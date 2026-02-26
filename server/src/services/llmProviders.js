@@ -299,30 +299,57 @@ const OPENAI_COMPLETION_MODELS = [
   'text-davinci-003', 'text-davinci-002', 'text-curie-001', 'text-babbage-001', 'text-ada-001'
 ];
 
+// Reasoning models: no temperature support, use 'developer' role instead of 'system'
+const OPENAI_REASONING_PREFIXES = ['o1', 'o3', 'o4'];
+
+function isOpenAIReasoningModel(model) {
+  return OPENAI_REASONING_PREFIXES.some(p => model.startsWith(p));
+}
+
 export class OpenAIProvider {
   constructor(apiKey, model) {
     this.client = new OpenAI({ apiKey });
     this.model = model || 'gpt-4o';
     this.isCompletionModel = OPENAI_COMPLETION_MODELS.some(m => this.model.startsWith(m));
+    this.isReasoningModel = isOpenAIReasoningModel(this.model);
+    // Set to true on 404 to permanently switch to the Responses API for this instance
+    this.useResponsesAPI = false;
+  }
+
+  _mapMessages(messages) {
+    return messages.map(m => ({
+      role: this.isReasoningModel && m.role === 'system' ? 'developer' : m.role,
+      content: m.content
+    }));
   }
 
   async chat(messages, options = {}) {
     if (this.isCompletionModel) {
       return this._completionChat(messages, options);
     }
-    return this._chatCompletion(messages, options);
+    if (this.useResponsesAPI) {
+      return this._responsesChat(messages, options);
+    }
+    try {
+      return await this._chatCompletion(messages, options);
+    } catch (err) {
+      if (err.status === 404) {
+        this.useResponsesAPI = true;
+        return this._responsesChat(messages, options);
+      }
+      throw err;
+    }
   }
 
   async _chatCompletion(messages, options = {}) {
     const params = {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: m.content
-      })),
-      temperature: options.temperature ?? 0.7,
+      messages: this._mapMessages(messages),
       max_completion_tokens: options.maxTokens || 4096,
     };
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
+    }
 
     const response = await this.client.chat.completions.create(params);
 
@@ -333,6 +360,37 @@ export class OpenAIProvider {
       usage: {
         inputTokens: response.usage?.prompt_tokens || 0,
         outputTokens: response.usage?.completion_tokens || 0
+      }
+    };
+  }
+
+  async _responsesChat(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const input = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const params = {
+      model: this.model,
+      input,
+      max_output_tokens: options.maxTokens || 4096,
+    };
+    if (systemMsg) {
+      params.instructions = systemMsg.content;
+    }
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
+    }
+
+    const response = await this.client.responses.create(params);
+
+    return {
+      content: response.output_text || '',
+      model: this.model,
+      provider: 'openai',
+      usage: {
+        inputTokens: response.usage?.input_tokens || 0,
+        outputTokens: response.usage?.output_tokens || 0
       }
     };
   }
@@ -366,23 +424,35 @@ export class OpenAIProvider {
   async *chatStream(messages, options = {}) {
     if (this.isCompletionModel) {
       yield* this._completionStream(messages, options);
-    } else {
+      return;
+    }
+    if (this.useResponsesAPI) {
+      yield* this._responsesChatStream(messages, options);
+      return;
+    }
+    try {
       yield* this._chatCompletionStream(messages, options);
+    } catch (err) {
+      if (err.status === 404) {
+        this.useResponsesAPI = true;
+        yield* this._responsesChatStream(messages, options);
+      } else {
+        throw err;
+      }
     }
   }
 
   async *_chatCompletionStream(messages, options = {}) {
     const params = {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: m.content
-      })),
-      temperature: options.temperature ?? 0.7,
+      messages: this._mapMessages(messages),
       max_completion_tokens: options.maxTokens || 4096,
       stream: true,
       stream_options: { include_usage: true },
     };
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
+    }
 
     const stream = await this.client.chat.completions.create(params);
 
@@ -399,6 +469,43 @@ export class OpenAIProvider {
           usage: {
             inputTokens: chunk.usage.prompt_tokens || 0,
             outputTokens: chunk.usage.completion_tokens || 0
+          }
+        };
+      }
+    }
+  }
+
+  async *_responsesChatStream(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const input = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const params = {
+      model: this.model,
+      input,
+      max_output_tokens: options.maxTokens || 4096,
+      stream: true,
+    };
+    if (systemMsg) {
+      params.instructions = systemMsg.content;
+    }
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
+    }
+
+    const stream = await this.client.responses.create(params);
+
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        yield { type: 'text', text: event.delta };
+      }
+      if (event.type === 'response.completed') {
+        yield {
+          type: 'done',
+          usage: {
+            inputTokens: event.response?.usage?.input_tokens || 0,
+            outputTokens: event.response?.usage?.output_tokens || 0
           }
         };
       }
@@ -446,13 +553,38 @@ export class OpenAIProvider {
         });
         return !!response;
       }
-      const response = await this.client.chat.completions.create({
+      if (this.useResponsesAPI) {
+        const response = await this.client.responses.create({
+          model: this.model,
+          input: 'ping',
+          max_output_tokens: 5,
+        });
+        return !!response;
+      }
+      const params = {
         model: this.model,
         max_completion_tokens: 5,
-        messages: [{ role: 'user', content: 'ping' }]
-      });
+        messages: [{ role: 'user', content: 'ping' }],
+      };
+      if (!this.isReasoningModel) {
+        params.temperature = 0;
+      }
+      const response = await this.client.chat.completions.create(params);
       return !!response;
-    } catch {
+    } catch (err) {
+      if (err.status === 404 && !this.useResponsesAPI) {
+        this.useResponsesAPI = true;
+        try {
+          const response = await this.client.responses.create({
+            model: this.model,
+            input: 'ping',
+            max_output_tokens: 5,
+          });
+          return !!response;
+        } catch {
+          return false;
+        }
+      }
       return false;
     }
   }
