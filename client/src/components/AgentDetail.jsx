@@ -733,8 +733,19 @@ function DelegationResultItem({ result }) {
 // ─── Todo Tab ──────────────────────────────────────────────────────────────
 function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete }) {
   const [expanded, setExpanded] = useState(false);
+  const textRef = useRef(null);
+  const [isTruncated, setIsTruncated] = useState(false);
   const firstLine = todo.text.split('\n')[0];
-  const hasMore = todo.text.includes('\n') && todo.text.trim() !== firstLine.trim();
+  const isMultiline = todo.text.includes('\n') && todo.text.trim() !== firstLine.trim();
+
+  useEffect(() => {
+    const el = textRef.current;
+    if (el) {
+      setIsTruncated(el.scrollWidth > el.clientWidth);
+    }
+  }, [todo.text]);
+
+  const canExpand = isMultiline || isTruncated;
 
   return (
     <div className={`bg-dark-800/50 rounded-lg border group transition-colors ${
@@ -752,16 +763,16 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
           {todo.done && <span className="text-xs">✓</span>}
         </button>
         <div
-          className={`flex-1 min-w-0 text-sm ${hasMore ? 'cursor-pointer select-none' : ''} ${todo.done ? 'line-through text-dark-500' : 'text-dark-200'}`}
-          onClick={() => hasMore && setExpanded(e => !e)}
+          className={`flex-1 min-w-0 text-sm ${canExpand ? 'cursor-pointer select-none' : ''} ${todo.done ? 'line-through text-dark-500' : 'text-dark-200'}`}
+          onClick={() => canExpand && setExpanded(e => !e)}
         >
           <div className="flex items-center gap-1.5">
-            {hasMore && (
+            {canExpand && (
               expanded
                 ? <ChevronDown className="w-3 h-3 text-dark-400 flex-shrink-0" />
                 : <ChevronRight className="w-3 h-3 text-dark-400 flex-shrink-0" />
             )}
-            <span className="truncate">{firstLine}</span>
+            <span ref={textRef} className={expanded ? 'whitespace-normal break-words' : 'truncate'}>{firstLine}</span>
           </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
@@ -783,7 +794,7 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
           </button>
         </div>
       </div>
-      {hasMore && expanded && (
+      {canExpand && expanded && isMultiline && (
         <div className={`px-3 pb-2 ml-8 border-t border-dark-700/30 pt-2 ${todo.done ? 'opacity-50' : ''}`}>
           <div className="markdown-content text-xs text-dark-300 leading-relaxed">
             <ReactMarkdown>{todo.text}</ReactMarkdown>
@@ -1038,7 +1049,7 @@ function HandoffTab({ agent, agents, socket, onRefresh }) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
 
-  const otherAgents = agents.filter(a => a.id !== agent.id);
+  const otherAgents = agents.filter(a => a.id !== agent.id && a.enabled !== false);
 
   const handleHandoff = async () => {
     if (!targetId || !context.trim()) return;
@@ -1168,6 +1179,7 @@ function SettingsTab({ agent, projects, onRefresh }) {
     icon: agent.icon,
     color: agent.color,
     project: agent.project || '',
+    enabled: agent.enabled !== false,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1190,6 +1202,7 @@ function SettingsTab({ agent, projects, onRefresh }) {
       icon: agent.icon,
       color: agent.color,
       project: agent.project || '',
+      enabled: agent.enabled !== false,
     });
     setSaved(false);
   }, [agent.id]);
@@ -1225,6 +1238,20 @@ function SettingsTab({ agent, projects, onRefresh }) {
 
   return (
     <div className="p-4 space-y-4">
+      {/* Enabled toggle */}
+      <div className="flex items-center justify-between px-3 py-2.5 bg-dark-800/50 rounded-lg border border-dark-700/50">
+        <div>
+          <span className="text-sm text-dark-200">Agent enabled</span>
+          <p className="text-[11px] text-dark-500 mt-0.5">Disabled agents are excluded from delegation, broadcast, and handoff</p>
+        </div>
+        <button
+          onClick={() => updateField('enabled', !form.enabled)}
+          className={`relative w-10 h-5 rounded-full transition-colors ${form.enabled ? 'bg-indigo-500' : 'bg-dark-600'}`}
+        >
+          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.enabled ? 'translate-x-5' : ''}`} />
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2">
           <label className="block text-xs text-dark-400 mb-1.5">Name</label>

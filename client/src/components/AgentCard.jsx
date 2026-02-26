@@ -9,12 +9,15 @@ const STATUS_STYLES = {
 export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop }) {
   const status = STATUS_STYLES[agent.status] || STATUS_STYLES.idle;
   const truncatedThinking = thinking ? thinking.slice(-120) + (thinking.length > 120 ? '' : '') : null;
+  const disabled = agent.enabled === false;
 
   if (viewMode === 'list') {
     return (
       <div
         onClick={onClick}
         className={`flex items-center gap-4 px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 border ${
+          disabled ? 'opacity-50' : ''
+        } ${
           isSelected
             ? 'bg-indigo-500/10 border-indigo-500/40'
             : 'bg-dark-800/50 border-dark-700/50 hover:bg-dark-800 hover:border-dark-600'
@@ -45,7 +48,9 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             <MessageSquare className="w-3 h-3" />
             {agent.metrics?.totalMessages || 0}
           </span>
-          {agent.status === 'busy' && onStop ? (
+          {disabled ? (
+            <span className="text-dark-500">Disabled</span>
+          ) : agent.status === 'busy' && onStop ? (
             <button
               onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
               className="flex items-center gap-1 px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
@@ -66,6 +71,8 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
     <div
       onClick={onClick}
       className={`rounded-xl cursor-pointer transition-all duration-200 border overflow-hidden group ${
+        disabled ? 'opacity-50' : ''
+      } ${
         isSelected
           ? 'bg-indigo-500/10 border-indigo-500/40 shadow-lg shadow-indigo-500/10'
           : 'bg-dark-800/50 border-dark-700/50 hover:bg-dark-800 hover:border-dark-600 hover:shadow-lg hover:shadow-black/20'
@@ -85,7 +92,9 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
           </div>
           <div className="flex items-center gap-1.5">
             {agent.isLeader && <Crown className="w-3.5 h-3.5 text-amber-400" title="Leader" />}
-            {agent.status === 'busy' && onStop ? (
+            {disabled ? (
+              <span className="text-xs font-medium text-dark-500">Disabled</span>
+            ) : agent.status === 'busy' && onStop ? (
               <button
                 onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
                 className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors text-xs"

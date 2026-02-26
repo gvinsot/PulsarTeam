@@ -55,6 +55,7 @@ export class AgentManager {
       },
       handoffTargets: config.handoffTargets || [],
       project: config.project || null,
+      enabled: config.enabled !== undefined ? config.enabled : true,
       isLeader: config.isLeader || false,
       template: config.template || null,
       color: config.color || this._randomColor(),
@@ -86,7 +87,7 @@ export class AgentManager {
     const allowed = [
       'name', 'role', 'description', 'instructions', 'temperature',
       'maxTokens', 'contextLength', 'todoList', 'ragDocuments', 'handoffTargets',
-      'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader'
+      'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'enabled'
     ];
 
     for (const key of allowed) {
@@ -174,7 +175,7 @@ export class AgentManager {
       // For leader agents, inject available agents context (only at top level to avoid confusion)
       if (agent.isLeader && delegationDepth === 0) {
         const availableAgents = Array.from(this.agents.values())
-          .filter(a => a.id !== id) // Exclude self
+          .filter(a => a.id !== id && a.enabled !== false) // Exclude self and disabled agents
           .map(a => `- ${a.name} (${a.role}): ${a.description || 'No description'}`);
         
         if (availableAgents.length > 0) {
@@ -293,13 +294,13 @@ export class AgentManager {
               detectedCount++;
 
               const targetAgent = Array.from(this.agents.values()).find(
-                a => a.name.toLowerCase() === delegation.agentName.toLowerCase() && a.id !== id
+                a => a.name.toLowerCase() === delegation.agentName.toLowerCase() && a.id !== id && a.enabled !== false
               );
 
               if (!targetAgent) {
-                console.log(`⚠️  Agent "${delegation.agentName}" not found in swarm`);
+                console.log(`⚠️  Agent "${delegation.agentName}" not found or disabled in swarm`);
                 delegationPromises.push(
-                  Promise.resolve({ agentName: delegation.agentName, response: null, error: `Agent "${delegation.agentName}" not found in swarm` })
+                  Promise.resolve({ agentName: delegation.agentName, response: null, error: `Agent "${delegation.agentName}" not found or disabled in swarm` })
                 );
                 continue;
               }
@@ -849,7 +850,7 @@ export class AgentManager {
 
   // ─── Global Broadcast (tmux-style) ─────────────────────────────────
   async broadcastMessage(message, streamCallback) {
-    const agents = Array.from(this.agents.values());
+    const agents = Array.from(this.agents.values()).filter(a => a.enabled !== false);
     const results = [];
 
     const promises = agents.map(async (agent) => {
