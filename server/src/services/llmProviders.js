@@ -56,6 +56,16 @@ export class OllamaProvider {
     this.model = model;
   }
 
+  // Format messages into a single prompt string for /api/generate raw mode.
+  // This bypasses Ollama's chat template and tool-calling harmony parser.
+  _formatPrompt(messages) {
+    return messages.map(m => {
+      const role = m.role === 'system' ? 'System'
+        : m.role === 'assistant' ? 'Assistant' : 'User';
+      return `### ${role}\n${m.content}`;
+    }).join('\n\n') + '\n\n### Assistant\n';
+  }
+
   async chat(messages, options = {}) {
     const ollamaOpts = {
       temperature: options.temperature ?? 0.7,
@@ -71,16 +81,13 @@ export class OllamaProvider {
 
     const body = {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role === 'system' ? 'system' : m.role,
-        content: m.content
-      })),
+      prompt: this._formatPrompt(messages),
       stream: false,
       raw: true,
       options: ollamaOpts
     };
 
-    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/chat`, {
+    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -93,7 +100,7 @@ export class OllamaProvider {
 
     const data = await res.json();
     return {
-      content: data.message?.content || '',
+      content: data.response || '',
       model: this.model,
       provider: 'ollama',
       usage: {
@@ -116,16 +123,13 @@ export class OllamaProvider {
 
     const body = {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role === 'system' ? 'system' : m.role,
-        content: m.content
-      })),
+      prompt: this._formatPrompt(messages),
       stream: true,
       raw: true,
       options: ollamaOpts
     };
 
-    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/chat`, {
+    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -152,8 +156,8 @@ export class OllamaProvider {
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
-          if (data.message?.content) {
-            yield { type: 'text', text: data.message.content };
+          if (data.response) {
+            yield { type: 'text', text: data.response };
           }
           if (data.done) {
             yield {
