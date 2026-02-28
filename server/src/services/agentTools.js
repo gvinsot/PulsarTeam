@@ -342,6 +342,79 @@ function jsonToToolCall(name, args) {
   }
 }
 
+// ── Balanced parsing helpers ─────────────────────────────────────────────────
+
+/**
+ * Starting right after an opening '(', find the index of the matching ')'.
+ * Tracks triple-quotes ("""), double quotes, single quotes, escape sequences,
+ * and nested parentheses.  Returns -1 if unbalanced.
+ */
+function _findBalancedClose(text, start) {
+  let depth = 1;
+  let inTripleQuote = false;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+
+  for (let i = start; i < text.length; i++) {
+    // Triple-quote toggle (check before single double-quote)
+    if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      if (inTripleQuote) { inTripleQuote = false; i += 2; continue; }
+      if (!inDoubleQuote && !inSingleQuote) { inTripleQuote = true; i += 2; continue; }
+    }
+    if (inTripleQuote) continue;
+
+    // Escape sequences inside quotes
+    if (text[i] === '\\' && (inDoubleQuote || inSingleQuote) && i + 1 < text.length) {
+      i++; continue;
+    }
+
+    // Double-quote toggle
+    if (text[i] === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; continue; }
+    // Single-quote toggle
+    if (text[i] === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; continue; }
+
+    // Parentheses tracking — only outside quotes
+    if (!inDoubleQuote && !inSingleQuote) {
+      if (text[i] === '(') depth++;
+      else if (text[i] === ')') {
+        depth--;
+        if (depth === 0) return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Find the index of the first comma that sits at the top level —
+ * i.e. not inside quotes or nested parentheses.
+ */
+function _findTopLevelComma(text) {
+  let inTripleQuote = false;
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let depth = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      if (inTripleQuote) { inTripleQuote = false; i += 2; continue; }
+      if (!inDoubleQuote && !inSingleQuote) { inTripleQuote = true; i += 2; continue; }
+    }
+    if (inTripleQuote) continue;
+
+    if (text[i] === '\\' && (inDoubleQuote || inSingleQuote)) { i++; continue; }
+    if (text[i] === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; continue; }
+    if (text[i] === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; continue; }
+
+    if (!inDoubleQuote && !inSingleQuote) {
+      if (text[i] === '(') depth++;
+      if (text[i] === ')') depth--;
+      if (text[i] === ',' && depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
 // Parse tool calls from agent response
 export function parseToolCalls(response) {
   const toolCalls = [];
@@ -375,69 +448,59 @@ export function parseToolCalls(response) {
     }
   }
 
-  // ── Phase 2: Parse @tool(args) custom format ────────────────────────
-  // Strip <tool_call> / </tool_call> wrappers (some models use them as prefixes
-  // around our @tool() syntax without JSON).
+  // ── Phase 2: Parse @tool(args) with balanced parenthesis tracking ───
+  // Handles nested quotes, parentheses, and escaped characters correctly.
   const cleaned = response
     .replace(/<\|?\/?tool_call\|?>/gi, '')    // <tool_call>, </tool_call>, <|tool_call|>, etc.
     .replace(/<\|?\/?tool_use\|?>/gi, '')     // <tool_use> variants
     .replace(/\[TOOL_CALLS?\]/gi, '');        // [TOOL_CALL] / [TOOL_CALLS] markers
 
-  let match;
+  const SINGLE_ARG_TOOLS = ['read_file', 'list_dir', 'run_command', 'report_error'];
+  const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files'];
+  const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...MULTI_ARG_TOOLS];
+  const toolStartPattern = new RegExp(`@(${ALL_TOOL_NAMES.join('|')})\\s*\\(`, 'gi');
+  let startMatch;
 
-  // Pattern for two-arg tools with multi-line content: @tool_name(path, """content""")
-  // (parse first — most specific pattern)
-  const multiLinePattern = /@(write_file|append_file)\s*\(\s*([^,]+?)\s*,\s*"""([\s\S]*?)"""\s*\)/gi;
-  while ((match = multiLinePattern.exec(cleaned)) !== null) {
-    toolCalls.push({
-      tool: match[1].toLowerCase(),
-      args: [match[2].trim(), match[3]]
-    });
-  }
+  while ((startMatch = toolStartPattern.exec(cleaned)) !== null) {
+    const toolName = startMatch[1].toLowerCase();
+    const argsStart = startMatch.index + startMatch[0].length;
 
-  // Pattern for search: @search_files(pattern, query)
-  const searchPattern = /@search_files\s*\(\s*([^,]+?)\s*,\s*([^)]+)\s*\)/gi;
-  while ((match = searchPattern.exec(cleaned)) !== null) {
-    toolCalls.push({
-      tool: 'search_files',
-      args: [match[1].trim(), match[2].trim()]
-    });
-  }
+    // Find the matching closing ')' using balanced tracking
+    const closeIdx = _findBalancedClose(cleaned, argsStart);
+    if (closeIdx === -1) continue; // unbalanced — skip
 
-  // Pattern for single-arg tools with double-quoted args: @tool("arg")
-  // Handles nested single-quotes and escaped chars inside double quotes.
-  const dblQuotedPattern = /@(read_file|list_dir|run_command|report_error)\s*\(\s*"((?:[^"\\]|\\.)*)"\s*\)/gi;
-  while ((match = dblQuotedPattern.exec(cleaned)) !== null) {
-    toolCalls.push({
-      tool: match[1].toLowerCase(),
-      args: [match[2].trim()]
-    });
-  }
+    const argsString = cleaned.slice(argsStart, closeIdx);
+    let args;
 
-  // Pattern for single-arg tools with single-quoted args: @tool('arg')
-  const sglQuotedPattern = /@(read_file|list_dir|run_command|report_error)\s*\(\s*'((?:[^'\\]|\\.)*)'\s*\)/gi;
-  while ((match = sglQuotedPattern.exec(cleaned)) !== null) {
-    toolCalls.push({
-      tool: match[1].toLowerCase(),
-      args: [match[2].trim()]
-    });
-  }
+    if (SINGLE_ARG_TOOLS.includes(toolName)) {
+      // Single argument: the entire content between parens
+      args = [sanitizeArg(argsString.trim())];
+    } else {
+      // Multi-arg (write_file, append_file, search_files): split at first top-level comma
+      const commaIdx = _findTopLevelComma(argsString);
+      if (commaIdx !== -1) {
+        const first = argsString.slice(0, commaIdx).trim();
+        let second = argsString.slice(commaIdx + 1).trim();
+        // Strip triple-quote delimiters for write_file/append_file content
+        if (second.startsWith('"""') && second.endsWith('"""')) {
+          second = second.slice(3, -3);
+        }
+        args = [sanitizeArg(first), second];
+      } else {
+        args = [sanitizeArg(argsString.trim())];
+      }
+    }
 
-  // Pattern for single-arg tools without quotes: @tool(arg)
-  // Only match if we haven't already matched this tool call via quoted patterns above.
-  const unquotedPattern = /@(read_file|list_dir|run_command|report_error)\s*\(\s*([^)]+)\s*\)/gi;
-  while ((match = unquotedPattern.exec(cleaned)) !== null) {
-    const tool = match[1].toLowerCase();
-    const rawArg = match[2].trim();
-    // Strip surrounding quotes if the LLM added them (sanitizeArg also does this,
-    // but we deduplicate here by checking if a quoted-pattern already captured this arg).
-    const stripped = rawArg.replace(/^["']+|["']+$/g, '').trim();
+    // Dedup: check if this tool call was already parsed in phase 1
     const isDuplicate = toolCalls.some(
-      tc => tc.tool === tool && (tc.args[0] === stripped || tc.args[0] === rawArg)
+      tc => tc.tool === toolName && tc.args[0] === args[0]
     );
     if (!isDuplicate) {
-      toolCalls.push({ tool, args: [rawArg] });
+      toolCalls.push({ tool: toolName, args });
     }
+
+    // Advance regex past this match to avoid partial re-matches
+    toolStartPattern.lastIndex = closeIdx + 1;
   }
 
   // Log summary
