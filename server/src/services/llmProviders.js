@@ -54,108 +54,23 @@ export class OllamaProvider {
   constructor(baseUrl, model) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.model = model;
-    this._chatTemplate = null; // Cached chat template from model
   }
 
-  /**
-   * Fetch the model's chat template from Ollama and cache it.
-   * Falls back to a simple ChatML-style template if unavailable.
-   */
-  async _getTemplate() {
-    if (this._chatTemplate) return this._chatTemplate;
-    try {
-      const res = await fetch(`${this.baseUrl}/api/show`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.model }),
-        signal: AbortSignal.timeout(5000)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.template) {
-          this._chatTemplate = data.template;
-          return this._chatTemplate;
-        }
-      }
-    } catch { /* ignore */ }
-    // Fallback: ChatML format (widely supported)
-    this._chatTemplate = 'chatml';
-    return this._chatTemplate;
-  }
-
-  /**
-   * Build a prompt string from messages using the model's native template.
-   * Uses /api/generate with raw:true to completely bypass the harmony parser.
-   */
-  _formatPrompt(messages, template) {
-    // Detect template family from the template string
-    const tpl = (template || '').toLowerCase();
-
-    // Llama 3 / Llama 3.1+ style
-    if (tpl.includes('<|start_header_id|>')) {
-      let prompt = '<|begin_of_text|>';
-      for (const m of messages) {
-        prompt += `<|start_header_id|>${m.role}<|end_header_id|>\n\n${m.content}<|eot_id|>`;
-      }
-      prompt += '<|start_header_id|>assistant<|end_header_id|>\n\n';
-      return prompt;
-    }
-
-    // Qwen / ChatML style
-    if (tpl.includes('<|im_start|>') || template === 'chatml') {
-      let prompt = '';
-      for (const m of messages) {
-        prompt += `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`;
-      }
-      prompt += '<|im_start|>assistant\n';
-      return prompt;
-    }
-
-    // Mistral style
-    if (tpl.includes('[INST]')) {
-      let prompt = '';
-      const systemMsg = messages.find(m => m.role === 'system');
-      if (systemMsg) prompt += `${systemMsg.content}\n\n`;
-      for (const m of messages.filter(m => m.role !== 'system')) {
-        if (m.role === 'user') prompt += `[INST] ${m.content} [/INST]`;
-        else prompt += ` ${m.content}</s>`;
-      }
-      return prompt;
-    }
-
-    // Gemma style
-    if (tpl.includes('<start_of_turn>')) {
-      let prompt = '';
-      for (const m of messages) {
-        const role = m.role === 'assistant' ? 'model' : m.role;
-        prompt += `<start_of_turn>${role}\n${m.content}<end_of_turn>\n`;
-      }
-      prompt += '<start_of_turn>model\n';
-      return prompt;
-    }
-
-    // Phi style
-    if (tpl.includes('<|system|>') || tpl.includes('<|user|>')) {
-      let prompt = '';
-      for (const m of messages) {
-        prompt += `<|${m.role}|>\n${m.content}<|end|>\n`;
-      }
-      prompt += '<|assistant|>\n';
-      return prompt;
-    }
-
-    // Generic fallback: ChatML
-    let prompt = '';
-    for (const m of messages) {
-      prompt += `<|im_start|>${m.role}\n${m.content}<|im_end|>\n`;
-    }
-    prompt += '<|im_start|>assistant\n';
-    return prompt;
+  // Strip control tokens that some models leak in their output
+  _cleanResponse(text) {
+    return text
+      .replace(/<\|im_start\|>.*?(?:<\|im_end\|>|$)/gs, '')
+      .replace(/<\|(?:end|start|channel|message|assistant|user|system)\|>/g, '')
+      .replace(/<\|im_start\|[^>]*>/g, '')
+      .replace(/<\|eot_id\|>/g, '')
+      .replace(/<\|end_header_id\|>/g, '')
+      .replace(/<\|start_header_id\|>.*?\n*/g, '')
+      .replace(/<end_of_turn>/g, '')
+      .replace(/<start_of_turn>.*?\n*/g, '')
+      .trim();
   }
 
   async chat(messages, options = {}) {
-    const template = await this._getTemplate();
-
     const ollamaOpts = {
       temperature: options.temperature ?? 0.7,
       num_predict: options.maxTokens ?? 4096,
@@ -170,13 +85,15 @@ export class OllamaProvider {
 
     const body = {
       model: this.model,
-      prompt: this._formatPrompt(messages, template),
+      messages: messages.map(m => ({
+        role: m.role === 'system' ? 'system' : m.role,
+        content: m.content
+      })),
       stream: false,
-      raw: true,
       options: ollamaOpts
     };
 
-    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/generate`, {
+    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -189,7 +106,7 @@ export class OllamaProvider {
 
     const data = await res.json();
     return {
-      content: data.response || '',
+      content: this._cleanResponse(data.message?.content || ''),
       model: this.model,
       provider: 'ollama',
       usage: {
@@ -200,8 +117,6 @@ export class OllamaProvider {
   }
 
   async *chatStream(messages, options = {}) {
-    const template = await this._getTemplate();
-
     const ollamaOpts = {
       temperature: options.temperature ?? 0.7,
       num_predict: options.maxTokens ?? 4096,
@@ -214,13 +129,15 @@ export class OllamaProvider {
 
     const body = {
       model: this.model,
-      prompt: this._formatPrompt(messages, template),
+      messages: messages.map(m => ({
+        role: m.role === 'system' ? 'system' : m.role,
+        content: m.content
+      })),
       stream: true,
-      raw: true,
       options: ollamaOpts
     };
 
-    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/generate`, {
+    const res = await ollamaFetchWithRetry(`${this.baseUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -234,6 +151,8 @@ export class OllamaProvider {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // Buffer to detect and strip control tokens from streamed chunks
+    let tokenBuffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
@@ -247,10 +166,30 @@ export class OllamaProvider {
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line);
-          if (data.response) {
-            yield { type: 'text', text: data.response };
+          if (data.message?.content) {
+            tokenBuffer += data.message.content;
+            // Flush tokenBuffer but hold back if it ends with '<' (possible start of control token)
+            const lastAngle = tokenBuffer.lastIndexOf('<');
+            let toEmit;
+            if (lastAngle >= 0 && !tokenBuffer.includes('>', lastAngle)) {
+              // Potential incomplete control token — hold it
+              toEmit = tokenBuffer.slice(0, lastAngle);
+              tokenBuffer = tokenBuffer.slice(lastAngle);
+            } else {
+              toEmit = this._cleanResponse(tokenBuffer);
+              tokenBuffer = '';
+            }
+            if (toEmit) {
+              yield { type: 'text', text: toEmit };
+            }
           }
           if (data.done) {
+            // Flush remaining buffer
+            if (tokenBuffer) {
+              const cleaned = this._cleanResponse(tokenBuffer);
+              if (cleaned) yield { type: 'text', text: cleaned };
+              tokenBuffer = '';
+            }
             yield {
               type: 'done',
               usage: {
