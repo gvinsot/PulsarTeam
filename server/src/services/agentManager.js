@@ -722,6 +722,20 @@ export class AgentManager {
       }
 
       try {
+        // Update thinking indicator with a descriptive message showing file paths
+        const toolLabels = {
+          write_file: (a) => `Writing ${a[0] || ''}`,
+          append_file: (a) => `Appending to ${a[0] || ''}`,
+          read_file: (a) => `Reading ${a[0] || ''}`,
+          list_dir: (a) => `Listing ${a[0] || '.'}`,
+          search_files: (a) => `Searching ${a[0] || '*'} for "${a[1] || ''}"`,
+          run_command: (a) => `Running: ${(a[0] || '').slice(0, 80)}`,
+        };
+        const labelFn = toolLabels[call.tool];
+        const toolLabel = labelFn ? labelFn(call.args) : `@${call.tool}`;
+        agent.currentThinking = toolLabel;
+        this._emit('agent:thinking', { agentId, thinking: agent.currentThinking });
+
         // Emit structured tool-start event (not raw text into stream)
         this._emit('agent:tool:start', {
           agentId,
@@ -729,14 +743,20 @@ export class AgentManager {
           tool: call.tool,
           args: call.args
         });
-        
+
         const result = await executeTool(call.tool, call.args, agent.project);
         results.push({
           tool: call.tool,
           args: call.args,
           ...result
         });
-        
+
+        // Stream a one-liner per tool execution into the chat
+        if (streamCallback) {
+          const statusIcon = result.success ? '✓' : '✗';
+          streamCallback(`\n${statusIcon} ${toolLabel}\n`);
+        }
+
         if (result.success) {
           // Emit structured tool-result event
           this._emit('agent:tool:result', {
