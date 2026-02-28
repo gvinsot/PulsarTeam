@@ -187,6 +187,7 @@ export class OllamaProvider {
     let buffer = '';
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    let finishReason = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -203,6 +204,7 @@ export class OllamaProvider {
         if (payload === '[DONE]') {
           yield {
             type: 'done',
+            finishReason: finishReason || 'stop',
             usage: {
               inputTokens: totalInputTokens,
               outputTokens: totalOutputTokens
@@ -212,9 +214,13 @@ export class OllamaProvider {
         }
         try {
           const data = JSON.parse(payload);
-          const delta = data.choices?.[0]?.delta;
-          if (delta?.content) {
-            yield { type: 'text', text: delta.content };
+          const choice = data.choices?.[0];
+          if (choice?.delta?.content) {
+            yield { type: 'text', text: choice.delta.content };
+          }
+          // Capture finish_reason (last chunk usually has it)
+          if (choice?.finish_reason) {
+            finishReason = choice.finish_reason;
           }
           // Ollama may include usage in the last chunk
           if (data.usage) {
@@ -305,6 +311,7 @@ export class ClaudeProvider {
     const finalMessage = await stream.finalMessage();
     yield {
       type: 'done',
+      finishReason: finalMessage.stop_reason === 'max_tokens' ? 'length' : 'stop',
       usage: {
         inputTokens: finalMessage.usage?.input_tokens || 0,
         outputTokens: finalMessage.usage?.output_tokens || 0
@@ -515,16 +522,22 @@ export class OpenAIProvider {
 
     const stream = await this.client.chat.completions.create(params);
 
+    let gptFinishReason = null;
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
+      const choice = chunk.choices[0];
+      const delta = choice?.delta;
       if (delta?.content) {
         yield { type: 'text', text: delta.content };
+      }
+      if (choice?.finish_reason) {
+        gptFinishReason = choice.finish_reason;
       }
 
       // Final chunk with usage
       if (chunk.usage) {
         yield {
           type: 'done',
+          finishReason: gptFinishReason || 'stop',
           usage: {
             inputTokens: chunk.usage.prompt_tokens || 0,
             outputTokens: chunk.usage.completion_tokens || 0
@@ -560,8 +573,10 @@ export class OpenAIProvider {
         yield { type: 'text', text: event.delta };
       }
       if (event.type === 'response.completed') {
+        const status = event.response?.status;
         yield {
           type: 'done',
+          finishReason: status === 'incomplete' ? 'length' : 'stop',
           usage: {
             inputTokens: event.response?.usage?.input_tokens || 0,
             outputTokens: event.response?.usage?.output_tokens || 0
@@ -598,6 +613,7 @@ export class OpenAIProvider {
 
     yield {
       type: 'done',
+      finishReason: 'stop',
       usage: { inputTokens: 0, outputTokens: totalTokens }
     };
   }
@@ -698,16 +714,21 @@ export class VLLMProvider {
     };
 
     const stream = await this.client.chat.completions.create(params);
+    let vllmFinishReason = null;
 
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      if (delta?.content) {
-        yield { type: 'text', text: delta.content };
+      const choice = chunk.choices?.[0];
+      if (choice?.delta?.content) {
+        yield { type: 'text', text: choice.delta.content };
+      }
+      if (choice?.finish_reason) {
+        vllmFinishReason = choice.finish_reason;
       }
 
       if (chunk.usage) {
         yield {
           type: 'done',
+          finishReason: vllmFinishReason || 'stop',
           usage: {
             inputTokens: chunk.usage.prompt_tokens || 0,
             outputTokens: chunk.usage.completion_tokens || 0

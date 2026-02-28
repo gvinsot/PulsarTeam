@@ -320,6 +320,7 @@ export class AgentManager {
       });
 
       let fullResponse = '';
+      let finishReason = null;
 
       // ── Incremental delegation: detect → enqueue immediately ───────────
       // As the leader streams, we detect complete @delegate() commands and:
@@ -426,10 +427,62 @@ export class AgentManager {
             }
           }
         }
-        if (chunk.type === 'done' && chunk.usage) {
-          agent.metrics.totalTokensIn += chunk.usage.inputTokens;
-          agent.metrics.totalTokensOut += chunk.usage.outputTokens;
+        if (chunk.type === 'done') {
+          if (chunk.usage) {
+            agent.metrics.totalTokensIn += chunk.usage.inputTokens;
+            agent.metrics.totalTokensOut += chunk.usage.outputTokens;
+          }
+          if (chunk.finishReason) {
+            finishReason = chunk.finishReason;
+          }
         }
+      }
+
+      // ── Auto-continuation: if the model hit maxTokens, ask it to continue ──
+      const MAX_CONTINUATIONS = 3;
+      let continuationCount = 0;
+      while (finishReason === 'length' && continuationCount < MAX_CONTINUATIONS) {
+        continuationCount++;
+        console.log(`🔄 [Continuation ${continuationCount}/${MAX_CONTINUATIONS}] "${agent.name}": response was truncated (finish_reason=length), requesting continuation...`);
+        if (streamCallback) streamCallback(`\n⏳ *Response truncated, continuing...*\n`);
+
+        // Add the partial response to history and ask the model to continue
+        messages.push({ role: 'assistant', content: fullResponse });
+        messages.push({ role: 'user', content: 'Your previous response was cut off because it exceeded the maximum output length. Continue EXACTLY from where you stopped. Do not repeat anything you already wrote — just output the remaining content.' });
+
+        finishReason = null;
+        for await (const chunk of provider.chatStream(messages, {
+          temperature: agent.temperature,
+          maxTokens: agent.maxTokens,
+          contextLength: agent.contextLength || 0,
+          signal: abortController.signal
+        })) {
+          if (abortController.signal.aborted) {
+            throw new Error('Agent stopped by user');
+          }
+          if (chunk.type === 'text') {
+            fullResponse += chunk.text;
+            agent.currentThinking = fullResponse;
+            if (streamCallback) streamCallback(chunk.text);
+          }
+          if (chunk.type === 'done') {
+            if (chunk.usage) {
+              agent.metrics.totalTokensIn += chunk.usage.inputTokens;
+              agent.metrics.totalTokensOut += chunk.usage.outputTokens;
+            }
+            if (chunk.finishReason) {
+              finishReason = chunk.finishReason;
+            }
+          }
+        }
+        // Remove the temporary continuation messages from the messages array
+        // so they don't pollute the stored history
+        messages.pop(); // remove continuation prompt
+        messages.pop(); // remove partial assistant response
+      }
+
+      if (continuationCount > 0 && finishReason === 'length') {
+        console.log(`⚠️  [Continuation] "${agent.name}": still truncated after ${MAX_CONTINUATIONS} continuations`);
       }
 
       // Store assistant message
