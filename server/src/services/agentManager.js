@@ -690,7 +690,7 @@ export class AgentManager {
     }
     
     console.log(`🔧 Agent ${agent.name} executing ${toolCalls.length} tool(s) (project=${agent.project})`);
-    
+
     const results = [];
     for (const call of toolCalls) {
       // ── Handle @report_error() specially ─────────────────────────────

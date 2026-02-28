@@ -49,6 +49,8 @@ IMPORTANT:
 - Always read files before modifying them
 - Use multi-line content with triple quotes """content"""
 - After making changes, verify by reading the file
+- Each tool call MUST be on its own line, with an empty line before and after it
+- Do NOT add decorative text like "Editing file..." or "Now I'll read..." before tool calls — just call the tool directly
 `;
 
 // Sanitize a tool argument: remove surrounding quotes and normalize paths
