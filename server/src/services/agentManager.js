@@ -528,7 +528,7 @@ export class AgentManager {
 
       // Shared nudge detection (used for both tool-using agents and leaders)
       const isNudge = messageMeta?.type === 'nudge';
-      const intentPatterns = /\b(i('ll| will| am going to|'m going to)|(let me|let's|going to|i'll|je vais|nous allons|on va|je m'en occupe|commençons|voyons|d'abord|ensuite|puis)|je \w+(rai|erai)\b)/i;
+      const intentPatterns = /\b(i('ll| will| am going to|'m going to)|(let me|let's|going to|i'll|je vais|nous allons|on va|je m'en occupe|commençons|voyons|d'abord|ensuite|puis))\b|je [^ ]+(rai|erai)\b/i;
 
       // Process tool calls if agent has a project (no limit — agent works until done)
       if (agent.project) {

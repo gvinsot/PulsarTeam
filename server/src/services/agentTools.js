@@ -8,6 +8,13 @@ const execAsync = promisify(exec);
 
 const PROJECTS_BASE = '/projects';
 
+// Allowed paths outside the agent's own project directory.
+// Supports exact paths and glob-style wildcards (trailing /*).
+const ALLOWED_EXTERNAL_PATHS = [
+  '/projects/LogsCrawler/PROMPT_PROJECTS.md',
+  '/projects/LogsCrawler/*',
+];
+
 // Tool definitions that will be injected into agent prompts
 export const TOOL_DEFINITIONS = `
 --- AVAILABLE TOOLS ---
@@ -134,10 +141,27 @@ export async function executeTool(toolName, args, projectPath) {
   }
 }
 
+// Check if a path matches the allowed external paths list
+function isAllowedExternalPath(fullPath) {
+  for (const pattern of ALLOWED_EXTERNAL_PATHS) {
+    if (pattern.endsWith('/*')) {
+      // Glob: /some/dir/* allows anything under /some/dir/
+      const prefix = pattern.slice(0, -1); // remove trailing *
+      if (fullPath.startsWith(prefix) || fullPath === prefix.slice(0, -1)) return true;
+    } else {
+      if (fullPath === pattern) return true;
+    }
+  }
+  return false;
+}
+
 // Security: resolve symlinks and verify the real path is within basePath
+// (or matches ALLOWED_EXTERNAL_PATHS)
 async function assertPathWithinBase(fullPath, basePath) {
   // First check the logical path (catches ../ traversal)
   if (!fullPath.startsWith(basePath)) {
+    // Allow explicitly whitelisted external paths
+    if (isAllowedExternalPath(fullPath)) return;
     throw new Error('Path traversal not allowed');
   }
   // Then resolve symlinks and check the real path
@@ -145,6 +169,7 @@ async function assertPathWithinBase(fullPath, basePath) {
     const realFullPath = await realpath(fullPath);
     const realBasePath = await realpath(basePath);
     if (!realFullPath.startsWith(realBasePath)) {
+      if (isAllowedExternalPath(realFullPath)) return;
       throw new Error('Path traversal not allowed (symlink escape)');
     }
   } catch (err) {
@@ -155,6 +180,7 @@ async function assertPathWithinBase(fullPath, basePath) {
         const realParent = await realpath(parentDir);
         const realBase = await realpath(basePath);
         if (!realParent.startsWith(realBase)) {
+          if (isAllowedExternalPath(fullPath)) return;
           throw new Error('Path traversal not allowed (symlink escape)');
         }
       } catch (parentErr) {
