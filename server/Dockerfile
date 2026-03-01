@@ -16,11 +16,13 @@ RUN apk add --no-cache \
     ripgrep \
     fd \
     less \
-    patch diffutils
+    patch diffutils \
+    docker-cli \
+    shadow
 
-# Configure git
-RUN git config --global user.name "Gildas" && \
-    git config --global user.email "gildas@methodinfo.fr"
+# Configure git at runtime via entrypoint (user/email from env vars)
+ENV GIT_USER_NAME=""
+ENV GIT_USER_EMAIL=""
 
 # Add GitHub's SSH host keys to known_hosts
 RUN mkdir -p /root/.ssh && \
@@ -32,7 +34,10 @@ RUN npm ci --production
 
 # Copy source code
 COPY server/src ./src
+COPY server/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 3001
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "src/index.js"]

@@ -18,10 +18,13 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - RUN_AS_USER=${RUN_AS_USER}
+      - GIT_USER_NAME=${GIT_USER_NAME}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL}
     volumes:
       - ${HOST_CODE_PATH}/AgentsSwarmUI/server/src:/app/src
       - ${HOST_CODE_PATH}:/projects  # Writable for agent tools
       - /home/gildas/.ssh:/root/.ssh:ro  # SSH keys for GitHub access
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker CLI access
     networks:
       - proxy
       - postgresqlcluster_internal
