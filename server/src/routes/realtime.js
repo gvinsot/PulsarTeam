@@ -50,10 +50,12 @@ export function realtimeRoutes(agentManager) {
             model: 'gpt-realtime',
             instructions,
             audio: {
+              input: {
+                turn_detection: { type: 'semantic_vad' }
+              },
               output: { voice }
             },
-            tools: [DELEGATE_TOOL],
-            turn_detection: { type: 'semantic_vad' }
+            tools: [DELEGATE_TOOL]
           }
         })
       });

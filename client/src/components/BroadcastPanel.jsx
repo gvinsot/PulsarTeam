@@ -25,11 +25,13 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], soc
   const [editForm, setEditForm] = useState({ name: '', description: '', category: '', icon: '', instructions: '' });
   const [showCreate, setShowCreate] = useState(false);
   const [newSkill, setNewSkill] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
-  const bottomRef = useRef(null);
+  const responsesRef = useRef(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [responses, history]);
+    if (responses.length > 0 && responsesRef.current) {
+      responsesRef.current.scrollTop = responsesRef.current.scrollHeight;
+    }
+  }, [responses]);
 
   useEffect(() => {
     if (!socket) return;
@@ -408,7 +410,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], soc
 
         {/* Responses */}
         {responses.length > 0 && (
-          <div className="space-y-2 max-h-[300px] overflow-auto">
+          <div ref={responsesRef} className="space-y-2 max-h-[300px] overflow-auto">
             <p className="text-xs text-dark-400 font-medium">Responses:</p>
             {responses.map((r, i) => (
               <div key={i} className={`p-3 rounded-lg border text-sm ${
@@ -440,7 +442,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], soc
           </div>
         )}
 
-        <div ref={bottomRef} />
       </div>
     </div>
   );
