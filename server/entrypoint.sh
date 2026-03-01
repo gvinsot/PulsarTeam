@@ -6,6 +6,16 @@ if [ -n "$RUN_AS_USER" ]; then
   uid="${RUN_AS_UID:-1000}"
   gid="${RUN_AS_GID:-1000}"
 
+  # Free up UID/GID if already taken by another user (e.g. 'node' uses 1000 in node:alpine)
+  existing_user=$(getent passwd "$uid" 2>/dev/null | cut -d: -f1 || true)
+  if [ -n "$existing_user" ] && [ "$existing_user" != "$RUN_AS_USER" ]; then
+    usermod -u 65534 "$existing_user" 2>/dev/null || true
+  fi
+  existing_group=$(getent group "$gid" 2>/dev/null | cut -d: -f1 || true)
+  if [ -n "$existing_group" ] && [ "$existing_group" != "$RUN_AS_USER" ]; then
+    groupmod -g 65534 "$existing_group" 2>/dev/null || true
+  fi
+
   # Create group if it doesn't exist
   if ! getent group "$gid" >/dev/null 2>&1; then
     addgroup -g "$gid" "$RUN_AS_USER"
