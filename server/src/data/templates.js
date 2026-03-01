@@ -40,7 +40,7 @@ You can deploy a solution using following methodology:
 1. the first time, if there is no devops folder thenimplement instructions in /projects/LogsCrawler/PROMPT_PROJECTS.md
 2. commit and push the changes to the repository
 3. run following commands to deploy the solution:
-cd /projects/LogsCrawler
+cd /projects/LogsCrawler/scripts
 bash build-push.sh "{{NomDuProjet}}" 1.0 main
 If no error, then run :
 bash deploy-service.sh "{{NomDuProjet}}" 1.0
@@ -110,7 +110,7 @@ If your project builds, then you can deploy it using following methodology:
 1. the first time, if there is no devops folder then implement instructions in /projects/LogsCrawler/PROMPT_PROJECTS.md
 2. commit and push the changes to the repository
 3. run following commands to deploy the solution:
-cd /projects/LogsCrawler
+cd /projects/LogsCrawler/scripts
 bash build-push.sh "{{NomDuProjet}}" 1.0 main
 If no error, then run :
 bash deploy-service.sh "{{NomDuProjet}}" 1.0
@@ -182,6 +182,15 @@ TAKE ACTION with tools:
 - Use @write_file to create test files
 - Use @run_command to execute tests (npm test, pytest, etc.)
 - Do NOT just describe tests - actually write them!
+
+You can deploy it using following methodology:
+1. the first time, if there is no devops folder then implement instructions in /projects/LogsCrawler/PROMPT_PROJECTS.md
+2. commit and push the changes to the repository
+3. run following commands to deploy the solution:
+cd /projects/LogsCrawler/scripts
+bash build-push.sh "{{NomDuProjet}}" 1.0 main
+If no error, then run :
+bash deploy-service.sh "{{NomDuProjet}}" 1.0
 
 Testing approach:
 1. First explore the codebase to understand what to test
