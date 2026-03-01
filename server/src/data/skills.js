@@ -388,6 +388,7 @@ Example:
 @stop_agent(AgentName) — Stop an agent's current task immediately.
 @list_projects() — List all available projects.
 @list_agents() — List all enabled agents with their current status, project, and role.
+@agent_status(AgentName) — Check a specific agent's status (busy/idle/error), project, pending todos, and message count.
 @clear_all_chats() — Clear ALL agents' conversation histories at once.
 @clear_all_action_logs() — Clear ALL agents' action logs at once.
 
@@ -398,6 +399,7 @@ Examples:
 @stop_agent(Developer)
 @list_projects()
 @list_agents()
+@agent_status(Developer)
 @clear_all_chats()
 @clear_all_action_logs()`
   },

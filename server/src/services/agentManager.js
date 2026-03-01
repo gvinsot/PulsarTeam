@@ -253,6 +253,7 @@ export class AgentManager {
         systemContent += `\n- @clear_all_chats() — Clear ALL agents' conversation histories at once, giving every agent a fresh start.`;
         systemContent += `\n- @clear_all_action_logs() — Clear ALL agents' action logs at once.`;
         systemContent += `\n- @list_agents() — List all enabled agents with their current status, project, and role.`;
+        systemContent += `\n- @agent_status(AgentName) — Check a specific agent's status (busy/idle/error), current project, pending todos, and message count.`;
         if (projectNames.length > 0) {
           systemContent += `\nAvailable projects: ${projectNames.join(', ')}`;
         }
@@ -917,6 +918,32 @@ export class AgentManager {
           if (streamCallback) streamCallback(`\n📋 Cleared action logs for ${count} agents\n`);
         }
 
+        // ── Process @agent_status commands ───────────────────────────────
+        const agentStatusCommands = this._parseAgentStatus(responseForParsing);
+        for (const cmd of agentStatusCommands) {
+          const targetAgent = Array.from(this.agents.values()).find(
+            a => a.name.toLowerCase() === cmd.targetAgentName.toLowerCase() && a.enabled !== false
+          );
+          if (!targetAgent) {
+            console.log(`⚠️  [Agent Status] Agent "${cmd.targetAgentName}" not found`);
+            if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
+            continue;
+          }
+          const pendingTodos = (targetAgent.todoList || []).filter(t => !t.done).length;
+          const totalTodos = (targetAgent.todoList || []).length;
+          const msgCount = (targetAgent.conversationHistory || []).length;
+          const lines = [
+            `Name: ${targetAgent.name}`,
+            `Status: ${targetAgent.status}`,
+            `Role: ${targetAgent.role || 'worker'}`,
+            `Project: ${targetAgent.project || 'none'}`,
+            `Todos: ${pendingTodos} pending / ${totalTodos} total`,
+            `Messages: ${msgCount}`,
+          ];
+          console.log(`📊 [Agent Status] ${targetAgent.name}: ${targetAgent.status}`);
+          if (streamCallback) streamCallback(`\n📊 Agent status — ${lines.join(' | ')}\n`);
+        }
+
         // ── Process @list_agents commands ────────────────────────────────
         if (/@list_agents\s*\(\s*\)/i.test(responseForParsing)) {
           const enabled = Array.from(this.agents.values()).filter(a => a.enabled !== false);
@@ -1325,6 +1352,35 @@ export class AgentManager {
 
     const results = [];
     const re = /@clear_context\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const closeIdx = text.indexOf(')', startAfterParen);
+      if (closeIdx === -1) continue;
+      const targetAgentName = text.slice(startAfterParen, closeIdx).trim().replace(/^["']|["']$/g, '');
+      if (targetAgentName) {
+        results.push({ targetAgentName });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Parse @agent_status(AgentName) commands from leader output.
+   * Returns array of { targetAgentName }.
+   */
+  _parseAgentStatus(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const results = [];
+    const re = /@agent_status\s*\(/gi;
     let reMatch;
     while ((reMatch = re.exec(text)) !== null) {
       if (isInsideCodeBlock(reMatch.index)) continue;
