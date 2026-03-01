@@ -368,7 +368,13 @@ async function runCommand(basePath, command) {
   }
 
   try {
-    const { stdout, stderr } = await execAsync(command, {
+    // If RUN_AS_USER is set, wrap the command with runuser to execute as that user
+    const runAsUser = process.env.RUN_AS_USER;
+    const actualCommand = runAsUser
+      ? `runuser -l ${runAsUser} -c ${JSON.stringify(`cd ${basePath} && ${command}`)}`
+      : command;
+
+    const { stdout, stderr } = await execAsync(actualCommand, {
       cwd: basePath,
       timeout: 30000,
       maxBuffer: 1024 * 1024, // 1MB

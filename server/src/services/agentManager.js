@@ -1,4 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
+import { readdir, access } from 'fs/promises';
+import { constants } from 'fs';
 import { createProvider } from './llmProviders.js';
 import { getAllAgents, saveAgent, deleteAgentFromDb } from './database.js';
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
@@ -23,6 +25,7 @@ export class AgentManager {
         agent.skills = agent.skills || [];
         agent.isVoice = agent.isVoice || false;
         agent.voice = agent.voice || 'alloy';
+        agent.projectContexts = agent.projectContexts || {};
         this.agents.set(agent.id, agent);
       }
       console.log(`📂 Loaded ${agents.length} agents from database`);
@@ -62,6 +65,7 @@ export class AgentManager {
       },
       handoffTargets: config.handoffTargets || [],
       project: config.project || null,
+      projectContexts: {},
       enabled: config.enabled !== undefined ? config.enabled : true,
       isLeader: config.isLeader || config.isVoice || false,
       isVoice: config.isVoice || false,
@@ -103,6 +107,10 @@ export class AgentManager {
       if (updates[key] !== undefined) {
         // Don't overwrite existing apiKey with empty string
         if (key === 'apiKey' && !updates[key] && agent[key]) continue;
+        // Context switching when project changes
+        if (key === 'project' && updates[key] !== agent[key]) {
+          this._switchProjectContext(agent, agent.project, updates[key]);
+        }
         agent[key] = updates[key];
       }
     }
@@ -125,6 +133,9 @@ export class AgentManager {
   updateAllProjects(project) {
     const updated = [];
     for (const agent of this.agents.values()) {
+      if (project !== agent.project) {
+        this._switchProjectContext(agent, agent.project, project);
+      }
       agent.project = project;
       agent.updatedAt = new Date().toISOString();
       saveAgent(agent);
@@ -218,12 +229,27 @@ export class AgentManager {
       if (agent.isLeader && delegationDepth === 0) {
         const availableAgents = Array.from(this.agents.values())
           .filter(a => a.id !== id && a.enabled !== false) // Exclude self and disabled agents
-          .map(a => `- ${a.name} (${a.role}): ${a.description || 'No description'}`);
-        
+          .map(a => {
+            const projectTag = a.project ? ` [project: ${a.project}]` : ' [no project]';
+            return `- ${a.name} (${a.role})${projectTag}: ${a.description || 'No description'}`;
+          });
+
         if (availableAgents.length > 0) {
           systemContent += `\n\n--- Available Swarm Agents ---\nYou can delegate tasks to these agents using the format: @delegate(AgentName, "task description")\n${availableAgents.join('\n')}\n\nWhen you need an agent to work on something, use the @delegate command. The agent's response will be provided back to you.\n\nIMPORTANT: Agents may report errors using @report_error(). When you receive delegation results containing errors, analyze the problem and decide whether to retry the task, reassign it to another agent, provide additional guidance, or escalate to the user.`;
         } else {
           systemContent += `\n\n--- Available Swarm Agents ---\nNo other agents are currently available in the swarm. You will need to complete tasks yourself or ask the user to create specialist agents.`;
+        }
+
+        // Inject leader management tools and available projects
+        const projectNames = await this._listAvailableProjects();
+        systemContent += `\n\n--- Agent Management Tools ---`;
+        systemContent += `\nYou have the following management commands available:`;
+        systemContent += `\n- @assign_project(AgentName, "project_name") — Assign an agent to a project. This sets their working directory so they can use file and command tools. When an agent's project changes, their conversation context is automatically saved and restored per-project.`;
+        systemContent += `\n- @get_project(AgentName) — Check which project an agent is currently assigned to.`;
+        systemContent += `\n- @clear_context(AgentName) — Clear an agent's entire conversation history, giving them a fresh start.`;
+        systemContent += `\n- @rollback(AgentName, X) — Remove the last X messages from an agent's conversation history.`;
+        if (projectNames.length > 0) {
+          systemContent += `\nAvailable projects: ${projectNames.join(', ')}`;
         }
       }
       
@@ -728,6 +754,84 @@ export class AgentManager {
         console.log(`⚠️ Max delegation depth (${MAX_DELEGATION_DEPTH}) reached for leader ${agent.name}`);
       }
 
+      // ── Process @assign_project commands (for leader agents) ──────────
+      if (agent.isLeader) {
+        const projectAssignments = this._parseProjectAssignments(responseForParsing);
+        for (const assignment of projectAssignments) {
+          const targetAgent = Array.from(this.agents.values()).find(
+            a => a.name.toLowerCase() === assignment.targetAgentName.toLowerCase() && a.id !== id && a.enabled !== false
+          );
+          if (!targetAgent) {
+            console.log(`⚠️  [Assign Project] Agent "${assignment.targetAgentName}" not found`);
+            if (streamCallback) streamCallback(`\n⚠️ Agent "${assignment.targetAgentName}" not found in swarm\n`);
+            continue;
+          }
+          this.update(targetAgent.id, { project: assignment.projectName });
+          console.log(`📁 [Assign Project] ${targetAgent.name} → project "${assignment.projectName}"`);
+          if (streamCallback) streamCallback(`\n✓ Assigned ${targetAgent.name} to project "${assignment.projectName}"\n`);
+        }
+
+        // ── Process @get_project commands ──────────────────────────────────
+        const getProjectCommands = this._parseGetProject(responseForParsing);
+        for (const cmd of getProjectCommands) {
+          const targetAgent = Array.from(this.agents.values()).find(
+            a => a.name.toLowerCase() === cmd.targetAgentName.toLowerCase() && a.id !== id && a.enabled !== false
+          );
+          if (!targetAgent) {
+            console.log(`⚠️  [Get Project] Agent "${cmd.targetAgentName}" not found`);
+            if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
+            continue;
+          }
+          const projectInfo = targetAgent.project || '(no project assigned)';
+          console.log(`📋 [Get Project] ${targetAgent.name} → "${projectInfo}"`);
+          if (streamCallback) streamCallback(`\n📋 ${targetAgent.name} is assigned to project: ${projectInfo}\n`);
+        }
+
+        // ── Process @clear_context commands ────────────────────────────────
+        const clearContextCommands = this._parseClearContext(responseForParsing);
+        for (const cmd of clearContextCommands) {
+          const targetAgent = Array.from(this.agents.values()).find(
+            a => a.name.toLowerCase() === cmd.targetAgentName.toLowerCase() && a.id !== id && a.enabled !== false
+          );
+          if (!targetAgent) {
+            console.log(`⚠️  [Clear Context] Agent "${cmd.targetAgentName}" not found`);
+            if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
+            continue;
+          }
+          this.clearHistory(targetAgent.id);
+          console.log(`🧹 [Clear Context] Cleared conversation history for ${targetAgent.name}`);
+          if (streamCallback) streamCallback(`\n🧹 Cleared conversation history for ${targetAgent.name}\n`);
+        }
+
+        // ── Process @rollback commands ─────────────────────────────────────
+        const rollbackCommands = this._parseRollback(responseForParsing);
+        for (const cmd of rollbackCommands) {
+          const targetAgent = Array.from(this.agents.values()).find(
+            a => a.name.toLowerCase() === cmd.targetAgentName.toLowerCase() && a.id !== id && a.enabled !== false
+          );
+          if (!targetAgent) {
+            console.log(`⚠️  [Rollback] Agent "${cmd.targetAgentName}" not found`);
+            if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
+            continue;
+          }
+          const historyLen = targetAgent.conversationHistory.length;
+          const removeCount = Math.min(cmd.count, historyLen);
+          if (removeCount === 0) {
+            if (streamCallback) streamCallback(`\n⚠️ ${targetAgent.name} has no messages to rollback\n`);
+            continue;
+          }
+          const newLength = historyLen - removeCount;
+          targetAgent.conversationHistory = targetAgent.conversationHistory.slice(0, newLength);
+          if (newLength === 0) {
+            delete targetAgent._compactionArmed;
+          }
+          saveAgent(targetAgent);
+          this._emit('agent:updated', this._sanitize(targetAgent));
+          console.log(`⏪ [Rollback] Removed last ${removeCount} message(s) from ${targetAgent.name} (${historyLen} → ${newLength})`);
+          if (streamCallback) streamCallback(`\n⏪ Rolled back ${removeCount} message(s) from ${targetAgent.name} (${historyLen} → ${newLength} messages)\n`);
+        }
+      }
+
       this.setStatus(id, 'idle');
       this.abortControllers.delete(id); // Clean up abort controller
       return fullResponse;
@@ -1021,6 +1125,185 @@ export class AgentManager {
       }
     }
     return delegations;
+  }
+
+  /**
+   * Parse @assign_project(AgentName, "project_name") commands from leader output.
+   * Returns array of { targetAgentName, projectName }.
+   */
+  _parseProjectAssignments(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const assignments = [];
+    const re = /@assign_project\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const commaIdx = text.indexOf(',', startAfterParen);
+      if (commaIdx === -1) continue;
+      const targetAgentName = text.slice(startAfterParen, commaIdx).trim();
+
+      let i = commaIdx + 1;
+      while (i < text.length && /\s/.test(text[i])) i++;
+      const quoteChar = text[i];
+      if (quoteChar !== '"' && quoteChar !== "'") continue;
+      i++;
+
+      let projectName = '';
+      let found = false;
+      while (i < text.length) {
+        if (text[i] === '\\' && i + 1 < text.length) {
+          projectName += text[i + 1];
+          i += 2;
+          continue;
+        }
+        if (text[i] === quoteChar) {
+          let j = i + 1;
+          while (j < text.length && /\s/.test(text[j])) j++;
+          if (j < text.length && text[j] === ')') {
+            found = true;
+            break;
+          }
+          projectName += text[i];
+          i++;
+          continue;
+        }
+        projectName += text[i];
+        i++;
+      }
+
+      if (found && targetAgentName && projectName.trim()) {
+        assignments.push({ targetAgentName, projectName: projectName.trim() });
+      }
+    }
+    return assignments;
+  }
+
+  /**
+   * Parse @get_project(AgentName) commands from leader output.
+   * Returns array of { targetAgentName }.
+   */
+  _parseGetProject(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const results = [];
+    const re = /@get_project\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const closeIdx = text.indexOf(')', startAfterParen);
+      if (closeIdx === -1) continue;
+      const targetAgentName = text.slice(startAfterParen, closeIdx).trim().replace(/^["']|["']$/g, '');
+      if (targetAgentName) {
+        results.push({ targetAgentName });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Parse @clear_context(AgentName) commands from leader output.
+   * Returns array of { targetAgentName }.
+   */
+  _parseClearContext(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const results = [];
+    const re = /@clear_context\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const closeIdx = text.indexOf(')', startAfterParen);
+      if (closeIdx === -1) continue;
+      const targetAgentName = text.slice(startAfterParen, closeIdx).trim().replace(/^["']|["']$/g, '');
+      if (targetAgentName) {
+        results.push({ targetAgentName });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Parse @rollback(AgentName, X) commands from leader output.
+   * Returns array of { targetAgentName, count }.
+   */
+  _parseRollback(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const results = [];
+    const re = /@rollback\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const commaIdx = text.indexOf(',', startAfterParen);
+      if (commaIdx === -1) continue;
+      const targetAgentName = text.slice(startAfterParen, commaIdx).trim().replace(/^["']|["']$/g, '');
+      const closeIdx = text.indexOf(')', commaIdx + 1);
+      if (closeIdx === -1) continue;
+      const countStr = text.slice(commaIdx + 1, closeIdx).trim();
+      const count = parseInt(countStr, 10);
+      if (isNaN(count) || count <= 0) continue;
+      if (targetAgentName) {
+        results.push({ targetAgentName, count });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * List available project directories (same logic as projects.js route).
+   */
+  async _listAvailableProjects() {
+    try {
+      let basePath = '/projects';
+      try {
+        await access(basePath, constants.R_OK);
+      } catch {
+        basePath = process.env.HOST_CODE_PATH;
+        if (!basePath) return [];
+        try {
+          await access(basePath, constants.R_OK);
+        } catch {
+          return [];
+        }
+      }
+      const entries = await readdir(basePath, { withFileTypes: true });
+      return entries
+        .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+        .map(e => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -1373,6 +1656,41 @@ export class AgentManager {
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return agent.conversationHistory;
+  }
+
+  // ─── Project Context Switching ──────────────────────────────────────
+  /**
+   * Save the current conversation context keyed by oldProject,
+   * then restore any previously saved context for newProject.
+   * If no saved context exists for newProject, start with a clean history.
+   */
+  _switchProjectContext(agent, oldProject, newProject) {
+    if (!agent.projectContexts) agent.projectContexts = {};
+
+    // Save current context under the OLD project key (if there is one)
+    if (oldProject) {
+      agent.projectContexts[oldProject] = {
+        conversationHistory: [...agent.conversationHistory],
+        _compactionArmed: agent._compactionArmed,
+        savedAt: new Date().toISOString()
+      };
+      console.log(`💾 [Context Switch] Saved context for "${agent.name}" on project "${oldProject}" (${agent.conversationHistory.length} messages)`);
+    }
+
+    // Restore context for the NEW project (if one was previously saved)
+    if (newProject && agent.projectContexts[newProject]) {
+      const saved = agent.projectContexts[newProject];
+      agent.conversationHistory = [...saved.conversationHistory];
+      agent._compactionArmed = saved._compactionArmed;
+      delete agent.projectContexts[newProject];
+      console.log(`📂 [Context Switch] Restored context for "${agent.name}" on project "${newProject}" (${agent.conversationHistory.length} messages)`);
+    } else {
+      // No saved context for the new project: start fresh
+      agent.conversationHistory = [];
+      agent.currentThinking = '';
+      delete agent._compactionArmed;
+      console.log(`🆕 [Context Switch] Clean slate for "${agent.name}" on project "${newProject || '(none)'}"`);
+    }
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────
