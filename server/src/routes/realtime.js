@@ -36,6 +36,7 @@ export function realtimeRoutes(agentManager) {
       // Build the voice instructions (system prompt with RAG, skills, agents, etc.)
       const instructions = agentManager.buildVoiceInstructions(agentId);
       const voice = agent.voice || 'alloy';
+      const model = agent.model || 'gpt-realtime-1.5';
 
       // Request an ephemeral client secret from OpenAI
       const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
@@ -47,7 +48,7 @@ export function realtimeRoutes(agentManager) {
         body: JSON.stringify({
           session: {
             type: 'realtime',
-            model: 'gpt-realtime',
+            model,
             instructions,
             audio: {
               input: {
@@ -71,7 +72,7 @@ export function realtimeRoutes(agentManager) {
         token: data.client_secret?.value || data.value,
         expiresAt: data.client_secret?.expires_at || data.expires_at,
         voice,
-        model: 'gpt-realtime'
+        model
       });
     } catch (err) {
       console.error('Failed to create realtime token:', err.message);

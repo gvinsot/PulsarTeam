@@ -87,7 +87,7 @@ export default function VoiceChatTab({ agent, socket }) {
 
       // 2. Get ephemeral token from our server
       const tokenData = await api.getRealtimeToken(agent.id);
-      const { token } = tokenData;
+      const { token, model } = tokenData;
 
       // 3. Create RTCPeerConnection
       const pc = new RTCPeerConnection();
@@ -131,7 +131,7 @@ export default function VoiceChatTab({ agent, socket }) {
       await pc.setLocalDescription(offer);
 
       // 8. Send SDP offer to OpenAI and get answer
-      const sdpResponse = await fetch('https://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03', {
+      const sdpResponse = await fetch(`https://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
