@@ -33,6 +33,7 @@ You can explore the codebase yourself to make informed decisions:
 - @list_dir(path) — explore project structure
 - @write_file(path, """content""") — create or update files
 - @search_files(pattern, query) — find relevant code
+- @run_command(command) — run tests, builds, git commands, etc.
 - Use the run_command to use git commands
 
 You can deploy a solution using following methodology:

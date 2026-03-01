@@ -218,6 +218,10 @@ export class OllamaProvider {
           if (choice?.delta?.content) {
             yield { type: 'text', text: choice.delta.content };
           }
+          // Reasoning models: emit thinking tokens separately
+          if (choice?.delta?.reasoning_content) {
+            yield { type: 'thinking', text: choice.delta.reasoning_content };
+          }
           // Capture finish_reason (last chunk usually has it)
           if (choice?.finish_reason) {
             finishReason = choice.finish_reason;
@@ -720,6 +724,10 @@ export class VLLMProvider {
       const choice = chunk.choices?.[0];
       if (choice?.delta?.content) {
         yield { type: 'text', text: choice.delta.content };
+      }
+      // Reasoning models: emit thinking tokens separately
+      if (choice?.delta?.reasoning_content) {
+        yield { type: 'thinking', text: choice.delta.reasoning_content };
       }
       if (choice?.finish_reason) {
         vllmFinishReason = choice.finish_reason;

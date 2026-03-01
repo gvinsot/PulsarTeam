@@ -357,6 +357,12 @@ export class AgentManager {
           throw new Error('Agent stopped by user');
         }
         
+        if (chunk.type === 'thinking') {
+          // Reasoning model thinking tokens — show in UI but don't add to response
+          agent.currentThinking = chunk.text;
+          this._emit('agent:thinking', { agentId: id, thinking: chunk.text });
+        }
+
         if (chunk.type === 'text') {
           fullResponse += chunk.text;
           agent.currentThinking = fullResponse;
@@ -364,7 +370,8 @@ export class AgentManager {
 
           // ── Incremental delegation detection ──────────────────────
           if (isLeaderStreaming) {
-            const parsed = this._parseDelegations(fullResponse);
+            const cleanedForParsing = fullResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+            const parsed = this._parseDelegations(cleanedForParsing);
             while (detectedCount < parsed.length) {
               const delegation = parsed[detectedCount];
               detectedCount++;
@@ -472,6 +479,10 @@ export class AgentManager {
           if (abortController.signal.aborted) {
             throw new Error('Agent stopped by user');
           }
+          if (chunk.type === 'thinking') {
+            agent.currentThinking = chunk.text;
+            this._emit('agent:thinking', { agentId: id, thinking: chunk.text });
+          }
           if (chunk.type === 'text') {
             fullResponse += chunk.text;
             agent.currentThinking = fullResponse;
@@ -509,9 +520,13 @@ export class AgentManager {
       agent.currentThinking = '';
       saveAgent(agent); // Persist conversation and metrics
 
+      // Strip <think>...</think> blocks from response before parsing tool calls / delegations
+      // These are reasoning tokens some models (Qwen3, etc.) emit inline in content
+      const responseForParsing = fullResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
       // Process tool calls if agent has a project (with depth limit)
       if (agent.project && delegationDepth < MAX_DELEGATION_DEPTH) {
-        const toolResults = await this._processToolCalls(id, fullResponse, streamCallback, delegationDepth);
+        const toolResults = await this._processToolCalls(id, responseForParsing, streamCallback, delegationDepth);
         if (toolResults.length > 0) {
           // Feed tool results back to agent and continue
           const resultsSummary = toolResults.map(r => {
@@ -552,7 +567,7 @@ export class AgentManager {
       // For leader agents, process delegation commands (with depth limit)
       if (isLeaderStreaming) {
         // Final pass: catch any delegations completed in the last chunk
-        const finalParsed = this._parseDelegations(fullResponse);
+        const finalParsed = this._parseDelegations(responseForParsing);
         while (detectedCount < finalParsed.length) {
           const delegation = finalParsed[detectedCount];
           detectedCount++;

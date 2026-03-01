@@ -77,6 +77,9 @@ export function cleanToolSyntax(text) {
   if (!text) return text;
   let cleaned = text;
 
+  // Remove <think>...</think> reasoning blocks (from reasoning models like Qwen3)
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, '');
+
   // Remove wrapper tags
   cleaned = cleaned.replace(/<\|?\/?tool_call\|?>/gi, '');
   cleaned = cleaned.replace(/<\|?\/?tool_use\|?>/gi, '');
