@@ -348,7 +348,6 @@ async function runCommand(basePath, command) {
     /\bshutdown\b/i,             // Shutdown system
     /\breboot\b/i,               // Reboot system
     /\bsystemctl\b/i,            // Manage services
-    /\bservice\b\s/i,            // Manage services (legacy)
     // Environment/shell manipulation
     /\bexport\b.*(?:PATH|LD_)/i, // Modify critical env vars
     /\beval\b/i,                 // Dynamic code execution
