@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile, access, stat, mkdir } from 'fs/promises';
+import { readdir, readFile, writeFile, access, stat, mkdir, realpath } from 'fs/promises';
 import { join, dirname, relative } from 'path';
 import { constants } from 'fs';
 import { exec } from 'child_process';
@@ -134,13 +134,45 @@ export async function executeTool(toolName, args, projectPath) {
   }
 }
 
+// Security: resolve symlinks and verify the real path is within basePath
+async function assertPathWithinBase(fullPath, basePath) {
+  // First check the logical path (catches ../ traversal)
+  if (!fullPath.startsWith(basePath)) {
+    throw new Error('Path traversal not allowed');
+  }
+  // Then resolve symlinks and check the real path
+  try {
+    const realFullPath = await realpath(fullPath);
+    const realBasePath = await realpath(basePath);
+    if (!realFullPath.startsWith(realBasePath)) {
+      throw new Error('Path traversal not allowed (symlink escape)');
+    }
+  } catch (err) {
+    // File doesn't exist yet (write_file) — check parent directory instead
+    if (err.code === 'ENOENT') {
+      const parentDir = dirname(fullPath);
+      try {
+        const realParent = await realpath(parentDir);
+        const realBase = await realpath(basePath);
+        if (!realParent.startsWith(realBase)) {
+          throw new Error('Path traversal not allowed (symlink escape)');
+        }
+      } catch (parentErr) {
+        if (parentErr.code === 'ENOENT') return; // Parent will be created by mkdir
+        throw parentErr;
+      }
+    } else if (err.message?.includes('traversal')) {
+      throw err;
+    }
+    // Other errors (e.g., permission denied) — let the actual operation handle them
+  }
+}
+
 async function readFileFromProject(basePath, filePath) {
   const fullPath = join(basePath, filePath);
-  
-  // Security: ensure path is within project
-  if (!fullPath.startsWith(basePath)) {
-    return { success: false, error: 'Path traversal not allowed' };
-  }
+
+  // Security: ensure path is within project (resolves symlinks)
+  await assertPathWithinBase(fullPath, basePath);
   
   try {
     const content = await readFile(fullPath, 'utf-8');
@@ -160,11 +192,9 @@ async function readFileFromProject(basePath, filePath) {
 
 async function writeFileToProject(basePath, filePath, content) {
   const fullPath = join(basePath, filePath);
-  
-  // Security: ensure path is within project
-  if (!fullPath.startsWith(basePath)) {
-    return { success: false, error: 'Path traversal not allowed' };
-  }
+
+  // Security: ensure path is within project (resolves symlinks)
+  await assertPathWithinBase(fullPath, basePath);
   
   // Create directory if needed
   const dir = dirname(fullPath);
@@ -182,10 +212,9 @@ async function writeFileToProject(basePath, filePath, content) {
 
 async function listDirectory(basePath, dirPath) {
   const fullPath = join(basePath, dirPath);
-  
-  if (!fullPath.startsWith(basePath)) {
-    return { success: false, error: 'Path traversal not allowed' };
-  }
+
+  // Security: ensure path is within project (resolves symlinks)
+  await assertPathWithinBase(fullPath, basePath);
   
   const entries = await readdir(fullPath, { withFileTypes: true });
   const items = entries
@@ -209,25 +238,34 @@ async function listDirectory(basePath, dirPath) {
 
 async function searchInFiles(basePath, pattern, query) {
   // Use grep for searching (available on Linux/Docker)
+  // Security: use execFile with argument arrays to prevent shell injection
+  const { execFile } = await import('child_process');
+  const { promisify } = await import('util');
+  const execFileAsync = promisify(execFile);
+
   try {
-    const { stdout } = await execAsync(
-      `grep -r -l -i "${query.replace(/"/g, '\\"')}" --include="${pattern}" . 2>/dev/null | head -20`,
-      { cwd: basePath, timeout: 10000 }
-    );
-    
-    const files = stdout.trim().split('\n').filter(Boolean);
-    
+    // Phase 1: find matching files
+    const { stdout } = await execFileAsync(
+      'grep', ['-r', '-l', '-i', '--include', pattern, '--', query, '.'],
+      { cwd: basePath, timeout: 10000, maxBuffer: 1024 * 512 }
+    ).catch(err => {
+      if (err.code === 1) return { stdout: '' }; // grep returns 1 when no matches
+      throw err;
+    });
+
+    const files = stdout.trim().split('\n').filter(Boolean).slice(0, 20);
+
     if (files.length === 0) {
       return { success: true, result: 'No matches found' };
     }
-    
-    // Get context for each match (first 3 files)
+
+    // Phase 2: get context for each match (first 5 files)
     const results = [];
     for (const file of files.slice(0, 5)) {
       const cleanPath = file.replace('./', '');
       try {
-        const { stdout: grepOut } = await execAsync(
-          `grep -n -i "${query.replace(/"/g, '\\"')}" "${file}" | head -5`,
+        const { stdout: grepOut } = await execFileAsync(
+          'grep', ['-n', '-i', '-m', '5', '--', query, file],
           { cwd: basePath, timeout: 5000 }
         );
         results.push(`📄 ${cleanPath}:\n${grepOut.trim()}`);
@@ -235,19 +273,18 @@ async function searchInFiles(basePath, pattern, query) {
         results.push(`📄 ${cleanPath}`);
       }
     }
-    
+
     if (files.length > 5) {
       results.push(`... and ${files.length - 5} more files`);
     }
-    
-    return { 
-      success: true, 
+
+    return {
+      success: true,
       result: results.join('\n\n'),
       meta: { matches: files.length, query }
     };
   } catch (err) {
     if (err.code === 1) {
-      // grep returns 1 when no matches
       return { success: true, result: 'No matches found' };
     }
     return { success: false, error: err.message };
@@ -255,41 +292,73 @@ async function searchInFiles(basePath, pattern, query) {
 }
 
 async function runCommand(basePath, command) {
-  // Security: block dangerous commands
+  // Security: block dangerous commands — comprehensive blocklist
   const blockedPatterns = [
-    /rm\s+-rf/i,
-    /rm\s+.*\//i,
-    /curl.*\|.*sh/i,
-    /wget.*\|.*sh/i,
-    />\s*\/dev/i,
-    /dd\s+if=/i,
-    /mkfs/i,
-    /format/i,
+    // Destructive file operations
+    /\brm\b/i,                    // rm in any form
+    /\bmkfs\b/i,                  // Format filesystem
+    /\bdd\b\s+if=/i,             // Disk dump
+    /\bshred\b/i,                 // Secure delete
+    /\btruncate\b/i,             // Truncate files
+    // Dangerous network operations (piped to shell)
+    /\b(curl|wget|fetch)\b.*\|/i, // Download piped to anything
+    /\|.*\b(bash|sh|zsh|dash|exec)\b/i, // Pipe into shell
+    // System modification
+    /\bchmod\b.*777/i,           // World-writable permissions
+    /\bchown\b.*root/i,          // Change ownership to root
+    /\buseradd\b/i,              // Add users
+    /\buserdel\b/i,              // Delete users
+    /\bpasswd\b/i,               // Change passwords
+    /\bsudo\b/i,                 // Privilege escalation
+    /\bsu\b\s/i,                 // Switch user
+    // Device/system writes
+    />\s*\/dev\//i,              // Write to device files
+    />\s*\/etc\//i,              // Write to system config
+    />\s*\/proc\//i,             // Write to proc
+    />\s*\/sys\//i,              // Write to sys
+    // Prevent escape from working directory
+    /\bkill\b/i,                 // Kill processes
+    /\bkillall\b/i,              // Kill all processes
+    /\bshutdown\b/i,             // Shutdown system
+    /\breboot\b/i,               // Reboot system
+    /\bsystemctl\b/i,            // Manage services
+    /\bservice\b\s/i,            // Manage services (legacy)
+    // Environment/shell manipulation
+    /\bexport\b.*(?:PATH|LD_)/i, // Modify critical env vars
+    /\beval\b/i,                 // Dynamic code execution
+    /\bsource\b\s/i,            // Source arbitrary scripts
+    /\b\.\s+\//,                 // Source with dot notation
+    // Crypto mining / reverse shells
+    /\bnc\b\s+-[elp]/i,         // netcat listeners
+    /\bncat\b/i,                 // ncat
+    /\/dev\/tcp\//i,             // Bash TCP device
+    /\bmkfifo\b/i,              // Named pipe (often used in reverse shells)
   ];
-  
+
   for (const pattern of blockedPatterns) {
     if (pattern.test(command)) {
-      return { success: false, error: 'Command blocked for security reasons' };
+      return { success: false, error: `Command blocked for security reasons: matches pattern ${pattern}` };
     }
   }
-  
+
   try {
-    const { stdout, stderr } = await execAsync(command, { 
-      cwd: basePath, 
+    const { stdout, stderr } = await execAsync(command, {
+      cwd: basePath,
       timeout: 30000,
       maxBuffer: 1024 * 1024, // 1MB
-      shell: '/bin/bash'
+      shell: '/bin/bash',
+      env: { ...process.env, PATH: process.env.PATH } // Don't leak extra env vars
     });
-    
+
     const output = stdout || stderr || '(no output)';
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: output.slice(0, 10000), // Limit output size
       meta: { command, truncated: output.length > 10000 }
     };
   } catch (err) {
-    return { 
-      success: false, 
+    return {
+      success: false,
       error: err.message,
       result: err.stderr || err.stdout
     };
@@ -298,10 +367,9 @@ async function runCommand(basePath, command) {
 
 async function appendToFile(basePath, filePath, content) {
   const fullPath = join(basePath, filePath);
-  
-  if (!fullPath.startsWith(basePath)) {
-    return { success: false, error: 'Path traversal not allowed' };
-  }
+
+  // Security: ensure path is within project (resolves symlinks)
+  await assertPathWithinBase(fullPath, basePath);
   
   // Create directory if needed
   const dir = dirname(fullPath);

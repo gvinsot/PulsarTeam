@@ -33,11 +33,32 @@ const getJwtSecret = () => {
   return secret;
 };
 
+// Rate limiting for login — max 5 attempts per IP per 15 minutes
+const loginAttempts = new Map(); // ip -> { count, resetAt }
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+function checkLoginRateLimit(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return true;
+  }
+  entry.count++;
+  return entry.count <= LOGIN_MAX_ATTEMPTS;
+}
+
 // Login
 router.post('/login', async (req, res) => {
   try {
+    const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
+    if (!checkLoginRateLimit(clientIp)) {
+      return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+    }
+
     await ensureUsersInitialized();
-    
+
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
