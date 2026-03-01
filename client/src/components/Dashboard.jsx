@@ -107,8 +107,10 @@ export default function Dashboard({
           <BroadcastPanel
             agents={agents}
             projects={projects}
+            skills={skills}
             socket={socket}
             onClose={() => setShowBroadcast(false)}
+            onRefresh={onRefresh}
           />
         )}
 
