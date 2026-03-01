@@ -7,13 +7,14 @@ if [ -n "$RUN_AS_USER" ]; then
   gid="${RUN_AS_GID:-1000}"
 
   # Free up UID/GID if already taken by another user (e.g. 'node' uses 1000 in node:alpine)
+  # Edit passwd/group files directly — usermod/groupmod fail when processes are running
   existing_user=$(getent passwd "$uid" 2>/dev/null | cut -d: -f1 || true)
   if [ -n "$existing_user" ] && [ "$existing_user" != "$RUN_AS_USER" ]; then
-    usermod -u 65534 "$existing_user" 2>/dev/null || true
+    sed -i "s/^${existing_user}:\([^:]*\):${uid}:/${existing_user}:\1:65534:/" /etc/passwd
   fi
   existing_group=$(getent group "$gid" 2>/dev/null | cut -d: -f1 || true)
   if [ -n "$existing_group" ] && [ "$existing_group" != "$RUN_AS_USER" ]; then
-    groupmod -g 65534 "$existing_group" 2>/dev/null || true
+    sed -i "s/^${existing_group}:\([^:]*\):${gid}:/${existing_group}:\1:65534:/" /etc/group
   fi
 
   # Create group if it doesn't exist
