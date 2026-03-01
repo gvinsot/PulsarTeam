@@ -3,7 +3,7 @@ import {
   X, Send, Trash2, Plus, Settings, MessageSquare,
   CheckSquare, FileText, ArrowRightLeft, RotateCcw,
   ChevronDown, ChevronRight, Edit3, Save, Clock, Zap, AlertCircle, FolderCode, StopCircle, Terminal, Users,
-  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench
+  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../api';
@@ -261,7 +261,7 @@ function RichAssistantContent({ text }) {
   );
 }
 
-export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onRefresh }) {
+export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh }) {
   const [activeTab, setActiveTab] = useState('chat');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -328,8 +328,27 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-dark-700">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-2xl flex-shrink-0">{agent.icon}</span>
-          <div className="min-w-0">
+          {/* Mobile back button */}
+          <button
+            onClick={onClose}
+            className="lg:hidden p-1.5 -ml-1 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0"
+            title="Back"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          {/* Mobile agent switcher */}
+          <select
+            value={agent.id}
+            onChange={(e) => onSelectAgent?.(e.target.value)}
+            className="lg:hidden px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-sm font-bold text-dark-100 focus:outline-none focus:border-indigo-500 max-w-[160px] truncate appearance-none"
+          >
+            {agents.filter(a => a.enabled !== false).map(a => (
+              <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
+            ))}
+          </select>
+          {/* Desktop: agent icon + name */}
+          <span className="text-2xl flex-shrink-0 hidden lg:inline">{agent.icon}</span>
+          <div className="min-w-0 hidden lg:block">
             <h2 className="font-bold text-dark-100">{agent.name}</h2>
             <div className="flex items-center gap-2 text-xs">
               <span className={`inline-flex items-center gap-1 ${
@@ -354,8 +373,8 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {/* Project selector — auto-saves */}
-          <div className="flex items-center gap-1.5">
+          {/* Project selector — auto-saves (hidden on mobile) */}
+          <div className="hidden sm:flex items-center gap-1.5">
             <FolderCode className="w-3.5 h-3.5 text-dark-500 flex-shrink-0" />
             <select
               value={agent.project || ''}
@@ -382,7 +401,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
               Stop
             </button>
           )}
-          <button onClick={onClose} className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
+          <button onClick={onClose} className="hidden lg:block p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
             <X className="w-5 h-5" />
           </button>
         </div>

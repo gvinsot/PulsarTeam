@@ -372,7 +372,8 @@ Examples:
 @delegate(Security Analyst, "Scan the codebase for SQL injection vulnerabilities and fix any found")
 @delegate(QA Engineer, "Write unit tests for the user service and run them")
 
-You can delegate multiple tasks at once. After delegations complete, you will receive the results and should synthesize them.
+Please do one delegate per task.
+After delegations complete, you will receive the results and should synthesize them.
 
 ## PROJECT ASSIGNMENT
 @assign_project(AgentName, "project_name") — Assign an agent to a project so they can use file and command tools on it. Context is automatically saved and restored per-project.

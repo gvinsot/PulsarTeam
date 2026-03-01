@@ -301,13 +301,15 @@ export class AgentManager {
     }
 
     // ── Proactive compaction: summarize older messages when history exceeds threshold ──
-    // IMPORTANT: Skip during tool/delegation continuations to avoid
-    // losing context mid-task. Only compact on top-level user messages.
+    // Compact on top-level user messages AND new delegation tasks (not tool-result continuations
+    // which need their recent context intact mid-task).
     const MAX_RECENT = 10;
     const COMPACT_TRIGGER = MAX_RECENT + 5; // 15
     const COMPACT_RESET = MAX_RECENT + 2;   // 12
     const isTopLevelUserMessage = delegationDepth === 0 && !messageMeta;
-    if (isTopLevelUserMessage) {
+    const isNewDelegationTask = messageMeta?.type === 'delegation-task';
+    const shouldCompact = isTopLevelUserMessage || isNewDelegationTask;
+    if (shouldCompact) {
       const nonSummaryMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
 
       if (agent._compactionArmed === undefined) {
@@ -335,8 +337,8 @@ export class AgentManager {
     messages.push({ role: 'user', content: userMessage });
 
     // ── Safety net: also compact if token budget is exceeded ──
-    // Skip during tool/delegation continuations to avoid breaking mid-task context
-    if (isTopLevelUserMessage) {
+    // Skip during tool-result continuations to avoid breaking mid-task context
+    if (shouldCompact) {
       const contextLimit = agent.contextLength || 8192;
       const estimatedTokens = this._estimateTokens(messages);
       if (estimatedTokens > contextLimit * 0.75 && realMessages.length > MAX_RECENT) {
@@ -487,6 +489,17 @@ export class AgentManager {
               }).catch(err => {
                 // End sub-agent stream on error too
                 if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id });
+                // Mark todo as done even on error (the error is reported to the leader)
+                if (todo && targetAgent) {
+                  const t = targetAgent.todoList.find(t => t.id === todo.id);
+                  if (t) {
+                    t.done = true;
+                    t.error = err.message;
+                    t.completedAt = new Date().toISOString();
+                    saveAgent(targetAgent);
+                    this._emit('agent:updated', this._sanitize(targetAgent));
+                  }
+                }
                 return { agentId: targetAgent?.id, agentName: targetAgent?.name || delegation.agentName, task: delegation.task, response: null, error: err.message };
               });
 
@@ -697,6 +710,17 @@ export class AgentManager {
           }).catch(err => {
             // End sub-agent stream on error too
             if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id });
+            // Mark todo as done even on error (the error is reported to the leader)
+            if (todo && targetAgent) {
+              const t = targetAgent.todoList.find(t => t.id === todo.id);
+              if (t) {
+                t.done = true;
+                t.error = err.message;
+                t.completedAt = new Date().toISOString();
+                saveAgent(targetAgent);
+                this._emit('agent:updated', this._sanitize(targetAgent));
+              }
+            }
             return { agentId: targetAgent?.id, agentName: targetAgent?.name || delegation.agentName, task: delegation.task, response: null, error: err.message };
           });
 

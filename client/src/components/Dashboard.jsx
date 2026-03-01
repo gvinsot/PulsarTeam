@@ -181,6 +181,7 @@ export default function Dashboard({
                 streamBuffer={streamBuffers[selectedAgentData.id]}
                 socket={socket}
                 onClose={() => setSelectedAgent(null)}
+                onSelectAgent={setSelectedAgent}
                 onRefresh={onRefresh}
               />
             </div>
