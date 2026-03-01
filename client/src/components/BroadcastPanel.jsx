@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Radio, Send, Loader2, FolderOpen, ChevronDown, StopCircle, Wrench, Plus, Pencil, Trash2, Check, ChevronRight } from 'lucide-react';
+import { X, Radio, Send, Loader2, FolderOpen, ChevronDown, StopCircle, Wrench, Plus, Pencil, Trash2, Check, ChevronRight, MessageSquareOff, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
@@ -128,12 +128,32 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], soc
     }
   };
 
+  const handleClearAllChats = async () => {
+    if (!agents.length) return;
+    try {
+      await Promise.all(agents.map(a => api.clearHistory(a.id)));
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to clear chats:', err);
+    }
+  };
+
+  const handleClearAllActionLogs = async () => {
+    if (!agents.length) return;
+    try {
+      await Promise.all(agents.map(a => api.clearActionLogs(a.id)));
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      console.error('Failed to clear action logs:', err);
+    }
+  };
+
   // Get current project (from first agent or null)
   const currentProject = agents.length > 0 ? agents[0].project : null;
 
   return (
-    <div className="border-b border-dark-700 bg-dark-900/50 animate-fadeIn">
-      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn" onClick={onClose}>
+      <div className="w-full max-w-3xl max-h-[85vh] overflow-auto bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl mx-4 px-6 py-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-amber-400" />
@@ -175,6 +195,26 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], soc
               <Wrench className="w-4 h-4" />
               <span className="hidden sm:inline">Skills</span>
               <span className="text-xs opacity-60">({skills.length})</span>
+            </button>
+            {/* Clear All Chats */}
+            <button
+              onClick={handleClearAllChats}
+              disabled={agents.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-dark-800 text-dark-400 hover:text-dark-200 hover:bg-dark-700 rounded-lg transition-colors text-sm font-medium disabled:opacity-40"
+              title="Clear all agent conversations"
+            >
+              <MessageSquareOff className="w-4 h-4" />
+              <span className="hidden sm:inline">Clear Chats</span>
+            </button>
+            {/* Clear All Action Logs */}
+            <button
+              onClick={handleClearAllActionLogs}
+              disabled={agents.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-dark-800 text-dark-400 hover:text-dark-200 hover:bg-dark-700 rounded-lg transition-colors text-sm font-medium disabled:opacity-40"
+              title="Clear all agent action logs"
+            >
+              <ScrollText className="w-4 h-4" />
+              <span className="hidden sm:inline">Clear Logs</span>
             </button>
             {/* Stop All button - visible when any agent is busy */}
             {agents.some(a => a.status === 'busy') && socket && (

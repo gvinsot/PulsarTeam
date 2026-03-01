@@ -250,6 +250,9 @@ export class AgentManager {
         systemContent += `\n- @rollback(AgentName, X) — Remove the last X messages from an agent's conversation history.`;
         systemContent += `\n- @stop_agent(AgentName) — Stop an agent's current task immediately.`;
         systemContent += `\n- @list_projects() — List all available projects.`;
+        systemContent += `\n- @clear_all_chats() — Clear ALL agents' conversation histories at once, giving every agent a fresh start.`;
+        systemContent += `\n- @clear_all_action_logs() — Clear ALL agents' action logs at once.`;
+        systemContent += `\n- @list_agents() — List all enabled agents with their current status, project, and role.`;
         if (projectNames.length > 0) {
           systemContent += `\nAvailable projects: ${projectNames.join(', ')}`;
         }
@@ -886,6 +889,40 @@ export class AgentManager {
           } else {
             if (streamCallback) streamCallback(`\n⚠️ ${targetAgent.name} is not currently busy\n`);
           }
+        }
+
+        // ── Process @clear_all_chats commands ───────────────────────────
+        if (/@clear_all_chats\s*\(\s*\)/i.test(responseForParsing)) {
+          let count = 0;
+          for (const a of this.agents.values()) {
+            if (a.id !== id && a.enabled !== false) {
+              this.clearHistory(a.id);
+              count++;
+            }
+          }
+          console.log(`🧹 [Clear All Chats] Cleared conversation history for ${count} agents`);
+          if (streamCallback) streamCallback(`\n🧹 Cleared conversation history for ${count} agents\n`);
+        }
+
+        // ── Process @clear_all_action_logs commands ─────────────────────
+        if (/@clear_all_action_logs\s*\(\s*\)/i.test(responseForParsing)) {
+          let count = 0;
+          for (const a of this.agents.values()) {
+            if (a.id !== id && a.enabled !== false) {
+              this.clearActionLogs(a.id);
+              count++;
+            }
+          }
+          console.log(`📋 [Clear All Action Logs] Cleared action logs for ${count} agents`);
+          if (streamCallback) streamCallback(`\n📋 Cleared action logs for ${count} agents\n`);
+        }
+
+        // ── Process @list_agents commands ────────────────────────────────
+        if (/@list_agents\s*\(\s*\)/i.test(responseForParsing)) {
+          const enabled = Array.from(this.agents.values()).filter(a => a.enabled !== false);
+          const lines = enabled.map(a => `- ${a.name} [${a.status}]${a.project ? ` project=${a.project}` : ''} (${a.role || 'worker'})`);
+          console.log(`👥 [List Agents] ${enabled.length} enabled agents`);
+          if (streamCallback) streamCallback(`\n👥 Enabled agents (${enabled.length}):\n${lines.join('\n')}\n`);
         }
       }
 

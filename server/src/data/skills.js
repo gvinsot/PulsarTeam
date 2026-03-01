@@ -387,12 +387,18 @@ Example:
 @rollback(AgentName, X) — Remove the last X messages from an agent's history.
 @stop_agent(AgentName) — Stop an agent's current task immediately.
 @list_projects() — List all available projects.
+@list_agents() — List all enabled agents with their current status, project, and role.
+@clear_all_chats() — Clear ALL agents' conversation histories at once.
+@clear_all_action_logs() — Clear ALL agents' action logs at once.
 
 Examples:
 @get_project(Developer)
 @clear_context(QA Engineer)
 @rollback(Developer, 4)
 @stop_agent(Developer)
-@list_projects()`
+@list_projects()
+@list_agents()
+@clear_all_chats()
+@clear_all_action_logs()`
   },
 ];
