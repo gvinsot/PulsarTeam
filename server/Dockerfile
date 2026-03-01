@@ -18,7 +18,8 @@ RUN apk add --no-cache \
     less \
     patch diffutils \
     docker-cli \
-    shadow
+    shadow \
+    util-linux
 
 # Configure git at runtime via entrypoint (user/email from env vars)
 ENV GIT_USER_NAME=""
