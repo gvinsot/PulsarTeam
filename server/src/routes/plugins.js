@@ -1,50 +1,89 @@
-import { Router } from 'express';
-import {
-  getPlugins,
-  createPlugin,
-  updatePlugin,
-  deletePlugin,
-  addMcpToPlugin,
-  removeMcpFromPlugin
-} from '../data/plugins.js';
+import express from 'express';
 
-const router = Router();
+export function pluginRoutes(skillManager) {
+  const router = express.Router();
 
-router.get('/', (_req, res) => {
-  res.json(getPlugins());
-});
+  router.get('/', (req, res) => {
+    const plugins = skillManager.getAll().map((s) => ({
+      ...s,
+      mcpServerIds: Array.isArray(s.mcpServerIds) ? s.mcpServerIds : []
+    }));
+    res.json(plugins);
+  });
 
-router.post('/', (req, res) => {
-  try {
-    const plugin = createPlugin(req.body || {});
-    res.status(201).json(plugin);
-  } catch (err) {
-    res.status(400).json({ error: err.message || 'Failed to create plugin' });
-  }
-});
+  router.get('/:id', (req, res) => {
+    const plugin = skillManager.getById(req.params.id);
+    if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
+    res.json({
+      ...plugin,
+      mcpServerIds: Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : []
+    });
+  });
 
-router.put('/:id', (req, res) => {
-  const updated = updatePlugin(req.params.id, req.body || {});
-  if (!updated) return res.status(404).json({ error: 'Plugin not found' });
-  res.json(updated);
-});
+  router.post('/', async (req, res) => {
+    try {
+      const { name, description, category, icon, instructions, mcpServerIds = [] } = req.body;
+      if (!name || !instructions) {
+        return res.status(400).json({ error: 'Name and instructions required' });
+      }
+      const plugin = await skillManager.create({
+        name,
+        description,
+        category,
+        icon,
+        instructions,
+        mcpServerIds: Array.isArray(mcpServerIds) ? mcpServerIds : []
+      });
+      res.status(201).json(plugin);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
-router.delete('/:id', (req, res) => {
-  const ok = deletePlugin(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Plugin not found' });
-  res.status(204).send();
-});
+  router.put('/:id', async (req, res) => {
+    try {
+      const plugin = await skillManager.update(req.params.id, req.body);
+      if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
+      res.json(plugin);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
-router.post('/:id/mcps/:mcpId', (req, res) => {
-  const updated = addMcpToPlugin(req.params.id, req.params.mcpId);
-  if (!updated) return res.status(404).json({ error: 'Plugin not found' });
-  res.json(updated);
-});
+  router.delete('/:id', async (req, res) => {
+    try {
+      const success = await skillManager.delete(req.params.id);
+      if (!success) return res.status(404).json({ error: 'Plugin not found' });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
-router.delete('/:id/mcps/:mcpId', (req, res) => {
-  const updated = removeMcpFromPlugin(req.params.id, req.params.mcpId);
-  if (!updated) return res.status(404).json({ error: 'Plugin not found' });
-  res.json(updated);
-});
+  router.post('/:id/mcps/:mcpId', async (req, res) => {
+    try {
+      const plugin = skillManager.getById(req.params.id);
+      if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
+      const ids = new Set(Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : []);
+      ids.add(req.params.mcpId);
+      const updated = await skillManager.update(req.params.id, { mcpServerIds: [...ids] });
+      res.json(updated);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
-export default router;
+  router.delete('/:id/mcps/:mcpId', async (req, res) => {
+    try {
+      const plugin = skillManager.getById(req.params.id);
+      if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
+      const ids = (Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : []).filter((id) => id !== req.params.mcpId);
+      const updated = await skillManager.update(req.params.id, { mcpServerIds: ids });
+      res.json(updated);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  return router;
+}
