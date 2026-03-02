@@ -68,6 +68,8 @@ function normalizePath(pathArg) {
   p = p.replace(/^\/projects\/[^/]+\//, '');
   // Strip any remaining leading slashes
   if (p.startsWith('/')) p = p.replace(/^\/+/, '');
+  // Prevent path traversal
+  p = p.split('/').filter(seg => seg !== '..').join('/');
   return p || '.';
 }
 
