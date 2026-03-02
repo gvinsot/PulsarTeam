@@ -254,6 +254,7 @@ export class ClaudeProvider {
   constructor(apiKey, model) {
     this.client = new Anthropic({ apiKey });
     this.model = model || 'claude-sonnet-4-20250514';
+    this.rateLimiter = claudeRateLimiter;
   }
 
   async chat(messages, options = {}) {
@@ -274,7 +275,7 @@ export class ClaudeProvider {
     };
     if (systemMsg) params.system = systemMsg.content;
 
-    const response = await claudeRateLimiter.schedule(() => this.client.messages.create(params));
+    const response = await this.rateLimiter.schedule(() => this.client.messages.create(params));
 
     return {
       content: response.content.map(c => c.text).join(''),
@@ -327,7 +328,7 @@ export class ClaudeProvider {
   async ping() {
     try {
       // Simple validation - try a minimal request
-      const response = await claudeRateLimiter.schedule(() => this.client.messages.create({
+      const response = await this.rateLimiter.schedule(() => this.client.messages.create({
         model: this.model,
         max_tokens: 10,
         messages: [{ role: 'user', content: 'ping' }]
@@ -340,25 +341,25 @@ export class ClaudeProvider {
 
   _sanitizeMessages(messages) {
     if (messages.length === 0) return [{ role: 'user', content: 'Hello' }];
-    
+
     const result = [];
     let lastRole = null;
-    
+
     for (const msg of messages) {
       if (msg.role === lastRole) {
         // Merge consecutive same-role messages
-        result[result.length - 1].content += '\n' + msg.content;
+        result[result.length - 1].content += '\\n' + msg.content;
       } else {
         result.push({ ...msg });
         lastRole = msg.role;
       }
     }
-    
+
     // Ensure first message is from user
     if (result[0]?.role !== 'user') {
       result.unshift({ role: 'user', content: '(continue)' });
     }
-    
+
     return result;
   }
 }
@@ -472,7 +473,7 @@ export class OpenAIProvider {
       if (m.role === 'system') return `System: ${m.content}`;
       if (m.role === 'user') return `Human: ${m.content}`;
       return `Assistant: ${m.content}`;
-    }).join('\n\n') + '\n\nAssistant:';
+    }).join('\\n\\n') + '\\n\\nAssistant:';
 
     const response = await this.client.completions.create({
       model: this.model,
@@ -597,7 +598,7 @@ export class OpenAIProvider {
       if (m.role === 'system') return `System: ${m.content}`;
       if (m.role === 'user') return `Human: ${m.content}`;
       return `Assistant: ${m.content}`;
-    }).join('\n\n') + '\n\nAssistant:';
+    }).join('\\n\\n') + '\\n\\nAssistant:';
 
     const stream = await this.client.completions.create({
       model: this.model,
