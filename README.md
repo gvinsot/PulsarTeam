@@ -101,4 +101,16 @@ Response shape:
     }
   ]
 }
-```
+```## Task List Status (Real-time)
+
+The agent task list now shows each task status directly, without requiring users to click "Execute this task".
+
+Supported statuses:
+- `pending`
+- `in_progress`
+- `error`
+- `done` (displayed as **Completed**)
+
+### Real-time updates
+
+Task status updates are pushed through existing agent update events over Socket.IO and reflected immediately in the UI.
