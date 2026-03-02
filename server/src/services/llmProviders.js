@@ -1,116 +1,194 @@
-// ─── LLM Providers ─────────────────────────────────────────────────────────
-// Unified interface for multiple LLM providers (OpenAI, Claude, Gemini, etc.)
-
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { claudeRateLimiter } from './rateLimiter.js';
 
-// ─── OpenAI-Compatible Provider ─────────────────────────────────────────────
-export class OpenAICompatibleProvider {
-  constructor(config = {}) {
-    this.baseURL = config.baseURL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-    this.apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-    this.model = config.model || 'gpt-4';
-    this.name = config.name || 'openai';
+// ─── Ollama Provider ────────────────────────────────────────────────────────
+// Retry helper for Ollama fetch calls — handles transient 'fetch failed'
+// or HTTP 503 when Ollama is busy with another request.
+const OLLAMA_MAX_RETRIES = 4;
+const OLLAMA_BASE_DELAY_MS = 2000;
+// Timeout for an individual Ollama request (5 minutes).  If the GPU hangs or
+// prompt evaluation takes too long, we abort rather than wait forever.
+const OLLAMA_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * @param {string} url
+ * @param {RequestInit} options
+ * @param {number} maxRetries
+ * @param {AbortSignal|null} externalSignal — caller-provided signal (e.g. user stop)
+ */
+async function ollamaFetchWithRetry(url, options, maxRetries = OLLAMA_MAX_RETRIES, externalSignal = null) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Combine the caller's abort signal with a per-request timeout so:
+    //  • the user can cancel at any time
+    //  • a hung GPU doesn't block forever
+    const timeoutSignal = AbortSignal.timeout(OLLAMA_REQUEST_TIMEOUT_MS);
+    const combinedSignal = externalSignal
+      ? AbortSignal.any([externalSignal, timeoutSignal])
+      : timeoutSignal;
+
+    try {
+      const res = await fetch(url, { ...options, signal: combinedSignal });
+      // Ollama returns 503 when busy — retry
+      if (res.status === 503 && attempt < maxRetries) {
+        const delay = OLLAMA_BASE_DELAY_MS * Math.pow(2, attempt);
+        console.log(`⚠️  [Ollama] 503 busy — retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      // If the caller explicitly aborted, propagate immediately (no retry)
+      if (externalSignal?.aborted) throw err;
+      // Transient network / timeout errors — retry
+      if (attempt < maxRetries) {
+        const delay = OLLAMA_BASE_DELAY_MS * Math.pow(2, attempt);
+        console.log(`⚠️  [Ollama] ${err.message} — retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+export class OllamaProvider {
+  constructor(baseUrl, model) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.model = model;
   }
 
-  async sendMessage(messages, options = {}) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048, tools } = options;
-    
-    const formattedMessages = [];
-    if (systemPrompt) {
-      formattedMessages.push({ role: 'system', content: systemPrompt });
-    }
-    formattedMessages.push(...messages);
+  // Use Ollama's OpenAI-compatible endpoint to leverage tool_choice: "none"
+  // which prevents models from generating tool calls that the harmony parser
+  // would intercept and block.
 
-    const body = {
-      model: options.model || this.model,
-      messages: formattedMessages,
-      temperature,
-      max_tokens: maxTokens,
-    };
-
-    if (tools && tools.length > 0) {
-      body.tools = tools.map(tool => ({
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters || { type: 'object', properties: {} }
+  /**
+   * Pull the model from Ollama if it's not already available locally.
+   * Called automatically on 404 errors.
+   */
+  async _pullModel() {
+    if (this._pulling) return this._pulling;
+    console.log(`📥 [Ollama] Model "${this.model}" not found locally — pulling...`);
+    this._pulling = (async () => {
+      try {
+        const res = await fetch(`${this.baseUrl}/api/pull`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: this.model, stream: false })
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`Pull failed (${res.status}): ${text}`);
         }
-      }));
+        await res.json();
+        console.log(`✅ [Ollama] Model "${this.model}" pulled successfully`);
+      } catch (err) {
+        console.error(`❌ [Ollama] Failed to pull model "${this.model}": ${err.message}`);
+        throw err;
+      } finally {
+        this._pulling = null;
+      }
+    })();
+    return this._pulling;
+  }
+
+  async chat(messages, options = {}) {
+    const body = {
+      model: this.model,
+      messages: messages.map(m => ({
+        role: m.role === 'system' ? 'system' : m.role,
+        content: m.content
+      })),
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens ?? 4096,
+      stream: false,
+      tool_choice: 'none',
+    };
+    // Pass num_ctx via Ollama-specific extension
+    if (options.contextLength) {
+      body.options = { num_ctx: options.contextLength };
+    } else {
+      body.options = { num_ctx: 8192 };
     }
 
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
+    let res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, OLLAMA_MAX_RETRIES, options.signal || null);
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error (${response.status}): ${error}`);
+    // Auto-pull model on 404 and retry
+    if (res.status === 404) {
+      await this._pullModel();
+      res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, OLLAMA_MAX_RETRIES, options.signal || null);
     }
 
-    const data = await response.json();
-    const choice = data.choices[0];
-    
-    // Handle tool calls
-    if (choice.message.tool_calls) {
-      return {
-        content: choice.message.content || '',
-        toolCalls: choice.message.tool_calls.map(tc => ({
-          id: tc.id,
-          name: tc.function.name,
-          arguments: JSON.parse(tc.function.arguments),
-        })),
-        usage: data.usage,
-        provider: this.name,
-      };
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ollama error ${res.status}: ${text}`);
     }
 
+    const data = await res.json();
+    const choice = data.choices?.[0];
     return {
-      content: choice.message.content,
-      usage: data.usage,
-      provider: this.name,
+      content: choice?.message?.content || '',
+      model: this.model,
+      provider: 'ollama',
+      usage: {
+        inputTokens: data.usage?.prompt_tokens || 0,
+        outputTokens: data.usage?.completion_tokens || 0
+      }
     };
   }
 
-  async sendMessageStream(messages, options = {}, onChunk) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048 } = options;
-    
-    const formattedMessages = [];
-    if (systemPrompt) {
-      formattedMessages.push({ role: 'system', content: systemPrompt });
+  async *chatStream(messages, options = {}) {
+    const body = {
+      model: this.model,
+      messages: messages.map(m => ({
+        role: m.role === 'system' ? 'system' : m.role,
+        content: m.content
+      })),
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens ?? 4096,
+      stream: true,
+      tool_choice: 'none',
+    };
+    if (options.contextLength) {
+      body.options = { num_ctx: options.contextLength };
+    } else {
+      body.options = { num_ctx: 8192 };
     }
-    formattedMessages.push(...messages);
 
-    const response = await fetch(`${this.baseURL}/chat/completions`, {
+    let res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: options.model || this.model,
-        messages: formattedMessages,
-        temperature,
-        max_tokens: maxTokens,
-        stream: true,
-      }),
-    });
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, OLLAMA_MAX_RETRIES, options.signal || null);
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error (${response.status}): ${error}`);
+    // Auto-pull model on 404 and retry
+    if (res.status === 404) {
+      await this._pullModel();
+      res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, OLLAMA_MAX_RETRIES, options.signal || null);
     }
 
-    const reader = response.body.getReader();
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Ollama error ${res.status}: ${text}`);
+    }
+
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let fullContent = '';
     let buffer = '';
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let finishReason = null;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -123,514 +201,678 @@ export class OpenAICompatibleProvider {
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const data = trimmed.slice(6);
-        if (data === '[DONE]') continue;
-
+        const payload = trimmed.slice(6);
+        if (payload === '[DONE]') {
+          yield {
+            type: 'done',
+            finishReason: finishReason || 'stop',
+            usage: {
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens
+            }
+          };
+          continue;
+        }
         try {
-          const parsed = JSON.parse(data);
-          const delta = parsed.choices[0]?.delta?.content;
-          if (delta) {
-            fullContent += delta;
-            if (onChunk) onChunk(delta);
+          const data = JSON.parse(payload);
+          const choice = data.choices?.[0];
+          if (choice?.delta?.content) {
+            yield { type: 'text', text: choice.delta.content };
+          }
+          // Reasoning models: emit thinking tokens separately
+          if (choice?.delta?.reasoning_content) {
+            yield { type: 'thinking', text: choice.delta.reasoning_content };
+          }
+          // Capture finish_reason (last chunk usually has it)
+          if (choice?.finish_reason) {
+            finishReason = choice.finish_reason;
+          }
+          // Ollama may include usage in the last chunk
+          if (data.usage) {
+            totalInputTokens = data.usage.prompt_tokens || 0;
+            totalOutputTokens = data.usage.completion_tokens || 0;
           }
         } catch (e) {
-          // Skip malformed chunks
+          // skip malformed SSE lines
         }
       }
     }
+  }
 
-    return { content: fullContent, provider: this.name };
+  async ping() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 }
-
-
-// ─── Ollama Provider ────────────────────────────────────────────────────────
-export class OllamaProvider {
-  constructor(config = {}) {
-    this.baseURL = config.baseURL || process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-    this.model = config.model || 'llama2';
-    this.name = 'ollama';
-  }
-
-  async sendMessage(messages, options = {}) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048 } = options;
-    
-    const formattedMessages = [];
-    if (systemPrompt) {
-      formattedMessages.push({ role: 'system', content: systemPrompt });
-    }
-    formattedMessages.push(...messages);
-
-    const response = await fetch(`${this.baseURL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: options.model || this.model,
-        messages: formattedMessages,
-        options: {
-          temperature,
-          num_predict: maxTokens,
-        },
-        stream: false,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Ollama API error (${response.status}): ${error}`);
-    }
-
-    const data = await response.json();
-    return {
-      content: data.message.content,
-      usage: {
-        prompt_tokens: data.prompt_eval_count || 0,
-        completion_tokens: data.eval_count || 0,
-      },
-      provider: 'ollama',
-    };
-  }
-
-  async sendMessageStream(messages, options = {}, onChunk) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048 } = options;
-    
-    const formattedMessages = [];
-    if (systemPrompt) {
-      formattedMessages.push({ role: 'system', content: systemPrompt });
-    }
-    formattedMessages.push(...messages);
-
-    const response = await fetch(`${this.baseURL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: options.model || this.model,
-        messages: formattedMessages,
-        options: {
-          temperature,
-          num_predict: maxTokens,
-        },
-        stream: true,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Ollama API error (${response.status}): ${error}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.message?.content) {
-            fullContent += parsed.message.content;
-            if (onChunk) onChunk(parsed.message.content);
-          }
-        } catch (e) {
-          // Skip malformed lines
-        }
-      }
-    }
-
-    return { content: fullContent, provider: 'ollama' };
-  }
-}
-
 
 // ─── Claude Provider ────────────────────────────────────────────────────────
 export class ClaudeProvider {
-  constructor(config = {}) {
-    this.client = new Anthropic({ apiKey: config.apiKey || process.env.ANTHROPIC_API_KEY });
+  constructor(apiKey, model) {
+    this.client = new Anthropic({ apiKey });
     this.model = model || 'claude-sonnet-4-20250514';
-    this.name = 'claude';
   }
 
-  async sendMessage(messages, options = {}) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048, tools } = options;
+  async chat(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const chatMessages = messages.filter(m => m.role !== 'system').map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.content
+    }));
 
-    // Separate system messages and format for Claude API
-    const claudeMessages = messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content,
-      }));
+    // Ensure messages alternate correctly
+    const sanitized = this._sanitizeMessages(chatMessages);
 
     const params = {
-      model: options.model || this.model,
-      max_tokens: maxTokens,
-      messages: claudeMessages,
+      model: this.model,
+      max_tokens: options.maxTokens || 4096,
+      temperature: options.temperature ?? 0.7,
+      messages: sanitized,
     };
+    if (systemMsg) params.system = systemMsg.content;
 
-    if (systemPrompt) {
-      params.system = systemPrompt;
-    }
-
-    if (tools && tools.length > 0) {
-      params.tools = tools.map(tool => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.parameters || { type: 'object', properties: {} }
-      }));
-    }
-
-    // ── Rate-limited Claude API call ──────────────────────────────────────
-    const response = await claudeRateLimiter.schedule(async () => {
-      const status = claudeRateLimiter.getStatus();
-      console.log(
-        `[ClaudeProvider] Sending request. ` +
-        `Rate limiter: ${status.requestsInWindow}/${status.maxRequestsPerMinute} req/min, ` +
-        `queue: ${status.queueDepth}`
-      );
-      return this.client.messages.create(params);
-    });
-
-    // Handle tool use responses
-    const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-    if (toolUseBlocks.length > 0) {
-      return {
-        content: response.content
-          .filter(b => b.type === 'text')
-          .map(b => b.text)
-          .join('\n') || '',
-        toolCalls: toolUseBlocks.map(b => ({
-          id: b.id,
-          name: b.name,
-          arguments: b.input,
-        })),
-        usage: {
-          prompt_tokens: response.usage?.input_tokens,
-          completion_tokens: response.usage?.output_tokens,
-        },
-        provider: 'claude',
-      };
-    }
+    const response = await claudeRateLimiter.schedule(() => this.client.messages.create(params));
 
     return {
-      content: response.content[0].text,
-      usage: {
-        prompt_tokens: response.usage?.input_tokens,
-        completion_tokens: response.usage?.output_tokens,
-      },
+      content: response.content.map(c => c.text).join(''),
+      model: this.model,
       provider: 'claude',
+      usage: {
+        inputTokens: response.usage?.input_tokens || 0,
+        outputTokens: response.usage?.output_tokens || 0
+      }
     };
   }
 
-  async sendMessageStream(messages, options = {}, onChunk) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048 } = options;
+  async *chatStream(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const chatMessages = messages.filter(m => m.role !== 'system').map(m => ({
+      role: m.role === 'user' ? 'user' : 'assistant',
+      content: m.content
+    }));
 
-    const claudeMessages = messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content,
-      }));
+    const sanitized = this._sanitizeMessages(chatMessages);
 
     const params = {
-      model: options.model || this.model,
-      max_tokens: maxTokens,
-      messages: claudeMessages,
+      model: this.model,
+      max_tokens: options.maxTokens || 4096,
+      temperature: options.temperature ?? 0.7,
+      messages: sanitized,
+      stream: true,
     };
+    if (systemMsg) params.system = systemMsg.content;
 
-    if (systemPrompt) {
-      params.system = systemPrompt;
-    }
-
-    // ── Rate-limited Claude streaming API call ───────────────────────────
-    const stream = await claudeRateLimiter.schedule(async () => {
-      const status = claudeRateLimiter.getStatus();
-      console.log(
-        `[ClaudeProvider] Sending stream request. ` +
-        `Rate limiter: ${status.requestsInWindow}/${status.maxRequestsPerMinute} req/min, ` +
-        `queue: ${status.queueDepth}`
-      );
-      return this.client.messages.stream(params);
-    });
-
-    let fullContent = '';
+    const stream = this.client.messages.stream(params);
 
     for await (const event of stream) {
-      if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
-        fullContent += event.delta.text;
-        if (onChunk) onChunk(event.delta.text);
+      if (event.type === 'content_block_delta' && event.delta?.text) {
+        yield { type: 'text', text: event.delta.text };
       }
     }
 
-    return { content: fullContent, provider: 'claude' };
+    const finalMessage = await stream.finalMessage();
+    yield {
+      type: 'done',
+      finishReason: finalMessage.stop_reason === 'max_tokens' ? 'length' : 'stop',
+      usage: {
+        inputTokens: finalMessage.usage?.input_tokens || 0,
+        outputTokens: finalMessage.usage?.output_tokens || 0
+      }
+    };
+  }
+
+  async ping() {
+    try {
+      // Simple validation - try a minimal request
+      const response = await claudeRateLimiter.schedule(() => this.client.messages.create({
+        model: this.model,
+        max_tokens: 10,
+        messages: [{ role: 'user', content: 'ping' }]
+      });
+      return !!response;
+    } catch {
+      return false;
+    }
+  }
+
+  _sanitizeMessages(messages) {
+    if (messages.length === 0) return [{ role: 'user', content: 'Hello' }];
+    
+    const result = [];
+    let lastRole = null;
+    
+    for (const msg of messages) {
+      if (msg.role === lastRole) {
+        // Merge consecutive same-role messages
+        result[result.length - 1].content += '\n' + msg.content;
+      } else {
+        result.push({ ...msg });
+        lastRole = msg.role;
+      }
+    }
+    
+    // Ensure first message is from user
+    if (result[0]?.role !== 'user') {
+      result.unshift({ role: 'user', content: '(continue)' });
+    }
+    
+    return result;
   }
 }
 
+// ─── OpenAI Provider ────────────────────────────────────────────────────────
+// Completion-only models (legacy, use /v1/completions endpoint)
+const OPENAI_COMPLETION_MODELS = [
+  'gpt-3.5-turbo-instruct', 'davinci-002', 'babbage-002',
+  'text-davinci-003', 'text-davinci-002', 'text-curie-001', 'text-babbage-001', 'text-ada-001'
+];
 
-// ─── Google Gemini Provider ─────────────────────────────────────────────────
-export class GeminiProvider {
-  constructor(config = {}) {
-    this.apiKey = config.apiKey || process.env.GOOGLE_API_KEY;
-    this.model = config.model || 'gemini-pro';
-    this.baseURL = 'https://generativelanguage.googleapis.com/v1beta';
-    this.name = 'gemini';
+// Reasoning models: no temperature support, use 'developer' role instead of 'system'
+const OPENAI_REASONING_PREFIXES = ['o1', 'o3', 'o4'];
+
+function isOpenAIReasoningModel(model) {
+  return OPENAI_REASONING_PREFIXES.some(p => model.startsWith(p));
+}
+
+export class OpenAIProvider {
+  constructor(apiKey, model) {
+    this.client = new OpenAI({ apiKey });
+    this.model = model || 'gpt-4o';
+    this.isCompletionModel = OPENAI_COMPLETION_MODELS.some(m => this.model.startsWith(m));
+    this.isReasoningModel = isOpenAIReasoningModel(this.model);
+    // Set to true on 404 to permanently switch to the Responses API for this instance
+    this.useResponsesAPI = false;
   }
 
-  async sendMessage(messages, options = {}) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048 } = options;
+  _mapMessages(messages) {
+    return messages.map(m => ({
+      role: this.isReasoningModel && m.role === 'system' ? 'developer' : m.role,
+      content: m.content
+    }));
+  }
 
-    // Convert to Gemini format
-    const contents = messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
-
-    const body = {
-      contents,
-      generationConfig: {
-        temperature,
-        maxOutputTokens: maxTokens,
-      },
-    };
-
-    if (systemPrompt) {
-      body.systemInstruction = { parts: [{ text: systemPrompt }] };
+  async chat(messages, options = {}) {
+    if (this.isCompletionModel) {
+      return this._completionChat(messages, options);
     }
-
-    const model = options.model || this.model;
-    const response = await fetch(
-      `${this.baseURL}/models/${model}:generateContent?key=${this.apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    if (this.useResponsesAPI) {
+      return this._responsesChat(messages, options);
+    }
+    try {
+      return await this._chatCompletion(messages, options);
+    } catch (err) {
+      if (err.status === 404) {
+        this.useResponsesAPI = true;
+        return this._responsesChat(messages, options);
       }
-    );
+      throw err;
+    }
+  }
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Gemini API error (${response.status}): ${error}`);
+  async _chatCompletion(messages, options = {}) {
+    const params = {
+      model: this.model,
+      messages: this._mapMessages(messages),
+      max_completion_tokens: options.maxTokens || 4096,
+    };
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
     }
 
-    const data = await response.json();
-    const content = data.candidates[0]?.content?.parts[0]?.text || '';
+    const response = await this.client.chat.completions.create(params);
 
     return {
-      content,
+      content: response.choices[0]?.message?.content || '',
+      model: this.model,
+      provider: 'openai',
       usage: {
-        prompt_tokens: data.usageMetadata?.promptTokenCount || 0,
-        completion_tokens: data.usageMetadata?.candidatesTokenCount || 0,
-      },
-      provider: 'gemini',
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0
+      }
     };
   }
 
-  async sendMessageStream(messages, options = {}, onChunk) {
-    const { systemPrompt, temperature = 0.7, maxTokens = 2048 } = options;
-
-    const contents = messages
+  async _responsesChat(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const input = messages
       .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+      .map(m => ({ role: m.role, content: m.content }));
 
-    const body = {
-      contents,
-      generationConfig: {
-        temperature,
-        maxOutputTokens: maxTokens,
-      },
+    const params = {
+      model: this.model,
+      input,
+      max_output_tokens: options.maxTokens || 4096,
     };
-
-    if (systemPrompt) {
-      body.systemInstruction = { parts: [{ text: systemPrompt }] };
+    if (systemMsg) {
+      params.instructions = systemMsg.content;
+    }
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
     }
 
-    const model = options.model || this.model;
-    const response = await fetch(
-      `${this.baseURL}/models/${model}:streamGenerateContent?key=${this.apiKey}&alt=sse`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    const response = await this.client.responses.create(params);
+
+    return {
+      content: response.output_text || '',
+      model: this.model,
+      provider: 'openai',
+      usage: {
+        inputTokens: response.usage?.input_tokens || 0,
+        outputTokens: response.usage?.output_tokens || 0
       }
-    );
+    };
+  }
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Gemini API error (${response.status}): ${error}`);
+  async _completionChat(messages, options = {}) {
+    // Convert messages to a single prompt for completion models
+    const prompt = messages.map(m => {
+      if (m.role === 'system') return `System: ${m.content}`;
+      if (m.role === 'user') return `Human: ${m.content}`;
+      return `Assistant: ${m.content}`;
+    }).join('\n\n') + '\n\nAssistant:';
+
+    const response = await this.client.completions.create({
+      model: this.model,
+      prompt,
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens || 4096,
+    });
+
+    return {
+      content: response.choices[0]?.text?.trim() || '',
+      model: this.model,
+      provider: 'openai',
+      usage: {
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0
+      }
+    };
+  }
+
+  async *chatStream(messages, options = {}) {
+    if (this.isCompletionModel) {
+      yield* this._completionStream(messages, options);
+      return;
+    }
+    if (this.useResponsesAPI) {
+      yield* this._responsesChatStream(messages, options);
+      return;
+    }
+    try {
+      yield* this._chatCompletionStream(messages, options);
+    } catch (err) {
+      if (err.status === 404) {
+        this.useResponsesAPI = true;
+        yield* this._responsesChatStream(messages, options);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  async *_chatCompletionStream(messages, options = {}) {
+    const params = {
+      model: this.model,
+      messages: this._mapMessages(messages),
+      max_completion_tokens: options.maxTokens || 4096,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-    let buffer = '';
+    const stream = await this.client.chat.completions.create(params);
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    let gptFinishReason = null;
+    for await (const chunk of stream) {
+      const choice = chunk.choices[0];
+      const delta = choice?.delta;
+      if (delta?.content) {
+        yield { type: 'text', text: delta.content };
+      }
+      if (choice?.finish_reason) {
+        gptFinishReason = choice.finish_reason;
+      }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data: ')) continue;
-        const data = trimmed.slice(6);
-
-        try {
-          const parsed = JSON.parse(data);
-          const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) {
-            fullContent += text;
-            if (onChunk) onChunk(text);
+      // Final chunk with usage
+      if (chunk.usage) {
+        yield {
+          type: 'done',
+          finishReason: gptFinishReason || 'stop',
+          usage: {
+            inputTokens: chunk.usage.prompt_tokens || 0,
+            outputTokens: chunk.usage.completion_tokens || 0
           }
-        } catch (e) {
-          // Skip malformed chunks
+        };
+      }
+    }
+  }
+
+  async *_responsesChatStream(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    const input = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role, content: m.content }));
+
+    const params = {
+      model: this.model,
+      input,
+      max_output_tokens: options.maxTokens || 4096,
+      stream: true,
+    };
+    if (systemMsg) {
+      params.instructions = systemMsg.content;
+    }
+    if (!this.isReasoningModel) {
+      params.temperature = options.temperature ?? 0.7;
+    }
+
+    const stream = await this.client.responses.create(params);
+
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        yield { type: 'text', text: event.delta };
+      }
+      if (event.type === 'response.completed') {
+        const status = event.response?.status;
+        yield {
+          type: 'done',
+          finishReason: status === 'incomplete' ? 'length' : 'stop',
+          usage: {
+            inputTokens: event.response?.usage?.input_tokens || 0,
+            outputTokens: event.response?.usage?.output_tokens || 0
+          }
+        };
+      }
+    }
+  }
+
+  async *_completionStream(messages, options = {}) {
+    // Convert messages to a single prompt for completion models
+    const prompt = messages.map(m => {
+      if (m.role === 'system') return `System: ${m.content}`;
+      if (m.role === 'user') return `Human: ${m.content}`;
+      return `Assistant: ${m.content}`;
+    }).join('\n\n') + '\n\nAssistant:';
+
+    const stream = await this.client.completions.create({
+      model: this.model,
+      prompt,
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens || 4096,
+      stream: true,
+    });
+
+    let totalTokens = 0;
+    for await (const chunk of stream) {
+      const text = chunk.choices[0]?.text;
+      if (text) {
+        yield { type: 'text', text };
+        totalTokens++;
+      }
+    }
+
+    yield {
+      type: 'done',
+      finishReason: 'stop',
+      usage: { inputTokens: 0, outputTokens: totalTokens }
+    };
+  }
+
+  async ping() {
+    try {
+      if (this.isCompletionModel) {
+        const response = await this.client.completions.create({
+          model: this.model,
+          prompt: 'ping',
+          max_tokens: 5,
+        });
+        return !!response;
+      }
+      if (this.useResponsesAPI) {
+        const response = await this.client.responses.create({
+          model: this.model,
+          input: 'ping',
+          max_output_tokens: 5,
+        });
+        return !!response;
+      }
+      const params = {
+        model: this.model,
+        max_completion_tokens: 5,
+        messages: [{ role: 'user', content: 'ping' }],
+      };
+      if (!this.isReasoningModel) {
+        params.temperature = 0;
+      }
+      const response = await this.client.chat.completions.create(params);
+      return !!response;
+    } catch (err) {
+      if (err.status === 404 && !this.useResponsesAPI) {
+        this.useResponsesAPI = true;
+        try {
+          const response = await this.client.responses.create({
+            model: this.model,
+            input: 'ping',
+            max_output_tokens: 5,
+          });
+          return !!response;
+        } catch {
+          return false;
         }
       }
+      return false;
     }
-
-    return { content: fullContent, provider: 'gemini' };
   }
 }
 
-
-// ─── DeepSeek Provider ──────────────────────────────────────────────────────
-export class DeepSeekProvider extends OpenAICompatibleProvider {
-  constructor(config = {}) {
-    super({
-      baseURL: config.baseURL || process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-      apiKey: config.apiKey || process.env.DEEPSEEK_API_KEY,
-      model: config.model || 'deepseek-chat',
-      name: 'deepseek',
+// ─── vLLM Provider (OpenAI-compatible) ──────────────────────────────────────
+export class VLLMProvider {
+  constructor(baseUrl, model, apiKey) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.model = model;
+    this.client = new OpenAI({
+      apiKey: apiKey || 'dummy',  // vLLM may not require an API key
+      baseURL: `${this.baseUrl}/v1`,
     });
   }
-}
 
+  async chat(messages, options = {}) {
+    const params = {
+      model: this.model,
+      messages: messages.map(m => ({
+        role: m.role,
+        content: m.content
+      })),
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens || 4096,
+    };
 
-// ─── OpenRouter Provider ────────────────────────────────────────────────────
-export class OpenRouterProvider extends OpenAICompatibleProvider {
-  constructor(config = {}) {
-    super({
-      baseURL: config.baseURL || 'https://openrouter.ai/api/v1',
-      apiKey: config.apiKey || process.env.OPENROUTER_API_KEY,
-      model: config.model || 'anthropic/claude-3.5-sonnet',
-      name: 'openrouter',
-    });
+    const response = await this.client.chat.completions.create(params);
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      model: this.model,
+      provider: 'vllm',
+      usage: {
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0
+      }
+    };
+  }
+
+  async *chatStream(messages, options = {}) {
+    const params = {
+      model: this.model,
+      messages: messages.map(m => ({
+        role: m.role,
+        content: m.content
+      })),
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens || 4096,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+
+    const stream = await this.client.chat.completions.create(params);
+    let vllmFinishReason = null;
+
+    for await (const chunk of stream) {
+      const choice = chunk.choices?.[0];
+      if (choice?.delta?.content) {
+        yield { type: 'text', text: choice.delta.content };
+      }
+      // Reasoning models: emit thinking tokens separately
+      if (choice?.delta?.reasoning_content) {
+        yield { type: 'thinking', text: choice.delta.reasoning_content };
+      }
+      if (choice?.finish_reason) {
+        vllmFinishReason = choice.finish_reason;
+      }
+
+      if (chunk.usage) {
+        yield {
+          type: 'done',
+          finishReason: vllmFinishReason || 'stop',
+          usage: {
+            inputTokens: chunk.usage.prompt_tokens || 0,
+            outputTokens: chunk.usage.completion_tokens || 0
+          }
+        };
+      }
+    }
+  }
+
+  async ping() {
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/models`, { signal: AbortSignal.timeout(5000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
   }
 }
 
-
-// ─── Groq Provider ──────────────────────────────────────────────────────────
-export class GroqProvider extends OpenAICompatibleProvider {
-  constructor(config = {}) {
-    super({
-      baseURL: config.baseURL || 'https://api.groq.com/openai/v1',
-      apiKey: config.apiKey || process.env.GROQ_API_KEY,
-      model: config.model || 'llama-3.3-70b-versatile',
-      name: 'groq',
+// ─── Mistral AI Provider ────────────────────────────────────────────────────
+export class MistralProvider {
+  constructor(apiKey, model) {
+    this.client = new OpenAI({
+      apiKey: apiKey,
+      baseURL: 'https://api.mistral.ai/v1',
     });
+    this.model = model || 'mistral-large-latest';
+  }
+
+  async chat(messages, options = {}) {
+    const params = {
+      model: this.model,
+      messages: messages.map(m => ({
+        role: m.role,
+        content: m.content
+      })),
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens || 4096,
+    };
+
+    const response = await this.client.chat.completions.create(params);
+
+    return {
+      content: response.choices[0]?.message?.content || '',
+      model: this.model,
+      provider: 'mistral',
+      usage: {
+        inputTokens: response.usage?.prompt_tokens || 0,
+        outputTokens: response.usage?.completion_tokens || 0
+      }
+    };
+  }
+
+  async *chatStream(messages, options = {}) {
+    const params = {
+      model: this.model,
+      messages: messages.map(m => ({
+        role: m.role,
+        content: m.content
+      })),
+      temperature: options.temperature ?? 0.7,
+      max_tokens: options.maxTokens || 4096,
+      stream: true,
+      stream_options: { include_usage: true },
+    };
+
+    const stream = await this.client.chat.completions.create(params);
+    let finishReason = null;
+
+    for await (const chunk of stream) {
+      const choice = chunk.choices?.[0];
+      if (choice?.delta?.content) {
+        yield { type: 'text', text: choice.delta.content };
+      }
+      // Reasoning models: emit thinking tokens separately
+      if (choice?.delta?.reasoning_content) {
+        yield { type: 'thinking', text: choice.delta.reasoning_content };
+      }
+      if (choice?.finish_reason) {
+        finishReason = choice.finish_reason;
+      }
+
+      if (chunk.usage) {
+        yield {
+          type: 'done',
+          finishReason: finishReason || 'stop',
+          usage: {
+            inputTokens: chunk.usage.prompt_tokens || 0,
+            outputTokens: chunk.usage.completion_tokens || 0
+          }
+        };
+      }
+    }
+  }
+
+  async ping() {
+    try {
+      const response = await this.client.models.list();
+      return !!response;
+    } catch {
+      return false;
+    }
   }
 }
-
-
-// ─── Together AI Provider ───────────────────────────────────────────────────
-export class TogetherProvider extends OpenAICompatibleProvider {
-  constructor(config = {}) {
-    super({
-      baseURL: config.baseURL || 'https://api.together.xyz/v1',
-      apiKey: config.apiKey || process.env.TOGETHER_API_KEY,
-      model: config.model || 'meta-llama/Llama-3-70b-chat-hf',
-      name: 'together',
-    });
-  }
-}
-
-
-// ─── Mistral Provider ───────────────────────────────────────────────────────
-export class MistralProvider extends OpenAICompatibleProvider {
-  constructor(config = {}) {
-    super({
-      baseURL: config.baseURL || 'https://api.mistral.ai/v1',
-      apiKey: config.apiKey || process.env.MISTRAL_API_KEY,
-      model: config.model || 'mistral-large-latest',
-      name: 'mistral',
-    });
-  }
-}
-
 
 // ─── Provider Factory ───────────────────────────────────────────────────────
-export function createProvider(type, config = {}) {
-  switch (type) {
-    case 'openai':
-      return new OpenAICompatibleProvider(config);
-    case 'claude':
-      return new ClaudeProvider(config);
-    case 'gemini':
-      return new GeminiProvider(config);
+export function createProvider(config) {
+  switch (config.provider) {
     case 'ollama':
-      return new OllamaProvider(config);
-    case 'deepseek':
-      return new DeepSeekProvider(config);
-    case 'openrouter':
-      return new OpenRouterProvider(config);
-    case 'groq':
-      return new GroqProvider(config);
-    case 'together':
-      return new TogetherProvider(config);
+      return new OllamaProvider(
+        config.endpoint || process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+        config.model
+      );
+    case 'claude':
+      return new ClaudeProvider(
+        config.apiKey || process.env.ANTHROPIC_API_KEY,
+        config.model
+      );
+    case 'openai':
+      return new OpenAIProvider(
+        config.apiKey || process.env.OPENAI_API_KEY,
+        config.model
+      );
+    case 'vllm':
+      return new VLLMProvider(
+        config.endpoint || process.env.VLLM_BASE_URL || 'http://localhost:8000',
+        config.model,
+        config.apiKey || process.env.VLLM_API_KEY || ''
+      );
     case 'mistral':
-      return new MistralProvider(config);
-    case 'custom':
-      return new OpenAICompatibleProvider(config);
+      return new MistralProvider(
+        config.apiKey || process.env.MISTRAL_API_KEY,
+        config.model
+      );
     default:
-      throw new Error(`Unknown provider type: ${type}`);
+      throw new Error(`Unknown provider: ${config.provider}`);
   }
-}
-
-export function getAvailableProviders() {
-  const providers = [];
-  
-  if (process.env.OPENAI_API_KEY) {
-    providers.push({ type: 'openai', name: 'OpenAI', models: ['gpt-4', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-4o', 'gpt-4o-mini'] });
-  }
-  if (process.env.ANTHROPIC_API_KEY) {
-    providers.push({ type: 'claude', name: 'Claude', models: ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'] });
-  }
-  if (process.env.GOOGLE_API_KEY) {
-    providers.push({ type: 'gemini', name: 'Gemini', models: ['gemini-pro', 'gemini-1.5-pro', 'gemini-1.5-flash'] });
-  }
-  if (process.env.DEEPSEEK_API_KEY) {
-    providers.push({ type: 'deepseek', name: 'DeepSeek', models: ['deepseek-chat', 'deepseek-coder'] });
-  }
-  if (process.env.OPENROUTER_API_KEY) {
-    providers.push({ type: 'openrouter', name: 'OpenRouter', models: ['anthropic/claude-3.5-sonnet', 'google/gemini-pro', 'meta-llama/llama-3-70b'] });
-  }
-  if (process.env.GROQ_API_KEY) {
-    providers.push({ type: 'groq', name: 'Groq', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'] });
-  }
-  if (process.env.TOGETHER_API_KEY) {
-    providers.push({ type: 'together', name: 'Together AI', models: ['meta-llama/Llama-3-70b-chat-hf'] });
-  }
-  if (process.env.MISTRAL_API_KEY) {
-    providers.push({ type: 'mistral', name: 'Mistral', models: ['mistral-large-latest', 'mistral-medium-latest'] });
-  }
-  
-  // Ollama is always available (local)
-  providers.push({ type: 'ollama', name: 'Ollama (Local)', models: ['llama2', 'codellama', 'mistral'] });
-  
-  return providers;
 }
