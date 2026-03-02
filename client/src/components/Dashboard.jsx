@@ -195,7 +195,6 @@ export default function Dashboard({
                 agents={sortedAgents}
                 projects={projects}
                 skills={skills}
-                mcpServers={mcpServers}
                 thinking={thinkingMap[selectedAgentData.id]}
                 streamBuffer={streamBuffers[selectedAgentData.id]}
                 socket={socket}

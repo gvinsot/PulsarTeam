@@ -50,6 +50,7 @@ export class SkillManager {
       category: config.category || 'general',
       icon: config.icon || '🔧',
       instructions: config.instructions || '',
+      mcpServerIds: Array.isArray(config.mcpServerIds) ? config.mcpServerIds : [],
       builtin: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -64,7 +65,7 @@ export class SkillManager {
     const skill = this.skills.get(id);
     if (!skill) return null;
 
-    const allowed = ['name', 'description', 'category', 'icon', 'instructions'];
+    const allowed = ['name', 'description', 'category', 'icon', 'instructions', 'mcpServerIds'];
     for (const key of allowed) {
       if (updates[key] !== undefined) {
         skill[key] = updates[key];

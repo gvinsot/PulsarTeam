@@ -3,7 +3,7 @@ import {
   X, Send, Trash2, Plus, Settings, MessageSquare,
   CheckSquare, FileText, ArrowRightLeft, RotateCcw,
   ChevronDown, ChevronRight, Edit3, Save, Clock, Zap, AlertCircle, FolderCode, StopCircle, Terminal, Users,
-  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Plug, Loader, XCircle, RotateCw
+  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Loader, XCircle, RotateCw
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../api';
@@ -22,8 +22,7 @@ const TABS = [
   { id: 'todos', label: 'Tasks', icon: CheckSquare },
   { id: 'rag', label: 'RAG', icon: FileText },
   { id: 'handoff', label: 'Handoff', icon: ArrowRightLeft },
-  { id: 'skills', label: 'Skills', icon: Wrench },
-  { id: 'mcp', label: 'MCP', icon: Plug },
+  { id: 'plugins', label: 'Plugins', icon: Wrench },
   { id: 'logs', label: 'Action Logs', icon: Activity },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
@@ -270,7 +269,7 @@ function RichAssistantContent({ text }) {
   );
 }
 
-export default function AgentDetail({ agent, agents, projects, skills, mcpServers = [], thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab }) {
+export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab }) {
   const [activeTab, setActiveTab] = useState('chat');
 
   // Notify parent of active tab changes
@@ -488,11 +487,8 @@ export default function AgentDetail({ agent, agents, projects, skills, mcpServer
         {activeTab === 'handoff' && (
           <HandoffTab agent={agent} agents={agents} socket={socket} onRefresh={onRefresh} />
         )}
-        {activeTab === 'skills' && (
-          <SkillsTab agent={agent} skills={skills} onRefresh={onRefresh} />
-        )}
-        {activeTab === 'mcp' && (
-          <McpTab agent={agent} mcpServers={mcpServers} onRefresh={onRefresh} />
+        {activeTab === 'plugins' && (
+          <PluginsTab agent={agent} plugins={skills} onRefresh={onRefresh} />
         )}
         {activeTab === 'logs' && (
           <ActionLogsTab agent={agent} onRefresh={onRefresh} />
@@ -1133,35 +1129,35 @@ function TodoTab({ agent, socket, onRefresh }) {
   );
 }
 
-// ─── Skills Tab ───────────────────────────────────────────────────────────
-function SkillsTab({ agent, skills, onRefresh }) {
+// ─── Plugins Tab ──────────────────────────────────────────────────────────
+function PluginsTab({ agent, plugins, onRefresh }) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
-  const [newSkill, setNewSkill] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
+  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
 
-  const agentSkillIds = agent.skills || [];
-  const assignedSkills = skills.filter(s => agentSkillIds.includes(s.id));
-  const availableSkills = skills.filter(s => !agentSkillIds.includes(s.id));
+  const agentPluginIds = agent.skills || [];
+  const assignedPlugins = plugins.filter(s => agentPluginIds.includes(s.id));
+  const availablePlugins = plugins.filter(s => !agentPluginIds.includes(s.id));
 
-  const categories = ['all', ...new Set(skills.map(s => s.category).filter(Boolean))];
+  const categories = ['all', ...new Set(plugins.map(s => s.category).filter(Boolean))];
   const filteredAvailable = categoryFilter === 'all'
-    ? availableSkills
-    : availableSkills.filter(s => s.category === categoryFilter);
+    ? availablePlugins
+    : availablePlugins.filter(s => s.category === categoryFilter);
 
-  const handleAssign = async (skillId) => {
-    await api.assignSkill(agent.id, skillId);
+  const handleAssign = async (pluginId) => {
+    await api.assignPlugin(agent.id, pluginId);
     onRefresh();
   };
 
-  const handleRemove = async (skillId) => {
-    await api.removeSkill(agent.id, skillId);
+  const handleRemove = async (pluginId) => {
+    await api.removePlugin(agent.id, pluginId);
     onRefresh();
   };
 
   const handleCreate = async () => {
-    if (!newSkill.name.trim() || !newSkill.instructions.trim()) return;
-    await api.createSkill(newSkill);
-    setNewSkill({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
+    if (!newPlugin.name.trim() || !newPlugin.instructions.trim()) return;
+    await api.createPlugin(newPlugin);
+    setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
     setShowCreate(false);
     onRefresh();
   };
@@ -1179,30 +1175,35 @@ function SkillsTab({ agent, skills, onRefresh }) {
 
   return (
     <div className="p-4 space-y-5 overflow-auto">
-      {/* Assigned skills */}
+      {/* Assigned plugins */}
       <div>
         <h3 className="font-medium text-dark-200 text-sm mb-3">
-          Assigned Skills
-          <span className="ml-2 text-dark-400 font-normal">({assignedSkills.length})</span>
+          Assigned Plugins
+          <span className="ml-2 text-dark-400 font-normal">({assignedPlugins.length})</span>
         </h3>
-        {assignedSkills.length > 0 ? (
+        {assignedPlugins.length > 0 ? (
           <div className="space-y-2">
-            {assignedSkills.map(skill => (
-              <div key={skill.id} className="flex items-center gap-3 p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 group">
-                <span className="text-lg flex-shrink-0">{skill.icon}</span>
+            {assignedPlugins.map(plugin => (
+              <div key={plugin.id} className="flex items-center gap-3 p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 group">
+                <span className="text-lg flex-shrink-0">{plugin.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-dark-200">{skill.name}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(skill.category)}`}>
-                      {skill.category}
+                    <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
+                      {plugin.category}
                     </span>
+                    {plugin.mcpServerIds?.length > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                        {plugin.mcpServerIds.length} MCP
+                      </span>
+                    )}
                   </div>
-                  <p className="text-xs text-dark-400 truncate">{skill.description}</p>
+                  <p className="text-xs text-dark-400 truncate">{plugin.description}</p>
                 </div>
                 <button
-                  onClick={() => handleRemove(skill.id)}
+                  onClick={() => handleRemove(plugin.id)}
                   className="p-1 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-                  title="Remove skill"
+                  title="Remove plugin"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -1212,16 +1213,16 @@ function SkillsTab({ agent, skills, onRefresh }) {
         ) : (
           <div className="text-center py-4 border border-dashed border-dark-700 rounded-lg">
             <Wrench className="w-5 h-5 mx-auto mb-1 text-dark-500 opacity-40" />
-            <p className="text-dark-500 text-xs">No skills assigned</p>
+            <p className="text-dark-500 text-xs">No plugins assigned</p>
           </div>
         )}
       </div>
 
-      {/* Marketplace */}
+      {/* Available plugins */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-dark-200 text-sm">
-            Available Skills
+            Available Plugins
             <span className="ml-2 text-dark-400 font-normal">({filteredAvailable.length})</span>
           </h3>
           <button
@@ -1249,27 +1250,27 @@ function SkillsTab({ agent, skills, onRefresh }) {
           ))}
         </div>
 
-        {/* Create custom skill form */}
+        {/* Create custom plugin form */}
         {showCreate && (
           <div className="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 space-y-2 mb-3 animate-fadeIn">
             <div className="flex gap-2">
               <input
                 type="text"
-                value={newSkill.icon}
-                onChange={(e) => setNewSkill(s => ({ ...s, icon: e.target.value }))}
+                value={newPlugin.icon}
+                onChange={(e) => setNewPlugin(s => ({ ...s, icon: e.target.value }))}
                 className="w-12 px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-center focus:outline-none focus:border-indigo-500"
                 placeholder="🔧"
               />
               <input
                 type="text"
-                value={newSkill.name}
-                onChange={(e) => setNewSkill(s => ({ ...s, name: e.target.value }))}
+                value={newPlugin.name}
+                onChange={(e) => setNewPlugin(s => ({ ...s, name: e.target.value }))}
                 className="flex-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
-                placeholder="Skill name"
+                placeholder="Plugin name"
               />
               <select
-                value={newSkill.category}
-                onChange={(e) => setNewSkill(s => ({ ...s, category: e.target.value }))}
+                value={newPlugin.category}
+                onChange={(e) => setNewPlugin(s => ({ ...s, category: e.target.value }))}
                 className="px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500"
               >
                 <option value="coding">coding</option>
@@ -1282,47 +1283,52 @@ function SkillsTab({ agent, skills, onRefresh }) {
             </div>
             <input
               type="text"
-              value={newSkill.description}
-              onChange={(e) => setNewSkill(s => ({ ...s, description: e.target.value }))}
+              value={newPlugin.description}
+              onChange={(e) => setNewPlugin(s => ({ ...s, description: e.target.value }))}
               className="w-full px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
               placeholder="Short description"
             />
             <textarea
-              value={newSkill.instructions}
-              onChange={(e) => setNewSkill(s => ({ ...s, instructions: e.target.value }))}
+              value={newPlugin.instructions}
+              onChange={(e) => setNewPlugin(s => ({ ...s, instructions: e.target.value }))}
               className="w-full px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono resize-none"
-              placeholder="Skill instructions (injected into agent prompt)..."
+              placeholder="Plugin instructions (injected into agent prompt)..."
               rows={5}
             />
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 text-dark-400 hover:text-dark-200 text-sm">Cancel</button>
               <button
                 onClick={handleCreate}
-                disabled={!newSkill.name.trim() || !newSkill.instructions.trim()}
+                disabled={!newPlugin.name.trim() || !newPlugin.instructions.trim()}
                 className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-40"
               >
-                Create Skill
+                Create Plugin
               </button>
             </div>
           </div>
         )}
 
-        {/* Available skills grid */}
+        {/* Available plugins grid */}
         <div className="space-y-2">
-          {filteredAvailable.map(skill => (
-            <div key={skill.id} className="flex items-center gap-3 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30 hover:border-dark-600 transition-colors">
-              <span className="text-lg flex-shrink-0">{skill.icon}</span>
+          {filteredAvailable.map(plugin => (
+            <div key={plugin.id} className="flex items-center gap-3 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30 hover:border-dark-600 transition-colors">
+              <span className="text-lg flex-shrink-0">{plugin.icon}</span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-dark-300">{skill.name}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(skill.category)}`}>
-                    {skill.category}
+                  <span className="text-sm font-medium text-dark-300">{plugin.name}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
+                    {plugin.category}
                   </span>
+                  {plugin.mcpServerIds?.length > 0 && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
+                      {plugin.mcpServerIds.length} MCP
+                    </span>
+                  )}
                 </div>
-                <p className="text-xs text-dark-500 truncate">{skill.description}</p>
+                <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
               </div>
               <button
-                onClick={() => handleAssign(skill.id)}
+                onClick={() => handleAssign(plugin.id)}
                 className="px-2.5 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400 rounded-md text-xs font-medium transition-colors flex-shrink-0"
               >
                 Add
@@ -1331,7 +1337,7 @@ function SkillsTab({ agent, skills, onRefresh }) {
           ))}
           {filteredAvailable.length === 0 && !showCreate && (
             <p className="text-center text-dark-500 text-xs py-4">
-              {availableSkills.length === 0 ? 'All skills assigned' : 'No skills in this category'}
+              {availablePlugins.length === 0 ? 'All plugins assigned' : 'No plugins in this category'}
             </p>
           )}
         </div>
@@ -1340,110 +1346,6 @@ function SkillsTab({ agent, skills, onRefresh }) {
   );
 }
 
-// ─── MCP Tab ──────────────────────────────────────────────────────────────
-function McpTab({ agent, mcpServers, onRefresh }) {
-  const agentMcpIds = agent.mcpServers || [];
-  const assignedServers = mcpServers.filter(s => agentMcpIds.includes(s.id));
-  const availableServers = mcpServers.filter(s => !agentMcpIds.includes(s.id));
-
-  const statusColors = {
-    connected: 'bg-emerald-500',
-    connecting: 'bg-amber-500 animate-pulse',
-    error: 'bg-red-500',
-    disconnected: 'bg-dark-500',
-  };
-
-  const handleAssign = async (serverId) => {
-    await api.assignMcpServer(agent.id, serverId);
-    onRefresh();
-  };
-
-  const handleRemove = async (serverId) => {
-    await api.removeMcpServer(agent.id, serverId);
-    onRefresh();
-  };
-
-  return (
-    <div className="p-4 space-y-5 overflow-auto">
-      {/* Assigned MCP servers */}
-      <div>
-        <h3 className="font-medium text-dark-200 text-sm mb-3">
-          Assigned MCP Servers
-          <span className="ml-2 text-dark-400 font-normal">({assignedServers.length})</span>
-        </h3>
-        {assignedServers.length > 0 ? (
-          <div className="space-y-2">
-            {assignedServers.map(server => (
-              <div key={server.id} className="flex items-center gap-3 p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 group">
-                <span className="text-lg flex-shrink-0">{server.icon || '🔌'}</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-dark-200">{server.name}</span>
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColors[server.status] || statusColors.disconnected}`} />
-                    <span className="text-[10px] text-dark-500">{server.status}</span>
-                  </div>
-                  <p className="text-xs text-dark-400 truncate">
-                    {server.tools?.length || 0} tool{(server.tools?.length || 0) !== 1 ? 's' : ''}
-                    {server.description ? ` — ${server.description}` : ''}
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleRemove(server.id)}
-                  className="p-1 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
-                  title="Remove MCP server"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-4 border border-dashed border-dark-700 rounded-lg">
-            <Plug className="w-5 h-5 mx-auto mb-1 text-dark-500 opacity-40" />
-            <p className="text-dark-500 text-xs">No MCP servers assigned</p>
-          </div>
-        )}
-      </div>
-
-      {/* Available MCP servers */}
-      <div>
-        <h3 className="font-medium text-dark-200 text-sm mb-3">
-          Available MCP Servers
-          <span className="ml-2 text-dark-400 font-normal">({availableServers.length})</span>
-        </h3>
-        <div className="space-y-2">
-          {availableServers.map(server => (
-            <div key={server.id} className="flex items-center gap-3 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30 hover:border-dark-600 transition-colors">
-              <span className="text-lg flex-shrink-0">{server.icon || '🔌'}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-dark-300">{server.name}</span>
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColors[server.status] || statusColors.disconnected}`} />
-                  <span className="text-[10px] text-dark-500">{server.status}</span>
-                </div>
-                <p className="text-xs text-dark-500 truncate">
-                  {server.tools?.length || 0} tool{(server.tools?.length || 0) !== 1 ? 's' : ''}
-                  {server.description ? ` — ${server.description}` : ''}
-                </p>
-              </div>
-              <button
-                onClick={() => handleAssign(server.id)}
-                className="px-2.5 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-md text-xs font-medium transition-colors flex-shrink-0"
-              >
-                Add
-              </button>
-            </div>
-          ))}
-          {availableServers.length === 0 && (
-            <p className="text-center text-dark-500 text-xs py-4">
-              {mcpServers.length === 0 ? 'No MCP servers configured — add one in Control Panel' : 'All servers assigned'}
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── RAG Tab ───────────────────────────────────────────────────────────────
 function RagTab({ agent, onRefresh }) {

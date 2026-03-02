@@ -347,22 +347,28 @@ export class AgentManager {
           systemContent += `\n[${doc.name}]:\n${doc.content}\n`;
         }
       }
-      // Append Skills context if available
+      // Append Plugins context and collect MCP server IDs from plugins
       const agentSkills = agent.skills || [];
+      const pluginMcpIds = new Set();
       if (agentSkills.length > 0 && this.skillManager) {
-        const resolvedSkills = agentSkills.map(sid => this.skillManager.getById(sid)).filter(Boolean);
-        if (resolvedSkills.length > 0) {
-          systemContent += '\n\n--- Active Skills ---\n';
-          for (const skill of resolvedSkills) {
-            systemContent += `\n[${skill.name}]:\n${skill.instructions}\n`;
+        const resolvedPlugins = agentSkills.map(sid => this.skillManager.getById(sid)).filter(Boolean);
+        if (resolvedPlugins.length > 0) {
+          systemContent += '\n\n--- Active Plugins ---\n';
+          for (const plugin of resolvedPlugins) {
+            systemContent += `\n[${plugin.name}]:\n${plugin.instructions}\n`;
+            // Collect MCP server IDs from plugin associations
+            if (Array.isArray(plugin.mcpServerIds)) {
+              plugin.mcpServerIds.forEach(id => pluginMcpIds.add(id));
+            }
           }
         }
       }
 
-      // Append MCP tools context if available
-      const agentMcpIds = agent.mcpServers || [];
-      if (agentMcpIds.length > 0 && this.mcpManager) {
-        const mcpTools = this.mcpManager.getToolsForAgent(agentMcpIds);
+      // Merge MCP server IDs: from plugins + direct agent assignments (backward compat)
+      const directMcpIds = agent.mcpServers || [];
+      const allMcpIds = [...new Set([...pluginMcpIds, ...directMcpIds])];
+      if (allMcpIds.length > 0 && this.mcpManager) {
+        const mcpTools = this.mcpManager.getToolsForAgent(allMcpIds);
         if (mcpTools.length > 0) {
           systemContent += '\n\n--- MCP Tools ---\n';
           systemContent += 'Call these tools using @mcp_call(server, tool, {"arg": "value"}) syntax.\n\n';
@@ -761,11 +767,11 @@ export class AgentManager {
         // Nudge mechanism: if agent has tools (project or MCP), produced text but NO tool calls,
         // and this isn't already a nudge — the agent may have described intent without acting.
         // Only nudge agents that have tools available (project-based or MCP).
-        const hasTools = agent.project || agent.mcpServers?.length > 0;
+        const hasTools = agent.project || agent.mcpServers?.length > 0 || agent.skills?.length > 0;
         if (hasTools && !isNudge && responseForParsing.length > 20 && !isLeaderStreaming) {
           if (intentPatterns.test(responseForParsing)) {
             console.log(`🔄 [Nudge] Agent "${agent.name}" described intent but used no tools — nudging`);
-            const nudgeMessage = agent.project
+            const nudgeMessage = agent.project || agent.skills?.length > 0
               ? '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use @read_file, @write_file, @list_dir, @search_files, or @run_command to accomplish your task. Do NOT explain what you will do — just do it.'
               : '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use your available @mcp_call tools to accomplish your task. Do NOT explain what you will do — just do it.';
             const nudgeResponse = await this.sendMessage(

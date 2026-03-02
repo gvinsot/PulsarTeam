@@ -38,7 +38,7 @@ export default function App() {
         api.getAgents(),
         api.getTemplates(),
         api.getProjects(),
-        api.getSkills(),
+        api.getPlugins(),
         api.getMcpServers()
       ]);
 

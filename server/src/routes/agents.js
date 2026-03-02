@@ -161,22 +161,27 @@ export function agentRoutes(agentManager) {
     res.json({ success: true });
   });
 
-  // ── Skill assignment endpoints ────────────────────────────────────
-  router.post('/:id/skills', (req, res) => {
-    const { skillId } = req.body;
-    if (!skillId) return res.status(400).json({ error: 'skillId required' });
-    const result = agentManager.assignSkill(req.params.id, skillId);
+  // ── Plugin (skill) assignment endpoints ──────────────────────────
+  const pluginAssignHandler = (req, res) => {
+    const pluginId = req.body.skillId || req.body.pluginId;
+    if (!pluginId) return res.status(400).json({ error: 'pluginId required' });
+    const result = agentManager.assignSkill(req.params.id, pluginId);
     if (result === null) return res.status(404).json({ error: 'Agent not found' });
-    res.json({ success: true, skills: result });
-  });
-
-  router.delete('/:id/skills/:skillId', (req, res) => {
-    const success = agentManager.removeSkill(req.params.id, req.params.skillId);
+    res.json({ success: true, plugins: result });
+  };
+  const pluginRemoveHandler = (req, res) => {
+    const pluginId = req.params.skillId || req.params.pluginId;
+    const success = agentManager.removeSkill(req.params.id, pluginId);
     if (!success) return res.status(404).json({ error: 'Not found' });
     res.json({ success: true });
-  });
+  };
+  router.post('/:id/plugins', pluginAssignHandler);
+  router.delete('/:id/plugins/:pluginId', pluginRemoveHandler);
+  // Backward compatibility
+  router.post('/:id/skills', pluginAssignHandler);
+  router.delete('/:id/skills/:skillId', pluginRemoveHandler);
 
-  // ── MCP server assignment endpoints ─────────────────────────────
+  // ── MCP server assignment endpoints (backward compat) ───────────
   router.post('/:id/mcp-servers', (req, res) => {
     const { serverId } = req.body;
     if (!serverId) return res.status(400).json({ error: 'serverId required' });

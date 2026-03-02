@@ -137,45 +137,73 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
-  // Skills (marketplace)
-  getSkills: () =>
-    fetch(`${API_BASE}/skills`, { headers: getHeaders() }).then(handleResponse),
+  // Plugins (unified skills + MCP)
+  getPlugins: () =>
+    fetch(`${API_BASE}/plugins`, { headers: getHeaders() }).then(handleResponse),
 
-  createSkill: (config) =>
-    fetch(`${API_BASE}/skills`, {
+  createPlugin: (config) =>
+    fetch(`${API_BASE}/plugins`, {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify(config)
     }).then(handleResponse),
 
-  updateSkill: (id, updates) =>
-    fetch(`${API_BASE}/skills/${id}`, {
+  updatePlugin: (id, updates) =>
+    fetch(`${API_BASE}/plugins/${id}`, {
       method: 'PUT',
       headers: getHeaders(),
       body: JSON.stringify(updates)
     }).then(handleResponse),
 
-  deleteSkill: (id) =>
-    fetch(`${API_BASE}/skills/${id}`, {
+  deletePlugin: (id) =>
+    fetch(`${API_BASE}/plugins/${id}`, {
       method: 'DELETE',
       headers: getHeaders()
     }).then(handleResponse),
 
-  // Agent skill assignment
-  assignSkill: (agentId, skillId) =>
-    fetch(`${API_BASE}/agents/${agentId}/skills`, {
+  // Plugin MCP server associations
+  addPluginMcp: (pluginId, mcpId) =>
+    fetch(`${API_BASE}/plugins/${pluginId}/mcps/${mcpId}`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  removePluginMcp: (pluginId, mcpId) =>
+    fetch(`${API_BASE}/plugins/${pluginId}/mcps/${mcpId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // Agent plugin assignment
+  assignPlugin: (agentId, pluginId) =>
+    fetch(`${API_BASE}/agents/${agentId}/plugins`, {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ skillId })
+      body: JSON.stringify({ pluginId })
     }).then(handleResponse),
 
-  removeSkill: (agentId, skillId) =>
-    fetch(`${API_BASE}/agents/${agentId}/skills/${skillId}`, {
+  removePlugin: (agentId, pluginId) =>
+    fetch(`${API_BASE}/agents/${agentId}/plugins/${pluginId}`, {
       method: 'DELETE',
       headers: getHeaders()
     }).then(handleResponse),
 
-  // MCP Servers
+  // Backward compat aliases
+  getSkills: () =>
+    fetch(`${API_BASE}/plugins`, { headers: getHeaders() }).then(handleResponse),
+  assignSkill: (agentId, skillId) =>
+    fetch(`${API_BASE}/agents/${agentId}/plugins`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ pluginId: skillId })
+    }).then(handleResponse),
+  removeSkill: (agentId, skillId) =>
+    fetch(`${API_BASE}/agents/${agentId}/plugins/${skillId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // MCP Servers (CRUD)
   getMcpServers: () =>
     fetch(`${API_BASE}/mcp-servers`, { headers: getHeaders() }).then(handleResponse),
 
@@ -202,20 +230,6 @@ export const api = {
   connectMcpServer: (id) =>
     fetch(`${API_BASE}/mcp-servers/${id}/connect`, {
       method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  // Agent MCP server assignment
-  assignMcpServer: (agentId, serverId) =>
-    fetch(`${API_BASE}/agents/${agentId}/mcp-servers`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ serverId })
-    }).then(handleResponse),
-
-  removeMcpServer: (agentId, serverId) =>
-    fetch(`${API_BASE}/agents/${agentId}/mcp-servers/${serverId}`, {
-      method: 'DELETE',
       headers: getHeaders()
     }).then(handleResponse),
 

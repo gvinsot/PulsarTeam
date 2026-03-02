@@ -1,6 +1,6 @@
 import express from 'express';
 
-export function pluginRoutes(skillManager) {
+export function pluginRoutes(skillManager, mcpManager) {
   const router = express.Router();
 
   router.get('/', (req, res) => {
