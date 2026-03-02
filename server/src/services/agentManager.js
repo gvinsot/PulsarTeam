@@ -1209,6 +1209,42 @@ export class AgentManager {
         continue;
       }
 
+      // ── Handle @update_todo() — update own task status ──────────────
+      if (call.tool === 'update_todo') {
+        const [todoId, newStatus] = call.args;
+        const validStatuses = ['in_progress', 'done', 'error'];
+        if (!validStatuses.includes(newStatus)) {
+          results.push({ tool: 'update_todo', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}` });
+          continue;
+        }
+        const todo = agent.todoList?.find(t => t.id === todoId);
+        if (!todo) {
+          results.push({ tool: 'update_todo', args: call.args, success: false, error: `Todo not found: ${todoId}` });
+          continue;
+        }
+        todo.status = newStatus;
+        if (newStatus === 'in_progress') todo.startedAt = new Date().toISOString();
+        if (newStatus === 'done') todo.completedAt = new Date().toISOString();
+        saveAgent(agent);
+        this._emit('agent:updated', this._sanitize(agent));
+        console.log(`📋 [Todo] Agent "${agent.name}" updated todo "${todo.text.slice(0, 50)}" → ${newStatus}`);
+        results.push({ tool: 'update_todo', args: call.args, success: true, result: `Todo "${todo.text}" updated to ${newStatus}` });
+        continue;
+      }
+
+      // ── Handle @list_my_tasks() — list agent's own tasks ────────────
+      if (call.tool === 'list_my_tasks') {
+        const todos = agent.todoList || [];
+        if (todos.length === 0) {
+          results.push({ tool: 'list_my_tasks', args: [], success: true, result: 'No tasks assigned.' });
+        } else {
+          const statusIcons = { pending: '[ ]', in_progress: '[~]', done: '[x]', error: '[!]' };
+          const lines = todos.map(t => `${statusIcons[t.status] || '[ ]'} ${t.id} — ${t.text}`);
+          results.push({ tool: 'list_my_tasks', args: [], success: true, result: lines.join('\n') });
+        }
+        continue;
+      }
+
       // ── Handle @mcp_call() — delegate to MCP server ────────────────
       if (call.tool === 'mcp_call') {
         const [serverName, toolName, argsJson] = call.args;
