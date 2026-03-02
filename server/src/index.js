@@ -14,6 +14,7 @@ import { MCPManager } from './services/mcpManager.js';
 import { skillRoutes } from './routes/skills.js';
 import { mcpServerRoutes } from './routes/mcpServers.js';
 import { realtimeRoutes } from './routes/realtime.js';
+import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase } from './services/database.js';
@@ -57,6 +58,7 @@ app.use('/api/projects', authenticateToken, projectRoutes());
 app.use('/api/skills', authenticateToken, skillRoutes(skillManager));
 app.use('/api/mcp-servers', authenticateToken, mcpServerRoutes(mcpManager));
 app.use('/api/realtime', authenticateToken, realtimeRoutes(agentManager));
+app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
 
 // Health check
 app.get('/api/health', (req, res) => {
