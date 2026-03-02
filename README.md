@@ -62,3 +62,43 @@ Open **http://localhost:5173** — login: `admin` / `swarm2026`
 - **Backend**: Node.js, Express, Socket.IO, JWT
 - **Frontend**: React 19, Vite 6, Tailwind CSS, Lucide Icons
 - **LLM**: Anthropic SDK, Ollama API
+## Swarm Leader Tool: Read Agent Last Messages
+
+A new management API is available for the Swarm Leader to inspect the latest messages from any agent.
+
+### Endpoint
+
+`GET /api/leader-tools/last-messages`
+
+Query parameters:
+- `agentId` (optional if `agentName` provided): target agent id
+- `agentName` (optional if `agentId` provided): target agent name (case-insensitive)
+- `limit` (optional): number of last messages to return (default `1`, max `50`)
+
+### Example
+
+```bash
+curl -H "Authorization: Bearer <JWT>" \
+  "http://localhost:3001/api/leader-tools/last-messages?agentName=Developer&limit=3"
+```
+
+Response shape:
+
+```json
+{
+  "agentId": "uuid",
+  "agentName": "Developer",
+  "totalMessages": 42,
+  "returned": 3,
+  "limit": 3,
+  "messages": [
+    {
+      "index": 39,
+      "role": "assistant",
+      "content": "…",
+      "timestamp": "2026-03-02T10:00:00.000Z",
+      "type": null
+    }
+  ]
+}
+```
