@@ -341,6 +341,8 @@ If you are asked to deploy a specific version:
 - @write_file(path, """content""") — create or update files
 - @search_files(pattern, query) — find relevant code
 - @run_command(command) — run tests, builds, git commands, etc.
+- @list_my_tasks() — list your assigned tasks with their status and ID
+- @update_todo(todoId, status) — update a task status (in_progress, done, error)
 - Use @run_command to execute git commands
 
 WORKFLOW:
