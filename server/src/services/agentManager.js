@@ -28,6 +28,19 @@ export class AgentManager {
         agent.isVoice = agent.isVoice || false;
         agent.voice = agent.voice || 'alloy';
         agent.projectContexts = agent.projectContexts || {};
+        // Migration: done boolean → status string
+        if (agent.todoList) {
+          for (const todo of agent.todoList) {
+            if (todo.status === undefined) {
+              todo.status = todo.done ? 'done' : 'pending';
+              delete todo.done;
+            }
+            // Reset in_progress tasks to pending on server restart
+            if (todo.status === 'in_progress') {
+              todo.status = 'pending';
+            }
+          }
+        }
         this.agents.set(agent.id, agent);
       }
       console.log(`📂 Loaded ${agents.length} agents from database`);
@@ -305,7 +318,8 @@ export class AgentManager {
       if (agent.todoList.length > 0) {
         systemContent += '\n\n--- Current Todo List ---\n';
         for (const todo of agent.todoList) {
-          systemContent += `- [${todo.done ? 'x' : ' '}] ${todo.text}\n`;
+          const mark = todo.status === 'done' ? 'x' : todo.status === 'in_progress' ? '~' : todo.status === 'error' ? '!' : ' ';
+          systemContent += `- [${mark}] ${todo.text}\n`;
         }
       }
       
@@ -480,6 +494,17 @@ export class AgentManager {
 
               // Enqueue execution — the queue will process it when the agent is free
               const promise = this._enqueueAgentTask(targetAgent.id, async () => {
+                // Mark todo as in_progress
+                if (todo) {
+                  const t = targetAgent.todoList.find(t => t.id === todo.id);
+                  if (t) {
+                    t.status = 'in_progress';
+                    t.startedAt = new Date().toISOString();
+                    saveAgent(targetAgent);
+                    this._emit('agent:updated', this._sanitize(targetAgent));
+                  }
+                }
+
                 // Notify leader's stream with a status marker (not raw sub-agent output)
                 if (streamCallback) streamCallback(`\n\n--- \uD83D\uDCE8 Delegating to ${targetAgent.name} ---\n`);
 
@@ -506,7 +531,7 @@ export class AgentManager {
                 if (todo) {
                   const t = targetAgent.todoList.find(t => t.id === todo.id);
                   if (t) {
-                    t.done = true;
+                    t.status = 'done';
                     t.completedAt = new Date().toISOString();
                     saveAgent(targetAgent);
                     this._emit('agent:updated', this._sanitize(targetAgent));
@@ -517,11 +542,11 @@ export class AgentManager {
               }).catch(err => {
                 // End sub-agent stream on error too
                 if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id });
-                // Mark todo as done even on error (the error is reported to the leader)
+                // Mark todo as error
                 if (todo && targetAgent) {
                   const t = targetAgent.todoList.find(t => t.id === todo.id);
                   if (t) {
-                    t.done = true;
+                    t.status = 'error';
                     t.error = err.message;
                     t.completedAt = new Date().toISOString();
                     saveAgent(targetAgent);
@@ -703,6 +728,17 @@ export class AgentManager {
           const todo = this.addTodo(targetAgent.id, `[From ${agent.name}] ${delegation.task}`);
 
           const promise = this._enqueueAgentTask(targetAgent.id, async () => {
+            // Mark todo as in_progress
+            if (todo) {
+              const t = targetAgent.todoList.find(t => t.id === todo.id);
+              if (t) {
+                t.status = 'in_progress';
+                t.startedAt = new Date().toISOString();
+                saveAgent(targetAgent);
+                this._emit('agent:updated', this._sanitize(targetAgent));
+              }
+            }
+
             // Notify leader's stream with a status marker (not raw sub-agent output)
             if (streamCallback) streamCallback(`\n\n--- \uD83D\uDCE8 Delegating to ${targetAgent.name} ---\n`);
 
@@ -728,7 +764,7 @@ export class AgentManager {
             if (todo) {
               const t = targetAgent.todoList.find(t => t.id === todo.id);
               if (t) {
-                t.done = true;
+                t.status = 'done';
                 t.completedAt = new Date().toISOString();
                 saveAgent(targetAgent);
                 this._emit('agent:updated', this._sanitize(targetAgent));
@@ -738,11 +774,11 @@ export class AgentManager {
           }).catch(err => {
             // End sub-agent stream on error too
             if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id });
-            // Mark todo as done even on error (the error is reported to the leader)
+            // Mark todo as error
             if (todo && targetAgent) {
               const t = targetAgent.todoList.find(t => t.id === todo.id);
               if (t) {
-                t.done = true;
+                t.status = 'error';
                 t.error = err.message;
                 t.completedAt = new Date().toISOString();
                 saveAgent(targetAgent);
@@ -953,7 +989,7 @@ export class AgentManager {
             if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
             continue;
           }
-          const pendingTodos = (targetAgent.todoList || []).filter(t => !t.done).length;
+          const pendingTodos = (targetAgent.todoList || []).filter(t => t.status === 'pending' || t.status === 'error').length;
           const totalTodos = (targetAgent.todoList || []).length;
           const msgCount = (targetAgent.conversationHistory || []).length;
           const lines = [
@@ -1584,6 +1620,17 @@ export class AgentManager {
 
       const todo = this.addTodo(targetAgent.id, `[From ${leader.name}] ${delegation.task}`);
 
+      // Mark todo as in_progress
+      if (todo) {
+        const t = targetAgent.todoList.find(t => t.id === todo.id);
+        if (t) {
+          t.status = 'in_progress';
+          t.startedAt = new Date().toISOString();
+          saveAgent(targetAgent);
+          this._emit('agent:updated', this._sanitize(targetAgent));
+        }
+      }
+
       let delegateStreamStarted = false;
       const agentResponse = await this.sendMessage(
         targetAgent.id,
@@ -1604,7 +1651,7 @@ export class AgentManager {
       if (todo) {
         const t = targetAgent.todoList.find(t => t.id === todo.id);
         if (t) {
-          t.done = true;
+          t.status = 'done';
           t.completedAt = new Date().toISOString();
           saveAgent(targetAgent);
           this._emit('agent:updated', this._sanitize(targetAgent));
@@ -1706,7 +1753,7 @@ export class AgentManager {
   addTodo(agentId, text) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = { id: uuidv4(), text, done: false, createdAt: new Date().toISOString() };
+    const todo = { id: uuidv4(), text, status: 'pending', createdAt: new Date().toISOString() };
     agent.todoList.push(todo);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
@@ -1718,7 +1765,21 @@ export class AgentManager {
     if (!agent) return null;
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) return null;
-    todo.done = !todo.done;
+    todo.status = todo.status === 'done' ? 'pending' : 'done';
+    if (todo.status === 'done') todo.completedAt = new Date().toISOString();
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return todo;
+  }
+
+  setTodoStatus(agentId, todoId, status) {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const todo = agent.todoList.find(t => t.id === todoId);
+    if (!todo) return null;
+    todo.status = status;
+    if (status === 'done') todo.completedAt = new Date().toISOString();
+    if (status === 'in_progress') todo.startedAt = new Date().toISOString();
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return todo;
@@ -1739,9 +1800,17 @@ export class AgentManager {
     if (!agent) throw new Error('Agent not found');
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) throw new Error('Todo not found');
-    if (todo.done) throw new Error('Todo already completed');
+    if (todo.status === 'done') throw new Error('Todo already completed');
+    if (todo.status === 'in_progress') throw new Error('Todo already in progress');
 
     console.log(`▶️  Executing todo for ${agent.name}: "${todo.text.slice(0, 80)}"`);
+
+    // Mark as in_progress
+    todo.status = 'in_progress';
+    todo.startedAt = new Date().toISOString();
+    delete todo.error;
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
     this._emit('agent:todo:executing', { agentId, todoId, text: todo.text });
 
     try {
@@ -1752,14 +1821,18 @@ export class AgentManager {
       );
 
       // Mark as done
-      todo.done = true;
+      todo.status = 'done';
       todo.completedAt = new Date().toISOString();
       saveAgent(agent);
       this._emit('agent:updated', this._sanitize(agent));
 
       return { todoId, response };
     } catch (err) {
-      // Mark as failed but don't mark done
+      // Mark as error
+      todo.status = 'error';
+      todo.error = err.message;
+      saveAgent(agent);
+      this._emit('agent:updated', this._sanitize(agent));
       this._emit('agent:todo:error', { agentId, todoId, error: err.message });
       throw err;
     }
@@ -1770,7 +1843,7 @@ export class AgentManager {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
 
-    const pending = agent.todoList.filter(t => !t.done);
+    const pending = agent.todoList.filter(t => t.status === 'pending' || t.status === 'error');
     if (pending.length === 0) throw new Error('No pending tasks');
 
     console.log(`▶️  Executing ${pending.length} pending todo(s) for ${agent.name}`);
@@ -1895,7 +1968,8 @@ export class AgentManager {
     if (agent.todoList && agent.todoList.length > 0) {
       instructions += '\n\n--- Current Todo List ---\n';
       for (const todo of agent.todoList) {
-        instructions += `- [${todo.done ? 'x' : ' '}] ${todo.text}\n`;
+        const mark = todo.status === 'done' ? 'x' : todo.status === 'in_progress' ? '~' : todo.status === 'error' ? '!' : ' ';
+        instructions += `- [${mark}] ${todo.text}\n`;
       }
     }
 

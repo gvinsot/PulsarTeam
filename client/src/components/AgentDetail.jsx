@@ -3,7 +3,7 @@ import {
   X, Send, Trash2, Plus, Settings, MessageSquare,
   CheckSquare, FileText, ArrowRightLeft, RotateCcw,
   ChevronDown, ChevronRight, Edit3, Save, Clock, Zap, AlertCircle, FolderCode, StopCircle, Terminal, Users,
-  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Plug
+  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Plug, Loader, XCircle, RotateCw
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../api';
@@ -884,24 +884,47 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
   }, [todo.text]);
 
   const canExpand = isMultiline || isTruncated;
+  const isDone = todo.status === 'done';
+  const isInProgress = todo.status === 'in_progress';
+  const isError = todo.status === 'error';
+  const isPending = todo.status === 'pending' || !todo.status;
+
+  const borderClass = isInProgress
+    ? 'border-amber-500/50 bg-amber-500/5'
+    : isError
+      ? 'border-red-500/50 bg-red-500/5'
+      : 'border-dark-700/50';
+
+  const checkboxClass = isDone
+    ? 'bg-indigo-500 border-indigo-500 text-white'
+    : isInProgress
+      ? 'bg-amber-500/20 border-amber-500 text-amber-400'
+      : isError
+        ? 'bg-red-500/20 border-red-500 text-red-400'
+        : 'border-dark-500 hover:border-indigo-400';
+
+  const textClass = isDone
+    ? 'line-through text-dark-500'
+    : isError
+      ? 'text-red-300'
+      : isInProgress
+        ? 'text-amber-200'
+        : 'text-dark-200';
 
   return (
-    <div className={`bg-dark-800/50 rounded-lg border group transition-colors ${
-      executing === todo.id || (executing === 'all' && !todo.done) ? 'border-amber-500/50 bg-amber-500/5' : 'border-dark-700/50'
-    }`}>
+    <div className={`bg-dark-800/50 rounded-lg border group transition-colors ${borderClass}`}>
       <div className="flex items-center gap-3 px-3 py-2">
         <button
           onClick={() => onToggle(todo.id)}
-          className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-            todo.done
-              ? 'bg-indigo-500 border-indigo-500 text-white'
-              : 'border-dark-500 hover:border-indigo-400'
-          }`}
+          disabled={isInProgress}
+          className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${checkboxClass}`}
         >
-          {todo.done && <span className="text-xs">✓</span>}
+          {isDone && <span className="text-xs">✓</span>}
+          {isInProgress && <Loader className="w-3 h-3 animate-spin" />}
+          {isError && <XCircle className="w-3 h-3" />}
         </button>
         <div
-          className={`flex-1 min-w-0 text-sm ${canExpand ? 'cursor-pointer select-none' : ''} ${todo.done ? 'line-through text-dark-500' : 'text-dark-200'}`}
+          className={`flex-1 min-w-0 text-sm ${canExpand ? 'cursor-pointer select-none' : ''} ${textClass}`}
           onClick={() => canExpand && setExpanded(e => !e)}
         >
           <div className="flex items-center gap-1.5">
@@ -911,17 +934,19 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
                 : <ChevronRight className="w-3 h-3 text-dark-400 flex-shrink-0" />
             )}
             <span ref={textRef} className={expanded ? 'whitespace-normal break-words' : 'truncate'}>{firstLine}</span>
+            {isInProgress && <span className="text-xs text-amber-400 font-medium ml-1 flex-shrink-0">In Progress</span>}
+            {isError && <span className="text-xs text-red-400 font-medium ml-1 flex-shrink-0">Error</span>}
           </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {!todo.done && (
+          {(isPending || isError) && (
             <button
               onClick={() => onExecute(todo.id)}
               disabled={!!executing || agentStatus === 'busy'}
               className="p-1 text-dark-500 hover:text-emerald-400 opacity-0 group-hover:opacity-100 disabled:opacity-30 transition-all"
-              title="Execute this task"
+              title={isError ? 'Retry this task' : 'Execute this task'}
             >
-              <Play className="w-3.5 h-3.5" />
+              {isError ? <RotateCw className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
             </button>
           )}
           <button
@@ -932,8 +957,13 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
           </button>
         </div>
       </div>
+      {isError && todo.error && (
+        <div className="px-3 pb-2 ml-8">
+          <p className="text-xs text-red-400/70">{todo.error}</p>
+        </div>
+      )}
       {canExpand && expanded && isMultiline && (
-        <div className={`px-3 pb-2 ml-8 border-t border-dark-700/30 pt-2 ${todo.done ? 'opacity-50' : ''}`}>
+        <div className={`px-3 pb-2 ml-8 border-t border-dark-700/30 pt-2 ${isDone ? 'opacity-50' : ''}`}>
           <div className="markdown-content text-xs text-dark-300 leading-relaxed">
             <ReactMarkdown>{todo.text}</ReactMarkdown>
           </div>
@@ -983,16 +1013,18 @@ function TodoTab({ agent, socket, onRefresh }) {
     }
   }, [agent.status]);
 
-  const done = agent.todoList?.filter(t => t.done).length || 0;
+  const done = agent.todoList?.filter(t => t.status === 'done').length || 0;
+  const inProgress = agent.todoList?.filter(t => t.status === 'in_progress').length || 0;
+  const errors = agent.todoList?.filter(t => t.status === 'error').length || 0;
   const total = agent.todoList?.length || 0;
-  const pending = total - done;
+  const runnable = agent.todoList?.filter(t => t.status === 'pending' || t.status === 'error').length || 0;
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-dark-200 text-sm">Task List</h3>
         <div className="flex items-center gap-2">
-          {pending > 0 && (
+          {runnable > 0 && (
             <button
               onClick={handleExecuteAll}
               disabled={!!executing || agent.status === 'busy'}
@@ -1000,12 +1032,14 @@ function TodoTab({ agent, socket, onRefresh }) {
               title="Execute all pending tasks"
             >
               <PlayCircle className="w-3.5 h-3.5" />
-              Run all ({pending})
+              Run all ({runnable})
             </button>
           )}
           {total > 0 && (
             <span className="text-xs text-dark-400">
               {done}/{total} completed
+              {inProgress > 0 && <span className="text-amber-400 ml-1">({inProgress} running)</span>}
+              {errors > 0 && <span className="text-red-400 ml-1">({errors} failed)</span>}
             </span>
           )}
         </div>
@@ -1013,10 +1047,18 @@ function TodoTab({ agent, socket, onRefresh }) {
 
       {/* Progress bar */}
       {total > 0 && (
-        <div className="w-full bg-dark-700 rounded-full h-1.5">
+        <div className="w-full bg-dark-700 rounded-full h-1.5 flex overflow-hidden">
           <div
-            className="bg-indigo-500 h-1.5 rounded-full transition-all duration-500"
+            className="bg-indigo-500 h-1.5 transition-all duration-500"
             style={{ width: `${(done / total) * 100}%` }}
+          />
+          <div
+            className="bg-amber-500 h-1.5 transition-all duration-500"
+            style={{ width: `${(inProgress / total) * 100}%` }}
+          />
+          <div
+            className="bg-red-500 h-1.5 transition-all duration-500"
+            style={{ width: `${(errors / total) * 100}%` }}
           />
         </div>
       )}

@@ -160,7 +160,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
           </span>
           <span className="flex items-center gap-1">
             <Cpu className="w-3 h-3" />
-            {agent.todoList?.filter(t => !t.done).length || 0} tasks
+            {agent.todoList?.filter(t => t.status !== 'done').length || 0} tasks
           </span>
         </div>
       </div>

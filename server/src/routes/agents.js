@@ -129,7 +129,13 @@ export function agentRoutes(agentManager) {
   });
 
   router.patch('/:id/todos/:todoId', (req, res) => {
-    const todo = agentManager.toggleTodo(req.params.id, req.params.todoId);
+    const { status } = req.body || {};
+    let todo;
+    if (status) {
+      todo = agentManager.setTodoStatus(req.params.id, req.params.todoId, status);
+    } else {
+      todo = agentManager.toggleTodo(req.params.id, req.params.todoId);
+    }
     if (!todo) return res.status(404).json({ error: 'Not found' });
     res.json(todo);
   });
