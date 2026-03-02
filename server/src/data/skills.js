@@ -292,13 +292,6 @@ MAINTENANCE:
     builtin: true,
     instructions: `You know how to integrate and deploy projects on the Swarm cluster.
 
-Build and deploy operations are managed via MCP tools (available through the swarm-manager service).
-
-## DEPLOYMENT TOOLS
-
-@git_commit_push(message) — Stage all changes, commit, and push to remote
-  Example: @git_commit_push(feat: add deployment config)
-
 MCP tools (call via the MCP endpoint):
 - list_stacks() — List all deployed stacks and their services
 - build_stack(stack_name, version) — Build and push Docker images for a stack
@@ -308,7 +301,7 @@ MCP tools (call via the MCP endpoint):
 - list_computers() — List available Swarm nodes
 - search_logs(stack_name, query, since) — Search service logs
 
-## DEPLOYMENT WORKFLOW
+Build and deploy operations are managed via MCP tools (available through the swarm-manager service).
 
 1. FIRST TIME SETUP — If the project has no devops/ folder yet:
    - Read the existing project structure and understand what needs to be containerized
@@ -400,6 +393,7 @@ Example:
 @agent_status(AgentName) — Check a specific agent's status (busy/idle/error), project, pending todos, and message count.
 @clear_all_chats() — Clear ALL agents' conversation histories at once.
 @clear_all_action_logs() — Clear ALL agents' action logs at once.
+@get_available_agent(role) — Get the first idle agent with the specified role (e.g. "developer"). Returns agent name, status, and project.
 
 Examples:
 @get_project(Developer)
@@ -410,6 +404,7 @@ Examples:
 @list_agents()
 @agent_status(Developer)
 @clear_all_chats()
-@clear_all_action_logs()`
+@clear_all_action_logs()
+@get_available_agent(developer)`
   },
 ];

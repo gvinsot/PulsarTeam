@@ -276,6 +276,7 @@ export class AgentManager {
         systemContent += `\n- @clear_all_action_logs() — Clear ALL agents' action logs at once.`;
         systemContent += `\n- @list_agents() — List all enabled agents with their current status, project, and role.`;
         systemContent += `\n- @agent_status(AgentName) — Check a specific agent's status (busy/idle/error), current project, pending todos, and message count.`;
+        systemContent += `\n- @get_available_agent(role) — Get the first idle agent with the specified role (e.g. "developer"). Returns agent name, status, and project.`;
         if (projectNames.length > 0) {
           systemContent += `\nAvailable projects: ${projectNames.join(', ')}`;
         }
@@ -1011,6 +1012,22 @@ export class AgentManager {
           console.log(`👥 [List Agents] ${enabled.length} enabled agents`);
           if (streamCallback) streamCallback(`\n👥 Enabled agents (${enabled.length}):\n${lines.join('\n')}\n`);
         }
+
+        // ── Process @get_available_agent commands ─────────────────────────
+        const getAvailableCommands = this._parseGetAvailableAgent(responseForParsing);
+        for (const cmd of getAvailableCommands) {
+          const available = Array.from(this.agents.values()).find(
+            a => a.id !== id && a.enabled !== false && a.status === 'idle' && (a.role || '').toLowerCase() === cmd.role.toLowerCase()
+          );
+          if (available) {
+            const projectInfo = available.project ? `project=${available.project}` : 'no project';
+            console.log(`🔍 [Get Available] Found idle "${cmd.role}": ${available.name}`);
+            if (streamCallback) streamCallback(`\n🔍 Available ${cmd.role}: ${available.name} [idle] (${projectInfo})\n`);
+          } else {
+            console.log(`🔍 [Get Available] No idle agent with role "${cmd.role}"`);
+            if (streamCallback) streamCallback(`\n🔍 No idle agent with role "${cmd.role}" available\n`);
+          }
+        }
       }
 
       this.setStatus(id, 'idle');
@@ -1512,6 +1529,35 @@ export class AgentManager {
       const targetAgentName = text.slice(startAfterParen, closeIdx).trim().replace(/^["']|["']$/g, '');
       if (targetAgentName) {
         results.push({ targetAgentName });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Parse @get_available_agent(role) commands from leader output.
+   * Returns array of { role }.
+   */
+  _parseGetAvailableAgent(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const results = [];
+    const re = /@get_available_agent\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const closeIdx = text.indexOf(')', startAfterParen);
+      if (closeIdx === -1) continue;
+      const role = text.slice(startAfterParen, closeIdx).trim().replace(/^["']|["']$/g, '');
+      if (role) {
+        results.push({ role });
       }
     }
     return results;
