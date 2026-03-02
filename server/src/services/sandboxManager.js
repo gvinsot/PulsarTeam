@@ -324,10 +324,12 @@ export class SandboxManager {
   }
 
   _projectPath(entry, relativePath) {
-    if (!entry.project) throw new Error('No project assigned');
     const rel = String(relativePath || '').replace(/^\/+/, '');
     const safe = rel.split('/').filter(seg => seg !== '..' && seg !== '').join('/');
-    return `${this._userWorkspace(entry.username)}/${entry.project}/${safe}`;
+    const base = entry.project
+      ? `${this._userWorkspace(entry.username)}/${entry.project}`
+      : this._userWorkspace(entry.username);
+    return safe ? `${base}/${safe}` : base;
   }
 
   _sh(value) {

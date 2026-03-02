@@ -93,7 +93,7 @@ export async function executeTool(toolName, args, projectPath, sandboxMgr, agent
   }
 
   if (!sandboxMgr.hasSandbox(agentId)) {
-    return { success: false, error: 'No sandbox running. Assign a project first.' };
+    return { success: false, error: 'No sandbox running. The sandbox will be initialized on the next tool call.' };
   }
 
   const cleanArgs = args.map(a => sanitizeArg(a));

@@ -303,19 +303,19 @@ MCP tools (call via the MCP endpoint):
 
 Build and deploy operations are managed via MCP tools (available through the swarm-manager service).
 
-1. FIRST TIME SETUP — If the project has no devops/ folder yet:
+FIRST TIME SETUP — If the project has no devops/ folder yet:
    - Read the existing project structure and understand what needs to be containerized
    - Create the devops/ folder with docker-compose.swarm.yml, .env, and optional pre/post scripts
    - Commit and push: @git_commit_push(feat: add deployment config)
 
-2. BUILD — Build and push Docker images:
+If you are asked to build:
    - Use the MCP build_stack tool with the project name and version
    - Images are built from devops/docker-compose.swarm.yml
    - Tagged with semantic version and pushed to the registry
    - Check build progress with get_action_status
    - Fix any build errors before proceeding
 
-3. DEPLOY — Deploy to the Swarm cluster:
+If you are asked to deploy a specific version:
    - Use the MCP deploy_stack tool with the project name and version
    - Check deploy progress with get_action_status
    - Verify services are running with list_stacks or list_containers

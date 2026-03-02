@@ -327,12 +327,12 @@ export class AgentManager {
       // Inject tool definitions and project working directory
       if (agent.project) {
         systemContent += `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nUse relative paths from the project root.`;
-        systemContent += `\nIMPORTANT: Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.`;
-        systemContent += `\n${TOOL_DEFINITIONS}`;
-        systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
       } else {
-        systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is selected. Ask to be assigned to a project before using file or command tools.`;
+        systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is assigned. You have access to ALL projects in your workspace. Use @list_dir(.) to discover available projects, then use project-name/path for files (e.g. @read_file(my-project/src/index.js)).`;
       }
+      systemContent += `\nIMPORTANT: Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.`;
+      systemContent += `\n${TOOL_DEFINITIONS}`;
+      systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
 
       // For Ollama models: suppress native/built-in tool calling (e.g. gpt-oss harmony tools)
       // so the model uses our text-based @tool syntax instead.
@@ -644,8 +644,8 @@ export class AgentManager {
       const isNudge = messageMeta?.type === 'nudge';
       const intentPatterns = /\b(i('ll| will| am going to|'m going to)|(let me|let's|going to|i'll|je vais|nous allons|on va|je m'en occupe|commençons|voyons|d'abord|ensuite|puis))\b|je [^ ]+(rai|erai)\b/i;
 
-      // Process tool calls if agent has a project OR MCP servers (no limit — agent works until done)
-      if (agent.project || agent.mcpServers?.length > 0) {
+      // Process tool calls — all agents can use tools (no project = access to all projects)
+      {
         const toolResults = await this._processToolCalls(id, responseForParsing, streamCallback, delegationDepth);
         if (toolResults.length > 0) {
           // Feed tool results back to agent and continue
@@ -683,10 +683,11 @@ export class AgentManager {
           return continuedResponse;
         }
 
-        // Nudge mechanism: if agent has tools available, produced text but NO tool calls,
+        // Nudge mechanism: if agent has tools (project or MCP), produced text but NO tool calls,
         // and this isn't already a nudge — the agent may have described intent without acting.
-        // Send a follow-up to prompt it to use tools.
-        if (!isNudge && responseForParsing.length > 20 && !isLeaderStreaming) {
+        // Only nudge agents that have tools available (project-based or MCP).
+        const hasTools = agent.project || agent.mcpServers?.length > 0;
+        if (hasTools && !isNudge && responseForParsing.length > 20 && !isLeaderStreaming) {
           if (intentPatterns.test(responseForParsing)) {
             console.log(`🔄 [Nudge] Agent "${agent.name}" described intent but used no tools — nudging`);
             const nudgeMessage = agent.project
@@ -1073,71 +1074,11 @@ export class AgentManager {
     }
   }
 
-  // ─── Tool Execution (for agents with projects) ────────────────────
+  // ─── Tool Execution ────────────────────────────────────────────────
   async _processToolCalls(agentId, response, streamCallback, depth = 0) {
     const agent = this.agents.get(agentId);
     if (!agent) return [];
-    
-    if (!agent.project) {
-      // Even without a project, @report_error and @mcp_call should still work
-      const noProjectCalls = parseToolCalls(response).filter(c => c.tool === 'report_error' || c.tool === 'mcp_call');
-      if (noProjectCalls.length > 0) {
-        const results = [];
-        for (const call of noProjectCalls) {
-          if (call.tool === 'report_error') {
-            const errorDescription = call.args[0] || 'Unknown error';
-            console.log(`🚨 [Error Report] Agent "${agent.name}" (no project) reports: ${errorDescription.slice(0, 200)}`);
-            this._emit('agent:error:report', {
-              agentId,
-              agentName: agent.name,
-              description: errorDescription,
-              timestamp: new Date().toISOString()
-            });
-            if (streamCallback) {
-              streamCallback(`\n\n🚨 **Error reported by ${agent.name}:** ${errorDescription}\n`);
-            }
-            results.push({
-              tool: 'report_error',
-              args: call.args,
-              success: true,
-              result: `Error reported: ${errorDescription}`,
-              isErrorReport: true
-            });
-          } else if (call.tool === 'mcp_call' && this.mcpManager) {
-            const [serverName, toolName, argsJson] = call.args;
-            const mcpLabel = `MCP: ${serverName} → ${toolName}`;
-            agent.currentThinking = mcpLabel;
-            this._emit('agent:thinking', { agentId, thinking: mcpLabel });
-            this._emit('agent:tool:start', { agentId, agentName: agent.name, tool: 'mcp_call', args: call.args });
-            try {
-              const parsedArgs = typeof argsJson === 'string' ? JSON.parse(argsJson) : (argsJson || {});
-              const mcpResult = await this.mcpManager.callToolByName(serverName, toolName, parsedArgs);
-              if (streamCallback) {
-                const icon = mcpResult.success ? '✓' : '✗';
-                streamCallback(`\n${icon} ${mcpLabel}\n`);
-              }
-              results.push({ tool: 'mcp_call', args: call.args, ...mcpResult });
-            } catch (mcpErr) {
-              if (streamCallback) streamCallback(`\n✗ ${mcpLabel}: ${mcpErr.message}\n`);
-              results.push({ tool: 'mcp_call', args: call.args, success: false, error: mcpErr.message });
-            }
-          }
-        }
-        return results;
-      }
 
-      // Check if the response contains tool-like patterns — warn if tools are used without a project
-      const hasToolSyntax = /@(read_file|write_file|list_dir|search_files|run_command|append_file)\s*\(/i.test(response)
-        || /<tool_call>/i.test(response);
-      if (hasToolSyntax) {
-        console.warn(`⚠️  Agent "${agent.name}" generated tool calls but has NO PROJECT assigned — tools will NOT execute. Assign a project to enable tool use.`);
-        if (streamCallback) {
-          streamCallback(`\n\n⚠️ **Tool calls detected but no project is assigned.** Assign a project to this agent (in Settings tab) to enable file and command tools.\n`);
-        }
-      }
-      return [];
-    }
-    
     const toolCalls = parseToolCalls(response);
     
     console.log(`\n🔧 [Tools] Parsing response from "${agent.name}" (depth=${depth}, length=${response.length})`);
@@ -1162,14 +1103,19 @@ export class AgentManager {
     
     console.log(`🔧 Agent ${agent.name} executing ${toolCalls.length} tool(s) (project=${agent.project})`);
 
-    // Ensure sandbox container is running with the correct project
-    if (agent.project && this.sandboxManager) {
+    // Ensure sandbox container is running with the correct project (or workspace-only)
+    if (this.sandboxManager) {
       try {
-        const gitUrl = await getProjectGitUrl(agent.project);
-        if (gitUrl) {
-          await this.sandboxManager.ensureSandbox(agentId, agent.project, gitUrl);
+        if (agent.project) {
+          const gitUrl = await getProjectGitUrl(agent.project);
+          if (gitUrl) {
+            await this.sandboxManager.ensureSandbox(agentId, agent.project, gitUrl);
+          } else {
+            console.warn(`⚠️  [Sandbox] No git URL found for project "${agent.project}"`);
+          }
         } else {
-          console.warn(`⚠️  [Sandbox] No git URL found for project "${agent.project}"`);
+          // No project — ensure sandbox exists at workspace root (access to all projects)
+          await this.sandboxManager.ensureSandbox(agentId);
         }
       } catch (err) {
         console.error(`⚠️  [Sandbox] Failed to ensure sandbox for ${agent.name}:`, err.message);
