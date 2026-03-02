@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, IconButton, Tooltip } from '@mui/material';
 import { SignalCellularAlt, Mic, MicOff, CallEnd } from '@mui/icons-material';
 
+// Déplacer simplement l'overlay existant
 const CallControlsOverlay = () => {
   const [isMuted, setIsMuted] = useState(false);
 
