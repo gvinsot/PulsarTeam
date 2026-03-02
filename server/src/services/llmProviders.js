@@ -331,7 +331,7 @@ export class ClaudeProvider {
         model: this.model,
         max_tokens: 10,
         messages: [{ role: 'user', content: 'ping' }]
-      });
+      }));
       return !!response;
     } catch {
       return false;
