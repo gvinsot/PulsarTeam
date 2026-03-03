@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { connectSocket, disconnectSocket, getSocket } from './socket';
 import { api } from './api';
 import LoginPage from './components/LoginPage';
@@ -16,6 +16,7 @@ export default function App() {
   const [mcpServers, setMcpServers] = useState([]);
   const [thinkingMap, setThinkingMap] = useState({});
   const [streamBuffers, setStreamBuffers] = useState({});
+  const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
   const [toasts, setToasts] = useState([]);
 
   const showToast = useCallback((message, type = 'error', duration = 5000) => {
@@ -84,7 +85,19 @@ export default function App() {
 
     sock.on('agents:list', (list) => setAgents(list));
     sock.on('agent:created', (agent) => setAgents(prev => [...prev, agent]));
-    sock.on('agent:updated', (agent) => setAgents(prev => prev.map(a => a.id === agent.id ? agent : a)));
+    sock.on('agent:updated', (agent) => {
+      setAgents(prev => prev.map(a => a.id === agent.id ? agent : a));
+      // When an agent's stream just ended, clear its buffer atomically
+      // with the history update so the message never disappears.
+      if (streamEndedAgents.current.has(agent.id)) {
+        streamEndedAgents.current.delete(agent.id);
+        setStreamBuffers(prev => {
+          const copy = { ...prev };
+          delete copy[agent.id];
+          return copy;
+        });
+      }
+    });
     sock.on('agent:deleted', ({ id }) => setAgents(prev => prev.filter(a => a.id !== id)));
     sock.on('agent:status', ({ id, status }) => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, status } : a));
@@ -106,17 +119,26 @@ export default function App() {
     });
 
     sock.on('agent:stream:end', ({ agentId }) => {
-      setStreamBuffers(prev => {
-        const copy = { ...prev };
-        delete copy[agentId];
-        return copy;
-      });
       setThinkingMap(prev => {
         const copy = { ...prev };
         delete copy[agentId];
         return copy;
       });
-      loadData();
+      // Don't clear streamBuffer here — mark the agent so that the next
+      // agent:updated event clears it atomically with the history update.
+      // This prevents the flash where the message disappears then reappears.
+      streamEndedAgents.current.add(agentId);
+      // Safety net: if agent:updated doesn't arrive within 3s, clear anyway
+      setTimeout(() => {
+        if (streamEndedAgents.current.has(agentId)) {
+          streamEndedAgents.current.delete(agentId);
+          setStreamBuffers(prev => {
+            const copy = { ...prev };
+            delete copy[agentId];
+            return copy;
+          });
+        }
+      }, 3000);
     });
 
     sock.on('agent:stream:error', ({ agentId, error }) => {

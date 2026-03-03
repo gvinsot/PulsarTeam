@@ -406,12 +406,19 @@ export class AgentManager {
 
       messages.push({ role: 'system', content: systemContent });
 
-      // Debug: log system prompt size and injected sections
+      // Debug: log system prompt composition
       const pluginCount = (agent.skills || []).length;
       const resolvedCount = pluginCount > 0 && this.skillManager
         ? (agent.skills || []).map(sid => this.skillManager.getById(sid)).filter(Boolean).length
         : 0;
-      console.log(`📋 [System Prompt] Agent "${agent.name}": ${systemContent.length} chars | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | hasToolDefs: ${systemContent.includes('AVAILABLE TOOLS')}`);
+      const sections = [];
+      if (systemContent.includes('Active Plugins'))   sections.push('plugins');
+      if (systemContent.includes('AVAILABLE TOOLS'))   sections.push('tools');
+      if (systemContent.includes('MCP Tools'))         sections.push('mcp');
+      if (systemContent.includes('Current Todo List')) sections.push('todos');
+      if (systemContent.includes('PROJECT CONTEXT'))   sections.push('project');
+      if (systemContent.includes('Swarm Agents'))      sections.push('swarm');
+      console.log(`📋 [System Prompt] Agent "${agent.name}" (${agent.provider}/${agent.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`);
     }
 
     // ── Proactive compaction: summarize older messages when history exceeds threshold ──

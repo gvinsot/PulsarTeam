@@ -494,6 +494,8 @@ export class OpenAIProvider {
   }
 
   async *chatStream(messages, options = {}) {
+    const systemMsg = messages.find(m => m.role === 'system');
+    console.log(`🔌 [OpenAI] chatStream model=${this.model} | messages=${messages.length} | systemPrompt=${systemMsg ? systemMsg.content.length + ' chars' : 'NONE'} | useResponsesAPI=${this.useResponsesAPI} | isReasoning=${this.isReasoningModel}`);
     if (this.isCompletionModel) {
       yield* this._completionStream(messages, options);
       return;
@@ -506,6 +508,7 @@ export class OpenAIProvider {
       yield* this._chatCompletionStream(messages, options);
     } catch (err) {
       if (err.status === 404) {
+        console.log(`🔌 [OpenAI] Chat Completions 404 for ${this.model} — switching to Responses API`);
         this.useResponsesAPI = true;
         yield* this._responsesChatStream(messages, options);
       } else {
