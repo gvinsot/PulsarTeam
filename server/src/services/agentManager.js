@@ -301,8 +301,8 @@ export class AgentManager {
     // Build messages array
     const messages = [];
     let systemContent = '';   // Hoisted so we can rebuild messages after compaction
-    if (agent.instructions) {
-      systemContent = agent.instructions;
+    {
+      systemContent = agent.instructions || 'You are a helpful AI assistant.';
       
       // For leader agents, inject available agents context (only at top level to avoid confusion)
       if (agent.isLeader && delegationDepth === 0) {
@@ -405,6 +405,13 @@ export class AgentManager {
       }
 
       messages.push({ role: 'system', content: systemContent });
+
+      // Debug: log system prompt size and injected sections
+      const pluginCount = (agent.skills || []).length;
+      const resolvedCount = pluginCount > 0 && this.skillManager
+        ? (agent.skills || []).map(sid => this.skillManager.getById(sid)).filter(Boolean).length
+        : 0;
+      console.log(`📋 [System Prompt] Agent "${agent.name}": ${systemContent.length} chars | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | hasToolDefs: ${systemContent.includes('AVAILABLE TOOLS')}`);
     }
 
     // ── Proactive compaction: summarize older messages when history exceeds threshold ──
