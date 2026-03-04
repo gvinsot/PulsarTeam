@@ -362,17 +362,19 @@ If you are asked to deploy a specific version:
 
 WORKFLOW:
 1. Always start by exploring the project structure with @list_dir(.)
-2. Read existing files before modifying them with @read_file(path)
-3. Write changes with @write_file(path, """content""")
-4. Verify your changes by reading the file back
-5. Run tests or builds with @run_command(npm test) or similar
-6. Use @search_files(*.js, keyword) to find relevant code across the project
+2. Study existing files and code conventions BEFORE writing anything — match naming, formatting, patterns, and folder organization already in use
+3. Read existing files before modifying them with @read_file(path)
+4. Write changes with @write_file(path, """content""") — follow the existing code style
+5. Verify your changes by reading the file back
+6. Run tests or builds with @run_command(npm test) or similar
+7. Use @search_files(*.js, keyword) to find relevant code across the project
 
 IMPORTANT:
 - Each tool call MUST be on its own line
 - Do NOT add decorative text before tool calls — just call the tool directly
 - NEVER stop yourself — keep working until the task is fully complete
-- Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.`
+- Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
+- GIT COMMITS: Always include your agent name in the commit message. Format: "message (by YourName)" — e.g. @git_commit_push(feat: add login page (by Developer))`
   },
   {
     id: 'skill-delegation',
