@@ -33,6 +33,20 @@ export const api = {
   getAgent: (id) =>
     fetch(`${API_BASE}/agents/${id}`, { headers: getHeaders() }).then(handleResponse),
 
+  getAgentStatus: (id) =>
+    fetch(`${API_BASE}/agents/${id}/status`, { headers: getHeaders() }).then(handleResponse),
+
+  getSwarmStatus: () =>
+    fetch(`${API_BASE}/agents/swarm-status`, { headers: getHeaders() }).then(handleResponse),
+
+  getAgentStatuses: (project) => {
+    const params = project ? `?project=${encodeURIComponent(project)}` : '';
+    return fetch(`${API_BASE}/agents/statuses${params}`, { headers: getHeaders() }).then(handleResponse);
+  },
+
+  getAgentsByProject: (project) =>
+    fetch(`${API_BASE}/agents/by-project/${encodeURIComponent(project)}`, { headers: getHeaders() }).then(handleResponse),
+
   createAgent: (config) =>
     fetch(`${API_BASE}/agents`, {
       method: 'POST',

@@ -1,10 +1,13 @@
-import { Activity, Cpu, MessageSquare, TrendingUp, Zap, AlertTriangle } from 'lucide-react';
+import { Activity, Cpu, MessageSquare, TrendingUp, Zap, AlertTriangle, FolderOpen } from 'lucide-react';
 
 export default function SwarmOverview({ stats, agents }) {
+  // Count unique active projects
+  const activeProjects = new Set(agents.filter(a => a.project).map(a => a.project));
+
   return (
     <div className="border-b border-dark-800 bg-dark-900/30">
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 py-3">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           <StatCard
             icon={<Cpu className="w-4 h-4" />}
             label="Total Agents"
@@ -34,6 +37,14 @@ export default function SwarmOverview({ stats, agents }) {
             bgColor="bg-red-500/10"
           />
           <StatCard
+            icon={<FolderOpen className="w-4 h-4" />}
+            label="Projects"
+            value={activeProjects.size}
+            color="text-sky-400"
+            bgColor="bg-sky-500/10"
+            tooltip={activeProjects.size > 0 ? [...activeProjects].join(', ') : 'No projects assigned'}
+          />
+          <StatCard
             icon={<MessageSquare className="w-4 h-4" />}
             label="Messages"
             value={stats.totalMessages}
@@ -53,9 +64,9 @@ export default function SwarmOverview({ stats, agents }) {
   );
 }
 
-function StatCard({ icon, label, value, color, bgColor }) {
+function StatCard({ icon, label, value, color, bgColor, tooltip }) {
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-dark-800/50 border border-dark-700/50">
+    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-dark-800/50 border border-dark-700/50" title={tooltip || undefined}>
       <div className={`p-1.5 rounded-md ${bgColor}`}>
         <span className={color}>{icon}</span>
       </div>

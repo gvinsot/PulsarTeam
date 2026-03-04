@@ -42,6 +42,7 @@ export class AgentManager {
       for (const agent of agents) {
         // Reset runtime state
         agent.status = 'idle';
+        agent.currentTask = null;
         agent.currentThinking = '';
         agent.actionLogs = agent.actionLogs || [];
         agent.skills = agent.skills || [];
@@ -49,6 +50,10 @@ export class AgentManager {
         agent.isVoice = agent.isVoice || false;
         agent.voice = agent.voice || 'alloy';
         agent.projectContexts = agent.projectContexts || {};
+        // Migration: initialize projectChangedAt for existing agents
+        if (agent.projectChangedAt === undefined) {
+          agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;
+        }
         // Migration: done boolean → status string
         if (agent.todoList) {
           for (const todo of agent.todoList) {
@@ -83,6 +88,7 @@ export class AgentManager {
       apiKey: config.apiKey || '',
       instructions: config.instructions || 'You are a helpful AI assistant.',
       status: 'idle',
+      currentTask: null,
       temperature: config.temperature ?? 0.7,
       maxTokens: config.maxTokens ?? 128000,
       contextLength: config.contextLength ?? 0,
@@ -102,6 +108,7 @@ export class AgentManager {
       },
       handoffTargets: config.handoffTargets || [],
       project: config.project || null,
+      projectChangedAt: config.project ? new Date().toISOString() : null,
       projectContexts: {},
       enabled: config.enabled !== undefined ? config.enabled : true,
       isLeader: config.isLeader || config.isVoice || false,
@@ -150,6 +157,8 @@ export class AgentManager {
     return {
       agentId: agent.id,
       agentName: agent.name,
+      project: agent.project || null,
+      status: agent.status,
       totalMessages: history.length,
       returned: messages.length,
       limit: safeLimit,
@@ -164,6 +173,201 @@ export class AgentManager {
     );
     if (!target) return null;
     return this.getLastMessages(target.id, limit);
+  }
+
+  /**
+   * Get comprehensive status of a single agent including project info.
+   * Used by REST API and leader tools for detailed agent inspection.
+   */
+  getAgentStatus(id) {
+    const agent = this.agents.get(id);
+    if (!agent) return null;
+
+    const todoList = agent.todoList || [];
+    const pendingTodos = todoList.filter(t => t.status === 'pending').length;
+    const inProgressTodos = todoList.filter(t => t.status === 'in_progress').length;
+    const doneTodos = todoList.filter(t => t.status === 'done').length;
+    const errorTodos = todoList.filter(t => t.status === 'error').length;
+    const totalTodos = todoList.length;
+    const msgCount = (agent.conversationHistory || []).length;
+    const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(agent.id) : false;
+
+    // Extract current in-progress task description from todoList
+    const currentTaskTodo = todoList.find(t => t.status === 'in_progress');
+    const currentTask = agent.currentTask || (currentTaskTodo ? currentTaskTodo.text : null);
+
+    // Collect active (in-progress + pending) todo descriptions for visibility
+    const activeTodos = todoList
+      .filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error')
+      .map(t => ({ id: t.id, text: t.text, status: t.status, startedAt: t.startedAt || null }));
+
+    return {
+      id: agent.id,
+      name: agent.name,
+      status: agent.status,
+      role: agent.role || 'worker',
+      description: agent.description || '',
+      project: agent.project || null,
+      projectChangedAt: agent.projectChangedAt || null,
+      currentTask: currentTask,
+      activeTodos,
+      provider: agent.provider || null,
+      model: agent.model || null,
+      enabled: agent.enabled !== false,
+      isLeader: agent.isLeader || false,
+      sandbox: hasSandbox ? 'running' : 'not running',
+      todos: {
+        pending: pendingTodos,
+        inProgress: inProgressTodos,
+        done: doneTodos,
+        error: errorTodos,
+        total: totalTodos
+      },
+      messages: msgCount,
+      metrics: {
+        totalMessages: agent.metrics?.totalMessages || 0,
+        totalTokensIn: agent.metrics?.totalTokensIn || 0,
+        totalTokensOut: agent.metrics?.totalTokensOut || 0,
+        lastActiveAt: agent.metrics?.lastActiveAt || null,
+        errors: agent.metrics?.errors || 0
+      },
+      createdAt: agent.createdAt || null,
+      updatedAt: agent.updatedAt || null
+    };
+  }
+
+  /**
+   * Get lightweight status for ALL agents (including project info).
+   * Unlike getAll() which returns full agent data (heavy), this returns
+   * only the essential status fields for each agent — ideal for dashboards,
+   * management tools, and leader queries that need a quick overview.
+   */
+  getAllStatuses() {
+    return Array.from(this.agents.values())
+      .filter(a => a.enabled !== false)
+      .map(a => this.getAgentStatus(a.id))
+      .filter(Boolean);
+  }
+
+  /**
+   * Get lightweight statuses for agents assigned to a specific project.
+   * Used by REST API for project-filtered queries.
+   */
+  getAgentsByProject(projectName) {
+    if (!projectName) return [];
+    return Array.from(this.agents.values())
+      .filter(a => a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase())
+      .map(a => this.getAgentStatus(a.id))
+      .filter(Boolean);
+  }
+
+  /**
+   * Get a high-level summary of all projects and their agent assignments.
+   * Useful for management dashboards and leader tools that need to quickly
+   * see how agents are distributed across projects.
+   */
+  getProjectSummary() {
+    const enabled = Array.from(this.agents.values()).filter(a => a.enabled !== false);
+    const projectMap = {};
+    const unassigned = [];
+
+    for (const agent of enabled) {
+      if (agent.project) {
+        if (!projectMap[agent.project]) {
+          projectMap[agent.project] = { agents: [], busy: 0, idle: 0, error: 0, total: 0 };
+        }
+        const entry = projectMap[agent.project];
+        entry.total++;
+        if (agent.status === 'busy') entry.busy++;
+        else if (agent.status === 'error') entry.error++;
+        else entry.idle++;
+        entry.agents.push({
+          id: agent.id,
+          name: agent.name,
+          status: agent.status,
+          role: agent.role || 'worker',
+          currentTask: agent.currentTask || null
+        });
+      } else {
+        unassigned.push({
+          id: agent.id,
+          name: agent.name,
+          status: agent.status,
+          role: agent.role || 'worker',
+          currentTask: agent.currentTask || null
+        });
+      }
+    }
+
+    return {
+      projects: Object.entries(projectMap).map(([name, data]) => ({
+        name,
+        ...data
+      })),
+      unassigned,
+      totalAgents: enabled.length,
+      totalProjects: Object.keys(projectMap).length
+    };
+  }
+
+  /**
+   * Get comprehensive swarm status: all agents with their current project assignments.
+   * Used by REST API and @swarm_status() leader command.
+   */
+  getSwarmStatus() {
+    const allAgents = Array.from(this.agents.values());
+    const enabled = allAgents.filter(a => a.enabled !== false);
+    const disabled = allAgents.filter(a => a.enabled === false);
+
+    // Group agents by project
+    const projectMap = {};
+    const unassigned = [];
+    for (const agent of enabled) {
+      const status = this.getAgentStatus(agent.id);
+      if (agent.project) {
+        if (!projectMap[agent.project]) projectMap[agent.project] = [];
+        projectMap[agent.project].push(status);
+      } else {
+        unassigned.push(status);
+      }
+    }
+
+    // Build per-project summary with busy/idle counts and per-agent task details
+    const projectSummaries = {};
+    for (const [project, agents] of Object.entries(projectMap)) {
+      projectSummaries[project] = {
+        total: agents.length,
+        busy: agents.filter(a => a.status === 'busy').length,
+        idle: agents.filter(a => a.status === 'idle').length,
+        error: agents.filter(a => a.status === 'error').length,
+        agents: agents.map(a => ({
+          name: a.name,
+          status: a.status,
+          role: a.role,
+          currentTask: a.currentTask || null,
+          activeTodos: (a.activeTodos || []).length,
+          projectChangedAt: a.projectChangedAt || null
+        }))
+      };
+    }
+
+    return {
+      summary: {
+        total: allAgents.length,
+        enabled: enabled.length,
+        disabled: disabled.length,
+        busy: enabled.filter(a => a.status === 'busy').length,
+        idle: enabled.filter(a => a.status === 'idle').length,
+        error: enabled.filter(a => a.status === 'error').length,
+        withProject: enabled.filter(a => a.project).length,
+        withoutProject: enabled.filter(a => !a.project).length,
+        activeProjects: Object.keys(projectMap)
+      },
+      projectSummaries,
+      projectAssignments: projectMap,
+      unassignedAgents: unassigned,
+      agents: enabled.map(a => this.getAgentStatus(a.id))
+    };
   }
 
   update(id, updates) {
@@ -183,6 +387,7 @@ export class AgentManager {
         // Context switching when project changes
         if (key === 'project' && updates[key] !== agent[key]) {
           this._switchProjectContext(agent, agent.project, updates[key]);
+          agent.projectChangedAt = updates[key] ? new Date().toISOString() : null;
         }
         agent[key] = updates[key];
       }
@@ -214,6 +419,7 @@ export class AgentManager {
     for (const agent of this.agents.values()) {
       if (project !== agent.project) {
         this._switchProjectContext(agent, agent.project, project);
+        agent.projectChangedAt = project ? new Date().toISOString() : null;
       }
       agent.project = project;
       agent.updatedAt = new Date().toISOString();
@@ -229,7 +435,21 @@ export class AgentManager {
     if (!agent) return;
     const prev = agent.status;
     agent.status = status;
-    this._emit('agent:status', { id, status });
+
+    // Clear currentTask when agent goes idle or errors out
+    if (status === 'idle' || status === 'error') {
+      agent.currentTask = null;
+    }
+
+    this._emit('agent:status', {
+      id,
+      name: agent.name,
+      status,
+      role: agent.role || 'worker',
+      project: agent.project || null,
+      currentTask: agent.currentTask || null,
+      isLeader: agent.isLeader || false
+    });
 
     // Log meaningful status transitions
     if (status === 'busy' && prev !== 'busy') {
@@ -267,20 +487,22 @@ export class AgentManager {
           }
           this._taskQueues.delete(subId);
           subAgent.currentThinking = '';
+          subAgent.currentTask = null;
           this.setStatus(subId, 'idle', 'Stopped by leader');
           saveAgent(subAgent);
-          this._emit('agent:stopped', { id: subId, name: subAgent.name });
+          this._emit('agent:stopped', { id: subId, name: subAgent.name, project: subAgent.project || null });
         }
       }
     }
 
     // Reset agent state
     agent.currentThinking = '';
+    agent.currentTask = null;
     this.setStatus(id, 'idle', 'Agent stopped by user');
     saveAgent(agent);
 
     console.log(`🛑 Agent ${agent.name} stopped`);
-    this._emit('agent:stopped', { id, name: agent.name });
+    this._emit('agent:stopped', { id, name: agent.name, project: agent.project || null });
     return true;
   }
 
@@ -298,6 +520,14 @@ export class AgentManager {
     this.setStatus(id, 'busy');
     agent.currentThinking = '';
 
+    // Track the current task for status reporting
+    if (messageMeta?.type === 'delegation-task') {
+      agent.currentTask = (userMessage || '').replace(/^\[TASK from [^\]]+\]:\s*/i, '').slice(0, 200) || null;
+    } else if (delegationDepth === 0 && !messageMeta) {
+      agent.currentTask = (userMessage || '').slice(0, 200) || null;
+    }
+    this._emit('agent:status', { id, status: 'busy', project: agent.project || null, currentTask: agent.currentTask || null });
+
     // Build messages array
     const messages = [];
     let systemContent = '';   // Hoisted so we can rebuild messages after compaction
@@ -309,8 +539,10 @@ export class AgentManager {
         const availableAgents = Array.from(this.agents.values())
           .filter(a => a.id !== id && a.enabled !== false) // Exclude self and disabled agents
           .map(a => {
+            const statusTag = ` [${a.status}]`;
             const projectTag = a.project ? ` [project: ${a.project}]` : ' [no project]';
-            return `- ${a.name} (${a.role})${projectTag}: ${a.description || 'No description'}`;
+            const taskInfo = a.currentTask ? ` (working on: "${a.currentTask.slice(0, 60)}${a.currentTask.length > 60 ? '...' : ''}")` : '';
+            return `- ${a.name} (${a.role})${statusTag}${projectTag}${taskInfo}: ${a.description || 'No description'}`;
           });
 
         if (availableAgents.length > 0) {
@@ -331,9 +563,11 @@ export class AgentManager {
         systemContent += `\n- @list_projects() — List all available projects.`;
         systemContent += `\n- @clear_all_chats() — Clear ALL agents' conversation histories at once, giving every agent a fresh start.`;
         systemContent += `\n- @clear_all_action_logs() — Clear ALL agents' action logs at once.`;
-        systemContent += `\n- @list_agents() — List all enabled agents with their current status, project, and role.`;
-        systemContent += `\n- @agent_status(AgentName) — Check a specific agent's status (busy/idle/error), current project, pending todos, and message count.`;
-        systemContent += `\n- @get_available_agent(role) — Get the first idle agent with the specified role (e.g. "developer"). Returns agent name, status, and project.`;
+        systemContent += `\n- @list_agents() — List all enabled agents with their current status, project assignment, role, active todos, and current task. Includes a project summary header showing agent distribution across projects.`;
+        systemContent += `\n- @agent_status(AgentName) — Check a specific agent's detailed status: busy/idle/error, current project, current task, active todo descriptions, sandbox state, message count, provider/model, and error count.`;
+        systemContent += `\n- @get_available_agent(role) — Find all idle agents with the specified role (e.g. "developer"). Returns each agent's name, project assignment, and pending todo count. If none are idle, shows busy agents with that role as a hint.`;
+        systemContent += `\n- @swarm_status() — Get a comprehensive overview of the entire swarm: all agents grouped by their current project, with per-agent status, role, current task descriptions, and todo counts.`;
+        systemContent += `\n- @agents_on_project(projectName) — List all agents currently assigned to a specific project with their status, role, current task, and todo counts. Useful for checking who is working on a particular project.`;
         if (projectNames.length > 0) {
           systemContent += `\nAvailable projects: ${projectNames.join(', ')}`;
         }
@@ -531,7 +765,7 @@ export class AgentManager {
         if (chunk.type === 'thinking') {
           // Reasoning model thinking tokens — show in UI but don't add to response
           agent.currentThinking = chunk.text;
-          this._emit('agent:thinking', { agentId: id, thinking: chunk.text });
+          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: chunk.text });
         }
 
         if (chunk.type === 'text') {
@@ -580,8 +814,8 @@ export class AgentManager {
 
               // Notify UI immediately
               this._emit('agent:delegation', {
-                from: { id, name: agent.name },
-                to: { id: targetAgent.id, name: targetAgent.name },
+                from: { id, name: agent.name, project: agent.project || null },
+                to: { id: targetAgent.id, name: targetAgent.name, project: targetAgent.project || null },
                 task: delegation.task
               });
 
@@ -605,21 +839,21 @@ export class AgentManager {
                 if (streamCallback) streamCallback(`\n\n--- \uD83D\uDCE8 Delegating to ${targetAgent.name} ---\n`);
 
                 // Stream to the sub-agent's own chat via socket
-                this._emit('agent:stream:start', { agentId: targetAgent.id });
+                this._emit('agent:stream:start', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null });
 
                 const agentResponse = await this.sendMessage(
                   targetAgent.id,
                   `[TASK from ${agent.name}]: ${delegation.task}`,
                   (chunk) => {
                     // Stream to the sub-agent's own chat
-                    this._emit('agent:stream:chunk', { agentId: targetAgent.id, chunk });
+                    this._emit('agent:stream:chunk', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null, chunk });
                   },
                   delegationDepth + 1,
                   { type: 'delegation-task', fromAgent: agent.name }
                 );
 
                 // End sub-agent stream and notify leader
-                this._emit('agent:stream:end', { agentId: targetAgent.id });
+                this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null });
                 if (streamCallback) streamCallback(`\n--- \u2705 ${targetAgent.name} finished ---\n`);
                 this._emit('agent:updated', this._sanitize(targetAgent));
 
@@ -634,10 +868,10 @@ export class AgentManager {
                   }
                 }
 
-                return { agentId: targetAgent.id, agentName: targetAgent.name, task: delegation.task, response: agentResponse, error: null };
+                return { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null, task: delegation.task, response: agentResponse, error: null };
               }).catch(err => {
                 // End sub-agent stream on error too
-                if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id });
+                if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent?.name || null, project: targetAgent?.project || null });
                 // Mark todo as error
                 if (todo && targetAgent) {
                   const t = targetAgent.todoList.find(t => t.id === todo.id);
@@ -649,7 +883,7 @@ export class AgentManager {
                     this._emit('agent:updated', this._sanitize(targetAgent));
                   }
                 }
-                return { agentId: targetAgent?.id, agentName: targetAgent?.name || delegation.agentName, task: delegation.task, response: null, error: err.message };
+                return { agentId: targetAgent?.id, agentName: targetAgent?.name || delegation.agentName, project: targetAgent?.project || null, task: delegation.task, response: null, error: err.message };
               });
 
               delegationPromises.push(promise);
@@ -691,7 +925,7 @@ export class AgentManager {
           }
           if (chunk.type === 'thinking') {
             agent.currentThinking = chunk.text;
-            this._emit('agent:thinking', { agentId: id, thinking: chunk.text });
+            this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: chunk.text });
           }
           if (chunk.type === 'text') {
             fullResponse += chunk.text;
@@ -821,8 +1055,8 @@ export class AgentManager {
           }
 
           this._emit('agent:delegation', {
-            from: { id, name: agent.name },
-            to: { id: targetAgent.id, name: targetAgent.name },
+            from: { id, name: agent.name, project: agent.project || null },
+            to: { id: targetAgent.id, name: targetAgent.name, project: targetAgent.project || null },
             task: delegation.task
           });
           const todo = this.addTodo(targetAgent.id, `[From ${agent.name}] ${delegation.task}`);
@@ -843,21 +1077,21 @@ export class AgentManager {
             if (streamCallback) streamCallback(`\n\n--- \uD83D\uDCE8 Delegating to ${targetAgent.name} ---\n`);
 
             // Stream to the sub-agent's own chat via socket
-            this._emit('agent:stream:start', { agentId: targetAgent.id });
+            this._emit('agent:stream:start', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null });
 
             const agentResponse = await this.sendMessage(
               targetAgent.id,
               `[TASK from ${agent.name}]: ${delegation.task}`,
               (chunk) => {
                 // Stream to the sub-agent's own chat
-                this._emit('agent:stream:chunk', { agentId: targetAgent.id, chunk });
+                this._emit('agent:stream:chunk', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null, chunk });
               },
               delegationDepth + 1,
               { type: 'delegation-task', fromAgent: agent.name }
             );
 
             // End sub-agent stream and notify leader
-            this._emit('agent:stream:end', { agentId: targetAgent.id });
+            this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null });
             if (streamCallback) streamCallback(`\n--- \u2705 ${targetAgent.name} finished ---\n`);
             this._emit('agent:updated', this._sanitize(targetAgent));
 
@@ -870,10 +1104,10 @@ export class AgentManager {
                 this._emit('agent:updated', this._sanitize(targetAgent));
               }
             }
-            return { agentId: targetAgent.id, agentName: targetAgent.name, task: delegation.task, response: agentResponse, error: null };
+            return { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null, task: delegation.task, response: agentResponse, error: null };
           }).catch(err => {
             // End sub-agent stream on error too
-            if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id });
+            if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent?.name || null, project: targetAgent?.project || null });
             // Mark todo as error
             if (todo && targetAgent) {
               const t = targetAgent.todoList.find(t => t.id === todo.id);
@@ -885,7 +1119,7 @@ export class AgentManager {
                 this._emit('agent:updated', this._sanitize(targetAgent));
               }
             }
-            return { agentId: targetAgent?.id, agentName: targetAgent?.name || delegation.agentName, task: delegation.task, response: null, error: err.message };
+            return { agentId: targetAgent?.id, agentName: targetAgent?.name || delegation.agentName, project: targetAgent?.project || null, task: delegation.task, response: null, error: err.message };
           });
 
           delegationPromises.push(promise);
@@ -901,11 +1135,12 @@ export class AgentManager {
             streamCallback(`\n\n--- Delegation complete, synthesizing results ---\n\n`);
           }
           
-          // Feed delegation results back to leader and get synthesis
+          // Feed delegation results back to leader and get synthesis (includes project info)
           const resultsSummary = delegationResults.map(r => {
+            const projectTag = r.project ? ` [project: ${r.project}]` : '';
             const header = r.error
-              ? `--- ⚠️ ERROR from ${r.agentName} ---`
-              : `--- Response from ${r.agentName} ---`;
+              ? `--- ⚠️ ERROR from ${r.agentName}${projectTag} ---`
+              : `--- Response from ${r.agentName}${projectTag} ---`;
             return `${header}\n${r.response || r.error}`;
           }).join('\n\n');
           
@@ -920,7 +1155,7 @@ export class AgentManager {
             `[DELEGATION RESULTS]\n${resultsSummary}\n\n${synthesisHint}`,
             streamCallback,
             delegationDepth + 1,
-            { type: 'delegation-result', delegationResults: delegationResults.map(r => ({ agentName: r.agentName, task: r.task, response: r.response, error: r.error })) }
+            { type: 'delegation-result', delegationResults: delegationResults.map(r => ({ agentName: r.agentName, project: r.project || null, task: r.task, response: r.response, error: r.error })) }
           );
           this.setStatus(id, 'idle');
           return synthesisResponse;
@@ -1089,42 +1324,178 @@ export class AgentManager {
             if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
             continue;
           }
-          const pendingTodos = (targetAgent.todoList || []).filter(t => t.status === 'pending' || t.status === 'error').length;
-          const totalTodos = (targetAgent.todoList || []).length;
+          const todoList = targetAgent.todoList || [];
+          const pendingTodos = todoList.filter(t => t.status === 'pending' || t.status === 'error').length;
+          const inProgressTodos = todoList.filter(t => t.status === 'in_progress').length;
+          const doneTodos = todoList.filter(t => t.status === 'done').length;
+          const totalTodos = todoList.length;
           const msgCount = (targetAgent.conversationHistory || []).length;
+          const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(targetAgent.id) : false;
+          const inProgressTodo = todoList.find(t => t.status === 'in_progress');
+          const currentTaskInfo = targetAgent.currentTask
+            ? targetAgent.currentTask.slice(0, 120) + (targetAgent.currentTask.length > 120 ? '...' : '')
+            : inProgressTodo
+              ? inProgressTodo.text.slice(0, 120) + (inProgressTodo.text.length > 120 ? '...' : '')
+              : 'none';
+          const projectAssignedAt = targetAgent.projectChangedAt
+            ? new Date(targetAgent.projectChangedAt).toLocaleString()
+            : 'n/a';
           const lines = [
             `Name: ${targetAgent.name}`,
             `Status: ${targetAgent.status}`,
             `Role: ${targetAgent.role || 'worker'}`,
-            `Project: ${targetAgent.project || 'none'}`,
-            `Todos: ${pendingTodos} pending / ${totalTodos} total`,
+            `Project: ${targetAgent.project || 'none'}${targetAgent.project ? ` (assigned ${projectAssignedAt})` : ''}`,
+            `Current task: ${currentTaskInfo}`,
+            `Provider: ${targetAgent.provider || 'unknown'}/${targetAgent.model || 'unknown'}`,
+            `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
+            `Todos: ${inProgressTodos} in-progress, ${pendingTodos} pending, ${doneTodos} done / ${totalTodos} total`,
             `Messages: ${msgCount}`,
+            `Last active: ${targetAgent.metrics?.lastActiveAt || 'never'}`,
+            `Errors: ${targetAgent.metrics?.errors || 0}`,
           ];
-          console.log(`📊 [Agent Status] ${targetAgent.name}: ${targetAgent.status}`);
-          if (streamCallback) streamCallback(`\n📊 Agent status — ${lines.join(' | ')}\n`);
+          // Show active todo details if any
+          const activeTodos = todoList.filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error');
+          if (activeTodos.length > 0) {
+            lines.push(`Active todos:`);
+            for (const t of activeTodos.slice(0, 10)) {
+              const mark = t.status === 'in_progress' ? '~' : t.status === 'error' ? '!' : ' ';
+              lines.push(`  [${mark}] ${t.text.slice(0, 100)}${t.text.length > 100 ? '...' : ''}`);
+            }
+            if (activeTodos.length > 10) lines.push(`  ... and ${activeTodos.length - 10} more`);
+          }
+          console.log(`📊 [Agent Status] ${targetAgent.name}: ${targetAgent.status} | project=${targetAgent.project || 'none'} | task=${currentTaskInfo}`);
+          if (streamCallback) streamCallback(`\n📊 Agent status:\n${lines.join('\n')}\n`);
         }
 
         // ── Process @list_agents commands ────────────────────────────────
         if (/@list_agents\s*\(\s*\)/i.test(responseForParsing)) {
           const enabled = Array.from(this.agents.values()).filter(a => a.enabled !== false);
-          const lines = enabled.map(a => `- ${a.name} [${a.status}]${a.project ? ` project=${a.project}` : ''} (${a.role || 'worker'})`);
-          console.log(`👥 [List Agents] ${enabled.length} enabled agents`);
-          if (streamCallback) streamCallback(`\n👥 Enabled agents (${enabled.length}):\n${lines.join('\n')}\n`);
+
+          // Build project summary header
+          const projectGroups = {};
+          let unassignedCount = 0;
+          for (const a of enabled) {
+            if (a.project) {
+              if (!projectGroups[a.project]) projectGroups[a.project] = { busy: 0, idle: 0, error: 0, total: 0 };
+              projectGroups[a.project].total++;
+              if (a.status === 'busy') projectGroups[a.project].busy++;
+              else if (a.status === 'error') projectGroups[a.project].error++;
+              else projectGroups[a.project].idle++;
+            } else {
+              unassignedCount++;
+            }
+          }
+
+          let output = `\n👥 Enabled agents (${enabled.length}):\n`;
+          // Project summary
+          const projectKeys = Object.keys(projectGroups);
+          if (projectKeys.length > 0 || unassignedCount > 0) {
+            output += `Projects: ${projectKeys.map(p => `${p} (${projectGroups[p].busy} busy, ${projectGroups[p].idle} idle)`).join(' | ')}`;
+            if (unassignedCount > 0) output += ` | unassigned: ${unassignedCount}`;
+            output += '\n';
+          }
+
+          // Per-agent details
+          const lines = enabled.map(a => {
+            const projectTag = a.project ? `project=${a.project}` : 'NO PROJECT';
+            const todoCount = (a.todoList || []).filter(t => t.status !== 'done').length;
+            const inProgressTodo = (a.todoList || []).find(t => t.status === 'in_progress');
+            const todoInfo = todoCount > 0 ? ` todos=${todoCount}` : '';
+            const taskInfo = a.currentTask
+              ? ` working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
+              : inProgressTodo
+                ? ` working on: "${inProgressTodo.text.slice(0, 80)}${inProgressTodo.text.length > 80 ? '...' : ''}"`
+                : '';
+            return `- ${a.name} [${a.status}] [${projectTag}] (${a.role || 'worker'})${todoInfo}${taskInfo}`;
+          });
+          output += lines.join('\n') + '\n';
+
+          console.log(`👥 [List Agents] ${enabled.length} enabled agents across ${projectKeys.length} projects`);
+          if (streamCallback) streamCallback(output);
         }
 
         // ── Process @get_available_agent commands ─────────────────────────
         const getAvailableCommands = this._parseGetAvailableAgent(responseForParsing);
         for (const cmd of getAvailableCommands) {
-          const available = Array.from(this.agents.values()).find(
+          const allMatching = Array.from(this.agents.values()).filter(
             a => a.id !== id && a.enabled !== false && a.status === 'idle' && (a.role || '').toLowerCase() === cmd.role.toLowerCase()
           );
-          if (available) {
-            const projectInfo = available.project ? `project=${available.project}` : 'no project';
-            console.log(`🔍 [Get Available] Found idle "${cmd.role}": ${available.name}`);
-            if (streamCallback) streamCallback(`\n🔍 Available ${cmd.role}: ${available.name} [idle] (${projectInfo})\n`);
+          if (allMatching.length > 0) {
+            const lines = allMatching.map(a => {
+              const projectInfo = a.project ? `project=${a.project}` : 'no project';
+              const todoCount = (a.todoList || []).filter(t => t.status !== 'done').length;
+              const todoInfo = todoCount > 0 ? `, ${todoCount} pending todos` : '';
+              return `  - ${a.name} [idle] (${projectInfo}${todoInfo})`;
+            });
+            console.log(`🔍 [Get Available] Found ${allMatching.length} idle "${cmd.role}" agent(s)`);
+            if (streamCallback) streamCallback(`\n🔍 Available ${cmd.role} agents (${allMatching.length} idle):\n${lines.join('\n')}\n`);
           } else {
+            // Show busy agents with that role as a hint
+            const busyMatching = Array.from(this.agents.values()).filter(
+              a => a.id !== id && a.enabled !== false && a.status === 'busy' && (a.role || '').toLowerCase() === cmd.role.toLowerCase()
+            );
+            let hint = '';
+            if (busyMatching.length > 0) {
+              hint = ` (${busyMatching.length} busy: ${busyMatching.map(a => `${a.name} on ${a.project || 'no project'}`).join(', ')})`;
+            }
             console.log(`🔍 [Get Available] No idle agent with role "${cmd.role}"`);
-            if (streamCallback) streamCallback(`\n🔍 No idle agent with role "${cmd.role}" available\n`);
+            if (streamCallback) streamCallback(`\n🔍 No idle agent with role "${cmd.role}" available${hint}\n`);
+          }
+        }
+
+        // ── Process @swarm_status commands ──────────────────────────────
+        if (/@swarm_status\s*\(\s*\)/i.test(responseForParsing)) {
+          const swarmStatus = this.getSwarmStatus();
+          const s = swarmStatus.summary;
+          let output = `\n📊 Swarm Status: ${s.enabled} agents (${s.busy} busy, ${s.idle} idle, ${s.error} error) | ${s.activeProjects.length} active projects\n`;
+          // Group by project
+          for (const [project, agents] of Object.entries(swarmStatus.projectAssignments)) {
+            const ps = swarmStatus.projectSummaries[project];
+            output += `\n📁 Project: ${project} (${ps.total} agents: ${ps.busy} busy, ${ps.idle} idle)\n`;
+            for (const a of agents) {
+              const taskInfo = a.currentTask
+                ? ` — working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
+                : '';
+              const todoInfo = a.todos.inProgress > 0 || a.todos.pending > 0
+                ? ` | todos: ${a.todos.inProgress} in-progress, ${a.todos.pending} pending`
+                : '';
+              output += `  - ${a.name} [${a.status}] (${a.role})${todoInfo}${taskInfo}\n`;
+            }
+          }
+          if (swarmStatus.unassignedAgents.length > 0) {
+            output += `\n⚠️ Unassigned (no project): ${swarmStatus.unassignedAgents.length} agents\n`;
+            for (const a of swarmStatus.unassignedAgents) {
+              const taskInfo = a.currentTask ? ` — task: "${a.currentTask.slice(0, 80)}..."` : '';
+              output += `  - ${a.name} [${a.status}] (${a.role})${taskInfo}\n`;
+            }
+          }
+          console.log(`📊 [Swarm Status] ${s.enabled} agents, ${Object.keys(swarmStatus.projectAssignments).length} projects`);
+          if (streamCallback) streamCallback(output);
+        }
+
+        // ── Process @agents_on_project commands ─────────────────────────
+        const agentsOnProjectCommands = this._parseAgentsOnProject(responseForParsing);
+        for (const cmd of agentsOnProjectCommands) {
+          const agents = this.getAgentsByProject(cmd.projectName);
+          if (agents.length > 0) {
+            let output = `\n📁 Agents on project "${cmd.projectName}" (${agents.length}):\n`;
+            const busyCount = agents.filter(a => a.status === 'busy').length;
+            const idleCount = agents.filter(a => a.status === 'idle').length;
+            output += `Summary: ${busyCount} busy, ${idleCount} idle\n`;
+            for (const a of agents) {
+              const taskInfo = a.currentTask
+                ? ` — working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
+                : '';
+              const todoInfo = a.todos.inProgress > 0 || a.todos.pending > 0
+                ? ` | todos: ${a.todos.inProgress} in-progress, ${a.todos.pending} pending`
+                : '';
+              output += `  - ${a.name} [${a.status}] (${a.role})${todoInfo}${taskInfo}\n`;
+            }
+            console.log(`📁 [Agents On Project] ${agents.length} agents on "${cmd.projectName}"`);
+            if (streamCallback) streamCallback(output);
+          } else {
+            console.log(`📁 [Agents On Project] No agents assigned to "${cmd.projectName}"`);
+            if (streamCallback) streamCallback(`\n📁 No agents are currently assigned to project "${cmd.projectName}"\n`);
           }
         }
       }
@@ -1261,6 +1632,7 @@ export class AgentManager {
         this._emit('agent:error:report', {
           agentId,
           agentName: agent.name,
+          project: agent.project || null,
           description: errorDescription,
           timestamp: new Date().toISOString()
         });
@@ -1306,13 +1678,63 @@ export class AgentManager {
       // ── Handle @list_my_tasks() — list agent's own tasks ────────────
       if (call.tool === 'list_my_tasks') {
         const todos = agent.todoList || [];
+        const header = `Agent: ${agent.name} | Project: ${agent.project || 'none'} | Status: ${agent.status}`;
         if (todos.length === 0) {
-          results.push({ tool: 'list_my_tasks', args: [], success: true, result: 'No tasks assigned.' });
+          results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\nNo tasks assigned.` });
         } else {
           const statusIcons = { pending: '[ ]', in_progress: '[~]', done: '[x]', error: '[!]' };
           const lines = todos.map(t => `${statusIcons[t.status] || '[ ]'} ${t.id} — ${t.text}`);
-          results.push({ tool: 'list_my_tasks', args: [], success: true, result: lines.join('\n') });
+          results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\n${lines.join('\n')}` });
         }
+        continue;
+      }
+
+      // ── Handle @check_status() — agent checks its own detailed status ─
+      if (call.tool === 'check_status') {
+        const todoList = agent.todoList || [];
+        const pendingTodos = todoList.filter(t => t.status === 'pending').length;
+        const inProgressTodos = todoList.filter(t => t.status === 'in_progress').length;
+        const doneTodos = todoList.filter(t => t.status === 'done').length;
+        const errorTodos = todoList.filter(t => t.status === 'error').length;
+        const totalTodos = todoList.length;
+        const msgCount = (agent.conversationHistory || []).length;
+        const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(agent.id) : false;
+        const inProgressTodo = todoList.find(t => t.status === 'in_progress');
+        const currentTaskInfo = agent.currentTask
+          ? agent.currentTask.slice(0, 120)
+          : inProgressTodo
+            ? inProgressTodo.text.slice(0, 120)
+            : 'none';
+        const projectAssignedAt = agent.projectChangedAt
+          ? new Date(agent.projectChangedAt).toLocaleString()
+          : 'n/a';
+
+        const lines = [
+          `Name: ${agent.name}`,
+          `Status: ${agent.status}`,
+          `Role: ${agent.role || 'worker'}`,
+          `Project: ${agent.project || 'none'}${agent.project ? ` (assigned ${projectAssignedAt})` : ''}`,
+          `Current task: ${currentTaskInfo}`,
+          `Provider: ${agent.provider || 'unknown'}/${agent.model || 'unknown'}`,
+          `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
+          `Todos: ${inProgressTodos} in-progress, ${pendingTodos} pending, ${doneTodos} done, ${errorTodos} error / ${totalTodos} total`,
+          `Messages: ${msgCount}`,
+          `Last active: ${agent.metrics?.lastActiveAt || 'never'}`,
+          `Errors: ${agent.metrics?.errors || 0}`,
+        ];
+        // Show active todo details
+        const activeTodos = todoList.filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error');
+        if (activeTodos.length > 0) {
+          lines.push(`Active todos:`);
+          for (const t of activeTodos.slice(0, 10)) {
+            const mark = t.status === 'in_progress' ? '~' : t.status === 'error' ? '!' : ' ';
+            lines.push(`  [${mark}] ${t.text.slice(0, 100)}${t.text.length > 100 ? '...' : ''}`);
+          }
+          if (activeTodos.length > 10) lines.push(`  ... and ${activeTodos.length - 10} more`);
+        }
+
+        console.log(`📊 [Check Status] Agent "${agent.name}": ${agent.status} | project=${agent.project || 'none'} | task=${currentTaskInfo}`);
+        results.push({ tool: 'check_status', args: [], success: true, result: lines.join('\n') });
         continue;
       }
 
@@ -1322,7 +1744,7 @@ export class AgentManager {
         const mcpLabel = `MCP: ${serverName} → ${toolName}`;
         agent.currentThinking = mcpLabel;
         this._emit('agent:thinking', { agentId, thinking: mcpLabel });
-        this._emit('agent:tool:start', { agentId, agentName: agent.name, tool: 'mcp_call', args: call.args });
+        this._emit('agent:tool:start', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', args: call.args });
 
         try {
           const parsedArgs = typeof argsJson === 'string' ? JSON.parse(argsJson) : (argsJson || {});
@@ -1334,12 +1756,12 @@ export class AgentManager {
           }
 
           results.push({ tool: 'mcp_call', args: call.args, ...mcpResult });
-          this._emit('agent:tool:result', { agentId, tool: 'mcp_call', args: call.args, success: mcpResult.success, preview: (mcpResult.result || '').slice(0, 300) });
+          this._emit('agent:tool:result', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', args: call.args, success: mcpResult.success, preview: (mcpResult.result || '').slice(0, 300) });
         } catch (mcpErr) {
           console.error(`❌ [MCP] Agent "${agent.name}" mcp_call failed: ${mcpErr.message}`);
           if (streamCallback) streamCallback(`\n✗ ${mcpLabel}: ${mcpErr.message}\n`);
           results.push({ tool: 'mcp_call', args: call.args, success: false, error: mcpErr.message });
-          this._emit('agent:tool:error', { agentId, tool: 'mcp_call', error: mcpErr.message });
+          this._emit('agent:tool:error', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', error: mcpErr.message });
         }
         continue;
       }
@@ -1363,6 +1785,7 @@ export class AgentManager {
         this._emit('agent:tool:start', {
           agentId,
           agentName: agent.name,
+          project: agent.project || null,
           tool: call.tool,
           args: call.args
         });
@@ -1384,6 +1807,8 @@ export class AgentManager {
           // Emit structured tool-result event
           this._emit('agent:tool:result', {
             agentId,
+            agentName: agent.name,
+            project: agent.project || null,
             tool: call.tool,
             args: call.args,
             success: true,
@@ -1396,6 +1821,7 @@ export class AgentManager {
           this._emit('agent:tool:error', {
             agentId,
             agentName: agent.name,
+            project: agent.project || null,
             tool: call.tool,
             args: call.args,
             error: result.error || 'Unknown error',
@@ -1422,6 +1848,7 @@ export class AgentManager {
         this._emit('agent:tool:error', {
           agentId,
           agentName: agent.name,
+          project: agent.project || null,
           tool: call.tool,
           args: call.args,
           error: err.message,
@@ -1433,7 +1860,7 @@ export class AgentManager {
         }
       }
     }
-    
+
     return results;
   }
 
@@ -1677,6 +2104,35 @@ export class AgentManager {
   }
 
   /**
+   * Parse @agents_on_project(projectName) commands from leader output.
+   * Returns array of { projectName }.
+   */
+  _parseAgentsOnProject(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const results = [];
+    const re = /@agents_on_project\s*\(/gi;
+    let reMatch;
+    while ((reMatch = re.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const closeIdx = text.indexOf(')', startAfterParen);
+      if (closeIdx === -1) continue;
+      const projectName = text.slice(startAfterParen, closeIdx).trim().replace(/^["']|["']$/g, '');
+      if (projectName) {
+        results.push({ projectName });
+      }
+    }
+    return results;
+  }
+
+  /**
    * Parse @stop_agent(AgentName) commands from leader output.
    * Returns array of { targetAgentName }.
    */
@@ -1772,8 +2228,8 @@ export class AgentManager {
       if (streamCallback) streamCallback(`\n\n--- 📨 Delegating to ${targetAgent.name} ---\n`);
 
       this._emit('agent:delegation', {
-        from: { id: leaderId, name: leader.name },
-        to: { id: targetAgent.id, name: targetAgent.name },
+        from: { id: leaderId, name: leader.name, project: leader.project || null },
+        to: { id: targetAgent.id, name: targetAgent.name, project: targetAgent.project || null },
         task: delegation.task
       });
 
@@ -1817,9 +2273,9 @@ export class AgentManager {
         }
       }
 
-      return { agentId: targetAgent.id, agentName: targetAgent.name, task: delegation.task, response: agentResponse, error: null };
+      return { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null, task: delegation.task, response: agentResponse, error: null };
     } catch (err) {
-      return { agentId: targetAgent.id, agentName: targetAgent.name, task: delegation.task, response: null, error: err.message };
+      return { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null, task: delegation.task, response: null, error: err.message };
     }
   }
 
@@ -1856,8 +2312,8 @@ export class AgentManager {
     }`;
 
     this._emit('agent:handoff', {
-      from: { id: fromId, name: fromAgent.name },
-      to: { id: toId, name: toAgent.name },
+      from: { id: fromId, name: fromAgent.name, project: fromAgent.project || null },
+      to: { id: toId, name: toAgent.name, project: toAgent.project || null },
       context
     });
 

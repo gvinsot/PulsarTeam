@@ -406,8 +406,8 @@ Example:
 @rollback(AgentName, X) — Remove the last X messages from an agent's history.
 @stop_agent(AgentName) — Stop an agent's current task immediately.
 @list_projects() — List all available projects.
-@list_agents() — List all enabled agents with their current status, project, and role.
-@agent_status(AgentName) — Check a specific agent's status (busy/idle/error), project, pending todos, and message count.
+@list_agents() — List all enabled agents with their current status, project, role, and current task (if busy).
+@agent_status(AgentName) — Check a specific agent's status (busy/idle/error), project, current task, pending todos, and message count.
 @clear_all_chats() — Clear ALL agents' conversation histories at once.
 @clear_all_action_logs() — Clear ALL agents' action logs at once.
 @get_available_agent(role) — Get the first idle agent with the specified role (e.g. "developer"). Returns agent name, status, and project.

@@ -89,6 +89,38 @@ export function setupSocketHandlers(io, agentManager) {
       socket.emit('agents:list', agentManager.getAll());
     });
 
+    // ── Get swarm status with project assignments ─────────────────────
+    socket.on('agents:swarm-status', () => {
+      socket.emit('agents:swarm-status', agentManager.getSwarmStatus());
+    });
+
+    // ── Get lightweight status for ALL enabled agents (includes project) ─
+    socket.on('agents:statuses', () => {
+      socket.emit('agents:statuses', agentManager.getAllStatuses());
+    });
+
+    // ── Get single agent detailed status ──────────────────────────────
+    socket.on('agent:status', (data) => {
+      const { agentId } = data || {};
+      if (!agentId) return;
+      const status = agentManager.getAgentStatus(agentId);
+      if (status) {
+        socket.emit('agent:status', status);
+      }
+    });
+
+    // ── Get agents by project ────────────────────────────────────────
+    socket.on('agents:by-project', (data) => {
+      const { project } = data || {};
+      if (!project) return;
+      socket.emit('agents:by-project', agentManager.getAgentsByProject(project));
+    });
+
+    // ── Get project summary ──────────────────────────────────────────
+    socket.on('agents:project-summary', () => {
+      socket.emit('agents:project-summary', agentManager.getProjectSummary());
+    });
+
     // ── Stop agent ────────────────────────────────────────────────────
     socket.on('agent:stop', (data) => {
       const { agentId } = data;

@@ -39,6 +39,10 @@ You can interact with project files using these commands. Use the exact format s
   Example: @update_todo(abc-123, in_progress)
   Example: @update_todo(abc-123, done)
 
+@check_status() - Check your own detailed status including project assignment, task counts, and metrics
+  Use this to see which project you are working on and your current state.
+  Example: @check_status()
+
 @report_error(description) - Report an error or problem back to the leader/manager agent
   Use this when you encounter a blocking issue you cannot resolve yourself.
   Example: @report_error(Cannot compile: missing dependency 'express'.)
@@ -102,6 +106,9 @@ export async function executeTool(toolName, args, projectPath, sandboxMgr, agent
   }
   if (toolName === 'list_my_tasks') {
     return { success: true, result: 'Tasks listed', isTaskList: true };
+  }
+  if (toolName === 'check_status') {
+    return { success: true, result: 'Status checked', isStatusCheck: true };
   }
 
   if (!sandboxMgr || !agentId) {
@@ -252,7 +259,7 @@ async function toolGitCommitPush(sandboxMgr, agentId, message) {
 
 // ─── Tool Call Parsing ──────────────────────────────────────────────────────
 
-const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_todo', 'list_my_tasks', 'mcp_call'];
+const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_todo', 'list_my_tasks', 'check_status', 'mcp_call'];
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
 function jsonToToolCall(name, args) {
@@ -278,6 +285,8 @@ function jsonToToolCall(name, args) {
       return { tool: 'update_todo', args: [args.todoId || args.todo_id || args.id || '', args.status || ''] };
     case 'list_my_tasks':
       return { tool: 'list_my_tasks', args: [] };
+    case 'check_status':
+      return { tool: 'check_status', args: [] };
     case 'mcp_call':
       return { tool: 'mcp_call', args: [args.server || args.serverName || '', args.tool || args.toolName || '', JSON.stringify(args.arguments || args.args || {})] };
     default:
@@ -372,7 +381,7 @@ export function parseToolCalls(response) {
     .replace(/<\|?\/?tool_use\|?>/gi, '')
     .replace(/\[TOOL_CALLS?\]/gi, '');
 
-  const SINGLE_ARG_TOOLS = ['read_file', 'list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks'];
+  const SINGLE_ARG_TOOLS = ['read_file', 'list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks', 'check_status'];
   const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'update_todo'];
   const THREE_ARG_TOOLS = ['mcp_call'];
   const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
