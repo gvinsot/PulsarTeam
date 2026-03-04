@@ -424,4 +424,37 @@ Examples:
 @clear_all_action_logs()
 @get_available_agent(developer)`
   },
+  {
+    id: 'skill-agents-direct-access',
+    name: 'Agents Direct Access',
+    description: 'Ask quick questions to other agents without creating tasks',
+    category: 'general',
+    icon: '💬',
+    builtin: true,
+    instructions: `You can ask questions directly to other agents in the swarm.
+
+## DIRECT QUESTIONS
+@ask(AgentName, "your question here")
+
+Use this for quick answers — no task is created on the target agent.
+The target agent will receive your question and respond concisely.
+Their answer will be provided back to you inline.
+
+WHEN TO USE @ask vs @delegate:
+- @ask: quick questions ("What framework is used?", "Did the tests pass?")
+- @delegate (leaders only): full tasks requiring work
+
+Examples:
+@ask(Developer, "What testing framework is configured in this project?")
+@ask(Security Analyst, "Are there known vulnerabilities in express 4.21?")
+@ask(QA Engineer, "Did the last test run pass?")
+
+RULES:
+- One @ask per question
+- Keep questions concise and specific
+- The target agent will give a brief answer — this is not for delegating work`,
+    mcpServerIds: [],
+    createdAt: '2024-03-01T00:00:00.000Z',
+    updatedAt: '2024-03-01T00:00:00.000Z'
+  },
 ];

@@ -605,6 +605,18 @@ export class AgentManager {
         }
       }
 
+      // Inject available agents list for agents with the direct-access skill
+      if (agentSkills.includes('skill-agents-direct-access')) {
+        const askableAgents = Array.from(this.agents.values())
+          .filter(a => a.id !== id && a.enabled !== false)
+          .map(a => `- ${a.name} (${a.role})${a.project ? ` [project: ${a.project}]` : ''}`);
+        if (askableAgents.length > 0) {
+          systemContent += `\n\n--- Agents You Can Ask ---\n`;
+          systemContent += `Use @ask(AgentName, "question") for quick questions.\n`;
+          systemContent += askableAgents.join('\n');
+        }
+      }
+
       // Merge MCP server IDs: from plugins + direct agent assignments (backward compat)
       const directMcpIds = agent.mcpServers || [];
       const allMcpIds = [...new Set([...pluginMcpIds, ...directMcpIds])];
@@ -1038,6 +1050,85 @@ export class AgentManager {
             );
             this.setStatus(id, 'idle');
             return nudgeResponse;
+          }
+        }
+      }
+
+      // ── Process @ask commands (any agent with direct-access skill) ────────
+      {
+        const agentHasDirectAccess = (agent.skills || []).includes('skill-agents-direct-access');
+        if (agentHasDirectAccess && delegationDepth < MAX_DELEGATION_DEPTH) {
+          const askCommands = this._parseAskCommands(responseForParsing);
+
+          if (askCommands.length > 0) {
+            const askResults = [];
+
+            for (const askCmd of askCommands) {
+              const targetAgent = Array.from(this.agents.values()).find(
+                a => a.name.toLowerCase() === askCmd.agentName.toLowerCase() && a.id !== id && a.enabled !== false
+              );
+
+              if (!targetAgent) {
+                console.log(`⚠️  [Ask] Agent "${askCmd.agentName}" not found or disabled`);
+                askResults.push({ agentName: askCmd.agentName, answer: null, error: `Agent "${askCmd.agentName}" not found or disabled in swarm` });
+                continue;
+              }
+
+              if (targetAgent.status === 'busy') {
+                console.log(`⚠️  [Ask] Agent "${askCmd.agentName}" is busy`);
+                askResults.push({ agentName: askCmd.agentName, answer: null, error: `Agent "${askCmd.agentName}" is currently busy. Try again later.` });
+                continue;
+              }
+
+              console.log(`💬 [Ask] ${agent.name} → ${targetAgent.name}: "${askCmd.question.slice(0, 80)}"`);
+
+              this._emit('agent:ask', {
+                from: { id, name: agent.name },
+                to: { id: targetAgent.id, name: targetAgent.name },
+                question: askCmd.question
+              });
+
+              this._emit('agent:stream:start', { agentId: targetAgent.id });
+
+              try {
+                const answer = await this.sendMessage(
+                  targetAgent.id,
+                  `[QUESTION from ${agent.name}]: ${askCmd.question}\n\nPlease provide a concise, direct answer.`,
+                  (chunk) => {
+                    this._emit('agent:stream:chunk', { agentId: targetAgent.id, chunk });
+                  },
+                  delegationDepth + 1,
+                  { type: 'ask-question', fromAgent: agent.name }
+                );
+
+                this._emit('agent:stream:end', { agentId: targetAgent.id });
+                this._emit('agent:updated', this._sanitize(targetAgent));
+
+                askResults.push({ agentName: targetAgent.name, answer, error: null });
+              } catch (err) {
+                this._emit('agent:stream:end', { agentId: targetAgent.id });
+                console.error(`💬 [Ask] Error from ${targetAgent.name}: ${err.message}`);
+                askResults.push({ agentName: targetAgent.name, answer: null, error: err.message });
+              }
+            }
+
+            // Feed answers back to the asking agent
+            const answersSummary = askResults.map(r => {
+              if (r.error) return `--- ⚠️ ERROR asking ${r.agentName} ---\n${r.error}`;
+              return `--- Answer from ${r.agentName} ---\n${r.answer}`;
+            }).join('\n\n');
+
+            if (streamCallback) streamCallback(`\n\n--- Received answers, continuing ---\n\n`);
+
+            const continuedResponse = await this.sendMessage(
+              id,
+              `[ASK RESULTS]\n${answersSummary}\n\nContinue with your task based on these answers.`,
+              streamCallback,
+              delegationDepth,
+              { type: 'ask-result', askResults: askResults.map(r => ({ agentName: r.agentName, answer: r.answer, error: r.error })) }
+            );
+            this.setStatus(id, 'idle');
+            return continuedResponse;
           }
         }
       }
@@ -2144,6 +2235,66 @@ export class AgentManager {
       }
     }
     return results;
+  }
+
+  /**
+   * Parse @ask(AgentName, "question") commands from any agent's output.
+   * Returns array of { agentName, question }.
+   */
+  _parseAskCommands(text) {
+    const codeBlockRanges = [];
+    const cbRe = /```[\s\S]*?```|`[^`]*`/g;
+    let cbMatch;
+    while ((cbMatch = cbRe.exec(text)) !== null) {
+      codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
+    }
+    const isInsideCodeBlock = (pos) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+
+    const asks = [];
+    const askRe = /@ask\s*\(/gi;
+    let reMatch;
+    while ((reMatch = askRe.exec(text)) !== null) {
+      if (isInsideCodeBlock(reMatch.index)) continue;
+
+      const startAfterParen = reMatch.index + reMatch[0].length;
+      const commaIdx = text.indexOf(',', startAfterParen);
+      if (commaIdx === -1) continue;
+      const agentName = text.slice(startAfterParen, commaIdx).trim();
+
+      let i = commaIdx + 1;
+      while (i < text.length && /\s/.test(text[i])) i++;
+      const quoteChar = text[i];
+      if (quoteChar !== '"' && quoteChar !== "'") continue;
+      i++;
+
+      let questionContent = '';
+      let found = false;
+      while (i < text.length) {
+        if (text[i] === '\\' && i + 1 < text.length) {
+          questionContent += text[i] + text[i + 1];
+          i += 2;
+          continue;
+        }
+        if (text[i] === quoteChar) {
+          let j = i + 1;
+          while (j < text.length && /\s/.test(text[j])) j++;
+          if (j < text.length && text[j] === ')') {
+            found = true;
+            break;
+          }
+          questionContent += text[i];
+          i++;
+          continue;
+        }
+        questionContent += text[i];
+        i++;
+      }
+
+      if (found && agentName && questionContent.trim()) {
+        asks.push({ agentName, question: questionContent.trim() });
+      }
+    }
+    return asks;
   }
 
   /**
