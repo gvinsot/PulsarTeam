@@ -6,6 +6,19 @@ import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
 
+// Render URLs in text as clickable links (for auth errors, etc.)
+function linkifyText(text) {
+  if (typeof text !== 'string') return text;
+  const urlRegex = /(https?:\/\/[^\s,)"']+)/g;
+  const parts = text.split(urlRegex);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) =>
+    urlRegex.test(part)
+      ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline font-medium hover:brightness-125">{part}</a>
+      : part
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -149,10 +162,11 @@ export default function App() {
         'too long', 'maximum context', 'exceeds', 'out of memory', 'oom',
         'kv cache', 'model error', 'ollama error'
       ].some(kw => errorLower.includes(kw));
+      const isAuthError = errorLower.includes('not authenticated') || errorLower.includes('auth_required') || errorLower.includes('log in');
       showToast(
         error || 'An error occurred while streaming response',
         'error',
-        isModelError ? 0 : 8000
+        (isModelError || isAuthError) ? 0 : 8000
       );
       setStreamBuffers(prev => {
         const copy = { ...prev };
@@ -249,7 +263,7 @@ export default function App() {
             {toast.type === 'error' ? <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
              toast.type === 'success' ? <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
              <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />}
-            <p className="text-sm flex-1">{toast.message}</p>
+            <p className="text-sm flex-1">{linkifyText(toast.message)}</p>
             <button
               onClick={() => dismissToast(toast.id)}
               className="opacity-60 hover:opacity-100 transition-opacity"
