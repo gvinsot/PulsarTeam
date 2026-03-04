@@ -10,24 +10,28 @@ export function setupSocketHandlers(io, agentManager) {
       const { agentId, message } = data;
       if (!agentId || !message) return;
 
+      const agentData = agentManager.agents.get(agentId);
+      const project = agentData?.project || null;
+
       try {
-        socket.emit('agent:stream:start', { agentId });
+        socket.emit('agent:stream:start', { agentId, project });
 
         await agentManager.sendMessage(agentId, message, (chunk) => {
-          socket.emit('agent:stream:chunk', { agentId, chunk });
+          socket.emit('agent:stream:chunk', { agentId, project, chunk });
           // Also broadcast the thinking state to all clients
           io.emit('agent:thinking', {
             agentId,
+            project,
             thinking: agentManager.agents.get(agentId)?.currentThinking || ''
           });
         });
 
-        socket.emit('agent:stream:end', { agentId });
+        socket.emit('agent:stream:end', { agentId, project });
         // Send updated agent with metrics
         const agent = agentManager.getById(agentId);
         if (agent) io.emit('agent:updated', agent);
       } catch (err) {
-        socket.emit('agent:stream:error', { agentId, error: err.message });
+        socket.emit('agent:stream:error', { agentId, project, error: err.message });
       }
     });
 
@@ -42,10 +46,12 @@ export function setupSocketHandlers(io, agentManager) {
         const results = await agentManager.broadcastMessage(
           message,
           (agentId, chunk) => {
-            socket.emit('agent:stream:chunk', { agentId, chunk });
+            const a = agentManager.agents.get(agentId);
+            socket.emit('agent:stream:chunk', { agentId, project: a?.project || null, chunk });
             io.emit('agent:thinking', {
               agentId,
-              thinking: agentManager.agents.get(agentId)?.currentThinking || ''
+              project: a?.project || null,
+              thinking: a?.currentThinking || ''
             });
           }
         );
@@ -61,25 +67,29 @@ export function setupSocketHandlers(io, agentManager) {
       const { fromId, toId, context } = data;
       if (!fromId || !toId || !context) return;
 
+      const targetAgent = agentManager.agents.get(toId);
+      const targetProject = targetAgent?.project || null;
+
       try {
         // Stream the target agent's response in real-time
-        io.emit('agent:stream:start', { agentId: toId });
+        io.emit('agent:stream:start', { agentId: toId, project: targetProject });
 
         const response = await agentManager.handoff(fromId, toId, context, (chunk) => {
-          io.emit('agent:stream:chunk', { agentId: toId, chunk });
+          io.emit('agent:stream:chunk', { agentId: toId, project: targetProject, chunk });
           io.emit('agent:thinking', {
             agentId: toId,
+            project: targetProject,
             thinking: agentManager.agents.get(toId)?.currentThinking || ''
           });
         });
 
-        io.emit('agent:stream:end', { agentId: toId });
+        io.emit('agent:stream:end', { agentId: toId, project: targetProject });
         const agent = agentManager.getById(toId);
         if (agent) io.emit('agent:updated', agent);
 
         socket.emit('agent:handoff:complete', { fromId, toId, response });
       } catch (err) {
-        io.emit('agent:stream:error', { agentId: toId, error: err.message });
+        io.emit('agent:stream:error', { agentId: toId, project: targetProject, error: err.message });
         socket.emit('agent:handoff:error', { error: err.message });
       }
     });
@@ -138,22 +148,26 @@ export function setupSocketHandlers(io, agentManager) {
       const { agentId, todoId } = data;
       if (!agentId || !todoId) return;
 
+      const todoAgent = agentManager.agents.get(agentId);
+      const todoProject = todoAgent?.project || null;
+
       try {
-        socket.emit('agent:stream:start', { agentId });
+        socket.emit('agent:stream:start', { agentId, project: todoProject });
 
         const result = await agentManager.executeTodo(agentId, todoId, (chunk) => {
-          socket.emit('agent:stream:chunk', { agentId, chunk });
+          socket.emit('agent:stream:chunk', { agentId, project: todoProject, chunk });
           io.emit('agent:thinking', {
             agentId,
+            project: todoProject,
             thinking: agentManager.agents.get(agentId)?.currentThinking || ''
           });
         });
 
-        socket.emit('agent:stream:end', { agentId });
+        socket.emit('agent:stream:end', { agentId, project: todoProject });
         const agent = agentManager.getById(agentId);
         if (agent) io.emit('agent:updated', agent);
       } catch (err) {
-        socket.emit('agent:stream:error', { agentId, error: err.message });
+        socket.emit('agent:stream:error', { agentId, project: todoProject, error: err.message });
       }
     });
 
@@ -162,22 +176,26 @@ export function setupSocketHandlers(io, agentManager) {
       const { agentId } = data;
       if (!agentId) return;
 
+      const execAgent = agentManager.agents.get(agentId);
+      const execProject = execAgent?.project || null;
+
       try {
-        socket.emit('agent:stream:start', { agentId });
+        socket.emit('agent:stream:start', { agentId, project: execProject });
 
         await agentManager.executeAllTodos(agentId, (chunk) => {
-          socket.emit('agent:stream:chunk', { agentId, chunk });
+          socket.emit('agent:stream:chunk', { agentId, project: execProject, chunk });
           io.emit('agent:thinking', {
             agentId,
+            project: execProject,
             thinking: agentManager.agents.get(agentId)?.currentThinking || ''
           });
         });
 
-        socket.emit('agent:stream:end', { agentId });
+        socket.emit('agent:stream:end', { agentId, project: execProject });
         const agent = agentManager.getById(agentId);
         if (agent) io.emit('agent:updated', agent);
       } catch (err) {
-        socket.emit('agent:stream:error', { agentId, error: err.message });
+        socket.emit('agent:stream:error', { agentId, project: execProject, error: err.message });
       }
     });
 
@@ -203,8 +221,10 @@ export function setupSocketHandlers(io, agentManager) {
 
         console.log(`🎙️ [Voice Delegate] "${targetAgentName}" ← task: ${task.slice(0, 80)}...`);
 
+        const voiceTargetProject = targetAgent.project || null;
+
         // Stream to the sub-agent's own chat
-        io.emit('agent:stream:start', { agentId: targetAgent.id });
+        io.emit('agent:stream:start', { agentId: targetAgent.id, project: voiceTargetProject });
 
         const leader = agentManager.agents.get(agentId);
         const leaderName = leader?.name || 'Voice Leader';
@@ -216,15 +236,16 @@ export function setupSocketHandlers(io, agentManager) {
           targetAgent.id,
           `[TASK from ${leaderName}]: ${task}`,
           (chunk) => {
-            io.emit('agent:stream:chunk', { agentId: targetAgent.id, chunk });
+            io.emit('agent:stream:chunk', { agentId: targetAgent.id, project: voiceTargetProject, chunk });
             io.emit('agent:thinking', {
               agentId: targetAgent.id,
+              project: voiceTargetProject,
               thinking: agentManager.agents.get(targetAgent.id)?.currentThinking || ''
             });
           }
         );
 
-        io.emit('agent:stream:end', { agentId: targetAgent.id });
+        io.emit('agent:stream:end', { agentId: targetAgent.id, project: voiceTargetProject });
         const updatedAgent = agentManager.getById(targetAgent.id);
         if (updatedAgent) io.emit('agent:updated', updatedAgent);
 

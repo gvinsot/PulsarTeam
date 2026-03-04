@@ -47,6 +47,9 @@ export const api = {
   getAgentsByProject: (project) =>
     fetch(`${API_BASE}/agents/by-project/${encodeURIComponent(project)}`, { headers: getHeaders() }).then(handleResponse),
 
+  getProjectSummary: () =>
+    fetch(`${API_BASE}/agents/project-summary`, { headers: getHeaders() }).then(handleResponse),
+
   createAgent: (config) =>
     fetch(`${API_BASE}/agents`, {
       method: 'POST',

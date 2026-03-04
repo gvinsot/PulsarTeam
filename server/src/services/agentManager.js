@@ -201,6 +201,12 @@ export class AgentManager {
       .filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error')
       .map(t => ({ id: t.id, text: t.text, status: t.status, startedAt: t.startedAt || null }));
 
+    // Calculate how long the agent has been on the current project
+    let projectDurationMs = null;
+    if (agent.project && agent.projectChangedAt) {
+      projectDurationMs = Date.now() - new Date(agent.projectChangedAt).getTime();
+    }
+
     return {
       id: agent.id,
       name: agent.name,
@@ -209,6 +215,7 @@ export class AgentManager {
       description: agent.description || '',
       project: agent.project || null,
       projectChangedAt: agent.projectChangedAt || null,
+      projectDurationMs,
       currentTask: currentTask,
       activeTodos,
       provider: agent.provider || null,
@@ -1340,11 +1347,14 @@ export class AgentManager {
           const projectAssignedAt = targetAgent.projectChangedAt
             ? new Date(targetAgent.projectChangedAt).toLocaleString()
             : 'n/a';
+          const targetProjectDuration = targetAgent.project && targetAgent.projectChangedAt
+            ? AgentManager.formatDuration(Date.now() - new Date(targetAgent.projectChangedAt).getTime())
+            : 'n/a';
           const lines = [
             `Name: ${targetAgent.name}`,
             `Status: ${targetAgent.status}`,
             `Role: ${targetAgent.role || 'worker'}`,
-            `Project: ${targetAgent.project || 'none'}${targetAgent.project ? ` (assigned ${projectAssignedAt})` : ''}`,
+            `Project: ${targetAgent.project || 'none'}${targetAgent.project ? ` (assigned ${projectAssignedAt}, duration: ${targetProjectDuration})` : ''}`,
             `Current task: ${currentTaskInfo}`,
             `Provider: ${targetAgent.provider || 'unknown'}/${targetAgent.model || 'unknown'}`,
             `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
@@ -1708,12 +1718,16 @@ export class AgentManager {
         const projectAssignedAt = agent.projectChangedAt
           ? new Date(agent.projectChangedAt).toLocaleString()
           : 'n/a';
+        const projectDurationMs = agent.project && agent.projectChangedAt
+          ? Date.now() - new Date(agent.projectChangedAt).getTime()
+          : null;
+        const projectDuration = AgentManager.formatDuration(projectDurationMs);
 
         const lines = [
           `Name: ${agent.name}`,
           `Status: ${agent.status}`,
           `Role: ${agent.role || 'worker'}`,
-          `Project: ${agent.project || 'none'}${agent.project ? ` (assigned ${projectAssignedAt})` : ''}`,
+          `Project: ${agent.project || 'none'}${agent.project ? ` (assigned ${projectAssignedAt}, duration: ${projectDuration})` : ''}`,
           `Current task: ${currentTaskInfo}`,
           `Provider: ${agent.provider || 'unknown'}/${agent.model || 'unknown'}`,
           `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
@@ -2873,5 +2887,23 @@ export class AgentManager {
       '#eab308', '#22c55e', '#14b8a6', '#06b6d4', '#3b82f6'
     ];
     return colors[Math.floor(Math.random() * colors.length)];
+  }
+
+  /**
+   * Format a duration in milliseconds to a human-readable string.
+   * E.g. 3661000 → "1h 1m", 120000 → "2m", 86400000 → "1d 0h"
+   */
+  static formatDuration(ms) {
+    if (!ms || ms < 0) return 'n/a';
+    const seconds = Math.floor(ms / 1000);
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (hours < 24) return `${hours}h ${remainingMinutes}m`;
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    return `${days}d ${remainingHours}h`;
   }
 }

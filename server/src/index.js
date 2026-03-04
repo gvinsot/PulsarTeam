@@ -58,7 +58,33 @@ app.use('/api/realtime', authenticateToken, realtimeRoutes(agentManager));
 app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), agentCount: agentManager.getAll().length });
+  const allAgents = Array.from(agentManager.agents.values());
+  const enabled = allAgents.filter(a => a.enabled !== false);
+  const projectCounts = {};
+  let unassigned = 0;
+  for (const a of enabled) {
+    if (a.project) {
+      projectCounts[a.project] = (projectCounts[a.project] || 0) + 1;
+    } else {
+      unassigned++;
+    }
+  }
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    agents: {
+      total: allAgents.length,
+      enabled: enabled.length,
+      busy: enabled.filter(a => a.status === 'busy').length,
+      idle: enabled.filter(a => a.status === 'idle').length,
+      error: enabled.filter(a => a.status === 'error').length,
+    },
+    projects: {
+      active: Object.keys(projectCounts).length,
+      distribution: projectCounts,
+      unassigned,
+    }
+  });
 });
 
 io.use((socket, next) => {
