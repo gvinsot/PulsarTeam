@@ -1,287 +1,206 @@
 # Security Review — AgentsSwarmUI
 
-**Date:** 2026-03-05 (Eighth Review Pass)
-**Reviewer:** CLAUDE (Automated Security Agent — Opus 4.6)
-**Scope:** Full-stack review of server, client, DevOps, sandbox, and dependency management
+**Date:** 2026-03-05 (Updated)
+**Reviewer:** CLAUDE (Autonomous Security Agent)
+**Scope:** Full codebase — server, client, DevOps, dependencies
 
 ---
 
 ## Executive Summary
 
-The AgentsSwarmUI project demonstrates **solid security fundamentals**: JWT authentication, bcrypt hashing, parameterized SQL, rate limiting, sandbox isolation, security headers, Zod input validation, and API key masking. This **eighth comprehensive review** independently re-validates the full codebase, confirms all prior fixes remain in place, and consolidates the report. `npm audit` reports **0 vulnerabilities** across both server and client dependencies.
+The AgentsSwarmUI project demonstrates **good security awareness overall**, with many best practices already in place: JWT-based auth, bcrypt password hashing, rate limiting, Zod input validation, parameterized SQL queries, shell argument escaping, path traversal prevention, security headers, WebSocket origin validation, per-socket rate limiting, and API key sanitization.
 
-| Severity | Total Found | Fixed | Remaining |
-|----------|------------|-------|-----------|
-| CRITICAL | 4 | 1 | 3 |
-| HIGH     | 3 | 0 | 3 |
-| MEDIUM   | 2 | 0 | 2 |
-| LOW      | 1 | 0 | 1 |
-| INFO     | 2 | 1 | 1 |
+Several issues were identified, ranging from **CRITICAL** (credential exposure) to **LOW** (hardening recommendations). Some previously identified issues have been resolved since the initial review.
 
 ---
 
-## Previously Applied Fixes (Confirmed Still in Place)
+## CRITICAL
 
-1. **Health Endpoint Split** — `/api/health` (public, minimal) vs `/api/health/details` (authenticated) (`index.js:84-117`)
-2. **Zod Schema Validation** — All creation/update routes (agents, plugins, MCP servers) validated with type/length constraints (`agents.js:5-30`, `plugins.js:5-12`, `mcpServers.js:5-12`)
-3. **Default Credentials Warning** — Console warning when `ADMIN_PASSWORD` not set; `process.exit(1)` in production (`auth.js:19-36`)
-4. **Security Headers** — Express middleware: `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`, `CSP`, `HSTS` (`index.js:49-57`)
-5. **WebSocket Origin Validation** — Handshake validates `Origin` header against CORS whitelist (`index.js:121-125`)
-6. **Command Injection Fix** — `sanitizeCommitMessage()` strips shell metacharacters in `git_commit_push` (`agentTools.js:253-261`)
-7. **Rate Limiter Cleanup** — Periodic `setInterval` cleanup prevents memory leaks in login attempt tracking (`auth.js:62-67`)
-8. **`.gitignore` Hardening** — `devops/.env` explicitly listed, confirmed NOT tracked by git (`git ls-files` returns empty)
-9. **MCP Server URL Validation** — `z.string().url().max(2000)` (`mcpServers.js:7`)
-10. **SSH Path Fallback Fixed** — Uses `/root/.ssh` (`sandboxManager.js:224`)
-11. **WebSocket Per-Event Rate Limiting** — `createSocketRateLimiter(30, 60_000)` per socket (`socketHandler.js:1-13`)
-12. **Docker Socket NOT mounted into sandbox** — Comment in `sandboxManager.js:234` confirms removal
+### 1. Production Secrets in `devops/.env` on Disk
+**Location:** `devops/.env`
+**Risk:** Total compromise of all integrated services
+**Status:** OPEN — requires human action (secret rotation)
 
----
+The `devops/.env` file contains **real production secrets**:
+- `ANTHROPIC_API_KEY` (sk-ant-api03-...)
+- `OPENAI_API_KEY` (sk-proj-...)
+- `MISTRAL_API_KEY`
+- `GITHUB_TOKEN` (github_pat_...)
+- `DATABASE_URL` with password
+- `JWT_SECRET`
+- `ADMIN_PASSWORD`
 
-## CRITICAL Issues
+**While this file is correctly in `.gitignore`** and has never been committed to git history (verified via `git log --all -- devops/.env`), it exists on disk and could be exposed through:
+- Backup processes
+- Docker volume mounts
+- Developer machine compromise
+- Accidental `git add -f`
 
-### C1. Production Secrets in `devops/.env`
+**Recommendation:**
+- **Immediately rotate ALL exposed keys** (Anthropic, OpenAI, Mistral, GitHub PAT, JWT secret, admin password, DB password)
+- Use a secrets manager (Docker Secrets, Vault, AWS SSM) instead of `.env` files
+- Add a pre-commit hook that blocks `devops/.env` from being staged
 
-**File:** `devops/.env`
-**Impact:** Full compromise of all integrated services
-**Status:** NOT tracked by git (confirmed via `git ls-files` and `git log`)
+### 2. Docker Socket Mounted in Production
+**Location:** `devops/docker-compose.swarm.yml:31`
+```yaml
+- /var/run/docker.sock:/var/run/docker.sock
+```
+**Risk:** Container escape → host root access
+**Status:** OPEN — requires architecture change
 
-The file contains **real production secrets in plaintext**:
-- Anthropic API key (`sk-ant-api03-...`)
-- OpenAI API key (`sk-proj-...`)
-- Mistral API key
-- GitHub PAT (`github_pat_...`)
-- PostgreSQL credentials (`postgresql://swarm_prod_app:...`)
-- Admin password, JWT secret
-- Docker registry URL
+The Docker socket gives the server container full control over the Docker daemon, meaning any code execution inside the container (including agent-generated code) can:
+- Start privileged containers
+- Mount the host filesystem
+- Execute arbitrary commands as root on the host
 
-**Recommendations:**
-1. **Immediately rotate ALL credentials** — assume they've been exposed to any agent/process with filesystem access
-2. Use Docker Swarm secrets (`docker secret create`) or a vault (HashiCorp Vault, AWS Secrets Manager)
-3. Never store real credentials in `.env` files on shared/multi-tenant hosts
-4. The sandbox containers (with `docker-cli` access) can potentially read environment variables from the server container
+Note: The sandbox container itself does NOT mount the Docker socket (comment at `sandboxManager.js:235` confirms deliberate removal). But the server container still needs it to manage sandbox containers.
 
-### C2. Docker Socket Mounted into Server Container
-
-**File:** `devops/docker-compose.swarm.yml:30`
-
-The server container gets the Docker socket mounted (`/var/run/docker.sock`). This grants **root-level host access** to any process inside the container. Combined with `docker-cli` in the server Dockerfile (`server/Dockerfile:20`), any code execution vulnerability could escalate to full host compromise.
-
-Attack chain: Prompt injection → sandbox escape → `docker exec <server-container> env` → extracts all API keys.
-
-**Recommendations:**
-1. Use a Docker socket proxy (e.g., Tecnativa/docker-socket-proxy) with restricted API endpoints
-2. Consider rootless Docker or Podman for sandbox management
-3. Isolate sandbox management into a separate sidecar service with minimal permissions
-
-### C3. Sandbox `docker-cli` + `kubectl` Access
-
-**Files:** `server/sandbox.Dockerfile:18, 43-44`
-
-The sandbox image installs `docker-cli`, `docker-cli-compose`, and `kubectl`. While the Docker socket is no longer mounted into sandbox containers (fixed previously), these tools remain in the image. If network conditions change or the socket is re-added, agent code could:
-- Execute arbitrary Docker commands on the host
-- Interact with Kubernetes clusters
-
-**Recommendation:** Remove `docker-cli`, `docker-cli-compose`, and `kubectl` from the sandbox image.
-
-### C4. `docker-cli` Installed in Server Dockerfile
-
-**File:** `server/Dockerfile:20`
-
-The **server** Dockerfile installs `docker-cli`, which combined with the Docker socket mount gives the server process direct Docker API access. Needed for sandbox management, but any code execution vulnerability in the server could escalate to full host compromise.
-
-**Recommendation:** Consider isolating sandbox management into a separate sidecar service.
+**Recommendation:**
+- Use a restricted Docker proxy like [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) with only `POST /containers/create`, `POST /containers/*/start`, `DELETE /containers/*`, and `GET /containers/*` allowed
+- Or use Docker API over TCP with TLS mutual auth
 
 ---
 
-## HIGH Issues
+## HIGH
 
-### H1. JWT Token Stored in localStorage (XSS Risk)
+### 3. JWT Token Expiry Too Long (24h) with No Refresh Mechanism
+**Location:** `server/src/middleware/auth.js:108`
+```js
+{ expiresIn: '24h' }
+```
+**Risk:** Extended window for token theft
+**Status:** OPEN
 
-**File:** `client/src/api.js:4`
+A 24-hour JWT with no refresh mechanism means a stolen token is valid for an entire day. There is no token revocation capability.
 
-Tokens in `localStorage` are accessible to any JavaScript on the page. If an XSS vulnerability is ever introduced (e.g., via agent-generated content rendered in the UI), tokens can be stolen.
+**Recommendation:**
+- Reduce JWT expiry to 1-2 hours
+- Implement refresh tokens with rotation
+- Add token revocation capability (e.g., maintain a blocklist in Redis/DB)
 
-**Recommendations:**
-1. Use `httpOnly`, `Secure`, `SameSite=Strict` cookies for token transport
-2. Implement short-lived access tokens (15 min) + refresh token rotation
-3. Current CSP header provides defense-in-depth
+### 4. No Role-Based Access Control (RBAC)
+**Location:** `server/src/middleware/auth.js:133-145`
+**Status:** OPEN
 
-### H2. 24-Hour JWT Expiry with No Revocation Mechanism
+The `authenticateToken` middleware verifies the token is valid but never checks `req.user.role`. All authenticated users have full admin access to all endpoints (create/delete agents, broadcast, clear histories, etc.).
 
-**File:** `server/src/middleware/auth.js:105-109`
-
-JWTs expire after 24 hours and there is no token blacklist. A stolen token remains valid until it expires. No logout endpoint exists.
-
-**Recommendations:**
-1. Reduce JWT lifetime to 15-60 minutes
-2. Implement refresh tokens stored server-side (in PostgreSQL)
-3. Add a token revocation endpoint (`POST /api/auth/logout`)
-
-### H3. SSH Keys Shared Across All Agent Users in Sandbox
-
-**File:** `server/src/services/sandboxManager.js:255-259`
-
-SSH keys from the host are copied to every agent user in the shared sandbox container. All agents share the same keys — a compromised agent could push malicious code to any accessible repo.
-
-**Recommendations:**
-1. Use per-repository deploy keys with minimal permissions
-2. Implement per-agent SSH key management
-3. Consider HTTPS with token-based auth instead of SSH keys
+**Recommendation:**
+- Add role checks: `admin` can manage agents, `viewer` can only read
+- Protect destructive endpoints (DELETE, broadcast, clear) with admin-only middleware
 
 ---
 
-## MEDIUM Issues
+## MEDIUM
 
-### M1. No Role-Based Authorization (RBAC)
+### 5. Client-Side Token Storage in localStorage
+**Location:** `client/src/api.js:4`, `client/src/App.jsx:175,194`
+```js
+const token = localStorage.getItem('token');
+localStorage.setItem('token', data.token);
+```
+**Risk:** XSS → token theft
 
-**Files:** All route files
+`localStorage` is accessible to any JavaScript running on the page. If XSS is achieved, the attacker can steal the JWT.
 
-All authenticated users have identical access. The `role` field exists on JWT tokens (`auth.js:106`) but is **never checked** by any route middleware. Any authenticated user can:
-- Delete all agents
-- Modify all projects
-- Broadcast to all agents
-- Access all conversation histories
-- Create/modify MCP servers
+**Mitigating factor:** The strong CSP headers (`default-src 'self'; script-src 'self'`) significantly reduce XSS risk.
 
-**Recommendation:** Add middleware that checks `req.user.role` for destructive operations.
+**Recommendation:**
+- Use `httpOnly` cookies for token storage (prevents JS access)
+- Or use `sessionStorage` (clears on tab close, slight improvement)
 
-### M2. In-Memory User Store
+### 6. SSH Keys Shared Across All Sandbox Agent Users
+**Location:** `server/src/services/sandboxManager.js:256-259`
 
-**File:** `server/src/middleware/auth.js:8`
+All sandbox agent users get a copy of the root SSH keys. This means any agent can push to any Git repository the SSH key has access to.
 
-Users are stored in a `Map()` and lost on restart. Only a single admin user can exist. No support for user management.
+**Recommendation:**
+- Use deploy keys (read-only) per repository
+- Or use per-agent SSH keypairs
 
-**Recommendation:** Store users in PostgreSQL (already available). Add user CRUD endpoints behind admin-only authorization.
+### 7. In-Memory Users Store
+**Location:** `server/src/middleware/auth.js:8`
+```js
+const users = new Map();
+```
+**Risk:** No user management, no password change capability
 
----
+Users are stored in memory with only a single admin user. No ability to create additional users, change passwords, or audit login history.
 
-## LOW Issues
+**Recommendation:** Move user management to the PostgreSQL database.
 
-### L1. CSP `style-src 'unsafe-inline'`
+### 8. Error Messages May Leak Internal Details
+**Location:** Multiple routes (e.g., `agents.js:146`, `plugins.js:49`)
+```js
+res.status(500).json({ error: err.message });
+```
+In production, this could reveal internal paths, library details, or stack traces.
 
-**File:** `server/src/index.js:54`
-
-The Content-Security-Policy uses `'unsafe-inline'` for `style-src`, which weakens XSS protection for styles. This is common with CSS-in-JS frameworks like Tailwind, but could be hardened.
-
-**Recommendation:** Consider nonce-based or hash-based CSP for styles.
-
----
-
-## INFO (New Findings — This Pass)
-
-### I1. `NODE_ENV` Not Set in Docker Compose
-
-**File:** `devops/docker-compose.swarm.yml`
-
-The `NODE_ENV` environment variable is not set in the Docker Compose service definition. While `process.env.NODE_ENV === 'production'` is checked in `auth.js:20` to enforce `ADMIN_PASSWORD`, this check won't trigger without explicitly setting `NODE_ENV=production` in the container.
-
-**Recommendation:** Add `NODE_ENV=production` to the server service environment in `docker-compose.swarm.yml`.
-
-### I2. Agent `apiKey` Field Accepts Per-Agent Keys
-
-**Files:** `agents.js:12`, `agentManager.js:88`, `llmProviders.js:910-912`
-
-Agents can have per-agent API keys (`config.apiKey`). While `_sanitize()` strips these before sending to clients (`agentManager.js:3026-3028`), the keys are stored in plain text in the PostgreSQL `agents.data` JSONB column. Anyone with database access can read them.
-
-**Recommendation:** Encrypt sensitive fields in the JSONB data before persisting, or use a secrets manager. At minimum, document this risk for operators.
+**Recommendation:** Return generic error messages in production, log details server-side only.
 
 ---
 
-## Positive Security Findings
+## LOW
 
-1. **Parameterized SQL queries** — All database queries use `$1, $2` placeholders; no string interpolation in SQL (zero SQL injection risk) (`database.js`)
-2. **bcrypt password hashing** with salt rounds of 10 (`auth.js:38`)
-3. **JWT secret validation** — `getJwtSecret()` throws if `JWT_SECRET` is unset (`auth.js:48-54`)
-4. **Shell argument escaping** — `sandboxManager._sh()` properly escapes single quotes (`sandboxManager.js:336-338`)
-5. **Path traversal prevention** — `agentTools.js:86` strips `..` segments; `_projectPath()` also filters `..` (`sandboxManager.js:329`)
-6. **Rate limiting** — Login: 5 attempts/15min per IP (`auth.js`), Global API: 100 req/min (`index.js:62-69`), WebSocket: 30 events/min per socket (`socketHandler.js`), Claude API: 50 req/min (`rateLimiter.js`)
-7. **CORS configuration** with explicit origins — not `*` (`index.js:26-28`)
-8. **API key masking** — `_sanitize()` strips `apiKey` from agent data; MCP routes mask keys (`mcpServers.js:18-24`)
-9. **Docker image uses Alpine** — Minimal attack surface
-10. **Sandbox user isolation** — Each agent gets a dedicated Linux user (`sandboxManager.js:245-259`)
-11. **Input validation** — All API routes use Zod schemas with type/length/format constraints
-12. **WebSocket authentication** — JWT verified on handshake, origin validated against CORS whitelist (`index.js:119-138`)
-13. **Security headers** — Express middleware sets 6 headers (`index.js:49-57`)
-14. **Git commit message sanitization** — `sanitizeCommitMessage()` prevents command injection (`agentTools.js:253-261`)
-15. **Container/image name validation** — `_validateName()` and `_validateImageRef()` reject shell-unsafe characters (`sandboxManager.js:340-353`)
-16. **`npm audit` reports 0 vulnerabilities** across 191 production dependencies
-17. **`.env` NOT tracked in git** — Confirmed via `git ls-files` and `git log`
-18. **No XSS vectors in client** — No `dangerouslySetInnerHTML`, `innerHTML`, `eval()`, or `new Function()` usage found
-19. **Sandbox file operations use proper escaping** — `writeFile`, `readFile`, `searchFiles` all use `_sh()` quoting
-20. **Agent ID sanitization** — `_username()` strips non-alphanumeric chars for Linux usernames (`sandboxManager.js:318-321`)
-21. **Concurrent container start mutex** — `_containerStartLock` prevents race conditions (`sandboxManager.js:213-219`)
-22. **Command output truncation** — `toolRunCommand` caps output at 10KB (`agentTools.js:208`)
-23. **Commit message length limit** — Capped at 500 chars (`agentTools.js:260`)
-24. **Message size validation** — Chat endpoint validates `message.length <= 50000` (`agents.js:129`)
-25. **Docker socket removed from sandbox** — Comment confirms intentional removal (`sandboxManager.js:234`)
-26. **Graceful shutdown** — SIGTERM/SIGINT handlers destroy sandboxes and disconnect MCP servers (`index.js:163-171`)
+### 9. Missing `helmet` Middleware
+The security headers are set manually (which is correct and comprehensive: CSP, X-Frame-Options, HSTS, nosniff, XSS-Protection, Referrer-Policy), but using `helmet` would provide additional defaults and stay updated with emerging best practices.
+
+### 10. No Request ID / Audit Trail
+There's no request ID middleware for correlating log entries across a request lifecycle. Adding `express-request-id` or similar would improve observability and forensic capabilities.
+
+### 11. `client/dist/` Mounted from Host
+**Location:** `docker-compose.swarm.yml:76`
+The built client is served from a volume mount of the host's `dist/` folder. Any modification to the host files immediately changes what's served. Consider serving from a built image instead.
+
+---
+
+## Resolved Issues (from initial review)
+
+| Issue | Resolution |
+|-------|-----------|
+| **WebSocket JWT_SECRET direct access** | Now uses `getJwtSecret()` (confirmed at `index.js:132`) |
+| **API keys leaked via WebSocket** | `agentManager._sanitize()` strips `apiKey` before all `_emit()` calls; `getAll()` and `getById()` also return sanitized data |
+| **API keys in REST responses** | `agents.js:sanitizeAgent()` masks keys; `mcpServers.js:sanitize()` replaces with `••••••••` |
+| **Default password in production** | Server exits with `process.exit(1)` if `ADMIN_PASSWORD` unset in `NODE_ENV=production` |
+| **Docker socket in sandbox** | Removed from sandbox container (comment at `sandboxManager.js:234-235`) |
+
+---
+
+## What's Already Done Well
+
+| Area | Implementation | Grade |
+|------|---------------|-------|
+| **Password Hashing** | bcrypt with cost 10 | Good |
+| **JWT Auth** | Proper verify, required JWT_SECRET (throws if unset) | Good |
+| **Login Rate Limiting** | 5 attempts/15min per IP, with periodic cleanup | Good |
+| **API Rate Limiting** | 100 req/min global + per-socket WS limiter (30/min) | Good |
+| **Input Validation** | Zod schemas on all REST routes, UUID regex on WS | Good |
+| **SQL Injection** | Parameterized queries ($1, $2) throughout | Excellent |
+| **Command Injection** | Shell arg escaping via `_sh()`, commit msg sanitization | Good |
+| **Path Traversal** | `..` segment filtering in `normalizePath()` and `_projectPath()` | Good |
+| **Security Headers** | CSP, X-Frame-Options DENY, HSTS, nosniff, XSS-Protection, Referrer-Policy | Good |
+| **WebSocket Auth** | JWT required + origin validation | Good |
+| **WebSocket Rate Limiting** | Per-socket 30 events/min for mutating operations | Good |
+| **CORS** | Configurable origins, not wildcard, credentials enabled | Good |
+| **Body Size Limit** | 1MB JSON limit | Good |
+| **Dependency Audit** | `npm audit` — 0 vulnerabilities | Excellent |
+| **API Key Masking** | `_sanitize()` strips keys before all client-facing data | Good |
+| **Production Safety** | Exits if ADMIN_PASSWORD missing in production | Good |
+| **Sandbox Isolation** | Per-agent Linux users, separate container, no Docker socket in sandbox | Good |
+| **LLM Rate Limiting** | Sliding window rate limiter for Claude API (50 req/min default) | Good |
 
 ---
 
 ## Priority Action Items
 
-| # | Priority | Action | Effort | Status |
-|---|----------|--------|--------|--------|
-| 1 | CRITICAL | Rotate ALL credentials in `devops/.env` | 1 hour | **Manual action required** |
-| 2 | CRITICAL | Replace Docker socket mount with socket proxy | 2-4 hours | Open |
-| 3 | CRITICAL | Remove `docker-cli`, `docker-cli-compose`, `kubectl` from sandbox image | 30 min | Open |
-| 4 | CRITICAL | Isolate sandbox management from main server (sidecar) | 4-8 hours | Open |
-| 5 | HIGH | Move JWT to httpOnly cookies + refresh tokens | 4-8 hours | Open |
-| 6 | HIGH | Reduce JWT expiry + add revocation/logout | 2-4 hours | Open |
-| 7 | HIGH | Implement per-agent SSH key isolation | 4-8 hours | Open |
-| 8 | MEDIUM | Implement RBAC middleware | 2-4 hours | Open |
-| 9 | MEDIUM | Move user store to PostgreSQL | 2-4 hours | Open |
-| 10 | LOW | Harden CSP (remove `unsafe-inline`) | 30 min | Open |
-| 11 | INFO | Add `NODE_ENV=production` to Docker Compose | 5 min | **Fixed in this pass** |
-| 12 | INFO | Document per-agent API key storage risk | 15 min | Open |
-| 13 | — | Set up automated dependency scanning (Dependabot/Renovate) | 1 hour | Open |
-
----
-
-## Previously Fixed (No Action Needed)
-
-| # | Issue | Status |
-|---|-------|--------|
-| 1 | Health endpoint information disclosure | **FIXED** — split public/authenticated |
-| 2 | Missing Zod validation on routes | **FIXED** — all routes validated |
-| 3 | MCP server URL not validated as URL format | **FIXED** — `z.string().url()` |
-| 4 | Hardcoded SSH fallback path | **FIXED** — uses `/root/.ssh` |
-| 5 | Rate limiter memory leak | **FIXED** — periodic cleanup added |
-| 6 | Missing nginx security headers | **FIXED** — CSP, HSTS, etc. |
-| 7 | Git commit message injection | **FIXED** — `sanitizeCommitMessage()` |
-| 8 | Missing WebSocket origin check | **FIXED** — origin validated |
-| 9 | Dead `tasks.js` file | **FIXED** — deleted |
-| 10 | WebSocket rate limiting | **FIXED** — 30 events/min/socket |
-| 11 | Default credentials in deployment script | **FIXED** — removed |
-| 12 | Docker socket in sandbox containers | **FIXED** — removed from `sandboxManager.js` |
-
----
-
-## Fixes Applied in Previous Passes
-
-| # | Issue | Action | Pass |
-|---|-------|--------|------|
-| 1 | `NODE_ENV` not set in Docker Compose | **Fixed** — added `NODE_ENV=production` | 7th |
-| 2 | Health endpoint information disclosure | **Fixed** — split public/authenticated | 2nd |
-| 3 | Missing Zod validation | **Fixed** — all routes validated | 3rd |
-| 4 | Git commit message injection | **Fixed** — `sanitizeCommitMessage()` | 4th |
-| 5 | WebSocket origin check missing | **Fixed** — origin validated | 5th |
-| 6 | WebSocket rate limiting missing | **Fixed** — 30 events/min/socket | 5th |
-| 7 | Docker socket in sandbox | **Fixed** — removed | 6th |
-
----
-
-## Eighth Pass Summary
-
-This pass independently re-audited all source files across server, client, DevOps, and sandbox:
-- **All 12 previously applied fixes remain in place and effective**
-- `npm audit` reports **0 vulnerabilities** for both server (`191 packages`) and client
-- `.env` file confirmed NOT tracked in git (only `.env.example`)
-- No new vulnerabilities introduced since the seventh pass
-- Consolidated and cleaned up the report for clarity
-
-The **3 CRITICAL + 3 HIGH remaining items are architectural** and require intentional design decisions rather than simple code fixes. They should be prioritized in the project roadmap.
-
----
-
-*Eighth review pass performed against codebase as of 2026-03-05. Next review recommended after addressing CRITICAL and HIGH items.*
+| Priority | Action | Effort | Status |
+|----------|--------|--------|--------|
+| **P0** | Rotate all secrets in `devops/.env` | 1 hour | OPEN |
+| **P0** | Replace Docker socket mount with socket proxy | 2 hours | OPEN |
+| **P1** | Add RBAC to endpoints | 2 hours | OPEN |
+| **P1** | Reduce JWT expiry + add refresh tokens | 2 hours | OPEN |
+| **P2** | Use httpOnly cookies instead of localStorage | 2 hours | OPEN |
+| **P2** | Sanitize error messages in production | 1 hour | OPEN |
+| **P3** | Move users to database | 4 hours | OPEN |
+| **P3** | Add audit logging / request IDs | 2 hours | OPEN |
+| **P3** | Per-repo deploy keys for sandbox | 2 hours | OPEN |
