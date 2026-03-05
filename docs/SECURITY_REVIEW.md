@@ -1,6 +1,6 @@
 # Security Review — AgentsSwarmUI
 
-**Date:** 2026-03-05 (Fifth Review Pass)
+**Date:** 2026-03-05 (Sixth Review Pass)
 **Reviewer:** CLAUDE (Automated Security Agent — Opus 4.6)
 **Scope:** Full-stack review of server, client, DevOps, sandbox, and dependency management
 
@@ -241,7 +241,15 @@ The CSP does not include `font-src`. If web fonts are loaded, they may be blocke
 
 ---
 
-## Fixes Applied in This Pass (Fifth)
+## Fixes Applied in This Pass (Sixth)
+
+| # | Issue | Action |
+|---|-------|--------|
+| 1 | Default credentials in `docker-compose.post.sh` | **Fixed** — removed hardcoded default password from deployment script output |
+| 2 | Full re-audit of all routes, middleware, services | **Confirmed** — all prior fixes still in place |
+| 3 | Dependency audit | **Confirmed** — `npm audit` reports 0 vulnerabilities |
+
+### Previous Pass Fixes (Fifth)
 
 | # | Issue | Action |
 |---|-------|--------|
@@ -250,4 +258,4 @@ The CSP does not include `font-src`. If web fonts are loaded, they may be blocke
 
 ---
 
-*Fifth review pass performed against codebase as of 2026-03-05. Next review recommended after addressing CRITICAL and HIGH items.*
+*Sixth review pass performed against codebase as of 2026-03-05. Next review recommended after addressing CRITICAL and HIGH items.*
