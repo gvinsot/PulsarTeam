@@ -8,6 +8,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import { api } from '../api';
 import VoiceChatTab from './VoiceChatTab';
+import PluginEditor from './PluginEditor';
 
 
 const TODO_STATUS_META = {
@@ -1156,10 +1157,21 @@ function TodoTab({ agent, socket, onRefresh }) {
 }
 
 // ─── Plugins Tab ──────────────────────────────────────────────────────────
+
 function PluginsTab({ agent, plugins, onRefresh }) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
-  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
+  const [editingPluginId, setEditingPluginId] = useState(null);
+  const [savingPlugin, setSavingPlugin] = useState(false);
+  const [draft, setDraft] = useState({
+    name: '',
+    description: '',
+    category: 'coding',
+    icon: '🔧',
+    instructions: '',
+    userConfig: {},
+    mcps: [],
+  });
 
   const agentPluginIds = agent.skills || [];
   const assignedPlugins = plugins.filter(s => agentPluginIds.includes(s.id));
@@ -1180,11 +1192,62 @@ function PluginsTab({ agent, plugins, onRefresh }) {
     onRefresh();
   };
 
-  const handleCreate = async () => {
-    if (!newPlugin.name.trim() || !newPlugin.instructions.trim()) return;
-    await api.createPlugin(newPlugin);
-    setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '' });
+  const resetDraft = () => {
+    setDraft({
+      name: '',
+      description: '',
+      category: 'coding',
+      icon: '🔧',
+      instructions: '',
+      userConfig: {},
+      mcps: [],
+    });
+    setEditingPluginId(null);
     setShowCreate(false);
+  };
+
+  const handleCreate = async () => {
+    if (!draft.name.trim() || !draft.instructions.trim()) return;
+    setSavingPlugin(true);
+    try {
+      await api.createPlugin(draft);
+      resetDraft();
+      onRefresh();
+    } finally {
+      setSavingPlugin(false);
+    }
+  };
+
+  const handleEdit = (plugin) => {
+    setEditingPluginId(plugin.id);
+    setShowCreate(false);
+    setDraft({
+      name: plugin.name || '',
+      description: plugin.description || '',
+      category: plugin.category || 'general',
+      icon: plugin.icon || '🔧',
+      instructions: plugin.instructions || '',
+      userConfig: plugin.userConfig || {},
+      mcps: Array.isArray(plugin.mcps) ? plugin.mcps : [],
+    });
+  };
+
+  const handleUpdate = async () => {
+    if (!editingPluginId || !draft.name.trim() || !draft.instructions.trim()) return;
+    setSavingPlugin(true);
+    try {
+      await api.updatePlugin(editingPluginId, draft);
+      resetDraft();
+      onRefresh();
+    } finally {
+      setSavingPlugin(false);
+    }
+  };
+
+  const handleDelete = async (pluginId, pluginName) => {
+    if (!confirm(`Delete plugin "${pluginName}"?`)) return;
+    await api.deletePlugin(pluginId);
+    if (editingPluginId === pluginId) resetDraft();
     onRefresh();
   };
 
@@ -1201,7 +1264,6 @@ function PluginsTab({ agent, plugins, onRefresh }) {
 
   return (
     <div className="p-4 space-y-5 overflow-auto">
-      {/* Assigned plugins */}
       <div>
         <h3 className="font-medium text-dark-200 text-sm mb-3">
           Assigned Plugins
@@ -1213,19 +1275,31 @@ function PluginsTab({ agent, plugins, onRefresh }) {
               <div key={plugin.id} className="flex items-center gap-3 p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 group">
                 <span className="text-lg flex-shrink-0">{plugin.icon}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
                       {plugin.category}
                     </span>
-                    {plugin.mcpServerIds?.length > 0 && (
+                    {(plugin.mcps || []).length > 0 && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                        {plugin.mcpServerIds.length} MCP
+                        {(plugin.mcps || []).length} MCP
+                      </span>
+                    )}
+                    {plugin.userConfig && Object.keys(plugin.userConfig).length > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-500/20 text-amber-400 border-amber-500/30">
+                        config utilisateur
                       </span>
                     )}
                   </div>
                   <p className="text-xs text-dark-400 truncate">{plugin.description}</p>
                 </div>
+                <button
+                  onClick={() => handleEdit(plugin)}
+                  className="p-1 text-dark-500 hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+                  title="Edit plugin"
+                >
+                  <Edit3 className="w-4 h-4" />
+                </button>
                 <button
                   onClick={() => handleRemove(plugin.id)}
                   className="p-1 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
@@ -1244,7 +1318,6 @@ function PluginsTab({ agent, plugins, onRefresh }) {
         )}
       </div>
 
-      {/* Available plugins */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-medium text-dark-200 text-sm">
@@ -1252,14 +1325,27 @@ function PluginsTab({ agent, plugins, onRefresh }) {
             <span className="ml-2 text-dark-400 font-normal">({filteredAvailable.length})</span>
           </h3>
           <button
-            onClick={() => setShowCreate(!showCreate)}
+            onClick={() => {
+              setEditingPluginId(null);
+              setShowCreate(v => !v);
+              if (!showCreate) {
+                setDraft({
+                  name: '',
+                  description: '',
+                  category: 'coding',
+                  icon: '🔧',
+                  instructions: '',
+                  userConfig: {},
+                  mcps: [],
+                });
+              }
+            }}
             className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Category filter chips */}
         <div className="flex flex-wrap gap-1.5 mb-3">
           {categories.map(cat => (
             <button
@@ -1276,83 +1362,65 @@ function PluginsTab({ agent, plugins, onRefresh }) {
           ))}
         </div>
 
-        {/* Create custom plugin form */}
         {showCreate && (
-          <div className="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 space-y-2 mb-3 animate-fadeIn">
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={newPlugin.icon}
-                onChange={(e) => setNewPlugin(s => ({ ...s, icon: e.target.value }))}
-                className="w-12 px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-center focus:outline-none focus:border-indigo-500"
-                placeholder="🔧"
-              />
-              <input
-                type="text"
-                value={newPlugin.name}
-                onChange={(e) => setNewPlugin(s => ({ ...s, name: e.target.value }))}
-                className="flex-1 px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
-                placeholder="Plugin name"
-              />
-              <select
-                value={newPlugin.category}
-                onChange={(e) => setNewPlugin(s => ({ ...s, category: e.target.value }))}
-                className="px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500"
-              >
-                <option value="coding">coding</option>
-                <option value="devops">devops</option>
-                <option value="writing">writing</option>
-                <option value="security">security</option>
-                <option value="analysis">analysis</option>
-                <option value="general">general</option>
-              </select>
-            </div>
-            <input
-              type="text"
-              value={newPlugin.description}
-              onChange={(e) => setNewPlugin(s => ({ ...s, description: e.target.value }))}
-              className="w-full px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
-              placeholder="Short description"
-            />
-            <textarea
-              value={newPlugin.instructions}
-              onChange={(e) => setNewPlugin(s => ({ ...s, instructions: e.target.value }))}
-              className="w-full px-3 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono resize-none"
-              placeholder="Plugin instructions (injected into agent prompt)..."
-              rows={5}
-            />
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setShowCreate(false)} className="px-3 py-1.5 text-dark-400 hover:text-dark-200 text-sm">Cancel</button>
-              <button
-                onClick={handleCreate}
-                disabled={!newPlugin.name.trim() || !newPlugin.instructions.trim()}
-                className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-40"
-              >
-                Create Plugin
-              </button>
-            </div>
-          </div>
+          <PluginEditor
+            value={draft}
+            onChange={setDraft}
+            onSubmit={handleCreate}
+            onCancel={resetDraft}
+            saving={savingPlugin}
+            submitLabel="Create Plugin"
+          />
         )}
 
-        {/* Available plugins grid */}
-        <div className="space-y-2">
+        {editingPluginId && (
+          <PluginEditor
+            value={draft}
+            onChange={setDraft}
+            onSubmit={handleUpdate}
+            onCancel={resetDraft}
+            saving={savingPlugin}
+            submitLabel="Save Plugin"
+          />
+        )}
+
+        <div className="space-y-2 mt-3">
           {filteredAvailable.map(plugin => (
-            <div key={plugin.id} className="flex items-center gap-3 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30 hover:border-dark-600 transition-colors">
+            <div key={plugin.id} className="flex items-center gap-3 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30 hover:border-dark-600 transition-colors group">
               <span className="text-lg flex-shrink-0">{plugin.icon}</span>
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-medium text-dark-300">{plugin.name}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
                     {plugin.category}
                   </span>
-                  {plugin.mcpServerIds?.length > 0 && (
+                  {(plugin.mcps || []).length > 0 && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                      {plugin.mcpServerIds.length} MCP
+                      {(plugin.mcps || []).length} MCP
+                    </span>
+                  )}
+                  {plugin.userConfig && Object.keys(plugin.userConfig).length > 0 && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-500/20 text-amber-400 border-amber-500/30">
+                      config utilisateur
                     </span>
                   )}
                 </div>
                 <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
               </div>
+              <button
+                onClick={() => handleEdit(plugin)}
+                className="p-1 text-dark-500 hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+                title="Edit plugin"
+              >
+                <Edit3 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => handleDelete(plugin.id, plugin.name)}
+                className="p-1 text-dark-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
+                title="Delete plugin"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => handleAssign(plugin.id)}
                 className="px-2.5 py-1 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-400 rounded-md text-xs font-medium transition-colors flex-shrink-0"
@@ -1361,7 +1429,7 @@ function PluginsTab({ agent, plugins, onRefresh }) {
               </button>
             </div>
           ))}
-          {filteredAvailable.length === 0 && !showCreate && (
+          {filteredAvailable.length === 0 && !showCreate && !editingPluginId && (
             <p className="text-center text-dark-500 text-xs py-4">
               {availablePlugins.length === 0 ? 'All plugins assigned' : 'No plugins in this category'}
             </p>
@@ -1371,7 +1439,6 @@ function PluginsTab({ agent, plugins, onRefresh }) {
     </div>
   );
 }
-
 
 // ─── RAG Tab ───────────────────────────────────────────────────────────────
 function RagTab({ agent, onRefresh }) {

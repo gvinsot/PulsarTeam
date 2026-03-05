@@ -1,47 +1,66 @@
 import express from 'express';
 import { z } from 'zod';
 
-// Schema for creating a plugin
+const mcpConfigSchema = z.object({
+  id: z.string().max(200).optional(),
+  name: z.string().min(1).max(200),
+  url: z.string().url().max(2000),
+  description: z.string().max(2000).optional(),
+  icon: z.string().max(50).optional(),
+  enabled: z.boolean().optional(),
+  apiKey: z.string().max(500).optional(),
+  userConfig: z.record(z.any()).optional(),
+});
+
 const createPluginSchema = z.object({
   name: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   category: z.string().max(100).optional(),
   icon: z.string().max(50).optional(),
   instructions: z.string().min(1).max(50000),
-  mcpServerIds: z.array(z.string().max(200)).optional(),
+  userConfig: z.record(z.any()).optional(),
+  mcps: z.array(mcpConfigSchema).optional(),
 });
 
-// Schema for updating a plugin (all fields optional)
 const updatePluginSchema = createPluginSchema.partial();
+
+function sanitizeMcp(mcp) {
+  if (!mcp) return mcp;
+  return {
+    ...mcp,
+    hasApiKey: !!mcp.apiKey,
+    apiKey: mcp.apiKey ? '••••••••' : '',
+  };
+}
+
+function sanitizePlugin(plugin) {
+  return {
+    ...plugin,
+    userConfig: plugin.userConfig || {},
+    mcps: Array.isArray(plugin.mcps) ? plugin.mcps.map(sanitizeMcp) : [],
+    mcpServerIds: Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : [],
+  };
+}
 
 export function pluginRoutes(skillManager, mcpManager) {
   const router = express.Router();
 
   router.get('/', (req, res) => {
-    const plugins = skillManager.getAll().map((s) => ({
-      ...s,
-      mcpServerIds: Array.isArray(s.mcpServerIds) ? s.mcpServerIds : []
-    }));
+    const plugins = skillManager.getAll().map(sanitizePlugin);
     res.json(plugins);
   });
 
   router.get('/:id', (req, res) => {
     const plugin = skillManager.getById(req.params.id);
     if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-    res.json({
-      ...plugin,
-      mcpServerIds: Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : []
-    });
+    res.json(sanitizePlugin(plugin));
   });
 
   router.post('/', async (req, res) => {
     try {
       const parsed = createPluginSchema.parse(req.body);
-      const plugin = await skillManager.create({
-        ...parsed,
-        mcpServerIds: Array.isArray(parsed.mcpServerIds) ? parsed.mcpServerIds : []
-      });
-      res.status(201).json(plugin);
+      const plugin = await skillManager.create(parsed);
+      res.status(201).json(sanitizePlugin(plugin));
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: 'Validation failed', details: err.issues });
@@ -55,7 +74,7 @@ export function pluginRoutes(skillManager, mcpManager) {
       const parsed = updatePluginSchema.parse(req.body);
       const plugin = await skillManager.update(req.params.id, parsed);
       if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-      res.json(plugin);
+      res.json(sanitizePlugin(plugin));
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: 'Validation failed', details: err.issues });
@@ -78,10 +97,25 @@ export function pluginRoutes(skillManager, mcpManager) {
     try {
       const plugin = skillManager.getById(req.params.id);
       if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-      const ids = new Set(Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : []);
-      ids.add(req.params.mcpId);
-      const updated = await skillManager.update(req.params.id, { mcpServerIds: [...ids] });
-      res.json(updated);
+      const server = mcpManager.getById(req.params.mcpId);
+      if (!server) return res.status(404).json({ error: 'MCP server not found' });
+
+      const mcps = Array.isArray(plugin.mcps) ? [...plugin.mcps] : [];
+      if (!mcps.some((m) => m.id === server.id)) {
+        mcps.push({
+          id: server.id,
+          name: server.name,
+          url: server.url,
+          description: server.description || '',
+          icon: server.icon || '🔌',
+          enabled: server.enabled !== false,
+          apiKey: server.apiKey || '',
+          userConfig: {},
+        });
+      }
+
+      const updated = await skillManager.update(req.params.id, { mcps });
+      res.json(sanitizePlugin(updated));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -91,9 +125,9 @@ export function pluginRoutes(skillManager, mcpManager) {
     try {
       const plugin = skillManager.getById(req.params.id);
       if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-      const ids = (Array.isArray(plugin.mcpServerIds) ? plugin.mcpServerIds : []).filter((id) => id !== req.params.mcpId);
-      const updated = await skillManager.update(req.params.id, { mcpServerIds: ids });
-      res.json(updated);
+      const mcps = (Array.isArray(plugin.mcps) ? plugin.mcps : []).filter((m) => m.id !== req.params.mcpId);
+      const updated = await skillManager.update(req.params.id, { mcps });
+      res.json(sanitizePlugin(updated));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
