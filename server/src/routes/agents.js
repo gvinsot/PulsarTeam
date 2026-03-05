@@ -126,6 +126,9 @@ export function agentRoutes(agentManager) {
     try {
       const { message } = req.body;
       if (!message) return res.status(400).json({ error: 'Message required' });
+      if (typeof message !== 'string' || message.length > 50000) {
+        return res.status(400).json({ error: 'Message must be a string under 50KB' });
+      }
 
       const response = await agentManager.sendMessage(req.params.id, message);
       res.json({ response });

@@ -17,6 +17,15 @@ const ensureUsersInitialized = async () => {
   const adminPassword = process.env.ADMIN_PASSWORD || 'swarm2026';
 
   if (!process.env.ADMIN_PASSWORD) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('');
+      console.error('================================================================');
+      console.error('  FATAL: ADMIN_PASSWORD is not set in production!');
+      console.error('  Set ADMIN_PASSWORD env var before deploying.');
+      console.error('================================================================');
+      console.error('');
+      process.exit(1);
+    }
     console.warn('');
     console.warn('================================================================');
     console.warn('  WARNING: ADMIN_PASSWORD is not set!');
