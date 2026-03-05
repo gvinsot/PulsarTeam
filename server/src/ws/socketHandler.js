@@ -1,6 +1,23 @@
+// ── Per-socket rate limiter for mutating WebSocket events ────────────
+// Prevents a single client from flooding chat/broadcast/delegation events.
+function createSocketRateLimiter(maxEvents = 30, windowMs = 60_000) {
+  const timestamps = [];
+  return function checkLimit() {
+    const now = Date.now();
+    const cutoff = now - windowMs;
+    while (timestamps.length > 0 && timestamps[0] <= cutoff) timestamps.shift();
+    if (timestamps.length >= maxEvents) return false;
+    timestamps.push(now);
+    return true;
+  };
+}
+
 export function setupSocketHandlers(io, agentManager) {
   io.on('connection', (socket) => {
     console.log(`⚡ Client connected: ${socket.user?.username}`);
+
+    // Per-socket rate limiter — 30 mutating events per minute
+    const checkSocketRate = createSocketRateLimiter(30, 60_000);
 
     // Send initial state
     socket.emit('agents:list', agentManager.getAll());
@@ -9,6 +26,10 @@ export function setupSocketHandlers(io, agentManager) {
     socket.on('agent:chat', async (data) => {
       const { agentId, message } = data;
       if (!agentId || !message) return;
+      if (!checkSocketRate()) {
+        socket.emit('error', { message: 'Rate limit exceeded. Please wait before sending more messages.' });
+        return;
+      }
 
       const agentData = agentManager.agents.get(agentId);
       const project = agentData?.project || null;
@@ -39,6 +60,10 @@ export function setupSocketHandlers(io, agentManager) {
     socket.on('broadcast:message', async (data) => {
       const { message } = data;
       if (!message) return;
+      if (!checkSocketRate()) {
+        socket.emit('error', { message: 'Rate limit exceeded. Please wait before sending more messages.' });
+        return;
+      }
 
       socket.emit('broadcast:start', { message });
 
@@ -66,6 +91,10 @@ export function setupSocketHandlers(io, agentManager) {
     socket.on('agent:handoff', async (data) => {
       const { fromId, toId, context } = data;
       if (!fromId || !toId || !context) return;
+      if (!checkSocketRate()) {
+        socket.emit('error', { message: 'Rate limit exceeded.' });
+        return;
+      }
 
       const targetAgent = agentManager.agents.get(toId);
       const targetProject = targetAgent?.project || null;
@@ -203,6 +232,10 @@ export function setupSocketHandlers(io, agentManager) {
     socket.on('voice:delegate', async (data) => {
       const { agentId, targetAgentName, task } = data;
       if (!agentId || !targetAgentName || !task) return;
+      if (!checkSocketRate()) {
+        socket.emit('voice:delegate:result', { agentId, targetAgentName, error: 'Rate limit exceeded', result: null });
+        return;
+      }
 
       try {
         // Find target agent by name

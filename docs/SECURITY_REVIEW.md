@@ -1,6 +1,6 @@
 # Security Review — AgentsSwarmUI
 
-**Date:** 2026-03-05 (Third Review Pass)
+**Date:** 2026-03-05 (Fourth Review Pass)
 **Reviewer:** CLAUDE (Automated Security Agent — Opus 4.6)
 **Scope:** Full-stack review of server, client, DevOps, sandbox, and dependency management
 
@@ -8,12 +8,12 @@
 
 ## Executive Summary
 
-The AgentsSwarmUI project demonstrates solid security fundamentals: JWT authentication, bcrypt hashing, parameterized SQL, rate limiting, sandbox isolation, security headers, Zod input validation, and API key masking. This is a **third comprehensive review** confirming prior fixes, validating the overall security posture, and identifying remaining action items. `npm audit` reports **0 vulnerabilities** across 191 production dependencies.
+The AgentsSwarmUI project demonstrates solid security fundamentals: JWT authentication, bcrypt hashing, parameterized SQL, rate limiting, sandbox isolation, security headers, Zod input validation, and API key masking. This is a **fourth comprehensive review** confirming prior fixes, validating the overall security posture, and identifying remaining action items. New findings: `docker-cli` in server Dockerfile, WebSocket per-message rate limiting gap, SSH key sharing across all agent users. `npm audit` reports **0 vulnerabilities** across 191 production dependencies.
 
 | Severity | Total Found | Fixed | Remaining |
 |----------|------------|-------|-----------|
-| CRITICAL | 3 | 1 | 2 |
-| HIGH     | 4 | 2 | 2 |
+| CRITICAL | 4 | 1 | 3 |
+| HIGH     | 6 | 2 | 4 |
 | MEDIUM   | 6 | 4 | 2 |
 | LOW      | 5 | 3 | 2 |
 
@@ -80,9 +80,36 @@ The sandbox image installs `kubectl`, which could allow agent code to interact w
 
 **Recommendation:** Remove `kubectl` from the sandbox image unless explicitly required for specific agent tasks.
 
+### C4. `docker-cli` Installed in Server Dockerfile
+
+**File:** `server/Dockerfile:20`
+
+The **server** Dockerfile installs `docker-cli`, which combined with the Docker socket mount (`docker-compose.swarm.yml:30`) gives the server process direct Docker API access. While needed for sandbox management, it means any code execution vulnerability in the server (e.g., via prompt injection leading to tool execution) could escalate to full host compromise.
+
+**Recommendation:** Consider isolating sandbox management into a separate sidecar service with minimal permissions, rather than giving the main application server Docker access.
+
 ---
 
 ## HIGH Issues
+
+### H3. SSH Keys Shared Across All Agent Users in Sandbox
+
+**File:** `server/src/services/sandboxManager.js:255-259`
+
+SSH keys from the host are copied to every agent user created in the shared sandbox container. All agents share the same SSH keys, which means any agent can push to any repository the keys have access to. A compromised or misbehaving agent could push malicious code to other projects.
+
+**Recommendation:**
+1. Use per-repository deploy keys with minimal permissions (read-only where possible)
+2. Implement per-agent SSH key management or Git credential helpers
+3. Consider using HTTPS with token-based auth instead of SSH keys
+
+### H4. WebSocket Events Not Rate-Limited
+
+**File:** `server/src/ws/socketHandler.js`
+
+While REST API endpoints have rate limiting (100 req/min), WebSocket events like `agent:chat`, `broadcast:message`, `voice:delegate`, and `voice:management` have no rate limiting. An authenticated user could flood the server.
+
+**Recommendation:** Implement per-socket event rate limiting (e.g., max 10 chat messages per minute, max 2 broadcasts per minute).
 
 ### H1. JWT Token Stored in localStorage (XSS Risk)
 
@@ -139,9 +166,9 @@ Users are stored in a `Map()` and lost on restart. Only a single admin user can 
 
 **File:** `server/src/index.js:56`
 
-A global 10MB limit is set. Routes that only need small JSON payloads (login, todo, etc.) accept unnecessarily large bodies.
+A global 1MB limit is set (`index.js:59`), which is reasonable. However, routes that only need small JSON payloads (login, todo updates) accept unnecessarily large bodies, while routes that may need larger payloads (RAG documents, agent instructions up to 50KB) are adequately served.
 
-**Recommendation:** Apply smaller limits per-route (e.g., 1KB for login, 100KB for agent config, 10MB for RAG documents).
+**Recommendation:** Consider applying smaller limits per-route for login (e.g., 1KB) and larger limits for RAG document uploads if needed.
 
 ### L2. CSP Missing `font-src` Directive
 
@@ -188,13 +215,16 @@ The CSP does not include `font-src`. If web fonts are loaded, they may be blocke
 | 1 | CRITICAL | Rotate ALL credentials in `devops/.env` | 1 hour | **Manual action required** |
 | 2 | CRITICAL | Replace Docker socket mount with socket proxy | 2-4 hours | Open |
 | 3 | CRITICAL | Remove `docker-cli`, `docker-cli-compose`, `kubectl` from sandbox image | 30 min | Open |
-| 4 | HIGH | Move JWT to httpOnly cookies + refresh tokens | 4-8 hours | Open |
-| 5 | HIGH | Reduce JWT expiry + add revocation/logout | 2-4 hours | Open |
-| 6 | MEDIUM | Implement RBAC middleware | 2-4 hours | Open |
-| 7 | MEDIUM | Move user store to PostgreSQL | 2-4 hours | Open |
-| 8 | LOW | Per-route body size limits | 1 hour | Open |
-| 9 | LOW | Harden CSP (`font-src`, remove `unsafe-inline`) | 30 min | Open |
-| 10 | — | Set up automated dependency scanning (Dependabot/Renovate) | 1 hour | Open |
+| 4 | CRITICAL | Isolate sandbox management from main server (sidecar) or restrict docker-cli | 4-8 hours | Open |
+| 5 | HIGH | Move JWT to httpOnly cookies + refresh tokens | 4-8 hours | Open |
+| 6 | HIGH | Reduce JWT expiry + add revocation/logout | 2-4 hours | Open |
+| 7 | HIGH | Implement per-agent SSH key isolation | 4-8 hours | Open |
+| 8 | HIGH | Add WebSocket per-event rate limiting | 2-4 hours | Open |
+| 9 | MEDIUM | Implement RBAC middleware | 2-4 hours | Open |
+| 10 | MEDIUM | Move user store to PostgreSQL | 2-4 hours | Open |
+| 11 | LOW | Per-route body size limits | 1 hour | Open |
+| 12 | LOW | Harden CSP (`font-src`, remove `unsafe-inline`) | 30 min | Open |
+| 13 | — | Set up automated dependency scanning (Dependabot/Renovate) | 1 hour | Open |
 
 ---
 
@@ -213,4 +243,4 @@ The CSP does not include `font-src`. If web fonts are loaded, they may be blocke
 
 ---
 
-*Review performed against codebase as of 2026-03-05. Next review recommended after addressing CRITICAL and HIGH items.*
+*Fourth review pass performed against codebase as of 2026-03-05. Next review recommended after addressing CRITICAL and HIGH items.*
