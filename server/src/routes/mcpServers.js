@@ -4,7 +4,7 @@ import { z } from 'zod';
 // Schema for creating an MCP server
 const createMcpServerSchema = z.object({
   name: z.string().min(1).max(200),
-  url: z.string().min(1).max(2000),
+  url: z.string().url().max(2000),
   description: z.string().max(2000).optional(),
   icon: z.string().max(50).optional(),
   enabled: z.boolean().optional(),

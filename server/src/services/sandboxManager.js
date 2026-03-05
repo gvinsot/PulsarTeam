@@ -221,7 +221,7 @@ export class SandboxManager {
   async _startContainer() {
     await this._forceRemove(this.sharedContainerName);
 
-    const sshMount = process.env.SSH_KEYS_HOST_PATH || '/home/gildas/.ssh';
+    const sshMount = process.env.SSH_KEYS_HOST_PATH || '/root/.ssh';
     const gitName = process.env.GIT_USER_NAME || '';
     const gitEmail = process.env.GIT_USER_EMAIL || '';
 
