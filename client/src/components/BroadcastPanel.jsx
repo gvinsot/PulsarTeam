@@ -66,9 +66,9 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
 
   // Plugin state
   const [editingPlugin, setEditingPlugin] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', description: '', category: '', icon: '', instructions: '', mcpServerIds: [] });
+  const [editForm, setEditForm] = useState({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [] });
   const [showCreate, setShowCreate] = useState(false);
-  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', mcpServerIds: [] });
+  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [] });
 
   const responsesRef = useRef(null);
 
@@ -128,13 +128,14 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
       category: plugin.category || 'general',
       icon: plugin.icon || '🔧',
       instructions: plugin.instructions || '',
-      mcpServerIds: Array.isArray(plugin.mcpServerIds) ? [...plugin.mcpServerIds] : []
+      userConfig: plugin.userConfig || {},
+      mcps: Array.isArray(plugin.mcps) ? [...plugin.mcps] : []
     });
   };
 
   const cancelEdit = () => {
     setEditingPlugin(null);
-    setEditForm({ name: '', description: '', category: '', icon: '', instructions: '', mcpServerIds: [] });
+    setEditForm({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [] });
   };
 
   const saveEdit = async () => {
@@ -158,7 +159,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
     if (!newPlugin.name.trim() || !newPlugin.instructions.trim()) return;
     try {
       await api.createPlugin(newPlugin);
-      setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', mcpServerIds: [] });
+      setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [] });
       setShowCreate(false);
       if (onRefresh) onRefresh();
     } catch (err) { console.error('Failed to create plugin:', err); }
@@ -476,7 +477,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                       <div className="space-y-1">
                         {mcpServers.map(server => (
                           <label key={server.id} className="flex items-center gap-2 px-2 py-1.5 bg-dark-800/30 rounded border border-dark-700/30 cursor-pointer hover:border-dark-600 transition-colors">
-                            <input type="checkbox" checked={newPlugin.mcpServerIds.includes(server.id)} onChange={() => toggleMcpInCreate(server.id)} className="rounded border-dark-600 bg-dark-800 text-emerald-500 focus:ring-emerald-500/30" />
+                            <input type="checkbox" checked={false} onChange={() => toggleMcpInCreate(server.id)} className="rounded border-dark-600 bg-dark-800 text-emerald-500 focus:ring-emerald-500/30" />
                             <span className="text-xs flex-shrink-0">{server.icon || '🔌'}</span>
                             <span className="text-xs text-dark-300">{server.name}</span>
                             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusColors[server.status] || statusColors.disconnected}`} />
@@ -520,7 +521,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                             <div className="space-y-1">
                               {mcpServers.map(server => (
                                 <label key={server.id} className="flex items-center gap-2 px-2 py-1.5 bg-dark-800/30 rounded border border-dark-700/30 cursor-pointer hover:border-dark-600 transition-colors">
-                                  <input type="checkbox" checked={editForm.mcpServerIds.includes(server.id)} onChange={() => toggleMcpInEdit(server.id)} className="rounded border-dark-600 bg-dark-800 text-emerald-500 focus:ring-emerald-500/30" />
+                                  <input type="checkbox" checked={false} onChange={() => toggleMcpInEdit(server.id)} className="rounded border-dark-600 bg-dark-800 text-emerald-500 focus:ring-emerald-500/30" />
                                   <span className="text-xs flex-shrink-0">{server.icon || '🔌'}</span>
                                   <span className="text-xs text-dark-300">{server.name}</span>
                                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusColors[server.status] || statusColors.disconnected}`} />
@@ -549,9 +550,9 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                             {plugin.builtin && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">builtin</span>
                             )}
-                            {(plugin.mcpServerIds || []).length > 0 && (
+                            {(plugin.mcps || []).length > 0 && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                                {plugin.mcpServerIds.length} MCP
+                                {(plugin.mcps || []).length} MCP
                               </span>
                             )}
                           </div>
