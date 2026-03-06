@@ -42,6 +42,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
       description: template.description,
       instructions: template.instructions,
       temperature: template.temperature,
+      temperatureEnabled: template.temperature != null,
       maxTokens: template.maxTokens,
       icon: template.icon,
       color: template.color,
@@ -59,8 +60,10 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     if (!form.name.trim()) return;
     setCreating(true);
     try {
+      const { temperatureEnabled, ...payload } = form;
+      payload.temperature = temperatureEnabled ? payload.temperature : null;
       const agent = await api.createAgent({
-        ...form,
+        ...payload,
         template: selectedTemplate?.id || null,
       });
       onCreated(agent);
