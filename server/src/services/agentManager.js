@@ -654,7 +654,7 @@ export class AgentManager {
       const directMcpIds = agent.mcpServers || [];
       const allMcpIds = [...new Set([...pluginMcpIds, ...directMcpIds])];
       if (allMcpIds.length > 0 && this.mcpManager) {
-        const mcpTools = this.mcpManager.getToolsForAgent(allMcpIds);
+        const { tools: mcpTools, unavailable: mcpUnavailable } = await this.mcpManager.getToolsForAgent(allMcpIds);
         if (mcpTools.length > 0) {
           systemContent += '\n\n--- MCP Tools ---\n';
           systemContent += 'Call these tools using @mcp_call(server, tool, {"arg": "value"}) syntax.\n';
@@ -663,6 +663,16 @@ export class AgentManager {
           for (const t of mcpTools) {
             const schema = _simplifyMcpSchema(t.inputSchema);
             systemContent += `@mcp_call(${t.serverName}, ${t.name}, ${schema}) — ${t.description || ''}\n`;
+          }
+        }
+        // Warn agent about MCP servers that are expected but not connected
+        if (mcpUnavailable.length > 0) {
+          systemContent += '\n\n--- MCP Servers Unavailable ---\n';
+          systemContent += 'The following MCP servers are configured but currently NOT connected.\n';
+          systemContent += 'Do NOT attempt to call tools on these servers — they will fail.\n';
+          systemContent += 'If the user asks you to use these tools, inform them that the MCP server is disconnected.\n\n';
+          for (const u of mcpUnavailable) {
+            systemContent += `- ${u.serverName}: ${u.reason}\n`;
           }
         }
       }

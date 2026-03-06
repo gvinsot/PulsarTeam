@@ -250,12 +250,24 @@ export class MCPManager {
 
   /**
    * Call a tool by server name (used by agents via @mcp_call syntax).
+   * Auto-reconnects if the server is registered but not connected.
    */
   async callToolByName(serverName, toolName, args = {}) {
     const server = Array.from(this.servers.values()).find(
       s => s.name.toLowerCase() === serverName.toLowerCase()
     );
-    if (!server) throw new Error(`MCP server "${serverName}" not found`);
+    if (!server) throw new Error(`MCP server "${serverName}" not found. Available servers: ${Array.from(this.servers.values()).map(s => s.name).join(', ') || 'none'}`);
+
+    // Auto-reconnect if server exists but is not connected
+    if (server.status !== 'connected') {
+      console.log(`🔌 [MCP] "${server.name}" is ${server.status}, attempting reconnect for ${toolName}...`);
+      try {
+        await this.connect(server.id);
+      } catch (err) {
+        throw new Error(`MCP server "${server.name}" is not connected and reconnect failed: ${err.message}`);
+      }
+    }
+
     return this.callTool(server.id, toolName, args);
   }
 
@@ -263,13 +275,43 @@ export class MCPManager {
 
   /**
    * Get all tools available to an agent based on their assigned MCP server IDs.
-   * Returns flat array of { serverName, serverId, name, description, inputSchema }.
+   * Attempts to reconnect disconnected servers before reporting unavailability.
+   * Returns { tools: [...], unavailable: [...] }
+   * - tools: flat array of { serverName, serverId, name, description, inputSchema }
+   * - unavailable: array of { serverName, serverId, status, reason } for non-connected servers
    */
-  getToolsForAgent(mcpServerIds) {
+  async getToolsForAgent(mcpServerIds) {
     const tools = [];
+    const unavailable = [];
+
+    // First pass: attempt to reconnect any disconnected servers
+    const reconnectPromises = [];
     for (const serverId of mcpServerIds) {
       const server = this.servers.get(serverId);
-      if (!server || server.status !== 'connected') continue;
+      if (server && server.status !== 'connected' && server.enabled && server.url) {
+        console.log(`🔌 [MCP] "${server.name}" not connected — attempting reconnect for agent prompt...`);
+        reconnectPromises.push(
+          this.connect(serverId).catch(err => {
+            console.warn(`⚠️ [MCP] Reconnect failed for "${server.name}": ${err.message}`);
+          })
+        );
+      }
+    }
+    if (reconnectPromises.length > 0) {
+      await Promise.allSettled(reconnectPromises);
+    }
+
+    // Second pass: collect tools from connected servers
+    for (const serverId of mcpServerIds) {
+      const server = this.servers.get(serverId);
+      if (!server) {
+        unavailable.push({ serverId, serverName: serverId, status: 'unknown', reason: 'Server not registered' });
+        continue;
+      }
+      if (server.status !== 'connected') {
+        unavailable.push({ serverId, serverName: server.name, status: server.status, reason: `Server is ${server.status}` + (server.error ? `: ${server.error}` : '') });
+        continue;
+      }
       for (const tool of server.tools) {
         tools.push({
           serverName: server.name,
@@ -280,6 +322,6 @@ export class MCPManager {
         });
       }
     }
-    return tools;
+    return { tools, unavailable };
   }
 }
