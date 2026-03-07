@@ -177,6 +177,14 @@ async function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
+// Prevent uncaught errors from MCP transports or other async sources from crashing the service
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ [Process] Unhandled promise rejection (service continues):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('💥 [Process] Uncaught exception (service continues):', err);
+});
+
 start().catch(err => {
   console.error('Failed to start server:', err);
   process.exit(1);

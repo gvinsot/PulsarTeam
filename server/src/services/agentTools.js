@@ -424,6 +424,7 @@ export function parseToolCalls(response) {
       args = [sanitizeArg(argsString.trim())];
     } else if (THREE_ARG_TOOLS.includes(toolName)) {
       // @mcp_call(server, tool, {json}) — split into 3 args
+      const trimmedMcp = argsString.trim();
       const firstComma = _findTopLevelComma(argsString);
       if (firstComma !== -1) {
         const first = argsString.slice(0, firstComma).trim();
@@ -436,8 +437,19 @@ export function parseToolCalls(response) {
         } else {
           args = [sanitizeArg(first), sanitizeArg(rest), '{}'];
         }
+      } else if (trimmedMcp.startsWith('{')) {
+        // Model passed a single JSON object instead of positional args — try to extract fields
+        try {
+          const parsed = JSON.parse(trimmedMcp);
+          const srv = parsed.server || parsed.serverName || parsed.server_name || '';
+          const tl = parsed.tool || parsed.toolName || parsed.tool_name || '';
+          const tArgs = parsed.arguments || parsed.args || parsed.parameters || {};
+          args = [srv, tl, JSON.stringify(tArgs)];
+        } catch {
+          args = ['', '', trimmedMcp];
+        }
       } else {
-        args = [sanitizeArg(argsString.trim()), '', '{}'];
+        args = [sanitizeArg(trimmedMcp), '', '{}'];
       }
     } else {
       const commaIdx = _findTopLevelComma(argsString);
