@@ -1,15 +1,28 @@
 {
-  "name": "agents-swarm-ui-server",
+  "name": "agent-swarm-server",
   "version": "1.0.0",
-  "description": "Backend server for Agents Swarm UI",
+  "description": "Agent Swarm Management Server",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test"
+    "dev": "node --watch src/index.js",
+    "test": "node --test src/services/__tests__/*.test.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@zvec/zvec": "^0.2.1",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
-    "express": "^5.1.0"
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^8.3.0",
+    "jsonwebtoken": "^9.0.2",
+    "openai": "^6.18.0",
+    "pg": "^8.18.0",
+    "socket.io": "^4.8.1",
+    "uuid": "^11.1.0",
+    "zod": "^4.3.6"
   }
 }
