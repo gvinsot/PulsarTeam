@@ -175,16 +175,22 @@ async function start() {
   await skillManager.seedDefaults(BUILTIN_SKILLS);
   await mcpManager.loadFromDatabase();
   await mcpManager.seedDefaults(BUILTIN_MCP_SERVERS);
-  await mcpManager.connectAll();
   await agentManager.loadFromDatabase();
   agentManager.startTaskLoop();
 
   await sandboxManager.cleanupOrphans();
 
-  httpServer.listen(PORT, () => {
-    console.log(`\\n🐝 Agent Swarm Server running on http://localhost:${PORT}`);
-    console.log('   WebSocket ready for connections');
+  await new Promise((resolve) => {
+    httpServer.listen(PORT, () => {
+      console.log(`\\n🐝 Agent Swarm Server running on http://localhost:${PORT}`);
+      console.log('   WebSocket ready for connections');
+      resolve();
+    });
   });
+
+  // Connect MCP servers after HTTP is listening, so internal MCPs
+  // (code-index, onedrive) can reach their localhost endpoints.
+  await mcpManager.connectAll();
 }
 
 async function shutdown() {

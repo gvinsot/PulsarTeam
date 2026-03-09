@@ -114,11 +114,11 @@ export const api = {
     }).then(handleResponse),
 
   // Todos
-  addTodo: (agentId, text) =>
+  addTodo: (agentId, text, project) =>
     fetch(`${API_BASE}/agents/${agentId}/todos`, {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, ...(project !== undefined && { project }) })
     }).then(handleResponse),
 
   toggleTodo: (agentId, todoId) =>

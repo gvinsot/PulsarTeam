@@ -1068,7 +1068,7 @@ function TodoTab({ agent, socket, onRefresh }) {
 
   const handleAdd = async () => {
     if (!newTodo.trim()) return;
-    await api.addTodo(agent.id, newTodo.trim());
+    await api.addTodo(agent.id, newTodo.trim(), agent.project || undefined);
     setNewTodo('');
     onRefresh();
   };

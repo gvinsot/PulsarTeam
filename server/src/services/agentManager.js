@@ -884,8 +884,8 @@ export class AgentManager {
                 task: delegation.task
               });
 
-              // Create todo immediately
-              const todo = this.addTodo(targetAgent.id, `[From ${agent.name}] ${delegation.task}`);
+              // Create todo immediately (inherit source agent's project)
+              const todo = this.addTodo(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null);
 
               // Enqueue execution — the queue will process it when the agent is free
               const promise = this._enqueueAgentTask(targetAgent.id, async () => {
@@ -1204,7 +1204,7 @@ export class AgentManager {
             to: { id: targetAgent.id, name: targetAgent.name, project: targetAgent.project || null },
             task: delegation.task
           });
-          const todo = this.addTodo(targetAgent.id, `[From ${agent.name}] ${delegation.task}`);
+          const todo = this.addTodo(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null);
 
           const promise = this._enqueueAgentTask(targetAgent.id, async () => {
             // Mark todo as in_progress
@@ -2501,7 +2501,7 @@ export class AgentManager {
         task: delegation.task
       });
 
-      const todo = this.addTodo(targetAgent.id, `[From ${leader.name}] ${delegation.task}`);
+      const todo = this.addTodo(targetAgent.id, `[From ${leader.name}] ${delegation.task}`, leader.project || null);
 
       // Mark todo as in_progress
       if (todo) {
@@ -2641,10 +2641,16 @@ export class AgentManager {
   }
 
   // ─── Todo Management ───────────────────────────────────────────────
-  addTodo(agentId, text) {
+  addTodo(agentId, text, project) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = { id: uuidv4(), text, status: 'pending', createdAt: new Date().toISOString() };
+    const todo = {
+      id: uuidv4(),
+      text,
+      status: 'pending',
+      project: project !== undefined ? project : (agent.project || null),
+      createdAt: new Date().toISOString()
+    };
     agent.todoList.push(todo);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
@@ -2695,6 +2701,15 @@ export class AgentManager {
     if (todo.status === 'in_progress') throw new Error('Todo already in progress');
 
     console.log(`▶️  Executing todo for ${agent.name}: "${todo.text.slice(0, 80)}"`);
+
+    // Auto-switch to the todo's project if it differs from the agent's current one
+    if (todo.project && todo.project !== agent.project) {
+      console.log(`🔀 [Task] Switching "${agent.name}" from project "${agent.project || '(none)'}" → "${todo.project}" for task execution`);
+      this._switchProjectContext(agent, agent.project, todo.project);
+      agent.project = todo.project;
+      agent.projectChangedAt = new Date().toISOString();
+      this._emit('agent:updated', this._sanitize(agent));
+    }
 
     // Mark as in_progress
     todo.status = 'in_progress';

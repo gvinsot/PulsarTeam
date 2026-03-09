@@ -82,6 +82,19 @@ export default function TodoList({
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <StatusBadge status={todo.status} />
+                      {todo.project && (
+                        <span style={{
+                          fontSize: 11,
+                          fontWeight: 600,
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          background: '#6366f122',
+                          color: '#818cf8',
+                          border: '1px solid #6366f144'
+                        }}>
+                          {todo.project}
+                        </span>
+                      )}
                       <span style={{ textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.75 : 1 }}>
                         {todo.text}
                       </span>
