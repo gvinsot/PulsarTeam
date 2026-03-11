@@ -107,6 +107,96 @@ services:
         - "traefik.http.routers.agentswarm-frontend-http.middlewares=redirect-to-https@file"
         - "traefik.http.routers.agentswarm-frontend-http.service=noop@internal"
 
+  coder-service:
+    build:
+      context: ..
+      dockerfile: coder-service/Dockerfile
+    image: registry.methodinfo.fr/coder-service:latest
+    networks:
+      proxy:
+        # Réseau proxy pour l'accès au service (API REST publique)
+      backend:
+        aliases:
+          - coder-service
+    environment:
+      - TZ=Europe/Paris
+      - LOG_LEVEL=info
+      # Claude Code authentication (OAuth token uses subscription plan, API key uses credits)
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
+      # Execution settings
+      - VERBOSE=${CODER_VERBOSE:-false}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      # Security - API key authentication
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      # Run as host user (match /projects owner for file permissions)
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      # Python settings
+      - PYTHONUNBUFFERED=1
+      - PYTHONFAULTHANDLER=1
+    volumes:
+      # Mount project directories
+      - /home/gildas:/projects
+      # SSH keys for Git access (read-only)
+      - /home/gildas/.ssh:/root/.ssh:ro
+      # Docker socket for Docker-in-Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent auth data (OAuth tokens survive container restarts)
+      - coder-auth-data:/app/data
+      # JDK setup for Android development
+      - coder-android-cache:/opt/android-sdk
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == server-b
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        delay: 10s
+        failure_action: rollback
+      labels:
+        # Activer Traefik
+        - "traefik.enable=true"
+
+        # Définir le port du service Coder
+        - "traefik.http.services.coder-service.loadbalancer.server.port=8000"
+        # Flush immédiat pour le streaming SSE
+        - "traefik.http.services.coder-service.loadbalancer.responseforwarding.flushinterval=1ms"
+
+        # Router HTTPS (principal) - Accès public
+        - "traefik.http.routers.coder-service.rule=Host(`${CODER_DOMAIN:-coder.methodinfo.fr}`)"
+        - "traefik.http.routers.coder-service.entrypoints=websecure"
+        - "traefik.http.routers.coder-service.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.coder-service.service=coder-service"
+
+        # Router HTTP (redirige vers HTTPS)
+        - "traefik.http.routers.coder-service-http.rule=Host(`${CODER_DOMAIN:-coder.methodinfo.fr}`)"
+        - "traefik.http.routers.coder-service-http.entrypoints=web"
+        - "traefik.http.routers.coder-service-http.middlewares=redirect-to-https@file"
+        - "traefik.http.routers.coder-service-http.service=noop@internal"
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   test:
     image: registry.methodinfo.fr/agentswarm-test:latest
     build:
@@ -133,6 +223,12 @@ services:
           - node.hostname == server-b
       restart_policy:
         condition: on-failure
+
+volumes:
+  coder-android-cache:
+    driver: local
+  coder-auth-data:
+    driver: local
 
 networks:
   proxy:

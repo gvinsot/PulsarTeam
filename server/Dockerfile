@@ -31,7 +31,7 @@ RUN mkdir -p /root/.ssh && \
 
 # Install dependencies
 COPY server/package*.json ./
-RUN npm ci --production
+RUN npm i --production
 
 # Copy source code
 COPY server/src ./src
