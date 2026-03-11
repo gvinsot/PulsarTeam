@@ -80,6 +80,9 @@ export function swarmApiRoutes(agentManager) {
     if (!task) {
       return res.status(400).json({ error: 'task field is required' });
     }
+    if (!project) {
+      return res.status(400).json({ error: 'project field is required' });
+    }
 
     const agent = agentManager.agents.get(req.params.id)
       || Array.from(agentManager.agents.values()).find(
@@ -90,7 +93,12 @@ export function swarmApiRoutes(agentManager) {
       return res.status(404).json({ error: 'Agent not found' });
     }
 
-    const todo = agentManager.addTodo(agent.id, task, project || undefined);
+    // Auto-assign agent to the project if different from current assignment
+    if (project !== agent.project) {
+      agentManager.update(agent.id, { project });
+    }
+
+    const todo = agentManager.addTodo(agent.id, task, project, { type: 'api' });
 
     res.status(201).json({
       success: true,

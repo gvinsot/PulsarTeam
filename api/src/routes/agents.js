@@ -219,6 +219,12 @@ export function agentRoutes(agentManager) {
   router.post('/:id/todos', (req, res) => {
     const { text, project, source } = req.body;
     if (!text) return res.status(400).json({ error: 'Text required' });
+    const agent = agentManager.agents.get(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    // Auto-assign agent to project if provided and different from current
+    if (project && project !== agent.project) {
+      agentManager.update(agent.id, { project });
+    }
     const resolvedSource = source || { type: 'user' };
     const todo = agentManager.addTodo(req.params.id, text, project, resolvedSource);
     if (!todo) return res.status(404).json({ error: 'Agent not found' });

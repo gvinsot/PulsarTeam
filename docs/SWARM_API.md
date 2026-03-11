@@ -121,10 +121,10 @@ Le parametre `:id` accepte un **UUID** ou le **nom de l'agent**.
 
 **Body :**
 
-| Champ     | Type   | Requis | Description                                    |
-|-----------|--------|--------|------------------------------------------------|
-| `task`    | string | oui    | Description de la tache                        |
-| `project` | string | non    | Projet a associer (defaut : projet de l'agent) |
+| Champ     | Type   | Requis | Description                                                    |
+|-----------|--------|--------|----------------------------------------------------------------|
+| `task`    | string | oui    | Description de la tache                                        |
+| `project` | string | oui    | Projet a associer. L'agent est automatiquement reassigne a ce projet si necessaire. |
 
 **Exemple :**
 ```bash
@@ -144,6 +144,7 @@ curl -X POST \
     "text": "Ecrire les tests unitaires pour le module auth",
     "status": "pending",
     "project": "my-project",
+    "source": { "type": "api" },
     "createdAt": "2026-03-10T14:30:00.000Z"
   },
   "agent": {
@@ -153,7 +154,7 @@ curl -X POST \
 }
 ```
 
-> La tache est ajoutee en statut `pending`. L'agent la prendra automatiquement en charge des qu'il sera `idle` (boucle de taches toutes les 5 secondes).
+> La tache est ajoutee en statut `pending`. L'agent est automatiquement assigne au projet fourni si son projet courant est different. L'agent prendra la tache en charge des qu'il sera `idle` (boucle de taches toutes les 5 secondes).
 
 ---
 
@@ -182,7 +183,7 @@ Pour les clients MCP (Claude, Claude Code, etc.), ajouter la configuration suiva
 |--------------------|----------------------------------------------------------|
 | `list_agents`      | Lister les agents (filtres optionnels : `project`, `status`) |
 | `get_agent_status` | Statut detaille d'un agent (par `agent_id` ou `agent_name`) |
-| `add_task`         | Ajouter une tache (params : `agent_id`/`agent_name`, `task`, `project`) |
+| `add_task`         | Ajouter une tache (params : `agent_id`/`agent_name`, `task`, `project` — requis). L'agent est auto-assigne au projet. |
 
 ---
 
@@ -192,7 +193,7 @@ Pour les clients MCP (Claude, Claude Code, etc.), ajouter la configuration suiva
 |------|--------------------------------------------------|
 | 401  | API key manquante (header Authorization absent)  |
 | 403  | API key invalide ou revoquee                     |
-| 400  | Parametre manquant (ex: `task` vide)             |
+| 400  | Parametre manquant (ex: `task` ou `project` absent) |
 | 404  | Agent non trouve                                 |
 | 429  | Rate limit atteint (100 req/min)                 |
 
