@@ -1,11 +1,18 @@
 /**
  * Discover available projects by listing GitHub starred repos.
  * Replaces the old filesystem scan of /projects.
+ *
+ * Caching strategy:
+ * - In-memory cache with configurable TTL (default 15 min)
+ * - HTTP conditional requests via ETag (304 Not Modified saves bandwidth & rate limits)
+ * - Stale cache served on error (resilience)
  */
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = parseInt(process.env.GITHUB_CACHE_TTL_MS, 10) || 15 * 60 * 1000; // 15 minutes default
 let _cache = null;
 let _cacheTime = 0;
+let _etags = {};       // page -> ETag header from last successful response
+let _fetchLock = null;  // dedup concurrent calls
 
 /**
  * List starred repos for the configured GitHub user.
@@ -22,50 +29,89 @@ export async function listStarredRepos() {
   // Return cached result if fresh
   if (_cache && Date.now() - _cacheTime < CACHE_TTL) return _cache;
 
+  // Deduplicate concurrent calls — only one fetch at a time
+  if (_fetchLock) return _fetchLock;
+
+  _fetchLock = _fetchStarredRepos(token, user);
+  try {
+    return await _fetchLock;
+  } finally {
+    _fetchLock = null;
+  }
+}
+
+async function _fetchStarredRepos(token, user) {
   try {
     const repos = [];
     let page = 1;
     const perPage = 100;
+    let allUnchanged = true;
 
     while (true) {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+
+      // Use conditional request if we have a cached ETag for this page
+      if (_etags[page]) {
+        headers['If-None-Match'] = _etags[page];
+      }
+
       const res = await fetch(
         `https://api.github.com/users/${user}/starred?per_page=${perPage}&page=${page}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/vnd.github+json',
-            'X-GitHub-Api-Version': '2022-11-28',
-          },
-        }
+        { headers }
       );
 
-      if (!res.ok) {
+      // Store ETag for future conditional requests
+      const etag = res.headers.get('etag');
+      if (etag) _etags[page] = etag;
+
+      if (res.status === 304) {
+        // Not Modified — cache is still valid
+        if (_cache) {
+          _cacheTime = Date.now();
+          return _cache;
+        }
+        // Shouldn't happen, but fall through to normal fetch if no cache
+        allUnchanged = false;
+      }
+
+      if (!res.ok && res.status !== 304) {
         console.error(`GitHub API error: ${res.status} ${res.statusText}`);
         break;
       }
 
-      const data = await res.json();
-      if (!data.length) break;
+      if (res.status !== 304) {
+        allUnchanged = false;
+        const data = await res.json();
+        if (!data.length) break;
 
-      for (const repo of data) {
-        repos.push({
-          name: repo.name,
-          fullName: repo.full_name,
-          sshUrl: repo.ssh_url,
-          httpsUrl: repo.clone_url,
-          description: repo.description || '',
-        });
+        for (const repo of data) {
+          repos.push({
+            name: repo.name,
+            fullName: repo.full_name,
+            sshUrl: repo.ssh_url,
+            httpsUrl: repo.clone_url,
+            description: repo.description || '',
+          });
+        }
+
+        if (data.length < perPage) break;
       }
 
-      if (data.length < perPage) break;
       page++;
     }
 
-    _cache = repos;
+    if (repos.length > 0 || !_cache) {
+      _cache = repos;
+    }
     _cacheTime = Date.now();
-    return repos;
+    return _cache;
   } catch (err) {
     console.error('Failed to fetch starred repos:', err.message);
+    // Serve stale cache on error for resilience
     return _cache || [];
   }
 }
@@ -86,4 +132,5 @@ export async function getProjectGitUrl(projectName) {
 export function invalidateProjectCache() {
   _cache = null;
   _cacheTime = 0;
+  _etags = {};
 }
