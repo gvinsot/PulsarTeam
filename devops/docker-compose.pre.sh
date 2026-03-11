@@ -39,27 +39,27 @@ docker compose -f docker-compose.swarm.yml push
 
 # 3. Build client dist on the host (for bind-mounted volume)
 echo ""
-echo "📦 Building client assets on host..."
-CLIENT_DIR="${HOST_CODE_PATH}/AgentsSwarmUI/client"
+echo "📦 Building frontend assets on host..."
+CLIENT_DIR="${HOST_CODE_PATH}/AgentsSwarmUI/frontend"
 if [ -d "${CLIENT_DIR}" ]; then
   docker run --rm \
     -v "${CLIENT_DIR}:/build" \
     -w /build \
     node:20-alpine \
     sh -c "npm ci && npm run build"
-  echo "   ✅ Client built at ${CLIENT_DIR}/dist"
+  echo "   ✅ Frontend built at ${CLIENT_DIR}/dist"
 else
-  echo "   ⚠️  Client directory not found at ${CLIENT_DIR}"
+  echo "   ⚠️  Frontend directory not found at ${CLIENT_DIR}"
   echo "      Falling back to image-baked dist (no bind mount override)"
 fi
 
-# 4. Ensure server source exists on host
+# 4. Ensure api source exists on host
 echo ""
-SERVER_DIR="${HOST_CODE_PATH}/AgentsSwarmUI/server"
+SERVER_DIR="${HOST_CODE_PATH}/AgentsSwarmUI/api"
 if [ -d "${SERVER_DIR}/src" ]; then
-  echo "✅ Server source found at ${SERVER_DIR}/src"
+  echo "✅ API source found at ${SERVER_DIR}/src"
 else
-  echo "⚠️  Server source not found at ${SERVER_DIR}/src"
+  echo "⚠️  API source not found at ${SERVER_DIR}/src"
   echo "   Make sure the repo is cloned at ${HOST_CODE_PATH}/AgentsSwarmUI"
 fi
 

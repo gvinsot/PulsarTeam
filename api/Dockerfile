@@ -30,11 +30,11 @@ RUN mkdir -p /root/.ssh && \
     ssh-keyscan github.com >> /root/.ssh/known_hosts
 
 # Install dependencies
-COPY server/package*.json ./
+COPY api/package*.json ./
 RUN npm i --production
 
 # Copy source code
-COPY server/src ./src
+COPY api/src ./src
 
 # ── Test stage ──────────────────────────────────────────────
 FROM base AS test
@@ -42,7 +42,7 @@ CMD ["sh", "-c", "node --test src/services/__tests__/*.test.js"]
 
 # ── Production stage ────────────────────────────────────────
 FROM base AS production
-COPY server/entrypoint.sh /entrypoint.sh
+COPY api/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 3001

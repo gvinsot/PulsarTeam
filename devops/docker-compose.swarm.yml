@@ -1,10 +1,10 @@
 version: '3.8'
 services:
-  server:
+  api:
     image: registry.methodinfo.fr/agentswarm-server:latest
     build:
       context: ..
-      dockerfile: server/Dockerfile
+      dockerfile: api/Dockerfile
       target: production
     environment:
       - NODE_ENV=production
@@ -53,7 +53,7 @@ services:
         - "traefik.enable=true"
 
         # Service port
-        - "traefik.http.services.agentswarm-server.loadbalancer.server.port=3001"
+        - "traefik.http.services.agentswarm-api.loadbalancer.server.port=3001"
 
         # HTTPS Router — API + WebSocket (/api and /socket.io)
         # Using realtime-global (no WAF) to avoid blocking AI chat content with code patterns
@@ -61,7 +61,7 @@ services:
         - "traefik.http.routers.agentswarm-api.entrypoints=websecure"
         - "traefik.http.routers.agentswarm-api.tls.certresolver=letsencrypt"
         - "traefik.http.routers.agentswarm-api.middlewares=realtime-global@file"
-        - "traefik.http.routers.agentswarm-api.service=agentswarm-server"
+        - "traefik.http.routers.agentswarm-api.service=agentswarm-api"
         - "traefik.http.routers.agentswarm-api.priority=100"
 
         # HTTP redirect
@@ -70,13 +70,13 @@ services:
         - "traefik.http.routers.agentswarm-api-http.middlewares=redirect-to-https@file"
         - "traefik.http.routers.agentswarm-api-http.service=noop@internal"
 
-  client:
+  frontend:
     image: registry.methodinfo.fr/agentswarm-client:latest
     build:
       context: ..
-      dockerfile: client/Dockerfile
+      dockerfile: frontend/Dockerfile
     volumes:
-      - ${HOST_CODE_PATH}/AgentsSwarmUI/client/dist:/usr/share/nginx/html
+      - ${HOST_CODE_PATH}/AgentsSwarmUI/frontend/dist:/usr/share/nginx/html
     networks:
       - proxy
     deploy:
@@ -91,14 +91,14 @@ services:
         - "traefik.enable=true"
 
         # Service port
-        - "traefik.http.services.agentswarm-client.loadbalancer.server.port=80"
+        - "traefik.http.services.agentswarm-frontend.loadbalancer.server.port=80"
 
         # HTTPS Router — Frontend (catch-all for swarm.methodinfo.fr)
         - "traefik.http.routers.agentswarm-frontend.rule=Host(`swarm.methodinfo.fr`)"
         - "traefik.http.routers.agentswarm-frontend.entrypoints=websecure"
         - "traefik.http.routers.agentswarm-frontend.tls.certresolver=letsencrypt"
         - "traefik.http.routers.agentswarm-frontend.middlewares=global@file"
-        - "traefik.http.routers.agentswarm-frontend.service=agentswarm-client"
+        - "traefik.http.routers.agentswarm-frontend.service=agentswarm-frontend"
         - "traefik.http.routers.agentswarm-frontend.priority=1"
 
         # HTTP redirect
@@ -201,7 +201,7 @@ services:
     image: registry.methodinfo.fr/agentswarm-test:latest
     build:
       context: ..
-      dockerfile: server/Dockerfile
+      dockerfile: api/Dockerfile
       target: test
     deploy:
       replicas: 0  # Only used for CI — never deployed as a service
@@ -210,7 +210,7 @@ services:
     image: ${DOCKER_REGISTRY_URL}/agentswarm-sandbox:latest
     build:
       context: ..
-      dockerfile: server/sandbox.Dockerfile
+      dockerfile: api/sandbox.Dockerfile
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${SSH_KEYS_HOST_PATH}:/root/.ssh:ro
