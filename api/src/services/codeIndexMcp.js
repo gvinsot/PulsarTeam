@@ -325,23 +325,41 @@ export function createCodeIndexMcpHandler(codeIndexService) {
 
   return async (req, res) => {
     try {
+      // Set proper headers for MCP protocol
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Mcp-Session-Id', 'code-index-session');
+
+      // Handle GET requests (SSE fallback)
       if (req.method === 'GET') {
-        const transport = await createSession();
-        res.on('close', () => transports.delete(transport.sessionId));
+        // For SSE fallback, return a simple 200 OK to indicate the endpoint is available
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+        res.write(': connected\\n\\n');
+        return;
+      }
+
+      // Handle POST requests (Streamable HTTP)
+      if (req.method === 'POST') {
+        const sessionId = req.headers['mcp-session-id'];
+        let transport;
+
+        if (sessionId && transports.has(sessionId)) {
+          transport = transports.get(sessionId);
+        } else {
+          transport = await createSession();
+          res.on('close', () => transports.delete(transport.sessionId));
+        }
+
         await transport.handleRequest(req, res, req.body);
         return;
       }
 
-      const sessionId = req.headers['mcp-session-id'];
-      if (sessionId && transports.has(sessionId)) {
-        const transport = transports.get(sessionId);
-        await transport.handleRequest(req, res, req.body);
-        return;
-      }
-
-      const transport = await createSession();
-      res.on('close', () => transports.delete(transport.sessionId));
-      await transport.handleRequest(req, res, req.body);
+      // Handle other methods
+      res.writeHead(405, { 'Allow': 'GET, POST' });
+      res.end(JSON.stringify({ error: 'Method not allowed' }));
     } catch (error) {
       console.error('[Code Index MCP] Error:', error);
       if (!res.headersSent) {
