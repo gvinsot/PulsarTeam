@@ -327,14 +327,14 @@ export function createCodeIndexMcpHandler(codeIndexService) {
         });
 
         await mcpServer.connect(transport);
-        await transport.handleRequest(req, res);
+        await transport.handleRequest(req, res, req.body);
         return;
       }
 
       const sessionId = req.headers['mcp-session-id'];
       if (sessionId && transports.has(sessionId)) {
         const transport = transports.get(sessionId);
-        await transport.handleRequest(req, res);
+        await transport.handleRequest(req, res, req.body);
         return;
       }
 
@@ -348,7 +348,7 @@ export function createCodeIndexMcpHandler(codeIndexService) {
       });
 
       await mcpServer.connect(transport);
-      await transport.handleRequest(req, res);
+      await transport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error('[Code Index MCP] Error:', error);
       if (!res.headersSent) {

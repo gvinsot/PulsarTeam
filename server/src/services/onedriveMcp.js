@@ -383,7 +383,7 @@ export function createOneDriveMcpHandler() {
         });
 
         await mcpServer.connect(transport);
-        await transport.handleRequest(req, res);
+        await transport.handleRequest(req, res, req.body);
         return;
       }
 
@@ -392,7 +392,7 @@ export function createOneDriveMcpHandler() {
 
       if (sessionId && transports.has(sessionId)) {
         const transport = transports.get(sessionId);
-        await transport.handleRequest(req, res);
+        await transport.handleRequest(req, res, req.body);
         return;
       }
 
@@ -405,7 +405,7 @@ export function createOneDriveMcpHandler() {
       });
 
       await mcpServer.connect(transport);
-      await transport.handleRequest(req, res);
+      await transport.handleRequest(req, res, req.body);
 
     } catch (err) {
       console.error('[OneDrive MCP] Error:', err);
