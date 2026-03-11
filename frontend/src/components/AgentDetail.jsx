@@ -11,6 +11,22 @@ import VoiceChatTab from './VoiceChatTab';
 import PluginEditor from './PluginEditor';
 
 
+const SOURCE_META = {
+  agent: { label: s => `Agent: ${s.name || ''}`, color: 'text-violet-400', bg: 'bg-violet-500/10 ring-violet-500/20' },
+  user:  { label: () => 'User',                  color: 'text-blue-400',   bg: 'bg-blue-500/10 ring-blue-500/20' },
+  api:   { label: () => 'API',                   color: 'text-slate-400',  bg: 'bg-slate-500/10 ring-slate-500/20' },
+  mcp:   { label: () => 'MCP',                   color: 'text-orange-400', bg: 'bg-orange-500/10 ring-orange-500/20' },
+};
+
+function timeAgo(iso) {
+  if (!iso) return null;
+  const diff = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 const TODO_STATUS_META = {
   pending: { label: 'Pending', dot: 'bg-amber-400', text: 'text-amber-300', ring: 'ring-amber-500/30 bg-amber-500/10' },
   in_progress: { label: 'In Progress', dot: 'bg-blue-400 animate-pulse', text: 'text-blue-300', ring: 'ring-blue-500/30 bg-blue-500/10' },
@@ -1090,6 +1106,28 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
           </button>
         </div>
       </div>
+      {(todo.source || todo.project || todo.createdAt) && (
+        <div className="flex items-center gap-2 px-3 pb-2 ml-8 flex-wrap">
+          {todo.source && (() => {
+            const meta = SOURCE_META[todo.source.type] || SOURCE_META.api;
+            return (
+              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ring-1 ${meta.color} ${meta.bg}`}>
+                {meta.label(todo.source)}
+              </span>
+            );
+          })()}
+          {todo.project && (
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded ring-1 text-indigo-400 bg-indigo-500/10 ring-indigo-500/20">
+              {todo.project}
+            </span>
+          )}
+          {todo.createdAt && (
+            <span className="flex items-center gap-1 text-xs text-dark-500">
+              <Clock className="w-3 h-3" />{timeAgo(todo.createdAt)}
+            </span>
+          )}
+        </div>
+      )}
       {isError && todo.error && (
         <div className="px-3 pb-2 ml-8">
           <p className="text-xs text-red-400/70">{todo.error}</p>
