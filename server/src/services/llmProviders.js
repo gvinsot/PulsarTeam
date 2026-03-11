@@ -349,8 +349,12 @@ export class ClaudeProvider {
         stream.abort();
         throw new Error('Agent stopped by user');
       }
-      if (event.type === 'content_block_delta' && event.delta?.text) {
-        yield { type: 'text', text: event.delta.text };
+      if (event.type === 'content_block_delta') {
+        if (event.delta?.type === 'thinking_delta' && event.delta?.thinking) {
+          yield { type: 'thinking', text: event.delta.thinking };
+        } else if (event.delta?.text) {
+          yield { type: 'text', text: event.delta.text };
+        }
       }
     }
 
@@ -589,6 +593,10 @@ export class OpenAIProvider {
       if (delta?.content) {
         yield { type: 'text', text: delta.content };
       }
+      // Reasoning models (o1/o3/o4): emit thinking tokens
+      if (delta?.reasoning_content) {
+        yield { type: 'thinking', text: delta.reasoning_content };
+      }
       if (choice?.finish_reason) {
         gptFinishReason = choice.finish_reason;
       }
@@ -635,6 +643,10 @@ export class OpenAIProvider {
       if (options.signal?.aborted) throw new Error('Agent stopped by user');
       if (event.type === 'response.output_text.delta') {
         yield { type: 'text', text: event.delta };
+      }
+      // Reasoning models: emit thinking tokens from reasoning summary
+      if (event.type === 'response.reasoning_summary_text.delta') {
+        yield { type: 'thinking', text: event.delta };
       }
       if (event.type === 'response.completed') {
         const status = event.response?.status;

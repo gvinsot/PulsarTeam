@@ -577,6 +577,24 @@ function ChatTab({ history, thinking, streamBuffer, message, setMessage, sending
           <ChatMessage key={i} message={msg} index={i} isLast={i === displayHistory.length - 1} onTruncate={onTruncate} />
         ))}
 
+        {/* Thinking indicator (shown during reasoning before/alongside text) */}
+        {thinking && !streamBuffer && (
+          <div className="flex gap-3 animate-fadeIn">
+            <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center flex-shrink-0 text-xs text-white font-bold">
+              AI
+            </div>
+            <div className="flex-1 bg-dark-800/50 rounded-xl p-3 border border-amber-500/20">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                <span className="text-xs text-amber-400 font-medium">Thinking...</span>
+              </div>
+              <div className="text-xs text-dark-400 font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto">
+                {thinking.slice(-500)}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Streaming response */}
         {streamBuffer && (
           <div className="flex gap-3 animate-fadeIn">
@@ -584,6 +602,17 @@ function ChatTab({ history, thinking, streamBuffer, message, setMessage, sending
               AI
             </div>
             <div className="flex-1 bg-dark-800/50 rounded-xl p-3 border border-dark-700/50">
+              {thinking && (
+                <details className="mb-2">
+                  <summary className="text-xs text-amber-400 cursor-pointer hover:text-amber-300 flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+                    Thinking...
+                  </summary>
+                  <div className="mt-1 text-xs text-dark-400 font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto border-l-2 border-amber-500/30 pl-2">
+                    {thinking.slice(-500)}
+                  </div>
+                </details>
+              )}
               <div className="markdown-content text-sm text-dark-200">
                 <RichAssistantContent text={streamBuffer} />
               </div>

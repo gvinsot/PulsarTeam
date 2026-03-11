@@ -801,6 +801,7 @@ export class AgentManager {
       });
 
       let fullResponse = '';
+      let thinkingBuffer = '';
       let finishReason = null;
 
       // ── Incremental delegation: detect → enqueue immediately ───────────
@@ -828,9 +829,10 @@ export class AgentManager {
         }
         
         if (chunk.type === 'thinking') {
-          // Reasoning model thinking tokens — show in UI but don't add to response
-          agent.currentThinking = chunk.text;
-          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: chunk.text });
+          // Reasoning model thinking tokens — accumulate and show in UI but don't add to response
+          thinkingBuffer += chunk.text;
+          agent.currentThinking = thinkingBuffer;
+          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: thinkingBuffer });
         }
 
         if (chunk.type === 'text') {
@@ -990,8 +992,9 @@ export class AgentManager {
             throw new Error('Agent stopped by user');
           }
           if (chunk.type === 'thinking') {
-            agent.currentThinking = chunk.text;
-            this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: chunk.text });
+            thinkingBuffer += chunk.text;
+            agent.currentThinking = thinkingBuffer;
+            this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: thinkingBuffer });
           }
           if (chunk.type === 'text') {
             fullResponse += chunk.text;
