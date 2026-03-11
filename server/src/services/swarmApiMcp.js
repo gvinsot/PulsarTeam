@@ -170,22 +170,23 @@ export function createSwarmApiMcpServer(agentManager) {
  * Creates an Express request handler for the Swarm API MCP endpoint.
  */
 export function createSwarmApiMcpHandler(agentManager) {
-  const mcpServer = createSwarmApiMcpServer(agentManager);
   const transports = new Map();
+
+  async function createSession() {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+    });
+    const server = createSwarmApiMcpServer(agentManager);
+    await server.connect(transport);
+    transports.set(transport.sessionId, transport);
+    return transport;
+  }
 
   return async (req, res) => {
     try {
       if (req.method === 'GET') {
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
-        });
-        transports.set(transport.sessionId, transport);
-
-        res.on('close', () => {
-          transports.delete(transport.sessionId);
-        });
-
-        await mcpServer.connect(transport);
+        const transport = await createSession();
+        res.on('close', () => transports.delete(transport.sessionId));
         await transport.handleRequest(req, res, req.body);
         return;
       }
@@ -197,16 +198,8 @@ export function createSwarmApiMcpHandler(agentManager) {
         return;
       }
 
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-      });
-      transports.set(transport.sessionId, transport);
-
-      res.on('close', () => {
-        transports.delete(transport.sessionId);
-      });
-
-      await mcpServer.connect(transport);
+      const transport = await createSession();
+      res.on('close', () => transports.delete(transport.sessionId));
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error('[Swarm API MCP] Error:', error);

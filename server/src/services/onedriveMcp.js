@@ -366,47 +366,35 @@ export function createOneDriveMcpServer() {
  * This bridges HTTP requests to the MCP server.
  */
 export function createOneDriveMcpHandler() {
-  const mcpServer = createOneDriveMcpServer();
-
-  // Map to store transports by session ID
   const transports = new Map();
+
+  async function createSession() {
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
+    const server = createOneDriveMcpServer();
+    await server.connect(transport);
+    transports.set(transport.sessionId, transport);
+    return transport;
+  }
 
   return async (req, res) => {
     try {
-      // Handle GET for SSE stream
       if (req.method === 'GET') {
-        const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
-        transports.set(transport.sessionId, transport);
-
-        res.on('close', () => {
-          transports.delete(transport.sessionId);
-        });
-
-        await mcpServer.connect(transport);
+        const transport = await createSession();
+        res.on('close', () => transports.delete(transport.sessionId));
         await transport.handleRequest(req, res, req.body);
         return;
       }
 
-      // Handle POST — check for existing session or create new
       const sessionId = req.headers['mcp-session-id'];
-
       if (sessionId && transports.has(sessionId)) {
         const transport = transports.get(sessionId);
         await transport.handleRequest(req, res, req.body);
         return;
       }
 
-      // New session
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
-      transports.set(transport.sessionId, transport);
-
-      res.on('close', () => {
-        transports.delete(transport.sessionId);
-      });
-
-      await mcpServer.connect(transport);
+      const transport = await createSession();
+      res.on('close', () => transports.delete(transport.sessionId));
       await transport.handleRequest(req, res, req.body);
-
     } catch (err) {
       console.error('[OneDrive MCP] Error:', err);
       if (!res.headersSent) {
