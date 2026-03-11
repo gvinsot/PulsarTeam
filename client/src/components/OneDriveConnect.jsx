@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Cloud, CloudOff, ExternalLink, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../api';
 
@@ -13,17 +13,22 @@ export default function OneDriveConnect({ onStatusChange }) {
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState(null);
 
+  // Use a ref for the callback to avoid re-triggering the effect when the
+  // parent passes a new inline function reference on every render.
+  const onStatusChangeRef = useRef(onStatusChange);
+  useEffect(() => { onStatusChangeRef.current = onStatusChange; }, [onStatusChange]);
+
   const fetchStatus = useCallback(async () => {
     try {
       const data = await api.getOnedriveStatus();
       setStatus(data);
-      onStatusChange?.(data);
+      onStatusChangeRef.current?.(data);
     } catch (err) {
       console.error('OneDrive status check failed:', err);
     } finally {
       setLoading(false);
     }
-  }, [onStatusChange]);
+  }, []);
 
   useEffect(() => {
     fetchStatus();
