@@ -1769,6 +1769,18 @@ function ActionLogsTab({ agent, onRefresh }) {
     onRefresh();
   };
 
+  // Compute stats
+  const busyLogs = logs.filter(l => l.type === 'busy');
+  const sessions = busyLogs.length;
+  const totalWorkMs = busyLogs.reduce((sum, l) => sum + (l.durationMs || 0), 0);
+  const totalTokens = (agent.metrics?.totalTokensIn || 0) + (agent.metrics?.totalTokensOut || 0);
+
+  const formatTokens = (n) => {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+    return String(n);
+  };
+
   const typeConfig = {
     busy:  { icon: Zap,          color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/20',   label: 'Busy' },
     idle:  { icon: Clock,        color: 'text-emerald-400', bg: 'bg-emerald-500/10',  border: 'border-emerald-500/20', label: 'Idle' },
@@ -1777,6 +1789,36 @@ function ActionLogsTab({ agent, onRefresh }) {
 
   return (
     <div className="p-4 space-y-4">
+      {/* Stats summary */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-dark-700/50 border border-dark-600/50 rounded-lg p-3 text-center">
+          <div className="flex items-center justify-center gap-1.5 mb-1">
+            <Play className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-[11px] text-dark-400 uppercase tracking-wide font-medium">Sessions</span>
+          </div>
+          <p className="text-lg font-semibold text-dark-100">{sessions}</p>
+        </div>
+        <div className="bg-dark-700/50 border border-dark-600/50 rounded-lg p-3 text-center">
+          <div className="flex items-center justify-center gap-1.5 mb-1">
+            <Clock className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-[11px] text-dark-400 uppercase tracking-wide font-medium">Work Time</span>
+          </div>
+          <p className="text-lg font-semibold text-dark-100">{formatDuration(totalWorkMs) || '0s'}</p>
+        </div>
+        <div className="bg-dark-700/50 border border-dark-600/50 rounded-lg p-3 text-center">
+          <div className="flex items-center justify-center gap-1.5 mb-1">
+            <Zap className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="text-[11px] text-dark-400 uppercase tracking-wide font-medium">Tokens</span>
+          </div>
+          <p className="text-lg font-semibold text-dark-100">{formatTokens(totalTokens)}</p>
+          {totalTokens > 0 && (
+            <p className="text-[10px] text-dark-500 mt-0.5">
+              {formatTokens(agent.metrics?.totalTokensIn || 0)} in / {formatTokens(agent.metrics?.totalTokensOut || 0)} out
+            </p>
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-dark-200 text-sm">Action Logs</h3>
         <div className="flex items-center gap-2">
