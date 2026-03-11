@@ -32,7 +32,7 @@ services:
       - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker CLI for sandbox management
-      - ${SSH_KEYS_HOST_PATH}:/root/.ssh:ro  # SSH keys (also mounted into sandboxes)
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro  # SSH keys (also mounted into sandboxes)
     networks:
       - proxy
       - postgresqlcluster_internal
@@ -211,7 +211,7 @@ services:
       dockerfile: api/sandbox.Dockerfile
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${SSH_KEYS_HOST_PATH}:/root/.ssh:ro
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
     networks:
       - proxy
     deploy:
