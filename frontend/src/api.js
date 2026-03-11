@@ -133,6 +133,12 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  clearTodos: (agentId) =>
+    fetch(`${API_BASE}/agents/${agentId}/todos`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   // Action Logs
   clearActionLogs: (agentId) =>
     fetch(`${API_BASE}/agents/${agentId}/action-logs`, {

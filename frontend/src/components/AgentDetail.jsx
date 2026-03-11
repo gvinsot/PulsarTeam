@@ -3,7 +3,7 @@ import {
   X, Send, Trash2, Plus, Settings, MessageSquare,
   CheckSquare, FileText, ArrowRightLeft, RotateCcw,
   ChevronDown, ChevronRight, Edit3, Save, Clock, Zap, AlertCircle, FolderCode, StopCircle, Terminal, Users,
-  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Loader, XCircle, RotateCw, ArrowDownToLine
+  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Loader, XCircle, RotateCw, ArrowDownToLine, Brush
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../api';
@@ -1127,6 +1127,11 @@ function TodoTab({ agent, socket, onRefresh }) {
     onRefresh();
   };
 
+  const handleClearAll = async () => {
+    await api.clearTodos(agent.id);
+    onRefresh();
+  };
+
   const handleExecute = (todoId) => {
     if (!socket || executing) return;
     setExecuting(todoId);
@@ -1169,11 +1174,20 @@ function TodoTab({ agent, socket, onRefresh }) {
             </button>
           )}
           {total > 0 && (
-            <span className="text-xs text-dark-400">
-              {done}/{total} completed
-              {inProgress > 0 && <span className="text-amber-400 ml-1">({inProgress} running)</span>}
-              {errors > 0 && <span className="text-red-400 ml-1">({errors} failed)</span>}
-            </span>
+            <>
+              <span className="text-xs text-dark-400">
+                {done}/{total} completed
+                {inProgress > 0 && <span className="text-amber-400 ml-1">({inProgress} running)</span>}
+                {errors > 0 && <span className="text-red-400 ml-1">({errors} failed)</span>}
+              </span>
+              <button
+                onClick={handleClearAll}
+                className="p-1 text-dark-500 hover:text-red-400 transition-colors"
+                title="Clear all tasks"
+              >
+                <Brush className="w-3.5 h-3.5" />
+              </button>
+            </>
           )}
         </div>
       </div>

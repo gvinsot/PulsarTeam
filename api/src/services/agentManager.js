@@ -2716,6 +2716,15 @@ export class AgentManager {
     return true;
   }
 
+  clearTodos(agentId) {
+    const agent = this.agents.get(agentId);
+    if (!agent) return false;
+    agent.todoList = [];
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return true;
+  }
+
   // Execute a single todo — sends it as a chat message to the agent
   async executeTodo(agentId, todoId, streamCallback) {
     const agent = this.agents.get(agentId);

@@ -236,6 +236,12 @@ export function agentRoutes(agentManager) {
     res.json(todo);
   });
 
+  router.delete('/:id/todos', (req, res) => {
+    const success = agentManager.clearTodos(req.params.id);
+    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    res.json({ success: true });
+  });
+
   router.delete('/:id/todos/:todoId', (req, res) => {
     const success = agentManager.deleteTodo(req.params.id, req.params.todoId);
     if (!success) return res.status(404).json({ error: 'Not found' });
