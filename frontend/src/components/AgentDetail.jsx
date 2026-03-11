@@ -3,7 +3,7 @@ import {
   X, Send, Trash2, Plus, Settings, MessageSquare,
   CheckSquare, FileText, ArrowRightLeft, RotateCcw,
   ChevronDown, ChevronRight, Edit3, Save, Clock, Zap, AlertCircle, FolderCode, StopCircle, Terminal, Users,
-  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Loader, XCircle, RotateCw, ArrowDownToLine, Brush
+  Play, PlayCircle, ArrowRight, Scissors, Activity, Wrench, ArrowLeft, Loader, XCircle, RotateCw, ArrowDownToLine, Eraser
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../api';
@@ -1109,6 +1109,8 @@ function TodoItem({ todo, executing, agentStatus, onToggle, onExecute, onDelete 
 function TodoTab({ agent, socket, onRefresh }) {
   const [newTodo, setNewTodo] = useState('');
   const [executing, setExecuting] = useState(null); // todoId or 'all'
+  const [confirmClear, setConfirmClear] = useState(false);
+  const confirmClearTimer = useRef(null);
 
   const handleAdd = async () => {
     if (!newTodo.trim()) return;
@@ -1128,6 +1130,13 @@ function TodoTab({ agent, socket, onRefresh }) {
   };
 
   const handleClearAll = async () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      confirmClearTimer.current = setTimeout(() => setConfirmClear(false), 3000);
+      return;
+    }
+    clearTimeout(confirmClearTimer.current);
+    setConfirmClear(false);
     await api.clearTodos(agent.id);
     onRefresh();
   };
@@ -1182,10 +1191,11 @@ function TodoTab({ agent, socket, onRefresh }) {
               </span>
               <button
                 onClick={handleClearAll}
-                className="p-1 text-dark-500 hover:text-red-400 transition-colors"
+                className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors ${confirmClear ? 'bg-red-500/20 text-red-400 animate-pulse' : 'text-dark-500 hover:text-red-400'}`}
                 title="Clear all tasks"
               >
-                <Brush className="w-3.5 h-3.5" />
+                <Eraser className="w-3.5 h-3.5" />
+                {confirmClear && <span>Confirm?</span>}
               </button>
             </>
           )}

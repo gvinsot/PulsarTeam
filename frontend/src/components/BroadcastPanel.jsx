@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, StopCircle, Wrench, Plus, Pencil, Trash2, Check, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, ListX, Brush } from 'lucide-react';
+import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, StopCircle, Wrench, Plus, Pencil, Trash2, Check, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, ListX, Eraser } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
@@ -713,7 +713,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                 <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
-                      <Brush className="w-4 h-4 text-dark-300" />
+                      <Eraser className="w-4 h-4 text-dark-300" />
                       <span className="text-sm font-medium text-dark-200">Clear All Tasks</span>
                     </div>
                     <p className="text-xs text-dark-500">Delete all tasks for every agent</p>
@@ -721,7 +721,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                   <ConfirmButton
                     onConfirm={handleClearAllTasks}
                     disabled={agents.length === 0}
-                    icon={Brush}
+                    icon={Eraser}
                     label="Clear"
                     confirmLabel="Confirm?"
                     className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
