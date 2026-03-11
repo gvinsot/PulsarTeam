@@ -12,6 +12,17 @@ function createSocketRateLimiter(maxEvents = 30, windowMs = 60_000) {
   };
 }
 
+// Global dedup cache: stores recently processed messageIds to reject replays.
+// Each entry is auto-evicted after 60 seconds.
+const _recentMessageIds = new Map();
+function _trackMessageId(messageId) {
+  if (!messageId) return false; // no ID → cannot dedup, allow through
+  if (_recentMessageIds.has(messageId)) return true; // duplicate
+  _recentMessageIds.set(messageId, Date.now());
+  setTimeout(() => _recentMessageIds.delete(messageId), 60_000);
+  return false; // first time
+}
+
 export function setupSocketHandlers(io, agentManager) {
   io.on('connection', (socket) => {
     console.log(`⚡ Client connected: ${socket.user?.username}`);
@@ -27,10 +38,16 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Chat with streaming ───────────────────────────────────────────
     socket.on('agent:chat', async (data) => {
-      const { agentId, message } = data;
+      const { agentId, message, messageId } = data;
       if (!agentId || !message) return;
       if (!checkSocketRate()) {
         socket.emit('error', { message: 'Rate limit exceeded. Please wait before sending more messages.' });
+        return;
+      }
+
+      // Global dedup: reject replayed events (e.g. socket.io reconnect buffer)
+      if (_trackMessageId(messageId)) {
+        console.warn(`⚠️ Duplicate messageId ${messageId} rejected (replay)`);
         return;
       }
 

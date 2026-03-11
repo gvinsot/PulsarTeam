@@ -343,6 +343,14 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
     }
   }, [history, streamBuffer, thinking, autoScroll]);
 
+  // Release send guard when agent finishes processing (stream ends)
+  useEffect(() => {
+    if (sendingRef.current && agent?.status !== 'busy') {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }, [agent?.status]);
+
   const handleSend = async () => {
     if (!message.trim() || sendingRef.current) return;
     sendingRef.current = true;
@@ -352,7 +360,10 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
 
     // Use socket for streaming
     if (socket) {
-      socket.emit('agent:chat', { agentId: agent.id, message: msg });
+      // Generate a unique message ID to allow server-side deduplication
+      const messageId = `${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // Use volatile.emit to prevent socket.io from buffering/replaying this event on reconnect
+      (socket.volatile || socket).emit('agent:chat', { agentId: agent.id, message: msg, messageId });
       // Optimistically add user message to history
       setHistory(prev => [...prev, { role: 'user', content: msg, timestamp: new Date().toISOString() }]);
     } else {
@@ -366,9 +377,10 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       } catch (err) {
         console.error(err);
       }
+      // Only release guard immediately for REST API path (no streaming)
+      sendingRef.current = false;
+      setSending(false);
     }
-    sendingRef.current = false;
-    setSending(false);
   };
 
   const handleClearHistory = async () => {
@@ -650,7 +662,7 @@ function ChatTab({ history, thinking, streamBuffer, message, setMessage, sending
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey && !sending) {
                   e.preventDefault();
                   onSend();
                 }

@@ -62,6 +62,7 @@ export class AgentManager {
     this.agents = new Map();
     this.abortControllers = new Map(); // Track ongoing requests by agentId
     this._taskQueues = new Map();       // Per-agent sequential task queue
+    this._chatLocks = new Set();        // Per-agent lock to prevent duplicate top-level chat
     this.io = io;
     this.skillManager = skillManager;
     this.sandboxManager = sandboxManager;
@@ -549,13 +550,26 @@ export class AgentManager {
   // ─── Chat ───────────────────────────────────────────────────────────
   async sendMessage(id, userMessage, streamCallback, delegationDepth = 0, messageMeta = null) {
     const MAX_DELEGATION_DEPTH = 5; // Prevent infinite loops
-    
+
+    // Prevent duplicate concurrent top-level chat for the same agent
+    const isTopLevel = delegationDepth === 0 && !messageMeta;
+    if (isTopLevel) {
+      if (this._chatLocks.has(id)) {
+        console.warn(`⚠️ Duplicate sendMessage blocked for agent ${id} (already processing a top-level message)`);
+        throw new Error('Agent is already processing a message');
+      }
+      this._chatLocks.add(id);
+    }
+
     // Create abort controller for this request
     const abortController = new AbortController();
     this.abortControllers.set(id, abortController);
-    
+
     const agent = this.agents.get(id);
-    if (!agent) throw new Error('Agent not found');
+    if (!agent) {
+      if (isTopLevel) this._chatLocks.delete(id);
+      throw new Error('Agent not found');
+    }
 
     this.setStatus(id, 'busy');
     agent.currentThinking = '';
@@ -1653,12 +1667,15 @@ export class AgentManager {
 
       this.setStatus(id, 'idle');
       this.abortControllers.delete(id); // Clean up abort controller
+      if (isTopLevel) this._chatLocks.delete(id);
       return fullResponse;
     } catch (err) {
       // ── Reactive compaction: context exceeded → compact and retry once ──
       if (this._isContextExceededError(err.message) && !agent._compactionRetried) {
         console.log(`🗜️  [Reactive Compact] "${agent.name}": context exceeded — compacting and retrying`);
         agent._compactionRetried = true;  // Prevent infinite retry loop
+        // Release the chat lock BEFORE recursive retry so it can re-acquire it
+        if (isTopLevel) this._chatLocks.delete(id);
         try {
           if (streamCallback) streamCallback(`\n⚠️ *Context limit exceeded — compacting conversation and retrying...*\n`);
           await this._compactHistory(agent, 6);
@@ -1677,6 +1694,7 @@ export class AgentManager {
           agent.currentThinking = '';
           this.setStatus(id, 'error', retryErr.message);
           saveAgent(agent);
+          if (isTopLevel) this._chatLocks.delete(id);
           throw retryErr;
         }
       }
@@ -1698,6 +1716,8 @@ export class AgentManager {
         await new Promise(r => setTimeout(r, delay));
         // Remove the user message we already pushed to avoid duplication
         agent.conversationHistory.pop();
+        // Release the chat lock BEFORE recursive retry so it can re-acquire it
+        if (isTopLevel) this._chatLocks.delete(id);
         try {
           const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta);
           delete agent._streamRetryCount;
@@ -1710,6 +1730,7 @@ export class AgentManager {
           const isRetryUserStop = retryErr.message === 'Agent stopped by user';
           this.setStatus(id, isRetryUserStop ? 'idle' : 'error', retryErr.message);
           saveAgent(agent);
+          if (isTopLevel) this._chatLocks.delete(id);
           throw retryErr;
         }
       }
@@ -1720,6 +1741,7 @@ export class AgentManager {
       agent.currentThinking = '';
       this.setStatus(id, isUserStop ? 'idle' : 'error', err.message);
       saveAgent(agent); // Persist error count
+      if (isTopLevel) this._chatLocks.delete(id);
       throw err;
     }
   }
