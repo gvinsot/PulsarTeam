@@ -232,9 +232,12 @@ export function agentRoutes(agentManager) {
   });
 
   router.patch('/:id/todos/:todoId', (req, res) => {
-    const { status } = req.body || {};
+    const { status, text } = req.body || {};
     let todo;
-    if (status) {
+    if (text !== undefined) {
+      if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
+      todo = agentManager.updateTodoText(req.params.id, req.params.todoId, text.trim());
+    } else if (status) {
       todo = agentManager.setTodoStatus(req.params.id, req.params.todoId, status);
     } else {
       todo = agentManager.toggleTodo(req.params.id, req.params.todoId);

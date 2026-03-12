@@ -2721,6 +2721,17 @@ export class AgentManager {
     return todo;
   }
 
+  updateTodoText(agentId, todoId, text) {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const todo = agent.todoList.find(t => t.id === todoId);
+    if (!todo) return null;
+    todo.text = text;
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return todo;
+  }
+
   deleteTodo(agentId, todoId) {
     const agent = this.agents.get(agentId);
     if (!agent) return false;

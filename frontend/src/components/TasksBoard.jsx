@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
-import { Search, Trash2, ArrowRightLeft, Clock, X, ChevronDown, AlertTriangle } from 'lucide-react';
+import {
+  Search, Trash2, ArrowRightLeft, Clock, X, AlertTriangle,
+  Edit3, Save, Check, User, Tag, Calendar, ChevronDown
+} from 'lucide-react';
 import { api } from '../api';
 
 // ── Column definitions ──────────────────────────────────────────────────────
@@ -40,6 +43,13 @@ const COLUMNS = [
   },
 ];
 
+const STATUS_OPTIONS = [
+  { value: 'pending',     label: 'To Do',       dot: 'bg-slate-400',   text: 'text-slate-300' },
+  { value: 'in_progress', label: 'In Progress',  dot: 'bg-amber-400',   text: 'text-amber-300' },
+  { value: 'done',        label: 'Done',         dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  { value: 'error',       label: 'Error',        dot: 'bg-red-400',     text: 'text-red-300' },
+];
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function timeAgo(iso) {
@@ -53,19 +63,381 @@ function timeAgo(iso) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function formatDate(iso) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
 const SOURCE_META = {
-  user: { label: () => 'User', cls: 'text-blue-400 bg-blue-500/10 ring-blue-500/20' },
-  agent: { label: (s) => s.name || 'Agent', cls: 'text-purple-400 bg-purple-500/10 ring-purple-500/20' },
-  api: { label: () => 'API', cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
-  mcp: { label: () => 'MCP', cls: 'text-orange-400 bg-orange-500/10 ring-orange-500/20' },
+  user:  { label: () => 'User',              cls: 'text-blue-400 bg-blue-500/10 ring-blue-500/20' },
+  agent: { label: (s) => s.name || 'Agent',  cls: 'text-purple-400 bg-purple-500/10 ring-purple-500/20' },
+  api:   { label: () => 'API',               cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
+  mcp:   { label: () => 'MCP',               cls: 'text-orange-400 bg-orange-500/10 ring-orange-500/20' },
 };
+
+// ── TaskDetailModal ──────────────────────────────────────────────────────────
+
+function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(task.text);
+  const [saving, setSaving] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const transferRef = useRef(null);
+  const statusRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  // Focus textarea when entering edit mode
+  useEffect(() => {
+    if (editing && textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.setSelectionRange(editText.length, editText.length);
+    }
+  }, [editing]);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handler = (e) => {
+      if (transferRef.current && !transferRef.current.contains(e.target)) setTransferOpen(false);
+      if (statusRef.current && !statusRef.current.contains(e.target)) setStatusOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') {
+        if (editing) { setEditing(false); setEditText(task.text); }
+        else onClose();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [editing, task.text, onClose]);
+
+  const handleSave = async () => {
+    const trimmed = editText.trim();
+    if (!trimmed || trimmed === task.text) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      await api.updateTodoText(task.agentId, task.id, trimmed);
+      await onRefresh();
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleStatusChange = async (newStatus) => {
+    setStatusOpen(false);
+    if (newStatus === task.status) return;
+    await api.setTodoStatus(task.agentId, task.id, newStatus);
+    onRefresh();
+  };
+
+  const handleTransfer = async (targetAgentId) => {
+    setTransferOpen(false);
+    await api.transferTodo(task.agentId, task.id, targetAgentId);
+    onRefresh();
+    onClose();
+  };
+
+  const handleDelete = async () => {
+    await onDelete(task);
+    onClose();
+  };
+
+  const isError = task.status === 'error';
+  const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
+  const currentStatus = STATUS_OPTIONS.find(s => s.value === (task.status || 'pending')) || STATUS_OPTIONS[0];
+  const otherAgents = agents.filter(a => a.id !== task.agentId && a.enabled !== false);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-lg bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col max-h-[90vh] animate-fadeIn">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
+          <div className="flex items-center gap-2">
+            {/* Status badge / selector */}
+            <div className="relative" ref={statusRef}>
+              <button
+                onClick={() => setStatusOpen(o => !o)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
+                  border transition-colors hover:opacity-80
+                  ${isError
+                    ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                    : task.status === 'done'
+                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                      : task.status === 'in_progress'
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        : 'bg-dark-700 text-dark-300 border-dark-600'
+                  }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${currentStatus.dot}`} />
+                {currentStatus.label}
+                <ChevronDown className="w-3 h-3 opacity-60" />
+              </button>
+              {statusOpen && (
+                <div className="absolute left-0 top-8 z-50 bg-dark-800 border border-dark-600 rounded-xl shadow-2xl py-1 min-w-[140px]">
+                  {STATUS_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => handleStatusChange(opt.value)}
+                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-dark-700 transition-colors
+                        flex items-center gap-2 ${opt.text}
+                        ${opt.value === task.status ? 'bg-dark-700/50' : ''}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${opt.dot}`} />
+                      {opt.label}
+                      {opt.value === task.status && <Check className="w-3 h-3 ml-auto opacity-60" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="text-xs text-dark-500 font-mono">{task.id?.slice(0, 8)}</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+
+          {/* Task text — editable */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-semibold text-dark-400 uppercase tracking-wide">Task</span>
+              {!editing && (
+                <button
+                  onClick={() => { setEditText(task.text); setEditing(true); }}
+                  className="flex items-center gap-1 text-xs text-dark-500 hover:text-indigo-400 transition-colors"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  Edit
+                </button>
+              )}
+            </div>
+            {editing ? (
+              <div className="space-y-2">
+                <textarea
+                  ref={textareaRef}
+                  value={editText}
+                  onChange={e => setEditText(e.target.value)}
+                  rows={5}
+                  className="w-full px-3 py-2.5 bg-dark-800 border border-indigo-500/50 rounded-lg text-sm
+                    text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500
+                    resize-none leading-relaxed"
+                  placeholder="Task description..."
+                />
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => { setEditing(false); setEditText(task.text); }}
+                    className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 bg-dark-800
+                      border border-dark-600 rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving || !editText.trim()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white
+                      bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 rounded-lg transition-colors"
+                  >
+                    <Save className="w-3 h-3" />
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p
+                className={`text-sm leading-relaxed whitespace-pre-wrap cursor-text
+                  ${isError ? 'text-red-300' : 'text-dark-200'}`}
+                onClick={() => { setEditText(task.text); setEditing(true); }}
+                title="Click to edit"
+              >
+                {task.text}
+              </p>
+            )}
+          </div>
+
+          {/* Error message */}
+          {isError && task.error && (
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+              <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-semibold text-red-400 mb-0.5">Error</p>
+                <p className="text-xs text-red-300/80 leading-relaxed">{task.error}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Metadata */}
+          <div className="space-y-2.5">
+            <span className="text-xs font-semibold text-dark-400 uppercase tracking-wide">Details</span>
+
+            {/* Assigned to (agent) */}
+            <div className="flex items-center justify-between py-2 border-b border-dark-800">
+              <div className="flex items-center gap-2 text-xs text-dark-400">
+                <User className="w-3.5 h-3.5" />
+                Assigned to
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20">
+                  {task.agentName}
+                </span>
+                {/* Transfer */}
+                <div className="relative" ref={transferRef}>
+                  <button
+                    onClick={() => setTransferOpen(o => !o)}
+                    className="p-1 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
+                    title="Transfer to another agent"
+                  >
+                    <ArrowRightLeft className="w-3 h-3" />
+                  </button>
+                  {transferOpen && (
+                    <div className="absolute right-0 top-7 z-50 bg-dark-800 border border-dark-600
+                      rounded-xl shadow-2xl shadow-black/40 py-1 min-w-[160px]">
+                      <div className="px-3 py-1.5 text-xs text-dark-400 font-semibold border-b border-dark-700 mb-1">
+                        Transfer to
+                      </div>
+                      {otherAgents.length === 0
+                        ? <p className="px-3 py-2 text-xs text-dark-500">No other agents</p>
+                        : otherAgents.map(a => (
+                          <button
+                            key={a.id}
+                            onClick={() => handleTransfer(a.id)}
+                            className="w-full text-left px-3 py-1.5 text-xs text-dark-200
+                              hover:bg-dark-700 hover:text-white transition-colors flex items-center gap-2"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                              style={{ background: a.status === 'busy' ? '#f59e0b' : a.status === 'error' ? '#ef4444' : '#22c55e' }} />
+                            {a.name}
+                          </button>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Assigned by (source) */}
+            {sourceMeta && (
+              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <Tag className="w-3.5 h-3.5" />
+                  Assigned by
+                </div>
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${sourceMeta.cls}`}>
+                  {sourceMeta.label(task.source)}
+                </span>
+              </div>
+            )}
+
+            {/* Project */}
+            {task.project && (
+              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <Tag className="w-3.5 h-3.5" />
+                  Project
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20">
+                  {task.project}
+                </span>
+              </div>
+            )}
+
+            {/* Created */}
+            {task.createdAt && (
+              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <Calendar className="w-3.5 h-3.5" />
+                  Created
+                </div>
+                <span className="text-xs text-dark-300" title={formatDate(task.createdAt)}>
+                  {timeAgo(task.createdAt)}
+                  <span className="text-dark-500 ml-1.5">· {formatDate(task.createdAt)}</span>
+                </span>
+              </div>
+            )}
+
+            {/* Started */}
+            {task.startedAt && (
+              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <Clock className="w-3.5 h-3.5" />
+                  Started
+                </div>
+                <span className="text-xs text-amber-300/80" title={formatDate(task.startedAt)}>
+                  {timeAgo(task.startedAt)}
+                  <span className="text-dark-500 ml-1.5">· {formatDate(task.startedAt)}</span>
+                </span>
+              </div>
+            )}
+
+            {/* Completed */}
+            {task.completedAt && (
+              <div className="flex items-center justify-between py-2">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <Check className="w-3.5 h-3.5" />
+                  Completed
+                </div>
+                <span className="text-xs text-emerald-300/80" title={formatDate(task.completedAt)}>
+                  {timeAgo(task.completedAt)}
+                  <span className="text-dark-500 ml-1.5">· {formatDate(task.completedAt)}</span>
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end px-5 py-3 border-t border-dark-700 gap-2">
+          <button
+            onClick={handleDelete}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-400
+              hover:text-red-300 hover:bg-red-500/10 border border-red-500/20 hover:border-red-500/40
+              rounded-lg transition-colors"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Delete task
+          </button>
+          <button
+            onClick={onClose}
+            className="px-4 py-1.5 text-xs text-dark-300 hover:text-dark-100
+              bg-dark-800 border border-dark-700 hover:border-dark-500 rounded-lg transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── TaskCard ────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, agents, onDelete, onTransfer }) {
+function TaskCard({ task, agents, onDelete, onTransfer, onOpen }) {
   const [transferOpen, setTransferOpen] = useState(false);
   const transferRef = useRef(null);
   const isError = task.status === 'error';
+  const isDraggingRef = useRef(false);
 
   useEffect(() => {
     if (!transferOpen) return;
@@ -82,15 +454,23 @@ function TaskCard({ task, agents, onDelete, onTransfer }) {
     <div
       draggable
       onDragStart={(e) => {
+        isDraggingRef.current = true;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('application/json', JSON.stringify({ agentId: task.agentId, todoId: task.id }));
-        // Ghost opacity via timeout trick
         setTimeout(() => e.target.classList.add('opacity-40'), 0);
       }}
-      onDragEnd={(e) => e.target.classList.remove('opacity-40')}
-      className={`group bg-dark-800 rounded-lg border p-3 cursor-grab active:cursor-grabbing
+      onDragEnd={(e) => {
+        e.target.classList.remove('opacity-40');
+        // Reset after a tick so click doesn't fire after drop
+        setTimeout(() => { isDraggingRef.current = false; }, 50);
+      }}
+      onClick={() => { if (!isDraggingRef.current) onOpen(task); }}
+      className={`group bg-dark-800 rounded-lg border p-3 cursor-pointer
         transition-all hover:shadow-lg hover:shadow-black/20
-        ${isError ? 'border-red-500/40 bg-red-500/5 hover:border-red-500/60' : 'border-dark-700 hover:border-dark-500'}`}
+        ${isError
+          ? 'border-red-500/40 bg-red-500/5 hover:border-red-500/60'
+          : 'border-dark-700 hover:border-dark-500'
+        }`}
     >
       {/* Task text */}
       <p className={`text-sm leading-snug mb-2.5 ${isError ? 'text-red-300' : 'text-dark-200'}`}
@@ -179,7 +559,7 @@ function TaskCard({ task, agents, onDelete, onTransfer }) {
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onTransfer, onDrop }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onTransfer, onDrop, onOpen }) {
   const [dragOver, setDragOver] = useState(false);
 
   return (
@@ -220,6 +600,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onTransfer, onDrop }) {
             agents={agents}
             onDelete={onDelete}
             onTransfer={onTransfer}
+            onOpen={onOpen}
           />
         ))}
         {tasks.length === 0 && (
@@ -239,6 +620,7 @@ export default function TasksBoard({ agents, onRefresh }) {
   const [projectFilter, setProjectFilter] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [selectedTask, setSelectedTask] = useState(null);
 
   // Aggregate all todos from all agents
   const allTasks = useMemo(() =>
@@ -248,7 +630,13 @@ export default function TasksBoard({ agents, onRefresh }) {
     [agents]
   );
 
-  // Unique projects & agents for filters
+  // Keep modal task in sync with live data
+  const liveSelectedTask = useMemo(() => {
+    if (!selectedTask) return null;
+    return allTasks.find(t => t.id === selectedTask.id && t.agentId === selectedTask.agentId) || null;
+  }, [selectedTask, allTasks]);
+
+  // Unique projects for filter
   const allProjects = useMemo(() => {
     const ps = new Set(allTasks.map(t => t.project).filter(Boolean));
     return Array.from(ps).sort();
@@ -387,10 +775,22 @@ export default function TasksBoard({ agents, onRefresh }) {
               onDelete={handleDelete}
               onTransfer={handleTransfer}
               onDrop={handleDrop}
+              onOpen={setSelectedTask}
             />
           ))}
         </div>
       </div>
+
+      {/* Task detail modal */}
+      {liveSelectedTask && (
+        <TaskDetailModal
+          task={liveSelectedTask}
+          agents={agents}
+          onClose={() => setSelectedTask(null)}
+          onRefresh={onRefresh}
+          onDelete={handleDelete}
+        />
+      )}
     </div>
   );
 }

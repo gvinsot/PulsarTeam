@@ -157,6 +157,13 @@ export const api = {
       body: JSON.stringify({ status })
     }).then(handleResponse),
 
+  updateTodoText: (agentId, todoId, text) =>
+    fetch(`${API_BASE}/agents/${agentId}/todos/${todoId}`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ text })
+    }).then(handleResponse),
+
   // Action Logs
   clearActionLogs: (agentId) =>
     fetch(`${API_BASE}/agents/${agentId}/action-logs`, {
