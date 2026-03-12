@@ -684,7 +684,8 @@ export class AgentManager {
         const { tools: mcpTools, unavailable: mcpUnavailable } = await this.mcpManager.getToolsForAgent(allMcpIds);
         if (mcpTools.length > 0) {
           systemContent += '\n\n--- MCP Tools ---\n';
-          systemContent += 'Call these tools using @mcp_call(server, tool, {"arg": "value"}) syntax.\n';
+          systemContent += 'These are NOT shell commands. Do NOT use @run_command or any bash tool to call them.\n';
+          systemContent += 'Call them using ONLY the @mcp_call(server, tool, {"arg": "value"}) syntax — this is the ONLY valid way.\n';
           systemContent += 'IMPORTANT: Replace <type> placeholders with ACTUAL values. Do NOT copy the type descriptions.\n';
           systemContent += 'Example: @mcp_call(MyServer, my_tool, {"name": "my-actual-value", "count": 5})\n\n';
           for (const t of mcpTools) {
