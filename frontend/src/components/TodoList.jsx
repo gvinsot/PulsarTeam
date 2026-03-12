@@ -31,6 +31,7 @@ function SourceBadge({ source }) {
 }
 
 const STATUS_META = {
+  backlog: { label: 'Backlog', color: '#a855f7' },
   pending: { label: 'Pending', color: '#f59e0b' },
   in_progress: { label: 'In Progress', color: '#3b82f6' },
   error: { label: 'Error', color: '#ef4444' },

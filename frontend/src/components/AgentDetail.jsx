@@ -28,6 +28,7 @@ function timeAgo(iso) {
 }
 
 const TODO_STATUS_META = {
+  backlog: { label: 'Backlog', dot: 'bg-purple-400', text: 'text-purple-300', ring: 'ring-purple-500/30 bg-purple-500/10' },
   pending: { label: 'Pending', dot: 'bg-amber-400', text: 'text-amber-300', ring: 'ring-amber-500/30 bg-amber-500/10' },
   in_progress: { label: 'In Progress', dot: 'bg-blue-400 animate-pulse', text: 'text-blue-300', ring: 'ring-blue-500/30 bg-blue-500/10' },
   error: { label: 'Error', dot: 'bg-red-400', text: 'text-red-300', ring: 'ring-red-500/30 bg-red-500/10' },
@@ -1045,6 +1046,7 @@ function TodoItem({ todo, executing, agentStatus, agents, onToggle, onExecute, o
   const isDone = todo.status === 'done';
   const isInProgress = todo.status === 'in_progress';
   const isError = todo.status === 'error';
+  const isBacklog = todo.status === 'backlog';
   const isPending = todo.status === 'pending' || !todo.status;
   const statusKey = todo.status || 'pending';
   const statusMeta = TODO_STATUS_META[statusKey] || TODO_STATUS_META.pending;
@@ -1053,7 +1055,9 @@ function TodoItem({ todo, executing, agentStatus, agents, onToggle, onExecute, o
     ? 'border-amber-500/50 bg-amber-500/5'
     : isError
       ? 'border-red-500/50 bg-red-500/5'
-      : 'border-dark-700/50';
+      : isBacklog
+        ? 'border-purple-500/40 bg-purple-500/5'
+        : 'border-dark-700/50';
 
   const checkboxClass = isDone
     ? 'bg-indigo-500 border-indigo-500 text-white'
@@ -1061,7 +1065,9 @@ function TodoItem({ todo, executing, agentStatus, agents, onToggle, onExecute, o
       ? 'bg-amber-500/20 border-amber-500 text-amber-400'
       : isError
         ? 'bg-red-500/20 border-red-500 text-red-400'
-        : 'border-dark-500 hover:border-indigo-400';
+        : isBacklog
+          ? 'bg-purple-500/20 border-purple-500 text-purple-400'
+          : 'border-dark-500 hover:border-indigo-400';
 
   const textClass = isDone
     ? 'line-through text-dark-500'
@@ -1069,7 +1075,9 @@ function TodoItem({ todo, executing, agentStatus, agents, onToggle, onExecute, o
       ? 'text-red-300'
       : isInProgress
         ? 'text-amber-200'
-        : 'text-dark-200';
+        : isBacklog
+          ? 'text-purple-200'
+          : 'text-dark-200';
 
   return (
     <div className={`bg-dark-800/50 rounded-lg border group transition-colors ${borderClass}`}>
@@ -1096,10 +1104,11 @@ function TodoItem({ todo, executing, agentStatus, agents, onToggle, onExecute, o
             <span ref={textRef} className={expanded ? 'whitespace-normal break-words' : 'truncate'}>{firstLine}</span>
             {isInProgress && <span className="text-xs text-amber-400 font-medium ml-1 flex-shrink-0">In Progress</span>}
             {isError && <span className="text-xs text-red-400 font-medium ml-1 flex-shrink-0">Error</span>}
+            {isBacklog && <span className="text-xs text-purple-400 font-medium ml-1 flex-shrink-0">Backlog</span>}
           </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {(isPending || isError) && (
+          {(isPending || isError || isBacklog) && (
             <button
               onClick={() => onExecute(todo.id)}
               disabled={!!executing || agentStatus === 'busy'}

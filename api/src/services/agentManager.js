@@ -2686,7 +2686,7 @@ export class AgentManager {
     const todo = {
       id: uuidv4(),
       text,
-      status: 'pending',
+      status: source?.type === 'api' ? 'backlog' : 'pending',
       project: project !== undefined ? project : (agent.project || null),
       source: source || null,
       createdAt: new Date().toISOString()

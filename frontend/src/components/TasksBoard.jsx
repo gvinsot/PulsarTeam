@@ -9,6 +9,17 @@ import { api } from '../api';
 
 const COLUMNS = [
   {
+    id: 'backlog',
+    label: 'Backlog',
+    statuses: ['backlog'],
+    dropStatus: 'backlog',
+    dot: 'bg-purple-500',
+    headerText: 'text-purple-300',
+    countCls: 'bg-purple-500/20 text-purple-300',
+    dropRing: 'ring-purple-500/40 bg-purple-500/5',
+    headerActive: 'border-purple-500/60',
+  },
+  {
     id: 'todo',
     label: 'To Do',
     statuses: ['pending', 'error'],
@@ -44,7 +55,8 @@ const COLUMNS = [
 ];
 
 const STATUS_OPTIONS = [
-  { value: 'pending',     label: 'To Do',       dot: 'bg-slate-400',   text: 'text-slate-300' },
+  { value: 'backlog',     label: 'Backlog',      dot: 'bg-purple-400',  text: 'text-purple-300' },
+  { value: 'pending',     label: 'To Do',        dot: 'bg-slate-400',   text: 'text-slate-300' },
   { value: 'in_progress', label: 'In Progress',  dot: 'bg-amber-400',   text: 'text-amber-300' },
   { value: 'done',        label: 'Done',         dot: 'bg-emerald-400', text: 'text-emerald-300' },
   { value: 'error',       label: 'Error',        dot: 'bg-red-400',     text: 'text-red-300' },
