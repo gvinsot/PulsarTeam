@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   Search, Trash2, ArrowRightLeft, Clock, X, AlertTriangle,
-  Edit3, Save, Check, User, Tag, Calendar, ChevronDown
+  Edit3, Save, Check, User, Tag, Calendar, ChevronDown, Plus
 } from 'lucide-react';
 import { api } from '../api';
 
@@ -89,6 +89,162 @@ const SOURCE_META = {
   api:   { label: () => 'API',               cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
   mcp:   { label: () => 'MCP',               cls: 'text-orange-400 bg-orange-500/10 ring-orange-500/20' },
 };
+
+// ── CreateTaskModal ──────────────────────────────────────────────────────────
+
+function CreateTaskModal({ agents, allProjects, defaultAgentId, onClose, onCreated }) {
+  const [text, setText] = useState('');
+  const [agentId, setAgentId] = useState(defaultAgentId || agents[0]?.id || '');
+  const [project, setProject] = useState('');
+  const [status, setStatus] = useState('backlog');
+  const [saving, setSaving] = useState(false);
+  const textareaRef = useRef(null);
+
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const trimmed = text.trim();
+    if (!trimmed || !agentId) return;
+    setSaving(true);
+    try {
+      await api.addTodo(agentId, trimmed, project.trim() || undefined, status);
+      await onCreated();
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const enabledAgents = agents.filter(a => a.enabled !== false);
+  const CREATE_STATUSES = STATUS_OPTIONS.filter(s => ['backlog', 'pending'].includes(s.value));
+  const currentStatus = STATUS_OPTIONS.find(s => s.value === status);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="w-full max-w-md bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
+          <div className="flex items-center gap-2">
+            <Plus className="w-4 h-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-dark-100">Create Task</span>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 px-5 py-4">
+          {/* Text */}
+          <div>
+            <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+              Task <span className="text-red-400">*</span>
+            </label>
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={e => setText(e.target.value)}
+              rows={4}
+              placeholder="Describe the task..."
+              className="w-full px-3 py-2.5 bg-dark-800 border border-dark-700 rounded-lg text-sm
+                text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500
+                resize-none leading-relaxed transition-colors"
+            />
+          </div>
+
+          {/* Assign to */}
+          <div>
+            <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+              <User className="inline w-3 h-3 mr-1" />Assign to <span className="text-red-400">*</span>
+            </label>
+            <select
+              value={agentId}
+              onChange={e => setAgentId(e.target.value)}
+              className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
+                focus:outline-none focus:border-indigo-500 transition-colors"
+            >
+              {enabledAgents.map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Project + Status row */}
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+                <Tag className="inline w-3 h-3 mr-1" />Project
+              </label>
+              <input
+                type="text"
+                value={project}
+                onChange={e => setProject(e.target.value)}
+                placeholder={allProjects[0] || 'e.g. backend'}
+                list="create-task-projects"
+                className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
+                  placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+              <datalist id="create-task-projects">
+                {allProjects.map(p => <option key={p} value={p} />)}
+              </datalist>
+            </div>
+            <div className="w-36">
+              <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+                Status
+              </label>
+              <select
+                value={status}
+                onChange={e => setStatus(e.target.value)}
+                className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                style={{ color: currentStatus?.text?.replace('text-', '') || 'inherit' }}
+              >
+                {STATUS_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-xs text-dark-300 hover:text-dark-100
+                bg-dark-800 border border-dark-700 hover:border-dark-500 rounded-lg transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={saving || !text.trim() || !agentId}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white
+                bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 rounded-lg transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {saving ? 'Creating…' : 'Create Task'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 // ── TaskDetailModal ──────────────────────────────────────────────────────────
 
@@ -633,6 +789,7 @@ export default function TasksBoard({ agents, onRefresh }) {
   const [agentFilter, setAgentFilter] = useState('');
   const [search, setSearch] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
 
   // Aggregate all todos from all agents
   const allTasks = useMemo(() =>
@@ -773,6 +930,16 @@ export default function TasksBoard({ agents, onRefresh }) {
             <span className="text-red-400/70">{totalByStatus.error} errors</span>
           )}
         </div>
+
+        {/* Create Task */}
+        <button
+          onClick={() => setCreateOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white
+            bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors flex-shrink-0"
+        >
+          <Plus className="w-3.5 h-3.5" />
+          New Task
+        </button>
       </div>
 
       {/* Board */}
@@ -801,6 +968,17 @@ export default function TasksBoard({ agents, onRefresh }) {
           onClose={() => setSelectedTask(null)}
           onRefresh={onRefresh}
           onDelete={handleDelete}
+        />
+      )}
+
+      {/* Create task modal */}
+      {createOpen && (
+        <CreateTaskModal
+          agents={agents}
+          allProjects={allProjects}
+          defaultAgentId={agentFilter || null}
+          onClose={() => setCreateOpen(false)}
+          onCreated={onRefresh}
         />
       )}
     </div>

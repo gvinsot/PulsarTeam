@@ -2680,13 +2680,14 @@ export class AgentManager {
   }
 
   // ─── Todo Management ───────────────────────────────────────────────
-  addTodo(agentId, text, project, source) {
+  addTodo(agentId, text, project, source, initialStatus) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
+    const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
     const todo = {
       id: uuidv4(),
       text,
-      status: source?.type === 'api' ? 'backlog' : 'pending',
+      status: initialStatus || defaultStatus,
       project: project !== undefined ? project : (agent.project || null),
       source: source || null,
       createdAt: new Date().toISOString()
