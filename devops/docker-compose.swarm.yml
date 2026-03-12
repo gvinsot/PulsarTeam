@@ -48,6 +48,9 @@ services:
           - node.hostname == server-b
       restart_policy:
         condition: on-failure
+      update_config:
+        delay: 10s
+        failure_action: rollback
       labels:
         # Enable Traefik
         - "traefik.enable=true"
@@ -86,6 +89,9 @@ services:
           - node.hostname == server-b
       restart_policy:
         condition: on-failure
+      update_config:
+        delay: 10s
+        failure_action: rollback
       labels:
         # Enable Traefik
         - "traefik.enable=true"
@@ -226,6 +232,9 @@ services:
           - node.hostname == server-b
       restart_policy:
         condition: on-failure
+      update_config:
+        delay: 10s
+        failure_action: rollback
 
 volumes:
   coder-android-cache:
