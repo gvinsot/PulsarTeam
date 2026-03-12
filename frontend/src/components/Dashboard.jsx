@@ -79,8 +79,8 @@ export default function Dashboard({
 
   const stats = {
     total: sortedAgents.length,
-    busy: sortedAgents.filter(a => a.status === 'busy').length,
-    idle: sortedAgents.filter(a => a.status === 'idle').length,
+    busy: sortedAgents.filter(a => a.status === 'busy' || thinkingMap[a.id]).length,
+    idle: sortedAgents.filter(a => a.status === 'idle' && !thinkingMap[a.id]).length,
     errors: sortedAgents.filter(a => a.status === 'error').length,
     totalTokensIn: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensIn || 0), 0),
     totalTokensOut: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensOut || 0), 0),

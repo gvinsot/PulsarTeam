@@ -7,7 +7,8 @@ const STATUS_STYLES = {
 };
 
 export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop }) {
-  const status = STATUS_STYLES[agent.status] || STATUS_STYLES.idle;
+  const effectiveStatus = thinking ? 'busy' : agent.status;
+  const status = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.idle;
   const truncatedThinking = thinking ? thinking.slice(-120) + (thinking.length > 120 ? '' : '') : null;
   const disabled = agent.enabled === false;
 
@@ -50,7 +51,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
           </span>
           {disabled ? (
             <span className="text-dark-500">Disabled</span>
-          ) : agent.status === 'busy' && onStop ? (
+          ) : effectiveStatus === 'busy' && onStop ? (
             <button
               onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
               className="flex items-center gap-1 px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
@@ -94,7 +95,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             {agent.isLeader && <Crown className="w-3.5 h-3.5 text-amber-400" title="Leader" />}
             {disabled ? (
               <span className="text-xs font-medium text-dark-500">Disabled</span>
-            ) : agent.status === 'busy' && onStop ? (
+            ) : effectiveStatus === 'busy' && onStop ? (
               <button
                 onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
                 className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors text-xs"
