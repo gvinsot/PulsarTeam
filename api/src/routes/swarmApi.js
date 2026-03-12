@@ -82,10 +82,12 @@ export function swarmApiRoutes(agentManager) {
 
   // ── Add task ───────────────────────────────────────────────────────────
   router.post('/agents/:id/tasks', (req, res) => {
+    console.log(`📥 [SwarmAPI] POST /agents/${req.params.id}/tasks — body:`, JSON.stringify(req.body));
     let task, project;
     try {
       ({ task, project } = createTaskSchema.parse(req.body));
     } catch (err) {
+      console.warn(`⚠️ [SwarmAPI] Task validation failed for agent "${req.params.id}":`, err instanceof z.ZodError ? err.issues : err.message);
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: 'Validation failed', details: err.issues });
       }
@@ -98,6 +100,7 @@ export function swarmApiRoutes(agentManager) {
       );
 
     if (!agent) {
+      console.warn(`⚠️ [SwarmAPI] Agent not found: "${req.params.id}"`);
       return res.status(404).json({ error: 'Agent not found' });
     }
 
@@ -107,6 +110,7 @@ export function swarmApiRoutes(agentManager) {
     }
 
     const todo = agentManager.addTodo(agent.id, task, project, { type: 'api' });
+    console.log(`✅ [SwarmAPI] Task created for agent "${agent.name}" (${agent.id}) — todo: ${todo?.id}, project: ${project}, task: ${task.slice(0, 100)}`);
 
     res.status(201).json({
       success: true,
