@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
-  RefreshCw, Zap, Settings, MessageSquare, Key, Users, KanbanSquare
+  RefreshCw, Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag
 } from 'lucide-react';
 import AgentCard from './AgentCard';
 import AgentDetail from './AgentDetail';
@@ -11,16 +11,17 @@ import SwarmOverview from './SwarmOverview';
 import ActiveVoiceIndicator from './ActiveVoiceIndicator';
 import ApiKeyModal from './ApiKeyModal';
 import TasksBoard from './TasksBoard';
+import ProjectsView from './ProjectsView';
 
 export default function Dashboard({
-  user, agents, templates, projects, skills, mcpServers, thinkingMap, streamBuffers,
+  user, agents, templates, projects, skills, mcpServers, projectContexts, thinkingMap, streamBuffers,
   onLogout, onRefresh, socket, showToast
 }) {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [viewMode, setViewMode] = useState('grid'); // grid | list
-  const [activeView, setActiveView] = useState('agents'); // agents | tasks
+  const [activeView, setActiveView] = useState('agents'); // agents | tasks | projects
   const [detailActiveTab, setDetailActiveTab] = useState('chat');
   const [requestedTab, setRequestedTab] = useState(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
@@ -90,6 +91,16 @@ export default function Dashboard({
               >
                 <KanbanSquare className="w-4 h-4" />
                 <span className="hidden md:inline">Tasks</span>
+              </button>
+              <button
+                onClick={() => setActiveView('projects')}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                  activeView === 'projects' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                }`}
+                title="Projects"
+              >
+                <Tag className="w-4 h-4" />
+                <span className="hidden md:inline">Projects</span>
               </button>
             </div>
           </div>
@@ -170,6 +181,15 @@ export default function Dashboard({
           {activeView === 'tasks' && (
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               <TasksBoard agents={sortedAgents} onRefresh={onRefresh} />
+            </div>
+          )}
+          {activeView === 'projects' && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <ProjectsView
+                agents={sortedAgents}
+                projectContexts={projectContexts || []}
+                onRefresh={onRefresh}
+              />
             </div>
           )}
           {/* Agent list */}

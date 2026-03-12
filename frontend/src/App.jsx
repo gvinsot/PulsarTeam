@@ -15,6 +15,7 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [skills, setSkills] = useState([]);
   const [mcpServers, setMcpServers] = useState([]);
+  const [projectContexts, setProjectContexts] = useState([]);
   const [thinkingMap, setThinkingMap] = useState({});
   const [streamBuffers, setStreamBuffers] = useState({});
   const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
@@ -36,12 +37,13 @@ export default function App() {
 
   const loadData = useCallback(async () => {
     try {
-      const [agentsResult, templatesResult, projectsResult, skillsResult, mcpResult] = await Promise.allSettled([
+      const [agentsResult, templatesResult, projectsResult, skillsResult, mcpResult, projectContextsResult] = await Promise.allSettled([
         api.getAgents(),
         api.getTemplates(),
         api.getProjects(),
         api.getPlugins(),
-        api.getMcpServers()
+        api.getMcpServers(),
+        api.getProjectContexts()
       ]);
 
       if (agentsResult.status === 'fulfilled') {
@@ -75,6 +77,12 @@ export default function App() {
       } else {
         console.error('Failed to load MCP servers:', mcpResult.reason);
         setMcpServers([]);
+      }
+
+      if (projectContextsResult.status === 'fulfilled') {
+        setProjectContexts(projectContextsResult.value);
+      } else {
+        setProjectContexts([]);
       }
     } catch (err) {
       console.error('Failed to load data:', err);
@@ -259,6 +267,7 @@ export default function App() {
         projects={projects}
         skills={skills}
         mcpServers={mcpServers}
+        projectContexts={projectContexts}
         thinkingMap={thinkingMap}
         streamBuffers={streamBuffers}
         onLogout={handleLogout}

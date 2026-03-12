@@ -313,9 +313,34 @@ export const api = {
   getTemplates: () =>
     fetch(`${API_BASE}/templates`, { headers: getHeaders() }).then(handleResponse),
 
-  // Projects
+  // Projects (GitHub starred repos)
   getProjects: () =>
     fetch(`${API_BASE}/projects`, { headers: getHeaders() }).then(handleResponse),
+
+  // Code Index — auto-index project by name
+  indexProject: (projectName) =>
+    fetch(`${API_BASE}/code-index/index-project`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ projectName })
+    }).then(handleResponse),
+
+  // Project Contexts (description + rules per project)
+  getProjectContexts: () =>
+    fetch(`${API_BASE}/project-contexts`, { headers: getHeaders() }).then(handleResponse),
+
+  saveProjectContext: (name, description, rules) =>
+    fetch(`${API_BASE}/project-contexts/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify({ description, rules })
+    }).then(handleResponse),
+
+  deleteProjectContext: (name) =>
+    fetch(`${API_BASE}/project-contexts/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
 
   // API Key (MCP)
   getApiKeyInfo: () =>

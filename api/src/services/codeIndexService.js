@@ -135,9 +135,11 @@ export class CodeIndexService {
     embeddingDimension = EMBEDDING_DIMENSION,
   } = {}) {
     this.storageRoot = path.resolve(storageRoot);
-    this.allowedRoots = (allowedRoots || (process.env.CODE_SEARCH_ALLOWED_ROOTS
+    const defaultRoots = process.env.CODE_SEARCH_ALLOWED_ROOTS
       ? process.env.CODE_SEARCH_ALLOWED_ROOTS.split(',')
-      : Array.from(new Set([process.cwd(), path.resolve(process.cwd(), '..')]))))
+      : [process.cwd(), path.resolve(process.cwd(), '..')];
+    if (process.env.REPOS_BASE_DIR) defaultRoots.push(process.env.REPOS_BASE_DIR);
+    this.allowedRoots = (allowedRoots || Array.from(new Set(defaultRoots)))
       .map((root) => path.resolve(root.trim()))
       .filter(Boolean);
     this.maxFiles = maxFiles;

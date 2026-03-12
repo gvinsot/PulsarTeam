@@ -337,6 +337,10 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
     try {
       await api.updateAgent(agent.id, { project });
       onRefresh();
+      // Trigger background indexing of the new project folder
+      if (project) {
+        api.indexProject(project).catch(() => {});
+      }
     } catch (err) {
       console.error(err);
       setCurrentProject(agent?.project || '');

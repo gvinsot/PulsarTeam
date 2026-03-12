@@ -29,6 +29,7 @@ import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
+import { projectContextRoutes } from './routes/projectContexts.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -96,6 +97,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/agents', authenticateToken, agentRoutes(agentManager));
 app.use('/api/templates', authenticateToken, templateRoutes());
 app.use('/api/projects', authenticateToken, projectRoutes());
+app.use('/api/project-contexts', authenticateToken, projectContextRoutes());
 app.use('/api/code-index', authenticateToken, codeIndexRoutes(codeIndexService));
 app.use('/api/plugins', authenticateToken, pluginRoutes(skillManager, mcpManager));
 // Backward compatibility

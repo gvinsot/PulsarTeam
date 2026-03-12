@@ -1,4 +1,6 @@
 import express from 'express';
+import path from 'path';
+import fs from 'fs/promises';
 import { z } from 'zod';
 
 const booleanQuerySchema = z
@@ -164,6 +166,28 @@ export function codeIndexRoutes(codeIndexService) {
       if (handleValidationError(res, error)) return;
       res.status(400).json({ error: error.message });
     }
+  });
+
+  // Auto-index a project by name — looks up REPOS_BASE_DIR/projectName locally
+  router.post('/index-project', async (req, res) => {
+    const { projectName } = req.body || {};
+    if (!projectName) return res.status(400).json({ error: 'projectName required' });
+
+    const reposBaseDir = process.env.REPOS_BASE_DIR;
+    if (!reposBaseDir) return res.status(400).json({ error: 'REPOS_BASE_DIR not configured on server' });
+
+    const folderPath = path.resolve(reposBaseDir, projectName);
+    try {
+      await fs.access(folderPath);
+    } catch {
+      return res.status(404).json({ error: `Project folder not found: ${folderPath}` });
+    }
+
+    // Fire and forget — respond immediately, indexing runs in background
+    res.json({ status: 'indexing', folderPath, projectName });
+    codeIndexService.indexFolder({ folderPath, repoName: projectName })
+      .then(repo => console.log(`[Code Index] Auto-indexed "${projectName}": ${repo.filesIndexed} files`))
+      .catch(err => console.error(`[Code Index] Auto-index failed for "${projectName}":`, err.message));
   });
 
   router.delete('/repos/:repoId', async (req, res) => {

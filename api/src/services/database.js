@@ -62,6 +62,18 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       `);
 
       console.log('✅ MCP servers table ready');
+
+      // Create project_contexts table if not exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS project_contexts (
+          name TEXT PRIMARY KEY,
+          data JSONB NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+
+      console.log('✅ Project contexts table ready');
       _dbConnected = true;
       return true;
     } catch (err) {
@@ -190,6 +202,42 @@ export async function deleteMcpServerFromDb(id) {
     await pool.query('DELETE FROM mcp_servers WHERE id = $1', [id]);
   } catch (err) {
     console.error('Failed to delete MCP server:', err.message);
+  }
+}
+
+// ── Project Contexts CRUD ────────────────────────────────────────────────────
+
+export async function getAllProjectContexts() {
+  if (!pool) return [];
+  try {
+    const result = await pool.query('SELECT data FROM project_contexts ORDER BY name');
+    return result.rows.map(row => row.data);
+  } catch (err) {
+    console.error('Failed to load project contexts:', err.message);
+    return [];
+  }
+}
+
+export async function saveProjectContext(ctx) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO project_contexts (name, data, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (name) DO UPDATE SET data = $2, updated_at = NOW()`,
+      [ctx.name, JSON.stringify(ctx)]
+    );
+  } catch (err) {
+    console.error('Failed to save project context:', err.message);
+  }
+}
+
+export async function deleteProjectContextFromDb(name) {
+  if (!pool) return;
+  try {
+    await pool.query('DELETE FROM project_contexts WHERE name = $1', [name]);
+  } catch (err) {
+    console.error('Failed to delete project context:', err.message);
   }
 }
 
