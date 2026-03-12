@@ -557,8 +557,15 @@ export class AgentManager {
     const isTopLevel = delegationDepth === 0 && !messageMeta;
     if (isTopLevel) {
       if (this._chatLocks.has(id)) {
-        console.warn(`⚠️ Duplicate sendMessage blocked for agent ${id} (already processing a top-level message)`);
-        throw new Error('Agent is already processing a message');
+        const agent = this.agents.get(id);
+        // Stale lock: agent is no longer busy — clear it and proceed
+        if (!agent || agent.status !== 'busy') {
+          console.warn(`⚠️ Stale chat lock detected for agent ${id} (status: ${agent?.status}) — auto-clearing`);
+          this._chatLocks.delete(id);
+        } else {
+          // Genuinely busy: skip silently, the ongoing execution will handle it
+          return null;
+        }
       }
       this._chatLocks.add(id);
     }
@@ -3147,8 +3154,10 @@ export class AgentManager {
           this._emit('agent:updated', this._sanitize(agent));
         })
         .catch((err) => {
-          console.error(`🔄 Task loop error for ${agent.name}:`, err.message);
-          this._emit('agent:stream:error', { agentId, error: err.message });
+          if (err) {
+            console.error(`🔄 Task loop error for ${agent.name}:`, err.message);
+            this._emit('agent:stream:error', { agentId, error: err.message });
+          }
         })
         .finally(() => {
           this._loopProcessing.delete(agentId);
