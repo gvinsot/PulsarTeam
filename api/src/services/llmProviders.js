@@ -946,6 +946,12 @@ export function createProvider(config) {
         config.model,
         config.apiKey || process.env.VLLM_API_KEY || ''
       );
+    case 'claude-paid':
+      return new VLLMProvider(
+        'http://coder-service:8000',
+        config.model || 'claude-sonnet-4-20250514',
+        config.apiKey || process.env.ANTHROPIC_API_KEY || ''
+      );
     case 'mistral':
       return new MistralProvider(
         config.apiKey || process.env.MISTRAL_API_KEY,

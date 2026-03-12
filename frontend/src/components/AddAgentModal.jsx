@@ -377,6 +377,10 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                         updateField('model', '');
                         updateField('endpoint', 'http://localhost:8000');
                         updateField('apiKey', '');
+                      } else if (e.target.value === 'claude-paid') {
+                        updateField('model', 'claude-sonnet-4-20250514');
+                        updateField('endpoint', '');
+                        updateField('apiKey', '');
                       } else {
                         updateField('model', 'qwen3-coder-next:q4_K_M');
                         updateField('endpoint', 'https://llm-dev.methodinfo.fr');
@@ -388,7 +392,8 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                     <option value="claude">Claude (Anthropic)</option>
                     <option value="openai">OpenAI</option>
                     <option value="mistral">Mistral AI</option>
-                    <option value="vllm">vLLM (Custom Server)</option>
+                    <option value="vllm">vLLM</option>
+                    <option value="claude-paid">Claude Paid Plan</option>
                   </select>
                   {form.isVoice && <p className="text-[11px] text-dark-500 mt-1">Locked — Voice agents use OpenAI Realtime</p>}
                 </div>
@@ -452,6 +457,19 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                       placeholder="sk-..."
                     />
                     <p className="text-[11px] text-dark-500 mt-1">Leave blank to use server default key (MISTRAL_API_KEY)</p>
+                  </div>
+                )}
+
+                {form.provider === 'claude-paid' && (
+                  <div className="col-span-2">
+                    <label className="block text-xs text-dark-400 mb-1.5">API Key</label>
+                    <input
+                      type="password" value={form.apiKey}
+                      onChange={(e) => updateField('apiKey', e.target.value)}
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                      placeholder="sk-ant-..."
+                    />
+                    <p className="text-[11px] text-dark-500 mt-1">Leave blank to use server default key (ANTHROPIC_API_KEY). Routed via coder-service.</p>
                   </div>
                 )}
 

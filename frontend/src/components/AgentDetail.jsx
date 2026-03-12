@@ -2111,7 +2111,17 @@ function SettingsTab({ agent, projects, currentProject, onRefresh }) {
           <p className="text-[11px] text-dark-500 mt-0.5">Disabled agents are excluded from delegation, broadcast, and handoff</p>
         </div>
         <button
-          onClick={() => updateField('enabled', !form.enabled)}
+          onClick={async () => {
+            const newEnabled = !form.enabled;
+            updateField('enabled', newEnabled);
+            try {
+              await api.updateAgent(agent.id, { enabled: newEnabled });
+              onRefresh();
+            } catch (err) {
+              console.error(err);
+              updateField('enabled', !newEnabled);
+            }
+          }}
           className={`relative w-10 h-5 rounded-full transition-colors ${form.enabled ? 'bg-indigo-500' : 'bg-dark-600'}`}
         >
           <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.enabled ? 'translate-x-5' : ''}`} />
@@ -2162,21 +2172,6 @@ function SettingsTab({ agent, projects, currentProject, onRefresh }) {
             rows={6}
           />
         </div>
-        <div className="col-span-2 hidden lg:block">
-          <label className="block text-xs text-dark-400 mb-1.5 flex items-center gap-1.5">
-            <FolderCode className="w-3.5 h-3.5" /> Working Project
-          </label>
-          <select
-            value={form.project}
-            onChange={(e) => updateField('project', e.target.value)}
-            className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="">No project selected</option>
-            {projects?.map(p => (
-              <option key={p.name} value={p.name}>{p.name}</option>
-            ))}
-          </select>
-        </div>
         <div>
           <label className="block text-xs text-dark-400 mb-1.5">Provider</label>
           <select
@@ -2188,7 +2183,8 @@ function SettingsTab({ agent, projects, currentProject, onRefresh }) {
             <option value="claude">Claude</option>
             <option value="openai">OpenAI</option>
             <option value="mistral">Mistral AI</option>
-            <option value="vllm">vLLM (Custom Server)</option>
+            <option value="vllm">vLLM</option>
+            <option value="claude-paid">Claude Paid Plan</option>
           </select>
         </div>
         <div>
@@ -2232,6 +2228,18 @@ function SettingsTab({ agent, projects, currentProject, onRefresh }) {
               placeholder="sk-..."
             />
             <p className="text-[11px] text-dark-500 mt-1">Leave blank to use server default key</p>
+          </div>
+        )}
+        {form.provider === 'claude-paid' && (
+          <div className="col-span-2">
+            <label className="block text-xs text-dark-400 mb-1.5">API Key</label>
+            <input
+              type="password" value={form.apiKey}
+              onChange={(e) => updateField('apiKey', e.target.value)}
+              className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+              placeholder="sk-ant-..."
+            />
+            <p className="text-[11px] text-dark-500 mt-1">Leave blank to use server default key (ANTHROPIC_API_KEY). Routed via coder-service.</p>
           </div>
         )}
         {form.provider === 'vllm' && (
