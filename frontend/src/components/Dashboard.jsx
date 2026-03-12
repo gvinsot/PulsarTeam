@@ -1,7 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
-  RefreshCw, Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag
+  RefreshCw, Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu
 } from 'lucide-react';
 import AgentCard from './AgentCard';
 import AgentDetail from './AgentDetail';
@@ -25,6 +25,19 @@ export default function Dashboard({
   const [detailActiveTab, setDetailActiveTab] = useState('chat');
   const [requestedTab, setRequestedTab] = useState(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const handleClickOutside = (e) => {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(e.target)) {
+        setMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [mobileMenuOpen]);
 
   const handleNavigateToVoiceAgent = useCallback((agentId) => {
     setSelectedAgent(agentId);
@@ -64,8 +77,36 @@ export default function Dashboard({
       <header className="glass border-b border-dark-700 sticky top-0 z-50">
         <div className="max-w-[1800px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Zap className="w-5 h-5 text-white" />
+            <div className="relative sm:static" ref={mobileMenuRef}>
+              <button
+                onClick={() => setMobileMenuOpen(prev => !prev)}
+                className="sm:pointer-events-none w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20"
+              >
+                <Menu className="w-5 h-5 text-white sm:hidden" />
+                <Zap className="w-5 h-5 text-white hidden sm:block" />
+              </button>
+              {mobileMenuOpen && (
+                <div className="absolute left-0 top-full mt-2 w-48 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
+                  {[
+                    { key: 'agents', label: 'Agents', icon: Users },
+                    { key: 'tasks', label: 'Tasks', icon: KanbanSquare },
+                    { key: 'projects', label: 'Projects', icon: Tag },
+                  ].map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      onClick={() => { setActiveView(key); setMobileMenuOpen(false); }}
+                      className={`flex items-center gap-3 w-full px-4 py-2.5 text-sm font-medium transition-colors ${
+                        activeView === key
+                          ? 'bg-dark-700 text-indigo-400'
+                          : 'text-dark-300 hover:bg-dark-700/50 hover:text-dark-100'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
               <h1 className="text-lg font-bold text-dark-100">Pulsar Team</h1>
