@@ -21,12 +21,28 @@ export default function Dashboard({
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [viewMode, setViewMode] = useState('grid'); // grid | list
-  const [activeView, setActiveView] = useState('agents'); // agents | tasks | projects
+  const [activeView, setActiveViewRaw] = useState(() => {
+    const hash = window.location.hash.replace('#', '').toLowerCase();
+    return ['agents', 'tasks', 'projects'].includes(hash) ? hash : 'agents';
+  });
+  const setActiveView = useCallback((view) => {
+    setActiveViewRaw(view);
+    window.history.replaceState(null, '', `#${view}`);
+  }, []);
   const [detailActiveTab, setDetailActiveTab] = useState('chat');
   const [requestedTab, setRequestedTab] = useState(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuRef = useRef(null);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace('#', '').toLowerCase();
+      if (['agents', 'tasks', 'projects'].includes(hash)) setActiveViewRaw(hash);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   useEffect(() => {
     if (!mobileMenuOpen) return;
