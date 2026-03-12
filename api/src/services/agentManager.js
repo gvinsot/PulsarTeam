@@ -1068,7 +1068,12 @@ export class AgentManager {
 
       // Shared nudge detection (used for both tool-using agents and leaders)
       const isNudge = messageMeta?.type === 'nudge';
-      const intentPatterns = /\b(i('ll| will| am going to|'m going to)|(let me|let's|going to|i'll|je vais|nous allons|on va|je m'en occupe|commençons|voyons|d'abord|ensuite|puis))\b|je [^ ]+(rai|erai)\b/i;
+      // Intent patterns: only match when the response STARTS with planning language
+      // (first 200 chars), indicating the agent is planning instead of acting.
+      // Previous regex was too broad and matched common words in normal responses.
+      const intentPatterns = /^[\s\S]{0,200}\b(i('ll| will| am going to|'m going to) (start|begin|proceed|now|first)|let me (start|begin|proceed|first|now|go ahead)|let's (start|begin|proceed)|je vais (commencer|d'abord|maintenant)|commençons par|je m'en occupe)\b/i;
+      // Additional safeguard: only nudge short responses (< 500 chars) that look like pure planning
+      const looksLikePurePlan = responseForParsing.length < 500;
 
       // Process tool calls — all agents can use tools (no project = access to all projects)
       {
@@ -1113,7 +1118,7 @@ export class AgentManager {
         // and this isn't already a nudge — the agent may have described intent without acting.
         // Only nudge agents that have tools available (project-based or MCP).
         const hasTools = agent.project || agent.mcpServers?.length > 0 || agent.skills?.length > 0;
-        if (hasTools && !isNudge && responseForParsing.length > 20 && !isLeaderStreaming) {
+        if (hasTools && !isNudge && looksLikePurePlan && responseForParsing.length > 20 && !isLeaderStreaming) {
           if (intentPatterns.test(responseForParsing)) {
             console.log(`🔄 [Nudge] Agent "${agent.name}" described intent but used no tools — nudging`);
             const nudgeMessage = agent.project || agent.skills?.length > 0
@@ -1337,7 +1342,7 @@ export class AgentManager {
           return synthesisResponse;
         }
         // Leader nudge: leader described intent but didn't use @delegate()
-        if (!isNudge && delegationPromises.length === 0 && responseForParsing.length > 20) {
+        if (!isNudge && looksLikePurePlan && delegationPromises.length === 0 && responseForParsing.length > 20) {
           if (intentPatterns.test(responseForParsing)) {
             console.log(`🔄 [Nudge] Leader "${agent.name}" described intent but used no @delegate — nudging`);
             const nudgeResponse = await this.sendMessage(
