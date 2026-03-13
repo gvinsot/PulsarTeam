@@ -67,6 +67,9 @@ export class AgentManager {
     this.skillManager = skillManager;
     this.sandboxManager = sandboxManager;
     this.mcpManager = mcpManager;
+    // Throttle state for agent:updated emissions (per agentId)
+    this._updateTimers = new Map();   // agentId → setTimeout handle
+    this._updatePending = new Map();  // agentId → latest data to emit
   }
 
   async loadFromDatabase() {
@@ -492,6 +495,12 @@ export class AgentManager {
       isLeader: agent.isLeader || false
     });
 
+    // Flush any pending throttled agent:updated when reaching a terminal state
+    // so the client gets the final state immediately
+    if (status === 'idle' || status === 'error') {
+      this._flushAgentUpdate(id);
+    }
+
     // Log meaningful status transitions
     if (status === 'busy' && prev !== 'busy') {
       this.addActionLog(id, 'busy', detail || 'Agent started working');
@@ -594,6 +603,23 @@ export class AgentManager {
       agent.currentTask = (userMessage || '').slice(0, 200) || null;
     }
     this._emit('agent:status', { id, status: 'busy', project: agent.project || null, currentTask: agent.currentTask || null });
+
+    // Early sandbox init so file tree is available for prompt injection
+    if (this.sandboxManager && agent.project && !this.sandboxManager.getFileTree(id)) {
+      try {
+        const gitUrl = await getProjectGitUrl(agent.project);
+        if (gitUrl) {
+          await this.sandboxManager.ensureSandbox(id, agent.project, gitUrl);
+          // Wait briefly for tree generation to complete (it was triggered in ensureSandbox)
+          if (!this.sandboxManager.getFileTree(id)) {
+            await this.sandboxManager.refreshFileTree(id);
+          }
+        }
+      } catch (err) {
+        // Non-blocking: tree will be available on next message
+        console.warn(`⚠️  [Sandbox] Early init for file tree failed: ${err.message}`);
+      }
+    }
 
     // Build messages array
     const messages = [];
@@ -716,7 +742,14 @@ export class AgentManager {
       
       // Inject tool definitions and project working directory
       if (agent.project) {
-        systemContent += `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nYour current working directory is already the project root. Use @list_dir(.) to see its contents.\nAll file paths are relative to this root (e.g. @read_file(src/index.js), NOT @read_file(/projects/${agent.project}/src/index.js)).\nDo NOT use absolute paths or /projects/ prefixes — they will not work.`;
+        const fileTree = this.sandboxManager?.getFileTree(id);
+        let projectCtx = `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nYour current working directory is already the project root.\nAll file paths are relative to this root (e.g. @read_file(src/index.js), NOT @read_file(/projects/${agent.project}/src/index.js)).\nDo NOT use absolute paths or /projects/ prefixes — they will not work.`;
+        if (fileTree) {
+          projectCtx += `\n\n--- PROJECT FILE TREE (3 levels) ---\n${fileTree}\n--- END FILE TREE ---\nUse this tree to navigate the project without needing @list_dir(.) first. Only use @list_dir for deeper exploration.`;
+        } else {
+          projectCtx += `\nUse @list_dir(.) to see its contents.`;
+        }
+        systemContent += projectCtx;
       } else {
         systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is assigned yet. Use @list_dir(.) to discover available projects. IMPORTANT: You MUST navigate into a project folder before working. Always prefix paths with the project name (e.g. @read_file(my-project/src/index.js), @list_dir(my-project/src)). Do NOT create or modify files at the workspace root — always work inside a project directory.`;
       }
@@ -3236,7 +3269,46 @@ export class AgentManager {
   }
 
   _emit(event, data) {
-    if (this.io) this.io.emit(event, data);
+    if (!this.io) return;
+
+    // Throttle agent:updated to avoid flooding clients with rapid-fire updates
+    // for the same agent (e.g. during delegation: todo created → in_progress → done)
+    if (event === 'agent:updated' && data?.id) {
+      const agentId = data.id;
+      // Always store the latest data
+      this._updatePending.set(agentId, data);
+
+      // If a timer is already running, let it fire with the latest data
+      if (this._updateTimers.has(agentId)) return;
+
+      // Set a short debounce window (300ms) — batches rapid emissions
+      const timer = setTimeout(() => {
+        this._updateTimers.delete(agentId);
+        const pendingData = this._updatePending.get(agentId);
+        this._updatePending.delete(agentId);
+        if (pendingData) {
+          this.io.emit('agent:updated', pendingData);
+        }
+      }, 300);
+      this._updateTimers.set(agentId, timer);
+      return;
+    }
+
+    this.io.emit(event, data);
+  }
+
+  /** Force-flush any pending throttled agent:updated for a specific agent */
+  _flushAgentUpdate(agentId) {
+    const timer = this._updateTimers.get(agentId);
+    if (timer) {
+      clearTimeout(timer);
+      this._updateTimers.delete(agentId);
+    }
+    const pendingData = this._updatePending.get(agentId);
+    this._updatePending.delete(agentId);
+    if (pendingData && this.io) {
+      this.io.emit('agent:updated', pendingData);
+    }
   }
 
   _randomColor() {

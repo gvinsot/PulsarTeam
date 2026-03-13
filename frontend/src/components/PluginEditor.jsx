@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff } from 'lucide-react';
 
 function createEmptyMcp() {
   return {
@@ -9,8 +9,8 @@ function createEmptyMcp() {
     description: '',
     icon: '🔌',
     enabled: true,
+    authMode: 'none',
     apiKey: '',
-    userConfig: {},
   };
 }
 
@@ -43,6 +43,10 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
   const updateMcp = (index, patch) => {
     const mcps = [...(value.mcps || [])];
     mcps[index] = { ...mcps[index], ...patch };
+    // If authMode changed to 'none', clear apiKey
+    if (patch.authMode === 'none') {
+      mcps[index].apiKey = '';
+    }
     update({ mcps });
   };
 
@@ -113,31 +117,33 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
           value={userConfigText}
           onChange={(e) => update({ userConfig: parseKeyValueText(e.target.value) })}
           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono resize-none"
-          placeholder={'oauth_client_id=...\\noauth_scopes=...\\ntenant=...'}
+          placeholder={'oauth_client_id=...\noauth_scopes=...\ntenant=...'}
           rows={4}
         />
-        <p className="text-[11px] text-dark-500 mt-1">Configuration propre à l’utilisateur, stockée avec le plugin. Format clé=valeur.</p>
+        <p className="text-[11px] text-dark-500 mt-1">Configuration propre a l'utilisateur, stockee avec le plugin. Format cle=valeur.</p>
       </div>
 
       <div className="border-t border-dark-700 pt-4">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h4 className="text-sm font-medium text-dark-200">MCP intégrés</h4>
-            <p className="text-[11px] text-dark-500">Créez et configurez les MCP directement dans le plugin.</p>
+            <h4 className="text-sm font-medium text-dark-200">MCP associe</h4>
+            <p className="text-[11px] text-dark-500">Configurez le serveur MCP dedie a ce plugin (URL, authentification).</p>
           </div>
-          <button
-            onClick={addMcp}
-            className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors flex items-center gap-1"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            Ajouter un MCP
-          </button>
+          {(value.mcps || []).length === 0 && (
+            <button
+              onClick={addMcp}
+              className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Ajouter un MCP
+            </button>
+          )}
         </div>
 
         <div className="space-y-3">
           {(value.mcps || []).map((mcp, index) => {
             const expanded = expandedMcps.has(index);
-            const userConfigValue = stringifyKeyValue(mcp.userConfig || {});
+            const authMode = mcp.authMode || (mcp.hasApiKey || mcp.apiKey ? 'bearer' : 'none');
             return (
               <div key={mcp.id || index} className="rounded-lg border border-dark-700/50 bg-dark-900/30">
                 <div className="flex items-center gap-2 px-3 py-2">
@@ -153,8 +159,19 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
                   </button>
                   <span className="text-lg">{mcp.icon || '🔌'}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-dark-200 truncate">{mcp.name || `MCP ${index + 1}`}</div>
-                    <div className="text-[11px] text-dark-500 truncate">{mcp.url || 'URL non configurée'}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-dark-200 truncate">{mcp.name || `MCP ${index + 1}`}</span>
+                      {authMode === 'bearer' ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-0.5">
+                          <Shield className="w-2.5 h-2.5" /> Bearer
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-600/50 text-dark-400 border border-dark-600/30 flex items-center gap-0.5">
+                          <ShieldOff className="w-2.5 h-2.5" /> No auth
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-dark-500 truncate font-mono">{mcp.url || 'URL non configuree'}</div>
                   </div>
                   <button
                     onClick={() => removeMcp(index)}
@@ -166,56 +183,103 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
                 </div>
 
                 {expanded && (
-                  <div className="px-3 pb-3 grid grid-cols-2 gap-3 border-t border-dark-700/50 pt-3">
-                    <div>
-                      <label className="block text-xs text-dark-400 mb-1.5">Nom</label>
-                      <input
-                        type="text"
-                        value={mcp.name}
-                        onChange={(e) => updateMcp(index, { name: e.target.value })}
-                        className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                      />
+                  <div className="px-3 pb-3 space-y-3 border-t border-dark-700/50 pt-3">
+                    {/* Name & Icon */}
+                    <div className="grid grid-cols-[1fr_80px] gap-3">
+                      <div>
+                        <label className="block text-xs text-dark-400 mb-1.5">Nom</label>
+                        <input
+                          type="text"
+                          value={mcp.name}
+                          onChange={(e) => updateMcp(index, { name: e.target.value })}
+                          className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                          placeholder="Nom du serveur MCP"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-dark-400 mb-1.5">Icone</label>
+                        <input
+                          type="text"
+                          value={mcp.icon}
+                          onChange={(e) => updateMcp(index, { icon: e.target.value })}
+                          className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 text-center focus:outline-none focus:border-indigo-500"
+                        />
+                      </div>
                     </div>
+
+                    {/* URL */}
                     <div>
-                      <label className="block text-xs text-dark-400 mb-1.5">Icône</label>
-                      <input
-                        type="text"
-                        value={mcp.icon}
-                        onChange={(e) => updateMcp(index, { icon: e.target.value })}
-                        className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="block text-xs text-dark-400 mb-1.5">URL</label>
+                      <label className="block text-xs text-dark-400 mb-1.5">URL du serveur MCP</label>
                       <input
                         type="text"
                         value={mcp.url}
                         onChange={(e) => updateMcp(index, { url: e.target.value })}
                         className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
-                        placeholder="https://..."
+                        placeholder="https://mcp-server.example.com/sse"
                       />
                     </div>
-                    <div className="col-span-2">
+
+                    {/* Description */}
+                    <div>
                       <label className="block text-xs text-dark-400 mb-1.5">Description</label>
                       <input
                         type="text"
                         value={mcp.description}
                         onChange={(e) => updateMcp(index, { description: e.target.value })}
                         className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                        placeholder="Description du serveur MCP"
                       />
                     </div>
-                    <div className="col-span-2">
-                      <label className="block text-xs text-dark-400 mb-1.5">API key / OAuth token</label>
-                      <input
-                        type="password"
-                        value={mcp.apiKey === '••••••••' ? '' : (mcp.apiKey || '')}
-                        onChange={(e) => updateMcp(index, { apiKey: e.target.value })}
-                        className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
-                        placeholder="Bearer token, API key, secret..."
-                      />
-                      <p className="text-[11px] text-dark-500 mt-1">Pour OAuth/MCP, collez ici le secret ou token utilisateur si nécessaire.</p>
+
+                    {/* Auth mode */}
+                    <div>
+                      <label className="block text-xs text-dark-400 mb-1.5">Mode d'authentification</label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => updateMcp(index, { authMode: 'none' })}
+                          className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm border transition-colors ${
+                            authMode === 'none'
+                              ? 'bg-dark-700 border-indigo-500 text-dark-100'
+                              : 'bg-dark-800 border-dark-600 text-dark-400 hover:border-dark-500'
+                          }`}
+                        >
+                          <ShieldOff className="w-4 h-4" />
+                          Pas d'authentification
+                        </button>
+                        <button
+                          onClick={() => updateMcp(index, { authMode: 'bearer' })}
+                          className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm border transition-colors ${
+                            authMode === 'bearer'
+                              ? 'bg-amber-500/10 border-amber-500 text-amber-400'
+                              : 'bg-dark-800 border-dark-600 text-dark-400 hover:border-dark-500'
+                          }`}
+                        >
+                          <Shield className="w-4 h-4" />
+                          Bearer Token
+                        </button>
+                      </div>
                     </div>
-                    <div className="col-span-2">
+
+                    {/* API Key (only shown when authMode is bearer) */}
+                    {authMode === 'bearer' && (
+                      <div>
+                        <label className="block text-xs text-dark-400 mb-1.5">Cle d'API / Token</label>
+                        <input
+                          type="password"
+                          value={mcp.apiKey === '••••••••' ? '' : (mcp.apiKey || '')}
+                          onChange={(e) => updateMcp(index, { apiKey: e.target.value })}
+                          className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                          placeholder={mcp.hasApiKey ? 'Laisser vide pour conserver, ou saisir une nouvelle cle' : 'Saisir la cle d\'API ou le bearer token'}
+                          autoComplete="off"
+                        />
+                        <p className="text-[11px] text-dark-500 mt-1">
+                          Le token sera envoye dans le header <code className="text-dark-400">Authorization: Bearer &lt;token&gt;</code>
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Enabled toggle */}
+                    <div>
                       <label className="flex items-center gap-2 text-sm text-dark-200">
                         <input
                           type="checkbox"
@@ -223,18 +287,8 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
                           onChange={(e) => updateMcp(index, { enabled: e.target.checked })}
                           className="w-4 h-4 rounded border-dark-600 bg-dark-700"
                         />
-                        MCP activé
+                        MCP active
                       </label>
-                    </div>
-                    <div className="col-span-2">
-                      <label className="block text-xs text-dark-400 mb-1.5">Configuration utilisateur du MCP</label>
-                      <textarea
-                        value={userConfigValue}
-                        onChange={(e) => updateMcp(index, { userConfig: parseKeyValueText(e.target.value) })}
-                        className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono resize-none"
-                        placeholder={'oauth_provider=google\\naccount_email=user@example.com'}
-                        rows={4}
-                      />
                     </div>
                   </div>
                 )}
@@ -244,7 +298,7 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
 
           {(value.mcps || []).length === 0 && (
             <div className="text-center py-6 border border-dashed border-dark-700 rounded-lg text-dark-500 text-xs">
-              Aucun MCP configuré pour ce plugin.
+              Aucun MCP configure pour ce plugin.
             </div>
           )}
         </div>

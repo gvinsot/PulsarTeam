@@ -19,6 +19,7 @@ export default function App() {
   const [thinkingMap, setThinkingMap] = useState({});
   const [streamBuffers, setStreamBuffers] = useState({});
   const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
+  const lastAgentJson = useRef(new Map());    // Dedup: last JSON per agentId
   const [toasts, setToasts] = useState([]);
 
   const showToast = useCallback((message, type = 'error', duration = 5000) => {
@@ -109,6 +110,11 @@ export default function App() {
     sock.on('agents:list', (list) => setAgents(list));
     sock.on('agent:created', (agent) => setAgents(prev => [...prev, agent]));
     sock.on('agent:updated', (agent) => {
+      // Dedup: skip if the payload is identical to the last one for this agent
+      const json = JSON.stringify(agent);
+      if (lastAgentJson.current.get(agent.id) === json) return;
+      lastAgentJson.current.set(agent.id, json);
+
       setAgents(prev => prev.map(a => a.id === agent.id ? agent : a));
       // When an agent's stream just ended, clear its buffer atomically
       // with the history update so the message never disappears.

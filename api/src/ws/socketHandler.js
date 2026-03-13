@@ -75,9 +75,7 @@ export function setupSocketHandlers(io, agentManager) {
         });
 
         socket.emit('agent:stream:end', { agentId, project });
-        // Send updated agent with metrics
-        const agent = agentManager.getById(agentId);
-        if (agent) io.emit('agent:updated', agent);
+        // Note: agentManager.sendMessage() already emits agent:updated internally
       } catch (err) {
         socket.emit('agent:stream:error', { agentId, project, error: err.message });
       } finally {
@@ -142,8 +140,7 @@ export function setupSocketHandlers(io, agentManager) {
         });
 
         io.emit('agent:stream:end', { agentId: toId, project: targetProject });
-        const agent = agentManager.getById(toId);
-        if (agent) io.emit('agent:updated', agent);
+        // Note: agentManager already emits agent:updated internally
 
         socket.emit('agent:handoff:complete', { fromId, toId, response });
       } catch (err) {
@@ -222,8 +219,7 @@ export function setupSocketHandlers(io, agentManager) {
         });
 
         socket.emit('agent:stream:end', { agentId, project: todoProject });
-        const agent = agentManager.getById(agentId);
-        if (agent) io.emit('agent:updated', agent);
+        // Note: agentManager.executeTodo() already emits agent:updated internally
       } catch (err) {
         socket.emit('agent:stream:error', { agentId, project: todoProject, error: err.message });
       }
@@ -250,8 +246,7 @@ export function setupSocketHandlers(io, agentManager) {
         });
 
         socket.emit('agent:stream:end', { agentId, project: execProject });
-        const agent = agentManager.getById(agentId);
-        if (agent) io.emit('agent:updated', agent);
+        // Note: agentManager.executeAllTodos() already emits agent:updated internally
       } catch (err) {
         socket.emit('agent:stream:error', { agentId, project: execProject, error: err.message });
       }
@@ -308,8 +303,7 @@ export function setupSocketHandlers(io, agentManager) {
         );
 
         io.emit('agent:stream:end', { agentId: targetAgent.id, project: voiceTargetProject });
-        const updatedAgent = agentManager.getById(targetAgent.id);
-        if (updatedAgent) io.emit('agent:updated', updatedAgent);
+        // Note: agentManager.sendMessage() already emits agent:updated internally
 
         socket.emit('voice:delegate:result', {
           agentId,
@@ -366,8 +360,7 @@ export function setupSocketHandlers(io, agentManager) {
         );
 
         io.emit('agent:stream:end', { agentId: targetAgent.id, project: targetProject });
-        const updatedAgent = agentManager.getById(targetAgent.id);
-        if (updatedAgent) io.emit('agent:updated', updatedAgent);
+        // Note: agentManager.sendMessage() already emits agent:updated internally
 
         socket.emit('voice:ask:result', { agentId, targetAgentName, error: null, result: answer });
       } catch (err) {
