@@ -23,6 +23,18 @@ export class SandboxManager {
 
     const existing = this.agentUsers.get(agentId);
     if (existing) {
+      // Re-create user if container was replaced and user is unverified
+      if (!existing._userVerified) {
+        console.log(`📦 [Sandbox] Re-creating user "${existing.username}" after container change...`);
+        await this._ensureLinuxUser(existing.username);
+        await this._ensureAgentWorkspace(existing.username);
+        existing._userVerified = true;
+        // Re-clone project since container storage is gone
+        if (existing.project && gitUrl) {
+          await this._cloneProjectForUser(existing.username, existing.project, gitUrl);
+          this._generateFileTree(agentId).catch(() => {});
+        }
+      }
       if (existing.project !== project) {
         await this._switchProject(agentId, project, gitUrl);
       }
@@ -37,7 +49,7 @@ export class SandboxManager {
       await this._cloneProjectForUser(username, project, gitUrl);
     }
 
-    this.agentUsers.set(agentId, { username, project });
+    this.agentUsers.set(agentId, { username, project, _userVerified: true });
     console.log(`📦 [Sandbox] Agent ${agentId} mapped to shared container user "${username}" (project: ${project || 'none'})`);
 
     // Generate file tree in background (non-blocking)
@@ -171,19 +183,7 @@ export class SandboxManager {
 
     await this._execAsAgentUser(entry.username, `mkdir -p ${this._sh(dirPath)}`);
 
-    const innerCmd = `cat > ${this._sh(fullPath)}`;
-    return new Promise((resolve, reject) => {
-      const proc = exec(
-        `docker exec -i -u ${this._sh(entry.username)} ${this._sh(this._resolvedContainerName)} /bin/bash -c ${this._sh(innerCmd)}`,
-        { timeout: 30000, maxBuffer: 5 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          if (err) reject(new Error(`Write failed: ${err.message}`));
-          else resolve({ stdout, stderr });
-        }
-      );
-      proc.stdin.write(content);
-      proc.stdin.end();
-    });
+    return this._execPipedAsUser(entry.username, `cat > ${this._sh(fullPath)}`, content);
   }
 
   async appendFile(agentId, filePath, content) {
@@ -194,19 +194,7 @@ export class SandboxManager {
 
     await this._execAsAgentUser(entry.username, `mkdir -p ${this._sh(dirPath)}`);
 
-    const innerCmd = `cat >> ${this._sh(fullPath)}`;
-    return new Promise((resolve, reject) => {
-      const proc = exec(
-        `docker exec -i -u ${this._sh(entry.username)} ${this._sh(this._resolvedContainerName)} /bin/bash -c ${this._sh(innerCmd)}`,
-        { timeout: 30000, maxBuffer: 5 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          if (err) reject(new Error(`Append failed: ${err.message}`));
-          else resolve({ stdout, stderr });
-        }
-      );
-      proc.stdin.write(content);
-      proc.stdin.end();
-    });
+    return this._execPipedAsUser(entry.username, `cat >> ${this._sh(fullPath)}`, content);
   }
 
   async listDir(agentId, dirPath) {
@@ -269,9 +257,19 @@ export class SandboxManager {
     // Check if cached container name is still valid
     if (this._resolvedContainerName && await this._isRunning(this._resolvedContainerName)) return;
 
+    const previousContainer = this._resolvedContainerName;
+
     // Discover the Swarm-managed sandbox container
     this._resolvedContainerName = await this._discoverContainer();
     console.log(`📦 [Sandbox] Connected to Swarm sandbox container: ${this._resolvedContainerName}`);
+
+    // If container changed, all previously created users are gone — mark them for re-creation
+    if (previousContainer && previousContainer !== this._resolvedContainerName) {
+      console.warn(`⚠️ [Sandbox] Container changed from "${previousContainer}" to "${this._resolvedContainerName}" — marking all agent users for re-creation`);
+      for (const [agentId, entry] of this.agentUsers.entries()) {
+        entry._userVerified = false;
+      }
+    }
   }
 
   async _discoverContainer() {
@@ -336,6 +334,37 @@ export class SandboxManager {
     if (gitEmail) await this._execAsAgentUser(username, `git config user.email ${this._sh(gitEmail)}`, { cwd: target });
   }
 
+  /**
+   * Execute a piped command (stdin content) as an agent user, with auto-retry on missing user.
+   */
+  async _execPipedAsUser(username, innerCmd, stdinContent) {
+    const runPiped = (containerName) => new Promise((resolve, reject) => {
+      const proc = exec(
+        `docker exec -i -u ${this._sh(username)} ${this._sh(containerName)} /bin/bash -c ${this._sh(innerCmd)}`,
+        { timeout: 30000, maxBuffer: 5 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          if (err) reject(err);
+          else resolve({ stdout, stderr });
+        }
+      );
+      proc.stdin.write(stdinContent);
+      proc.stdin.end();
+    });
+
+    try {
+      return await runPiped(this._resolvedContainerName);
+    } catch (err) {
+      if (err.message && err.message.includes('no matching entries in passwd')) {
+        console.warn(`⚠️ [Sandbox] User "${username}" not found in container — re-creating user and retrying...`);
+        await this._ensureSharedContainerRunning();
+        await this._ensureLinuxUser(username);
+        await this._ensureAgentWorkspace(username);
+        return runPiped(this._resolvedContainerName);
+      }
+      throw err;
+    }
+  }
+
   async _execAsRoot(command, { timeout = 120000 } = {}) {
     const cmd = `docker exec ${this._sh(this._resolvedContainerName)} /bin/bash -c ${this._sh(command)}`;
     return execAsync(cmd, { timeout, maxBuffer: 10 * 1024 * 1024 });
@@ -344,7 +373,25 @@ export class SandboxManager {
   async _execAsAgentUser(username, command, { cwd = null, timeout = 120000 } = {}) {
     const cwdArg = cwd ? `-w ${this._sh(cwd)}` : '';
     const cmd = `docker exec ${cwdArg} -u ${this._sh(username)} ${this._sh(this._resolvedContainerName)} /bin/bash -c ${this._sh(command)}`;
-    return execAsync(cmd, { timeout, maxBuffer: 10 * 1024 * 1024 });
+    try {
+      return await execAsync(cmd, { timeout, maxBuffer: 10 * 1024 * 1024 });
+    } catch (err) {
+      // Detect "unable to find user" — container was likely replaced and user no longer exists
+      if (err.message && err.message.includes('no matching entries in passwd')) {
+        console.warn(`⚠️ [Sandbox] User "${username}" not found in container — re-creating user and retrying...`);
+        await this._ensureSharedContainerRunning();
+        await this._ensureLinuxUser(username);
+        await this._ensureAgentWorkspace(username);
+        // Mark user as verified again
+        for (const entry of this.agentUsers.values()) {
+          if (entry.username === username) entry._userVerified = true;
+        }
+        // Retry the command once
+        const retryCmd = `docker exec ${cwdArg} -u ${this._sh(username)} ${this._sh(this._resolvedContainerName)} /bin/bash -c ${this._sh(command)}`;
+        return execAsync(retryCmd, { timeout, maxBuffer: 10 * 1024 * 1024 });
+      }
+      throw err;
+    }
   }
 
   async _isRunning(containerName) {
