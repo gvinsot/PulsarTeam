@@ -8,6 +8,7 @@ const mcpConfigSchema = z.object({
   description: z.string().max(2000).optional(),
   icon: z.string().max(50).optional(),
   enabled: z.boolean().optional(),
+  authMode: z.enum(['none', 'bearer']).optional(),
   apiKey: z.string().max(500).optional(),
   userConfig: z.record(z.any()).optional(),
 });
@@ -28,6 +29,7 @@ function sanitizeMcp(mcp) {
   if (!mcp) return mcp;
   return {
     ...mcp,
+    authMode: mcp.authMode || (mcp.apiKey ? 'bearer' : 'none'),
     hasApiKey: !!mcp.apiKey,
     apiKey: mcp.apiKey ? '••••••••' : '',
   };
