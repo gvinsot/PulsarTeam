@@ -1,49 +1,49 @@
 # Swarm External API
 
-API externe pour interagir avec le swarm d'agents depuis n'importe quel client (scripts, CI/CD, autres LLMs, MCP clients...).
+External API to interact with the agent swarm from any client (scripts, CI/CD, other LLMs, MCP clients...).
 
-Toutes les requetes sont authentifiees par **API key** via le header `Authorization: Bearer <api-key>`.
+All requests are authenticated via **API key** using the `Authorization: Bearer <api-key>` header.
 
-## Obtenir une API key
+## Getting an API Key
 
-1. Se connecter a l'interface web Agent Swarm
-2. Cliquer sur l'icone **cle** dans le header
-3. Cliquer sur **Generate API Key**
-4. Copier la cle affichee — elle ne sera plus visible apres fermeture de la modale
+1. Log in to the PulsarTeam web interface
+2. Click the **key** icon in the header
+3. Click **Generate API Key**
+4. Copy the displayed key — it will no longer be visible after closing the modal
 
-> La cle peut etre regeneree (l'ancienne est automatiquement revoquee) ou supprimee depuis la meme modale.
+> The key can be regenerated (the previous one is automatically revoked) or deleted from the same modal.
 
 ---
 
 ## REST API
 
-Base URL : `https://<votre-domaine>/api/swarm`
+Base URL: `https://<your-domain>/api/swarm`
 
-Toutes les requetes necessitent le header :
+All requests require the header:
 ```
 Authorization: Bearer <api-key>
 ```
 
-### Lister les agents
+### List Agents
 
 ```
 GET /api/swarm/agents
 ```
 
-**Query parameters (optionnels) :**
+**Query parameters (optional):**
 
-| Parametre | Type   | Description                          |
-|-----------|--------|--------------------------------------|
-| `project` | string | Filtrer par nom de projet            |
-| `status`  | string | Filtrer par statut : `idle`, `busy`, `error` |
+| Parameter | Type   | Description                              |
+|-----------|--------|------------------------------------------|
+| `project` | string | Filter by project name                  |
+| `status`  | string | Filter by status: `idle`, `busy`, `error` |
 
-**Exemple :**
+**Example:**
 ```bash
 curl -H "Authorization: Bearer swarm_sk_abc123..." \
      "https://swarm.example.com/api/swarm/agents?status=idle"
 ```
 
-**Reponse :**
+**Response:**
 ```json
 {
   "count": 2,
@@ -64,27 +64,27 @@ curl -H "Authorization: Bearer swarm_sk_abc123..." \
 
 ---
 
-### Statut detaille d'un agent
+### Detailed Agent Status
 
 ```
 GET /api/swarm/agents/:id
 ```
 
-Le parametre `:id` accepte un **UUID** ou le **nom de l'agent** (insensible a la casse).
+The `:id` parameter accepts a **UUID** or the **agent name** (case-insensitive).
 
-**Exemple :**
+**Example:**
 ```bash
 curl -H "Authorization: Bearer swarm_sk_abc123..." \
      "https://swarm.example.com/api/swarm/agents/QWEN"
 ```
 
-**Reponse :**
+**Response:**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "QWEN",
   "role": "Developer",
-  "description": "Agent specialise en code Python",
+  "description": "Agent specialized in Python code",
   "status": "busy",
   "project": "my-project",
   "currentTask": "Implementing authentication module",
@@ -110,38 +110,38 @@ curl -H "Authorization: Bearer swarm_sk_abc123..." \
 
 ---
 
-### Ajouter une tache a un agent
+### Add a Task to an Agent
 
 ```
 POST /api/swarm/agents/:id/tasks
 Content-Type: application/json
 ```
 
-Le parametre `:id` accepte un **UUID** ou le **nom de l'agent**.
+The `:id` parameter accepts a **UUID** or the **agent name**.
 
-**Body :**
+**Body:**
 
-| Champ     | Type   | Requis | Description                                                    |
-|-----------|--------|--------|----------------------------------------------------------------|
-| `task`    | string | oui    | Description de la tache                                        |
-| `project` | string | oui    | Projet a associer. L'agent est automatiquement reassigne a ce projet si necessaire. |
+| Field     | Type   | Required | Description                                                    |
+|-----------|--------|----------|----------------------------------------------------------------|
+| `task`    | string | yes      | Task description                                               |
+| `project` | string | yes      | Project to associate. The agent is automatically reassigned to this project if needed. |
 
-**Exemple :**
+**Example:**
 ```bash
 curl -X POST \
      -H "Authorization: Bearer swarm_sk_abc123..." \
      -H "Content-Type: application/json" \
-     -d '{"task": "Ecrire les tests unitaires pour le module auth", "project": "my-project"}' \
+     -d '{"task": "Write unit tests for the auth module", "project": "my-project"}' \
      "https://swarm.example.com/api/swarm/agents/QWEN/tasks"
 ```
 
-**Reponse (201 Created) :**
+**Response (201 Created):**
 ```json
 {
   "success": true,
   "todo": {
     "id": "new-todo-uuid",
-    "text": "Ecrire les tests unitaires pour le module auth",
+    "text": "Write unit tests for the auth module",
     "status": "pending",
     "project": "my-project",
     "source": { "type": "api" },
@@ -154,15 +154,15 @@ curl -X POST \
 }
 ```
 
-> La tache est ajoutee en statut `pending`. L'agent est automatiquement assigne au projet fourni si son projet courant est different. L'agent prendra la tache en charge des qu'il sera `idle` (boucle de taches toutes les 5 secondes).
+> The task is added with `pending` status. The agent is automatically assigned to the provided project if its current project differs. The agent will pick up the task as soon as it becomes `idle` (task loop runs every 5 seconds).
 
 ---
 
 ## MCP (Model Context Protocol)
 
-Endpoint : `https://<votre-domaine>/api/swarm/mcp`
+Endpoint: `https://<your-domain>/api/swarm/mcp`
 
-Pour les clients MCP (Claude, Claude Code, etc.), ajouter la configuration suivante :
+For MCP clients (Claude, Claude Code, etc.), add the following configuration:
 
 ```json
 {
@@ -177,49 +177,49 @@ Pour les clients MCP (Claude, Claude Code, etc.), ajouter la configuration suiva
 }
 ```
 
-### Outils disponibles
+### Available Tools
 
-| Outil              | Description                                              |
+| Tool               | Description                                              |
 |--------------------|----------------------------------------------------------|
-| `list_agents`      | Lister les agents (filtres optionnels : `project`, `status`) |
-| `get_agent_status` | Statut detaille d'un agent (par `agent_id` ou `agent_name`) |
-| `add_task`         | Ajouter une tache (params : `agent_id`/`agent_name`, `task`, `project` — requis). L'agent est auto-assigne au projet. |
+| `list_agents`      | List agents (optional filters: `project`, `status`)      |
+| `get_agent_status` | Detailed agent status (by `agent_id` or `agent_name`)    |
+| `add_task`         | Add a task (params: `agent_id`/`agent_name`, `task`, `project` — required). The agent is auto-assigned to the project. |
 
 ---
 
-## Codes d'erreur
+## Error Codes
 
-| Code | Description                                      |
-|------|--------------------------------------------------|
-| 401  | API key manquante (header Authorization absent)  |
-| 403  | API key invalide ou revoquee                     |
-| 400  | Parametre manquant (ex: `task` ou `project` absent) |
-| 404  | Agent non trouve                                 |
-| 429  | Rate limit atteint (100 req/min)                 |
+| Code | Description                                          |
+|------|------------------------------------------------------|
+| 401  | Missing API key (Authorization header absent)        |
+| 403  | Invalid or revoked API key                           |
+| 400  | Missing parameter (e.g. `task` or `project` absent)  |
+| 404  | Agent not found                                      |
+| 429  | Rate limit reached (100 req/min)                     |
 
 ---
 
-## Exemples d'utilisation
+## Usage Examples
 
-### Script bash — assigner une tache et verifier le statut
+### Bash script — assign a task and check status
 
 ```bash
 API_KEY="swarm_sk_..."
 BASE="https://swarm.example.com/api/swarm"
 
-# Ajouter une tache
+# Add a task
 curl -s -X POST \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"task": "Refactorer le module de paiement"}' \
+  -d '{"task": "Refactor the payment module", "project": "my-project"}' \
   "$BASE/agents/QWEN/tasks"
 
-# Attendre puis verifier le statut
+# Wait then check status
 sleep 10
 curl -s -H "Authorization: Bearer $API_KEY" "$BASE/agents/QWEN" | jq '.status, .todoList'
 ```
 
-### Python — lister les agents disponibles
+### Python — list available agents
 
 ```python
 import requests
@@ -232,5 +232,5 @@ response = requests.get(f"{BASE}/agents", params={"status": "idle"}, headers=hea
 agents = response.json()["agents"]
 
 for agent in agents:
-    print(f"{agent['name']} ({agent['role']}) — {agent['pendingTasks']} taches en attente")
+    print(f"{agent['name']} ({agent['role']}) — {agent['pendingTasks']} pending tasks")
 ```

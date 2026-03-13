@@ -146,12 +146,17 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - **Infrastructure**: Docker Swarm, Traefik (reverse proxy + TLS), Nginx
 - **Tooling**: MCP (Model Context Protocol), ZVEC (vector search)
 
-## Deployment (Docker Swarm)
+## Getting Started
+
+See the full installation guide: **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**
+
+Quick deploy:
 
 ```bash
 cd devops
+cp .env.example .env       # Configure environment variables
 ./docker-compose.pre.sh    # Build & push images
-docker stack deploy -c docker-compose.swarm.yml pulsar
+docker stack deploy -c docker-compose.swarm.yml pulsarteam
 ./docker-compose.post.sh   # Verify services
 ```
 
