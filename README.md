@@ -1,6 +1,16 @@
 # PulsarTeam
 
-A professional, real-time web interface for managing a swarm of AI agents. Built with the **Swarm pattern** (lightweight multi-agent orchestration with handoffs), supporting multiple LLM providers including Ollama and Claude (Anthropic).
+A professional, real-time web interface for managing a swarm of AI agents. Built with the **Swarm pattern** (lightweight multi-agent orchestration with handoffs), supporting multiple LLM providers including vLLM, Ollama, GPT, Mistral and Claude (Anthropic).
+
+## Screenshots
+
+| Vue Projet | Vue des Agents |
+|:-:|:-:|
+| ![Vue Projet](Screenshot1.png) | ![Vue des Agents](Screenshot2.png) |
+
+| Vue Scrum | Vue Tâches & Détail Agent |
+|:-:|:-:|
+| ![Vue Scrum](Screenshot3.png) | ![Vue Tâches & Détail Agent](Screenshot4.png) |
 
 ## Features
 
