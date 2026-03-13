@@ -2,25 +2,21 @@
 
 A professional, real-time web interface for managing a swarm of AI agents. Built with the **Swarm pattern** (lightweight multi-agent orchestration with handoffs), supporting multiple LLM providers including vLLM, Ollama, GPT, Mistral and Claude (Anthropic).
 
-## Screenshots
-
-| Vue Projet | Vue des Agents |
-|:-:|:-:|
-| ![Vue Projet](Screenshot1.png) | ![Vue des Agents](Screenshot2.png) |
-
-| Vue Scrum | Vue Tâches & Détail Agent |
-|:-:|:-:|
-| ![Vue Scrum](Screenshot3.png) | ![Vue Tâches & Détail Agent](Screenshot4.png) |
-
 ## Features
 
 ### Agent Management
+
+![Vue des Agents](Screenshot2.png)
+
 - **10 pre-built agent templates**: Swarm Leader, Developer, Architect, QA Engineer, Marketing, DevOps, Data Analyst, Product Manager, Voice Leader, Security Analyst
 - **Custom agent creation** with full LLM configuration (model, provider, temperature, system prompt)
 - **Color-coded** agent cards with real-time status indicators (idle / busy / error)
 - **Per-agent metrics**: messages, tokens in/out, errors, last active time
 
 ### Scrum Board (Kanban)
+
+![Vue Scrum](Screenshot3.png)
+
 - **4-column task board**: Backlog → To Do → In Progress → Done
 - **Drag-and-drop** between columns
 - Per-agent and per-project task lists
@@ -29,12 +25,18 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - Source tracking (user, agent, API, or MCP-created tasks)
 
 ### Projects & Context
+
+![Vue Projet](Screenshot1.png)
+
 - **Project-scoped workspaces**: objective, rules/constraints, assigned agents
 - Agents auto-switch context when assigned to a project
 - Task statistics and progress tracking per project
 - Project context injected into agent prompts
 
 ### Chat & Interaction
+
+![Vue Tâches & Détail Agent](Screenshot4.png)
+
 - **Per-agent chat** with full markdown rendering and syntax highlighting
 - **Live streaming** of responses via WebSocket with thinking indicators
 - **Conversation history** with timestamps
