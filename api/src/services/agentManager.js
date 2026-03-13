@@ -595,6 +595,23 @@ export class AgentManager {
     }
     this._emit('agent:status', { id, status: 'busy', project: agent.project || null, currentTask: agent.currentTask || null });
 
+    // Early sandbox init so file tree is available for prompt injection
+    if (this.sandboxManager && agent.project && !this.sandboxManager.getFileTree(id)) {
+      try {
+        const gitUrl = await getProjectGitUrl(agent.project);
+        if (gitUrl) {
+          await this.sandboxManager.ensureSandbox(id, agent.project, gitUrl);
+          // Wait briefly for tree generation to complete (it was triggered in ensureSandbox)
+          if (!this.sandboxManager.getFileTree(id)) {
+            await this.sandboxManager.refreshFileTree(id);
+          }
+        }
+      } catch (err) {
+        // Non-blocking: tree will be available on next message
+        console.warn(`⚠️  [Sandbox] Early init for file tree failed: ${err.message}`);
+      }
+    }
+
     // Build messages array
     const messages = [];
     let systemContent = '';   // Hoisted so we can rebuild messages after compaction
@@ -716,7 +733,14 @@ export class AgentManager {
       
       // Inject tool definitions and project working directory
       if (agent.project) {
-        systemContent += `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nYour current working directory is already the project root. Use @list_dir(.) to see its contents.\nAll file paths are relative to this root (e.g. @read_file(src/index.js), NOT @read_file(/projects/${agent.project}/src/index.js)).\nDo NOT use absolute paths or /projects/ prefixes — they will not work.`;
+        const fileTree = this.sandboxManager?.getFileTree(id);
+        let projectCtx = `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nYour current working directory is already the project root.\nAll file paths are relative to this root (e.g. @read_file(src/index.js), NOT @read_file(/projects/${agent.project}/src/index.js)).\nDo NOT use absolute paths or /projects/ prefixes — they will not work.`;
+        if (fileTree) {
+          projectCtx += `\n\n--- PROJECT FILE TREE (3 levels) ---\n${fileTree}\n--- END FILE TREE ---\nUse this tree to navigate the project without needing @list_dir(.) first. Only use @list_dir for deeper exploration.`;
+        } else {
+          projectCtx += `\nUse @list_dir(.) to see its contents.`;
+        }
+        systemContent += projectCtx;
       } else {
         systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is assigned yet. Use @list_dir(.) to discover available projects. IMPORTANT: You MUST navigate into a project folder before working. Always prefix paths with the project name (e.g. @read_file(my-project/src/index.js), @list_dir(my-project/src)). Do NOT create or modify files at the workspace root — always work inside a project directory.`;
       }

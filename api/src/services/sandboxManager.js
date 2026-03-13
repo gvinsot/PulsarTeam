@@ -15,6 +15,7 @@ export class SandboxManager {
     this.baseWorkspace = process.env.SANDBOX_BASE_WORKSPACE || '/workspace';
     this.agentUsers = new Map(); // agentId -> { username, project }
     this._resolvedContainerName = null;
+    this._fileTreeCache = new Map(); // agentId -> { project, tree, timestamp }
   }
 
   async ensureSandbox(agentId, project = null, gitUrl = null) {
@@ -38,6 +39,11 @@ export class SandboxManager {
 
     this.agentUsers.set(agentId, { username, project });
     console.log(`📦 [Sandbox] Agent ${agentId} mapped to shared container user "${username}" (project: ${project || 'none'})`);
+
+    // Generate file tree in background (non-blocking)
+    if (project) {
+      this._generateFileTree(agentId).catch(() => {});
+    }
   }
 
   async switchProject(agentId, newProject, gitUrl = null) {
@@ -57,6 +63,7 @@ export class SandboxManager {
     }
 
     this.agentUsers.delete(agentId);
+    this._fileTreeCache.delete(agentId);
     console.log(`🗑️  [Sandbox] Detached agent ${agentId} from shared sandbox user "${username}"`);
   }
 
@@ -68,6 +75,65 @@ export class SandboxManager {
 
   async cleanupOrphans() {
     // Container lifecycle is managed by Docker Swarm — nothing to clean up
+  }
+
+  /**
+   * Get a compact file tree for the agent's project (cached, max 3 levels deep).
+   * Returns null if no sandbox or tree not yet generated.
+   */
+  getFileTree(agentId) {
+    const cached = this._fileTreeCache.get(agentId);
+    if (!cached) return null;
+    const entry = this.agentUsers.get(agentId);
+    if (!entry || entry.project !== cached.project) return null;
+    return cached.tree;
+  }
+
+  /**
+   * Generate and cache a compact file tree for the agent's current project.
+   * Uses `find` with depth limit, excludes .git/node_modules, outputs a tree-like format.
+   */
+  async _generateFileTree(agentId) {
+    const entry = this.agentUsers.get(agentId);
+    if (!entry) return;
+    const basePath = entry.project
+      ? `${this._userWorkspace(entry.username)}/${entry.project}`
+      : this._userWorkspace(entry.username);
+    try {
+      const { stdout } = await this._execAsAgentUser(
+        entry.username,
+        `find ${this._sh(basePath)} -maxdepth 3 -not -path '*/\\.git/*' -not -path '*/\\.git' -not -path '*/node_modules/*' -not -path '*/node_modules' -not -path '*/__pycache__/*' -not -path '*/.next/*' | sort | head -300`,
+        { timeout: 10000 }
+      );
+      // Convert absolute paths to relative tree
+      const prefix = basePath + '/';
+      const lines = stdout.trim().split('\n')
+        .map(l => l.replace(basePath, '.'))
+        .filter(l => l && l !== '.');
+      if (lines.length === 0) {
+        this._fileTreeCache.set(agentId, { project: entry.project, tree: null, timestamp: Date.now() });
+        return;
+      }
+      // Build indented tree
+      const tree = lines.map(l => {
+        const rel = l.startsWith('./') ? l.slice(2) : l;
+        const parts = rel.split('/');
+        const indent = '  '.repeat(parts.length - 1);
+        const name = parts[parts.length - 1];
+        return `${indent}${name}`;
+      }).join('\n');
+      this._fileTreeCache.set(agentId, { project: entry.project, tree, timestamp: Date.now() });
+      console.log(`🌳 [Sandbox] File tree cached for agent ${agentId} (${lines.length} entries)`);
+    } catch (err) {
+      console.warn(`⚠️  [Sandbox] Failed to generate file tree for ${agentId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Force refresh the cached file tree (e.g., after git operations).
+   */
+  async refreshFileTree(agentId) {
+    await this._generateFileTree(agentId);
   }
 
   hasSandbox(agentId) {
@@ -190,6 +256,13 @@ export class SandboxManager {
 
     entry.project = newProject;
     console.log(`📦 [Sandbox] User "${username}" switched to project "${newProject}"`);
+
+    // Regenerate file tree for new project
+    if (newProject) {
+      this._generateFileTree(agentId).catch(() => {});
+    } else {
+      this._fileTreeCache.delete(agentId);
+    }
   }
 
   async _ensureSharedContainerRunning() {
