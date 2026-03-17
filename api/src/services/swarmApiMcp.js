@@ -128,6 +128,7 @@ export function createSwarmApiMcpServer(agentManager) {
       status: z.enum(['backlog', 'pending']).optional().describe('Initial task status: "backlog" (default, agent won\'t auto-pick) or "pending" (agent picks up immediately)'),
     },
     async ({ agent_id, agent_name, task, project, status }) => {
+      console.log(`📥 [SwarmMCP] add_task called — agent_id: ${agent_id || '(none)'}, agent_name: ${agent_name || '(none)'}, project: ${project || '(none)'}, status: ${status || '(default)'}, task: ${task.slice(0, 100)}`);
       let agent = null;
 
       if (agent_id) {
@@ -139,6 +140,7 @@ export function createSwarmApiMcpServer(agentManager) {
       }
 
       if (!agent) {
+        console.warn(`⚠️ [SwarmMCP] add_task — Agent not found: agent_id="${agent_id || ''}", agent_name="${agent_name || ''}"`);
         return {
           content: [{
             type: 'text',
@@ -149,6 +151,7 @@ export function createSwarmApiMcpServer(agentManager) {
       }
 
       const todo = agentManager.addTodo(agent.id, task, project || undefined, { type: 'mcp' }, status);
+      console.log(`✅ [SwarmMCP] add_task — Task created for agent "${agent.name}" (${agent.id}) — todo: ${todo?.id}, project: ${project || '(none)'}, status: ${status || '(default)'}`);
 
       return {
         content: [{
