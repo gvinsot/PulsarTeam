@@ -727,7 +727,7 @@ function TaskCard({ task, agents, onDelete, onTransfer, onOpen }) {
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onTransfer, onDrop, onOpen }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onTransfer, onDrop, onOpen, onClearAll }) {
   const [dragOver, setDragOver] = useState(false);
 
   return (
@@ -744,9 +744,20 @@ function KanbanColumn({ col, tasks, agents, onDelete, onTransfer, onDrop, onOpen
           <span className={`w-2 h-2 rounded-full ${col.dot}`} />
           <span className={`text-sm font-semibold ${col.headerText}`}>{col.label}</span>
         </div>
-        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${col.countCls}`}>
-          {tasks.length}
-        </span>
+        <div className="flex items-center gap-1.5">
+          {onClearAll && tasks.length > 0 && (
+            <button
+              onClick={onClearAll}
+              className="p-1 rounded text-dark-500 hover:text-red-400 hover:bg-dark-700 transition-colors"
+              title="Delete all done tasks"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${col.countCls}`}>
+            {tasks.length}
+          </span>
+        </div>
       </div>
 
       {/* Drop zone */}
@@ -835,6 +846,12 @@ export default function TasksBoard({ agents, onRefresh }) {
     await api.deleteTodo(task.agentId, task.id);
     onRefresh();
   }, [onRefresh]);
+
+  const handleClearDone = useCallback(async () => {
+    const doneTasks = allTasks.filter(t => t.status === 'done');
+    await Promise.all(doneTasks.map(t => api.deleteTodo(t.agentId, t.id)));
+    onRefresh();
+  }, [allTasks, onRefresh]);
 
   const handleTransfer = useCallback(async (task, targetAgentId) => {
     await api.transferTodo(task.agentId, task.id, targetAgentId);
@@ -955,6 +972,7 @@ export default function TasksBoard({ agents, onRefresh }) {
               onTransfer={handleTransfer}
               onDrop={handleDrop}
               onOpen={setSelectedTask}
+              onClearAll={col.id === 'done' ? handleClearDone : undefined}
             />
           ))}
         </div>

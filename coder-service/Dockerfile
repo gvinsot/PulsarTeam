@@ -46,9 +46,9 @@ RUN npm install -g @anthropic-ai/claude-code
 # Install Go
 RUN curl -fsSL https://go.dev/dl/go1.24.1.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH"
-RUN go install golang.org/x/tools/gopls@latest && \
-    go install github.com/go-delve/delve/cmd/dlv@latest && \
-    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+RUN CGO_ENABLED=0 go install golang.org/x/tools/gopls@latest && \
+    CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@latest && \
+    CGO_ENABLED=0 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 # Install Docker CLI (for agent to manage containers)
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \

@@ -24,9 +24,9 @@ RUN apk add --no-cache \
 # Go tools (gopls, delve, golangci-lint)
 ENV GOPATH="/root/go"
 ENV PATH="/usr/lib/go/bin:$GOPATH/bin:$PATH"
-RUN go install golang.org/x/tools/gopls@latest && \
-    go install github.com/go-delve/delve/cmd/dlv@latest && \
-    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+RUN CGO_ENABLED=0 go install golang.org/x/tools/gopls@latest && \
+    CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@latest && \
+    CGO_ENABLED=0 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 # Chromium flags for running inside containers (no GPU, no sandbox needed)
 ENV CHROMIUM_BIN=/usr/bin/chromium-browser \
