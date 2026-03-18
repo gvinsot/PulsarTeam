@@ -202,23 +202,27 @@ export default function App() {
   }, []); // No deps — uses refs for callbacks, setState is stable
 
   useEffect(() => {
+    let cancelled = false;
     const token = localStorage.getItem('token');
     if (token) {
       api.verify()
         .then(async (data) => {
+          if (cancelled) return;
           setUser(data.user);
           await loadData();
+          if (cancelled) return;
           initSocket(token);
           checkDbHealth();
         })
         .catch(() => {
-          localStorage.removeItem('token');
+          if (!cancelled) localStorage.removeItem('token');
         })
-        .finally(() => setLoading(false));
+        .finally(() => { if (!cancelled) setLoading(false); });
     } else {
       setLoading(false);
     }
     return () => {
+      cancelled = true;
       // Cleanup: remove all socket listeners when effect re-runs
       const sock = getSocket();
       if (sock) SOCKET_EVENTS.forEach(ev => sock.off(ev));
