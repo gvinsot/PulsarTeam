@@ -10,7 +10,7 @@ RUN apk add --no-cache \
     tree \
     tar gzip unzip \
     python3 py3-pip py3-pytest \
-    make gcc g++ musl-dev \
+    make gcc g++ musl-dev binutils \
     ripgrep \
     fd \
     less \
