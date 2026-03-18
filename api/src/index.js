@@ -25,7 +25,7 @@ import { initDatabase, isDatabaseConnected } from './services/database.js';
 import { onedriveRoutes } from './routes/onedrive.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
-import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
+import { createSwarmApiMcpHandler, createSwarmApiMcpSseHandlers } from './services/swarmApiMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
@@ -118,6 +118,10 @@ app.all('/api/code-index/mcp', authenticateToken, (req, res) => codeIndexMcpHand
 // External Swarm API — secured via API key (Bearer token)
 const swarmApiMcpHandler = createSwarmApiMcpHandler(agentManager);
 app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(req, res));
+// Legacy SSE transport for older MCP clients (GET /sse → stream, POST /messages → JSON-RPC)
+const { sseHandler, messagesHandler } = createSwarmApiMcpSseHandlers(agentManager);
+app.get('/api/swarm/mcp/sse', authenticateApiKey, (req, res) => sseHandler(req, res));
+app.post('/api/swarm/mcp/messages', authenticateApiKey, (req, res) => messagesHandler(req, res));
 app.use('/api/swarm', authenticateApiKey, swarmApiRoutes(agentManager));
 
 // Public liveness probe — returns minimal info for health checks

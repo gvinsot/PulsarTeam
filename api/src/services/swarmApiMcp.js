@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 
 /**
@@ -170,7 +171,7 @@ export function createSwarmApiMcpServer(agentManager) {
 }
 
 /**
- * Creates an Express request handler for the Swarm API MCP endpoint.
+ * Creates an Express request handler for the Swarm API MCP endpoint (Streamable HTTP).
  */
 export function createSwarmApiMcpHandler(agentManager) {
   return async (req, res) => {
@@ -190,4 +191,41 @@ export function createSwarmApiMcpHandler(agentManager) {
       }
     }
   };
+}
+
+/**
+ * Creates Express request handlers for the legacy SSE MCP transport.
+ * - GET  /sse      → establishes the SSE stream
+ * - POST /messages → receives JSON-RPC messages from the client
+ */
+export function createSwarmApiMcpSseHandlers(agentManager) {
+  const sessions = new Map();
+
+  const sseHandler = async (req, res) => {
+    console.log('[Swarm API MCP] SSE connection established (legacy transport)');
+    const transport = new SSEServerTransport('/api/swarm/mcp/messages', res);
+    sessions.set(transport.sessionId, transport);
+
+    res.on('close', () => {
+      console.log(`[Swarm API MCP] SSE session ${transport.sessionId} closed`);
+      sessions.delete(transport.sessionId);
+    });
+
+    const server = createSwarmApiMcpServer(agentManager);
+    await server.connect(transport);
+  };
+
+  const messagesHandler = async (req, res) => {
+    const sessionId = req.query.sessionId;
+    const transport = sessions.get(sessionId);
+
+    if (!transport) {
+      res.status(400).json({ error: 'No active SSE session for this sessionId' });
+      return;
+    }
+
+    await transport.handlePostMessage(req, res, req.body);
+  };
+
+  return { sseHandler, messagesHandler };
 }

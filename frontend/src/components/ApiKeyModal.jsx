@@ -59,6 +59,7 @@ export default function ApiKeyModal({ onClose, showToast }) {
   };
 
   const mcpEndpoint = `${window.location.origin}/api/swarm/mcp`;
+  const mcpSseEndpoint = `${window.location.origin}/api/swarm/mcp/sse`;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center">
@@ -85,20 +86,38 @@ export default function ApiKeyModal({ onClose, showToast }) {
 
         {/* Content */}
         <div className="p-5 space-y-5">
-          {/* MCP Endpoint */}
-          <div>
-            <label className="block text-sm font-medium text-dark-300 mb-2">MCP Endpoint</label>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-sm text-dark-200 font-mono truncate">
-                {mcpEndpoint}
-              </code>
-              <button
-                onClick={() => handleCopy(mcpEndpoint)}
-                className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
-                title="Copy endpoint"
-              >
-                <Copy className="w-4 h-4" />
-              </button>
+          {/* MCP Endpoints */}
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-dark-300">MCP Endpoints</label>
+            <div>
+              <span className="text-xs text-dark-500 mb-1 block">Streamable HTTP (modern clients)</span>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-sm text-dark-200 font-mono truncate">
+                  {mcpEndpoint}
+                </code>
+                <button
+                  onClick={() => handleCopy(mcpEndpoint)}
+                  className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+                  title="Copy endpoint"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div>
+              <span className="text-xs text-dark-500 mb-1 block">SSE (legacy clients)</span>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-sm text-dark-200 font-mono truncate">
+                  {mcpSseEndpoint}
+                </code>
+                <button
+                  onClick={() => handleCopy(mcpSseEndpoint)}
+                  className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+                  title="Copy SSE endpoint"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
 
@@ -222,11 +241,25 @@ export default function ApiKeyModal({ onClose, showToast }) {
           {/* MCP config example */}
           <div className="border-t border-dark-700 pt-4">
             <h3 className="text-sm font-medium text-dark-300 mb-2">MCP Client Config</h3>
+            <p className="text-xs text-dark-500 mb-2">Streamable HTTP (Claude, Cursor, etc.)</p>
             <pre className="bg-dark-800 border border-dark-700 rounded-lg p-3 text-xs font-mono text-dark-300 overflow-x-auto whitespace-pre">
 {`{
   "mcpServers": {
     "pulsar-team": {
       "url": "${mcpEndpoint}",
+      "headers": {
+        "Authorization": "Bearer <your-api-key>"
+      }
+    }
+  }
+}`}
+            </pre>
+            <p className="text-xs text-dark-500 mb-2 mt-3">SSE legacy (older clients)</p>
+            <pre className="bg-dark-800 border border-dark-700 rounded-lg p-3 text-xs font-mono text-dark-300 overflow-x-auto whitespace-pre">
+{`{
+  "mcpServers": {
+    "pulsar-team": {
+      "url": "${mcpSseEndpoint}",
       "headers": {
         "Authorization": "Bearer <your-api-key>"
       }
