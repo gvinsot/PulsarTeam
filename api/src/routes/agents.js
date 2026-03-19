@@ -234,11 +234,13 @@ export function agentRoutes(agentManager) {
   });
 
   router.patch('/:id/todos/:todoId', (req, res) => {
-    const { status, text } = req.body || {};
+    const { status, text, project } = req.body || {};
     let todo;
     if (text !== undefined) {
       if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
       todo = agentManager.updateTodoText(req.params.id, req.params.todoId, text.trim());
+    } else if (project !== undefined) {
+      todo = agentManager.updateTodoProject(req.params.id, req.params.todoId, project || null);
     } else if (status) {
       todo = agentManager.setTodoStatus(req.params.id, req.params.todoId, status);
     } else {

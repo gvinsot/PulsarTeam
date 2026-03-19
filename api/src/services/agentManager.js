@@ -2776,6 +2776,17 @@ export class AgentManager {
     return todo;
   }
 
+  updateTodoProject(agentId, todoId, project) {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const todo = agent.todoList.find(t => t.id === todoId);
+    if (!todo) return null;
+    todo.project = project;
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return todo;
+  }
+
   deleteTodo(agentId, todoId) {
     const agent = this.agents.get(agentId);
     if (!agent) return false;

@@ -248,15 +248,19 @@ function CreateTaskModal({ agents, allProjects, defaultAgentId, onClose, onCreat
 
 // ── TaskDetailModal ──────────────────────────────────────────────────────────
 
-function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete }) {
+function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
   const [saving, setSaving] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState(false);
+  const [editProject, setEditProject] = useState(task.project || '');
+  const [savingProject, setSavingProject] = useState(false);
   const transferRef = useRef(null);
   const statusRef = useRef(null);
   const textareaRef = useRef(null);
+  const projectInputRef = useRef(null);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -313,6 +317,19 @@ function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete }) {
     await api.transferTodo(task.agentId, task.id, targetAgentId);
     onRefresh();
     onClose();
+  };
+
+  const handleProjectSave = async () => {
+    const trimmed = editProject.trim();
+    if (trimmed === (task.project || '')) { setEditingProject(false); return; }
+    setSavingProject(true);
+    try {
+      await api.updateTodoProject(task.agentId, task.id, trimmed || null);
+      await onRefresh();
+      setEditingProject(false);
+    } finally {
+      setSavingProject(false);
+    }
   };
 
   const handleDelete = async () => {
@@ -518,18 +535,64 @@ function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete }) {
             )}
 
             {/* Project */}
-            {task.project && (
-              <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                <div className="flex items-center gap-2 text-xs text-dark-400">
-                  <Tag className="w-3.5 h-3.5" />
-                  Project
-                </div>
-                <span className="text-xs px-2 py-0.5 rounded-full font-medium
-                  bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20">
-                  {task.project}
-                </span>
+            <div className="flex items-center justify-between py-2 border-b border-dark-800">
+              <div className="flex items-center gap-2 text-xs text-dark-400">
+                <Tag className="w-3.5 h-3.5" />
+                Project
               </div>
-            )}
+              {editingProject ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    ref={projectInputRef}
+                    type="text"
+                    value={editProject}
+                    onChange={e => setEditProject(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleProjectSave(); if (e.key === 'Escape') { setEditingProject(false); setEditProject(task.project || ''); } }}
+                    list="detail-task-projects"
+                    placeholder="No project"
+                    className="px-2 py-0.5 w-32 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
+                      placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                    autoFocus
+                  />
+                  <datalist id="detail-task-projects">
+                    {(allProjects || []).map(p => <option key={p} value={p} />)}
+                  </datalist>
+                  <button
+                    onClick={handleProjectSave}
+                    disabled={savingProject}
+                    className="p-0.5 rounded text-emerald-400 hover:text-emerald-300 hover:bg-dark-700 transition-colors"
+                    title="Save"
+                  >
+                    <Check className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => { setEditingProject(false); setEditProject(task.project || ''); }}
+                    className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
+                    title="Cancel"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  {task.project ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                      bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20">
+                      {task.project}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-dark-500 italic">None</span>
+                  )}
+                  <button
+                    onClick={() => { setEditProject(task.project || ''); setEditingProject(true); }}
+                    className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
+                    title="Change project"
+                  >
+                    <Edit3 className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Created */}
             {task.createdAt && (
@@ -983,6 +1046,7 @@ export default function TasksBoard({ agents, onRefresh }) {
         <TaskDetailModal
           task={liveSelectedTask}
           agents={agents}
+          allProjects={allProjects}
           onClose={() => setSelectedTask(null)}
           onRefresh={onRefresh}
           onDelete={handleDelete}
