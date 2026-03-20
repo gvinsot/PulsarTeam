@@ -97,10 +97,10 @@ export function agentRoutes(agentManager) {
   });
 
   // Create agent
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     try {
       const parsed = createAgentSchema.parse(req.body);
-      const agent = agentManager.create(parsed);
+      const agent = await agentManager.create(parsed);
       res.status(201).json(agent);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -111,10 +111,10 @@ export function agentRoutes(agentManager) {
   });
 
   // Update agent
-  router.put('/:id', (req, res) => {
+  router.put('/:id', async (req, res) => {
     try {
       const parsed = updateAgentSchema.parse(req.body);
-      const agent = agentManager.update(req.params.id, parsed);
+      const agent = await agentManager.update(req.params.id, parsed);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
       res.json(agent);
     } catch (err) {
@@ -126,8 +126,8 @@ export function agentRoutes(agentManager) {
   });
 
   // Delete agent
-  router.delete('/:id', (req, res) => {
-    const success = agentManager.delete(req.params.id);
+  router.delete('/:id', async (req, res) => {
+    const success = await agentManager.delete(req.params.id);
     if (!success) return res.status(404).json({ error: 'Agent not found' });
     res.json({ success: true });
   });
@@ -204,11 +204,11 @@ export function agentRoutes(agentManager) {
   });
 
   // Update project for all agents
-  router.put('/project/all', (req, res) => {
+  router.put('/project/all', async (req, res) => {
     try {
       const { project } = req.body;
       if (project === undefined) return res.status(400).json({ error: 'Project required' });
-      const updated = agentManager.updateAllProjects(project);
+      const updated = await agentManager.updateAllProjects(project);
       res.json({ success: true, count: updated.length });
     } catch (err) {
       res.status(500).json({ error: err.message });

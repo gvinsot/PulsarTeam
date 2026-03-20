@@ -214,13 +214,20 @@ async def _refresh_oauth_token() -> bool:
         logger.warning("No refresh token available — cannot refresh, need full re-auth")
         return False
 
-    # Rate limit: wait if we made a request too recently
+    # Serialize all token requests and enforce minimum interval
     async with _token_request_lock:
         elapsed = time.time() - _last_token_request_time
         if elapsed < _MIN_TOKEN_REQUEST_INTERVAL:
             wait_time = _MIN_TOKEN_REQUEST_INTERVAL - elapsed
             logger.info(f"Rate limiting token refresh, waiting {wait_time:.1f}s...")
             await asyncio.sleep(wait_time)
+
+        # Check if token was refreshed by another coroutine while we waited
+        if not _is_token_expired():
+            logger.info("Token was refreshed by another request while waiting for lock")
+            return True
+
+        _last_token_request_time = time.time()
 
     logger.info("Access token expired, refreshing via refresh_token grant...")
     try:
@@ -265,9 +272,10 @@ async def _refresh_oauth_token() -> bool:
                         result = json.loads(resp.read().decode("utf-8"))
                     break
                 elif e.code == 429:
-                    # Claude AI rate limit - use longer backoff (30s, 60s, 120s)
-                    retry_after = int(e.headers.get("Retry-After", 30 * (2 ** attempt)))
-                    logger.warning(f"Refresh token rate-limited (429), retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    # Ignore low Retry-After values - enforce minimum 30s backoff
+                    server_retry = int(e.headers.get("Retry-After", 0))
+                    retry_after = max(server_retry, 30 * (2 ** attempt))
+                    logger.warning(f"Refresh token rate-limited (429), waiting {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_after)
                         continue
@@ -291,10 +299,6 @@ async def _refresh_oauth_token() -> bool:
         expires_in = result.get("expires_in", 28800)
         _save_token(access_token, refresh_token=new_refresh, expires_in=expires_in)
         logger.info("OAuth token refreshed successfully")
-        
-        # Update last request time
-        async with _token_request_lock:
-            _last_token_request_time = time.time()
         return True
 
     except Exception as e:
@@ -406,13 +410,14 @@ async def _exchange_auth_code(full_code: str) -> dict:
     if not _oauth_code_verifier:
         return {"status": "error", "message": "No login flow in progress. Start one first."}
 
-    # Rate limit: wait if we made a request too recently
+    # Serialize all token requests and enforce minimum interval
     async with _token_request_lock:
         elapsed = time.time() - _last_token_request_time
         if elapsed < _MIN_TOKEN_REQUEST_INTERVAL:
             wait_time = _MIN_TOKEN_REQUEST_INTERVAL - elapsed
             logger.info(f"Rate limiting token exchange, waiting {wait_time:.1f}s...")
             await asyncio.sleep(wait_time)
+        _last_token_request_time = time.time()
 
     # Split code on # — format is auth_code#state
     if "#" in full_code:
@@ -471,9 +476,10 @@ async def _exchange_auth_code(full_code: str) -> dict:
                         result = json.loads(resp.read().decode("utf-8"))
                     break
                 elif e.code == 429:
-                    # Claude AI rate limit - use longer backoff (30s, 60s, 120s)
-                    retry_after = int(e.headers.get("Retry-After", 30 * (2 ** attempt)))
-                    logger.warning(f"Token exchange rate-limited (429), retrying in {retry_after}s (attempt {attempt + 1}/{max_retries})")
+                    # Ignore low Retry-After values - enforce minimum 30s backoff
+                    server_retry = int(e.headers.get("Retry-After", 0))
+                    retry_after = max(server_retry, 30 * (2 ** attempt))
+                    logger.warning(f"Token exchange rate-limited (429), waiting {retry_after}s (attempt {attempt + 1}/{max_retries})")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(retry_after)
                         continue
@@ -509,10 +515,6 @@ async def _exchange_auth_code(full_code: str) -> dict:
         _oauth_code_verifier = None
         _oauth_state = None
         _auth_url = None
-        
-        # Update last request time
-        async with _token_request_lock:
-            _last_token_request_time = time.time()
 
         return {
             "status": "authenticated",

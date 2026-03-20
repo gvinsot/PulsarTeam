@@ -111,7 +111,7 @@ export class AgentManager {
     }
   }
 
-  create(config) {
+  async create(config) {
     const id = uuidv4();
     const agent = {
       id,
@@ -159,7 +159,7 @@ export class AgentManager {
     };
 
     this.agents.set(id, agent);
-    saveAgent(agent); // Persist to database
+    await saveAgent(agent); // Persist to database
     this._emit('agent:created', this._sanitize(agent));
     return this._sanitize(agent);
   }
@@ -414,7 +414,7 @@ export class AgentManager {
     };
   }
 
-  update(id, updates) {
+  async update(id, updates) {
     const agent = this.agents.get(id);
     if (!agent) return null;
 
@@ -438,12 +438,12 @@ export class AgentManager {
     }
     agent.updatedAt = new Date().toISOString();
 
-    saveAgent(agent); // Persist to database
+    await saveAgent(agent); // Persist to database
     this._emit('agent:updated', this._sanitize(agent));
     return this._sanitize(agent);
   }
 
-  delete(id) {
+  async delete(id) {
     const agent = this.agents.get(id);
     if (!agent) return false;
     // Destroy sandbox container
@@ -453,12 +453,12 @@ export class AgentManager {
       });
     }
     this.agents.delete(id);
-    deleteAgentFromDb(id); // Remove from database
+    await deleteAgentFromDb(id); // Remove from database
     this._emit('agent:deleted', { id });
     return true;
   }
 
-  updateAllProjects(project) {
+  async updateAllProjects(project) {
     const updated = [];
     for (const agent of this.agents.values()) {
       if (project !== agent.project) {
@@ -467,7 +467,7 @@ export class AgentManager {
       }
       agent.project = project;
       agent.updatedAt = new Date().toISOString();
-      saveAgent(agent);
+      await saveAgent(agent);
       updated.push(this._sanitize(agent));
       this._emit('agent:updated', this._sanitize(agent));
     }
