@@ -5,7 +5,7 @@ import { AgentManager } from '../agentManager.js';
 test('getLastMessages returns newest messages with original indexes', async () => {
   const io = { emit() {} };
   const manager = new AgentManager(io, null, null, null);
-  const created = manager.create({ name: 'Tester', role: 'developer' });
+  const created = await manager.create({ name: 'Tester', role: 'developer' });
   const raw = manager.agents.get(created.id);
 
   raw.conversationHistory = [
@@ -25,7 +25,7 @@ test('getLastMessages returns newest messages with original indexes', async () =
 test('getLastMessagesByName is case-insensitive and clamps invalid limit', async () => {
   const io = { emit() {} };
   const manager = new AgentManager(io, null, null, null);
-  const created = manager.create({ name: 'Reviewer', role: 'reviewer' });
+  const created = await manager.create({ name: 'Reviewer', role: 'reviewer' });
   const raw = manager.agents.get(created.id);
 
   raw.conversationHistory = [
