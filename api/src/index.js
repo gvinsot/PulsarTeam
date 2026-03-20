@@ -82,10 +82,11 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '1mb' }));
 
-// Global API rate limiter — 100 requests per minute per IP
+// Global API rate limiter — 300 requests per minute per IP
+// Authenticated users need headroom for rapid UI actions (bulk task deletion, etc.)
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 100,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' }
