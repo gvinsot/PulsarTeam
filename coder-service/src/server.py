@@ -485,11 +485,15 @@ async def _get_login_url() -> str:
     return url
 
 
-def _build_claude_cmd(prompt: str, output_format: str = "json", system_prompt: Optional[str] = None) -> list[str]:
-    """Build the claude CLI command with appropriate flags."""
+def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] = None) -> list[str]:
+    """Build the claude CLI command with appropriate flags.
+
+    The prompt is passed via stdin (not as a CLI argument) to avoid
+    'Argument list too long' errors with large conversation histories.
+    """
     cmd = [
         "claude",
-        "-p", prompt,
+        "-p",
         "--output-format", output_format,
         "--max-turns", str(CLAUDE_MAX_TURNS),
         "--model", CLAUDE_MODEL,
@@ -551,7 +555,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None) -> d
     if _is_token_expired() and time.time() >= _token_cooldown_until:
         await _refresh_oauth_token()
 
-    cmd = _build_claude_cmd(prompt, output_format="json", system_prompt=system_prompt)
+    cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt)
 
     logger.info(f"Executing Claude Code: {prompt[:100]}...")
     logger.debug(f"Command: {' '.join(cmd)}")
@@ -560,13 +564,14 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None) -> d
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=CLAUDE_CWD,
             env=_get_claude_env(),
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(),
+            proc.communicate(input=prompt.encode("utf-8")),
             timeout=TIMEOUT,
         )
     except asyncio.TimeoutError:
@@ -680,18 +685,25 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None)
             }
             return
 
-    cmd = _build_claude_cmd(prompt, output_format="stream-json", system_prompt=system_prompt)
+    cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt)
 
     logger.info(f"Streaming Claude Code: {prompt[:100]}...")
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=CLAUDE_CWD,
         env=_get_claude_env(),
         limit=10 * 1024 * 1024,  # 10MB readline buffer (default 64KB too small for large JSON events)
     )
+
+    # Send prompt via stdin (avoids ARG_MAX limit) then close stdin
+    proc.stdin.write(prompt.encode("utf-8"))
+    await proc.stdin.drain()
+    proc.stdin.close()
+    await proc.stdin.wait_closed()
 
     try:
         async for line in proc.stdout:
