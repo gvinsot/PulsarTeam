@@ -4,6 +4,8 @@ import {
   Edit3, Save, Check, User, Tag, Calendar, ChevronDown, Plus, Settings
 } from 'lucide-react';
 import { api } from '../api';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 // ── Column definitions ──────────────────────────────────────────────────────
 
