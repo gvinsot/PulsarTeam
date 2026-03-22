@@ -235,6 +235,11 @@ export function agentRoutes(agentManager) {
 
   router.patch('/:id/todos/:todoId', (req, res) => {
     const { status, text, project } = req.body || {};
+    // Capture old status before any update
+    const agent = agentManager.agents.get(req.params.id);
+    const oldTodo = agent?.todoList?.find(t => t.id === req.params.todoId);
+    const oldStatus = oldTodo?.status;
+    
     let todo;
     if (text !== undefined) {
       if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
@@ -247,6 +252,11 @@ export function agentRoutes(agentManager) {
       todo = agentManager.toggleTodo(req.params.id, req.params.todoId);
     }
     if (!todo) return res.status(404).json({ error: 'Not found' });
+    // If task moved OUT of in_progress, stop the agent
+    if (oldStatus === 'in_progress' && status && status !== 'in_progress' && agent?.status === 'busy') {
+      console.log(`\u{1F6D1} [Todo] Task moved from in_progress to ${status} — stopping agent "${agent.name}"`);
+      agentManager.stopAgent(req.params.id);
+    }
     res.json(todo);
   });
 
@@ -257,8 +267,18 @@ export function agentRoutes(agentManager) {
   });
 
   router.delete('/:id/todos/:todoId', (req, res) => {
+    // Check if deleting an in_progress todo
+    const agent = agentManager.agents.get(req.params.id);
+    const todoToDelete = agent?.todoList?.find(t => t.id === req.params.todoId);
+    const wasInProgress = todoToDelete?.status === 'in_progress';
+    
     const success = agentManager.deleteTodo(req.params.id, req.params.todoId);
     if (!success) return res.status(404).json({ error: 'Not found' });
+    // If deleted todo was in_progress, stop the agent
+    if (wasInProgress && agent?.status === 'busy') {
+      console.log(`\u{1F6D1} [Todo] Task deleted while in_progress — stopping agent "${agent.name}"`);
+      agentManager.stopAgent(req.params.id);
+    }
     res.json({ success: true });
   });
 
