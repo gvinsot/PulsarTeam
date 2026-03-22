@@ -74,6 +74,17 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       `);
 
       console.log('✅ Project contexts table ready');
+
+      // Create settings table if not exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL DEFAULT '',
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+
+      console.log('✅ Settings table ready');
       _dbConnected = true;
       return true;
     } catch (err) {

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
-  RefreshCw, Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu
+  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu
 } from 'lucide-react';
 import AgentCard from './AgentCard';
 import AgentDetail from './AgentDetail';
@@ -181,27 +181,6 @@ export default function Dashboard({
             >
               <Key className="w-4 h-4" />
             </button>
-            <button
-              onClick={onRefresh}
-              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
-              title="Refresh"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden ml-1">
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'}`}
-              >
-                <LayoutGrid className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => setViewMode('list')}
-                className={`p-2 transition-colors ${viewMode === 'list' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'}`}
-              >
-                <List className="w-4 h-4" />
-              </button>
-            </div>
             <div className="ml-2 pl-2 border-l border-dark-700 flex items-center gap-2">
               <span className="text-sm text-dark-400 hidden sm:inline">{user.username}</span>
               <button
@@ -257,13 +236,29 @@ export default function Dashboard({
                   Agents
                   <span className="ml-2 text-sm font-normal text-dark-400">({sortedAgents.length})</span>
                 </h2>
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-indigo-500/20"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add Agent
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => setViewMode('grid')}
+                      className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'}`}
+                    >
+                      <LayoutGrid className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setViewMode('list')}
+                      className={`p-2 transition-colors ${viewMode === 'list' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'}`}
+                    >
+                      <List className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-indigo-500/20"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Agent
+                  </button>
+                </div>
               </div>
 
               {sortedAgents.length === 0 ? (

@@ -90,6 +90,15 @@ export default function App() {
     }
   }, []);
 
+  // Auto-refresh when the browser tab regains focus
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && user) loadData();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [loadData, user]);
+
   // Use a ref to hold showToast so socket handlers always call the latest version
   const showToastRef = useRef(showToast);
   useEffect(() => { showToastRef.current = showToast; }, [showToast]);

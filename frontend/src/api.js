@@ -364,4 +364,15 @@ export const api = {
       method: 'DELETE',
       headers: getHeaders()
     }).then(handleResponse),
+
+  // General settings
+  getSettings: () =>
+    fetch(`${API_BASE}/settings/general`, { headers: getHeaders() }).then(handleResponse),
+
+  updateSettings: (patch) =>
+    fetch(`${API_BASE}/settings/general`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(patch)
+    }).then(handleResponse),
 };

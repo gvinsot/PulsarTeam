@@ -25,6 +25,7 @@ import { initDatabase, isDatabaseConnected } from './services/database.js';
 import { onedriveRoutes } from './routes/onedrive.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
+import { settingsRoutes } from './routes/settings.js';
 import { createSwarmApiMcpHandler, createSwarmApiMcpSseHandlers } from './services/swarmApiMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
@@ -108,6 +109,7 @@ app.use('/api/onedrive', authenticateToken, onedriveRoutes());
 app.use('/api/realtime', authenticateToken, realtimeRoutes(agentManager));
 app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
 app.use('/api/settings/api-key', authenticateToken, apiKeyRoutes);
+app.use('/api/settings/general', authenticateToken, settingsRoutes());
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
 const onedriveMcpHandler = createOneDriveMcpHandler();

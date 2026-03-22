@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   Search, Trash2, ArrowRightLeft, Clock, X, AlertTriangle,
-  Edit3, Save, Check, User, Tag, Calendar, ChevronDown, Plus
+  Edit3, Save, Check, User, Tag, Calendar, ChevronDown, Plus, Settings
 } from 'lucide-react';
 import { api } from '../api';
 
@@ -875,6 +875,20 @@ export default function TasksBoard({ agents, onRefresh }) {
   const [search, setSearch] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [ideasAgent, setIdeasAgent] = useState('');
+  const [showIdeasSettings, setShowIdeasSettings] = useState(false);
+
+  // Load ideas agent setting
+  useEffect(() => {
+    api.getSettings().then(s => setIdeasAgent(s.ideasAgent || '')).catch(() => {});
+  }, []);
+
+  const handleIdeasAgentChange = useCallback(async (value) => {
+    setIdeasAgent(value);
+    try {
+      await api.updateSettings({ ideasAgent: value });
+    } catch { /* ignore */ }
+  }, []);
 
   // Aggregate all todos from all agents
   const allTasks = useMemo(() =>
@@ -1019,6 +1033,34 @@ export default function TasksBoard({ agents, onRefresh }) {
           <span className="text-emerald-400/70">{totalByStatus.done} done</span>
           {totalByStatus.error > 0 && (
             <span className="text-red-400/70">{totalByStatus.error} errors</span>
+          )}
+        </div>
+
+        {/* Ideas settings */}
+        <div className="relative">
+          <button
+            onClick={() => setShowIdeasSettings(v => !v)}
+            className={`p-1.5 rounded-lg transition-colors ${showIdeasSettings ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200 hover:bg-dark-700'}`}
+            title="Ideas refinement settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+          {showIdeasSettings && (
+            <div className="absolute right-0 top-full mt-1 z-50 bg-dark-800 border border-dark-600 rounded-lg shadow-xl p-3 w-64">
+              <label className="block text-xs font-medium text-dark-300 mb-1.5">Ideas refinement agent</label>
+              <select
+                value={ideasAgent}
+                onChange={e => handleIdeasAgentChange(e.target.value)}
+                className="w-full px-2.5 py-1.5 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-200
+                  focus:outline-none focus:border-indigo-500 transition-colors"
+              >
+                <option value="">Disabled</option>
+                {agents.filter(a => a.enabled !== false).map(a => (
+                  <option key={a.id} value={a.name}>{a.name} ({a.provider}/{a.model})</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-dark-500 mt-1.5">When set, ideas are automatically refined and moved to backlog using this agent's LLM.</p>
+            </div>
           )}
         </div>
 
