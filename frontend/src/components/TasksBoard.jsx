@@ -361,7 +361,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="w-full max-w-lg bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col max-h-[90vh] animate-fadeIn">
+      <div className="w-[80vw] max-w-5xl h-[80vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
 
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
@@ -436,11 +436,11 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
                   ref={textareaRef}
                   value={editText}
                   onChange={e => setEditText(e.target.value)}
-                  rows={5}
-                  className="w-full px-3 py-2.5 bg-dark-800 border border-indigo-500/50 rounded-lg text-sm
+                  rows={15}
+                  className="w-full h-full min-h-[300px] px-3 py-2.5 bg-dark-800 border border-indigo-500/50 rounded-lg text-sm
                     text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500
-                    resize-none leading-relaxed"
-                  placeholder="Task description..."
+                    resize-y leading-relaxed font-mono"
+                  placeholder="Task description (supports Markdown)..."
                 />
                 <div className="flex gap-2 justify-end">
                   <button
@@ -462,14 +462,38 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
                 </div>
               </div>
             ) : (
-              <p
-                className={`text-sm leading-relaxed whitespace-pre-wrap cursor-text
+              <div
+                className={`text-sm leading-relaxed cursor-text
                   ${isError ? 'text-red-300' : 'text-dark-200'}`}
                 onClick={() => { setEditText(task.text); setEditing(true); }}
                 title="Click to edit"
               >
-                {task.text}
-              </p>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  className="prose prose-invert prose-sm max-w-none break-words"
+                  components={{
+                    pre: ({ children }) => <pre className="bg-dark-900 rounded-lg p-3 overflow-x-auto my-2 border border-dark-600">{children}</pre>,
+                    code: ({ inline, children }) => inline
+                      ? <code className="bg-dark-700 px-1.5 py-0.5 rounded text-purple-300 text-xs">{children}</code>
+                      : <code className="text-green-300 text-xs">{children}</code>,
+                    a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">{children}</a>,
+                    table: ({ children }) => <table className="border-collapse border border-dark-600 my-2 w-full text-xs">{children}</table>,
+                    th: ({ children }) => <th className="border border-dark-600 px-2 py-1 bg-dark-700 text-left">{children}</th>,
+                    td: ({ children }) => <td className="border border-dark-600 px-2 py-1">{children}</td>,
+                    ul: ({ children }) => <ul className="list-disc list-inside space-y-1">{children}</ul>,
+                    ol: ({ children }) => <ol className="list-decimal list-inside space-y-1">{children}</ol>,
+                    h1: ({ children }) => <h1 className="text-lg font-bold text-white mt-3 mb-1">{children}</h1>,
+                    h2: ({ children }) => <h2 className="text-base font-bold text-white mt-3 mb-1">{children}</h2>,
+                    h3: ({ children }) => <h3 className="text-sm font-bold text-white mt-2 mb-1">{children}</h3>,
+                    blockquote: ({ children }) => <blockquote className="border-l-2 border-purple-500 pl-3 my-2 text-dark-400 italic">{children}</blockquote>,
+                    p: ({ children }) => <p className="my-1">{children}</p>,
+                    hr: () => <hr className="border-dark-600 my-3" />,
+                    li: ({ children }) => <li className="text-dark-200">{children}</li>,
+                  }}
+                >
+                  {task.text}
+                </ReactMarkdown>
+              </div>
             )}
           </div>
 
