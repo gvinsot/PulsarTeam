@@ -276,7 +276,7 @@ async function toolGitCommitPush(sandboxMgr, agentId, message) {
 
 // ─── Tool Call Parsing ──────────────────────────────────────────────────────
 
-const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_todo', 'list_my_tasks', 'check_status', 'mcp_call'];
+const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_todo', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
 function jsonToToolCall(name, args) {
@@ -306,6 +306,17 @@ function jsonToToolCall(name, args) {
       return { tool: 'check_status', args: [] };
     case 'mcp_call':
       return { tool: 'mcp_call', args: [args.server || args.serverName || '', args.tool || args.toolName || '', JSON.stringify(args.arguments || args.args || {})] };
+    // Convenience aliases for Swarm Manager tools
+    case 'get_action_status':
+    case 'build_stack':
+    case 'deploy_stack':
+    case 'list_stacks':
+    case 'list_containers':
+    case 'list_computers':
+    case 'search_logs':
+    case 'get_log_metadata':
+      return { tool: toolName, args: [JSON.stringify(args)] };
+
     default:
       return null;
   }
