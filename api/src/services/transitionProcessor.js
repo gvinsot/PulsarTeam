@@ -10,8 +10,16 @@ function findAgentByRole(agentManager, role) {
   const matching = agents.filter(
     a => a.enabled !== false && (a.role || '').toLowerCase() === role.toLowerCase()
   );
-  // Only return idle agents — do NOT fall back to busy ones
-  return matching.find(a => a.status === 'idle') || null;
+  // Only return idle agents that don't already have an in_progress task
+  return matching.find(a => {
+    if (a.status !== 'idle') return false;
+    const hasInProgress = (a.todoList || []).some(t => t.status === 'in_progress');
+    if (hasInProgress) {
+      console.log(`[Workflow] Skipping agent "${a.name}" - already has in_progress task`);
+      return false;
+    }
+    return true;
+  }) || null;
 }
 
 /**

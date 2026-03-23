@@ -2792,6 +2792,14 @@ export class AgentManager {
     if (!agent) return null;
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) return null;
+    // Guard: only one in_progress task per agent at a time
+    if (status === 'in_progress' && todo.status !== 'in_progress') {
+      const existing = agent.todoList.find(t => t.status === 'in_progress' && t.id !== todoId);
+      if (existing) {
+        console.warn(`[Guard] Agent "${agent.name}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${todo.text.slice(0, 60)}"`);
+        return null;
+      }
+    }
     const prevStatus = todo.status;
     todo.status = status;
     const now = new Date().toISOString();
