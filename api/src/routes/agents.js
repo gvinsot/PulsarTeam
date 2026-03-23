@@ -304,13 +304,13 @@ export function agentRoutes(agentManager) {
     if (!refineAgent) return res.status(404).json({ error: 'Refine agent not found' });
 
     // Fire-and-forget: refine via the agent's chat (visible in UI via stream events)
-    const { processIdeaTodo } = await import('../services/ideasProcessor.js');
+    const { processTransition } = await import('../services/transitionProcessor.js');
     const enrichedTodo = {
       ...todo,
       agentId: req.params.id,
       _transition: { agent: refineAgent.name, to: null, instructions: '' },
     };
-    processIdeaTodo(enrichedTodo, agentManager, req.app.get('io')).catch(err => {
+    processTransition(enrichedTodo, agentManager, req.app.get('io')).catch(err => {
       console.error(`[Refine] Error:`, err.message);
     });
 

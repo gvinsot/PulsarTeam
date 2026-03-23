@@ -609,46 +609,49 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
               )}
             </div>
 
-            {/* Created */}
-            {task.createdAt && (
-              <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                <div className="flex items-center gap-2 text-xs text-dark-400">
-                  <Calendar className="w-3.5 h-3.5" />
-                  Created
+            {/* Transition history */}
+            {(task.history && task.history.length > 0) ? (
+              <div className="space-y-0">
+                <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold mb-1.5">History</div>
+                <div className="relative pl-4 border-l border-dark-700 space-y-1.5">
+                  {task.history.map((h, i) => (
+                    <div key={i} className="relative flex items-start gap-2">
+                      <div className="absolute -left-[17px] top-1 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900" />
+                      <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
+                        <div className="flex items-center gap-1.5 text-xs min-w-0">
+                          {h.from && (
+                            <>
+                              <span className="text-dark-500">{h.from}</span>
+                              <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
+                            </>
+                          )}
+                          <span className="text-dark-200 font-medium">{h.status}</span>
+                          {h.by && (
+                            <span className="text-dark-500 truncate">by {h.by}</span>
+                          )}
+                        </div>
+                        <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(h.at)}>
+                          {timeAgo(h.at)}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <span className="text-xs text-dark-300" title={formatDate(task.createdAt)}>
-                  {timeAgo(task.createdAt)}
-                  <span className="text-dark-500 ml-1.5">· {formatDate(task.createdAt)}</span>
-                </span>
               </div>
-            )}
-
-            {/* Started */}
-            {task.startedAt && (
-              <div className="flex items-center justify-between py-2 border-b border-dark-800">
-                <div className="flex items-center gap-2 text-xs text-dark-400">
-                  <Clock className="w-3.5 h-3.5" />
-                  Started
-                </div>
-                <span className="text-xs text-amber-300/80" title={formatDate(task.startedAt)}>
-                  {timeAgo(task.startedAt)}
-                  <span className="text-dark-500 ml-1.5">· {formatDate(task.startedAt)}</span>
-                </span>
-              </div>
-            )}
-
-            {/* Completed */}
-            {task.completedAt && (
-              <div className="flex items-center justify-between py-2">
-                <div className="flex items-center gap-2 text-xs text-dark-400">
-                  <Check className="w-3.5 h-3.5" />
-                  Completed
-                </div>
-                <span className="text-xs text-emerald-300/80" title={formatDate(task.completedAt)}>
-                  {timeAgo(task.completedAt)}
-                  <span className="text-dark-500 ml-1.5">· {formatDate(task.completedAt)}</span>
-                </span>
-              </div>
+            ) : (
+              <>
+                {task.createdAt && (
+                  <div className="flex items-center justify-between py-1">
+                    <div className="flex items-center gap-2 text-xs text-dark-400">
+                      <Calendar className="w-3.5 h-3.5" />
+                      Created
+                    </div>
+                    <span className="text-xs text-dark-300" title={formatDate(task.createdAt)}>
+                      {timeAgo(task.createdAt)}
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -937,6 +940,7 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
   const [saving, setSaving] = useState(false);
 
   const enabledAgents = agents.filter(a => a.enabled !== false);
+  const availableRoles = [...new Set(enabledAgents.map(a => a.role).filter(Boolean))].sort();
 
   const handleSave = async () => {
     setSaving(true);
@@ -1076,9 +1080,9 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                         onChange={e => updateTransition(idx, { agent: e.target.value || null })}
                         className="px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200"
                       >
-                        <option value="">Select agent...</option>
-                        {enabledAgents.map(a => (
-                          <option key={a.id} value={a.name}>{a.name}</option>
+                        <option value="">Select role...</option>
+                        {availableRoles.map(r => (
+                          <option key={r} value={r}>{r}</option>
                         ))}
                       </select>
                     )}

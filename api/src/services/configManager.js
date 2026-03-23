@@ -60,8 +60,7 @@ const DEFAULT_COLUMNS = [
 const DEFAULT_TRANSITIONS = [
   { from: 'idea', to: 'backlog', agent: 'product-manager', autoRefine: true, instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.' },
   { from: 'backlog', to: 'pending', agent: null, autoRefine: false, instructions: '' },
-  { from: 'pending', to: 'in_progress', agent: null, autoRefine: false, instructions: '' },
-  { from: 'in_progress', to: 'done', agent: null, autoRefine: false, instructions: '' },
+  { from: 'pending', to: 'done', agent: 'developer', autoRefine: true, instructions: '' },
   { from: 'in_progress', to: 'backlog', agent: null, autoRefine: false, instructions: '' },
   { from: 'done', to: 'backlog', agent: null, autoRefine: false, instructions: '' },
 ];

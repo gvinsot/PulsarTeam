@@ -3,7 +3,7 @@ import { createProvider, createLoggingProvider } from './llmProviders.js';
 import { getAllAgents, saveAgent, deleteAgentFromDb } from './database.js';
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
-import { processIdeaTodo } from './ideasProcessor.js';
+import { processTransition } from './transitionProcessor.js';
 import { getWorkflow } from './configManager.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -2733,7 +2733,7 @@ export class AgentManager {
       if (!transition) return;
       // Attach transition config so the processor knows the target status and instructions
       const enrichedTodo = { ...todo, _transition: transition };
-      processIdeaTodo(enrichedTodo, this, this.io).catch(err => {
+      processTransition(enrichedTodo, this, this.io).catch(err => {
         console.error(`[Workflow] Unhandled error for "${todo.text}":`, err.message);
       });
     }).catch(err => {
@@ -2746,13 +2746,16 @@ export class AgentManager {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
+    const status = initialStatus || defaultStatus;
+    const now = new Date().toISOString();
     const todo = {
       id: uuidv4(),
       text,
-      status: initialStatus || defaultStatus,
+      status,
       project: project !== undefined ? project : (agent.project || null),
       source: source || null,
-      createdAt: new Date().toISOString()
+      createdAt: now,
+      history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };
     agent.todoList.push(todo);
     saveAgent(agent);
@@ -2766,21 +2769,29 @@ export class AgentManager {
     if (!agent) return null;
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) return null;
-    todo.status = todo.status === 'done' ? 'pending' : 'done';
+    const prevStatus = todo.status;
+    todo.status = prevStatus === 'done' ? 'pending' : 'done';
     if (todo.status === 'done') todo.completedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    if (!todo.history) todo.history = [];
+    todo.history.push({ from: prevStatus, status: todo.status, at: now, by: 'user' });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return todo;
   }
 
-  setTodoStatus(agentId, todoId, status, { skipAutoRefine = false } = {}) {
+  setTodoStatus(agentId, todoId, status, { skipAutoRefine = false, by = null } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) return null;
+    const prevStatus = todo.status;
     todo.status = status;
-    if (status === 'done') todo.completedAt = new Date().toISOString();
-    if (status === 'in_progress') todo.startedAt = new Date().toISOString();
+    const now = new Date().toISOString();
+    if (status === 'done') todo.completedAt = now;
+    if (status === 'in_progress') todo.startedAt = now;
+    if (!todo.history) todo.history = [];
+    todo.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     if (!skipAutoRefine) this._checkAutoRefine({ ...todo, agentId });
@@ -2857,48 +2868,14 @@ export class AgentManager {
     if (todo.status === 'done') throw new Error('Todo already completed');
     if (todo.status === 'in_progress') throw new Error('Todo already in progress');
 
-    console.log(`▶️  Executing todo for ${agent.name}: "${todo.text.slice(0, 80)}"`);
+    console.log(`[Workflow] Triggering execution for "${todo.text.slice(0, 80)}"`);
 
-    // Auto-switch to the todo's project if it differs from the agent's current one
-    if (todo.project && todo.project !== agent.project) {
-      console.log(`🔀 [Task] Switching "${agent.name}" from project "${agent.project || '(none)'}" → "${todo.project}" for task execution`);
-      this._switchProjectContext(agent, agent.project, todo.project);
-      agent.project = todo.project;
-      agent.projectChangedAt = new Date().toISOString();
-      this._emit('agent:updated', this._sanitize(agent));
-    }
+    // Set to pending — this triggers _checkAutoRefine which will find
+    // the transition (pending -> in_progress with a developer role agent)
+    // and execute the task via the automatic transition system.
+    this.setTodoStatus(agentId, todoId, 'pending');
 
-    // Mark as in_progress
-    todo.status = 'in_progress';
-    todo.startedAt = new Date().toISOString();
-    delete todo.error;
-    saveAgent(agent);
-    this._emit('agent:updated', this._sanitize(agent));
-    this._emit('agent:todo:executing', { agentId, todoId, text: todo.text });
-
-    try {
-      const response = await this.sendMessage(
-        agentId,
-        `[TASK] ${todo.text}`,
-        streamCallback
-      );
-
-      // Mark as done
-      todo.status = 'done';
-      todo.completedAt = new Date().toISOString();
-      saveAgent(agent);
-      this._emit('agent:updated', this._sanitize(agent));
-
-      return { todoId, response };
-    } catch (err) {
-      // Mark as error
-      todo.status = 'error';
-      todo.error = err.message;
-      saveAgent(agent);
-      this._emit('agent:updated', this._sanitize(agent));
-      this._emit('agent:todo:error', { agentId, todoId, error: err.message });
-      throw err;
-    }
+    return { todoId, response: null };
   }
 
   // Execute all pending todos sequentially
