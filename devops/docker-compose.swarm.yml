@@ -1,232 +1,119 @@
 version: '3.8'
+
 services:
-  team-api:
-    image: registry.methodinfo.fr/pulsarteam-server:latest
+  api:
+    image: registry.music-ml.com/pulsarteam-api:${VERSION:-latest}
     build:
-      context: ..
-      dockerfile: api/Dockerfile
-      target: production
+      context: ../api
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
     environment:
-      - NODE_ENV=production
-      - PORT=${PORT}
-      - JWT_SECRET=${JWT_SECRET}
-      - ADMIN_USERNAME=${ADMIN_USERNAME}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - PORT=3001
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
-      - CORS_ORIGINS=${CORS_ORIGINS}
-      - DATABASE_URL=${DATABASE_URL}
-      - GIT_USER_NAME=${GIT_USER_NAME}
-      - GIT_USER_EMAIL=${GIT_USER_EMAIL}
-      - SANDBOX_SHARED_CONTAINER_NAME=sandbox
-      - SANDBOX_BASE_WORKSPACE=/workspace
-      - SSH_KEYS_HOST_PATH=${SSH_KEYS_HOST_PATH}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - GITHUB_USER=${GITHUB_USER}
-      - MCP_ENDPOINT=http://swarm-manager:8000/ai/mcp
-      - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID}
-      - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET}
-      - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI}
-      - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - VERSION=${VERSION:-latest}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker CLI for sandbox management
-      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro  # SSH keys (also mounted into sandboxes)
+      - agent-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - proxy
-      - postgresqlcluster_internal
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - app-network
+      - traefik-public
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == server-b
       restart_policy:
         condition: on-failure
-      update_config:
-        delay: 10s
-        failure_action: rollback
       labels:
-        # Enable Traefik
         - "traefik.enable=true"
-
-        # Service port
-        - "traefik.http.services.pulsarteam-api.loadbalancer.server.port=3001"
-
-        # HTTPS Router — API + WebSocket (/api and /socket.io)
-        # Using realtime-global (no WAF) to avoid blocking AI chat content with code patterns
-        - "traefik.http.routers.pulsarteam-api.rule=Host(`swarm.methodinfo.fr`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"
+        - "traefik.http.routers.pulsarteam-api.rule=Host(`swarm.music-ml.com`) && PathPrefix(`/api`, `/socket.io`)"
         - "traefik.http.routers.pulsarteam-api.entrypoints=websecure"
         - "traefik.http.routers.pulsarteam-api.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.pulsarteam-api.middlewares=realtime-global@file"
-        - "traefik.http.routers.pulsarteam-api.service=pulsarteam-api"
-        - "traefik.http.routers.pulsarteam-api.priority=100"
-
-        # HTTP redirect
-        - "traefik.http.routers.pulsarteam-api-http.rule=Host(`swarm.methodinfo.fr`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"
-        - "traefik.http.routers.pulsarteam-api-http.entrypoints=web"
-        - "traefik.http.routers.pulsarteam-api-http.middlewares=redirect-to-https@file"
-        - "traefik.http.routers.pulsarteam-api-http.service=noop@internal"
+        - "traefik.http.services.pulsarteam-api.loadbalancer.server.port=3001"
+        - "traefik.docker.network=traefik-public"
 
   frontend:
-    image: registry.methodinfo.fr/pulsarteam-client:latest
+    image: registry.music-ml.com/pulsarteam-frontend:${VERSION:-latest}
     build:
-      context: ..
-      dockerfile: frontend/Dockerfile
-    volumes:
-      - ${HOST_CODE_PATH}/PulsarTeam/frontend/dist:/usr/share/nginx/html
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_APP_VERSION=${VERSION:-dev}
+    ports:
+      - "5173:80"
     networks:
-      - proxy
+      - app-network
+      - traefik-public
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == server-b
       restart_policy:
         condition: on-failure
-      update_config:
-        delay: 10s
-        failure_action: rollback
       labels:
-        # Enable Traefik
         - "traefik.enable=true"
-
-        # Service port
-        - "traefik.http.services.pulsarteam-frontend.loadbalancer.server.port=80"
-
-        # HTTPS Router — Frontend (catch-all for swarm.methodinfo.fr)
-        - "traefik.http.routers.pulsarteam-frontend.rule=Host(`swarm.methodinfo.fr`)"
+        - "traefik.http.routers.pulsarteam-frontend.rule=Host(`swarm.music-ml.com`) && !PathPrefix(`/api`, `/socket.io`)"
         - "traefik.http.routers.pulsarteam-frontend.entrypoints=websecure"
         - "traefik.http.routers.pulsarteam-frontend.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.pulsarteam-frontend.middlewares=global@file"
-        - "traefik.http.routers.pulsarteam-frontend.service=pulsarteam-frontend"
-        - "traefik.http.routers.pulsarteam-frontend.priority=1"
+        - "traefik.http.services.pulsarteam-frontend.loadbalancer.server.port=80"
+        - "traefik.docker.network=traefik-public"
 
-        # HTTP redirect
-        - "traefik.http.routers.pulsarteam-frontend-http.rule=Host(`swarm.methodinfo.fr`)"
-        - "traefik.http.routers.pulsarteam-frontend-http.entrypoints=web"
-        - "traefik.http.routers.pulsarteam-frontend-http.middlewares=redirect-to-https@file"
-        - "traefik.http.routers.pulsarteam-frontend-http.service=noop@internal"
-
-  coder-service:
+  coder-service-1:
+    image: registry.music-ml.com/pulsarteam-coder-service-1:${VERSION:-latest}
     build:
-      context: ..
-      dockerfile: coder-service/Dockerfile
-    image: registry.methodinfo.fr/coder-service:latest
-    networks:
-      proxy:
-        aliases:
-          - coder-service
+      context: ../coder-service
+      dockerfile: Dockerfile
+    ports:
+      - "8111:8000"
     environment:
-      - TZ=Europe/Paris
-      - LOG_LEVEL=info
-      # Claude Code authentication (OAuth token uses subscription plan, API key uses credits)
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
-      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
-      # Execution settings
-      - VERBOSE=${CODER_VERBOSE:-false}
-      - TIMEOUT=600
-      - PORT=8000
-      - HOST=0.0.0.0
-      # Security - API key authentication
-      - API_KEY=${CODER_API_KEY:-change-me-in-production}
-      # Run as host user (match /projects owner for file permissions)
-      - PUID=${CODER_PUID:-1000}
-      - PGID=${CODER_PGID:-1000}
-      # MCP servers (same cluster services as agents in sandbox)
-      - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET}
-      - MCP_ENDPOINT=${MCP_ENDPOINT:-http://swarm-manager:8000/ai/mcp}
-      # Python settings
-      - PYTHONUNBUFFERED=1
-      - PYTHONFAULTHANDLER=1
-    volumes:
-      # Mount project directories
-      - /home/gildas:/projects
-      # SSH keys for Git access (read-only)
-      - /home/gildas/.ssh:/root/.ssh:ro
-      # Docker socket for Docker-in-Docker
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Persistent auth data (OAuth tokens survive container restarts)
-      - coder-auth-data:/app/data
-      # JDK setup for Android development
-      - coder-android-cache:/opt/android-sdk
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.hostname == server-b
-      resources:
-        limits:
-          cpus: '4'
-          memory: 8G
-        reservations:
-          cpus: '2'
-          memory: 4G
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-        max_attempts: 3
-      update_config:
-        delay: 10s
-        failure_action: rollback
-      labels:
-        # Activer Traefik
-        - "traefik.enable=false"
-
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-
-  test:
-    image: registry.methodinfo.fr/pulsarteam-test:latest
-    build:
-      context: ..
-      dockerfile: api/Dockerfile
-      target: test
-    volumes: []  # No volumes for test service - prevents Docker socket mount
-    deploy:
-      replicas: 0  # Only used for CI — never deployed as a service
-
-  sandbox:
-    image: ${DOCKER_REGISTRY_URL}/pulsarteam-sandbox:latest
-    build:
-      context: ..
-      dockerfile: api/sandbox.Dockerfile
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CODER_INSTANCE_ID=1
     networks:
-      - proxy
+      - app-network
     deploy:
       replicas: 1
-      placement:
-        constraints:
-          - node.hostname == server-b
       restart_policy:
         condition: on-failure
-      update_config:
-        delay: 10s
-        failure_action: rollback
 
-volumes:
-  coder-android-cache:
-    driver: local
-  coder-auth-data:
-    driver: local
+  coder-service-2:
+    image: registry.music-ml.com/pulsarteam-coder-service-2:${VERSION:-latest}
+    build:
+      context: ../coder-service
+      dockerfile: Dockerfile
+    ports:
+      - "8112:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CODER_INSTANCE_ID=2
+    networks:
+      - app-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  coder-service-3:
+    image: registry.music-ml.com/pulsarteam-coder-service-3:${VERSION:-latest}
+    build:
+      context: ../coder-service
+      dockerfile: Dockerfile
+    ports:
+      - "8113:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CODER_INSTANCE_ID=3
+    networks:
+      - app-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
 
 networks:
-  proxy:
+  app-network:
+    driver: overlay
+  traefik-public:
     external: true
-  postgresqlcluster_internal:
-    external: true
+
+volumes:
+  agent-data:

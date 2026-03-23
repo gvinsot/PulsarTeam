@@ -922,6 +922,20 @@ export class MistralProvider {
   }
 }
 
+// ─── Coder Service Round-Robin ────────────────────────────────────────────────
+const CODER_SERVICE_URLS = [
+  'http://coder-service-1:8000',
+  'http://coder-service-2:8000',
+  'http://coder-service-3:8000',
+];
+let _coderServiceIndex = 0;
+function getNextCoderServiceUrl() {
+  const url = CODER_SERVICE_URLS[_coderServiceIndex % CODER_SERVICE_URLS.length];
+  _coderServiceIndex++;
+  console.log(`🔄 [Coder Service] Using instance: ${url} (round-robin #${_coderServiceIndex})`);
+  return url;
+}
+
 // ─── Provider Factory ───────────────────────────────────────────────────────
 export function createProvider(config) {
   switch (config.provider) {
@@ -948,7 +962,7 @@ export function createProvider(config) {
       );
     case 'claude-paid':
       return new VLLMProvider(
-        'http://coder-service:8000',
+        getNextCoderServiceUrl(),
         config.model || 'claude-sonnet-4-20250514',
         config.apiKey || process.env.ANTHROPIC_API_KEY || ''
       );
