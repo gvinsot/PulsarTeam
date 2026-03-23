@@ -1,65 +1,220 @@
-version: '3.8'
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=swarm_prod
+      - POSTGRES_USER=swarm_prod_app
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pulsarteam}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swarm_prod_app -d swarm_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: production
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-swarm2026}
+      - DATABASE_URL=postgresql://swarm_prod_app:${POSTGRES_PASSWORD:-pulsarteam}@postgres:5432/swarm_prod
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost}
+      - GIT_USER_NAME=${GIT_USER_NAME:-PulsarTeam}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-agent@pulsarteam.local}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITHUB_USER=${GITHUB_USER:-}
+      - SANDBOX_SHARED_CONTAINER_NAME=sandbox
+      - SANDBOX_BASE_WORKSPACE=/workspace
+      - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID:-}
+      - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET:-}
+      - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI:-}
+      - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
     ports:
       - "3001:3001"
-    environment:
-      - PORT=3001
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
-    volumes:
-      - agent-data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - app-network
+      - internal
+      - sandbox-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
-      - "5173:80"
+      - "80:80"
+    networks:
+      - internal
     depends_on:
       - api
+    restart: unless-stopped
+
+  sandbox:
+    build:
+      context: .
+      dockerfile: api/sandbox.Dockerfile
+    container_name: sandbox
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
     networks:
-      - app-network
+      - sandbox-net
+    restart: unless-stopped
 
   coder-service-1:
-    build: ./coder-service
-    ports:
-      - "8111:8000"
+    build:
+      context: .
+      dockerfile: coder-service/Dockerfile
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TZ=${TZ:-Europe/Paris}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://api:3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - PYTHONUNBUFFERED=1
+      - PYTHONFAULTHANDLER=1
       - CODER_INSTANCE_ID=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+      - ${HOST_CODE_PATH:-~}:/projects
+      - coder-auth-data:/app/data
+    ports:
+      - "8000:8000"
     networks:
-      - app-network
+      - sandbox-net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    profiles:
+      - coder
 
   coder-service-2:
-    build: ./coder-service
-    ports:
-      - "8112:8000"
+    build:
+      context: .
+      dockerfile: coder-service/Dockerfile
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TZ=${TZ:-Europe/Paris}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://api:3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - PYTHONUNBUFFERED=1
+      - PYTHONFAULTHANDLER=1
       - CODER_INSTANCE_ID=2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+      - ${HOST_CODE_PATH:-~}:/projects
+      - coder-auth-data:/app/data
+    ports:
+      - "8001:8000"
     networks:
-      - app-network
+      - sandbox-net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    profiles:
+      - coder
 
   coder-service-3:
-    build: ./coder-service
-    ports:
-      - "8113:8000"
+    build:
+      context: .
+      dockerfile: coder-service/Dockerfile
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - TZ=${TZ:-Europe/Paris}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://api:3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - PYTHONUNBUFFERED=1
+      - PYTHONFAULTHANDLER=1
       - CODER_INSTANCE_ID=3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+      - ${HOST_CODE_PATH:-~}:/projects
+      - coder-auth-data:/app/data
+    ports:
+      - "8002:8000"
     networks:
-      - app-network
-
-networks:
-  app-network:
-    driver: bridge
+      - sandbox-net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+    profiles:
+      - coder
 
 volumes:
-  agent-data:
+  pgdata:
+  coder-auth-data:
+
+networks:
+  internal:
+  sandbox-net:
