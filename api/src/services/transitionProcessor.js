@@ -26,18 +26,21 @@ function findAgentByRole(agentManager, role) {
 export async function processTransition(todo, agentManager, io) {
   const targetStatus = todo._transition?.to ?? 'backlog';
   const transitionRole = todo._transition?.agent;
+  const mode = todo._transition?.mode;
+  const instructions = todo._transition?.instructions || '';
+
+  console.log(`[Workflow] processTransition called: todo="${todo.text?.slice(0, 60)}" from="${todo.status}" to="${targetStatus}" mode="${mode}" role="${transitionRole || 'none'}" agentId="${todo.agentId}"`);
 
   try {
+    // Explicit mode takes precedence; fall back to legacy heuristic
+    const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
+
     // Find agent by role
     let agent = null;
     if (transitionRole) {
       agent = findAgentByRole(agentManager, transitionRole);
+      if (agent) console.log(`[Workflow] Found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
     }
-
-    const instructions = todo._transition?.instructions || '';
-    const mode = todo._transition?.mode;
-    // Explicit mode takes precedence; fall back to legacy heuristic
-    const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
 
     // Fallback: try global ideasAgent setting (by name, for backward compat)
     if (!agent) {
@@ -46,6 +49,7 @@ export async function processTransition(todo, agentManager, io) {
         agent = Array.from(agentManager.agents.values()).find(
           a => a.enabled !== false && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
         );
+        if (agent) console.log(`[Workflow] Found agent via ideasAgent setting: ${agent.name}`);
       }
     }
 
@@ -53,7 +57,7 @@ export async function processTransition(todo, agentManager, io) {
     if (!agent && isExecution && todo.agentId) {
       agent = agentManager.agents.get(todo.agentId);
       if (agent) {
-        console.log(`[Workflow] Execute mode: using task owner "${agent.name}" (no role agent found)`);
+        console.log(`[Workflow] Execute mode: using task owner "${agent.name}" (${agent.id})`);
       }
     }
 
@@ -61,6 +65,20 @@ export async function processTransition(todo, agentManager, io) {
       console.log(`[Workflow] No agent found for transition${targetStatus ? `, moving to ${targetStatus}` : ''}`);
       if (targetStatus) agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: 'workflow' });
       return;
+    }
+
+    // Check if agent is busy — if so, wait briefly then check again
+    if (agent.status === 'busy') {
+      console.log(`[Workflow] Agent "${agent.name}" is busy, waiting up to 30s for it to become idle...`);
+      const waitStart = Date.now();
+      while (agent.status === 'busy' && Date.now() - waitStart < 30000) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+      if (agent.status === 'busy') {
+        console.log(`[Workflow] Agent "${agent.name}" still busy after 30s — aborting transition`);
+        return;
+      }
+      console.log(`[Workflow] Agent "${agent.name}" is now idle, proceeding`);
     }
 
     // Auto-switch agent to the todo's project if needed
@@ -75,16 +93,18 @@ export async function processTransition(todo, agentManager, io) {
     let prompt;
     let messagePrefix;
     if (isExecution) {
-      // Execution mode: mark in_progress, execute the task
-      agentManager.setTodoStatus(todo.agentId, todo.id, 'in_progress', { skipAutoRefine: true, by: agent.name });
+      // Execution mode: mark in_progress (only if not already), execute the task
+      if (todo.status !== 'in_progress') {
+        agentManager.setTodoStatus(todo.agentId, todo.id, 'in_progress', { skipAutoRefine: true, by: agent.name });
+      }
       prompt = todo.text;
       messagePrefix = '';
-      console.log(`[Workflow] Executing "${todo.text}" via ${agent.name} (role: ${agent.role})`);
+      console.log(`[Workflow] Executing "${todo.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
     } else {
       // Refinement mode: ask for an improved description
       prompt = `Refine the following task:\n\nTask: ${todo.text}\n${todo.project ? `Project: ${todo.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved description.`;
       messagePrefix = '[Auto-Transition]';
-      console.log(`[Workflow] Refining "${todo.text}" via ${agent.name} (role: ${agent.role})`);
+      console.log(`[Workflow] Refining "${todo.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
     }
 
     let fullResponse = '';
@@ -107,6 +127,12 @@ export async function processTransition(todo, agentManager, io) {
             project: agent.project || null,
             chunk,
           });
+          // Emit thinking state like the socket handler does
+          io.emit('agent:thinking', {
+            agentId: agent.id,
+            project: agent.project || null,
+            thinking: agentManager.agents.get(agent.id)?.currentThinking || ''
+          });
         }
       );
 
@@ -125,20 +151,20 @@ export async function processTransition(todo, agentManager, io) {
         }
       }
 
-      console.log(`[Workflow] Done: "${todo.text}" via ${agent.name}${targetStatus ? ` -> ${targetStatus}` : ''}`);
+      console.log(`[Workflow] Done: "${todo.text.slice(0, 80)}" via ${agent.name}${targetStatus ? ` -> ${targetStatus}` : ''}`);
     } finally {
       io.emit('agent:stream:end', {
         agentId: agent.id,
         agentName: agent.name,
         project: agent.project || null,
       });
+      // Emit agent:updated so the frontend gets the updated conversation history
+      io.emit('agent:updated', agentManager._sanitize(agent));
     }
   } catch (err) {
-    console.error(`[Workflow] Error processing "${todo.text}":`, err.message);
+    console.error(`[Workflow] Error processing "${todo.text}":`, err.message, err.stack);
     try {
-      const instructions = todo._transition?.instructions || '';
-      const errMode = todo._transition?.mode;
-      const isExec = errMode === 'execute' || (!errMode && (!instructions || instructions.includes('[EXECUTE]')));
+      const isExec = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
       if (isExec) {
         agentManager.setTodoStatus(todo.agentId, todo.id, 'error', { skipAutoRefine: true, by: 'workflow' });
       } else if (targetStatus) {

@@ -2726,11 +2726,16 @@ export class AgentManager {
   // ─── Workflow Auto-Refine ───────────────────────────────────────────
   _checkAutoRefine(todo) {
     // Fire-and-forget: check if there's an autoRefine transition for this status
+    console.log(`[Workflow] _checkAutoRefine: status="${todo.status}" text="${(todo.text || '').slice(0, 60)}" agentId="${todo.agentId}"`);
     getWorkflow('_default').then(workflow => {
       const transition = workflow.transitions.find(
         t => t.from === todo.status && t.autoRefine && (t.agent || t.mode === 'execute')
       );
-      if (!transition) return;
+      if (!transition) {
+        console.log(`[Workflow] No matching transition for status="${todo.status}" (${workflow.transitions.length} transitions checked)`);
+        return;
+      }
+      console.log(`[Workflow] Found transition: ${transition.from} -> ${transition.to} (mode=${transition.mode}, agent=${transition.agent || 'none'})`);
       // Attach transition config so the processor knows the target status and instructions
       const enrichedTodo = { ...todo, _transition: transition };
       processTransition(enrichedTodo, this, this.io).catch(err => {
