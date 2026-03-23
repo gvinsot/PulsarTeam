@@ -376,3 +376,5 @@ export const api = {
       body: JSON.stringify(patch)
     }).then(handleResponse),
 };
+
+export default api;

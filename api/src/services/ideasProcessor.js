@@ -14,20 +14,32 @@ export async function processIdeaTodo(todo, agentManager, io) {
     const settings = await getSettings();
     const ideasAgentName = settings.ideasAgent;
 
+    // Use transition config if available, default to 'backlog'
+    const targetStatus = todo._transition?.to || 'backlog';
+
     if (!ideasAgentName) {
-      // No agent configured — silently move to backlog
-      agentManager.setTodoStatus(todo.agentId, todo.id, 'backlog');
+      // No agent configured — silently move to target status
+      agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus);
       return;
     }
 
-    // Find the ideas-refinement agent by name
-    const ideasAgent = Array.from(agentManager.agents.values()).find(
-      a => (a.name || '').toLowerCase() === ideasAgentName.toLowerCase()
-    );
+    // Find agent: prefer transition config agent role, fall back to settings agent name
+    const transitionAgentRole = todo._transition?.agent;
+    let ideasAgent = null;
+    if (transitionAgentRole) {
+      ideasAgent = Array.from(agentManager.agents.values()).find(
+        a => a.enabled !== false && (a.role || '').toLowerCase() === transitionAgentRole.toLowerCase()
+      );
+    }
+    if (!ideasAgent) {
+      ideasAgent = Array.from(agentManager.agents.values()).find(
+        a => a.enabled !== false && (a.name || '').toLowerCase() === ideasAgentName.toLowerCase()
+      );
+    }
 
     if (!ideasAgent) {
-      console.log(`[Ideas] Agent "${ideasAgentName}" not found, moving to backlog as-is`);
-      agentManager.setTodoStatus(todo.agentId, todo.id, 'backlog');
+      console.log(`[Workflow] Agent "${transitionAgentRole || ideasAgentName}" not found, moving to ${targetStatus} as-is`);
+      agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus);
       return;
     }
 
@@ -41,7 +53,7 @@ Keep it concise but informative.
 
 Reply ONLY with the improved description. No title, no headers, no preamble.`;
 
-    console.log(`[Ideas] Refining "${todo.text}" via agent "${ideasAgent.name}"`);
+    console.log(`[Workflow] Refining "${todo.text}" via agent "${ideasAgent.name}" (${todo.status} → ${targetStatus})`);
 
     // Stream the refinement through the ideas agent's chat so it's visible in the UI
     let fullResponse = '';
@@ -73,8 +85,8 @@ Reply ONLY with the improved description. No title, no headers, no preamble.`;
         // Update todo text with the refined description and move to backlog
         agentManager.updateTodoText(todo.agentId, todo.id, `${todo.text}\n\n---\n${improved}`);
       }
-      agentManager.setTodoStatus(todo.agentId, todo.id, 'backlog');
-      console.log(`[Ideas] Refined and moved to backlog: "${todo.text}"`);
+      agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus);
+      console.log(`[Workflow] Refined and moved to ${targetStatus}: "${todo.text}"`);
     } finally {
       io.emit('agent:stream:end', {
         agentId: ideasAgent.id,
@@ -86,7 +98,7 @@ Reply ONLY with the improved description. No title, no headers, no preamble.`;
     console.error(`[Ideas] Error processing "${todo.text}":`, err.message);
     // Move to backlog so it doesn't get stuck
     try {
-      agentManager.setTodoStatus(todo.agentId, todo.id, 'backlog');
+      agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus);
     } catch (e) {
       console.error(`[Ideas] Failed to move to backlog after error:`, e.message);
     }
