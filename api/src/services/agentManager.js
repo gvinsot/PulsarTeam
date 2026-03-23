@@ -2871,7 +2871,6 @@ export class AgentManager {
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) throw new Error('Todo not found');
     if (todo.status === 'done') throw new Error('Todo already completed');
-    if (todo.status === 'in_progress') throw new Error('Todo already in progress');
 
     console.log(`[Workflow] Triggering execution for "${todo.text.slice(0, 80)}"`);
 
@@ -3281,7 +3280,18 @@ export class AgentManager {
       if (agent.status !== 'idle') continue;
       if (this._loopProcessing.has(agentId)) continue;
 
-      // Find the first pending todo
+      // Priority 1: resume in_progress tasks that are stalled (agent is idle but task is in_progress)
+      const inProgressTodo = agent.todoList?.find(t => t.status === 'in_progress');
+      if (inProgressTodo) {
+        this._loopProcessing.add(agentId);
+        console.log(`🔄 [TaskLoop] Agent "${agent.name}" is idle but has in_progress task "${inProgressTodo.text.slice(0, 60)}" — resuming`);
+        this._resumeInProgressTask(agentId, agent, inProgressTodo).finally(() => {
+          this._loopProcessing.delete(agentId);
+        });
+        continue;
+      }
+
+      // Priority 2: pick up the first pending todo
       const todo = agent.todoList?.find(t => t.status === 'pending');
       if (!todo) continue;
 
@@ -3317,6 +3327,62 @@ export class AgentManager {
         .finally(() => {
           this._loopProcessing.delete(agentId);
         });
+    }
+  }
+
+  /**
+   * Resume an in_progress task when the agent is idle.
+   * Sends the task text directly to the agent and moves to done on success.
+   */
+  async _resumeInProgressTask(agentId, agent, todo) {
+    const streamCallback = (chunk) => {
+      this._emit('agent:stream:chunk', { agentId, chunk });
+      this._emit('agent:thinking', {
+        agentId,
+        thinking: agent.currentThinking || ''
+      });
+    };
+
+    this._emit('agent:stream:start', { agentId });
+
+    try {
+      // Check if there's a workflow transition from in_progress that defines a target status
+      let targetStatus = 'done';
+      try {
+        const workflow = await getWorkflow('_default');
+        const transition = workflow.transitions.find(
+          t => t.from === 'in_progress' && t.autoRefine && (t.mode === 'execute' || t.agent)
+        );
+        if (transition?.to) targetStatus = transition.to;
+      } catch (_) { /* use default */ }
+
+      // Auto-switch agent to the todo's project if needed
+      if (todo.project && todo.project !== agent.project) {
+        console.log(`🔄 [TaskLoop] Switching "${agent.name}" to project "${todo.project}" for resume`);
+        if (this._switchProjectContext) {
+          this._switchProjectContext(agent, agent.project, todo.project);
+        }
+        agent.project = todo.project;
+      }
+
+      const result = await this.sendMessage(
+        agentId,
+        todo.text,
+        streamCallback
+      );
+
+      // Move to target status on success
+      this.setTodoStatus(agentId, todo.id, targetStatus, { skipAutoRefine: true, by: agent.name });
+      console.log(`🔄 [TaskLoop] Resumed and completed "${todo.text.slice(0, 60)}" -> ${targetStatus}`);
+    } catch (err) {
+      console.error(`🔄 [TaskLoop] Error resuming task for ${agent.name}:`, err.message);
+      this._emit('agent:stream:error', { agentId, error: err.message });
+      if (agent.status === 'error') {
+        this.setStatus(agentId, 'idle', 'Auto-recovered after resume error');
+      }
+    } finally {
+      this._emit('agent:stream:end', { agentId });
+      this._emit('agent:updated', this._sanitize(agent));
     }
   }
 
