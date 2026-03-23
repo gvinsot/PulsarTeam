@@ -115,7 +115,7 @@ describe('CodeIndexService', () => {
     await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-list' });
     const repos = await service.listRepos();
     assert.ok(repos.length > 0);
-    assert.ok(repos[0].repoId, 'Should have repoId');
+    assert.ok(repos[0].id, 'Should have id');
   });
 
   it('should return file tree', async () => {
@@ -133,8 +133,8 @@ describe('CodeIndexService', () => {
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-outline' });
     const outline = await service.getFileOutline(result.id, 'src/auth.js');
     assert.ok(outline);
-    assert.ok(outline.length > 0);
-    const names = outline.map(s => s.name);
+    assert.ok(outline.symbols && outline.symbols.length > 0);
+    const names = outline.symbols.map(s => s.name);
     assert.ok(names.includes('authenticateToken'), 'Should find authenticateToken');
   });
 
