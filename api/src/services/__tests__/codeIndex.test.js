@@ -8,9 +8,12 @@ import os from 'os';
 const TEST_DATA_DIR = path.join(os.tmpdir(), 'code-index-data-' + Date.now());
 const FIXTURE_DIR = path.join(os.tmpdir(), 'code-index-test-' + Date.now());
 
+let _serviceCounter = 0;
 function makeService() {
+  _serviceCounter++;
+  const serviceDir = path.join(TEST_DATA_DIR, 'svc-' + _serviceCounter);
   return new CodeIndexService({
-    storageRoot: TEST_DATA_DIR,
+    storageRoot: serviceDir,
     allowedRoots: [FIXTURE_DIR, os.tmpdir()],
   });
 }
@@ -140,7 +143,7 @@ describe('CodeIndexService', () => {
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-search' });
     const results = await service.searchSymbols(result.id, { query: 'authenticate' });
     assert.ok(results.length > 0, 'Should find matching symbols');
-    assert.ok(results[0].name.toLowerCase().includes('authenticate'));
+    assert.ok(results[0].qualifiedName.toLowerCase().includes('authenticate'));
   });
 
   it('should return empty for no matches', async () => {
