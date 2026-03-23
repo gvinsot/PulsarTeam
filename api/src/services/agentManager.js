@@ -3116,7 +3116,7 @@ export class AgentManager {
     for (const m of messages) {
       chars += (m.content || '').length;
     }
-    return Math.ceil(chars / 3.5);
+    return Math.ceil(chars / 3.0);
   }
 
   /**
@@ -3131,7 +3131,7 @@ export class AgentManager {
     const desiredMaxTokens = agent.maxTokens || 4096;
     const estimatedInput = this._estimateTokens(messages);
     // Leave 5% headroom for token estimation inaccuracy
-    const safetyMargin = Math.ceil(contextLength * 0.05);
+    const safetyMargin = Math.ceil(contextLength * 0.15);
     const available = contextLength - estimatedInput - safetyMargin;
     if (available < desiredMaxTokens) {
       const capped = Math.max(1024, available); // minimum 1024 output tokens
