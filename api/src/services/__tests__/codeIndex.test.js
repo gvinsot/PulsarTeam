@@ -102,9 +102,9 @@ describe('CodeIndexService', () => {
   it('should index a folder and return stats', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-repo' });
-    assert.ok(result.repoId, 'Should have repoId');
+    assert.ok(result.id, 'Should have repoId');
     assert.ok(result.filesIndexed > 0, 'Should index files');
-    assert.ok(result.symbolCount > 0, 'Should find symbols');
+    assert.ok(result.symbolsIndexed > 0, 'Should find symbols');
   });
 
   it('should list indexed repos', async () => {
@@ -118,7 +118,7 @@ describe('CodeIndexService', () => {
   it('should return file tree', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-tree' });
-    const tree = await service.getFileTree(result.repoId);
+    const tree = await service.getFileTree(result.id);
     assert.ok(tree);
     assert.ok(tree.children && tree.children.length > 0, 'Tree should have children');
     const allNames = JSON.stringify(tree);
@@ -128,7 +128,7 @@ describe('CodeIndexService', () => {
   it('should return file outline with symbols', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-outline' });
-    const outline = await service.getFileOutline(result.repoId, 'src/auth.js');
+    const outline = await service.getFileOutline(result.id, 'src/auth.js');
     assert.ok(outline);
     assert.ok(outline.length > 0);
     const names = outline.map(s => s.name);
@@ -138,7 +138,7 @@ describe('CodeIndexService', () => {
   it('should search symbols by name', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-search' });
-    const results = await service.searchSymbols(result.repoId, { query: 'authenticate' });
+    const results = await service.searchSymbols(result.id, { query: 'authenticate' });
     assert.ok(results.length > 0, 'Should find matching symbols');
     assert.ok(results[0].name.toLowerCase().includes('authenticate'));
   });
@@ -146,14 +146,14 @@ describe('CodeIndexService', () => {
   it('should return empty for no matches', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-no-match' });
-    const results = await service.searchSymbols(result.repoId, { query: 'xyzNonExistent123' });
+    const results = await service.searchSymbols(result.id, { query: 'xyzNonExistent123' });
     assert.deepEqual(results, []);
   });
 
   it('should search semantically', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-semantic' });
-    const results = await service.searchSemantic(result.repoId, { query: 'JWT authentication middleware' });
+    const results = await service.searchSemantic(result.id, { query: 'JWT authentication middleware' });
     assert.ok(results.length > 0);
     const allText = results.map(r => (r.name + ' ' + (r.summary || '')).toLowerCase()).join(' ');
     assert.ok(/auth|token|jwt/.test(allText), 'Should find auth-related symbols');
@@ -162,16 +162,16 @@ describe('CodeIndexService', () => {
   it('should search text', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-text' });
-    const results = await service.searchText(result.repoId, { query: 'jwt.verify' });
+    const results = await service.searchText(result.id, { query: 'jwt.verify' });
     assert.ok(results.length > 0);
   });
 
   it('should retrieve symbol source code', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-symbol' });
-    const symbols = await service.searchSymbols(result.repoId, { query: 'authenticateToken' });
+    const symbols = await service.searchSymbols(result.id, { query: 'authenticateToken' });
     assert.ok(symbols.length > 0);
-    const detail = await service.getSymbol(result.repoId, symbols[0].id);
+    const detail = await service.getSymbol(result.id, symbols[0].id);
     assert.ok(detail);
     assert.ok(detail.source.includes('jwt.verify'));
   });
@@ -179,14 +179,14 @@ describe('CodeIndexService', () => {
   it('should index Python files', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-py' });
-    const results = await service.searchSymbols(result.repoId, { query: 'Database' });
+    const results = await service.searchSymbols(result.id, { query: 'Database' });
     assert.ok(results.length > 0);
   });
 
   it('should index TypeScript files', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-ts' });
-    const results = await service.searchSymbols(result.repoId, { query: 'formatDuration' });
+    const results = await service.searchSymbols(result.id, { query: 'formatDuration' });
     assert.ok(results.length > 0);
   });
 
@@ -195,9 +195,9 @@ describe('CodeIndexService', () => {
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-tokens' });
     const fullFile = fsSync.readFileSync(path.join(FIXTURE_DIR, 'src/auth.js'), 'utf8');
     const fullTokens = fullFile.length / 4;
-    const results = await service.searchSymbols(result.repoId, { query: 'authenticateToken', topK: 1 });
+    const results = await service.searchSymbols(result.id, { query: 'authenticateToken', topK: 1 });
     assert.equal(results.length, 1);
-    const sym = await service.getSymbol(result.repoId, results[0].id);
+    const sym = await service.getSymbol(result.id, results[0].id);
     const indexedTokens = sym.source.length / 4;
     const reduction = 1 - (indexedTokens / fullTokens);
     console.log(`  Token reduction: ${(reduction * 100).toFixed(1)}% (full: ~${Math.round(fullTokens)}, indexed: ~${Math.round(indexedTokens)})`);
@@ -212,10 +212,10 @@ describe('CodeIndexService', () => {
       if (p.endsWith('.js') || p.endsWith('.py') || p.endsWith('.ts')) total += c;
     }
     const fullTokens = total.length / 4;
-    const results = await service.searchSemantic(result.repoId, { query: 'authentication', topK: 3 });
+    const results = await service.searchSemantic(result.id, { query: 'authentication', topK: 3 });
     let indexed = '';
     for (const r of results) {
-      const s = await service.getSymbol(result.repoId, r.id);
+      const s = await service.getSymbol(result.id, r.id);
       if (s) indexed += s.source;
     }
     const indexedTokens = indexed.length / 4;
@@ -245,7 +245,7 @@ describe('CodeIndexService', () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-edge' });
     await assert.rejects(
-      () => service.getSymbol(result.repoId, 'nonexistent-id'),
+      () => service.getSymbol(result.id, 'nonexistent-id'),
       /not found/i
     );
   });
