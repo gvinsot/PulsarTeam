@@ -974,17 +974,20 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                         >
                           <option value="refine">Refine task</option>
                           <option value="execute">Execute task</option>
+                          <option value="decide">Decide</option>
                         </select>
                       </>
                     )}
                   </div>
 
-                  {/* Instructions (only in refine mode) */}
-                  {t.autoRefine && (t.mode || 'refine') === 'refine' && (
+                  {/* Instructions (refine + decide modes) */}
+                  {t.autoRefine && (t.mode || 'refine') !== 'execute' && (
                     <textarea
                       value={t.instructions || ''}
                       onChange={e => updateTransition(idx, { instructions: e.target.value })}
-                      placeholder="Instructions for the agent when processing this transition..."
+                      placeholder={t.mode === 'decide'
+                        ? "Criteria for the decision (e.g. 'Approve if the task is clear and actionable')..."
+                        : "Instructions for the agent when processing this transition..."}
                       rows={2}
                       className="w-full bg-dark-700 border border-dark-600 rounded-lg px-2.5 py-1.5 text-xs text-dark-200
                         placeholder-dark-500 focus:outline-none focus:border-indigo-500 resize-none transition-colors"

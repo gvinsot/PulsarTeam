@@ -2731,7 +2731,7 @@ export class AgentManager {
     console.log(`[Workflow] _checkAutoRefine: status="${todo.status}" text="${(todo.text || '').slice(0, 60)}" agentId="${todo.agentId}"`);
     getWorkflow('_default').then(workflow => {
       const transition = workflow.transitions.find(
-        t => t.from === todo.status && t.autoRefine && (t.agent || t.mode === 'execute')
+        t => t.from === todo.status && t.autoRefine && (t.agent || t.mode === 'execute' || t.mode === 'decide')
       );
       if (!transition) {
         console.log(`[Workflow] No matching transition for status="${todo.status}" (${workflow.transitions.length} transitions checked)`);
@@ -3375,7 +3375,7 @@ export class AgentManager {
       try {
         const workflow = await getWorkflow('_default');
         const transition = workflow.transitions.find(
-          t => t.from === 'in_progress' && t.autoRefine && (t.mode === 'execute' || t.agent)
+          t => t.from === 'in_progress' && t.autoRefine && (t.mode === 'execute' || t.mode === 'decide' || t.agent)
         );
         if (transition?.to) targetStatus = transition.to;
       } catch (_) { /* use default */ }

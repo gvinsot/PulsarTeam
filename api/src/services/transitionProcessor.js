@@ -15,13 +15,42 @@ function findAgentByRole(agentManager, role) {
 }
 
 /**
+ * Parse a decide-mode response to extract the structured decision.
+ * Accepts JSON like { "decision": "proceed" } or plain text containing proceed/hold/revise.
+ */
+function parseDecision(response) {
+  // Try JSON first
+  try {
+    const jsonMatch = response.match(/\{[\s\S]*?"decision"[\s\S]*?\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        decision: (parsed.decision || 'hold').toLowerCase(),
+        reason: parsed.reason || '',
+      };
+    }
+  } catch (_) { /* not valid JSON, fall through */ }
+
+  // Fall back to keyword detection in plain text
+  const lower = response.toLowerCase();
+  if (lower.includes('proceed') || lower.includes('approve') || lower.includes('yes')) {
+    return { decision: 'proceed', reason: response };
+  }
+  if (lower.includes('revise') || lower.includes('reject') || lower.includes('no')) {
+    return { decision: 'revise', reason: response };
+  }
+  return { decision: 'hold', reason: response };
+}
+
+/**
  * Process an automatic workflow transition.
  *
- * Two modes based on transition config:
+ * Three modes based on transition config:
  * - Refinement mode (default): sends a refinement prompt, appends result to task text
- * - Execution mode (instructions empty or contains [EXECUTE]): sends the task as-is for execution
+ * - Execution mode: sends the task as-is for execution
+ * - Decide mode: agent evaluates whether the task should proceed, hold, or be revised
  *
- * The `todo._transition` object carries: { agent (role), to (target status or null), instructions }
+ * The `todo._transition` object carries: { agent (role), to (target status or null), instructions, mode }
  */
 export async function processTransition(todo, agentManager, io) {
   const targetStatus = todo._transition?.to ?? 'backlog';
@@ -34,6 +63,7 @@ export async function processTransition(todo, agentManager, io) {
   try {
     // Explicit mode takes precedence; fall back to legacy heuristic
     const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
+    const isDecide = mode === 'decide';
 
     // Find agent by role
     let agent = null;
@@ -88,6 +118,20 @@ export async function processTransition(todo, agentManager, io) {
       prompt = todo.text;
       messagePrefix = '';
       console.log(`[Workflow] Executing "${todo.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
+    } else if (isDecide) {
+      // Decide mode: agent evaluates whether the task should proceed
+      prompt = `You are a decision gate. Evaluate the following task and decide if it should proceed to the next step.
+
+Task: ${todo.text}
+${todo.project ? `Project: ${todo.project}\n` : ''}${instructions ? `Criteria: ${instructions}\n` : ''}
+You MUST reply with a JSON object (and nothing else) in this exact format:
+{ "decision": "proceed" | "hold" | "revise", "reason": "brief explanation" }
+
+- "proceed": the task is ready to move to the next step
+- "hold": the task should stay in its current state (not ready yet)
+- "revise": the task needs changes before it can proceed (explain what needs to change)`;
+      messagePrefix = '[Decide]';
+      console.log(`[Workflow] Deciding "${todo.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
     } else {
       // Refinement mode: ask for an improved description
       prompt = `Refine the following task:\n\nTask: ${todo.text}\n${todo.project ? `Project: ${todo.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved description.`;
@@ -130,7 +174,29 @@ export async function processTransition(todo, agentManager, io) {
         if (targetStatus) {
           agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: agent.name });
         }
+      } else if (isDecide) {
+        // Parse the agent's decision
+        const { decision, reason } = parseDecision(response);
+        console.log(`[Workflow] Decision for "${todo.text.slice(0, 60)}": ${decision} — ${reason.slice(0, 100)}`);
+
+        if (decision === 'proceed') {
+          // Move to target status
+          if (targetStatus) {
+            agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: agent.name });
+          }
+          console.log(`[Workflow] Decide: proceeding "${todo.text.slice(0, 60)}" -> ${targetStatus}`);
+        } else if (decision === 'revise') {
+          // Append feedback but keep task in current status
+          if (reason) {
+            agentManager.updateTodoText(todo.agentId, todo.id, `${todo.text}\n\n---\n**Review feedback:** ${reason}`);
+          }
+          console.log(`[Workflow] Decide: revision requested for "${todo.text.slice(0, 60)}" — stays in "${todo.status}"`);
+        } else {
+          // hold — task stays in current status, no changes
+          console.log(`[Workflow] Decide: holding "${todo.text.slice(0, 60)}" in "${todo.status}"`);
+        }
       } else {
+        // Refine mode
         if (response) {
           agentManager.updateTodoText(todo.agentId, todo.id, `${todo.text}\n\n---\n${response}`);
         }
