@@ -34,6 +34,11 @@ export async function processTransition(todo, agentManager, io) {
       agent = findAgentByRole(agentManager, transitionRole);
     }
 
+    const instructions = todo._transition?.instructions || '';
+    const mode = todo._transition?.mode;
+    // Explicit mode takes precedence; fall back to legacy heuristic
+    const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
+
     // Fallback: try global ideasAgent setting (by name, for backward compat)
     if (!agent) {
       const settings = await getSettings();
@@ -44,16 +49,19 @@ export async function processTransition(todo, agentManager, io) {
       }
     }
 
+    // In execute mode, fall back to the task's own agent when no role-matched agent is found
+    if (!agent && isExecution && todo.agentId) {
+      agent = agentManager.agents.get(todo.agentId);
+      if (agent) {
+        console.log(`[Workflow] Execute mode: using task owner "${agent.name}" (no role agent found)`);
+      }
+    }
+
     if (!agent) {
-      console.log(`[Workflow] No agent with role "${transitionRole}" found${targetStatus ? `, moving to ${targetStatus}` : ''}`);
+      console.log(`[Workflow] No agent found for transition${targetStatus ? `, moving to ${targetStatus}` : ''}`);
       if (targetStatus) agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: 'workflow' });
       return;
     }
-
-    const instructions = todo._transition?.instructions || '';
-    const mode = todo._transition?.mode;
-    // Explicit mode takes precedence; fall back to legacy heuristic
-    const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
 
     // Auto-switch agent to the todo's project if needed
     if (todo.project && todo.project !== agent.project) {

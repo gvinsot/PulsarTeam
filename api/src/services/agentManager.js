@@ -2728,7 +2728,7 @@ export class AgentManager {
     // Fire-and-forget: check if there's an autoRefine transition for this status
     getWorkflow('_default').then(workflow => {
       const transition = workflow.transitions.find(
-        t => t.from === todo.status && t.autoRefine && t.agent
+        t => t.from === todo.status && t.autoRefine && (t.agent || t.mode === 'execute')
       );
       if (!transition) return;
       // Attach transition config so the processor knows the target status and instructions
