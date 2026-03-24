@@ -928,8 +928,8 @@ function migrateTransition(t) {
 
 // ── Condition value widget ───────────────────────────────────────────────────
 
-function ConditionValueWidget({ cond, onChange }) {
-  if (cond.field === 'owner_status' || cond.field === 'assignee_status') {
+function ConditionValueWidget({ cond, onChange, agents = [] }) {
+  if (cond.field === 'assignee_status') {
     return (
       <select value={cond.value || 'idle'} onChange={e => onChange({ ...cond, value: e.target.value })}
         className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
@@ -939,12 +939,32 @@ function ConditionValueWidget({ cond, onChange }) {
       </select>
     );
   }
-  if (cond.field === 'owner_enabled' || cond.field === 'assignee_enabled' || cond.field === 'task_has_assignee') {
+  if (cond.field === 'idle_agent_available') {
+    const roles = [...new Set(agents.map(a => a.role).filter(Boolean))];
+    return (
+      <select value={cond.value || roles[0] || ''} onChange={e => onChange({ ...cond, value: e.target.value })}
+        className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+        {roles.map(r => <option key={r} value={r}>{r}</option>)}
+        {roles.length === 0 && <option value="">no roles</option>}
+      </select>
+    );
+  }
+  if (cond.field === 'assignee_enabled' || cond.field === 'task_has_assignee') {
     return (
       <select value={cond.value || 'true'} onChange={e => onChange({ ...cond, value: e.target.value })}
         className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
         <option value="true">true</option>
         <option value="false">false</option>
+      </select>
+    );
+  }
+  if (cond.field === 'assignee_role') {
+    const roles = [...new Set(agents.map(a => a.role).filter(Boolean))];
+    return (
+      <select value={cond.value || roles[0] || ''} onChange={e => onChange({ ...cond, value: e.target.value })}
+        className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+        {roles.map(r => <option key={r} value={r}>{r}</option>)}
+        {roles.length === 0 && <option value="">no roles</option>}
       </select>
     );
   }
@@ -1047,7 +1067,7 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
   const addCondition = (tIdx) => {
     setTransitions(prev => prev.map((t, i) => {
       if (i !== tIdx) return t;
-      return { ...t, conditions: [...t.conditions, { field: 'assignee_status', operator: 'eq', value: 'idle' }] };
+      return { ...t, conditions: [...t.conditions, { field: 'idle_agent_available', operator: 'eq', value: '' }] };
     }));
   };
 
@@ -1169,20 +1189,23 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                             <select value={cond.field || 'assignee_status'}
                               onChange={e => updateCondition(idx, ci, { ...cond, field: e.target.value })}
                               className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                              <option value="owner_status">Owner status</option>
-                              <option value="owner_enabled">Owner enabled</option>
-                              <option value="assignee_status">Assignee status</option>
-                              <option value="assignee_enabled">Assignee enabled</option>
-                              <option value="assignee_role">Assignee role</option>
+                              <option value="assignee_status">Assigned agent status</option>
+                              <option value="assignee_enabled">Assigned agent enabled</option>
+                              <option value="assignee_role">Assigned agent role</option>
                               <option value="task_has_assignee">Task has assignee</option>
+                              <option value="idle_agent_available">Idle agent available (by role)</option>
                             </select>
-                            <select value={cond.operator || 'eq'}
-                              onChange={e => updateCondition(idx, ci, { ...cond, operator: e.target.value })}
-                              className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                              <option value="eq">is</option>
-                              <option value="neq">is not</option>
-                            </select>
-                            <ConditionValueWidget cond={cond} onChange={c => updateCondition(idx, ci, c)} />
+                            {cond.field === 'idle_agent_available' ? (
+                              <span className="text-[10px] text-dark-400">with role</span>
+                            ) : (
+                              <select value={cond.operator || 'eq'}
+                                onChange={e => updateCondition(idx, ci, { ...cond, operator: e.target.value })}
+                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                                <option value="eq">is</option>
+                                <option value="neq">is not</option>
+                              </select>
+                            )}
+                            <ConditionValueWidget cond={cond} onChange={c => updateCondition(idx, ci, c)} agents={agents} />
                             <button onClick={() => removeCondition(idx, ci)}
                               className="p-0.5 text-dark-500 hover:text-red-400">
                               <Trash2 className="w-2.5 h-2.5" />

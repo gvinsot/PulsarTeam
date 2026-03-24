@@ -2731,16 +2731,26 @@ export class AgentManager {
   // ─── Workflow Auto-Refine ───────────────────────────────────────────
   /** Evaluate a condition against the current todo/agent state */
   _evaluateCondition(cond, todo) {
-    const ownerAgent = todo.agentId ? this.agents.get(todo.agentId) : null;
     const assigneeAgent = todo.assignee ? this.agents.get(todo.assignee) : null;
     let fieldValue;
     switch (cond.field) {
-      case 'owner_status': fieldValue = ownerAgent?.status || 'none'; break;
-      case 'owner_enabled': fieldValue = ownerAgent ? (ownerAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
+      // Legacy owner fields — map to assignee for backward compat
+      case 'owner_status': fieldValue = assigneeAgent?.status || 'none'; break;
+      case 'owner_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
       case 'assignee_status': fieldValue = assigneeAgent?.status || 'none'; break;
       case 'assignee_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
       case 'assignee_role': fieldValue = assigneeAgent?.role || ''; break;
       case 'task_has_assignee': fieldValue = todo.assignee ? 'true' : 'false'; break;
+      case 'idle_agent_available': {
+        // Check if any idle+enabled agent with the given role exists
+        const role = cond.value;
+        const found = [...this.agents.values()].some(a =>
+          a.project === todo.project && a.status === 'idle' && a.enabled !== false && (!role || a.role === role)
+        );
+        fieldValue = found ? 'true' : 'false';
+        // For this condition, operator 'eq' checks if true, 'neq' checks if false
+        return cond.operator === 'neq' ? !found : found;
+      }
       default: fieldValue = '';
     }
     return cond.operator === 'neq' ? fieldValue !== cond.value : fieldValue === cond.value;
