@@ -2875,13 +2875,30 @@ export class AgentManager {
       // ── Auto-assign by column role (independent of transitions) ──
       const currentColumn = workflow.columns?.find(c => c.id === todo.status);
       if (currentColumn?.autoAssignRole && !todo.assignee) {
-        const autoAgent = Array.from(this.agents.values()).find(a =>
+        // Find all matching agents, then pick the one with the fewest tasks in this column
+        const candidates = Array.from(this.agents.values()).filter(a =>
           a.enabled !== false &&
-          a.role === currentColumn.autoAssignRole &&
-          !this.agentHasActiveTask(a.id)
+          a.role === currentColumn.autoAssignRole
         );
+        let autoAgent = null;
+        let minTasks = Infinity;
+        for (const candidate of candidates) {
+          // Count tasks assigned to this agent in the current column (across all agents' todoLists)
+          let count = 0;
+          for (const [, owner] of this.agents) {
+            for (const t of owner.todoList || []) {
+              if (t.status === todo.status && (t.assignee === candidate.id || (!t.assignee && owner.id === candidate.id))) {
+                count++;
+              }
+            }
+          }
+          if (count < minTasks) {
+            minTasks = count;
+            autoAgent = candidate;
+          }
+        }
         if (autoAgent) {
-          console.log(`[Auto-Assign] Task "${(todo.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (role: ${currentColumn.autoAssignRole}, column: ${currentColumn.label})`);
+          console.log(`[Auto-Assign] Task "${(todo.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (${minTasks} tasks in column, role: ${currentColumn.autoAssignRole})`);
           todo.assignee = autoAgent.id;
           // Update the actual agent's todoList (todo is a spread copy)
           const ownerAgent = this.agents.get(todo.agentId);
@@ -2919,16 +2936,24 @@ export class AgentManager {
 
         for (const action of actions) {
           if (action.type === 'assign_agent') {
-            // Find an idle agent with the specified role and assign
-            const agent = Array.from(this.agents.values()).find(a =>
+            // Find the agent with the specified role that has the fewest tasks in this column
+            const candidates = Array.from(this.agents.values()).filter(a =>
               a.enabled !== false &&
-              a.status === 'idle' &&
-              (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
-              !this.agentHasActiveTask(a.id)
+              (a.role || '').toLowerCase() === (action.role || '').toLowerCase()
             );
+            let agent = null;
+            let minTasks = Infinity;
+            for (const c of candidates) {
+              let count = 0;
+              for (const [, owner] of this.agents) {
+                for (const t of owner.todoList || []) {
+                  if (t.status === todo.status && (t.assignee === c.id || (!t.assignee && owner.id === c.id))) count++;
+                }
+              }
+              if (count < minTasks) { minTasks = count; agent = c; }
+            }
             if (agent) {
               todo.assignee = agent.id;
-              // Update the actual agent's todoList (todo is a spread copy)
               const ownerAgent = this.agents.get(todo.agentId);
               const actualTodo = ownerAgent?.todoList?.find(t => t.id === todo.id);
               if (actualTodo) {
@@ -2936,7 +2961,7 @@ export class AgentManager {
                 saveAgent(ownerAgent);
               }
               this.io?.to(`agent:${todo.agentId}`)?.emit('todo:updated', { agentId: todo.agentId, todo });
-              console.log(`[Workflow] Action: assigned "${(todo.text || '').slice(0, 60)}" to "${agent.name}" (role: ${action.role})`);
+              console.log(`[Workflow] Action: assigned "${(todo.text || '').slice(0, 60)}" to "${agent.name}" (${minTasks} tasks in column, role: ${action.role})`);
             } else {
               console.log(`[Workflow] Action: no idle agent with role "${action.role}" — skipping assign`);
             }
@@ -3723,12 +3748,21 @@ export class AgentManager {
             let didReturn = false;
             for (const action of actions) {
               if (action.type === 'assign_agent') {
-                const foundAgent = Array.from(this.agents.values()).find(a =>
+                const candidates = Array.from(this.agents.values()).filter(a =>
                   a.enabled !== false &&
-                  a.status === 'idle' &&
-                  (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
-                  !this.agentHasActiveTask(a.id)
+                  (a.role || '').toLowerCase() === (action.role || '').toLowerCase()
                 );
+                let foundAgent = null;
+                let minTasks = Infinity;
+                for (const c of candidates) {
+                  let count = 0;
+                  for (const [, ow] of this.agents) {
+                    for (const t of ow.todoList || []) {
+                      if (t.status === todo.status && (t.assignee === c.id || (!t.assignee && ow.id === c.id))) count++;
+                    }
+                  }
+                  if (count < minTasks) { minTasks = count; foundAgent = c; }
+                }
                 if (foundAgent) {
                   const actualTodo = agent.todoList.find(t => t.id === todo.id);
                   if (actualTodo) {
@@ -3736,7 +3770,7 @@ export class AgentManager {
                     saveAgent(agent);
                   }
                   this.io?.to(`agent:${agentId}`)?.emit('todo:updated', { agentId, todo: { ...todo, assignee: foundAgent.id } });
-                  console.log(`[Workflow] Condition re-check: assigned "${(todo.text || '').slice(0, 60)}" to "${foundAgent.name}" (role: ${action.role})`);
+                  console.log(`[Workflow] Condition re-check: assigned "${(todo.text || '').slice(0, 60)}" to "${foundAgent.name}" (${minTasks} tasks in column, role: ${action.role})`);
                 }
               } else if (action.type === 'run_agent') {
                 const enrichedTodo = {
