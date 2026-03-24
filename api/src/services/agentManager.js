@@ -2880,8 +2880,11 @@ export class AgentManager {
 
           } else if (action.type === 'change_status') {
             if (action.target && action.target !== todo.status) {
-              console.log(`[Workflow] Action: change_status "${todo.status}" -> "${action.target}"`);
-              this.setTodoStatus(todo.agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+              console.log(`[Workflow] Action: change_status "${todo.status}" -> "${action.target}" for "${(todo.text || '').slice(0, 60)}"`);
+              const result = this.setTodoStatus(todo.agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+              if (!result) {
+                console.warn(`[Workflow] Action: change_status BLOCKED (guard) for "${(todo.text || '').slice(0, 60)}"`);
+              }
               return; // status change triggers a new _checkAutoRefine cycle
             }
           }
@@ -2941,12 +2944,21 @@ export class AgentManager {
     if (!agent) return null;
     const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) return null;
-    // Guard: only one in_progress task per agent at a time
+    // Guard: only one in_progress task per assignee at a time
+    // The guard checks the ASSIGNEE (the agent actually working), not the todoList owner
     if (status === 'in_progress' && todo.status !== 'in_progress') {
-      const existing = agent.todoList.find(t => t.status === 'in_progress' && t.id !== todoId);
-      if (existing) {
-        console.warn(`[Guard] Agent "${agent.name}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${todo.text.slice(0, 60)}"`);
-        return null;
+      const assigneeId = todo.assignee || agentId;
+      // Check across ALL agents' todoLists for any in_progress task assigned to the same assignee
+      for (const [ownerId, ownerAgent] of this.agents) {
+        if (!ownerAgent.todoList) continue;
+        const existing = ownerAgent.todoList.find(t =>
+          t.status === 'in_progress' && t.id !== todoId &&
+          (t.assignee || ownerId) === assigneeId
+        );
+        if (existing) {
+          console.warn(`[Guard] Assignee "${this.agents.get(assigneeId)?.name || assigneeId}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${todo.text.slice(0, 60)}"`);
+          return null;
+        }
       }
     }
     const prevStatus = todo.status;
@@ -3508,8 +3520,11 @@ export class AgentManager {
                 break;
               } else if (action.type === 'change_status') {
                 if (action.target && action.target !== todo.status) {
-                  console.log(`[Workflow] Condition re-check: change_status "${todo.status}" -> "${action.target}"`);
-                  this.setTodoStatus(agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+                  console.log(`[Workflow] Condition re-check: change_status "${todo.status}" -> "${action.target}" for "${(todo.text || '').slice(0, 60)}"`);
+                  const result = this.setTodoStatus(agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+                  if (!result) {
+                    console.warn(`[Workflow] Condition re-check: change_status BLOCKED (guard) for "${(todo.text || '').slice(0, 60)}"`);
+                  }
                   this._conditionProcessing.delete(lockKey);
                   didReturn = true;
                   break;
