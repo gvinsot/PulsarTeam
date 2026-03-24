@@ -2755,11 +2755,7 @@ export class AgentManager {
         const triggerType = transition.triggerType || (transition.autoRefine ? 'agent' : 'none');
         
         if (triggerType === 'agent') {
-          // Agent-based: needs autoRefine + mode/agent
-          if (!transition.autoRefine && !transition.triggerType) continue;
-          if (!(transition.agent || transition.mode === 'execute' || transition.mode === 'decide' || transition.mode === 'refine')) continue;
-          
-          console.log(`[Workflow] Found agent transition: ${transition.from} -> ${transition.to} (mode=${transition.mode})`);
+          console.log(`[Workflow] Found agent transition: ${transition.from} -> ${transition.to} (mode=${transition.mode}, agent=${transition.agent || 'none'})`);
           const enrichedTodo = { ...todo, _transition: transition };
           processTransition(enrichedTodo, this, this.io).catch(err => {
             console.error(`[Workflow] Unhandled error for "${todo.text}":`, err.message);
@@ -2772,10 +2768,13 @@ export class AgentManager {
           const conditions = transition.conditions || [];
           if (conditions.length === 0) continue;
           
+          const ownerAgent = todo.agentId ? this.agents.get(todo.agentId) : null;
           const assigneeAgent = todo.assignee ? this.agents.get(todo.assignee) : null;
           const allMet = conditions.every(cond => {
             let fieldValue;
             switch (cond.field) {
+              case 'owner_status': fieldValue = ownerAgent?.status || 'none'; break;
+              case 'owner_enabled': fieldValue = ownerAgent ? (ownerAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
               case 'assignee_status': fieldValue = assigneeAgent?.status || 'none'; break;
               case 'assignee_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
               case 'assignee_role': fieldValue = assigneeAgent?.role || ''; break;
@@ -2787,12 +2786,8 @@ export class AgentManager {
           
           if (allMet) {
             console.log(`[Workflow] Conditional transition matched: ${transition.from} -> ${transition.to} (${conditions.length} conditions met)`);
-            todo.status = transition.to;
-            const db = require('./database');
-            await db.updateTodo(todo.agentId, todo.id, { status: transition.to });
-            this.io?.to(`agent:${todo.agentId}`)?.emit('todo:updated', { agentId: todo.agentId, todo });
-            // Check for further transitions from the new status
-            this._checkAutoRefine({ ...todo, status: transition.to });
+            // Use setTodoStatus to properly update history and trigger further transitions
+            this.setTodoStatus(todo.agentId, todo.id, transition.to, { skipAutoRefine: false, by: 'workflow-condition' });
             return;
           }
         }

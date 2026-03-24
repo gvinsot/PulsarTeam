@@ -924,8 +924,7 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
   const updateTransition = (idx, patch) => setTransitions(prev => prev.map((t, i) => i === idx ? { ...t, ...patch } : t));
   const removeTransition = (idx) => setTransitions(prev => prev.filter((_, i) => i !== idx));
   const addTransition = () => {
-    setTransitions(prev => [...prev, { from: cols[0]?.id || '', to: cols[1]?.id || '', triggerType: 'none', mode: 'refine', role: '', autoRefine: false, instructions: '', conditions: [] }]);
-  };
+    setTransitions(prev => [...prev, { from: cols[0]?.id || '', to: cols[1]?.id || '', triggerType: 'none', mode: 'refine', agent: '', autoRefine: false, instructions: '', conditions: [] }]);
   };
 
   return (
@@ -1057,9 +1056,9 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                           <option value="execute">Execute</option>
                           <option value="decide">Decide</option>
                         </select>
-                        <select value={t.role || ""} onChange={e => updateTransition(idx, { role: e.target.value || null })}
+                        <select value={t.agent || ""} onChange={e => updateTransition(idx, { agent: e.target.value || null })}
                           className="px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200">
-                          <option value="">Any role</option>
+                          <option value="">Select role...</option>
                           {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                         </select>
                       </div>
@@ -1087,6 +1086,8 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                               updateTransition(idx, { conditions: newConds });
                             }}
                             className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                            <option value="owner_status">Owner status</option>
+                            <option value="owner_enabled">Owner enabled</option>
                             <option value="assignee_status">Assignee status</option>
                             <option value="assignee_enabled">Assignee enabled</option>
                             <option value="assignee_role">Assignee role</option>
@@ -1102,15 +1103,40 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                             <option value="eq">is</option>
                             <option value="neq">is not</option>
                           </select>
-                          <input value={cond.value || ""}
-                            onChange={e => {
-                              const newConds = [...(t.conditions || [])];
-                              newConds[ci] = { ...newConds[ci], value: e.target.value };
-                              updateTransition(idx, { conditions: newConds });
-                            }}
-                            placeholder="idle, enabled, developer..."
-                            className="flex-1 px-1.5 py-0.5 bg-dark-900 border border-dark-600 rounded text-[10px] text-dark-200 placeholder-dark-500"
-                          />
+                          {(cond.field === 'owner_status' || cond.field === 'assignee_status') ? (
+                            <select value={cond.value || "idle"}
+                              onChange={e => {
+                                const newConds = [...(t.conditions || [])];
+                                newConds[ci] = { ...newConds[ci], value: e.target.value };
+                                updateTransition(idx, { conditions: newConds });
+                              }}
+                              className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                              <option value="idle">idle</option>
+                              <option value="busy">busy</option>
+                              <option value="error">error</option>
+                            </select>
+                          ) : (cond.field === 'owner_enabled' || cond.field === 'assignee_enabled' || cond.field === 'task_has_assignee') ? (
+                            <select value={cond.value || "true"}
+                              onChange={e => {
+                                const newConds = [...(t.conditions || [])];
+                                newConds[ci] = { ...newConds[ci], value: e.target.value };
+                                updateTransition(idx, { conditions: newConds });
+                              }}
+                              className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                              <option value="true">true</option>
+                              <option value="false">false</option>
+                            </select>
+                          ) : (
+                            <input value={cond.value || ""}
+                              onChange={e => {
+                                const newConds = [...(t.conditions || [])];
+                                newConds[ci] = { ...newConds[ci], value: e.target.value };
+                                updateTransition(idx, { conditions: newConds });
+                              }}
+                              placeholder="value..."
+                              className="flex-1 px-1.5 py-0.5 bg-dark-900 border border-dark-600 rounded text-[10px] text-dark-200 placeholder-dark-500"
+                            />
+                          )}
                           <button onClick={() => {
                               const newConds = (t.conditions || []).filter((_, j) => j !== ci);
                               updateTransition(idx, { conditions: newConds });
@@ -1121,7 +1147,7 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                         </div>
                       ))}
                       <button onClick={() => {
-                          const newConds = [...(t.conditions || []), { field: "assignee_status", operator: "eq", value: "idle" }];
+                          const newConds = [...(t.conditions || []), { field: "owner_status", operator: "eq", value: "idle" }];
                           updateTransition(idx, { conditions: newConds });
                         }}
                         className="text-[10px] text-amber-400 hover:text-amber-300">
