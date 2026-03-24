@@ -891,10 +891,10 @@ const AVAILABLE_COLORS = [
 // ── Action type helpers ──────────────────────────────────────────────────────
 
 const ACTION_OPTIONS = [
-  { value: 'assign_agent', label: 'Assign to agent' },
-  { value: 'run_agent:execute', label: 'Execute (agent)' },
-  { value: 'run_agent:refine', label: 'Refine (agent)' },
-  { value: 'run_agent:decide', label: 'Decide (agent)' },
+  { value: 'assign_agent', label: 'Assign to agent (by role)' },
+  { value: 'run_agent:execute', label: 'Execute task (agent)' },
+  { value: 'run_agent:refine', label: 'Refine description (agent)' },
+  { value: 'run_agent:decide', label: 'Evaluate / Decide (agent)' },
   { value: 'change_status', label: 'Move to status' },
 ];
 
@@ -1158,8 +1158,8 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                     <select value={t.trigger || 'on_enter'}
                       onChange={e => updateTransition(idx, { trigger: e.target.value })}
                       className="w-full px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200">
-                      <option value="on_enter">On enter (fires when task enters this column)</option>
-                      <option value="condition">When conditions are met</option>
+                      <option value="on_enter">On enter — fires immediately when a task enters this column</option>
+                      <option value="condition">When conditions met — fires when all conditions become true (checked periodically)</option>
                     </select>
                     {t.trigger === 'condition' && (
                       <div className="mt-2 space-y-1.5 pl-3 border-l-2 border-amber-500/30">
@@ -1253,13 +1253,15 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                             </button>
                           </div>
 
-                          {/* Instructions for refine/decide */}
-                          {action.type === 'run_agent' && (action.mode === 'refine' || action.mode === 'decide') && (
+                          {/* Instructions for agent actions */}
+                          {action.type === 'run_agent' && (
                             <textarea value={action.instructions || ''}
                               onChange={e => updateAction(idx, ai, { instructions: e.target.value })}
                               placeholder={action.mode === 'decide'
-                                ? "Decision criteria... (e.g., 'Approve if task is well-defined')"
-                                : "Refinement instructions... (e.g., 'Add acceptance criteria')"}
+                                ? "Decision criteria... (e.g., 'Approve if task has acceptance criteria and clear scope')"
+                                : action.mode === 'refine'
+                                ? "Refinement instructions... (e.g., 'Add acceptance criteria and break into sub-tasks')"
+                                : "Extra instructions (optional)... (e.g., 'Focus on unit tests')"}
                               className="w-full ml-4 bg-dark-900 border border-dark-600 rounded px-2 py-1.5 text-xs text-dark-200 placeholder-dark-500 resize-none h-14"
                               style={{ width: 'calc(100% - 1rem)' }}
                             />

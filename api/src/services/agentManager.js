@@ -508,6 +508,8 @@ export class AgentManager {
       this.addActionLog(id, 'busy', detail || 'Agent started working');
     } else if (status === 'idle' && prev !== 'idle') {
       this.addActionLog(id, 'idle', detail || 'Agent finished working');
+      // Agent became idle — re-check conditional transitions that might depend on agent status
+      this._recheckConditionalTransitions();
     } else if (status === 'error') {
       this.addActionLog(id, 'error', 'Agent encountered an error', detail);
     }
@@ -3407,6 +3409,94 @@ export class AgentManager {
     this._emit('agent:updated', this._sanitize(agent));
   }
 
+  // ─── Re-evaluate conditional transitions ──────────────────────────
+  // Called periodically (from task loop) to re-check condition-based transitions
+  // for tasks that are stuck waiting for conditions to be met (e.g. "assignee is idle").
+  _recheckConditionalTransitions() {
+    getWorkflow('_default').then(async (workflow) => {
+      const condTransitions = workflow.transitions
+        .map(t => this._migrateTransition(t))
+        .filter(t => t && t.trigger === 'condition' && (t.conditions || []).length > 0);
+
+      if (condTransitions.length === 0) return;
+
+      // Collect all todos across all agents
+      for (const [agentId, agent] of this.agents) {
+        if (!agent.todoList) continue;
+        for (const todo of agent.todoList) {
+          // Find conditional transitions matching this todo's status
+          const matching = condTransitions.filter(t => t.from === todo.status);
+          if (matching.length === 0) continue;
+
+          for (const transition of matching) {
+            const allMet = transition.conditions.every(cond =>
+              this._evaluateCondition(cond, { ...todo, agentId })
+            );
+            if (!allMet) continue;
+
+            // Prevent double-processing: skip if already being processed
+            const lockKey = `${agentId}:${todo.id}`;
+            if (this._conditionProcessing?.has(lockKey)) continue;
+            if (!this._conditionProcessing) this._conditionProcessing = new Set();
+            this._conditionProcessing.add(lockKey);
+
+            console.log(`[Workflow] Condition re-check: all conditions met for "${(todo.text || '').slice(0, 60)}" in status="${todo.status}"`);
+
+            // Process actions (same logic as _checkAutoRefine)
+            const actions = transition.actions || [];
+            let didReturn = false;
+            for (const action of actions) {
+              if (action.type === 'assign_agent') {
+                const foundAgent = Array.from(this.agents.values()).find(a =>
+                  a.enabled !== false &&
+                  a.status === 'idle' &&
+                  (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
+                  !this.agentHasActiveTask(a.id)
+                );
+                if (foundAgent) {
+                  const actualTodo = agent.todoList.find(t => t.id === todo.id);
+                  if (actualTodo) {
+                    actualTodo.assignee = foundAgent.id;
+                    saveAgent(agent);
+                  }
+                  this.io?.to(`agent:${agentId}`)?.emit('todo:updated', { agentId, todo: { ...todo, assignee: foundAgent.id } });
+                  console.log(`[Workflow] Condition re-check: assigned "${(todo.text || '').slice(0, 60)}" to "${foundAgent.name}" (role: ${action.role})`);
+                }
+              } else if (action.type === 'run_agent') {
+                const enrichedTodo = {
+                  ...todo, agentId,
+                  _transition: {
+                    agent: action.role || '',
+                    mode: action.mode || 'execute',
+                    instructions: action.instructions || '',
+                    to: action.targetStatus || null,
+                  }
+                };
+                console.log(`[Workflow] Condition re-check: run_agent mode="${action.mode}" role="${action.role}"`);
+                processTransition(enrichedTodo, this, this.io)
+                  .catch(err => console.error(`[Workflow] Condition re-check error:`, err.message))
+                  .finally(() => this._conditionProcessing.delete(lockKey));
+                didReturn = true;
+                break;
+              } else if (action.type === 'change_status') {
+                if (action.target && action.target !== todo.status) {
+                  console.log(`[Workflow] Condition re-check: change_status "${todo.status}" -> "${action.target}"`);
+                  this.setTodoStatus(agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+                  didReturn = true;
+                  break;
+                }
+              }
+            }
+            if (!didReturn) this._conditionProcessing.delete(lockKey);
+            break; // one transition matched — stop checking others for this todo
+          }
+        }
+      }
+    }).catch(err => {
+      console.error(`[Workflow] Condition re-check error:`, err.message);
+    });
+  }
+
   // ─── Automatic Task Loop ───────────────────────────────────────────
   // Periodically scans idle+enabled agents for pending todos and executes the first one.
 
@@ -3426,6 +3516,9 @@ export class AgentManager {
   }
 
   _processNextPendingTasks() {
+    // Re-evaluate conditional transitions for tasks waiting on conditions
+    this._recheckConditionalTransitions();
+
     for (const [agentId, agent] of this.agents) {
       // Skip disabled, non-idle, or already being processed by the loop
       if (agent.enabled === false) continue;
