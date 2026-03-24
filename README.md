@@ -169,3 +169,7 @@ This project is licensed under the **GNU Affero General Public License v3.0 (AGP
 - This ensures that all improvements to PulsarTeam remain open, even when deployed as a service
 
 See [LICENSE](LICENSE) for the full license text.
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/pulsarteam)
