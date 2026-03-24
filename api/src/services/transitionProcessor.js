@@ -96,22 +96,8 @@ export async function processTransition(todo, agentManager, io) {
       if (agent) console.log(`[Workflow] Found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
     }
 
-    // Fallback: try global ideasAgent setting (by name, for backward compat)
-    // Only assign if the agent is idle — never force-assign a busy agent
-    if (!agent) {
-      const settings = await getSettings();
-      if (settings.ideasAgent) {
-        agent = Array.from(agentManager.agents.values()).find(
-          a => a.enabled !== false && a.status === 'idle' && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
-        );
-        if (agent) console.log(`[Workflow] Found idle agent via ideasAgent setting: ${agent.name}`);
-      }
-    }
-
-    // In execute mode, fall back to the task's assignee or owner
-    // Only if the agent is idle
+    // In execute mode, use the task's assignee or owner (not ideasAgent)
     if (!agent && isExecution) {
-      // Prefer the assigned agent over the task owner
       const assignee = todo.assignee ? agentManager.agents.get(todo.assignee) : null;
       if (assignee && assignee.enabled !== false && assignee.status === 'idle') {
         agent = assignee;
@@ -122,6 +108,17 @@ export async function processTransition(todo, agentManager, io) {
           agent = owner;
           console.log(`[Workflow] Execute mode: using idle task owner "${agent.name}" (${agent.id})`);
         }
+      }
+    }
+
+    // Fallback for non-execute modes: try global ideasAgent setting
+    if (!agent && !isExecution) {
+      const settings = await getSettings();
+      if (settings.ideasAgent) {
+        agent = Array.from(agentManager.agents.values()).find(
+          a => a.enabled !== false && a.status === 'idle' && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
+        );
+        if (agent) console.log(`[Workflow] Found idle agent via ideasAgent setting: ${agent.name}`);
       }
     }
 
