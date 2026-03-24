@@ -33,6 +33,7 @@ services:
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost}
+      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
       - GIT_USER_NAME=${GIT_USER_NAME:-PulsarTeam}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-agent@pulsarteam.local}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
