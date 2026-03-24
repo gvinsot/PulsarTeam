@@ -30,6 +30,10 @@ services:
       - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET}
       - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI}
       - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID}
+      - JIRA_BOARD_URL=${JIRA_BOARD_URL:-}
+      - JIRA_ORG_ID=${JIRA_ORG_ID:-}
+      - JIRA_API_KEY=${JIRA_API_KEY:-}
+      - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock  # Docker CLI for sandbox management
       - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro  # SSH keys (also mounted into sandboxes)
