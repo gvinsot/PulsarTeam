@@ -1,31 +1,50 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { getSocket } from '../socket';
 
-const WebSocketContext = createContext({ socket: null, connected: false });
+const WebSocketContext = createContext({ socket: null, connected: false, lastMessage: null });
 
 export function WebSocketProvider({ children }) {
   const [connected, setConnected] = useState(false);
-  const socket = getSocket();
+  const [lastMessage, setLastMessage] = useState(null);
+  const socketRef = useRef(null);
 
   useEffect(() => {
-    if (!socket) return;
+    const check = () => {
+      const s = getSocket();
+      if (s && s !== socketRef.current) {
+        socketRef.current = s;
+        setConnected(s.connected);
 
-    setConnected(socket.connected);
+        const onConnect = () => setConnected(true);
+        const onDisconnect = () => setConnected(false);
+        const onAny = (event, data) => setLastMessage({ event, data, ts: Date.now() });
 
-    const onConnect = () => setConnected(true);
-    const onDisconnect = () => setConnected(false);
+        s.on('connect', onConnect);
+        s.on('disconnect', onDisconnect);
+        s.onAny(onAny);
 
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-
-    return () => {
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
+        return () => {
+          s.off('connect', onConnect);
+          s.off('disconnect', onDisconnect);
+          s.offAny(onAny);
+        };
+      }
     };
-  }, [socket]);
+
+    // Socket may not exist yet (created after login), so poll briefly
+    const cleanup = check();
+    if (cleanup) return cleanup;
+
+    const interval = setInterval(() => {
+      const c = check();
+      if (c) clearInterval(interval);
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, []);
 
   return (
-    <WebSocketContext.Provider value={{ socket, connected }}>
+    <WebSocketContext.Provider value={{ socket: socketRef.current, connected, lastMessage }}>
       {children}
     </WebSocketContext.Provider>
   );
