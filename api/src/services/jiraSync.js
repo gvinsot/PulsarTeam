@@ -51,13 +51,9 @@ function getConfig() {
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 function authHeaders(cfg) {
-  // PAT tokens start with ATCTT3x → Bearer
-  if (cfg.apiKey.startsWith('ATCTT3x') || cfg.apiKey.startsWith('ATATT3x')) {
-    return { Authorization: `Bearer ${cfg.apiKey}` };
-  }
-  // Classic API token → Basic email:token
+  // Jira Cloud REST API requires Basic auth: email:api_token
   if (!cfg.userEmail) {
-    console.error('[Jira] JIRA_USER_EMAIL is required for classic API tokens');
+    console.error('[Jira] JIRA_USER_EMAIL is required (Basic auth with email:api_token)');
     return {};
   }
   const encoded = Buffer.from(`${cfg.userEmail}:${cfg.apiKey}`).toString('base64');
