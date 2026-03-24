@@ -107,13 +107,20 @@ export async function processTransition(todo, agentManager, io) {
       }
     }
 
-    // In execute mode, fall back to the task's own agent when no role-matched agent is found
-    // Only if the task owner is idle
-    if (!agent && isExecution && todo.agentId) {
-      const owner = agentManager.agents.get(todo.agentId);
-      if (owner && owner.enabled !== false && owner.status === 'idle') {
-        agent = owner;
-        console.log(`[Workflow] Execute mode: using idle task owner "${agent.name}" (${agent.id})`);
+    // In execute mode, fall back to the task's assignee or owner
+    // Only if the agent is idle
+    if (!agent && isExecution) {
+      // Prefer the assigned agent over the task owner
+      const assignee = todo.assignee ? agentManager.agents.get(todo.assignee) : null;
+      if (assignee && assignee.enabled !== false && assignee.status === 'idle') {
+        agent = assignee;
+        console.log(`[Workflow] Execute mode: using idle assignee "${agent.name}" (${agent.id})`);
+      } else if (todo.agentId) {
+        const owner = agentManager.agents.get(todo.agentId);
+        if (owner && owner.enabled !== false && owner.status === 'idle') {
+          agent = owner;
+          console.log(`[Workflow] Execute mode: using idle task owner "${agent.name}" (${agent.id})`);
+        }
       }
     }
 

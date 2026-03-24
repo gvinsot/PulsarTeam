@@ -1241,8 +1241,8 @@ function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                               {ACTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
 
-                            {/* Role selector for assign_agent and run_agent */}
-                            {(action.type === 'assign_agent' || action.type === 'run_agent') && (
+                            {/* Role selector for assign_agent and run_agent (except execute — uses task's assigned agent) */}
+                            {(action.type === 'assign_agent' || (action.type === 'run_agent' && action.mode !== 'execute')) && (
                               <select value={action.role || ''}
                                 onChange={e => updateAction(idx, ai, { role: e.target.value })}
                                 className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
