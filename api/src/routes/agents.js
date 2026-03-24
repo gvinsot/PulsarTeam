@@ -28,6 +28,7 @@ const createAgentSchema = z.object({
   template: z.string().max(200).nullable().optional(),
   color: z.string().max(50).optional(),
   icon: z.string().max(50).optional(),
+  copyApiKeyFromAgent: z.string().uuid().optional(),
 });
 
 // Schema for updating an agent (all fields optional)

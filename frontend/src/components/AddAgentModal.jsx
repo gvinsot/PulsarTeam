@@ -334,7 +334,8 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                             provider: source.provider || prev.provider,
                             model: source.model || prev.model,
                             endpoint: source.endpoint || prev.endpoint,
-                            apiKey: source.apiKey || prev.apiKey,
+                            apiKey: '',
+                            copyApiKeyFromAgent: source.id,
                             temperature: source.temperature ?? prev.temperature,
                             temperatureEnabled: source.temperature != null,
                             maxTokens: source.maxTokens ?? prev.maxTokens,
@@ -354,6 +355,9 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                       ))}
                     </select>
                     <p className="text-[11px] text-dark-500 mt-1">Copies provider, model, endpoint, API key, temperature, max tokens and context length</p>
+                    {form.copyApiKeyFromAgent && !form.apiKey && (
+                      <p className="text-[11px] text-green-400 mt-1">API key will be copied from the selected agent</p>
+                    )}
                   </div>
                 )}
 

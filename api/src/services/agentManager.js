@@ -123,7 +123,7 @@ export class AgentManager {
       provider: config.provider,
       model: config.model,
       endpoint: config.endpoint || '',
-      apiKey: config.apiKey || '',
+      apiKey: config.apiKey || (config.copyApiKeyFromAgent && this.agents.get(config.copyApiKeyFromAgent)?.apiKey) || '',
       instructions: config.instructions || 'You are a helpful AI assistant.',
       status: 'idle',
       currentTask: null,
