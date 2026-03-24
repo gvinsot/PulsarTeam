@@ -2730,7 +2730,24 @@ export class AgentManager {
   _checkAutoRefine(todo) {
     // Fire-and-forget: check if there's an autoRefine transition for this status
     console.log(`[Workflow] _checkAutoRefine: status="${todo.status}" text="${(todo.text || '').slice(0, 60)}" agentId="${todo.agentId}"`);
-    getWorkflow('_default').then(workflow => {
+    getWorkflow('_default').then(async (workflow) => {
+      // ── Auto-assign by column role (independent of transitions) ──
+      const currentColumn = workflow.columns?.find(c => c.id === todo.status);
+      if (currentColumn?.autoAssignRole && !todo.assignee) {
+        const autoAgent = Array.from(this.agents.values()).find(a =>
+          a.enabled !== false &&
+          a.role === currentColumn.autoAssignRole &&
+          !this.agentHasActiveTask(a.id)
+        );
+        if (autoAgent) {
+          console.log(`📋 [Auto-Assign] Task "${(todo.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (role: ${currentColumn.autoAssignRole}, column: ${currentColumn.label})`);
+          todo.assignee = autoAgent.id;
+          const db = require('./database');
+          await db.updateTodo(todo.agentId, todo.id, { assignee: todo.assignee });
+          this.io?.to(`agent:${todo.agentId}`)?.emit('todo:updated', { agentId: todo.agentId, todo });
+        }
+      }
+
       const transition = workflow.transitions.find(
         t => t.from === todo.status && t.autoRefine && (t.agent || t.mode === 'execute' || t.mode === 'decide')
       );
