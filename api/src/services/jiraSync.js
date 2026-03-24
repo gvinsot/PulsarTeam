@@ -225,6 +225,44 @@ export async function syncIssues(cfg, agentManager, statusToColumn) {
         created++;
       }
     }
+// ── Create Jira issue from PulsarTeam task ──────────────────────────────────
+export function isJiraEnabled() {
+  return !!getJiraConfig();
+}
+
+export async function createJiraIssue(title, description) {
+  const cfg = getJiraConfig();
+  if (!cfg) return null;
+
+  try {
+    const body = {
+      fields: {
+        project: { key: cfg.projectKey },
+        summary: title,
+        issuetype: { name: 'Task' },
+      },
+    };
+    if (description) {
+      body.fields.description = {
+        type: 'doc',
+        version: 1,
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: description }] }],
+      };
+    }
+
+    const issue = await jiraFetch(cfg, '/rest/api/3/issue', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+
+    console.log(`[Jira] Created issue ${issue.key} for "${title}"`);
+    return { key: issue.key, id: issue.id };
+  } catch (err) {
+    console.error(`[Jira] Failed to create issue for "${title}":`, err.message);
+    return null;
+  }
+}
+
 
     if (startAt + issues.length >= (data.total || issues.length)) break;
     startAt += maxResults;

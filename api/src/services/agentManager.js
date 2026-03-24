@@ -5,7 +5,7 @@ import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
 import { processTransition } from './transitionProcessor.js';
 import { getWorkflow } from './configManager.js';
-import { onTodoStatusChanged } from './jiraSync.js';
+import { onTodoStatusChanged, isJiraEnabled, createJiraIssue } from './jiraSync.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -3048,6 +3048,20 @@ export class AgentManager {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const todo = agent.todoList.find(t => t.id === todoId);
+
+    // If Jira sync is enabled and this task is not from Jira, create a Jira issue
+    if (isJiraEnabled() && todo.source?.type !== 'jira' && !todo.jiraKey) {
+      createJiraIssue(todo.title, todo.description).then(result => {
+        if (result) {
+          todo.jiraKey = result.key;
+          todo.jiraId = result.id;
+          todo.title = `[${result.key}] ${todo.title}`;
+          this.configManager.updateAgent(agentId, { todos: agent.todos });
+          if (this.io) this.io.emit('agent:updated', agent);
+          console.log(`[AgentManager] Linked todo to Jira issue ${result.key}`);
+        }
+      }).catch(err => console.error('[AgentManager] Jira issue creation failed:', err.message));
+    }
     if (!todo) return null;
     // Guard: only one in_progress task per assignee at a time
     // The guard checks the ASSIGNEE (the agent actually working), not the todoList owner
