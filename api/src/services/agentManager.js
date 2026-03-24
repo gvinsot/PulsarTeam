@@ -885,6 +885,10 @@ export class AgentManager {
 
       // Stream response (check for abort on each chunk)
       const safeMaxTokens = this._safeMaxTokens(messages, agent);
+
+      // Final safety net: truncate individual large messages if total still exceeds context
+      this._truncateMessagesToFit(messages, agent.contextLength || 131072, safeMaxTokens);
+
       for await (const chunk of provider.chatStream(messages, {
         temperature: agent.temperature,
         maxTokens: safeMaxTokens,
@@ -1051,6 +1055,7 @@ export class AgentManager {
 
         finishReason = null;
         const contMaxTokens = this._safeMaxTokens(messages, agent);
+        this._truncateMessagesToFit(messages, agent.contextLength || 131072, contMaxTokens);
         for await (const chunk of provider.chatStream(messages, {
           temperature: agent.temperature,
           maxTokens: contMaxTokens,
@@ -3355,12 +3360,15 @@ export class AgentManager {
     const contextLength = agent.contextLength || 131072;
     const desiredMaxTokens = agent.maxTokens || 4096;
     const estimatedInput = this._estimateTokens(messages);
-    // Leave 5% headroom for token estimation inaccuracy
+    // Leave 15% headroom for token estimation inaccuracy
     const safetyMargin = Math.ceil(contextLength * 0.15);
     const available = contextLength - estimatedInput - safetyMargin;
     if (available < desiredMaxTokens) {
-      const capped = Math.max(1024, available); // minimum 1024 output tokens
-      console.log(`⚠️  [TokenCap] "${agent.name}": capping maxTokens from ${desiredMaxTokens} to ${capped} (input ~${estimatedInput}, context ${contextLength})`);
+      // When available is very low/negative, _truncateMessagesToFit will handle it
+      const capped = Math.max(1024, available);
+      if (capped !== desiredMaxTokens) {
+        console.log(`⚠️  [TokenCap] "${agent.name}": capping maxTokens from ${desiredMaxTokens} to ${capped} (input ~${estimatedInput}, context ${contextLength})`);
+      }
       return capped;
     }
     return desiredMaxTokens;
@@ -3424,6 +3432,47 @@ export class AgentManager {
       'kv cache full', 'prompt is too long', 'input too long',
       'context_length_exceeded'
     ].some(kw => lower.includes(kw));
+  }
+
+  /**
+   * Truncate individual messages so total estimated tokens fits within context limit.
+   * Prioritizes truncating the largest non-system messages first.
+   * Preserves system prompt and keeps at least a minimum of each message.
+   * Returns true if truncation was performed.
+   */
+  _truncateMessagesToFit(messages, contextLimit, reserveOutputTokens = 1024) {
+    const target = contextLimit - reserveOutputTokens - Math.ceil(contextLimit * 0.10); // 10% safety margin
+    let estimated = this._estimateTokens(messages);
+    if (estimated <= target) return false;
+
+    const MIN_CONTENT = 500; // minimum chars to keep per message
+
+    // Build a list of truncatable messages (skip system prompt — index 0)
+    const candidates = messages
+      .map((m, i) => ({ index: i, len: (m.content || '').length }))
+      .filter(c => c.index > 0 && c.len > MIN_CONTENT)
+      .sort((a, b) => b.len - a.len); // largest first
+
+    let truncated = false;
+    for (const c of candidates) {
+      if (estimated <= target) break;
+      const msg = messages[c.index];
+      const content = msg.content || '';
+      // Calculate how much we need to cut (in chars, estimated 3 chars/token)
+      const excessTokens = estimated - target;
+      const excessChars = excessTokens * 3;
+      const newLen = Math.max(MIN_CONTENT, content.length - excessChars);
+      if (newLen < content.length) {
+        msg.content = content.slice(0, newLen) + `\n\n... [truncated from ${content.length} to ${newLen} chars to fit context window]`;
+        estimated = this._estimateTokens(messages);
+        truncated = true;
+      }
+    }
+
+    if (truncated) {
+      console.log(`✂️  [Truncate] Messages truncated to fit context: ~${estimated} tokens (target: ${target}, limit: ${contextLimit})`);
+    }
+    return truncated;
   }
 
   /**
@@ -3505,16 +3554,22 @@ export class AgentManager {
       const msgCount = toSummarize.length + (existingSummary ? 1 : 0);
       console.log(`🗜️  [Compact] "${agent.name}": summarizing ${msgCount} messages (${summaryInput.length} chars input, cap ${summaryInputCap}), keeping ${toKeep.length} recent, context ${contextLimit}`);
 
-      const summaryResponse = await provider.chat([
+      // Cap input to stay well within context: leave room for system prompt + output tokens
+      const maxSummaryInputChars = Math.min(summaryInputCap, (contextLimit - summaryMaxTokens - 1000) * 3);
+      const summaryMessages = [
         {
           role: 'system',
           content: `You are a conversation summarizer. Produce a concise but thorough summary of the conversation below.${existingSummary ? ' A previous summary is included — integrate it with the new messages into one unified summary.' : ''} Preserve: key decisions made, files modified and their changes, errors encountered and how they were resolved, current task status, tools/commands used, and any important context the assistant needs to continue working effectively. Be factual and structured. Use bullet points grouped by topic. Maximum ${summaryMaxWords} words.`
         },
         {
           role: 'user',
-          content: `Summarize this conversation:\n\n${summaryInput.slice(0, summaryInputCap)}`
+          content: `Summarize this conversation:\n\n${summaryInput.slice(0, maxSummaryInputChars)}`
         }
-      ], {
+      ];
+      // Safety: also truncate summary messages if they'd exceed context
+      this._truncateMessagesToFit(summaryMessages, contextLimit, summaryMaxTokens);
+
+      const summaryResponse = await provider.chat(summaryMessages, {
         temperature: 0.2,
         maxTokens: summaryMaxTokens,
         contextLength: contextLimit
@@ -3545,6 +3600,14 @@ export class AgentManager {
         agent.conversationHistory = [existingSummary, ...toKeep];
       } else {
         agent.conversationHistory = toKeep;
+      }
+      // Also truncate individual large messages to prevent context overflow on next call
+      const maxPerMsg = Math.floor((contextLimit * 3) / Math.max(agent.conversationHistory.length, 1) * 0.6);
+      for (const m of agent.conversationHistory) {
+        if (m.type === 'compaction-summary') continue;
+        if ((m.content || '').length > maxPerMsg) {
+          m.content = m.content.slice(0, maxPerMsg) + `\n\n... [hard-truncated from ${m.content.length} to ${maxPerMsg} chars]`;
+        }
       }
       saveAgent(agent);
     }
