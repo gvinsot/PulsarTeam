@@ -4,7 +4,9 @@ export const TOOL_DEFINITIONS = `
 You can interact with project files using these commands. Use the exact format shown.
 
 @read_file(path) - Read contents of a file
+  @read_file(path, startLine, endLine) - Read specific line range (1-indexed, inclusive)
   Example: @read_file(src/index.js)
+  Example: @read_file(src/index.js, 10, 25)
 
 @write_file(path, content) - Write content to a file (creates directories if needed)
   Example: @write_file(src/utils/helper.js, """
@@ -365,7 +367,7 @@ function jsonToToolCall(name, args) {
   if (!args || typeof args !== 'object') args = {};
   switch (name) {
     case 'read_file':
-      return { tool: 'read_file', args: [args.path || args.file || args.filename || ''] };
+      return { tool: 'read_file', args: [args.path || args.file || args.filename || '', args.start_line || args.startLine || '', args.end_line || args.endLine || ''] };
     case 'list_dir':
       return { tool: 'list_dir', args: [args.path || args.directory || args.dir || '.'] };
     case 'run_command':
@@ -497,7 +499,7 @@ export function parseToolCalls(response) {
     .replace(/<\|?\/?tool_use\|?>/gi, '')
     .replace(/\[TOOL_CALLS?\]/gi, '');
 
-  const SINGLE_ARG_TOOLS = ['read_file', 'list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks', 'check_status', 'get_action_status', 'build_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
+  const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks', 'check_status', 'get_action_status', 'build_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
   const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'update_todo'];
   const THREE_ARG_TOOLS = ['mcp_call'];
   const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
