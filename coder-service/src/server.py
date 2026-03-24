@@ -65,10 +65,9 @@ SYSTEM_PROMPT = os.getenv("CLAUDE_SYSTEM_PROMPT", (
 ))
 
 # ─── Per-Agent Linux User Isolation ──────────────────────────────────────────
-import pwd
 import shutil
 
-_agent_user_lock = asyncio.Lock()
+_agent_user_lock = None  # Lazily initialized (asyncio.Lock needs a running event loop)
 _agent_users: dict[str, dict] = {}
 
 def _sanitize_agent_id(agent_id: str) -> str:
@@ -76,40 +75,30 @@ def _sanitize_agent_id(agent_id: str) -> str:
     return f"agent_{sanitized}" if sanitized else "agent_default"
 
 async def ensure_agent_user(agent_id: str) -> dict:
-    """Create or retrieve a Linux user for the given agent ID."""
+    """Create an isolated home directory for the given agent ID.
+    
+    Instead of creating Linux users (requires root), we create separate
+    home directories and override HOME/USER env vars. Claude Code CLI
+    uses $HOME to find its config files, so this provides effective isolation.
+    """
     if not agent_id:
         return None
     if agent_id in _agent_users:
         return _agent_users[agent_id]
+    global _agent_user_lock
+    if _agent_user_lock is None:
+        _agent_user_lock = asyncio.Lock()
     async with _agent_user_lock:
         if agent_id in _agent_users:
             return _agent_users[agent_id]
         username = _sanitize_agent_id(agent_id)
-        home_dir = f"/home/{username}"
+        # Use /app/data/agents/ for persistent storage (mounted volume)
+        home_dir = os.path.join(DATA_DIR, "agents", username)
         try:
-            pw = pwd.getpwnam(username)
-            user_info = {"username": username, "uid": pw.pw_uid, "gid": pw.pw_gid, "home": pw.pw_dir}
-            _agent_users[agent_id] = user_info
-            logger.info(f"[Agent User] Reusing user {username} (uid={pw.pw_uid}) for agent {agent_id[:12]}")
-            return user_info
-        except KeyError:
-            pass
-        uid = 2000 + len(_agent_users)
-        gid = uid
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "bash", "-c",
-                f"groupadd -g {gid} {username} 2>/dev/null; "
-                f"useradd -m -u {uid} -g {gid} -d {home_dir} -s /bin/bash {username} 2>/dev/null; "
-                f"mkdir -p {home_dir}/.claude; "
-                f"chown -R {uid}:{gid} {home_dir}",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            # Copy all Claude config files from the main coder user
-            coder_home = os.path.expanduser("~")
             agent_claude_dir = os.path.join(home_dir, ".claude")
             os.makedirs(agent_claude_dir, exist_ok=True)
+            # Copy config files from the main coder user
+            coder_home = os.path.expanduser("~")
             # 1. Credentials (OAuth token for CLI)
             if os.path.exists(CREDENTIALS_FILE):
                 shutil.copy2(CREDENTIALS_FILE, os.path.join(agent_claude_dir, ".credentials.json"))
@@ -121,18 +110,12 @@ async def ensure_agent_user(agent_id: str) -> dict:
             coder_claude_json = os.path.join(coder_home, ".claude.json")
             if os.path.exists(coder_claude_json):
                 shutil.copy2(coder_claude_json, os.path.join(home_dir, ".claude.json"))
-                os.chown(os.path.join(home_dir, ".claude.json"), uid, gid)
-            # Fix ownership
-            for root, dirs, files in os.walk(agent_claude_dir):
-                os.chown(root, uid, gid)
-                for f in files:
-                    os.chown(os.path.join(root, f), uid, gid)
-            user_info = {"username": username, "uid": uid, "gid": gid, "home": home_dir}
+            user_info = {"username": username, "uid": os.getuid(), "gid": os.getgid(), "home": home_dir}
             _agent_users[agent_id] = user_info
-            logger.info(f"[Agent User] Created user {username} (uid={uid}) for agent {agent_id[:12]}")
+            logger.info(f"[Agent User] Created isolated home for agent {agent_id[:12]} at {home_dir}")
             return user_info
         except Exception as e:
-            logger.error(f"[Agent User] Failed to create user for agent {agent_id}: {e}")
+            logger.error(f"[Agent User] Failed to create home for agent {agent_id}: {e}")
             return None
 
 def _get_agent_env(agent_user: dict = None) -> dict:
@@ -144,14 +127,8 @@ def _get_agent_env(agent_user: dict = None) -> dict:
     return env
 
 def _get_subprocess_kwargs(agent_user: dict = None) -> dict:
-    kwargs = {}
-    if agent_user:
-        uid, gid = agent_user["uid"], agent_user["gid"]
-        def set_ids():
-            os.setgid(gid)
-            os.setuid(uid)
-        kwargs["preexec_fn"] = set_ids
-    return kwargs
+    """No-op: all agents run as the same coder user, isolated by HOME dir."""
+    return {}
 
 
 # ─── Authentication Management (OAuth PKCE) ───────────────────────────────────
