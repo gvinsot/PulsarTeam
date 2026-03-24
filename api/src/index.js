@@ -206,7 +206,7 @@ async function start() {
   await mcpManager.seedDefaults(BUILTIN_MCP_SERVERS);
   await agentManager.loadFromDatabase();
   agentManager.startTaskLoop();
-  startJiraSync(agentManager, 60000); // sync every 60s
+  startJiraSync(agentManager, io, 60000); // sync every 60s
 
   await sandboxManager.cleanupOrphans();
 

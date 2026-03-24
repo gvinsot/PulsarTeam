@@ -230,9 +230,7 @@ export async function syncIssues(cfg, agentManager, statusToColumn) {
     startAt += maxResults;
   }
 
-  if (created > 0) {
-    console.log(`[Jira] Created ${created} new tasks from ${total} board issues`);
-  }
+  console.log(`[Jira] Issues sync: ${created} created, ${total - created} already existed (${total} total on board)`);
   return { created, total };
 }
 
@@ -327,6 +325,8 @@ export async function pullStatusUpdates(cfg, agentManager, statusToColumn) {
 
 let _statusToColumn = null;
 
+let _io = null;
+
 export async function fullSync(agentManager) {
   const cfg = getConfig();
   if (!cfg) return;
@@ -335,8 +335,19 @@ export async function fullSync(agentManager) {
     _statusToColumn = await syncColumns(cfg);
     if (!_statusToColumn) return;
 
-    await syncIssues(cfg, agentManager, _statusToColumn);
+    const { created } = await syncIssues(cfg, agentManager, _statusToColumn);
     await pullStatusUpdates(cfg, agentManager, _statusToColumn);
+
+    // Notify frontend to reload workflow + agents
+    if (_io) {
+      _io.emit('workflow:updated');
+      // Emit agent:updated for all agents that have Jira tasks
+      for (const [, agent] of agentManager.agents) {
+        if (agent.todoList?.some(t => t.jiraKey)) {
+          _io.emit('agent:updated', agentManager._sanitize(agent));
+        }
+      }
+    }
   } catch (err) {
     console.error('[Jira] Full sync failed:', err.message);
   }
@@ -345,13 +356,14 @@ export async function fullSync(agentManager) {
 /**
  * Start periodic Jira sync. Runs immediately on start, then every intervalMs.
  */
-export function startJiraSync(agentManager, intervalMs = 60000) {
+export function startJiraSync(agentManager, io, intervalMs = 60000) {
   const cfg = getConfig();
   if (!cfg) {
     console.log('[Jira] JIRA_BOARD_URL not set — sync disabled');
     return null;
   }
 
+  _io = io;
   console.log(`[Jira] Sync enabled for board ${cfg.boardId} on ${cfg.domain} (every ${intervalMs / 1000}s)`);
 
   // Initial sync

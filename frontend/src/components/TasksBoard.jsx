@@ -1547,6 +1547,9 @@ export default function TasksBoard({ agents, onRefresh }) {
               setJiraSyncing(true);
               try {
                 await api.triggerJiraSync();
+                // Reload workflow (columns may have changed) and agents (new tasks)
+                const wf = await api.getWorkflow();
+                setWorkflow(wf);
                 onRefresh?.();
               } finally {
                 setJiraSyncing(false);
