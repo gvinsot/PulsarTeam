@@ -64,6 +64,82 @@ SYSTEM_PROMPT = os.getenv("CLAUDE_SYSTEM_PROMPT", (
     "Be concise and provide actionable results."
 ))
 
+# ─── Per-Agent Linux User Isolation ──────────────────────────────────────────
+import pwd
+import shutil
+
+_agent_user_lock = asyncio.Lock()
+_agent_users: dict[str, dict] = {}
+
+def _sanitize_agent_id(agent_id: str) -> str:
+    sanitized = re.sub(r'[^a-zA-Z0-9]', '', agent_id)[:24]
+    return f"agent_{sanitized}" if sanitized else "agent_default"
+
+async def ensure_agent_user(agent_id: str) -> dict:
+    """Create or retrieve a Linux user for the given agent ID."""
+    if not agent_id:
+        return None
+    if agent_id in _agent_users:
+        return _agent_users[agent_id]
+    async with _agent_user_lock:
+        if agent_id in _agent_users:
+            return _agent_users[agent_id]
+        username = _sanitize_agent_id(agent_id)
+        home_dir = f"/home/{username}"
+        try:
+            pw = pwd.getpwnam(username)
+            user_info = {"username": username, "uid": pw.pw_uid, "gid": pw.pw_gid, "home": pw.pw_dir}
+            _agent_users[agent_id] = user_info
+            logger.info(f"[Agent User] Reusing user {username} (uid={pw.pw_uid}) for agent {agent_id[:12]}")
+            return user_info
+        except KeyError:
+            pass
+        uid = 2000 + len(_agent_users)
+        gid = uid
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bash", "-c",
+                f"groupadd -g {gid} {username} 2>/dev/null; "
+                f"useradd -m -u {uid} -g {gid} -d {home_dir} -s /bin/bash {username} 2>/dev/null; "
+                f"mkdir -p {home_dir}/.claude; "
+                f"chown -R {uid}:{gid} {home_dir}",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if os.path.exists(CREDENTIALS_FILE):
+                agent_claude_dir = os.path.join(home_dir, ".claude")
+                agent_creds = os.path.join(agent_claude_dir, ".credentials.json")
+                os.makedirs(agent_claude_dir, exist_ok=True)
+                shutil.copy2(CREDENTIALS_FILE, agent_creds)
+                os.chown(agent_creds, uid, gid)
+                os.chown(agent_claude_dir, uid, gid)
+            user_info = {"username": username, "uid": uid, "gid": gid, "home": home_dir}
+            _agent_users[agent_id] = user_info
+            logger.info(f"[Agent User] Created user {username} (uid={uid}) for agent {agent_id[:12]}")
+            return user_info
+        except Exception as e:
+            logger.error(f"[Agent User] Failed to create user for agent {agent_id}: {e}")
+            return None
+
+def _get_agent_env(agent_user: dict = None) -> dict:
+    env = _get_claude_env()
+    if agent_user:
+        env["HOME"] = agent_user["home"]
+        env["USER"] = agent_user["username"]
+        env["LOGNAME"] = agent_user["username"]
+    return env
+
+def _get_subprocess_kwargs(agent_user: dict = None) -> dict:
+    kwargs = {}
+    if agent_user:
+        uid, gid = agent_user["uid"], agent_user["gid"]
+        def set_ids():
+            os.setgid(gid)
+            os.setuid(uid)
+        kwargs["preexec_fn"] = set_ids
+    return kwargs
+
+
 # ─── Authentication Management (OAuth PKCE) ───────────────────────────────────
 
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
@@ -528,7 +604,7 @@ def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] 
 
 # ─── Claude Code Execution ────────────────────────────────────────────────────
 
-async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None) -> dict:
+async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None) -> dict:
     """Execute a prompt via Claude Code CLI and return parsed result.
 
     Uses asyncio.create_subprocess_exec instead of asyncio.to_thread to avoid
@@ -556,9 +632,13 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None) -> d
     if _is_token_expired() and time.time() >= _token_cooldown_until:
         await _refresh_oauth_token()
 
+    # Resolve agent-specific Linux user for isolation
+    agent_user = await ensure_agent_user(agent_id) if agent_id else None
+
     cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt)
 
-    logger.info(f"Executing Claude Code: {prompt[:100]}...")
+    agent_label = f" (user={agent_user['username']})" if agent_user else ""
+    logger.info(f"Executing Claude Code{agent_label}: {prompt[:100]}...")
     logger.debug(f"Command: {' '.join(cmd)}")
 
     proc = None
@@ -569,7 +649,8 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None) -> d
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=CLAUDE_CWD,
-            env=_get_claude_env(),
+            env=_get_agent_env(agent_user),
+            **_get_subprocess_kwargs(agent_user),
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(input=prompt.encode("utf-8")),
@@ -651,7 +732,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None) -> d
         return {"status": "success", "output": stdout}
 
 
-async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None):
+async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None):
     """Async generator - streams Claude Code events in real-time.
 
     Yields status updates as the agent works, then the final result.
@@ -686,9 +767,13 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None)
             }
             return
 
+    # Resolve agent-specific Linux user for isolation
+    agent_user = await ensure_agent_user(agent_id) if agent_id else None
+
     cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt)
 
-    logger.info(f"Streaming Claude Code: {prompt[:100]}...")
+    agent_label = f" (user={agent_user['username']})" if agent_user else ""
+    logger.info(f"Streaming Claude Code{agent_label}: {prompt[:100]}...")
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -696,8 +781,9 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None)
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=CLAUDE_CWD,
-        env=_get_claude_env(),
-        limit=10 * 1024 * 1024,  # 10MB readline buffer (default 64KB too small for large JSON events)
+        env=_get_agent_env(agent_user),
+        limit=10 * 1024 * 1024,
+        **_get_subprocess_kwargs(agent_user),  # 10MB readline buffer (default 64KB too small for large JSON events)
     )
 
     # Send prompt via stdin (avoids ARG_MAX limit) then close stdin
@@ -1086,12 +1172,13 @@ async def execute_message(
     request: MessageRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_agent_id: Optional[str] = Header(None),
 ):
     """Execute a natural language request via Claude Code CLI."""
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
 
-    result = await run_claude_sync(request.content, request.system_prompt)
+    result = await run_claude_sync(request.content, request.system_prompt, agent_id=x_agent_id)
     return ExecutionResponse(**result)
 
 
@@ -1129,6 +1216,7 @@ async def stream_execution(
     request: MessageRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_agent_id: Optional[str] = Header(None),
 ):
     """Stream execution results in real-time via SSE."""
     api_key = extract_api_key(x_api_key, authorization)
@@ -1139,7 +1227,7 @@ async def stream_execution(
             yield f"data: {json.dumps({'status': 'starting', 'message': 'Claude Code execution started'})}\n\n"
 
             has_streamed_text = False
-            async for event in stream_claude_events(request.content, request.system_prompt):
+            async for event in stream_claude_events(request.content, request.system_prompt, agent_id=x_agent_id):
                 event_type = event.get("type", "")
 
                 if event_type == "status":
@@ -1198,6 +1286,7 @@ async def openai_chat_completions(
     request: OpenAIChatCompletionRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_agent_id: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -1220,7 +1309,7 @@ async def openai_chat_completions(
         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
 
         has_streamed_text = False
-        async for event in stream_claude_events(prompt, system_prompt):
+        async for event in stream_claude_events(prompt, system_prompt, agent_id=x_agent_id):
             event_type = event.get("type", "")
 
             if event_type == "text":
@@ -1246,7 +1335,7 @@ async def openai_chat_completions(
         return StreamingResponse(stream_openai_response(), media_type="text/event-stream")
 
     # Non-streaming: run synchronously
-    result = await run_claude_sync(prompt, system_prompt)
+    result = await run_claude_sync(prompt, system_prompt, agent_id=x_agent_id)
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {
@@ -1268,6 +1357,7 @@ async def openai_completions(
     request: OpenAICompletionRequest,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_agent_id: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -1279,7 +1369,7 @@ async def openai_completions(
         created = int(time.time())
 
         has_streamed_text = False
-        async for event in stream_claude_events(request.prompt, request.system_prompt):
+        async for event in stream_claude_events(request.prompt, request.system_prompt, agent_id=x_agent_id):
             event_type = event.get("type", "")
 
             if event_type == "text":
@@ -1301,7 +1391,7 @@ async def openai_completions(
     if request.stream:
         return StreamingResponse(stream_openai_completion_response(), media_type="text/event-stream")
 
-    result = await run_claude_sync(request.prompt, request.system_prompt)
+    result = await run_claude_sync(request.prompt, request.system_prompt, agent_id=x_agent_id)
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {
