@@ -27,13 +27,13 @@ export default function ProjectDetailView() {
         const [projRes, agentsRes, tasksRes, branchesRes, commitsRes] = await Promise.all([
           api.get(`/api/projects/${encodeURIComponent(name)}`),
           api.get(`/api/projects/${encodeURIComponent(name)}/agents`),
-          api.get(`/api/projects/${encodeURIComponent(name)}/todos`),
+          api.get(`/api/projects/${encodeURIComponent(name)}/tasks`),
           api.get(`/api/projects/${encodeURIComponent(name)}/branches`),
           api.get(`/api/projects/${encodeURIComponent(name)}/commits`),
         ]);
         setProject(projRes.data?.project || null);
         setAgents(agentsRes.data?.agents || []);
-        setTasks(tasksRes.data?.todos || []);
+        setTasks(tasksRes.data?.tasks || []);
         setBranches(branchesRes.data?.branches || []);
         setCommits(commitsRes.data?.commits || []);
       } catch (err) {

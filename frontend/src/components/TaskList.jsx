@@ -80,8 +80,8 @@ export default function TaskList({
   const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'error').length;
 
   return (
-    <div className="todo-list">
-      <div className="todo-list-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div className="task-list">
+      <div className="task-list-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h4 style={{ margin: 0 }}>Tasks</h4>
         <button
           onClick={onExecuteAllTasks}

@@ -171,8 +171,8 @@ export async function pollJira(agentManager) {
   // Build set of existing Jira keys
   const existingJiraKeys = new Set();
   for (const [, agent] of agentManager.agents) {
-    for (const todo of agent.todoList || []) {
-      if (todo.jiraKey) existingJiraKeys.add(todo.jiraKey);
+    for (const task of agent.todoList || []) {
+      if (task.jiraKey) existingJiraKeys.add(task.jiraKey);
     }
   }
 

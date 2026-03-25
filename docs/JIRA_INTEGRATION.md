@@ -9,7 +9,7 @@ Jira Board                    PulsarTeam Workflow
 ┌──────────┐                 ┌─────────────────────────────────────┐
 │ Backlog  │                 │                                     │
 ├──────────┤                 │  ┌───────┐  ┌────────┐  ┌──────┐   │
-│ En cours │──── trigger ───▶│  │ Todo  │→ │In Prog │→ │ Done │   │
+│ En cours │──── trigger ───▶│  │Pending│→ │In Prog │→ │ Done │   │
 ├──────────┤                 │  └───────┘  └────────┘  └──┬───┘   │
 │ Review   │◀── action ─────│                             │       │
 ├──────────┤                 └─────────────────────────────┼───────┘
@@ -17,7 +17,7 @@ Jira Board                    PulsarTeam Workflow
 └──────────┘                              move_jira_status ─┘
 ```
 
-- **Trigger** : quand un ticket Jira entre dans la colonne "En cours", il est créé dans la colonne "Todo" de PulsarTeam.
+- **Trigger** : quand un ticket Jira entre dans la colonne "En cours", il est créé dans la colonne "Pending" de PulsarTeam.
 - **Action** : quand la task PulsarTeam atteint "Done", le ticket Jira est déplacé vers "Review".
 
 ## Setup
@@ -60,7 +60,7 @@ L'intégration se configure entièrement dans **Workflow Configuration** (icône
 
 ### Trigger : importer les tickets Jira
 
-1. Ajouter une transition sur la colonne d'entrée (ex: "Todo")
+1. Ajouter une transition sur la colonne d'entrée (ex: "Pending")
 2. Sélectionner le trigger **🔗 Jira ticket**
 3. Cocher la ou les colonnes Jira à surveiller (ex: "En cours")
 

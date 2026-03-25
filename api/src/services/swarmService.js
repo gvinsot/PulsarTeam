@@ -49,7 +49,7 @@ function getAgentByName(name) {
   return agents.find(a => a.name.toLowerCase() === name.toLowerCase());
 }
 
-function assignTaskToAgent(agentName, task, todoId) {
+function assignTaskToAgent(agentName, task, taskId) {
   const agent = getAgentByName(agentName);
   if (!agent) {
     console.log(`⚠️ Agent "${agentName}" not found`);
@@ -59,16 +59,16 @@ function assignTaskToAgent(agentName, task, todoId) {
   const agentFile = path.join(AGENTS_DIR, `${agent.id}.json`);
   const updateData = { status: 'busy', currentTask: task };
 
-  // Add todo to agent's todo list
-  if (!agent.todos) agent.todos = [];
-  const newTodo = {
-    id: todoId || uuidv4(),
+  // Add task to agent's task list
+  if (!agent.tasks) agent.tasks = [];
+  const newTask = {
+    id: taskId || uuidv4(),
     text: task,
     status: 'in_progress',
     assignedAt: new Date().toISOString()
   };
-  agent.todos.push(newTodo);
-  updateData.todos = agent.todos;
+  agent.tasks.push(newTask);
+  updateData.tasks = agent.tasks;
 
   const updated = { ...agent, ...updateData, lastActivity: new Date().toISOString() };
   fs.writeFileSync(agentFile, JSON.stringify(updated, null, 2));

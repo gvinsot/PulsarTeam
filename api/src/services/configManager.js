@@ -52,7 +52,7 @@ export async function updateSettings(patch) {
 const DEFAULT_COLUMNS = [
   { id: 'idea', label: 'Ideas', color: '#a855f7' },
   { id: 'backlog', label: 'Backlog', color: '#6b7280' },
-  { id: 'pending', label: 'Todo', color: '#3b82f6' },
+  { id: 'pending', label: 'Pending', color: '#3b82f6' },
   { id: 'in_progress', label: 'In Progress', color: '#eab308' },
   { id: 'done', label: 'Done', color: '#22c55e' },
 ];

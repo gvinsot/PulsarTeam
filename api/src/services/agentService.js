@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 
 const DATA_DIR = path.join(__dirname, '../data');
 const AGENTS_DIR = path.join(DATA_DIR, 'agents');
-const TODOS_FILE = path.join(DATA_DIR, 'todos.json');
+const TASKS_FILE = path.join(DATA_DIR, 'todos.json');
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -44,7 +44,7 @@ function createAgent(data) {
     apiKey: data.apiKey || '',
     project: data.project || null,
     currentTask: null,
-    todos: [],
+    tasks: [],
     completedTasks: 0,
     errors: 0,
     lastActivity: new Date().toISOString(),
@@ -73,46 +73,46 @@ function deleteAgent(id) {
   return false;
 }
 
-// Agent Todos
-function getAgentTodos(agentId) {
+// Agent Tasks
+function getAgentTasks(agentId) {
   const agent = getAgent(agentId);
-  return agent?.todos || [];
+  return agent?.tasks || [];
 }
 
-function addAgentTodo(agentId, text, todoId) {
+function addAgentTask(agentId, text, taskId) {
   const agent = getAgent(agentId);
   if (!agent) return null;
-  if (!agent.todos) agent.todos = [];
-  const todo = {
-    id: todoId || uuidv4(),
+  if (!agent.tasks) agent.tasks = [];
+  const task = {
+    id: taskId || uuidv4(),
     text,
     status: 'pending',
     createdAt: new Date().toISOString()
   };
-  agent.todos.push(todo);
-  const updateData = { status: 'busy', currentTask: todo.text };
-  updateData.todos = agent.todos;
+  agent.tasks.push(task);
+  const updateData = { status: 'busy', currentTask: task.text };
+  updateData.tasks = agent.tasks;
   // Also set currentTask to the latest assigned task text
-  updateData.currentTask = todo.text;
+  updateData.currentTask = task.text;
   return updateAgent(agentId, updateData);
 }
 
-function updateAgentTodo(agentId, todoId, data) {
+function updateAgentTask(agentId, taskId, data) {
   const agent = getAgent(agentId);
-  if (!agent || !agent.todos) return null;
-  const todoIndex = agent.todos.findIndex(t => t.id === todoId);
-  if (todoIndex === -1) return null;
-  agent.todos[todoIndex] = { ...agent.todos[todoIndex], ...data };
+  if (!agent || !agent.tasks) return null;
+  const taskIndex = agent.tasks.findIndex(t => t.id === taskId);
+  if (taskIndex === -1) return null;
+  agent.tasks[taskIndex] = { ...agent.tasks[taskIndex], ...data };
 
-  // If todo is done, update agent status
-  const updateData = { todos: agent.todos };
+  // If task is done, update agent status
+  const updateData = { tasks: agent.tasks };
   if (data.status === 'done') {
-    const activeTodos = agent.todos.filter(t => t.status !== 'done');
-    if (activeTodos.length === 0) {
+    const activeTasks = agent.tasks.filter(t => t.status !== 'done');
+    if (activeTasks.length === 0) {
       updateData.status = 'idle';
       updateData.currentTask = null;
     } else {
-      updateData.currentTask = activeTodos[activeTodos.length - 1].text;
+      updateData.currentTask = activeTasks[activeTasks.length - 1].text;
     }
     updateData.completedTasks = (agent.completedTasks || 0) + 1;
   }
@@ -123,31 +123,31 @@ function updateAgentTodo(agentId, todoId, data) {
   return updateAgent(agentId, updateData);
 }
 
-function deleteAgentTodo(agentId, todoId) {
+function deleteAgentTask(agentId, taskId) {
   const agent = getAgent(agentId);
-  if (!agent || !agent.todos) return null;
-  agent.todos = agent.todos.filter(t => t.id !== todoId);
+  if (!agent || !agent.tasks) return null;
+  agent.tasks = agent.tasks.filter(t => t.id !== taskId);
 
-  const activeTodos = agent.todos.filter(t => t.status !== 'done');
+  const activeTasks = agent.tasks.filter(t => t.status !== 'done');
   const updateData = {
-    todos: agent.todos,
-    currentTask: activeTodos.length > 0 ? activeTodos[activeTodos.length - 1].text : null,
-    status: activeTodos.length > 0 ? 'busy' : 'idle'
+    tasks: agent.tasks,
+    currentTask: activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].text : null,
+    status: activeTasks.length > 0 ? 'busy' : 'idle'
   };
 
   return updateAgent(agentId, updateData);
 }
 
-// Global Todos
-function getGlobalTodos() {
+// Global Tasks
+function getGlobalTasks() {
   ensureDataDir();
-  if (!fs.existsSync(TODOS_FILE)) return [];
-  return JSON.parse(fs.readFileSync(TODOS_FILE, 'utf-8'));
+  if (!fs.existsSync(TASKS_FILE)) return [];
+  return JSON.parse(fs.readFileSync(TASKS_FILE, 'utf-8'));
 }
 
-function addGlobalTodo(text, project, source) {
-  const todos = getGlobalTodos();
-  const todo = {
+function addGlobalTask(text, project, source) {
+  const tasks = getGlobalTasks();
+  const task = {
     id: uuidv4(),
     text,
     status: 'pending',
@@ -155,24 +155,24 @@ function addGlobalTodo(text, project, source) {
     source: source || null,
     createdAt: new Date().toISOString()
   };
-  todos.push(todo);
-  fs.writeFileSync(TODOS_FILE, JSON.stringify(todos, null, 2));
-  return todo;
+  tasks.push(task);
+  fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+  return task;
 }
 
-function updateGlobalTodo(id, data) {
-  const todos = getGlobalTodos();
-  const index = todos.findIndex(t => t.id === id);
+function updateGlobalTask(id, data) {
+  const tasks = getGlobalTasks();
+  const index = tasks.findIndex(t => t.id === id);
   if (index === -1) return null;
-  todos[index] = { ...todos[index], ...data };
-  fs.writeFileSync(TODOS_FILE, JSON.stringify(todos, null, 2));
-  return todos[index];
+  tasks[index] = { ...tasks[index], ...data };
+  fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+  return tasks[index];
 }
 
-function deleteGlobalTodo(id) {
-  let todos = getGlobalTodos();
-  todos = todos.filter(t => t.id !== id);
-  fs.writeFileSync(TODOS_FILE, JSON.stringify(todos, null, 2));
+function deleteGlobalTask(id) {
+  let tasks = getGlobalTasks();
+  tasks = tasks.filter(t => t.id !== id);
+  fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
   return true;
 }
 
@@ -193,13 +193,13 @@ module.exports = {
   createAgent,
   updateAgent,
   deleteAgent,
-  getAgentTodos,
-  addAgentTodo,
-  updateAgentTodo,
-  deleteAgentTodo,
-  getGlobalTodos,
-  addGlobalTodo,
-  updateGlobalTodo,
-  deleteGlobalTodo,
+  getAgentTasks,
+  addAgentTask,
+  updateAgentTask,
+  deleteAgentTask,
+  getGlobalTasks,
+  addGlobalTask,
+  updateGlobalTask,
+  deleteGlobalTask,
   getProjects
 };

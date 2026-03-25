@@ -91,7 +91,7 @@ curl -H "Authorization: Bearer swarm_sk_abc123..." \
   "enabled": true,
   "todoList": [
     {
-      "id": "todo-uuid",
+      "id": "task-uuid",
       "text": "Write unit tests",
       "status": "pending",
       "project": "my-project",
@@ -139,8 +139,8 @@ curl -X POST \
 ```json
 {
   "success": true,
-  "todo": {
-    "id": "new-todo-uuid",
+  "task": {
+    "id": "new-task-uuid",
     "text": "Write unit tests for the auth module",
     "status": "pending",
     "project": "my-project",

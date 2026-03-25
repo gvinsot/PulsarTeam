@@ -97,14 +97,14 @@ export class AgentManager {
         }
         // Migration: done boolean → status string
         if (agent.todoList) {
-          for (const todo of agent.todoList) {
-            if (todo.status === undefined) {
-              todo.status = todo.done ? 'done' : 'pending';
-              delete todo.done;
+          for (const task of agent.todoList) {
+            if (task.status === undefined) {
+              task.status = task.done ? 'done' : 'pending';
+              delete task.done;
             }
             // Reset in_progress tasks to pending on server restart
-            if (todo.status === 'in_progress') {
-              todo.status = 'pending';
+            if (task.status === 'in_progress') {
+              task.status = 'pending';
             }
           }
         }
@@ -424,7 +424,7 @@ export class AgentManager {
           status: a.status,
           role: a.role,
           currentTask: a.currentTask || null,
-          activeTodos: (a.activeTodos || []).length,
+          activeTasks: (a.activeTasks || []).length,
           projectChangedAt: a.projectChangedAt || null
         }))
       };
@@ -697,7 +697,7 @@ export class AgentManager {
         systemContent += `\n- @list_projects() — List all available projects.`;
         systemContent += `\n- @clear_all_chats() — Clear ALL agents' conversation histories at once, giving every agent a fresh start.`;
         systemContent += `\n- @clear_all_action_logs() — Clear ALL agents' action logs at once.`;
-        systemContent += `\n- @list_agents() — List all enabled agents with their current status, project assignment, role, active todos, and current task. Includes a project summary header showing agent distribution across projects.`;
+        systemContent += `\n- @list_agents() — List all enabled agents with their current status, project assignment, role, active tasks, and current task. Includes a project summary header showing agent distribution across projects.`;
         systemContent += `\n- @agent_status(AgentName) — Check a specific agent's detailed status: busy/idle/error, current project, current task, active task descriptions, sandbox state, message count, provider/model, and error count.`;
         systemContent += `\n- @get_available_agent(role) — Find all idle agents with the specified role (e.g. "developer"). Returns each agent's name, project assignment, and pending task count. If none are idle, shows busy agents with that role as a hint.`;
         systemContent += `\n- @swarm_status() — Get a comprehensive overview of the entire swarm: all agents grouped by their current project, with per-agent status, role, current task descriptions, and task counts.`;
@@ -775,9 +775,9 @@ export class AgentManager {
       // Append task list context
       if (agent.todoList.length > 0) {
         systemContent += '\n\n--- Current Task List ---\n';
-        for (const todo of agent.todoList) {
-          const mark = todo.status === 'done' ? 'x' : todo.status === 'in_progress' ? '~' : todo.status === 'error' ? '!' : ' ';
-          systemContent += `- [${mark}] (${todo.id.slice(0, 8)}) ${todo.text}\n`;
+        for (const task of agent.todoList) {
+          const mark = task.status === 'done' ? 'x' : task.status === 'in_progress' ? '~' : task.status === 'error' ? '!' : ' ';
+          systemContent += `- [${mark}] (${task.id.slice(0, 8)}) ${task.text}\n`;
         }
       }
       
@@ -999,13 +999,13 @@ export class AgentManager {
               });
 
               // Create task immediately (inherit source agent's project)
-              const todo = this.addTask(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null, { type: 'agent', name: agent.name, id });
+              const createdTask = this.addTask(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null, { type: 'agent', name: agent.name, id });
 
               // Enqueue execution — the queue will process it when the agent is free
               const promise = this._enqueueAgentTask(targetAgent.id, async () => {
                 // Mark task as in_progress
-                if (todo) {
-                  const t = targetAgent.todoList.find(t => t.id === todo.id);
+                if (createdTask) {
+                  const t = targetAgent.todoList.find(t => t.id === createdTask.id);
                   if (t) {
                     t.status = 'in_progress';
                     t.startedAt = new Date().toISOString();
@@ -1037,8 +1037,8 @@ export class AgentManager {
                 this._emit('agent:updated', this._sanitize(targetAgent));
 
                 // Mark task as done
-                if (todo) {
-                  const t = targetAgent.todoList.find(t => t.id === todo.id);
+                if (createdTask) {
+                  const t = targetAgent.todoList.find(t => t.id === createdTask.id);
                   if (t) {
                     t.status = 'done';
                     t.completedAt = new Date().toISOString();
@@ -1052,8 +1052,8 @@ export class AgentManager {
                 // End sub-agent stream on error too
                 if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent?.name || null, project: targetAgent?.project || null });
                 // Mark task as error
-                if (todo && targetAgent) {
-                  const t = targetAgent.todoList.find(t => t.id === todo.id);
+                if (createdTask && targetAgent) {
+                  const t = targetAgent.todoList.find(t => t.id === createdTask.id);
                   if (t) {
                     t.status = 'error';
                     t.error = err.message;
@@ -1328,12 +1328,12 @@ export class AgentManager {
             to: { id: targetAgent.id, name: targetAgent.name, project: targetAgent.project || null },
             task: delegation.task
           });
-          const todo = this.addTask(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null, { type: 'agent', name: agent.name, id });
+          const createdTask = this.addTask(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null, { type: 'agent', name: agent.name, id });
 
           const promise = this._enqueueAgentTask(targetAgent.id, async () => {
             // Mark task as in_progress
-            if (todo) {
-              const t = targetAgent.todoList.find(t => t.id === todo.id);
+            if (createdTask) {
+              const t = targetAgent.todoList.find(t => t.id === createdTask.id);
               if (t) {
                 t.status = 'in_progress';
                 t.startedAt = new Date().toISOString();
@@ -1364,8 +1364,8 @@ export class AgentManager {
             if (streamCallback) streamCallback(`\n--- \u2705 ${targetAgent.name} finished ---\n`);
             this._emit('agent:updated', this._sanitize(targetAgent));
 
-            if (todo) {
-              const t = targetAgent.todoList.find(t => t.id === todo.id);
+            if (createdTask) {
+              const t = targetAgent.todoList.find(t => t.id === createdTask.id);
               if (t) {
                 t.status = 'done';
                 t.completedAt = new Date().toISOString();
@@ -1378,8 +1378,8 @@ export class AgentManager {
             // End sub-agent stream on error too
             if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent?.name || null, project: targetAgent?.project || null });
             // Mark task as error
-            if (todo && targetAgent) {
-              const t = targetAgent.todoList.find(t => t.id === todo.id);
+            if (createdTask && targetAgent) {
+              const t = targetAgent.todoList.find(t => t.id === createdTask.id);
               if (t) {
                 t.status = 'error';
                 t.error = err.message;
@@ -1594,17 +1594,17 @@ export class AgentManager {
             continue;
           }
           const todoList = targetAgent.todoList || [];
-          const pendingTodos = todoList.filter(t => t.status === 'pending' || t.status === 'error').length;
-          const inProgressTodos = todoList.filter(t => t.status === 'in_progress').length;
-          const doneTodos = todoList.filter(t => t.status === 'done').length;
-          const totalTodos = todoList.length;
+          const pendingTasks = todoList.filter(t => t.status === 'pending' || t.status === 'error').length;
+          const inProgressTasks = todoList.filter(t => t.status === 'in_progress').length;
+          const doneTasks = todoList.filter(t => t.status === 'done').length;
+          const totalTasks = todoList.length;
           const msgCount = (targetAgent.conversationHistory || []).length;
           const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(targetAgent.id) : false;
-          const inProgressTodo = todoList.find(t => t.status === 'in_progress');
+          const inProgressTask = todoList.find(t => t.status === 'in_progress');
           const currentTaskInfo = targetAgent.currentTask
             ? targetAgent.currentTask.slice(0, 120) + (targetAgent.currentTask.length > 120 ? '...' : '')
-            : inProgressTodo
-              ? inProgressTodo.text.slice(0, 120) + (inProgressTodo.text.length > 120 ? '...' : '')
+            : inProgressTask
+              ? inProgressTask.text.slice(0, 120) + (inProgressTask.text.length > 120 ? '...' : '')
               : 'none';
           const projectAssignedAt = targetAgent.projectChangedAt
             ? new Date(targetAgent.projectChangedAt).toLocaleString()
@@ -1620,7 +1620,7 @@ export class AgentManager {
             `Current task: ${currentTaskInfo}`,
             `Provider: ${targetAgent.provider || 'unknown'}/${targetAgent.model || 'unknown'}`,
             `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
-            `Todos: ${inProgressTodos} in-progress, ${pendingTodos} pending, ${doneTodos} done / ${totalTodos} total`,
+            `Tasks: ${inProgressTasks} in-progress, ${pendingTasks} pending, ${doneTasks} done / ${totalTasks} total`,
             `Messages: ${msgCount}`,
             `Last active: ${targetAgent.metrics?.lastActiveAt || 'never'}`,
             `Errors: ${targetAgent.metrics?.errors || 0}`,
@@ -1670,15 +1670,15 @@ export class AgentManager {
           // Per-agent details
           const lines = enabled.map(a => {
             const projectTag = a.project ? `project=${a.project}` : 'NO PROJECT';
-            const todoCount = (a.todoList || []).filter(t => t.status !== 'done').length;
-            const inProgressTodo = (a.todoList || []).find(t => t.status === 'in_progress');
-            const todoInfo = todoCount > 0 ? ` todos=${todoCount}` : '';
+            const taskCount = (a.todoList || []).filter(t => t.status !== 'done').length;
+            const inProgressTask = (a.todoList || []).find(t => t.status === 'in_progress');
+            const taskCountInfo = taskCount > 0 ? ` tasks=${taskCount}` : '';
             const taskInfo = a.currentTask
               ? ` working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
-              : inProgressTodo
-                ? ` working on: "${inProgressTodo.text.slice(0, 80)}${inProgressTodo.text.length > 80 ? '...' : ''}"`
+              : inProgressTask
+                ? ` working on: "${inProgressTask.text.slice(0, 80)}${inProgressTask.text.length > 80 ? '...' : ''}"`
                 : '';
-            return `- ${a.name} [${a.status}] [${projectTag}] (${a.role || 'worker'})${todoInfo}${taskInfo}`;
+            return `- ${a.name} [${a.status}] [${projectTag}] (${a.role || 'worker'})${taskCountInfo}${taskInfo}`;
           });
           output += lines.join('\n') + '\n';
 
@@ -1728,10 +1728,10 @@ export class AgentManager {
               const taskInfo = a.currentTask
                 ? ` — working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
                 : '';
-              const todoInfo = a.todos.inProgress > 0 || a.todos.pending > 0
-                ? ` | todos: ${a.todos.inProgress} in-progress, ${a.todos.pending} pending`
+              const taskCountInfo = a.tasks.inProgress > 0 || a.tasks.pending > 0
+                ? ` | tasks: ${a.tasks.inProgress} in-progress, ${a.tasks.pending} pending`
                 : '';
-              output += `  - ${a.name} [${a.status}] (${a.role})${todoInfo}${taskInfo}\n`;
+              output += `  - ${a.name} [${a.status}] (${a.role})${taskCountInfo}${taskInfo}\n`;
             }
           }
           if (swarmStatus.unassignedAgents.length > 0) {
@@ -1758,10 +1758,10 @@ export class AgentManager {
               const taskInfo = a.currentTask
                 ? ` — working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
                 : '';
-              const todoInfo = a.todos.inProgress > 0 || a.todos.pending > 0
-                ? ` | todos: ${a.todos.inProgress} in-progress, ${a.todos.pending} pending`
+              const taskCountInfo = a.tasks.inProgress > 0 || a.tasks.pending > 0
+                ? ` | tasks: ${a.tasks.inProgress} in-progress, ${a.tasks.pending} pending`
                 : '';
-              output += `  - ${a.name} [${a.status}] (${a.role})${todoInfo}${taskInfo}\n`;
+              output += `  - ${a.name} [${a.status}] (${a.role})${taskCountInfo}${taskInfo}\n`;
             }
             console.log(`📁 [Agents On Project] ${agents.length} agents on "${cmd.projectName}"`);
             if (streamCallback) streamCallback(output);
@@ -1800,10 +1800,10 @@ export class AgentManager {
         if (streamCallback) streamCallback(`\n⏸️ *${err.message}. Task will auto-retry at ${err.resetLabel} + 5min.*\n`);
 
         // Find the in_progress task for this agent and put it back to pending
-        const inProgressTodo = agent.todoList?.find(t => t.status === 'in_progress');
-        if (inProgressTodo) {
-          this.setTaskStatus(id, inProgressTodo.id, 'pending', { skipAutoRefine: true, by: 'rate-limit' });
-          console.log(`🕐 [Rate Limit] Task "${inProgressTodo.text.slice(0, 60)}" moved back to pending`);
+        const inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
+        if (inProgressTask) {
+          this.setTaskStatus(id, inProgressTask.id, 'pending', { skipAutoRefine: true, by: 'rate-limit' });
+          console.log(`🕐 [Rate Limit] Task "${inProgressTask.text.slice(0, 60)}" moved back to pending`);
         }
 
         // Schedule re-check after reset time + 5min
@@ -1984,22 +1984,22 @@ export class AgentManager {
           results.push({ tool: 'update_task', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}` });
           continue;
         }
-        let todo = agent.todoList?.find(t => t.id === taskId);
-        if (!todo) todo = agent.todoList?.find(t => t.id.startsWith(taskId));
-        if (!todo) {
+        let task = agent.todoList?.find(t => t.id === taskId);
+        if (!task) task = agent.todoList?.find(t => t.id.startsWith(taskId));
+        if (!task) {
           // Look for partial match to give a helpful hint
           const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
           results.push({ tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
-        todo.status = newStatus;
-        if (newStatus === 'in_progress') todo.startedAt = new Date().toISOString();
-        if (newStatus === 'done') todo.completedAt = new Date().toISOString();
+        task.status = newStatus;
+        if (newStatus === 'in_progress') task.startedAt = new Date().toISOString();
+        if (newStatus === 'done') task.completedAt = new Date().toISOString();
         saveAgent(agent);
         this._emit('agent:updated', this._sanitize(agent));
-        console.log(`📋 [Task] Agent "${agent.name}" updated task "${todo.text.slice(0, 50)}" → ${newStatus}`);
-        results.push({ tool: 'update_task', args: call.args, success: true, result: `Task "${todo.text}" updated to ${newStatus}` });
+        console.log(`📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}" → ${newStatus}`);
+        results.push({ tool: 'update_task', args: call.args, success: true, result: `Task "${task.text}" updated to ${newStatus}` });
         continue;
       }
 
@@ -2010,29 +2010,29 @@ export class AgentManager {
           results.push({ tool: 'link_commit', args: call.args, success: false, error: 'Usage: @link_commit(taskId, commitHash, optionalMessage)' });
           continue;
         }
-        let todo = agent.todoList?.find(t => t.id === taskId);
-        if (!todo) todo = agent.todoList?.find(t => t.id.startsWith(taskId));
-        if (!todo) {
+        let task = agent.todoList?.find(t => t.id === taskId);
+        if (!task) task = agent.todoList?.find(t => t.id.startsWith(taskId));
+        if (!task) {
           const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
           results.push({ tool: 'link_commit', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
-        this.addTaskCommit(agentId, todo.id, commitHash, commitMsg || '');
-        console.log(`🔗 [Commit] Agent "${agent.name}" linked ${commitHash.slice(0, 7)} to task "${todo.text.slice(0, 50)}"`);
-        results.push({ tool: 'link_commit', args: call.args, success: true, result: `Commit ${commitHash.slice(0, 7)} linked to task "${todo.text.slice(0, 60)}"` });
+        this.addTaskCommit(agentId, task.id, commitHash, commitMsg || '');
+        console.log(`🔗 [Commit] Agent "${agent.name}" linked ${commitHash.slice(0, 7)} to task "${task.text.slice(0, 50)}"`);
+        results.push({ tool: 'link_commit', args: call.args, success: true, result: `Commit ${commitHash.slice(0, 7)} linked to task "${task.text.slice(0, 60)}"` });
         continue;
       }
 
       // ── Handle @list_my_tasks() — list agent's own tasks ────────────
       if (call.tool === 'list_my_tasks') {
-        const todos = agent.todoList || [];
+        const tasks = agent.todoList || [];
         const header = `Agent: ${agent.name} | Project: ${agent.project || 'none'} | Status: ${agent.status}`;
-        if (todos.length === 0) {
+        if (tasks.length === 0) {
           results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\nNo tasks assigned.` });
         } else {
           const statusIcons = { pending: '[ ]', in_progress: '[~]', done: '[x]', error: '[!]' };
-          const lines = todos.map(t => `${statusIcons[t.status] || '[ ]'} ${t.id} — ${t.text}`);
+          const lines = tasks.map(t => `${statusIcons[t.status] || '[ ]'} ${t.id} — ${t.text}`);
           results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\n${lines.join('\n')}` });
         }
         continue;
@@ -2041,18 +2041,18 @@ export class AgentManager {
       // ── Handle @check_status() — agent checks its own detailed status ─
       if (call.tool === 'check_status') {
         const todoList = agent.todoList || [];
-        const pendingTodos = todoList.filter(t => t.status === 'pending').length;
-        const inProgressTodos = todoList.filter(t => t.status === 'in_progress').length;
-        const doneTodos = todoList.filter(t => t.status === 'done').length;
-        const errorTodos = todoList.filter(t => t.status === 'error').length;
-        const totalTodos = todoList.length;
+        const pendingTasks = todoList.filter(t => t.status === 'pending').length;
+        const inProgressTasks = todoList.filter(t => t.status === 'in_progress').length;
+        const doneTasks = todoList.filter(t => t.status === 'done').length;
+        const errorTasks = todoList.filter(t => t.status === 'error').length;
+        const totalTasks = todoList.length;
         const msgCount = (agent.conversationHistory || []).length;
         const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(agent.id) : false;
-        const inProgressTodo = todoList.find(t => t.status === 'in_progress');
+        const inProgressTask = todoList.find(t => t.status === 'in_progress');
         const currentTaskInfo = agent.currentTask
           ? agent.currentTask.slice(0, 120)
-          : inProgressTodo
-            ? inProgressTodo.text.slice(0, 120)
+          : inProgressTask
+            ? inProgressTask.text.slice(0, 120)
             : 'none';
         const projectAssignedAt = agent.projectChangedAt
           ? new Date(agent.projectChangedAt).toLocaleString()
@@ -2070,7 +2070,7 @@ export class AgentManager {
           `Current task: ${currentTaskInfo}`,
           `Provider: ${agent.provider || 'unknown'}/${agent.model || 'unknown'}`,
           `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
-          `Todos: ${inProgressTodos} in-progress, ${pendingTodos} pending, ${doneTodos} done, ${errorTodos} error / ${totalTodos} total`,
+          `Tasks: ${inProgressTasks} in-progress, ${pendingTasks} pending, ${doneTasks} done, ${errorTasks} error / ${totalTasks} total`,
           `Messages: ${msgCount}`,
           `Last active: ${agent.metrics?.lastActiveAt || 'never'}`,
           `Errors: ${agent.metrics?.errors || 0}`,
@@ -2212,10 +2212,10 @@ export class AgentManager {
           if (commitMatch) {
             const commitHash = commitMatch[1];
             const commitMsg = call.args[0] || '';
-            const inProgressTodo = (agent.todoList || []).find(t => t.status === 'in_progress');
-            if (inProgressTodo) {
-              this.addTaskCommit(agentId, inProgressTodo.id, commitHash, commitMsg);
-              console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${inProgressTodo.text.slice(0, 50)}"`);
+            const inProgressTask = (agent.todoList || []).find(t => t.status === 'in_progress');
+            if (inProgressTask) {
+              this.addTaskCommit(agentId, inProgressTask.id, commitHash, commitMsg);
+              console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${inProgressTask.text.slice(0, 50)}"`);
             }
           }
         }
@@ -2716,11 +2716,11 @@ export class AgentManager {
         task: delegation.task
       });
 
-      const todo = this.addTask(targetAgent.id, `[From ${leader.name}] ${delegation.task}`, leader.project || null, { type: 'agent', name: leader.name, id: leaderId });
+      const createdTask = this.addTask(targetAgent.id, `[From ${leader.name}] ${delegation.task}`, leader.project || null, { type: 'agent', name: leader.name, id: leaderId });
 
       // Mark task as in_progress
-      if (todo) {
-        const t = targetAgent.todoList.find(t => t.id === todo.id);
+      if (createdTask) {
+        const t = targetAgent.todoList.find(t => t.id === createdTask.id);
         if (t) {
           t.status = 'in_progress';
           t.startedAt = new Date().toISOString();
@@ -2746,8 +2746,8 @@ export class AgentManager {
         { type: 'delegation-task', fromAgent: leader.name }
       );
 
-      if (todo) {
-        const t = targetAgent.todoList.find(t => t.id === todo.id);
+      if (createdTask) {
+        const t = targetAgent.todoList.find(t => t.id === createdTask.id);
         if (t) {
           t.status = 'done';
           t.completedAt = new Date().toISOString();
@@ -2859,9 +2859,9 @@ export class AgentManager {
   /** Evaluate a condition against the current task/agent state.
    *  Always re-fetches the agent from the live agents map to ensure
    *  real-time status (avoids stale closures or cached references). */
-  _evaluateCondition(cond, todo) {
+  _evaluateCondition(cond, task) {
     // Re-fetch assignee from the live map every time — never rely on a cached reference
-    const assigneeAgent = todo.assignee ? this.agents.get(todo.assignee) : null;
+    const assigneeAgent = task.assignee ? this.agents.get(task.assignee) : null;
     let fieldValue;
     switch (cond.field) {
       // Legacy owner fields — DEPRECATED, mapped to assignee for backward compat
@@ -2871,7 +2871,7 @@ export class AgentManager {
       case 'assignee_status': fieldValue = assigneeAgent?.status || 'none'; break;
       case 'assignee_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
       case 'assignee_role': fieldValue = assigneeAgent?.role || ''; break;
-      case 'task_has_assignee': fieldValue = todo.assignee ? 'true' : 'false'; break;
+      case 'task_has_assignee': fieldValue = task.assignee ? 'true' : 'false'; break;
       case 'idle_agent_available': {
         // Check if any idle+enabled agent with the given role exists
         const role = cond.value;
@@ -2880,13 +2880,13 @@ export class AgentManager {
         );
         fieldValue = found ? 'true' : 'false';
         const result = cond.operator === 'neq' ? !found : found;
-        console.log(`[Workflow] Condition: idle_agent_available role="${role}" project="${todo.project}" => ${result}`);
+        console.log(`[Workflow] Condition: idle_agent_available role="${role}" project="${task.project}" => ${result}`);
         return result;
       }
       default: fieldValue = '';
     }
     const result = cond.operator === 'neq' ? fieldValue !== cond.value : fieldValue === cond.value;
-    console.log(`[Workflow] Condition: ${cond.field} ${cond.operator} "${cond.value}" => fieldValue="${fieldValue}" result=${result} (assignee=${todo.assignee || 'none'}, agentName=${assigneeAgent?.name || 'N/A'}, agentStatus=${assigneeAgent?.status || 'N/A'})`);
+    console.log(`[Workflow] Condition: ${cond.field} ${cond.operator} "${cond.value}" => fieldValue="${fieldValue}" result=${result} (assignee=${task.assignee || 'none'}, agentName=${assigneeAgent?.name || 'N/A'}, agentStatus=${assigneeAgent?.status || 'N/A'})`);
     return result;
   }
 
@@ -2894,12 +2894,12 @@ export class AgentManager {
   agentHasActiveTask(agentId) {
     for (const [ownerId, agent] of this.agents) {
       if (!agent.todoList) continue;
-      for (const todo of agent.todoList) {
-        if (todo.status !== 'in_progress') continue;
+      for (const task of agent.todoList) {
+        if (task.status !== 'in_progress') continue;
         // Task is owned by this agent
         if (ownerId === agentId) return true;
         // Task is assigned to this agent
-        if (todo.assignee === agentId) return true;
+        if (task.assignee === agentId) return true;
       }
     }
     return false;
@@ -2911,13 +2911,13 @@ export class AgentManager {
     return t && t.from && t.trigger && Array.isArray(t.actions);
   }
 
-  _checkAutoRefine(todo) {
+  _checkAutoRefine(task) {
     // Fire-and-forget: check if there's an autoRefine transition for this status
-    console.log(`[Workflow] _checkAutoRefine: status="${todo.status}" text="${(todo.text || '').slice(0, 60)}" agentId="${todo.agentId}"`);
+    console.log(`[Workflow] _checkAutoRefine: status="${task.status}" text="${(task.text || '').slice(0, 60)}" agentId="${task.agentId}"`);
     getWorkflow('_default').then(async (workflow) => {
       // ── Auto-assign by column role (independent of transitions) ──
-      const currentColumn = workflow.columns?.find(c => c.id === todo.status);
-      const colIndex = workflow.columns?.findIndex(c => c.id === todo.status) ?? -1;
+      const currentColumn = workflow.columns?.find(c => c.id === task.status);
+      const colIndex = workflow.columns?.findIndex(c => c.id === task.status) ?? -1;
       const isFirstOrLast = colIndex === 0 || colIndex === (workflow.columns?.length || 0) - 1;
       if (currentColumn?.autoAssignRole && !isFirstOrLast) {
         // Find all matching agents, then pick the one with the fewest tasks across the entire board
@@ -2931,7 +2931,7 @@ export class AgentManager {
           let count = 0;
           for (const [, owner] of this.agents) {
             for (const t of owner.todoList || []) {
-              if (t.id === todo.id) continue; // don't count the task being assigned
+              if (t.id === task.id) continue; // don't count the task being assigned
               if (t.assignee === candidate.id || (!t.assignee && owner.id === candidate.id)) {
                 count++;
               }
@@ -2943,23 +2943,23 @@ export class AgentManager {
           }
         }
         if (autoAgent) {
-          console.log(`[Auto-Assign] Task "${(todo.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (${minTasks} tasks in column, role: ${currentColumn.autoAssignRole})`);
-          todo.assignee = autoAgent.id;
-          // Update the actual agent's todoList (todo is a spread copy)
-          const ownerAgent = this.agents.get(todo.agentId);
-          const actualTodo = ownerAgent?.todoList?.find(t => t.id === todo.id);
-          if (actualTodo) {
-            actualTodo.assignee = autoAgent.id;
+          console.log(`[Auto-Assign] Task "${(task.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (${minTasks} tasks in column, role: ${currentColumn.autoAssignRole})`);
+          task.assignee = autoAgent.id;
+          // Update the actual agent's todoList (task is a spread copy)
+          const ownerAgent = this.agents.get(task.agentId);
+          const actualTask = ownerAgent?.todoList?.find(t => t.id === task.id);
+          if (actualTask) {
+            actualTask.assignee = autoAgent.id;
             saveAgent(ownerAgent);
           }
-          this.io?.to(`agent:${todo.agentId}`)?.emit('task:updated', { agentId: todo.agentId, todo });
+          this.io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
         }
       }
 
       // Migrate and filter transitions
       const matchingTransitions = workflow.transitions
         .filter(t => this._validTransition(t))
-        .filter(t => t && t.from === todo.status);
+        .filter(t => t && t.from === task.status);
 
       for (const transition of matchingTransitions) {
         // ── Skip Jira-managed triggers (handled by jiraSync polling) ──
@@ -2969,7 +2969,7 @@ export class AgentManager {
         if (transition.trigger === 'condition') {
           const conditions = transition.conditions || [];
           if (conditions.length === 0) continue;
-          const allMet = conditions.every(cond => this._evaluateCondition(cond, todo));
+          const allMet = conditions.every(cond => this._evaluateCondition(cond, task));
           if (!allMet) {
             console.log(`[Workflow] Condition not met for transition from="${transition.from}" (${conditions.length} conditions)`);
             continue;
@@ -2995,22 +2995,22 @@ export class AgentManager {
               let count = 0;
               for (const [, owner] of this.agents) {
                 for (const t of owner.todoList || []) {
-                  if (t.id === todo.id) continue;
+                  if (t.id === task.id) continue;
                   if (t.assignee === c.id || (!t.assignee && owner.id === c.id)) count++;
                 }
               }
               if (count < minTasks) { minTasks = count; agent = c; }
             }
             if (agent) {
-              todo.assignee = agent.id;
-              const ownerAgent = this.agents.get(todo.agentId);
-              const actualTodo = ownerAgent?.todoList?.find(t => t.id === todo.id);
-              if (actualTodo) {
-                actualTodo.assignee = agent.id;
+              task.assignee = agent.id;
+              const ownerAgent = this.agents.get(task.agentId);
+              const actualTask = ownerAgent?.todoList?.find(t => t.id === task.id);
+              if (actualTask) {
+                actualTask.assignee = agent.id;
                 saveAgent(ownerAgent);
               }
-              this.io?.to(`agent:${todo.agentId}`)?.emit('task:updated', { agentId: todo.agentId, todo });
-              console.log(`[Workflow] Action: assigned "${(todo.text || '').slice(0, 60)}" to "${agent.name}" (${minTasks} total tasks, role: ${action.role})`);
+              this.io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
+              console.log(`[Workflow] Action: assigned "${(task.text || '').slice(0, 60)}" to "${agent.name}" (${minTasks} total tasks, role: ${action.role})`);
             } else {
               console.log(`[Workflow] Action: no idle agent with role "${action.role}" — skipping assign`);
             }
@@ -3018,7 +3018,7 @@ export class AgentManager {
           } else if (action.type === 'run_agent') {
             // Build _transition compatible with processTransition
             const enrichedTask = {
-              ...todo,
+              ...task,
               _transition: {
                 agent: action.role || '',
                 mode: action.mode || 'execute',
@@ -3028,16 +3028,16 @@ export class AgentManager {
             };
             console.log(`[Workflow] Action: run_agent mode="${action.mode}" role="${action.role}" target="${action.targetStatus}"`);
             processTransition(enrichedTask, this, this.io).catch(err => {
-              console.error(`[Workflow] Error in run_agent for "${(todo.text || '').slice(0, 60)}":`, err.message);
+              console.error(`[Workflow] Error in run_agent for "${(task.text || '').slice(0, 60)}":`, err.message);
             });
             return; // run_agent is async — stop processing further transitions
 
           } else if (action.type === 'change_status') {
-            if (action.target && action.target !== todo.status) {
-              console.log(`[Workflow] Action: change_status "${todo.status}" -> "${action.target}" for "${(todo.text || '').slice(0, 60)}"`);
-              const result = this.setTaskStatus(todo.agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+            if (action.target && action.target !== task.status) {
+              console.log(`[Workflow] Action: change_status "${task.status}" -> "${action.target}" for "${(task.text || '').slice(0, 60)}"`);
+              const result = this.setTaskStatus(task.agentId, task.id, action.target, { skipAutoRefine: false, by: 'workflow' });
               if (!result) {
-                console.warn(`[Workflow] Action: change_status BLOCKED (guard) for "${(todo.text || '').slice(0, 60)}"`);
+                console.warn(`[Workflow] Action: change_status BLOCKED (guard) for "${(task.text || '').slice(0, 60)}"`);
               }
               return; // status change triggers a new _checkAutoRefine cycle
             }
@@ -3046,7 +3046,7 @@ export class AgentManager {
         return; // transition matched and all actions processed
       }
 
-      console.log(`[Workflow] No matching transition for status="${todo.status}" (${matchingTransitions.length} candidates checked)`);
+      console.log(`[Workflow] No matching transition for status="${task.status}" (${matchingTransitions.length} candidates checked)`);
     }).catch(err => {
       console.error(`[Workflow] Failed to load workflow:`, err.message);
     });
@@ -3064,7 +3064,7 @@ export class AgentManager {
     const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
     const status = initialStatus || defaultStatus;
     const now = new Date().toISOString();
-    const todo = {
+    const newTask = {
       id: uuidv4(),
       text,
       status,
@@ -3073,139 +3073,139 @@ export class AgentManager {
       createdAt: now,
       history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };
-    agent.todoList.push(todo);
+    agent.todoList.push(newTask);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
-    this._checkAutoRefine({ ...todo, agentId });
-    return todo;
+    this._checkAutoRefine({ ...newTask, agentId });
+    return newTask;
   }
 
   toggleTask(agentId, taskId) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
-    const prevStatus = todo.status;
-    todo.status = prevStatus === 'done' ? 'pending' : 'done';
-    if (todo.status === 'done') todo.completedAt = new Date().toISOString();
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    const prevStatus = task.status;
+    task.status = prevStatus === 'done' ? 'pending' : 'done';
+    if (task.status === 'done') task.completedAt = new Date().toISOString();
 
     // If Jira sync is enabled and this task is not from Jira, create a Jira issue
-    if (isJiraEnabled() && todo.source?.type !== 'jira' && !todo.jiraKey) {
-      createJiraIssue(todo.text, '').then(result => {
+    if (isJiraEnabled() && task.source?.type !== 'jira' && !task.jiraKey) {
+      createJiraIssue(task.text, '').then(result => {
         if (result) {
-          todo.jiraKey = result.key;
-          todo.jiraId = result.id;
-          todo.text = `[${result.key}] ${todo.text}`;
+          task.jiraKey = result.key;
+          task.jiraId = result.id;
+          task.text = `[${result.key}] ${task.text}`;
           this.configManager.updateAgent(agentId, { todoList: agent.todoList });
           this._emitUpdate(agent);
-          console.log(`[AgentManager] Linked todo to Jira issue ${result.key}`);
+          console.log(`[AgentManager] Linked task to Jira issue ${result.key}`);
         }
       }).catch(err => console.error('[AgentManager] Jira issue creation failed:', err.message));
     }
     const now = new Date().toISOString();
-    if (!todo.history) todo.history = [];
-    todo.history.push({ from: prevStatus, status: todo.status, at: now, by: 'user' });
+    if (!task.history) task.history = [];
+    task.history.push({ from: prevStatus, status: task.status, at: now, by: 'user' });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
-    return todo;
+    return task;
   }
 
   setTaskStatus(agentId, taskId, status, { skipAutoRefine = false, by = null } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
     // Guard: only one in_progress task per assignee at a time
     // The guard checks the ASSIGNEE (the agent actually working), not the todoList owner
-    if (status === 'in_progress' && todo.status !== 'in_progress') {
-      const assigneeId = todo.assignee || agentId;
+    if (status === 'in_progress' && task.status !== 'in_progress') {
+      const assigneeId = task.assignee || agentId;
       // Check across ALL agents' todoLists for any in_progress task assigned to the same assignee
       for (const [ownerId, ownerAgent] of this.agents) {
         if (!ownerAgent.todoList) continue;
         const existing = ownerAgent.todoList.find(t =>
-          t.status === 'in_progress' && t.id !== todoId &&
+          t.status === 'in_progress' && t.id !== taskId &&
           (t.assignee || ownerId) === assigneeId
         );
         if (existing) {
-          console.warn(`[Guard] Assignee "${this.agents.get(assigneeId)?.name || assigneeId}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${todo.text.slice(0, 60)}"`);
+          console.warn(`[Guard] Assignee "${this.agents.get(assigneeId)?.name || assigneeId}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${task.text.slice(0, 60)}"`);
           return null;
         }
       }
     }
-    const prevStatus = todo.status;
-    if (prevStatus === status) return todo; // No-op: skip same-status transitions
-    todo.status = status;
+    const prevStatus = task.status;
+    if (prevStatus === status) return task; // No-op: skip same-status transitions
+    task.status = status;
     const now = new Date().toISOString();
-    if (status === 'done') todo.completedAt = now;
-    if (status === 'in_progress') todo.startedAt = now;
-    if (!todo.history) todo.history = [];
-    todo.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
+    if (status === 'done') task.completedAt = now;
+    if (status === 'in_progress') task.startedAt = now;
+    if (!task.history) task.history = [];
+    task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     // Push status change to Jira (fire-and-forget, skips if no jiraKey or if triggered by jira-sync)
-    if (by !== 'jira-sync') onTaskStatusChanged(todo, status, this);
-    if (!skipAutoRefine) this._checkAutoRefine({ ...todo, agentId });
-    return todo;
+    if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
+    if (!skipAutoRefine) this._checkAutoRefine({ ...task, agentId });
+    return task;
   }
 
   updateTaskText(agentId, taskId, text) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
-    todo.text = text;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    task.text = text;
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
-    return todo;
+    return task;
   }
 
   updateTaskProject(agentId, taskId, project) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
-    todo.project = project;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    task.project = project;
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
-    return todo;
+    return task;
   }
 
   addTaskCommit(agentId, taskId, hash, message) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
-    if (!todo.commits) todo.commits = [];
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    if (!task.commits) task.commits = [];
     // Avoid duplicates
-    if (todo.commits.some(c => c.hash === hash)) return todo;
-    todo.commits.push({ hash, message: message || '', date: new Date().toISOString() });
+    if (task.commits.some(c => c.hash === hash)) return task;
+    task.commits.push({ hash, message: message || '', date: new Date().toISOString() });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
-    return todo;
+    return task;
   }
 
   removeTaskCommit(agentId, taskId, hash) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo || !todo.commits) return null;
-    const before = todo.commits.length;
-    todo.commits = todo.commits.filter(c => c.hash !== hash);
-    if (todo.commits.length === before) return null;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task || !task.commits) return null;
+    const before = task.commits.length;
+    task.commits = task.commits.filter(c => c.hash !== hash);
+    if (task.commits.length === before) return null;
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
-    return todo;
+    return task;
   }
 
   setTaskAssignee(agentId, taskId, assigneeId) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
-    todo.assignee = assigneeId;
-    if (!todo.history) todo.history = [];
-    todo.history.push({
-      status: todo.status,
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    task.assignee = assigneeId;
+    if (!task.history) task.history = [];
+    task.history.push({
+      status: task.status,
       at: new Date().toISOString(),
       by: 'user',
       type: 'reassign',
@@ -3215,7 +3215,7 @@ export class AgentManager {
     this._emit('agent:updated', this._sanitize(agent));
     // Re-check workflow transitions since assignee changed
     this._recheckConditionalTransitions();
-    return todo;
+    return task;
   }
 
   deleteTask(agentId, taskId) {
@@ -3240,10 +3240,10 @@ export class AgentManager {
     const fromAgent = this.agents.get(fromAgentId);
     const toAgent = this.agents.get(toAgentId);
     if (!fromAgent || !toAgent) return null;
-    const todo = fromAgent.todoList.find(t => t.id === taskId);
-    if (!todo) return null;
+    const taskToTransfer = fromAgent.todoList.find(t => t.id === taskId);
+    if (!taskToTransfer) return null;
 
-    const prevStatus = todo.status;
+    const prevStatus = taskToTransfer.status;
 
     // Remove from source agent
     fromAgent.todoList = fromAgent.todoList.filter(t => t.id !== taskId);
@@ -3251,7 +3251,7 @@ export class AgentManager {
     this._emit('agent:updated', this._sanitize(fromAgent));
 
     // Add to target agent, preserving status and assigning to target agent
-    const newTask = this.addTask(toAgentId, todo.text, todo.project, {
+    const newTask = this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, {
       type: 'transfer',
       name: fromAgent.name,
       id: fromAgent.id,
@@ -3274,11 +3274,11 @@ export class AgentManager {
   async executeTask(agentId, taskId, streamCallback) {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
-    const todo = agent.todoList.find(t => t.id === taskId);
-    if (!todo) throw new Error('Task not found');
-    if (todo.status === 'done') throw new Error('Task already completed');
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) throw new Error('Task not found');
+    if (task.status === 'done') throw new Error('Task already completed');
 
-    console.log(`[Workflow] Triggering execution for "${todo.text.slice(0, 80)}"`);
+    console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}"`);  
 
     // Set to pending — this triggers _checkAutoRefine which will find
     // the transition (pending -> in_progress with a developer role agent)
@@ -3300,12 +3300,12 @@ export class AgentManager {
     this._emit('agent:task:executeAll:start', { agentId, count: pending.length });
 
     const results = [];
-    for (const todo of pending) {
+    for (const task of pending) {
       try {
-        const result = await this.executeTask(agentId, todo.id, streamCallback);
-        results.push({ taskId: todo.id, text: todo.text, success: true, response: result.response });
+        const result = await this.executeTask(agentId, task.id, streamCallback);
+        results.push({ taskId: task.id, text: task.text, success: true, response: result.response });
       } catch (err) {
-        results.push({ taskId: todo.id, text: todo.text, success: false, error: err.message });
+        results.push({ taskId: task.id, text: task.text, success: false, error: err.message });
         // Continue with next task
       }
     }
@@ -3417,9 +3417,9 @@ export class AgentManager {
     // Append task list context
     if (agent.todoList && agent.todoList.length > 0) {
       instructions += '\n\n--- Current Task List ---\n';
-      for (const todo of agent.todoList) {
-        const mark = todo.status === 'done' ? 'x' : todo.status === 'in_progress' ? '~' : todo.status === 'error' ? '!' : ' ';
-        instructions += `- [${mark}] ${todo.text}\n`;
+      for (const task of agent.todoList) {
+        const mark = task.status === 'done' ? 'x' : task.status === 'in_progress' ? '~' : task.status === 'error' ? '!' : ' ';
+        instructions += `- [${mark}] ${task.text}\n`;
       }
     }
 
@@ -3821,36 +3821,36 @@ export class AgentManager {
 
       if (condTransitions.length === 0) return;
 
-      // Collect all todos across all agents
+      // Collect all tasks across all agents
       for (const [agentId, agent] of this.agents) {
         if (!agent.todoList) continue;
-        for (const todo of agent.todoList) {
-          // Find conditional transitions matching this todo's status
-          const matching = condTransitions.filter(t => t.from === todo.status);
+        for (const task of agent.todoList) {
+          // Find conditional transitions matching this task's status
+          const matching = condTransitions.filter(t => t.from === task.status);
           if (matching.length === 0) continue;
 
           // Skip tasks where the assignee is busy (actively executing).
           // Allow re-evaluation when assignee is idle, error, or absent —
           // the condition evaluator will check the actual status.
-          if (todo.assignee) {
-            const assigneeAgent = this.agents.get(todo.assignee);
+          if (task.assignee) {
+            const assigneeAgent = this.agents.get(task.assignee);
             if (assigneeAgent && assigneeAgent.status === 'busy') continue;
           }
 
           for (const transition of matching) {
             const conditions = transition.conditions || [];
             const allMet = conditions.length === 0 || conditions.every(cond =>
-              this._evaluateCondition(cond, { ...todo, agentId })
+              this._evaluateCondition(cond, { ...task, agentId })
             );
             if (!allMet) continue;
 
             // Prevent double-processing: skip if already being processed (with TTL)
-            const lockKey = `${agentId}:${todo.id}`;
+            const lockKey = `${agentId}:${task.id}`;
             if (!this._conditionProcessing) this._conditionProcessing = new Map();
             if (this._conditionProcessing.has(lockKey)) continue;
             this._conditionProcessing.set(lockKey, Date.now());
 
-            console.log(`[Workflow] Condition re-check: all conditions met for "${(todo.text || '').slice(0, 60)}" in status="${todo.status}"`);
+            console.log(`[Workflow] Condition re-check: all conditions met for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
 
             // Process actions (same logic as _checkAutoRefine)
             const actions = transition.actions || [];
@@ -3867,24 +3867,24 @@ export class AgentManager {
                   let count = 0;
                   for (const [, ow] of this.agents) {
                     for (const t of ow.todoList || []) {
-                      if (t.id === todo.id) continue;
+                      if (t.id === task.id) continue;
                       if (t.assignee === c.id || (!t.assignee && ow.id === c.id)) count++;
                     }
                   }
                   if (count < minTasks) { minTasks = count; foundAgent = c; }
                 }
                 if (foundAgent) {
-                  const actualTodo = agent.todoList.find(t => t.id === todo.id);
-                  if (actualTodo) {
-                    actualTodo.assignee = foundAgent.id;
+                  const actualTask = agent.todoList.find(t => t.id === task.id);
+                  if (actualTask) {
+                    actualTask.assignee = foundAgent.id;
                     saveAgent(agent);
                   }
-                  this.io?.to(`agent:${agentId}`)?.emit('task:updated', { agentId, todo: { ...todo, assignee: foundAgent.id } });
-                  console.log(`[Workflow] Condition re-check: assigned "${(todo.text || '').slice(0, 60)}" to "${foundAgent.name}" (${minTasks} tasks in column, role: ${action.role})`);
+                  this.io?.to(`agent:${agentId}`)?.emit('task:updated', { agentId, task: { ...task, assignee: foundAgent.id } });
+                  console.log(`[Workflow] Condition re-check: assigned "${(task.text || '').slice(0, 60)}" to "${foundAgent.name}" (${minTasks} tasks in column, role: ${action.role})`);
                 }
               } else if (action.type === 'run_agent') {
                 const enrichedTask = {
-                  ...todo, agentId,
+                  ...task, agentId,
                   _transition: {
                     agent: action.role || '',
                     mode: action.mode || 'execute',
@@ -3899,11 +3899,11 @@ export class AgentManager {
                 didReturn = true;
                 break;
               } else if (action.type === 'change_status') {
-                if (action.target && action.target !== todo.status) {
-                  console.log(`[Workflow] Condition re-check: change_status "${todo.status}" -> "${action.target}" for "${(todo.text || '').slice(0, 60)}"`);
-                  const result = this.setTaskStatus(agentId, todo.id, action.target, { skipAutoRefine: false, by: 'workflow' });
+                if (action.target && action.target !== task.status) {
+                  console.log(`[Workflow] Condition re-check: change_status "${task.status}" -> "${action.target}" for "${(task.text || '').slice(0, 60)}"`);
+                  const result = this.setTaskStatus(agentId, task.id, action.target, { skipAutoRefine: false, by: 'workflow' });
                   if (!result) {
-                    console.warn(`[Workflow] Condition re-check: change_status BLOCKED (guard) for "${(todo.text || '').slice(0, 60)}"`);
+                    console.warn(`[Workflow] Condition re-check: change_status BLOCKED (guard) for "${(task.text || '').slice(0, 60)}"`);
                   }
                   this._conditionProcessing.delete(lockKey);
                   didReturn = true;
@@ -3912,7 +3912,7 @@ export class AgentManager {
               }
             }
             if (!didReturn) this._conditionProcessing.delete(lockKey);
-            break; // one transition matched — stop checking others for this todo
+            break; // one transition matched — stop checking others for this task
           }
         }
       }
@@ -3979,42 +3979,42 @@ export class AgentManager {
 
       // Priority 1: resume in_progress tasks assigned to this agent (check own list + other lists)
       // Skip if workflow manages in_progress transitions (conditions will handle the move)
-      let inProgressTodo = null;
+      let inProgressTask = null;
       let inProgressOwnerId = null;
       // Check own list first
       const ownInProgress = agent.todoList?.find(t =>
         t.status === 'in_progress' && (!t.assignee || t.assignee === agentId)
       );
       if (ownInProgress) {
-        inProgressTodo = ownInProgress;
+        inProgressTask = ownInProgress;
         inProgressOwnerId = agentId;
       } else {
         // Check other agents' lists for tasks assigned to this agent
         for (const [oid, oa] of this.agents) {
           if (oid === agentId || !oa.todoList) continue;
           const found = oa.todoList.find(t => t.status === 'in_progress' && t.assignee === agentId);
-          if (found) { inProgressTodo = found; inProgressOwnerId = oid; break; }
+          if (found) { inProgressTask = found; inProgressOwnerId = oid; break; }
         }
       }
-      if (inProgressTodo) {
+      if (inProgressTask) {
         if (this._workflowManagedStatuses?.has('in_progress')) continue;
         this._loopProcessing.add(agentId);
-        console.log(`🔄 [TaskLoop] Agent "${agent.name}" is idle but has in_progress task "${inProgressTodo.text.slice(0, 60)}" — resuming`);
-        this._resumeInProgressTask(inProgressOwnerId, this.agents.get(inProgressOwnerId), inProgressTodo).finally(() => {
+        console.log(`🔄 [TaskLoop] Agent "${agent.name}" is idle but has in_progress task "${inProgressTask.text.slice(0, 60)}" — resuming`);
+        this._resumeInProgressTask(inProgressOwnerId, this.agents.get(inProgressOwnerId), inProgressTask).finally(() => {
           this._loopProcessing.delete(agentId);
         });
         continue;
       }
 
-      // Priority 2: pick up the first pending todo — but skip tasks managed by workflow transitions
+      // Priority 2: pick up the first pending task — but skip tasks managed by workflow transitions
       // Only pick up tasks where this agent is the assignee (or owner when no assignee is set)
-      const todo = agent.todoList?.find(t =>
+      const task = agent.todoList?.find(t =>
         t.status === 'pending' && (!t.assignee || t.assignee === agentId)
       );
-      if (!todo) continue;
+      if (!task) continue;
 
       // Check if there's a workflow transition for this status — if so, let the workflow handle it
-      if (this._workflowManagedStatuses?.has(todo.status)) continue;
+      if (this._workflowManagedStatuses?.has(task.status)) continue;
 
       // Mark as being processed by the loop to avoid double-pickup on next tick
       this._loopProcessing.add(agentId);
@@ -4030,7 +4030,7 @@ export class AgentManager {
 
       this._emit('agent:stream:start', { agentId });
 
-      this.executeTask(agentId, todo.id, streamCallback)
+      this.executeTask(agentId, task.id, streamCallback)
         .then(() => {
           this._emit('agent:stream:end', { agentId });
           this._emit('agent:updated', this._sanitize(agent));
@@ -4056,9 +4056,9 @@ export class AgentManager {
    * Sends the task text directly to the assignee and moves to done on success.
    * The agentId parameter is the todoList owner (creator); execution uses the assignee.
    */
-  async _resumeInProgressTask(agentId, agent, todo) {
+  async _resumeInProgressTask(agentId, agent, task) {
     // Use the assignee agent for execution (fall back to owner if no assignee set)
-    const executorId = todo.assignee || agentId;
+    const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
 
     const streamCallback = (chunk) => {
@@ -4082,28 +4082,28 @@ export class AgentManager {
         if (transition?.to) targetStatus = transition.to;
       } catch (_) { /* use default */ }
 
-      // Auto-switch executor to the todo's project if needed
-      if (todo.project && todo.project !== executor.project) {
-        console.log(`🔄 [TaskLoop] Switching "${executor.name}" to project "${todo.project}" for resume`);
+      // Auto-switch executor to the task's project if needed
+      if (task.project && task.project !== executor.project) {
+        console.log(`🔄 [TaskLoop] Switching "${executor.name}" to project "${task.project}" for resume`);
         if (this._switchProjectContext) {
-          this._switchProjectContext(executor, executor.project, todo.project);
+          this._switchProjectContext(executor, executor.project, task.project);
         }
-        executor.project = todo.project;
+        executor.project = task.project;
       }
 
       const result = await this.sendMessage(
         executorId,
-        todo.text,
+        task.text,
         streamCallback
       );
 
       // If workflow manages in_progress transitions, let it handle the next move
       // Otherwise fall back to moving the task to the target status directly
       if (this._workflowManagedStatuses?.has('in_progress')) {
-        console.log(`🔄 [TaskLoop] Execution finished for "${todo.text.slice(0, 60)}" — stays in_progress for workflow`);
+        console.log(`🔄 [TaskLoop] Execution finished for "${task.text.slice(0, 60)}" — stays in_progress for workflow`);
       } else {
-        this.setTaskStatus(agentId, todo.id, targetStatus, { skipAutoRefine: true, by: executor.name });
-        console.log(`🔄 [TaskLoop] Resumed and completed "${todo.text.slice(0, 60)}" -> ${targetStatus}`);
+        this.setTaskStatus(agentId, task.id, targetStatus, { skipAutoRefine: true, by: executor.name });
+        console.log(`🔄 [TaskLoop] Resumed and completed "${task.text.slice(0, 60)}" -> ${targetStatus}`);
       }
     } catch (err) {
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
@@ -4148,7 +4148,7 @@ export class AgentManager {
     if (!this.io) return;
 
     // Throttle agent:updated to avoid flooding clients with rapid-fire updates
-    // for the same agent (e.g. during delegation: todo created → in_progress → done)
+    // for the same agent (e.g. during delegation: task created → in_progress → done)
     if (event === 'agent:updated' && data?.id) {
       const agentId = data.id;
       // Always store the latest data

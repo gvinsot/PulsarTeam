@@ -58,19 +58,19 @@ export function jiraRoutes(agentManager) {
     const jiraKey = req.params.jiraKey;
 
     // Find the task linked to this Jira key
-    let todo = null;
+    let task = null;
     let agentId = null;
     for (const [id, agent] of agentManager.agents) {
       const found = (agent.todoList || []).find(t => t.jiraKey === jiraKey);
       if (found) {
-        todo = found;
+        task = found;
         agentId = id;
         break;
       }
     }
 
     try {
-      await analyzeAndCommentJira(jiraKey, todo || { text: jiraKey }, agentId, agentManager, instructions || '', role || '');
+      await analyzeAndCommentJira(jiraKey, task || { text: jiraKey }, agentId, agentManager, instructions || '', role || '');
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });

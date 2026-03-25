@@ -3,50 +3,50 @@ import path from 'path';
 import crypto from 'crypto';
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
-const TODOS_FILE = path.join(DATA_DIR, 'global-todos.json');
+const TASKS_FILE = path.join(DATA_DIR, 'global-todos.json');
 
-class GlobalTodoStore {
+class GlobalTaskStore {
   constructor() {
-    this.todos = new Map();
+    this.tasks = new Map();
     this._load();
   }
 
   _load() {
     try {
-      if (fs.existsSync(TODOS_FILE)) {
-        const data = JSON.parse(fs.readFileSync(TODOS_FILE, 'utf8'));
+      if (fs.existsSync(TASKS_FILE)) {
+        const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
         if (Array.isArray(data)) {
           for (const t of data) {
             // Backfill: ensure type and history exist
             if (!t.type) t.type = 'bug';
             if (!t.history) t.history = [{ from: null, to: t.status || 'backlog', at: t.createdAt || new Date().toISOString(), by: null }];
-            this.todos.set(t.id, t);
+            this.tasks.set(t.id, t);
           }
         }
       }
     } catch (err) {
-      console.error('Failed to load global todos:', err.message);
+      console.error('Failed to load global tasks:', err.message);
     }
   }
 
   _save() {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(TODOS_FILE, JSON.stringify(Array.from(this.todos.values()), null, 2));
+      fs.writeFileSync(TASKS_FILE, JSON.stringify(Array.from(this.tasks.values()), null, 2));
     } catch (err) {
-      console.error('Failed to save global todos:', err.message);
+      console.error('Failed to save global tasks:', err.message);
     }
   }
 
   getAll() {
-    return Array.from(this.todos.values());
+    return Array.from(this.tasks.values());
   }
 
   add({ title, description, priority, status, assignee, project, type }) {
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const initialStatus = status || 'backlog';
-    const todo = {
+    const task = {
       id,
       title: title || 'Untitled',
       description: description || '',
@@ -59,67 +59,67 @@ class GlobalTodoStore {
       updatedAt: now,
       history: [{ from: null, to: initialStatus, at: now, by: null }],
     };
-    this.todos.set(id, todo);
+    this.tasks.set(id, task);
     this._save();
-    return todo;
+    return task;
   }
 
   update(id, updates, changedBy = null) {
-    const todo = this.todos.get(id);
-    if (!todo) return null;
+    const task = this.tasks.get(id);
+    if (!task) return null;
     const now = new Date().toISOString();
-    const oldStatus = todo.status;
+    const oldStatus = task.status;
 
-    if (updates.title !== undefined) todo.title = updates.title;
-    if (updates.description !== undefined) todo.description = updates.description;
-    if (updates.priority !== undefined) todo.priority = updates.priority;
-    if (updates.assignee !== undefined) todo.assignee = updates.assignee;
-    if (updates.project !== undefined) todo.project = updates.project;
-    if (updates.type !== undefined) todo.type = updates.type;
+    if (updates.title !== undefined) task.title = updates.title;
+    if (updates.description !== undefined) task.description = updates.description;
+    if (updates.priority !== undefined) task.priority = updates.priority;
+    if (updates.assignee !== undefined) task.assignee = updates.assignee;
+    if (updates.project !== undefined) task.project = updates.project;
+    if (updates.type !== undefined) task.type = updates.type;
 
     // Track status changes in history
     if (updates.status !== undefined && updates.status !== oldStatus) {
-      todo.status = updates.status;
-      if (!todo.history) todo.history = [];
-      todo.history.push({ from: oldStatus, to: updates.status, at: now, by: changedBy });
+      task.status = updates.status;
+      if (!task.history) task.history = [];
+      task.history.push({ from: oldStatus, to: updates.status, at: now, by: changedBy });
     }
 
-    todo.updatedAt = now;
+    task.updatedAt = now;
     this._save();
-    return todo;
+    return task;
   }
 
   delete(id) {
-    const existed = this.todos.has(id);
-    this.todos.delete(id);
+    const existed = this.tasks.has(id);
+    this.tasks.delete(id);
     if (existed) this._save();
     return existed;
   }
 
   get(id) {
-    return this.todos.get(id) || null;
+    return this.tasks.get(id) || null;
   }
 
   getHistory(id) {
-    const todo = this.todos.get(id);
-    if (!todo) return null;
-    return todo.history || [];
+    const task = this.tasks.get(id);
+    if (!task) return null;
+    return task.history || [];
   }
 
   getStats(projectFilter = null) {
-    let todos = Array.from(this.todos.values());
+    let tasks = Array.from(this.tasks.values());
     if (projectFilter) {
-      todos = todos.filter(t => t.project === projectFilter);
+      tasks = tasks.filter(t => t.project === projectFilter);
     }
 
-    const total = todos.length;
+    const total = tasks.length;
     const byType = { bug: 0, feature: 0 };
     const byStatus = {};
     const resolutionTimes = [];
     const resolutionByType = { bug: [], feature: [] };
     const stateDurations = {};
 
-    for (const t of todos) {
+    for (const t of tasks) {
       // Count by type
       byType[t.type || 'bug'] = (byType[t.type || 'bug'] || 0) + 1;
 
@@ -192,4 +192,4 @@ class GlobalTodoStore {
   }
 }
 
-export const globalTodoStore = new GlobalTodoStore();
+export const globalTaskStore = new GlobalTaskStore();

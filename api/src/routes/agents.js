@@ -1,5 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
+import { globalTaskStore } from '../services/globalTaskStore.js';
 
 // Schema for creating a new agent
 const createAgentSchema = z.object({
@@ -389,12 +390,12 @@ export function agentRoutes(agentManager) {
 
 router.get("/tasks/stats", (req, res) => {
   const { project } = req.query;
-  const stats = globalTodoStore.getStats(project || null);
+  const stats = globalTaskStore.getStats(project || null);
   res.json(stats);
 });
 
 router.get("/tasks/:id/history", (req, res) => {
-  const history = globalTodoStore.getHistory(req.params.id);
+  const history = globalTaskStore.getHistory(req.params.id);
   if (!history) return res.status(404).json({ error: "Not found" });
   res.json(history);
 });
