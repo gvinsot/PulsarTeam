@@ -540,11 +540,11 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
             </div>
 
 
-            {/* Agent */}
+            {/* Assignee */}
             <div className="flex items-center justify-between py-2 border-b border-dark-800">
               <div className="flex items-center gap-2 text-xs text-dark-400">
                 <User className="w-3.5 h-3.5" />
-                Agent
+                Assignee
               </div>
               {editingAgent ? (
                 <div className="flex items-center gap-1.5">
@@ -583,15 +583,16 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
               ) : (
                 <div className="flex items-center gap-1.5">
                   {(() => {
-                    const ag = agents.find(a => a.id === task.agentId);
-                    return ag ? (
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium
-                        bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20">
-                        {ag.icon} {ag.name}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-dark-500 italic">Unassigned</span>
-                    );
+                    const assignee = task.assignee ? agents.find(a => a.id === task.assignee) : null;
+                    if (assignee) {
+                      return (
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                          bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20">
+                          {assignee.icon} {assignee.name}
+                        </span>
+                      );
+                    }
+                    return <span className="text-xs text-dark-500 italic">Unassigned</span>;
                   })()}
                   <button
                     onClick={() => setEditingAgent(true)}
@@ -825,10 +826,10 @@ function TaskCard({ task, agents, onDelete, onOpen, showAgent }) {
             {sourceMeta.label(task.source)}
           </span>
         )}
-        {showAgent && task.agentName && (
+        {showAgent && task.assigneeName && (
           <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20">
             <User className="w-2.5 h-2.5" />
-            {task.agentName}
+            {`${task.assigneeIcon || ''} ${task.assigneeName}`.trim()}
           </span>
         )}
         {task.commits && task.commits.length > 0 && (
@@ -1204,7 +1205,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                       </button>
                     </div>
                     <div className="flex items-center gap-2">
-                      <label className="flex items-center gap-1 text-[10px] text-dark-400 cursor-pointer" title="Show agent on cards">
+                      <label className="flex items-center gap-1 text-[10px] text-dark-400 cursor-pointer" title="Show assignee on cards">
                         <input type="checkbox" checked={col.showAgent || false}
                           onChange={e => updateCol(idx, { showAgent: e.target.checked })}
                           className="rounded border-dark-600 bg-dark-700 text-indigo-500 focus:ring-indigo-500/30 w-3 h-3" />
@@ -1480,7 +1481,16 @@ export default function TasksBoard({ agents, onRefresh }) {
   // Aggregate all todos from all agents
   const allTasks = useMemo(() =>
     agents.flatMap(a =>
-      (a.todoList || []).map(t => ({ ...t, agentId: a.id, agentName: a.name }))
+      (a.todoList || []).map(t => {
+        const assigneeAgent = t.assignee ? agents.find(ag => ag.id === t.assignee) : null;
+        return {
+          ...t,
+          agentId: a.id,
+          agentName: a.name,
+          assigneeName: assigneeAgent?.name || null,
+          assigneeIcon: assigneeAgent?.icon || null,
+        };
+      })
     ),
     [agents]
   );
