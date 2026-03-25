@@ -1,309 +1,348 @@
-import { getSettings } from './configManager.js';
-import { saveAgent } from './database.js';
-import { getWorkflow } from './workflowManager.js';
+/**
+ * TransitionProcessor – handles workflow column transitions with trigger actions.
+ *
+ * When a todo moves from one column to another, the target column may have
+ * a trigger (e.g. "on_enter: run_prompt") that should be executed.
+ *
+ * This module:
+ *  1. Validates the transition is allowed by the workflow config
+ *  2. Executes any trigger associated with the target column
+ *  3. Handles errors gracefully and reports them back
+ */
+
+// ── Transition queue to avoid race conditions ───────────────────────────────
+const _transitionQueue = [];
+let _processing = false;
+const MAX_RETRIES = 3;
+const _deadLetterQueue = [];
 
 /**
- * Find the first available agent matching a role.
- * "Available" = enabled AND idle (not busy/error).
- * Returns null if no idle agent with the role exists — the task stays pending.
+ * Queue a transition for processing.
+ * Returns a promise that resolves when the transition is complete.
  */
-function findAgentByRole(agentManager, role) {
-  const agents = Array.from(agentManager.agents.values());
-  const matching = agents.filter(
-    a => a.enabled !== false && (a.role || '').toLowerCase() === role.toLowerCase()
-  );
-  // Only return idle agents that don't already have an in_progress task
-  return matching.find(a => {
-    if (a.status !== 'idle') return false;
-    const hasInProgress = (a.todoList || []).some(t => t.status === 'in_progress');
-    if (hasInProgress) {
-      console.log(`[Workflow] Skipping agent "${a.name}" - already has in_progress task`);
-      return false;
-    }
-    return true;
-  }) || null;
+export function queueTransition(params) {
+  return new Promise((resolve, reject) => {
+    _transitionQueue.push({ params, resolve, reject, retries: 0 });
+    _processNextTransition();
+  });
 }
 
 /**
- * Parse a decide-mode response to extract the structured decision.
- * Accepts JSON like { "decision": "proceed" } or plain text containing proceed/hold/revise.
+ * Get dead-letter queue contents for debugging.
  */
-function parseDecision(response) {
-  // Strip markdown code fences (```json ... ``` or ``` ... ```)
-  let cleaned = response.replace(/```(?:json)?\s*\n?([\s\S]*?)```/g, '$1').trim();
-
-  // Try JSON parse — first the whole cleaned string, then extract via regex
-  for (const candidate of [cleaned, response]) {
-    try {
-      // Try parsing the whole candidate as JSON
-      const direct = JSON.parse(candidate.trim());
-      if (direct.decision) {
-        return { decision: direct.decision.toLowerCase(), reason: direct.reason || '' };
-      }
-    } catch (_) { /* not valid JSON */ }
-
-    // Extract JSON object containing "decision" — use greedy match for last } to handle nested braces
-    try {
-      const jsonMatch = candidate.match(/\{[^{}]*"decision"\s*:\s*"[^"]*"[^{}]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          decision: (parsed.decision || 'hold').toLowerCase(),
-          reason: parsed.reason || '',
-        };
-      }
-    } catch (_) { /* not valid JSON, fall through */ }
-  }
-
-  // Fall back to keyword detection in plain text
-  const lower = response.toLowerCase();
-  if (lower.includes('proceed') || lower.includes('approve') || lower.includes('yes')) {
-    return { decision: 'proceed', reason: response };
-  }
-  if (lower.includes('revise') || lower.includes('reject') || lower.includes('no')) {
-    return { decision: 'revise', reason: response };
-  }
-  return { decision: 'hold', reason: response };
+export function getDeadLetterQueue() {
+  return [..._deadLetterQueue];
 }
 
-/**
- * Process an automatic workflow transition.
- *
- * Three modes based on transition config:
- * - Refinement mode (default): sends a refinement prompt, appends result to task text
- * - Execution mode: sends the task as-is for execution
- * - Decide mode: agent evaluates whether the task should proceed, hold, or be revised
- *
- * The `todo._transition` object carries: { agent (role), to (target status or null), instructions, mode }
- */
-export async function processTransition(todo, agentManager, io) {
-  const targetStatus = todo._transition?.to ?? 'backlog';
-  const transitionRole = todo._transition?.agent;
-  const mode = todo._transition?.mode;
-  const instructions = todo._transition?.instructions || '';
+async function _processNextTransition() {
+  if (_processing) return;
+  if (_transitionQueue.length === 0) return;
 
-  console.log(`[Workflow] processTransition called: todo="${todo.text?.slice(0, 60)}" from="${todo.status}" to="${targetStatus}" mode="${mode}" role="${transitionRole || 'none'}" agentId="${todo.agentId}"`);
+  _processing = true;
+  const item = _transitionQueue.shift();
+  const { params, resolve, reject, retries } = item;
 
   try {
-    // Explicit mode takes precedence; fall back to legacy heuristic
-    const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
-    const isDecide = mode === 'decide';
-
-    // Find the agent to run this transition
-    let agent = null;
-
-    if (isExecution) {
-      // Execute mode: always use the task's assignee first, then owner
-      const assignee = todo.assignee ? agentManager.agents.get(todo.assignee) : null;
-      if (assignee && assignee.enabled !== false && assignee.status === 'idle') {
-        agent = assignee;
-        console.log(`[Workflow] Execute mode: using idle assignee "${agent.name}" (${agent.id})`);
-      } else if (todo.agentId) {
-        const owner = agentManager.agents.get(todo.agentId);
-        if (owner && owner.enabled !== false && owner.status === 'idle') {
-          agent = owner;
-          console.log(`[Workflow] Execute mode: using idle task owner "${agent.name}" (${agent.id})`);
-        }
-      }
+    const result = await processTransition(params);
+    resolve(result);
+  } catch (err) {
+    if (retries < MAX_RETRIES) {
+      // Retry with exponential backoff
+      const delay = Math.min(1000 * Math.pow(2, retries), 10000);
+      console.warn(`[Workflow] Transition failed (attempt ${retries + 1}/${MAX_RETRIES}), retrying in ${delay}ms:`, err.message);
+      setTimeout(() => {
+        _transitionQueue.push({ params, resolve, reject, retries: retries + 1 });
+        _processNextTransition();
+      }, delay);
     } else {
-      // Non-execute modes: find agent by role
-      if (transitionRole) {
-        agent = findAgentByRole(agentManager, transitionRole);
-        if (agent) console.log(`[Workflow] Found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
-      }
+      // Max retries exceeded – move to dead-letter queue
+      console.error(`[Workflow] Transition permanently failed after ${MAX_RETRIES} retries:`, err.message);
+      _deadLetterQueue.push({
+        params: { agentId: params.agentId, todoId: params.todoId, fromColumn: params.fromColumn, toColumn: params.toColumn, by: params.by },
+        error: err.message,
+        failedAt: new Date().toISOString(),
+      });
+      // Keep dead-letter queue bounded
+      if (_deadLetterQueue.length > 50) _deadLetterQueue.shift();
+      reject(err);
     }
-
-    // Fallback for non-execute modes: try global ideasAgent setting
-    if (!agent && !isExecution) {
-      const settings = await getSettings();
-      if (settings.ideasAgent) {
-        agent = Array.from(agentManager.agents.values()).find(
-          a => a.enabled !== false && a.status === 'idle' && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
-        );
-        if (agent) console.log(`[Workflow] Found idle agent via ideasAgent setting: ${agent.name}`);
-      }
+  } finally {
+    _processing = false;
+    // Process next in queue
+    if (_transitionQueue.length > 0) {
+      setImmediate(_processNextTransition);
     }
+  }
+}
 
-    if (!agent) {
-      console.log(`[Workflow] No idle agent found for role "${transitionRole || 'any'}" — task stays pending (will be picked up when an agent becomes available)`);
-      return;
+/**
+ * Process a single transition.
+ *
+ * @param {object} params
+ * @param {string} params.agentId – agent that owns the todo
+ * @param {string} params.todoId – the todo being moved
+ * @param {string} params.fromColumn – current column name
+ * @param {string} params.toColumn – target column name
+ * @param {string} params.by – who initiated (agentId or 'user')
+ * @param {object} params.agentManager – AgentManager instance
+ * @param {object} params.io – Socket.IO instance
+ */
+export async function processTransition({
+  agentId,
+  todoId,
+  fromColumn,
+  toColumn,
+  by,
+  agentManager,
+  io,
+}) {
+  if (!agentManager) {
+    console.error('[Workflow] No agentManager provided');
+    return { success: false, error: 'No agentManager' };
+  }
+
+  const agent = agentManager.agents?.find(a => a.id === agentId);
+  if (!agent) {
+    console.error(`[Workflow] Agent ${agentId} not found`);
+    return { success: false, error: 'Agent not found' };
+  }
+
+  const todo = (agent.todoList || []).find(t => t.id === todoId);
+  if (!todo) {
+    console.error(`[Workflow] Todo ${todoId} not found on agent ${agent.name}`);
+    return { success: false, error: 'Todo not found' };
+  }
+
+  const wf = agentManager.configManager?.getWorkflowConfig?.(agentManager.projectId);
+  if (!wf?.columns) {
+    console.error('[Workflow] No workflow config found');
+    return { success: false, error: 'No workflow config' };
+  }
+
+  const targetCol = wf.columns.find(c => c.name === toColumn || c.id === toColumn);
+  if (!targetCol) {
+    console.error(`[Workflow] Target column "${toColumn}" not found`);
+    return { success: false, error: `Column "${toColumn}" not found` };
+  }
+
+  console.log(`[Workflow] Transitioning "${todo.text}" from ${fromColumn} → ${toColumn} (by ${by})`);
+
+  // ── Update the todo status ──────────────────────────────────────────────
+  const previousStatus = todo.status || fromColumn;
+  todo.status = toColumn;
+  todo.updatedAt = new Date().toISOString();
+  todo.lastTransition = { from: fromColumn, to: toColumn, by, at: todo.updatedAt };
+
+  agentManager.configManager.updateAgent(agentId, { todoList: agent.todoList });
+  if (typeof agentManager._emitUpdate === 'function') {
+    agentManager._emitUpdate(agent);
+  }
+
+  // ── Jira sync ─────────────────────────────────────────────────────────────
+  try {
+    const { onTodoStatusChanged } = await import('./jiraSync.js');
+    await onTodoStatusChanged(todo, toColumn);
+  } catch (err) {
+    console.warn(`[Workflow] Jira sync failed for ${todo.jiraKey || todoId}:`, err.message);
+  }
+
+  // ── Execute column trigger ────────────────────────────────────────────────
+  const trigger = targetCol.trigger || targetCol.onEnter;
+  if (trigger) {
+    try {
+      await executeTrigger({
+        trigger,
+        agent,
+        todo,
+        toColumn,
+        fromColumn,
+        agentManager,
+        io,
+      });
+    } catch (err) {
+      console.error(`[Workflow] Trigger failed for column "${toColumn}":`, err.message);
+      // Don't revert the status change – the todo is already in the new column
     }
+  }
 
-    // Auto-switch agent to the todo's project if needed
-    if (todo.project && todo.project !== agent.project) {
-      console.log(`[Workflow] Switching "${agent.name}" to project "${todo.project}" for transition`);
-      if (agentManager._switchProjectContext) {
-        agentManager._switchProjectContext(agent, agent.project, todo.project);
-      }
-      agent.project = todo.project;
-    }
+  // ── Handle special status transitions ─────────────────────────────────────
+  if (toColumn === 'done' || targetCol.isFinal) {
+    todo.completedAt = new Date().toISOString();
+    agentManager.configManager.updateAgent(agentId, { todoList: agent.todoList });
 
-    let prompt;
-    let messagePrefix;
-    if (isExecution) {
-      // Execution mode: mark in_progress (only if not already), execute the task
-      if (todo.status !== 'in_progress') {
-        agentManager.setTodoStatus(todo.agentId, todo.id, 'in_progress', { skipAutoRefine: true, by: agent.name });
-      }
-      prompt = todo.text;
-      messagePrefix = '';
-      console.log(`[Workflow] Executing "${todo.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
-    } else if (isDecide) {
-      // Decide mode: agent evaluates based ONLY on configured instructions
-      if (!instructions) {
-        // No instructions → auto-proceed without LLM call
-        console.log(`[Workflow] Decide: no instructions configured — auto-proceeding "${todo.text.slice(0, 60)}"`);
-        todo.history = todo.history || [];
-        todo.history.push({
-          status: targetStatus,
-          from: todo.status,
-          timestamp: new Date().toISOString(),
-          agent: agent.name,
-          type: 'decide',
-          decision: 'proceed',
-          reason: 'No decision instructions configured — auto-proceed'
+    // If this agent has a leader, notify them
+    if (agent.leaderId) {
+      try {
+        await notifyLeader({
+          agent,
+          todo,
+          fromColumn,
+          toColumn,
+          agentManager,
+          io,
         });
-        todo.status = targetStatus;
-        todo.assignee = null;
-        // Update the actual agent's todoList and persist
-        const ownerAgent = agentManager.agents.get(todo.agentId);
-        const actualTodo = ownerAgent?.todoList?.find(t => t.id === todo.id);
-        if (actualTodo) {
-          actualTodo.status = targetStatus;
-          actualTodo.assignee = null;
-          actualTodo.history = todo.history;
-          if (targetStatus === 'done') actualTodo.completedAt = new Date().toISOString();
-          saveAgent(ownerAgent);
-        }
-        io?.to(`agent:${todo.agentId}`)?.emit('todo:updated', { agentId: todo.agentId, todo });
-        return;
+      } catch (err) {
+        console.warn(`[Workflow] Leader notification failed:`, err.message);
       }
-      prompt = `You are a decision-making agent. Your ONLY job is to evaluate the following instructions and decide if the task should proceed.
+    }
+  }
 
-Decision instructions:
-${instructions}
+  // ── Track metrics ─────────────────────────────────────────────────────────
+  if (!agent.metrics) agent.metrics = {};
+  if (!agent.metrics.transitions) agent.metrics.transitions = [];
+  agent.metrics.transitions.push({
+    todoId,
+    from: fromColumn,
+    to: toColumn,
+    by,
+    at: new Date().toISOString(),
+  });
 
-Task title: ${todo.text}
-${todo.error ? `Previous error: ${todo.error}` : ''}
+  // Keep only last 100 transitions
+  if (agent.metrics.transitions.length > 100) {
+    agent.metrics.transitions = agent.metrics.transitions.slice(-100);
+  }
 
-Based STRICTLY on the decision instructions above, respond with JSON only: {"decision": "proceed"|"hold"|"revise", "reason": "brief explanation based on the instructions"}`;
-      messagePrefix = '[Decide]';
-      console.log(`[Workflow] Deciding "${todo.text.slice(0, 80)}" via ${agent.name}`);
-    } else {
-      // Refinement mode: ask for an improved description
-      prompt = `Refine the following task:\n\nTask: ${todo.text}\n${todo.project ? `Project: ${todo.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved description.`;
-      messagePrefix = '[Auto-Transition]';
-      console.log(`[Workflow] Refining "${todo.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
+  agentManager._saveState();
+
+  return { success: true, todo, previousStatus };
+}
+
+
+// ── Trigger execution ─────────────────────────────────────────────────────
+async function executeTrigger({ trigger, agent, todo, toColumn, fromColumn, agentManager, io }) {
+  const triggerType = typeof trigger === 'string' ? trigger : trigger?.type;
+  const triggerConfig = typeof trigger === 'object' ? trigger : {};
+
+  if (!triggerType) {
+    console.warn('[Workflow] Trigger has no type, skipping');
+    return;
+  }
+
+  console.log(`[Workflow] Executing trigger "${triggerType}" for column "${toColumn}"`);
+
+  switch (triggerType) {
+    case 'run_prompt':
+    case 'prompt': {
+      const prompt = triggerConfig.prompt || triggerConfig.message ||
+        `Task "${todo.text}" has moved to column "${toColumn}". Please process it accordingly.`;
+
+      // Send as a message to the agent
+      await agentManager.handleUserMessage(agent.id, prompt, {
+        source: 'workflow',
+        triggerColumn: toColumn,
+        todoId: todo.id,
+      });
+      break;
     }
 
-    let fullResponse = '';
+    case 'assign': {
+      // Assign the todo to a specific agent
+      const targetAgentId = triggerConfig.agentId || triggerConfig.target;
+      if (targetAgentId) {
+        todo.assignee = targetAgentId;
+        agentManager.configManager.updateAgent(agent.id, { todoList: agent.todoList });
+        console.log(`[Workflow] Assigned todo to agent ${targetAgentId}`);
+      }
+      break;
+    }
 
-    io.emit('agent:stream:start', {
+    case 'notify': {
+      // Emit a notification event
+      if (io) {
+        io.emit('workflow:notification', {
+          type: 'transition',
+          agentId: agent.id,
+          agentName: agent.name,
+          todoId: todo.id,
+          todoText: todo.text,
+          from: fromColumn,
+          to: toColumn,
+          message: triggerConfig.message || `Task moved to ${toColumn}`,
+        });
+      }
+      break;
+    }
+
+    case 'auto_advance': {
+      // Automatically move to the next column after a delay
+      const delay = triggerConfig.delay || 0;
+      const nextCol = triggerConfig.nextColumn;
+      if (nextCol) {
+        setTimeout(() => {
+          queueTransition({
+            agentId: agent.id,
+            todoId: todo.id,
+            fromColumn: toColumn,
+            toColumn: nextCol,
+            by: 'system',
+            agentManager,
+            io,
+          });
+        }, delay);
+      }
+      break;
+    }
+
+    case 'webhook': {
+      // Call an external webhook
+      const url = triggerConfig.url;
+      if (url) {
+        try {
+          await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              event: 'transition',
+              agentId: agent.id,
+              todoId: todo.id,
+              from: fromColumn,
+              to: toColumn,
+            }),
+          });
+        } catch (err) {
+          console.error(`[Workflow] Webhook failed:`, err.message);
+        }
+      }
+      break;
+    }
+
+    default:
+      console.warn(`[Workflow] Unknown trigger type: ${triggerType}`);
+  }
+}
+
+
+// ── Leader notification ─────────────────────────────────────────────────────
+async function notifyLeader({ agent, todo, fromColumn, toColumn, agentManager, io }) {
+  const leader = agentManager.agents?.find(a => a.id === agent.leaderId);
+  if (!leader) return;
+
+  const message = `Task completed: "${todo.text}" moved from ${fromColumn} → ${toColumn} by ${agent.name}.`;
+
+  // Send notification to leader via socket
+  if (io) {
+    io.emit('leader:notification', {
+      leaderId: leader.id,
       agentId: agent.id,
       agentName: agent.name,
-      project: agent.project || null,
+      todoId: todo.id,
+      todoText: todo.text,
+      fromColumn,
+      toColumn,
+      message,
     });
+  }
 
-    try {
-      const result = await agentManager.sendMessage(
-        agent.id,
-        messagePrefix ? `${messagePrefix} ${prompt}` : prompt,
-        (chunk) => {
-          fullResponse += chunk;
-          io.emit('agent:stream:chunk', {
-            agentId: agent.id,
-            agentName: agent.name,
-            project: agent.project || null,
-            chunk,
-          });
-          // Emit thinking state like the socket handler does
-          io.emit('agent:thinking', {
-            agentId: agent.id,
-            project: agent.project || null,
-            thinking: agentManager.agents.get(agent.id)?.currentThinking || ''
-          });
-        }
-      );
-
-      const response = (result?.content || fullResponse).trim();
-
-      if (isExecution) {
-        // Check if workflow has a transition from in_progress (condition or agent-based)
-        // If so, let workflow handle it; otherwise move to targetStatus directly
-        let workflowManagesInProgress = false;
-        try {
-          const wf = await getWorkflow('_default');
-          workflowManagesInProgress = wf.transitions.some(t => {
-            if (t.actions) {
-              // New format: check for condition trigger or run_agent actions
-              return t.from === 'in_progress' && (
-                (t.trigger === 'condition' && (t.conditions || []).length > 0) ||
-                (t.actions || []).some(a => a.type === 'run_agent')
-              );
-            }
-            // Old format
-            return t.from === 'in_progress' && (t.autoRefine || t.triggerType === 'condition');
-          });
-        } catch (_) { /* use default: move immediately */ }
-
-        if (workflowManagesInProgress) {
-          console.log(`[Workflow] Execution finished for "${todo.text.slice(0, 60)}" — stays in_progress for workflow transition`);
-        } else if (targetStatus) {
-          agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: agent.name });
-          console.log(`[Workflow] Execution finished for "${todo.text.slice(0, 60)}" — moved to ${targetStatus}`);
-        }
-      } else if (isDecide) {
-        // Parse the agent's decision
-        const { decision, reason } = parseDecision(response);
-        console.log(`[Workflow] Decision for "${todo.text.slice(0, 60)}": ${decision} — ${reason.slice(0, 100)}`);
-
-        if (decision === 'proceed') {
-          // Move to target status
-          if (targetStatus) {
-            agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: agent.name });
-          }
-          console.log(`[Workflow] Decide: proceeding "${todo.text.slice(0, 60)}" -> ${targetStatus}`);
-        } else if (decision === 'revise') {
-          // Append feedback but keep task in current status
-          if (reason) {
-            agentManager.updateTodoText(todo.agentId, todo.id, `${todo.text}\n\n---\n**Review feedback:** ${reason}`);
-          }
-          console.log(`[Workflow] Decide: revision requested for "${todo.text.slice(0, 60)}" — stays in "${todo.status}"`);
-        } else {
-          // hold — task stays in current status, no changes
-          console.log(`[Workflow] Decide: holding "${todo.text.slice(0, 60)}" in "${todo.status}"`);
-        }
-      } else {
-        // Refine mode
-        if (response) {
-          agentManager.updateTodoText(todo.agentId, todo.id, `${todo.text}\n\n---\n${response}`);
-        }
-        if (targetStatus) {
-          agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: agent.name });
-        }
-      }
-
-      console.log(`[Workflow] Done: "${todo.text.slice(0, 80)}" via ${agent.name}${targetStatus ? ` -> ${targetStatus}` : ''}`);
-    } finally {
-      io.emit('agent:stream:end', {
-        agentId: agent.id,
-        agentName: agent.name,
-        project: agent.project || null,
-      });
-      // Emit agent:updated so the frontend gets the updated conversation history
-      io.emit('agent:updated', agentManager._sanitize(agent));
-    }
+  // Optionally send as a message to the leader agent
+  try {
+    await agentManager.handleUserMessage(leader.id, message, {
+      source: 'workflow',
+      type: 'task_completed',
+      agentId: agent.id,
+      todoId: todo.id,
+    });
   } catch (err) {
-    console.error(`[Workflow] Error processing "${todo.text}":`, err.message, err.stack);
-    try {
-      const isExec = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
-      if (isExec) {
-        agentManager.setTodoStatus(todo.agentId, todo.id, 'error', { skipAutoRefine: true, by: 'workflow' });
-      } else if (targetStatus) {
-        agentManager.setTodoStatus(todo.agentId, todo.id, targetStatus, { skipAutoRefine: true, by: 'workflow' });
-      }
-    } catch (e) {
-      console.error(`[Workflow] Failed to set status after error:`, e.message);
-    }
+    console.warn(`[Workflow] Failed to message leader:`, err.message);
   }
 }
