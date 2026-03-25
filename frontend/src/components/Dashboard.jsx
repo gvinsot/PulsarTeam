@@ -1,297 +1,405 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { fetchGlobalTodos, updateGlobalTodo, addGlobalTodo, deleteGlobalTodo, fetchProjects } from '../api';
-import { useWebSocket } from '../contexts/WebSocketContext';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import {
+  LogOut, Plus, Globe, LayoutGrid, List,
+  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu, Info, ExternalLink
+} from 'lucide-react';
+import AgentCard from './AgentCard';
+import AgentDetail from './AgentDetail';
+import AddAgentModal from './AddAgentModal';
+import BroadcastPanel from './BroadcastPanel';
+import SwarmOverview from './SwarmOverview';
+import ActiveVoiceIndicator from './ActiveVoiceIndicator';
+import ApiKeyModal from './ApiKeyModal';
+import TasksBoard from './TasksBoard';
 import ProjectsView from './ProjectsView';
 
-export default function Dashboard({ agents, swarmConfig }) {
-  const [todos, setTodos] = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [newTodo, setNewTodo] = useState('');
-  const [selectedProject, setSelectedProject] = useState('');
-  const [activeTab, setActiveTab] = useState('overview');
-  const [showHello, setShowHello] = useState(false);
-  const { lastMessage } = useWebSocket();
-
-  const activeAgents = agents.filter(a => a.status === 'busy' || a.status === 'idle');
-  const busyAgents = agents.filter(a => a.status === 'busy');
+export default function Dashboard({
+  user, agents, templates, projects, skills, mcpServers, projectContexts, thinkingMap, streamBuffers,
+  onLogout, onRefresh, socket, showToast
+}) {
+  const [selectedAgent, setSelectedAgent] = useState(null);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showBroadcast, setShowBroadcast] = useState(false);
+  const [viewMode, setViewMode] = useState('grid'); // grid | list
+  const [activeView, setActiveViewRaw] = useState(() => {
+    const hash = window.location.hash.replace('#', '').toLowerCase();
+    return ['agents', 'tasks', 'projects', 'about'].includes(hash) ? hash : 'agents';
+  });
+  const setActiveView = useCallback((view) => {
+    setActiveViewRaw(view);
+    window.history.replaceState(null, '', `#${view}`);
+  }, []);
+  const [detailActiveTab, setDetailActiveTab] = useState('chat');
+  const [requestedTab, setRequestedTab] = useState(null);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuRef = useRef(null);
 
   useEffect(() => {
-    fetchGlobalTodos().then(setTodos);
-    fetchProjects().then(setProjects);
+    const onHashChange = () => {
+      const hash = window.location.hash.replace('#', '').toLowerCase();
+      if (['agents', 'tasks', 'projects', 'about'].includes(hash)) setActiveViewRaw(hash);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
   useEffect(() => {
-    if (!lastMessage) return;
-    if (['todos-updated', 'todo-added', 'todo-updated', 'todo-deleted'].includes(lastMessage.type)) {
-      fetchGlobalTodos().then(setTodos);
+    if (!mobileMenuOpen) return;
+    const handleClickOutside = (e) => {
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(e.target)) {
+        setMobileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [mobileMenuOpen]);
+
+  const handleNavigateToVoiceAgent = useCallback((agentId) => {
+    setSelectedAgent(agentId);
+    setRequestedTab('chat');
+    // Clear requestedTab after it's consumed
+    setTimeout(() => setRequestedTab(null), 100);
+  }, []);
+
+  // Sort agents with 'Swarm Leaders' role first
+  const sortedAgents = [...agents].sort((a, b) => {
+    if (a.role === 'Swarm Leaders' && b.role !== 'Swarm Leaders') return -1;
+    if (a.role !== 'Swarm Leaders' && b.role === 'Swarm Leaders') return 1;
+    return 0;
+  });
+
+  const selectedAgentData = sortedAgents.find(a => a.id === selectedAgent);
+
+  const handleStopAgent = (agentId) => {
+    if (socket) {
+      socket.emit('agent:stop', { agentId });
     }
-  }, [lastMessage]);
-
-  const handleAddTodo = async (e) => {
-    e.preventDefault();
-    if (!newTodo.trim()) return;
-    await addGlobalTodo(newTodo, selectedProject || undefined);
-    setNewTodo('');
-    fetchGlobalTodos().then(setTodos);
   };
 
-  const handleToggle = async (todo) => {
-    await updateGlobalTodo(todo.id, { status: todo.status === 'done' ? 'pending' : 'done' });
-    fetchGlobalTodos().then(setTodos);
+  const stats = {
+    total: sortedAgents.length,
+    busy: sortedAgents.filter(a => a.status === 'busy' || thinkingMap[a.id]).length,
+    idle: sortedAgents.filter(a => a.status === 'idle' && !thinkingMap[a.id]).length,
+    errors: sortedAgents.filter(a => a.status === 'error').length,
+    totalTokensIn: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensIn || 0), 0),
+    totalTokensOut: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensOut || 0), 0),
+    totalMessages: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalMessages || 0), 0),
   };
-
-  const handleDelete = async (todoId) => {
-    await deleteGlobalTodo(todoId);
-    fetchGlobalTodos().then(setTodos);
-  };
-
-  const pendingTodos = todos.filter(t => t.status !== 'done');
-  const doneTodos = todos.filter(t => t.status === 'done');
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold">Dashboard</h1>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setActiveTab('overview')}
-            className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-              activeTab === 'overview' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-            }`}
-          >
-            Overview
-          </button>
-          <button
-            onClick={() => setActiveTab('projects')}
-            className={`px-4 py-2 rounded text-sm font-medium transition-colors ${
-              activeTab === 'projects' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'
-            }`}
-          >
-            Projects
-          </button>
+    <div className="min-h-screen bg-dark-950 flex flex-col">
+      {/* Header */}
+      <header className="glass border-b border-dark-700 sticky top-0 z-50">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="relative sm:static" ref={mobileMenuRef}>
+              <button
+                onClick={() => setMobileMenuOpen(prev => !prev)}
+                className="sm:pointer-events-none w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20"
+              >
+                <Menu className="w-5 h-5 text-white sm:hidden" />
+                <Zap className="w-5 h-5 text-white hidden sm:block" />
+              </button>
+              {mobileMenuOpen && (
+                <div className="absolute left-0 top-full mt-2 w-48 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
+                  {[
+                    { key: 'agents', label: 'Agents', icon: Users },
+                    { key: 'tasks', label: 'Tasks', icon: KanbanSquare },
+                    { key: 'projects', label: 'Projects', icon: Tag },
+                    { key: 'about', label: 'About', icon: Info },
+                  ].map(({ key, label, icon: Icon }) => (
+                    <button
+                      key={key}
+                      onClick={() => { setActiveView(key); setMobileMenuOpen(false); }}
+                      className={`flex items-center gap-3 w-full px-4 py-2.5 text-sm font-medium transition-colors ${
+                        activeView === key
+                          ? 'bg-dark-700 text-indigo-400'
+                          : 'text-dark-300 hover:bg-dark-700/50 hover:text-dark-100'
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <h1 className="text-lg font-bold text-dark-100">Pulsar Team</h1>
+              <p className="text-xs text-dark-400 -mt-0.5">{sortedAgents.length} agents active</p>
+            </div>
+            <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden ml-2">
+              <button
+                onClick={() => setActiveView('agents')}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                  activeView === 'agents' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                }`}
+                title="Agents view"
+              >
+                <Users className="w-4 h-4" />
+                <span className="hidden md:inline">Agents</span>
+              </button>
+              <button
+                onClick={() => setActiveView('tasks')}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                  activeView === 'tasks' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                }`}
+                title="Tasks board"
+              >
+                <KanbanSquare className="w-4 h-4" />
+                <span className="hidden md:inline">Tasks</span>
+              </button>
+              <button
+                onClick={() => setActiveView('projects')}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                  activeView === 'projects' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                }`}
+                title="Projects"
+              >
+                <Tag className="w-4 h-4" />
+                <span className="hidden md:inline">Projects</span>
+              </button>
+              <button
+                onClick={() => setActiveView('about')}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                  activeView === 'about' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                }`}
+                title="About"
+              >
+                <Info className="w-4 h-4" />
+                <span className="hidden md:inline">About</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowBroadcast(!showBroadcast)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                showBroadcast
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                  : 'text-dark-300 hover:bg-dark-700 hover:text-dark-100'
+              }`}
+            >
+              <Globe className="w-4 h-4" />
+              <span className="hidden sm:inline">Global</span>
+            </button>
+            <button
+              onClick={() => setShowApiKeyModal(true)}
+              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+              title="MCP API Key"
+            >
+              <Key className="w-4 h-4" />
+            </button>
+            <div className="ml-2 pl-2 border-l border-dark-700 flex items-center gap-2">
+              <span className="text-sm text-dark-400 hidden sm:inline">{user.username}</span>
+              <button
+                onClick={onLogout}
+                className="p-2 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
+                title="Logout"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="flex-1 flex flex-col">
+        {/* Stats bar */}
+        <SwarmOverview stats={stats} agents={sortedAgents} />
+
+        {/* Broadcast Panel */}
+        {showBroadcast && (
+          <BroadcastPanel
+            agents={sortedAgents}
+            projects={projects}
+            skills={skills}
+            mcpServers={mcpServers}
+            socket={socket}
+            onClose={() => setShowBroadcast(false)}
+            onRefresh={onRefresh}
+          />
+        )}
+
+        {/* Main content */}
+        <div className="flex-1 flex max-w-[1800px] mx-auto w-full min-h-0">
+          {activeView === 'tasks' && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <TasksBoard agents={sortedAgents} onRefresh={onRefresh} />
+            </div>
+          )}
+          {activeView === 'about' && (
+            <div className="flex-1 p-4 sm:p-6 overflow-auto">
+              <div className="max-w-lg mx-auto mt-8">
+                <div className="bg-dark-800 border border-dark-700 rounded-xl p-6 space-y-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                      <Zap className="w-5 h-5 text-white" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-bold text-dark-100">Pulsar Team</h2>
+                      <p className="text-xs text-dark-400">AI Agent Swarm Platform</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between py-3 border-t border-dark-700">
+                      <span className="text-sm text-dark-400">Version</span>
+                      <span className="text-sm font-mono text-dark-200">
+                        {import.meta.env.VITE_APP_VERSION || 'dev'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between py-3 border-t border-dark-700">
+                      <span className="text-sm text-dark-400">Source code</span>
+                      <a
+                        href="https://github.com/gvinsot/PulsarTeam"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 text-sm text-indigo-400 hover:text-indigo-300 transition-colors"
+                      >
+                        github.com/gvinsot/PulsarTeam
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+          {activeView === 'projects' && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <ProjectsView
+                agents={sortedAgents}
+                projectContexts={projectContexts || []}
+                onRefresh={onRefresh}
+              />
+            </div>
+          )}
+          {/* Agent list */}
+          {activeView === 'agents' && (
+            <div className={`flex-1 p-4 sm:p-6 overflow-auto ${selectedAgentData ? 'hidden lg:block lg:w-1/2 xl:w-3/5' : ''}`}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-dark-200">
+                  Agents
+                  <span className="ml-2 text-sm font-normal text-dark-400">({sortedAgents.length})</span>
+                </h2>
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => setViewMode('grid')}
+                      className={`p-2 transition-colors ${viewMode === 'grid' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'}`}
+                    >
+                      <LayoutGrid className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setViewMode('list')}
+                      className={`p-2 transition-colors ${viewMode === 'list' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'}`}
+                    >
+                      <List className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-indigo-500/20"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Agent
+                  </button>
+                </div>
+              </div>
+
+              {sortedAgents.length === 0 ? (
+                <div className="text-center py-20">
+                  <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-dark-800 flex items-center justify-center">
+                    <MessageSquare className="w-8 h-8 text-dark-500" />
+                  </div>
+                  <h3 className="text-dark-300 font-medium mb-1">No agents yet</h3>
+                  <p className="text-dark-500 text-sm mb-4">Create your first agent to get started</p>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Agent
+                  </button>
+                </div>
+              ) : (
+                <div className={
+                  viewMode === 'grid'
+                    ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
+                    : 'space-y-3'
+                }>
+                  {sortedAgents.map(agent => (
+                    <AgentCard
+                      key={agent.id}
+                      agent={agent}
+                      thinking={thinkingMap[agent.id]}
+                      isSelected={selectedAgent === agent.id}
+                      viewMode={viewMode}
+                      onClick={() => setSelectedAgent(agent.id === selectedAgent ? null : agent.id)}
+                      onStop={handleStopAgent}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Agent detail panel */}
+          {activeView === 'agents' && selectedAgentData && (
+            <div className="lg:w-1/2 xl:w-2/5 border-l border-dark-700 bg-dark-900/50 overflow-auto">
+              <AgentDetail
+                key={selectedAgentData.id}
+                agent={selectedAgentData}
+                agents={sortedAgents}
+                projects={projects}
+                skills={skills}
+                thinking={thinkingMap[selectedAgentData.id]}
+                streamBuffer={streamBuffers[selectedAgentData.id]}
+                socket={socket}
+                onClose={() => setSelectedAgent(null)}
+                onSelectAgent={setSelectedAgent}
+                onRefresh={onRefresh}
+                onActiveTabChange={setDetailActiveTab}
+                requestedTab={requestedTab}
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {activeTab === 'projects' ? (
-        <ProjectsView agents={agents} />
-      ) : (
-        <>
-          {/* Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-              <div className="text-sm text-gray-400">Total Agents</div>
-              <div className="text-2xl font-bold">{agents.length}</div>
-            </div>
-            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-              <div className="text-sm text-gray-400">Active</div>
-              <div className="text-2xl font-bold text-green-400">{activeAgents.length}</div>
-            </div>
-            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-              <div className="text-sm text-gray-400">Busy</div>
-              <div className="text-2xl font-bold text-yellow-400">{busyAgents.length}</div>
-            </div>
-            <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-              <div className="text-sm text-gray-400">Swarm Mode</div>
-              <div className="text-2xl font-bold text-purple-400">{swarmConfig?.enabled ? 'ON' : 'OFF'}</div>
-            </div>
-          </div>
-
-          {/* Hello Button */}
-          <div className="bg-gray-900 rounded-lg border border-gray-800 p-6 mb-8">
-            <div className="flex items-center gap-4">
-              <button
-                onClick={() => setShowHello(!showHello)}
-                className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-medium"
-              >
-                {showHello ? 'Hide' : 'Say Hello'}
-              </button>
-              {showHello && <span className="text-xl font-semibold text-green-400">hello</span>}
-            </div>
-          </div>
-
-          {/* Global Todo List */}
-          <div className="bg-gray-900 rounded-lg border border-gray-800 p-6 mb-8">
-            <h2 className="text-xl font-semibold mb-4">📋 Global Tasks</h2>
-
-            <form onSubmit={handleAddTodo} className="flex gap-2 mb-4">
-              <input
-                type="text"
-                value={newTodo}
-                onChange={e => setNewTodo(e.target.value)}
-                placeholder="Add a new task..."
-                className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
-              />
-              {projects.length > 0 && (
-                <select
-                  value={selectedProject}
-                  onChange={e => setSelectedProject(e.target.value)}
-                  className="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm"
-                >
-                  <option value="">No project</option>
-                  {projects.map(p => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              )}
-              <button type="submit" className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-medium">
-                Add
-              </button>
-            </form>
-
-            {pendingTodos.length === 0 && doneTodos.length === 0 && (
-              <p className="text-gray-500 text-sm">No tasks yet</p>
-            )}
-
-            {pendingTodos.map(todo => (
-              <div key={todo.id} className="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0">
-                <button onClick={() => handleToggle(todo)} className="text-gray-500 hover:text-green-400">
-                  ○
-                </button>
-                <span className="flex-1 text-sm">{todo.text}</span>
-                {todo.project && (
-                  <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded">{todo.project}</span>
-                )}
-                {todo.source && (
-                  <span className="text-xs bg-gray-800 text-blue-400 px-2 py-1 rounded">{todo.source}</span>
-                )}
-                <span className={`text-xs px-2 py-1 rounded ${
-                  todo.status === 'in_progress' ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-800 text-gray-400'
-                }`}>
-                  {todo.status}
-                </span>
-                <button onClick={() => handleDelete(todo.id)} className="text-gray-600 hover:text-red-400 text-sm">✕</button>
-              </div>
-            ))}
-
-            {doneTodos.length > 0 && (
-              <div className="mt-4">
-                <div className="text-sm text-gray-500 mb-2">Completed ({doneTodos.length})</div>
-                {doneTodos.map(todo => (
-                  <div key={todo.id} className="flex items-center gap-3 py-2 border-b border-gray-800 last:border-0 opacity-50">
-                    <button onClick={() => handleToggle(todo)} className="text-green-400">✓</button>
-                    <span className="flex-1 text-sm line-through">{todo.text}</span>
-                    {todo.project && (
-                      <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded">{todo.project}</span>
-                    )}
-                    <button onClick={() => handleDelete(todo.id)} className="text-gray-600 hover:text-red-400 text-sm">✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Agent List */}
-          <div className="bg-gray-900 rounded-lg border border-gray-800 p-6">
-            <h2 className="text-xl font-semibold mb-4">🤖 Agents</h2>
-            {agents.length === 0 ? (
-              <p className="text-gray-500 text-sm">No agents registered</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {agents.map(agent => (
-                  <Link key={agent.id} to={`/agent/${agent.id}`} className="block bg-gray-800 rounded-lg p-4 hover:bg-gray-750 transition-colors">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium">{agent.name}</span>
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        agent.status === 'busy' ? 'bg-yellow-900 text-yellow-300' :
-                        agent.status === 'idle' ? 'bg-green-900 text-green-300' :
-                        'bg-gray-700 text-gray-400'
-                      }`}>
-                        {agent.status}
-                      </span>
-                    </div>
-                    {agent.currentTask && (
-                      <p className="text-sm text-gray-400 truncate">{agent.currentTask}</p>
-                    )}
-                    {agent.project && (
-                      <p className="text-xs text-gray-500 mt-1">📁 {agent.project}</p>
-                    )}
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Recent Activity */}
-          <div className="bg-gray-900 rounded-lg border border-gray-800 p-6 mt-8">
-            <h2 className="text-xl font-semibold mb-4">📊 Recent Activity</h2>
-            <div className="space-y-3">
-              {agents.filter(a => a.lastActivity).sort((a, b) => new Date(b.lastActivity) - new Date(a.lastActivity)).slice(0, 10).map(agent => (
-                <div key={agent.id} className="flex items-center gap-3 text-sm">
-                  <span className={`w-2 h-2 rounded-full ${
-                    agent.status === 'busy' ? 'bg-yellow-400' :
-                    agent.status === 'idle' ? 'bg-green-400' :
-                    'bg-gray-600'
-                  }`}></span>
-                  <Link to={`/agent/${agent.id}`} className="text-blue-400 hover:text-blue-300">
-                    {agent.name}
-                  </Link>
-                  <span className="text-gray-500">
-                    {agent.currentTask || 'Idle'}
-                  </span>
-                  <span className="text-gray-600 ml-auto text-xs">
-                    {agent.lastActivity ? new Date(agent.lastActivity).toLocaleTimeString() : ''}
-                  </span>
-                </div>
-              ))}
-              {agents.filter(a => a.lastActivity).length === 0 && (
-                <p className="text-gray-500 text-sm">No recent activity</p>
-              )}
-            </div>
-          </div>
-
-          {/* System Health */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
-            <div className="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <h2 className="text-lg font-semibold mb-4">🔧 System Info</h2>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Swarm Mode</span>
-                  <span className={swarmConfig?.enabled ? 'text-green-400' : 'text-gray-500'}>
-                    {swarmConfig?.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Leader Model</span>
-                  <span className="text-gray-300">{swarmConfig?.leaderModel || 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Worker Model</span>
-                  <span className="text-gray-300">{swarmConfig?.workerModel || 'N/A'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Max Workers</span>
-                  <span className="text-gray-300">{swarmConfig?.maxWorkers || 'N/A'}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-gray-900 rounded-lg border border-gray-800 p-6">
-              <h2 className="text-lg font-semibold mb-4">📈 Task Stats</h2>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Total Tasks</span>
-                  <span className="text-gray-300">{todos.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Pending</span>
-                  <span className="text-yellow-400">{pendingTodos.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Completed</span>
-                  <span className="text-green-400">{doneTodos.length}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Completion Rate</span>
-                  <span className="text-gray-300">
-                    {todos.length > 0 ? Math.round((doneTodos.length / todos.length) * 100) : 0}%
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
+      {/* Add Agent Modal */}
+      {showAddModal && (
+        <AddAgentModal
+          templates={templates}
+          projects={projects}
+          agents={agents}
+          onClose={() => setShowAddModal(false)}
+          onCreated={(agent) => {
+            setShowAddModal(false);
+            setSelectedAgent(agent.id);
+          }}
+        />
       )}
+
+      {/* API Key Modal */}
+      {showApiKeyModal && (
+        <ApiKeyModal
+          onClose={() => setShowApiKeyModal(false)}
+          showToast={showToast}
+        />
+      )}
+
+      {/* Voice session floating indicator */}
+      <ActiveVoiceIndicator
+        agents={sortedAgents}
+        selectedAgentId={selectedAgent}
+        activeTab={detailActiveTab}
+        onNavigateToAgent={handleNavigateToVoiceAgent}
+      />
     </div>
   );
 }
