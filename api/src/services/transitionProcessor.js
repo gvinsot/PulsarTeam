@@ -2,8 +2,24 @@ import { getSettings } from './configManager.js';
 import { saveAgent } from './database.js';
 import { getWorkflow } from './workflowManager.js';
 
-// Lock to prevent concurrent execution of the same task
-const _executionLocks = new Set();
+// Lock to prevent concurrent execution of the same task (lockKey → timestamp)
+// Uses a Map with TTL to prevent permanent deadlocks from crashed transitions.
+const _executionLocks = new Map();
+const EXECUTION_LOCK_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function _acquireExecutionLock(lockKey) {
+  // Evict stale locks first
+  const now = Date.now();
+  for (const [key, ts] of _executionLocks) {
+    if (now - ts > EXECUTION_LOCK_TTL_MS) {
+      console.warn(`[Workflow] Evicting stale execution lock: ${key} (age: ${Math.round((now - ts) / 1000)}s)`);
+      _executionLocks.delete(key);
+    }
+  }
+  if (_executionLocks.has(lockKey)) return false;
+  _executionLocks.set(lockKey, now);
+  return true;
+}
 
 /**
  * Find the first available agent matching a role.
@@ -85,13 +101,12 @@ export async function processTransition(todo, agentManager, io) {
   const mode = todo._transition?.mode;
   const instructions = todo._transition?.instructions || '';
 
-  // Prevent concurrent execution of the same task
+  // Prevent concurrent execution of the same task (with TTL-based lock)
   const lockKey = `${todo.agentId}:${todo.id}`;
-  if (_executionLocks.has(lockKey)) {
+  if (!_acquireExecutionLock(lockKey)) {
     console.log(`[Workflow] Skipping duplicate processTransition for "${todo.text?.slice(0, 60)}" — already in progress`);
     return;
   }
-  _executionLocks.add(lockKey);
 
   console.log(`[Workflow] processTransition called: todo="${todo.text?.slice(0, 60)}" from="${todo.status}" to="${targetStatus}" mode="${mode}" role="${transitionRole || 'none'}" agentId="${todo.agentId}"`);
 

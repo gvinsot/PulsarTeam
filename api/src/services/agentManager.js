@@ -73,6 +73,8 @@ export class AgentManager {
     // Throttle state for agent:updated emissions (per agentId)
     this._updateTimers = new Map();   // agentId → setTimeout handle
     this._updatePending = new Map();  // agentId → latest data to emit
+    // TTL-based lock map for condition re-check deduplication (lockKey → timestamp)
+    this._conditionProcessing = new Map();
   }
 
   async loadFromDatabase() {
@@ -544,6 +546,9 @@ export class AgentManager {
       this._recheckConditionalTransitions();
     } else if (status === 'error') {
       this.addActionLog(id, 'error', 'Agent encountered an error', detail);
+      // Agent errored — re-check conditional transitions so tasks waiting on
+      // this agent's status are re-evaluated (e.g. to reassign or unblock)
+      this._recheckConditionalTransitions();
     }
   }
 
@@ -1066,6 +1071,7 @@ export class AgentManager {
           if (chunk.usage) {
             agent.metrics.totalTokensIn += chunk.usage.inputTokens;
             agent.metrics.totalTokensOut += chunk.usage.outputTokens;
+            this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
           }
           if (chunk.finishReason) {
             finishReason = chunk.finishReason;
@@ -1079,7 +1085,6 @@ export class AgentManager {
       while (finishReason === 'length' && continuationCount < MAX_CONTINUATIONS) {
         continuationCount++;
         console.log(`🔄 [Continuation ${continuationCount}/${MAX_CONTINUATIONS}] "${agent.name}": response was truncated (finish_reason=length), requesting continuation...`);
-            this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
         if (streamCallback) streamCallback(`\n⏳ *Response truncated, continuing...*\n`);
 
         // Add the partial response to history and ask the model to continue
@@ -1113,6 +1118,7 @@ export class AgentManager {
             if (chunk.usage) {
               agent.metrics.totalTokensIn += chunk.usage.inputTokens;
               agent.metrics.totalTokensOut += chunk.usage.outputTokens;
+              this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
             }
             if (chunk.finishReason) {
               finishReason = chunk.finishReason;
@@ -1127,7 +1133,6 @@ export class AgentManager {
 
       if (continuationCount > 0 && finishReason === 'length') {
         console.log(`⚠️  [Continuation] "${agent.name}": still truncated after ${MAX_CONTINUATIONS} continuations`);
-              this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
       }
 
       // Store assistant message
@@ -2849,8 +2854,11 @@ export class AgentManager {
   }
 
   // ─── Workflow Auto-Refine ───────────────────────────────────────────
-  /** Evaluate a condition against the current todo/agent state */
+  /** Evaluate a condition against the current todo/agent state.
+   *  Always re-fetches the agent from the live agents map to ensure
+   *  real-time status (avoids stale closures or cached references). */
   _evaluateCondition(cond, todo) {
+    // Re-fetch assignee from the live map every time — never rely on a cached reference
     const assigneeAgent = todo.assignee ? this.agents.get(todo.assignee) : null;
     let fieldValue;
     switch (cond.field) {
@@ -2875,7 +2883,7 @@ export class AgentManager {
       default: fieldValue = '';
     }
     const result = cond.operator === 'neq' ? fieldValue !== cond.value : fieldValue === cond.value;
-    console.log(`[Workflow] Condition: ${cond.field} ${cond.operator} "${cond.value}" => fieldValue="${fieldValue}" result=${result} (assignee=${todo.assignee || 'none'}, agentName=${assigneeAgent?.name || 'N/A'})`);
+    console.log(`[Workflow] Condition: ${cond.field} ${cond.operator} "${cond.value}" => fieldValue="${fieldValue}" result=${result} (assignee=${todo.assignee || 'none'}, agentName=${assigneeAgent?.name || 'N/A'}, agentStatus=${assigneeAgent?.status || 'N/A'})`);
     return result;
   }
 
@@ -3755,9 +3763,22 @@ export class AgentManager {
   }
 
   // ─── Re-evaluate conditional transitions ──────────────────────────
-  // Called periodically (from task loop) to re-check condition-based transitions
-  // for tasks that are stuck waiting for conditions to be met (e.g. "assignee is idle").
+  // Called periodically (from task loop) and on agent status changes to re-check
+  // condition-based transitions for tasks waiting on conditions (e.g. "assignee is idle").
   _recheckConditionalTransitions() {
+    // Evict stale locks older than 2 minutes to prevent permanent deadlocks
+    // from failed processTransition calls that didn't clean up.
+    const LOCK_TTL_MS = 2 * 60 * 1000;
+    if (this._conditionProcessing) {
+      const now = Date.now();
+      for (const [key, timestamp] of this._conditionProcessing) {
+        if (now - timestamp > LOCK_TTL_MS) {
+          console.warn(`[Workflow] Evicting stale condition lock: ${key} (age: ${Math.round((now - timestamp) / 1000)}s)`);
+          this._conditionProcessing.delete(key);
+        }
+      }
+    }
+
     getWorkflow('_default').then(async (workflow) => {
       const condTransitions = workflow.transitions
         .filter(t => this._validTransition(t))
@@ -3781,10 +3802,12 @@ export class AgentManager {
           const matching = condTransitions.filter(t => t.from === todo.status);
           if (matching.length === 0) continue;
 
-          // Skip tasks where the assignee is already busy (execution in progress)
+          // Skip tasks where the assignee is busy (actively executing).
+          // Allow re-evaluation when assignee is idle, error, or absent —
+          // the condition evaluator will check the actual status.
           if (todo.assignee) {
             const assigneeAgent = this.agents.get(todo.assignee);
-            if (assigneeAgent && assigneeAgent.status !== 'idle') continue;
+            if (assigneeAgent && assigneeAgent.status === 'busy') continue;
           }
 
           for (const transition of matching) {
@@ -3794,11 +3817,11 @@ export class AgentManager {
             );
             if (!allMet) continue;
 
-            // Prevent double-processing: skip if already being processed
+            // Prevent double-processing: skip if already being processed (with TTL)
             const lockKey = `${agentId}:${todo.id}`;
-            if (this._conditionProcessing?.has(lockKey)) continue;
-            if (!this._conditionProcessing) this._conditionProcessing = new Set();
-            this._conditionProcessing.add(lockKey);
+            if (!this._conditionProcessing) this._conditionProcessing = new Map();
+            if (this._conditionProcessing.has(lockKey)) continue;
+            this._conditionProcessing.set(lockKey, Date.now());
 
             console.log(`[Workflow] Condition re-check: all conditions met for "${(todo.text || '').slice(0, 60)}" in status="${todo.status}"`);
 
