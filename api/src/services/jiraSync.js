@@ -367,6 +367,7 @@ export async function handleWebhook(payload, agentManager) {
   const jiraTriggers = workflow.transitions.filter(
     t => t.trigger === 'jira_ticket' && t.jiraStatusIds?.length > 0
   );
+  console.log(`[Jira] Webhook: ${jiraTriggers.length} jira_ticket trigger(s), statusId="${statusId}", watched: ${jiraTriggers.map(t => JSON.stringify(t.jiraStatusIds)).join(', ') || 'none'}`);
 
   // Check if issue already tracked
   let existingTodo = null;
