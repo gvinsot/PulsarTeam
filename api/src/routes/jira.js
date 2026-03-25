@@ -40,7 +40,10 @@ export function jiraWebhookRoute(agentManager) {
   const router = express.Router();
 
   router.post('/', async (req, res) => {
+    console.log(`[Jira] Webhook received: ${req.headers['content-type']} | event=${req.body?.webhookEvent || 'unknown'} | issue=${req.body?.issue?.key || 'none'} | auth-header=${req.headers['x-automation-webhook-token'] ? 'present' : 'missing'}`);
+
     if (!verifyWebhook(req)) {
+      console.warn('[Jira] Webhook rejected: invalid or missing secret');
       return res.status(401).json({ error: 'Invalid webhook secret' });
     }
 

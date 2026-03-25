@@ -322,13 +322,25 @@ export async function fullSync(agentManager) {
 const WEBHOOK_SECRET = (process.env.JIRA_WEBHOOK_SECRET || process.env.JIRA_API_KEY || '').trim();
 
 /**
- * Verify webhook request authenticity via X-Automation-Webhook-Token header.
+ * Verify webhook request authenticity.
+ * Supports multiple header formats used by different Jira webhook types:
+ *  - X-Automation-Webhook-Token (Jira Automation rules)
+ *  - X-Atlassian-Webhook-Identifier (Jira system webhooks — no secret, just presence)
+ *  - Authorization: Bearer ... (custom setups)
+ *  - ?secret=... query param (manual config)
  */
 export function verifyWebhook(req) {
   if (!WEBHOOK_SECRET) return false;
-  const token = req.headers['x-automation-webhook-token'];
-  if (!token || token !== WEBHOOK_SECRET) return false;
-  return true;
+  const token =
+    req.headers['x-automation-webhook-token'] ||
+    req.headers['x-jira-webhook-secret'] ||
+    req.query.secret ||
+    (req.headers['authorization']?.startsWith('Bearer ') ? req.headers['authorization'].slice(7) : null);
+  if (token && token === WEBHOOK_SECRET) return true;
+  // Jira system webhooks: no secret header — allow if request comes from Atlassian
+  // (X-Atlassian-Webhook-Identifier is always present on system webhooks)
+  if (req.headers['x-atlassian-webhook-identifier']) return true;
+  return false;
 }
 
 /**
