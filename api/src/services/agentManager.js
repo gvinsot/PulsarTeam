@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createProvider, createLoggingProvider } from './llmProviders.js';
-import { getAllAgents, saveAgent, deleteAgentFromDb } from './database.js';
+import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage } from './database.js';
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
 import { processTransition } from './transitionProcessor.js';
@@ -121,6 +121,19 @@ export class AgentManager {
       name: config.name || 'Unnamed Agent',
       role: config.role || 'general',
       description: config.description || '',
+
+  _recordUsage(agent, inputTokens, outputTokens) {
+    try {
+      const budgetConfig = getSetting("budget_config") || { tokenCosts: {} };
+      const costs = budgetConfig.tokenCosts || {};
+      const providerCosts = costs[agent.provider] || costs["default"] || { input: 2.0, output: 10.0 };
+      const cost = (inputTokens * providerCosts.input / 1000000) + (outputTokens * providerCosts.output / 1000000);
+      recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+    } catch (err) {
+      console.warn("Failed to record token usage:", err.message);
+    }
+  }
+
       provider: config.provider,
       model: config.model,
       endpoint: config.endpoint || '',
@@ -1054,6 +1067,7 @@ export class AgentManager {
       while (finishReason === 'length' && continuationCount < MAX_CONTINUATIONS) {
         continuationCount++;
         console.log(`🔄 [Continuation ${continuationCount}/${MAX_CONTINUATIONS}] "${agent.name}": response was truncated (finish_reason=length), requesting continuation...`);
+            this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
         if (streamCallback) streamCallback(`\n⏳ *Response truncated, continuing...*\n`);
 
         // Add the partial response to history and ask the model to continue
@@ -1101,6 +1115,7 @@ export class AgentManager {
 
       if (continuationCount > 0 && finishReason === 'length') {
         console.log(`⚠️  [Continuation] "${agent.name}": still truncated after ${MAX_CONTINUATIONS} continuations`);
+              this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
       }
 
       // Store assistant message

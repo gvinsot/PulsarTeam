@@ -61,6 +61,25 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
         )
       `);
 
+
+// Token usage log for budget tracking
+db.exec(`
+  CREATE TABLE IF NOT EXISTS token_usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id TEXT NOT NULL,
+    agent_name TEXT,
+    provider TEXT,
+    model TEXT,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cost REAL DEFAULT 0,
+    recorded_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (agent_id) REFERENCES agents(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_token_usage_agent ON token_usage_log(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage_log(recorded_at);
+`);
+
       console.log('✅ MCP servers table ready');
 
       // Create project_contexts table if not exists
