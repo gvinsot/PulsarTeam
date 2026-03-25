@@ -957,18 +957,9 @@ function getActionKey(action) {
   return action.type;
 }
 
-/** Migrate old transition format (triggerType/to/agent/mode) to new trigger+actions format */
-function migrateTransition(t) {
-  if (t.actions) return t; // already new format
-  const triggerType = t.triggerType || (t.autoRefine ? 'agent' : 'none');
-  if (triggerType === 'none') return null; // manual → no transition needed
-  const newT = { from: t.from, trigger: triggerType === 'agent' ? 'on_enter' : 'condition', conditions: t.conditions || [], actions: [] };
-  if (triggerType === 'agent') {
-    newT.actions.push({ type: 'run_agent', mode: t.mode || 'refine', role: t.agent || '', instructions: t.instructions || '', targetStatus: t.to || '' });
-  } else {
-    newT.actions.push({ type: 'change_status', target: t.to || '' });
-  }
-  return newT;
+/** Filter valid transitions (must have new format with trigger + actions) */
+function validTransition(t) {
+  return t && t.from && t.trigger && Array.isArray(t.actions);
 }
 
 // ── Condition value widget ───────────────────────────────────────────────────
@@ -1025,7 +1016,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
   const [cols, setCols] = useState(() => JSON.parse(JSON.stringify(workflow.columns)));
   const [transitions, setTransitions] = useState(() => {
     const raw = JSON.parse(JSON.stringify(workflow.transitions));
-    return raw.map(migrateTransition).filter(Boolean);
+    return raw.filter(validTransition);
   });
   const [saving, setSaving] = useState(false);
   const [jiraColumns, setJiraColumns] = useState([]);
