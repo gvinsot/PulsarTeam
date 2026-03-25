@@ -35,11 +35,11 @@ You can interact with project files using these commands. Use the exact format s
   Use this to check what tasks are assigned to you and their current state.
   Example: @list_my_tasks()
 
-@update_todo(todoId, status) - Update the status of one of your tasks
+@update_task(taskId, status) - Update the status of one of your tasks
   Valid statuses: in_progress, done, error
   Use this to mark a task as in_progress when you start working on it, or done when finished.
-  Example: @update_todo(abc-123, in_progress)
-  Example: @update_todo(abc-123, done)
+  Example: @update_task(abc-123, in_progress)
+  Example: @update_task(abc-123, done)
 
 @check_status() - Check your own detailed status including project assignment, task counts, and metrics
   Use this to see which project you are working on and your current state.
@@ -53,7 +53,7 @@ You can interact with project files using these commands. Use the exact format s
   Commits are automatically linked to your current in_progress task.
   Example: @git_commit_push(feat: add user authentication)
 
-@link_commit(todoId, commitHash, message) - Associate a commit with a specific task
+@link_commit(taskId, commitHash, message) - Associate a commit with a specific task
   Use this to manually link a commit to a task (e.g. when associating with a different task than the current one).
   Example: @link_commit(abc-123, a1b2c3d, feat: add login page)
 
@@ -108,8 +108,8 @@ export async function executeTool(toolName, args, projectPath, sandboxMgr, agent
     const description = args[0] || 'Unknown error';
     return { success: true, result: `Error reported: ${description}`, isErrorReport: true };
   }
-  if (toolName === 'update_todo') {
-    return { success: true, result: `Todo update: ${args[0]} → ${args[1]}`, isTodoUpdate: true };
+  if (toolName === 'update_task') {
+    return { success: true, result: `Task update: ${args[0]} → ${args[1]}`, isTodoUpdate: true };
   }
   if (toolName === 'link_commit') {
     return { success: true, result: `Commit linked: ${args[1]} → ${args[0]}`, isLinkCommit: true };
@@ -427,7 +427,7 @@ async function toolGitCommitPush(sandboxMgr, agentId, message) {
 
 // ─── Tool Call Parsing ──────────────────────────────────────────────────────
 
-const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_todo', 'link_commit', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
+const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_task', 'link_commit', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
 function jsonToToolCall(name, args) {
@@ -449,10 +449,10 @@ function jsonToToolCall(name, args) {
       return { tool: 'report_error', args: [args.description || args.message || args.error || ''] };
     case 'git_commit_push':
       return { tool: 'git_commit_push', args: [args.message || args.msg || ''] };
-    case 'update_todo':
-      return { tool: 'update_todo', args: [args.todoId || args.todo_id || args.id || '', args.status || ''] };
+    case 'update_task':
+      return { tool: 'update_task', args: [args.taskId || args.task_id || args.id || '', args.status || ''] };
     case 'link_commit':
-      return { tool: 'link_commit', args: [args.todoId || args.todo_id || args.id || '', args.commitHash || args.commit_hash || args.hash || '', args.message || args.msg || ''] };
+      return { tool: 'link_commit', args: [args.taskId || args.task_id || args.id || '', args.commitHash || args.commit_hash || args.hash || '', args.message || args.msg || ''] };
     case 'list_my_tasks':
       return { tool: 'list_my_tasks', args: [] };
     case 'check_status':
@@ -569,7 +569,7 @@ export function parseToolCalls(response) {
     .replace(/\[TOOL_CALLS?\]/gi, '');
 
   const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks', 'check_status', 'get_action_status', 'build_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
-  const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'update_todo'];
+  const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'update_task'];
   const THREE_ARG_TOOLS = ['mcp_call', 'link_commit'];
   const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
   const toolStartPattern = new RegExp(`@(${ALL_TOOL_NAMES.join('|')})\\s*\\(`, 'gi');

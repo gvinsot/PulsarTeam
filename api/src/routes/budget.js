@@ -15,25 +15,25 @@ router.get('/summary', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/by-agent', (req, res) => {
+router.get('/by-agent', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
-    res.json(getTokenUsageByAgent(days));
+    res.json(await getTokenUsageByAgent(days));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/timeline', (req, res) => {
+router.get('/timeline', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 7;
     const groupBy = req.query.groupBy || 'day';
-    res.json(getTokenUsageTimeline(days, groupBy));
+    res.json(await getTokenUsageTimeline(days, groupBy));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/daily', (req, res) => {
+router.get('/daily', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
-    res.json(getDailyTokenUsage(days));
+    res.json(await getDailyTokenUsage(days));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -59,7 +59,7 @@ router.put('/config', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/alerts', (req, res) => {
+router.get('/alerts', async (req, res) => {
   try {
     const config = getSetting('budget_config') || { dailyBudget: 10.00, alertThreshold: 80 };
     const todaySummary = getTokenUsageSummary(1);
@@ -70,7 +70,7 @@ router.get('/alerts', (req, res) => {
       if (pct >= 100) alerts.push({ level: 'critical', message: `Daily budget exceeded: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)` });
       else if (pct >= config.alertThreshold) alerts.push({ level: 'warning', message: `Approaching daily budget: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)` });
     }
-    const byAgent = getTokenUsageByAgent(1);
+    const byAgent = await getTokenUsageByAgent(1);
     res.json({ alerts, todayCost, dailyBudget: config.dailyBudget, byAgent });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

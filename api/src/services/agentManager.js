@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createProvider, createLoggingProvider } from './llmProviders.js';
-import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage } from './database.js';
+import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage, getSetting } from './database.js';
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
 import { processTransition } from './transitionProcessor.js';
@@ -1956,21 +1956,21 @@ export class AgentManager {
         continue;
       }
 
-      // ── Handle @update_todo() — update own task status ──────────────
-      if (call.tool === 'update_todo') {
-        const [todoId, newStatus] = call.args;
+      // ── Handle @update_task() — update own task status ──────────────
+      if (call.tool === 'update_task') {
+        const [taskId, newStatus] = call.args;
         const validStatuses = ['in_progress', 'done', 'error'];
         if (!validStatuses.includes(newStatus)) {
-          results.push({ tool: 'update_todo', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}` });
+          results.push({ tool: 'update_task', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}` });
           continue;
         }
-        let todo = agent.todoList?.find(t => t.id === todoId);
-        if (!todo) todo = agent.todoList?.find(t => t.id.startsWith(todoId));
+        let todo = agent.todoList?.find(t => t.id === taskId);
+        if (!todo) todo = agent.todoList?.find(t => t.id.startsWith(taskId));
         if (!todo) {
           // Look for partial match to give a helpful hint
-          const partial = agent.todoList?.find(t => t.id.startsWith(todoId.slice(0, 8)));
+          const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
-          results.push({ tool: 'update_todo', args: call.args, success: false, error: `Todo not found: ${todoId}.${hint}` });
+          results.push({ tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
         todo.status = newStatus;
@@ -1978,24 +1978,24 @@ export class AgentManager {
         if (newStatus === 'done') todo.completedAt = new Date().toISOString();
         saveAgent(agent);
         this._emit('agent:updated', this._sanitize(agent));
-        console.log(`📋 [Todo] Agent "${agent.name}" updated todo "${todo.text.slice(0, 50)}" → ${newStatus}`);
-        results.push({ tool: 'update_todo', args: call.args, success: true, result: `Todo "${todo.text}" updated to ${newStatus}` });
+        console.log(`📋 [Task] Agent "${agent.name}" updated task "${todo.text.slice(0, 50)}" → ${newStatus}`);
+        results.push({ tool: 'update_task', args: call.args, success: true, result: `Task "${todo.text}" updated to ${newStatus}` });
         continue;
       }
 
       // ── Handle @link_commit() — associate a commit with a task ─────
       if (call.tool === 'link_commit') {
-        const [todoId, commitHash, commitMsg] = call.args;
-        if (!todoId || !commitHash) {
-          results.push({ tool: 'link_commit', args: call.args, success: false, error: 'Usage: @link_commit(todoId, commitHash, optionalMessage)' });
+        const [taskId, commitHash, commitMsg] = call.args;
+        if (!taskId || !commitHash) {
+          results.push({ tool: 'link_commit', args: call.args, success: false, error: 'Usage: @link_commit(taskId, commitHash, optionalMessage)' });
           continue;
         }
-        let todo = agent.todoList?.find(t => t.id === todoId);
-        if (!todo) todo = agent.todoList?.find(t => t.id.startsWith(todoId));
+        let todo = agent.todoList?.find(t => t.id === taskId);
+        if (!todo) todo = agent.todoList?.find(t => t.id.startsWith(taskId));
         if (!todo) {
-          const partial = agent.todoList?.find(t => t.id.startsWith(todoId.slice(0, 8)));
+          const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
-          results.push({ tool: 'link_commit', args: call.args, success: false, error: `Todo not found: ${todoId}.${hint}` });
+          results.push({ tool: 'link_commit', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
         this.addTodoCommit(agentId, todo.id, commitHash, commitMsg || '');
