@@ -2911,9 +2911,10 @@ export class AgentManager {
     return t && t.from && t.trigger && Array.isArray(t.actions);
   }
 
-  _checkAutoRefine(task) {
+  _checkAutoRefine(task, { by = null } = {}) {
     // Fire-and-forget: check if there's an autoRefine transition for this status
-    console.log(`[Workflow] _checkAutoRefine: status="${task.status}" text="${(task.text || '').slice(0, 60)}" agentId="${task.agentId}"`);
+    const isManual = by === 'user';
+    console.log(`[Workflow] _checkAutoRefine: status="${task.status}" text="${(task.text || '').slice(0, 60)}" agentId="${task.agentId}" by="${by || 'unknown'}"`);
     getWorkflow('_default').then(async (workflow) => {
       // ── Auto-assign by column role (independent of transitions) ──
       const currentColumn = workflow.columns?.find(c => c.id === task.status);
@@ -2964,6 +2965,15 @@ export class AgentManager {
       for (const transition of matchingTransitions) {
         // ── Skip Jira-managed triggers (handled by jiraSync polling) ──
         if (transition.trigger === 'jira_ticket') continue;
+
+        // ── Skip on_enter transitions for manual user changes ──
+        // When a user manually drags/moves a task, on_enter transitions should not
+        // fire (they would revert the move via change_status or trigger unintended agents).
+        // Condition-based transitions are still handled by the periodic checker.
+        if (isManual && transition.trigger === 'on_enter') {
+          console.log(`[Workflow] Skipping on_enter transition for manual move (from="${transition.from}")`);
+          continue;
+        }
 
         // ── Evaluate trigger ──
         if (transition.trigger === 'condition') {
@@ -3144,7 +3154,7 @@ export class AgentManager {
     this._emit('agent:updated', this._sanitize(agent));
     // Push status change to Jira (fire-and-forget, skips if no jiraKey or if triggered by jira-sync)
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
-    if (!skipAutoRefine) this._checkAutoRefine({ ...task, agentId });
+    if (!skipAutoRefine) this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;
   }
 

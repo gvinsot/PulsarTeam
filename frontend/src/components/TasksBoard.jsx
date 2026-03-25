@@ -287,8 +287,12 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   const handleStatusChange = async (newStatus) => {
     setStatusOpen(false);
     if (newStatus === task.status) return;
-    await api.setTaskStatus(task.agentId, task.id, newStatus);
-    onRefresh();
+    try {
+      await api.setTaskStatus(task.agentId, task.id, newStatus);
+      onRefresh();
+    } catch (err) {
+      console.error('[TasksBoard] Status change failed:', err.message);
+    }
   };
 
   const handleProjectSave = async () => {
@@ -1565,13 +1569,18 @@ export default function TasksBoard({ agents, onRefresh }) {
   }, [allTasks, onRefresh]);
 
   const handleDrop = useCallback(async (e, col) => {
+    let agentId, taskId;
     try {
-      const { agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json'));
+      ({ agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json')));
+    } catch { return; /* invalid drag data */ }
+    try {
       const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
       if (!task || col.statuses.includes(task.status || 'pending')) return;
       await api.setTaskStatus(agentId, taskId, col.dropStatus);
       onRefresh();
-    } catch { /* invalid drag data */ }
+    } catch (err) {
+      console.error('[TasksBoard] Drop status change failed:', err.message);
+    }
   }, [allTasks, onRefresh]);
 
   const totalByStatus = useMemo(() => ({
