@@ -2831,7 +2831,7 @@ export class AgentManager {
         // Check if any idle+enabled agent with the given role exists
         const role = cond.value;
         const found = [...this.agents.values()].some(a =>
-          a.project === todo.project && a.status === 'idle' && a.enabled !== false && (!role || a.role === role)
+          a.status === 'idle' && a.enabled !== false && (!role || a.role === role)
         );
         fieldValue = found ? 'true' : 'false';
         const result = cond.operator === 'neq' ? !found : found;
