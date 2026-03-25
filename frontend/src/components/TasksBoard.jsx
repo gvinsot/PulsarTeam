@@ -81,10 +81,10 @@ const SOURCE_META = {
 
 // ── CreateTaskModal ──────────────────────────────────────────────────────────
 
-function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions }) {
+function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions, defaultStatus }) {
   const [text, setText] = useState('');
   const [project, setProject] = useState('');
-  const [status, setStatus] = useState('idea');
+  const [status, setStatus] = useState(defaultStatus || 'idea');
   const [saving, setSaving] = useState(false);
   const textareaRef = useRef(null);
 
@@ -851,11 +851,13 @@ function TaskCard({ task, agents, onDelete, onOpen, showAgent }) {
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll, showAgent }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll, onAddTask, showAgent }) {
   const [dragOver, setDragOver] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   return (
-    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0">
+    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group"
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {/* Column header */}
       <div className={`flex items-center justify-between px-3 py-2.5 rounded-t-xl border border-b-2
         transition-colors mb-0
@@ -911,6 +913,16 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
             transition-colors ${dragOver ? 'text-dark-400' : 'text-dark-700'}`}>
             {dragOver ? '↓ Drop here' : 'No tasks'}
           </div>
+        )}
+        {onAddTask && (
+          <button
+            onClick={onAddTask}
+            className={`flex items-center justify-center gap-1.5 py-1.5 mt-1 rounded-lg text-xs
+              transition-all duration-150
+              ${hovered ? 'opacity-100 text-dark-400 hover:text-indigo-400 hover:bg-dark-700/50' : 'opacity-0'}`}
+          >
+            <Plus className="w-3 h-3" /> Add task
+          </button>
         )}
       </div>
     </div>
@@ -1462,6 +1474,7 @@ export default function TasksBoard({ agents, onRefresh }) {
   const [search, setSearch] = useState('');
   const [selectedTask, setSelectedTask] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createDefaultStatus, setCreateDefaultStatus] = useState(null);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
   const [jiraStatus, setJiraStatus] = useState(null);
 
@@ -1640,7 +1653,7 @@ export default function TasksBoard({ agents, onRefresh }) {
       {/* Board */}
       <div className="flex-1 overflow-auto min-h-0">
         <div className="flex gap-4 p-6 h-full min-w-max">
-          {columns.map(col => (
+          {columns.map((col, colIdx) => (
             <KanbanColumn
               key={col.id}
               col={col}
@@ -1650,6 +1663,7 @@ export default function TasksBoard({ agents, onRefresh }) {
               onDrop={handleDrop}
               onOpen={setSelectedTask}
               onClearAll={col.id === 'done' ? handleClearDone : undefined}
+              onAddTask={colIdx < columns.length - 1 ? () => { setCreateDefaultStatus(col.id); setCreateOpen(true); } : undefined}
               showAgent={col.showAgent}
             />
           ))}
@@ -1675,7 +1689,8 @@ export default function TasksBoard({ agents, onRefresh }) {
           agents={agents}
           allProjects={allProjects}
           statusOptions={statusOptions}
-          onClose={() => setCreateOpen(false)}
+          defaultStatus={createDefaultStatus}
+          onClose={() => { setCreateOpen(false); setCreateDefaultStatus(null); }}
           onCreated={onRefresh}
         />
       )}
