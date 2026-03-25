@@ -31,8 +31,8 @@ import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
 import { projectContextRoutes } from './routes/projectContexts.js';
-import { jiraRoutes } from './routes/jira.js';
-import { startJiraSync } from './services/jiraSync.js';
+import { jiraRoutes, jiraWebhookRoute } from './routes/jira.js';
+import { startJiraSync, registerWebhook } from './services/jiraSync.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -98,6 +98,9 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 app.use('/api/auth', authRouter);
+
+// Jira webhook — public endpoint, secured by shared secret header
+app.use('/api/jira/webhook', jiraWebhookRoute(agentManager));
 
 app.use('/api/agents', authenticateToken, agentRoutes(agentManager));
 app.use('/api/templates', authenticateToken, templateRoutes());
@@ -207,6 +210,7 @@ async function start() {
   await agentManager.loadFromDatabase();
   agentManager.startTaskLoop();
   startJiraSync(agentManager, io, 60000); // sync every 60s
+  registerWebhook().catch(() => {}); // auto-register Jira webhook
 
   await sandboxManager.cleanupOrphans();
 

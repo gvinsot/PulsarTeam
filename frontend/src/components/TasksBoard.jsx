@@ -1044,15 +1044,29 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
   };
 
   // ── Column helpers ──
-  const updateCol = (idx, patch) => setCols(prev => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'step';
+  const updateCol = (idx, patch) => setCols(prev => prev.map((c, i) => {
+    if (i !== idx) return c;
+    const updated = { ...c, ...patch };
+    // Sync id with label when label changes
+    if (patch.label !== undefined) {
+      const newId = slugify(patch.label);
+      const oldId = c.id;
+      if (newId && newId !== oldId) {
+        updated.id = newId;
+        // Update transitions that reference the old id
+        setTransitions(ts => ts.map(t => t.from === oldId ? { ...t, from: newId } : t));
+      }
+    }
+    return updated;
+  }));
   const removeCol = (idx) => {
     const removed = cols[idx];
     setCols(prev => prev.filter((_, i) => i !== idx));
     setTransitions(prev => prev.filter(t => t.from !== removed.id));
   };
   const addCol = () => {
-    const id = `step_${Date.now()}`;
-    setCols(prev => [...prev, { id, label: 'New Step', color: '#6b7280' }]);
+    setCols(prev => [...prev, { id: 'new_step', label: 'New Step', color: '#6b7280' }]);
   };
   const moveCol = (idx, dir) => {
     const target = idx + dir;
@@ -1450,7 +1464,6 @@ export default function TasksBoard({ agents, onRefresh }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
   const [jiraStatus, setJiraStatus] = useState(null);
-  const [jiraSyncing, setJiraSyncing] = useState(false);
 
   // Workflow config (columns + transitions from DB)
   const [workflow, setWorkflow] = useState(null);
@@ -1603,33 +1616,6 @@ export default function TasksBoard({ agents, onRefresh }) {
             <span className="text-red-400/70">{totalByStatus.error} errors</span>
           )}
         </div>
-
-        {/* Jira sync */}
-        {jiraStatus?.enabled && (
-          <button
-            onClick={async () => {
-              setJiraSyncing(true);
-              try {
-                await api.triggerJiraSync();
-                // Reload workflow (columns may have changed) and agents (new tasks)
-                const wf = await api.getWorkflow();
-                setWorkflow(wf);
-                onRefresh?.();
-              } finally {
-                setJiraSyncing(false);
-              }
-            }}
-            disabled={jiraSyncing}
-            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs transition-colors
-              ${jiraSyncing ? 'text-blue-300 bg-blue-500/10' : 'text-dark-400 hover:text-blue-400 hover:bg-dark-700'}`}
-            title={`Sync with Jira (${jiraStatus.projectKey})`}
-          >
-            <svg className={`w-3.5 h-3.5 ${jiraSyncing ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 12a9 9 0 11-6.219-8.56" strokeLinecap="round" />
-            </svg>
-            Jira
-          </button>
-        )}
 
         {/* Workflow settings */}
         <button

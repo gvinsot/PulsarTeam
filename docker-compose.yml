@@ -48,6 +48,8 @@ services:
       - JIRA_ORG_ID=${JIRA_ORG_ID:-}
       - JIRA_API_KEY=${JIRA_API_KEY:-}
       - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
+      - JIRA_WEBHOOK_URL=${JIRA_WEBHOOK_URL:-}
+      - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro

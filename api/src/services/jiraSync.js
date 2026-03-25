@@ -310,3 +310,144 @@ export function getJiraSyncStatus() {
 export async function fullSync(agentManager) {
   await pollJira(agentManager);
 }
+
+// ── Webhook: real-time notifications from Jira ──────────────────────────────
+
+const WEBHOOK_SECRET = (process.env.JIRA_WEBHOOK_SECRET || process.env.JIRA_API_KEY || '').trim();
+
+/**
+ * Verify webhook request authenticity via shared secret header.
+ */
+export function verifyWebhook(req) {
+  const token = req.headers['x-jira-webhook-secret'];
+  if (!token || token !== WEBHOOK_SECRET) return false;
+  return true;
+}
+
+/**
+ * Handle a Jira webhook event.
+ * Supported: issue_updated, issue_created (status transitions).
+ */
+export async function handleWebhook(payload, agentManager) {
+  const cfg = getConfig();
+  if (!cfg) return;
+
+  const event = payload.webhookEvent;
+  const issue = payload.issue;
+  if (!issue?.key || !issue?.fields?.status) return;
+
+  const statusId = issue.fields.status.id;
+  const summary = issue.fields.summary || issue.key;
+
+  console.log(`[Jira] Webhook: ${event} ${issue.key} → status "${issue.fields.status.name}" (${statusId})`);
+
+  const workflow = await getWorkflow('_default');
+  if (!workflow?.transitions) return;
+
+  // ── Check if this issue matches a jira_ticket trigger (new import) ──
+  const jiraTriggers = workflow.transitions.filter(
+    t => t.trigger === 'jira_ticket' && t.jiraStatusIds?.length > 0
+  );
+
+  // Check if issue already tracked
+  let existingTodo = null;
+  let existingAgentId = null;
+  for (const [agentId, agent] of agentManager.agents) {
+    const found = (agent.todoList || []).find(t => t.jiraKey === issue.key);
+    if (found) {
+      existingTodo = found;
+      existingAgentId = agentId;
+      break;
+    }
+  }
+
+  if (!existingTodo) {
+    // Try to import as new task
+    for (const trigger of jiraTriggers) {
+      if (!new Set(trigger.jiraStatusIds).has(statusId)) continue;
+
+      let ownerAgent = null;
+      for (const [, a] of agentManager.agents) {
+        if (a.enabled === false) continue;
+        if (a.isLeader) { ownerAgent = a; break; }
+        if (!ownerAgent) ownerAgent = a;
+      }
+      if (!ownerAgent) return;
+
+      const todo = agentManager.addTodo(
+        ownerAgent.id,
+        `[${issue.key}] ${summary}`,
+        null,
+        { type: 'jira', name: 'Jira', key: issue.key },
+        trigger.from
+      );
+      if (todo) {
+        const actualTodo = ownerAgent.todoList.find(t => t.id === todo.id);
+        if (actualTodo) {
+          actualTodo.jiraKey = issue.key;
+          actualTodo.jiraStatusId = statusId;
+          saveAgent(ownerAgent);
+        }
+        console.log(`[Jira] Webhook: imported ${issue.key} → column "${trigger.from}"`);
+        if (_io) _io.emit('workflow:updated');
+      }
+      return;
+    }
+  }
+
+  // ── Existing task: check if Jira status moved away from watched columns ──
+  // (means the ticket was moved in Jira, not by us)
+  if (existingTodo && existingTodo.jiraStatusId !== statusId) {
+    existingTodo.jiraStatusId = statusId;
+    console.log(`[Jira] Webhook: ${issue.key} status updated to "${issue.fields.status.name}"`);
+    // Don't auto-move the PulsarTeam task — Jira status changes from outside
+    // are informational. The workflow transitions in PulsarTeam drive the flow.
+  }
+}
+
+/**
+ * Register a webhook in Jira for the configured project.
+ * Called on startup if JIRA_WEBHOOK_URL is set.
+ */
+export async function registerWebhook() {
+  const cfg = getConfig();
+  const webhookUrl = (process.env.JIRA_WEBHOOK_URL || '').trim();
+  if (!cfg || !webhookUrl) return;
+
+  try {
+    // List existing webhooks to avoid duplicates
+    const existing = await jiraFetch(cfg, '/rest/webhooks/1.0/webhook');
+    const alreadyRegistered = (Array.isArray(existing) ? existing : []).find(
+      w => w.url === webhookUrl
+    );
+
+    if (alreadyRegistered) {
+      console.log(`[Jira] Webhook already registered: ${alreadyRegistered.name} (id: ${alreadyRegistered.self})`);
+      return;
+    }
+
+    const webhook = await jiraFetch(cfg, '/rest/webhooks/1.0/webhook', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'PulsarTeam Sync',
+        url: webhookUrl,
+        events: [
+          'jira:issue_created',
+          'jira:issue_updated',
+        ],
+        filters: {
+          'issue-related-events-section': `project = ${cfg.projectKey}`,
+        },
+        excludeBody: false,
+      }),
+    });
+
+    console.log(`[Jira] Webhook registered: ${webhookUrl}`);
+  } catch (err) {
+    console.error(`[Jira] Failed to register webhook:`, err.message);
+    console.log('[Jira] You can register it manually in Jira: Settings > System > WebHooks');
+    console.log(`[Jira]   URL: ${webhookUrl}`);
+    console.log(`[Jira]   Events: Issue Created, Issue Updated`);
+    console.log(`[Jira]   JQL filter: project = ${cfg.projectKey}`);
+  }
+}
