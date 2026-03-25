@@ -3065,7 +3065,7 @@ export class AgentManager {
   setTodoStatus(agentId, todoId, status, { skipAutoRefine = false, by = null } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    }
+    const todo = agent.todoList.find(t => t.id === todoId);
     if (!todo) return null;
     // Guard: only one in_progress task per assignee at a time
     // The guard checks the ASSIGNEE (the agent actually working), not the todoList owner
