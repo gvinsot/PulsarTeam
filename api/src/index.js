@@ -32,6 +32,7 @@ import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
 import { projectContextRoutes } from './routes/projectContexts.js';
 import { jiraRoutes, jiraWebhookRoute } from './routes/jira.js';
+import budgetRoutes from './routes/budget.js';
 import { startJiraSync, registerWebhook } from './services/jiraSync.js';
 
 const app = express();
@@ -114,7 +115,7 @@ app.use('/api/mcp-servers', authenticateToken, mcpServerRoutes(mcpManager));
 app.use('/api/onedrive', authenticateToken, onedriveRoutes());
 app.use('/api/realtime', authenticateToken, realtimeRoutes(agentManager));
 app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
-app.use('/api/budget', budgetRoutes);
+app.use('/api/budget', authenticateToken, budgetRoutes);
 app.use('/api/settings/api-key', authenticateToken, apiKeyRoutes);
 app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes(agentManager));
