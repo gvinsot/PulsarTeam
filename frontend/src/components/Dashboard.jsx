@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
-  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu
+  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu, DollarSign
 } from 'lucide-react';
 import AgentCard from './AgentCard';
 import AgentDetail from './AgentDetail';
@@ -12,6 +12,7 @@ import ActiveVoiceIndicator from './ActiveVoiceIndicator';
 import ApiKeyModal from './ApiKeyModal';
 import TasksBoard from './TasksBoard';
 import ProjectsView from './ProjectsView';
+import BudgetDashboard from './BudgetDashboard';
 
 export default function Dashboard({
   user, agents, templates, projects, skills, mcpServers, projectContexts, thinkingMap, streamBuffers,
@@ -23,7 +24,7 @@ export default function Dashboard({
   const [viewMode, setViewMode] = useState('grid'); // grid | list
   const [activeView, setActiveViewRaw] = useState(() => {
     const hash = window.location.hash.replace('#', '').toLowerCase();
-    return ['agents', 'tasks', 'projects', 'about'].includes(hash) ? hash : 'agents';
+    return ['agents', 'tasks', 'projects', 'budget', 'about'].includes(hash) ? hash : 'agents';
   });
   const setActiveView = useCallback((view) => {
     setActiveViewRaw(view);
@@ -38,7 +39,7 @@ export default function Dashboard({
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash.replace('#', '').toLowerCase();
-      if (['agents', 'tasks', 'projects', 'about'].includes(hash)) setActiveViewRaw(hash);
+      if (['agents', 'tasks', 'projects', 'budget', 'about'].includes(hash)) setActiveViewRaw(hash);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -107,6 +108,7 @@ export default function Dashboard({
                     { key: 'agents', label: 'Agents', icon: Users },
                     { key: 'tasks', label: 'Tasks', icon: KanbanSquare },
                     { key: 'projects', label: 'Projects', icon: Tag },
+                    { key: 'budget', label: 'Budget', icon: DollarSign },
                   ].map(({ key, label, icon: Icon }) => (
                     <button
                       key={key}
@@ -158,6 +160,16 @@ export default function Dashboard({
               >
                 <Tag className="w-4 h-4" />
                 <span className="hidden md:inline">Projects</span>
+              </button>
+              <button
+                onClick={() => setActiveView('budget')}
+                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                  activeView === 'budget' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                }`}
+                title="Budget"
+              >
+                <DollarSign className="w-4 h-4" />
+                <span className="hidden md:inline">Budget</span>
               </button>
             </div>
           </div>
@@ -226,6 +238,11 @@ export default function Dashboard({
                 projectContexts={projectContexts || []}
                 onRefresh={onRefresh}
               />
+            </div>
+          )}
+          {activeView === 'budget' && (
+            <div className="flex-1 min-h-0 flex flex-col overflow-auto">
+              <BudgetDashboard agents={sortedAgents} />
             </div>
           )}
           {/* Agent list */}

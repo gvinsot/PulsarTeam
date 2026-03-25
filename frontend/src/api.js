@@ -421,4 +421,30 @@ export const api = {
     fetch(`${API_BASE}/jira/columns`, { headers: getHeaders() }).then(handleResponse),
 };
 
+// Budget
+export const fetchBudgetSummary = (days = 1) =>
+  fetch(`${API_BASE}/budget/summary?days=${days}`, { headers: getHeaders() }).then(handleResponse);
+
+export const fetchBudgetByAgent = (days = 30) =>
+  fetch(`${API_BASE}/budget/by-agent?days=${days}`, { headers: getHeaders() }).then(handleResponse);
+
+export const fetchBudgetTimeline = (days = 7, groupBy = 'day') =>
+  fetch(`${API_BASE}/budget/timeline?days=${days}&groupBy=${groupBy}`, { headers: getHeaders() }).then(handleResponse);
+
+export const fetchBudgetDaily = (days = 30) =>
+  fetch(`${API_BASE}/budget/daily?days=${days}`, { headers: getHeaders() }).then(handleResponse);
+
+export const fetchBudgetConfig = () =>
+  fetch(`${API_BASE}/budget/config`, { headers: getHeaders() }).then(handleResponse);
+
+export const updateBudgetConfig = (config) =>
+  fetch(`${API_BASE}/budget/config`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(config)
+  }).then(handleResponse);
+
+export const fetchBudgetAlerts = () =>
+  fetch(`${API_BASE}/budget/alerts`, { headers: getHeaders() }).then(handleResponse);
+
 export default api;
