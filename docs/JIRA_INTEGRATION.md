@@ -100,15 +100,17 @@ Dans Jira : **Settings > System > WebHooks** :
 | Events | Issue Created, Issue Updated |
 | JQL filter | `project = KEY` (remplacer KEY par votre clé projet) |
 
-Ajouter le header HTTP :
+Dans la configuration Jira du webhook, définir le header HTTP :
 
 ```
-X-Jira-Webhook-Secret: votre-secret
+X-Automation-Webhook-Token: votre-secret
 ```
+
+(La valeur doit correspondre à `JIRA_WEBHOOK_SECRET` dans le `.env`)
 
 #### Sécurité du webhook
 
-L'endpoint `POST /api/jira/webhook` est public (pas de JWT — Jira ne peut pas s'authentifier avec notre token). La sécurité repose sur le header `X-Jira-Webhook-Secret` :
+L'endpoint `POST /api/jira/webhook` est public (pas de JWT — Jira ne peut pas s'authentifier avec notre token). La sécurité repose sur le header `X-Automation-Webhook-Token` :
 
 - Chaque requête doit contenir ce header avec la valeur de `JIRA_WEBHOOK_SECRET`
 - Si le header est absent ou incorrect → HTTP 401

@@ -200,7 +200,13 @@ export async function pollJira(agentManager) {
 
   if (created > 0) {
     console.log(`[Jira] Poll: imported ${created} new issue(s)`);
-    if (_io) _io.emit('workflow:updated');
+    if (_io) {
+      for (const [, agent] of agentManager.agents) {
+        if (agent.todoList?.some(t => t.jiraKey)) {
+          _io.emit('agent:updated', agentManager._sanitize(agent));
+        }
+      }
+    }
   }
 }
 
@@ -316,10 +322,11 @@ export async function fullSync(agentManager) {
 const WEBHOOK_SECRET = (process.env.JIRA_WEBHOOK_SECRET || process.env.JIRA_API_KEY || '').trim();
 
 /**
- * Verify webhook request authenticity via shared secret header.
+ * Verify webhook request authenticity via X-Automation-Webhook-Token header.
  */
 export function verifyWebhook(req) {
-  const token = req.headers['x-jira-webhook-secret'];
+  if (!WEBHOOK_SECRET) return false;
+  const token = req.headers['x-automation-webhook-token'];
   if (!token || token !== WEBHOOK_SECRET) return false;
   return true;
 }
@@ -389,7 +396,9 @@ export async function handleWebhook(payload, agentManager) {
           saveAgent(ownerAgent);
         }
         console.log(`[Jira] Webhook: imported ${issue.key} → column "${trigger.from}"`);
-        if (_io) _io.emit('workflow:updated');
+        if (_io) {
+          _io.emit('agent:updated', agentManager._sanitize(ownerAgent));
+        }
       }
       return;
     }

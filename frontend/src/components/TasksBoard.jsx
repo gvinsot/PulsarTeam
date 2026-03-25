@@ -1249,7 +1249,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                 <div key={idx} className="bg-dark-800 rounded-lg px-3 py-3 space-y-3">
                   {/* From column + delete */}
                   <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-dark-500 w-10">From:</span>
+                    <span className="text-[10px] text-dark-500 w-14">Column:</span>
                     <select value={t.from} onChange={e => updateTransition(idx, { from: e.target.value })}
                       className="px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200">
                       {cols.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
