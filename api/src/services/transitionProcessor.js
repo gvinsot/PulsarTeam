@@ -119,7 +119,7 @@ export async function processTransition(task, agentManager, io) {
     let agent = null;
 
     if (isExecution) {
-      // Execute mode: use the task's assignee ONLY — never fallback to owner
+      // Execute mode: use the task's assignee ONLY — never fallback to creator
       const assignee = task.assignee ? agentManager.agents.get(task.assignee) : null;
       if (assignee && assignee.enabled !== false && assignee.status === 'idle') {
         agent = assignee;
@@ -193,14 +193,14 @@ export async function processTransition(task, agentManager, io) {
         task.status = targetStatus;
         task.assignee = null;
         // Update the actual agent's todoList and persist
-        const ownerAgent = agentManager.agents.get(task.agentId);
-        const actualTask = ownerAgent?.todoList?.find(t => t.id === task.id);
+        const creatorAgent = agentManager.agents.get(task.agentId);
+        const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
         if (actualTask) {
           actualTask.status = targetStatus;
           actualTask.assignee = null;
           actualTask.history = task.history;
           if (targetStatus === 'done') actualTask.completedAt = new Date().toISOString();
-          saveAgent(ownerAgent);
+          saveAgent(creatorAgent);
         }
         io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
         _executionLocks.delete(lockKey);

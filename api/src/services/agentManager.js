@@ -2877,8 +2877,8 @@ export class AgentManager {
     switch (cond.field) {
       // Legacy owner fields — DEPRECATED, mapped to assignee for backward compat
       // Use assignee_status / assignee_enabled instead
-      case 'owner_status': fieldValue = assigneeAgent?.status || 'none'; break;
-      case 'owner_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
+      case 'creator_status': case 'owner_status': fieldValue = assigneeAgent?.status || 'none'; break;
+      case 'creator_enabled': case 'owner_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
       case 'assignee_status': fieldValue = assigneeAgent?.status || 'none'; break;
       case 'assignee_enabled': fieldValue = assigneeAgent ? (assigneeAgent.enabled !== false ? 'true' : 'false') : 'false'; break;
       case 'assignee_role': fieldValue = assigneeAgent?.role || ''; break;
@@ -2903,12 +2903,12 @@ export class AgentManager {
 
   /** Check if an agent currently has an in_progress task (as creator or assignee) */
   agentHasActiveTask(agentId) {
-    for (const [ownerId, agent] of this.agents) {
+    for (const [creatorId, agent] of this.agents) {
       if (!agent.todoList) continue;
       for (const task of agent.todoList) {
         if (task.status !== 'in_progress') continue;
-        // Task is owned by this agent
-        if (ownerId === agentId) return true;
+        // Task was created by this agent
+        if (creatorId === agentId) return true;
         // Task is assigned to this agent
         if (task.assignee === agentId) return true;
       }
@@ -2941,10 +2941,10 @@ export class AgentManager {
         let minTasks = Infinity;
         for (const candidate of candidates) {
           let count = 0;
-          for (const [, owner] of this.agents) {
-            for (const t of owner.todoList || []) {
+          for (const [, creator] of this.agents) {
+            for (const t of creator.todoList || []) {
               if (t.id === task.id) continue; // don't count the task being assigned
-              if (t.assignee === candidate.id || (!t.assignee && owner.id === candidate.id)) {
+              if (t.assignee === candidate.id || (!t.assignee && creator.id === candidate.id)) {
                 count++;
               }
             }
@@ -2958,11 +2958,11 @@ export class AgentManager {
           console.log(`[Auto-Assign] Task "${(task.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (${minTasks} tasks in column, role: ${currentColumn.autoAssignRole})`);
           task.assignee = autoAgent.id;
           // Update the actual agent's todoList (task is a spread copy)
-          const ownerAgent = this.agents.get(task.agentId);
-          const actualTask = ownerAgent?.todoList?.find(t => t.id === task.id);
+          const creatorAgent = this.agents.get(task.agentId);
+          const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
           if (actualTask) {
             actualTask.assignee = autoAgent.id;
-            saveAgent(ownerAgent);
+            saveAgent(creatorAgent);
           }
           this.io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
         }
@@ -3014,21 +3014,21 @@ export class AgentManager {
             let minTasks = Infinity;
             for (const c of candidates) {
               let count = 0;
-              for (const [, owner] of this.agents) {
-                for (const t of owner.todoList || []) {
+              for (const [, creator] of this.agents) {
+                for (const t of creator.todoList || []) {
                   if (t.id === task.id) continue;
-                  if (t.assignee === c.id || (!t.assignee && owner.id === c.id)) count++;
+                  if (t.assignee === c.id || (!t.assignee && creator.id === c.id)) count++;
                 }
               }
               if (count < minTasks) { minTasks = count; agent = c; }
             }
             if (agent) {
               task.assignee = agent.id;
-              const ownerAgent = this.agents.get(task.agentId);
-              const actualTask = ownerAgent?.todoList?.find(t => t.id === task.id);
+              const creatorAgent = this.agents.get(task.agentId);
+              const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
               if (actualTask) {
                 actualTask.assignee = agent.id;
-                saveAgent(ownerAgent);
+                saveAgent(creatorAgent);
               }
               this.io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
               console.log(`[Workflow] Action: assigned "${(task.text || '').slice(0, 60)}" to "${agent.name}" (${minTasks} total tasks, role: ${action.role})`);
@@ -3077,8 +3077,8 @@ export class AgentManager {
   // IMPORTANT: Once a task's `source` is set at creation, it MUST NOT be modified.
   // Source tracks the origin (user, api, mcp, agent) and is immutable after creation.
   // Terminology:
-  //   - agentId (creator): the agent whose todoList stores this task
-  //   - assignee: the agent that actually executes this task (only assignee should work on it)
+  //   - agentId (creator): the agent whose todoList stores this task (Task Creator)
+  //   - assignee: the agent that actually executes this task (Task Assignee)
   addTask(agentId, text, project, source, initialStatus) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
@@ -3137,15 +3137,15 @@ export class AgentManager {
     const task = agent.todoList.find(t => t.id === taskId);
     if (!task) return null;
     // Guard: only one in_progress task per assignee at a time
-    // The guard checks the ASSIGNEE (the agent actually working), not the todoList owner
+    // The guard checks the ASSIGNEE (the agent actually working), not the todoList creator
     if (status === 'in_progress' && task.status !== 'in_progress') {
       const assigneeId = task.assignee || agentId;
       // Check across ALL agents' todoLists for any in_progress task assigned to the same assignee
-      for (const [ownerId, ownerAgent] of this.agents) {
-        if (!ownerAgent.todoList) continue;
-        const existing = ownerAgent.todoList.find(t =>
+      for (const [creatorId, creatorAgent] of this.agents) {
+        if (!creatorAgent.todoList) continue;
+        const existing = creatorAgent.todoList.find(t =>
           t.status === 'in_progress' && t.id !== taskId &&
-          (t.assignee || ownerId) === assigneeId
+          (t.assignee || creatorId) === assigneeId
         );
         if (existing) {
           console.warn(`[Guard] Assignee "${this.agents.get(assigneeId)?.name || assigneeId}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${task.text.slice(0, 60)}"`);
@@ -3886,10 +3886,10 @@ export class AgentManager {
                 let minTasks = Infinity;
                 for (const c of candidates) {
                   let count = 0;
-                  for (const [, ow] of this.agents) {
-                    for (const t of ow.todoList || []) {
+                  for (const [, cr] of this.agents) {
+                    for (const t of cr.todoList || []) {
                       if (t.id === task.id) continue;
-                      if (t.assignee === c.id || (!t.assignee && ow.id === c.id)) count++;
+                      if (t.assignee === c.id || (!t.assignee && cr.id === c.id)) count++;
                     }
                   }
                   if (count < minTasks) { minTasks = count; foundAgent = c; }
@@ -4001,34 +4001,34 @@ export class AgentManager {
       // Priority 1: resume in_progress tasks assigned to this agent (check own list + other lists)
       // Skip if workflow manages in_progress transitions (conditions will handle the move)
       let inProgressTask = null;
-      let inProgressOwnerId = null;
+      let inProgressCreatorId = null;
       // Check own list first
       const ownInProgress = agent.todoList?.find(t =>
         t.status === 'in_progress' && (!t.assignee || t.assignee === agentId)
       );
       if (ownInProgress) {
         inProgressTask = ownInProgress;
-        inProgressOwnerId = agentId;
+        inProgressCreatorId = agentId;
       } else {
         // Check other agents' lists for tasks assigned to this agent
         for (const [oid, oa] of this.agents) {
           if (oid === agentId || !oa.todoList) continue;
           const found = oa.todoList.find(t => t.status === 'in_progress' && t.assignee === agentId);
-          if (found) { inProgressTask = found; inProgressOwnerId = oid; break; }
+          if (found) { inProgressTask = found; inProgressCreatorId = oid; break; }
         }
       }
       if (inProgressTask) {
         if (this._workflowManagedStatuses?.has('in_progress')) continue;
         this._loopProcessing.add(agentId);
         console.log(`🔄 [TaskLoop] Agent "${agent.name}" is idle but has in_progress task "${inProgressTask.text.slice(0, 60)}" — resuming`);
-        this._resumeInProgressTask(inProgressOwnerId, this.agents.get(inProgressOwnerId), inProgressTask).finally(() => {
+        this._resumeInProgressTask(inProgressCreatorId, this.agents.get(inProgressCreatorId), inProgressTask).finally(() => {
           this._loopProcessing.delete(agentId);
         });
         continue;
       }
 
       // Priority 2: pick up the first pending task — but skip tasks managed by workflow transitions
-      // Only pick up tasks where this agent is the assignee (or owner when no assignee is set)
+      // Only pick up tasks where this agent is the assignee (or creator when no assignee is set)
       const task = agent.todoList?.find(t =>
         t.status === 'pending' && (!t.assignee || t.assignee === agentId)
       );
@@ -4075,10 +4075,10 @@ export class AgentManager {
   /**
    * Resume an in_progress task when the assignee agent is idle.
    * Sends the task text directly to the assignee and moves to done on success.
-   * The agentId parameter is the todoList owner (creator); execution uses the assignee.
+   * The agentId parameter is the todoList creator; execution uses the assignee.
    */
   async _resumeInProgressTask(agentId, agent, task) {
-    // Use the assignee agent for execution (fall back to owner if no assignee set)
+    // Use the assignee agent for execution (fall back to creator if no assignee set)
     const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
 

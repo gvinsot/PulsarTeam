@@ -206,18 +206,18 @@ export async function pollJira(agentManager) {
       if (!statusId || !watchedStatusIds.has(statusId)) continue;
       if (existingJiraKeys.has(issue.key)) continue;
 
-      // Find owner agent (prefer leader)
-      let ownerAgent = null;
+      // Find creator agent (prefer leader)
+      let creatorAgent = null;
       for (const [, a] of agentManager.agents) {
         if (a.enabled === false) continue;
-        if (a.isLeader) { ownerAgent = a; break; }
-        if (!ownerAgent) ownerAgent = a;
+        if (a.isLeader) { creatorAgent = a; break; }
+        if (!creatorAgent) creatorAgent = a;
       }
-      if (!ownerAgent) continue;
+      if (!creatorAgent) continue;
 
       const summary = issue.fields?.summary || issue.key;
       const task = agentManager.addTask(
-        ownerAgent.id,
+        creatorAgent.id,
         `[${issue.key}] ${summary}`,
         null,
         { type: 'jira', name: 'Jira', key: issue.key },
@@ -225,17 +225,17 @@ export async function pollJira(agentManager) {
       );
 
       if (task) {
-        const actualTask = ownerAgent.todoList.find(t => t.id === task.id);
+        const actualTask = creatorAgent.todoList.find(t => t.id === task.id);
         if (actualTask) {
           actualTask.jiraKey = issue.key;
           actualTask.jiraStatusId = statusId;
-          saveAgent(ownerAgent);
+          saveAgent(creatorAgent);
         }
         existingJiraKeys.add(issue.key);
         created++;
         console.log(`[Jira] Imported ${issue.key} "${summary}" → column "${targetColumn}"`);
         // Execute transition actions (change_status, run_agent, etc.)
-        await executeTransitionActions(trigger, actualTask || task, ownerAgent.id, agentManager);
+        await executeTransitionActions(trigger, actualTask || task, creatorAgent.id, agentManager);
       }
     }
   }
@@ -391,7 +391,7 @@ export async function addCommentToJira(jiraKey, commentText) {
  *
  * @param {string} jiraKey - The Jira issue key (e.g. KAN-7)
  * @param {object} task - The PulsarTeam task object
- * @param {string} agentId - The owner agent ID
+ * @param {string} agentId - The creator agent ID
  * @param {object} agentManager - The AgentManager instance
  * @param {string} instructions - Custom analysis instructions from workflow config
  * @param {string} role - Agent role to use for the analysis
@@ -667,33 +667,33 @@ export async function handleWebhook(payload, agentManager) {
     for (const trigger of jiraTriggers) {
       if (!new Set(trigger.jiraStatusIds).has(statusId)) continue;
 
-      let ownerAgent = null;
+      let creatorAgent = null;
       for (const [, a] of agentManager.agents) {
         if (a.enabled === false) continue;
-        if (a.isLeader) { ownerAgent = a; break; }
-        if (!ownerAgent) ownerAgent = a;
+        if (a.isLeader) { creatorAgent = a; break; }
+        if (!creatorAgent) creatorAgent = a;
       }
-      if (!ownerAgent) return;
+      if (!creatorAgent) return;
 
       const task = agentManager.addTask(
-        ownerAgent.id,
+        creatorAgent.id,
         `[${issue.key}] ${summary}`,
         null,
         { type: 'jira', name: 'Jira', key: issue.key },
         trigger.from
       );
       if (task) {
-        const actualTask = ownerAgent.todoList.find(t => t.id === task.id);
+        const actualTask = creatorAgent.todoList.find(t => t.id === task.id);
         if (actualTask) {
           actualTask.jiraKey = issue.key;
           actualTask.jiraStatusId = statusId;
-          saveAgent(ownerAgent);
+          saveAgent(creatorAgent);
         }
         console.log(`[Jira] Webhook: imported ${issue.key} → column "${trigger.from}"`);
         // Execute transition actions (change_status, run_agent, etc.)
-        await executeTransitionActions(trigger, actualTask || task, ownerAgent.id, agentManager);
+        await executeTransitionActions(trigger, actualTask || task, creatorAgent.id, agentManager);
         if (_io) {
-          _io.emit('agent:updated', agentManager._sanitize(ownerAgent));
+          _io.emit('agent:updated', agentManager._sanitize(creatorAgent));
         }
       }
       return;
