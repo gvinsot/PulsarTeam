@@ -875,11 +875,11 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group"
+    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group h-full"
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {/* Column header */}
       <div className={`flex items-center justify-between px-3 py-2.5 rounded-t-xl border border-b-2
-        transition-colors mb-0
+        transition-colors mb-0 flex-shrink-0
         ${dragOver
           ? `bg-dark-750 ${col.headerActive} border-b-2`
           : 'bg-dark-800/60 border-dark-700/50'
@@ -907,7 +907,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
 
       {/* Drop zone */}
       <div
-        className={`flex-1 flex flex-col gap-2 p-2 rounded-b-xl border border-t-0 min-h-[120px]
+        className={`flex-1 flex flex-col gap-2 p-2 rounded-b-xl border border-t-0 min-h-0 overflow-y-auto
           transition-all duration-150
           ${dragOver
             ? `ring-2 ring-inset ${col.dropRing} border-dark-600`
@@ -937,7 +937,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
           <button
             onClick={onAddTask}
             className={`flex items-center justify-center gap-1.5 py-1.5 mt-1 rounded-lg text-xs
-              transition-all duration-150
+              transition-all duration-150 flex-shrink-0
               ${hovered ? 'opacity-100 text-dark-400 hover:text-indigo-400 hover:bg-dark-700/50' : 'opacity-0'}`}
           >
             <Plus className="w-3 h-3" /> Add task
@@ -1915,7 +1915,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       </div>
 
       {/* Board */}
-      <div className="flex-1 overflow-auto min-h-0">
+      <div className="flex-1 overflow-x-scroll overflow-y-hidden min-h-0">
         <div className="flex gap-4 p-6 h-full min-w-max">
           {columns.map((col, colIdx) => (
             <KanbanColumn
