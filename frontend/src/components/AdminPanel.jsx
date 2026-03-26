@@ -632,7 +632,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
               LLM Configurations ({llmConfigs.length})
             </h3>
             <button
-              onClick={() => setLlmForm({ name: '', provider: 'anthropic', model: '', endpoint: '', apiKey: '', isReasoning: false, costPerInputToken: null, costPerOutputToken: null })}
+              onClick={() => setLlmForm({ name: '', provider: 'anthropic', model: '', endpoint: '', apiKey: '', isReasoning: false, contextSize: null, maxOutputTokens: null, costPerInputToken: null, costPerOutputToken: null })}
               className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -692,6 +692,20 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-xs text-dark-400 mb-1">Context Size <span className="text-dark-500">(tokens)</span></label>
+                  <input type="number" min="1" value={llmForm.contextSize ?? ''} onChange={e => setLlmForm(f => ({ ...f, contextSize: e.target.value ? Number(e.target.value) : null }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. 200000" />
+                </div>
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Max Output Tokens</label>
+                  <input type="number" min="1" value={llmForm.maxOutputTokens ?? ''} onChange={e => setLlmForm(f => ({ ...f, maxOutputTokens: e.target.value ? Number(e.target.value) : null }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. 16384" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <label className="block text-xs text-dark-400 mb-1">Cost / 1M input tokens ($)</label>
                   <input type="number" step="0.01" min="0" value={llmForm.costPerInputToken ?? ''} onChange={e => setLlmForm(f => ({ ...f, costPerInputToken: e.target.value ? Number(e.target.value) : null }))}
                     className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
@@ -741,6 +755,8 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                       <span className="text-xs text-dark-400 capitalize">{config.provider}</span>
                       <span className="text-xs text-dark-500">{config.model}</span>
                       {config.endpoint && <span className="text-xs text-dark-600 truncate max-w-[200px]">{config.endpoint}</span>}
+                      {config.contextSize && <span className="text-xs text-dark-500">{(config.contextSize / 1000).toFixed(0)}k ctx</span>}
+                      {config.maxOutputTokens && <span className="text-xs text-dark-500">{(config.maxOutputTokens / 1000).toFixed(0)}k out</span>}
                       {config.costPerInputToken != null && (
                         <span className="text-xs text-dark-500">${config.costPerInputToken}/{config.costPerOutputToken} per 1M</span>
                       )}
