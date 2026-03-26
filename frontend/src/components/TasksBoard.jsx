@@ -962,8 +962,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group"
-      style={{ height: '100%', maxHeight: '100%' }}
+    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group max-h-[calc(100vh-220px)]"
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {/* Column header */}
       <div className={`flex items-center justify-between px-3 py-2.5 rounded-t-xl border border-b-2
@@ -1694,17 +1693,6 @@ export default function TasksBoard({ agents, onRefresh, user }) {
   const [jiraStatus, setJiraStatus] = useState(null);
   const boardScrollRef = useRef(null);
 
-  // Convert vertical mouse wheel to horizontal scroll on the board
-  const handleBoardWheel = useCallback((e) => {
-    const el = boardScrollRef.current;
-    if (!el) return;
-    // Only hijack vertical wheel when there's horizontal overflow
-    if (el.scrollWidth > el.clientWidth && e.deltaY !== 0) {
-      e.preventDefault();
-      el.scrollLeft += e.deltaY;
-    }
-  }, []);
-
   // Multi-board state
   const [boards, setBoards] = useState([]);
   const [activeBoardId, setActiveBoardId] = useState(null);
@@ -1914,7 +1902,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
   }
 
   return (
-    <div className="flex flex-col h-full" style={{ minHeight: 0, overflow: 'hidden' }}>
+    <div className="flex flex-col h-full min-h-0">
       {/* Board Tabs */}
       {boards.length > 0 && (
         <BoardTabs
@@ -2019,11 +2007,9 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       {/* Board */}
       <div
         ref={boardScrollRef}
-        onWheel={handleBoardWheel}
-        className="scrollbar-always-visible"
-        style={{ flex: '1 1 0%', minHeight: 0, overflowX: 'auto', overflowY: 'hidden' }}
+        className="flex-1 overflow-auto min-h-0 scrollbar-always-visible"
       >
-        <div className="flex gap-4 p-6 min-w-max" style={{ height: '100%' }}>
+        <div className="flex gap-4 p-6 min-w-max">
           {columns.map((col, colIdx) => (
             <KanbanColumn
               key={col.id}
