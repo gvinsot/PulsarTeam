@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, ListX, Eraser, Search, Settings, Check } from 'lucide-react';
+import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, ListX, Eraser, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
@@ -20,7 +20,6 @@ const TABS = [
   { id: 'broadcast', label: 'Global', icon: Globe },
   { id: 'plugins', label: 'Plugins', icon: Wrench },
   { id: 'actions', label: 'Actions', icon: Zap },
-  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 // Inline confirm button — first click shows "Are you sure?", second click executes
@@ -87,12 +86,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
   const [expandedMcpExplorer, setExpandedMcpExplorer] = useState(new Set());
   const [connectingMcp, setConnectingMcp] = useState(null);
 
-  // Settings state
-  const [settings, setSettings] = useState(null);
-  const [settingsLoading, setSettingsLoading] = useState(false);
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [customCurrency, setCustomCurrency] = useState('');
-
   const responsesRef = useRef(null);
 
   useEffect(() => {
@@ -122,25 +115,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
       socket.off('broadcast:error', handleError);
     };
   }, [socket]);
-
-  // ── Load settings when settings tab is opened ──────────────────────
-  useEffect(() => {
-    if (tab !== 'settings' || settings) return;
-    setSettingsLoading(true);
-    api.getSettings()
-      .then(s => setSettings(s))
-      .catch(err => console.error('Failed to load settings:', err))
-      .finally(() => setSettingsLoading(false));
-  }, [tab]);
-
-  const handleSettingSave = async (key, value) => {
-    setSettingsSaving(true);
-    try {
-      const updated = await api.updateSettings({ [key]: value });
-      setSettings(updated);
-    } catch (err) { console.error('Failed to save setting:', err); }
-    finally { setSettingsSaving(false); }
-  };
 
   // ── Broadcast handlers ──────────────────────────────────────────────
 
@@ -800,93 +774,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                   />
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* ── SETTINGS TAB ──────────────────────────────────── */}
-          {tab === 'settings' && (
-            <div className="flex-1 p-5 space-y-4 overflow-auto">
-              {settingsLoading ? (
-                <div className="flex items-center justify-center gap-2 text-xs text-dark-400 py-12">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Loading settings...
-                </div>
-              ) : (
-                <>
-                  {/* Jira Integration */}
-                  <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30">
-                    <div className="flex items-center justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-base">🔗</span>
-                          <span className="text-sm font-medium text-dark-200">Jira Integration</span>
-                        </div>
-                        <p className="text-xs text-dark-500">Enable or disable Jira synchronization and workflow triggers</p>
-                      </div>
-                      <button
-                        onClick={() => handleSettingSave('jiraEnabled', settings?.jiraEnabled === 'true' ? 'false' : 'true')}
-                        disabled={settingsSaving}
-                        className={`relative w-11 h-6 rounded-full transition-colors duration-200 flex-shrink-0 ${
-                          settings?.jiraEnabled === 'true' ? 'bg-emerald-500' : 'bg-dark-600'
-                        }`}
-                      >
-                        <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200 ${
-                          settings?.jiraEnabled === 'true' ? 'translate-x-5' : 'translate-x-0'
-                        }`} />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Currency */}
-                  <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30">
-                    <div className="flex-1 min-w-0 mb-3">
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="text-base">💰</span>
-                        <span className="text-sm font-medium text-dark-200">Currency</span>
-                      </div>
-                      <p className="text-xs text-dark-500">Symbol displayed in budget and cost views</p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {['$', '€', '£', '¥'].map(c => (
-                        <button
-                          key={c}
-                          onClick={() => { setCustomCurrency(''); handleSettingSave('currency', c); }}
-                          disabled={settingsSaving}
-                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
-                            settings?.currency === c && !customCurrency
-                              ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
-                              : 'bg-dark-800 text-dark-300 border-dark-700 hover:border-dark-500'
-                          }`}
-                        >
-                          {c}
-                        </button>
-                      ))}
-                      <div className="flex items-center gap-1">
-                        <input
-                          type="text"
-                          value={customCurrency || (!['$', '€', '£', '¥'].includes(settings?.currency || '$') ? settings?.currency || '' : '')}
-                          onChange={(e) => setCustomCurrency(e.target.value.slice(0, 5))}
-                          placeholder="Other..."
-                          className={`w-20 px-3 py-2 rounded-lg text-sm bg-dark-800 border text-dark-200 placeholder-dark-500 focus:outline-none transition-colors ${
-                            customCurrency || (!['$', '€', '£', '¥'].includes(settings?.currency || '$'))
-                              ? 'border-indigo-500/40'
-                              : 'border-dark-700 focus:border-dark-500'
-                          }`}
-                        />
-                        {customCurrency && (
-                          <button
-                            onClick={() => { handleSettingSave('currency', customCurrency); setCustomCurrency(''); }}
-                            disabled={settingsSaving || !customCurrency.trim()}
-                            className="p-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-colors disabled:opacity-40"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
             </div>
           )}
 
