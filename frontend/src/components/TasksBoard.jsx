@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   Search, Trash2, Clock, X, AlertTriangle,
   Edit3, Save, Check, Tag, Calendar, ChevronDown, Plus, Settings,
-  ArrowRight, Zap, User, GitCommit, KanbanSquare
+  ArrowRight, Zap, User, GitCommit, KanbanSquare, Repeat
 } from 'lucide-react';
 import { api } from '../api';
 import ReactMarkdown from 'react-markdown';
@@ -75,22 +75,27 @@ function formatDate(iso) {
 }
 
 const SOURCE_META = {
-  user:  { label: () => 'User',              cls: 'text-blue-400 bg-blue-500/10 ring-blue-500/20' },
-  agent: { label: (s) => s.name || 'Agent',  cls: 'text-purple-400 bg-purple-500/10 ring-purple-500/20' },
-  api:   { label: () => 'API',               cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
-  mcp:   { label: () => 'MCP',               cls: 'text-orange-400 bg-orange-500/10 ring-orange-500/20' },
+  user:       { label: () => 'User',              cls: 'text-blue-400 bg-blue-500/10 ring-blue-500/20' },
+  agent:      { label: (s) => s.name || 'Agent',  cls: 'text-purple-400 bg-purple-500/10 ring-purple-500/20' },
+  api:        { label: () => 'API',               cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
+  mcp:        { label: () => 'MCP',               cls: 'text-orange-400 bg-orange-500/10 ring-orange-500/20' },
+  recurrence: { label: () => 'Recurring',          cls: 'text-teal-400 bg-teal-500/10 ring-teal-500/20' },
 };
 
 // ── CreateTaskModal ──────────────────────────────────────────────────────────
 
 function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions, defaultStatus, boardId }) {
-  const CREATE_STATUSES = statusOptions.filter(s => ['idea', 'backlog', 'pending'].includes(s.value));
+  // Allow all columns except the last one (typically "Done") as creation statuses
+  const CREATE_STATUSES = statusOptions.length > 1 ? statusOptions.slice(0, -1) : statusOptions;
   const initialStatus = defaultStatus && CREATE_STATUSES.some(s => s.value === defaultStatus)
     ? defaultStatus
     : (CREATE_STATUSES[0]?.value || 'backlog');
   const [text, setText] = useState('');
   const [project, setProject] = useState('');
   const [status, setStatus] = useState(initialStatus);
+  const [recurring, setRecurring] = useState(false);
+  const [recurrencePeriod, setRecurrencePeriod] = useState('daily');
+  const [customInterval, setCustomInterval] = useState(60);
   const [saving, setSaving] = useState(false);
   const textareaRef = useRef(null);
 
@@ -107,13 +112,28 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  const RECURRENCE_PERIODS = [
+    { value: 'hourly', label: 'Every hour', minutes: 60 },
+    { value: 'daily', label: 'Every day', minutes: 1440 },
+    { value: 'weekly', label: 'Every week', minutes: 10080 },
+    { value: 'monthly', label: 'Every month', minutes: 43200 },
+    { value: 'custom', label: 'Custom interval', minutes: null },
+  ];
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     const trimmed = text.trim();
     if (!trimmed || !defaultAgentId) return;
     setSaving(true);
     try {
-      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId);
+      const recurrence = recurring ? {
+        enabled: true,
+        period: recurrencePeriod,
+        intervalMinutes: recurrencePeriod === 'custom'
+          ? customInterval
+          : RECURRENCE_PERIODS.find(p => p.value === recurrencePeriod)?.minutes || 1440,
+      } : undefined;
+      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId, recurrence);
       await onCreated();
       onClose();
     } finally {
@@ -195,6 +215,48 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Recurrence */}
+          <div className="border border-dark-700 rounded-lg p-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={recurring}
+                onChange={e => setRecurring(e.target.checked)}
+                className="w-3.5 h-3.5 rounded border-dark-600 bg-dark-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-0"
+              />
+              <Repeat className="w-3.5 h-3.5 text-dark-400" />
+              <span className="text-xs font-semibold text-dark-300 uppercase tracking-wide">Recurring task</span>
+            </label>
+            {recurring && (
+              <div className="mt-3 flex gap-3 items-end">
+                <div className="flex-1">
+                  <label className="block text-xs text-dark-400 mb-1">Period</label>
+                  <select
+                    value={recurrencePeriod}
+                    onChange={e => setRecurrencePeriod(e.target.value)}
+                    className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    {RECURRENCE_PERIODS.map(p => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {recurrencePeriod === 'custom' && (
+                  <div className="w-32">
+                    <label className="block text-xs text-dark-400 mb-1">Minutes</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={customInterval}
+                      onChange={e => setCustomInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Actions */}
@@ -482,6 +544,25 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
                 </div>
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${sourceMeta.cls}`}>
                   {sourceMeta.label(task.source)}
+                </span>
+              </div>
+            )}
+
+            {/* Recurrence */}
+            {task.recurrence?.enabled && (
+              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <Repeat className="w-3.5 h-3.5" />
+                  Recurring
+                </div>
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
+                  {task.recurrence.period === 'custom'
+                    ? `Every ${task.recurrence.intervalMinutes} min`
+                    : task.recurrence.period === 'hourly' ? 'Every hour'
+                    : task.recurrence.period === 'daily' ? 'Every day'
+                    : task.recurrence.period === 'weekly' ? 'Every week'
+                    : task.recurrence.period === 'monthly' ? 'Every month'
+                    : task.recurrence.period}
                 </span>
               </div>
             )}
@@ -843,6 +924,12 @@ function TaskCard({ task, agents, onDelete, onOpen, showAgent }) {
           <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
             <GitCommit className="w-2.5 h-2.5" />
             {task.commits.length}
+          </span>
+        )}
+        {task.recurrence?.enabled && (
+          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-teal-500/10 text-teal-400 ring-1 ring-teal-500/20">
+            <Repeat className="w-2.5 h-2.5" />
+            {task.recurrence.period === 'custom' ? `${task.recurrence.intervalMinutes}m` : task.recurrence.period}
           </span>
         )}
       </div>
