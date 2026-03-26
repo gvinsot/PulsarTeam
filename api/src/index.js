@@ -126,7 +126,7 @@ app.use('/api/settings/api-key', authenticateToken, apiKeyRoutes);
 app.use('/api/llm-configs', authenticateToken, llmConfigRoutes(agentManager));
 app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes(agentManager));
-app.use('/api/boards', authenticateToken, boardRoutes());
+app.use('/api/boards', authenticateToken, boardRoutes(agentManager));
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
 const onedriveMcpHandler = createOneDriveMcpHandler();

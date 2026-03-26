@@ -11,7 +11,7 @@ const DEFAULT_BOARD_WORKFLOW = {
   version: 1,
 };
 
-export function boardRoutes() {
+export function boardRoutes(agentManager) {
   const router = express.Router();
 
   // GET / — list all boards for the current user
@@ -24,23 +24,20 @@ export function boardRoutes() {
     }
   });
 
-  // GET /tasks/by-assignee/:agentId — all tasks assigned to an agent across all boards
+  // GET /tasks/by-assignee/:agentId — all tasks assigned to an agent across all agents' todoLists
   router.get('/tasks/by-assignee/:agentId', async (req, res) => {
     try {
-      const boards = await getBoardsByUser(req.user.userId);
+      const targetAgentId = req.params.agentId;
+      const allAgents = agentManager.getAll();
       const tasks = [];
-      for (const board of boards) {
-        for (const col of (board.workflow?.columns || [])) {
-          for (const task of (col.tasks || [])) {
-            if (task.assignee === req.params.agentId) {
-              tasks.push({
-                ...task,
-                boardId: board.id,
-                boardName: board.name,
-                columnId: col.id,
-                columnName: col.name,
-              });
-            }
+      for (const agent of allAgents) {
+        for (const task of (agent.todoList || [])) {
+          if (task.assignee === targetAgentId || (!task.assignee && agent.id === targetAgentId)) {
+            tasks.push({
+              ...task,
+              _ownerId: agent.id,
+              _ownerName: agent.name,
+            });
           }
         }
       }

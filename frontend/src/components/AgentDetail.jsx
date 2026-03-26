@@ -1218,30 +1218,18 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
     return () => { cancelled = true; };
   }, [agent.id, agent.todoList]);
 
-  // Merge board tasks + internal tasks where this agent is assignee, deduplicate by ID
+  // Collect all tasks assigned to this agent from all agents' todoLists, deduplicate by ID
   const allTasks = (() => {
     const seen = new Set();
     const merged = [];
-    // 1. Board tasks (already filtered by assignee on the backend)
-    for (const bt of boardTasks) {
-      if (!seen.has(bt.id)) {
-        seen.add(bt.id);
-        merged.push({
-          ...bt,
-          text: bt.title || bt.text || 'Untitled',
-          status: bt.status || (bt.columnName?.toLowerCase().replace(/\s+/g, '_')) || 'pending',
-          _source: 'board',
-        });
-      }
-    }
-    // 2. Tasks from THIS agent's todoList where this agent is the assignee (or no assignee set)
+    // 1. Tasks from THIS agent's todoList where this agent is the assignee (or no assignee set)
     for (const it of (agent.todoList || [])) {
       if (!seen.has(it.id) && (!it.assignee || it.assignee === agent.id)) {
         seen.add(it.id);
         merged.push({ ...it, _source: 'internal' });
       }
     }
-    // 3. Tasks from OTHER agents' todoLists that are assigned to THIS agent
+    // 2. Tasks from OTHER agents' todoLists that are assigned to THIS agent
     for (const other of (agents || [])) {
       if (other.id === agent.id) continue;
       for (const it of (other.todoList || [])) {
@@ -1249,6 +1237,18 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
           seen.add(it.id);
           merged.push({ ...it, _source: 'internal', _creatorId: other.id, _creatorName: other.name });
         }
+      }
+    }
+    // 3. Fallback: tasks from API that weren't found in local agent data
+    for (const bt of boardTasks) {
+      if (!seen.has(bt.id)) {
+        seen.add(bt.id);
+        merged.push({
+          ...bt,
+          _source: 'internal',
+          _creatorId: bt._ownerId !== agent.id ? bt._ownerId : undefined,
+          _creatorName: bt._ownerId !== agent.id ? bt._ownerName : undefined,
+        });
       }
     }
     return merged;
