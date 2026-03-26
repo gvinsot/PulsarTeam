@@ -15,6 +15,32 @@ export function boardRoutes() {
     }
   });
 
+  // GET /tasks/by-assignee/:agentId — all tasks assigned to an agent across all boards
+  router.get('/tasks/by-assignee/:agentId', async (req, res) => {
+    try {
+      const boards = await getBoardsByUser(req.user.userId);
+      const tasks = [];
+      for (const board of boards) {
+        for (const col of (board.workflow?.columns || [])) {
+          for (const task of (col.tasks || [])) {
+            if (task.assignee === req.params.agentId) {
+              tasks.push({
+                ...task,
+                boardId: board.id,
+                boardName: board.name,
+                columnId: col.id,
+                columnName: col.name,
+              });
+            }
+          }
+        }
+      }
+      res.json(tasks);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /:id — get a specific board
   router.get('/:id', async (req, res) => {
     try {

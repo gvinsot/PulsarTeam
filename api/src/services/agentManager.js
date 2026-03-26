@@ -3136,7 +3136,7 @@ export class AgentManager {
   // Terminology:
   //   - agentId (creator): the agent whose todoList stores this task (Task Creator)
   //   - assignee: the agent that actually executes this task (Task Assignee)
-  addTask(agentId, text, project, source, initialStatus) {
+  addTask(agentId, text, project, source, initialStatus, { boardId } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
@@ -3148,6 +3148,7 @@ export class AgentManager {
       status,
       project: project !== undefined ? project : (agent.project || null),
       source: source || null,
+      boardId: boardId || null,
       createdAt: now,
       history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };

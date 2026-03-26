@@ -667,6 +667,22 @@ export async function deleteLlmConfig(id) {
 
 // ── Boards CRUD ──────────────────────────────────────────────────────────────
 
+export async function getAllBoards() {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.created_at, b.updated_at,
+              u.username, u.display_name
+       FROM boards b LEFT JOIN users u ON b.user_id = u.id
+       ORDER BY u.username, b.position, b.created_at`
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Failed to get all boards:', err.message);
+    return [];
+  }
+}
+
 export async function getBoardsByUser(userId) {
   if (!pool) return [];
   try {

@@ -118,11 +118,11 @@ export const api = {
     }).then(handleResponse),
 
   // Tasks
-  addTask: (agentId, text, project, status) =>
+  addTask: (agentId, text, project, status, boardId) =>
     fetch(`${API_BASE}/agents/${agentId}/tasks`, {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ text, ...(project !== undefined && { project }), ...(status && { status }) })
+      body: JSON.stringify({ text, ...(project !== undefined && { project }), ...(status && { status }), ...(boardId && { boardId }) })
     }).then(handleResponse),
 
   toggleTask: (agentId, taskId) =>
@@ -447,6 +447,9 @@ export const api = {
       method: 'DELETE',
       headers: getHeaders()
     }).then(handleResponse),
+
+  getTasksByAssignee: (agentId) =>
+    fetch(`${API_BASE}/boards/tasks/by-assignee/${agentId}`, { headers: getHeaders() }).then(handleResponse),
 
   // Project task stats
   getProjectTaskStats: (project) =>

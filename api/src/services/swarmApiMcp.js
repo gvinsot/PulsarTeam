@@ -2,12 +2,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
+import { getAllBoards, getBoardById } from './database.js';
 
 /**
  * Creates an MCP server exposing swarm management tools:
  * - list_agents: List all agents with their status
  * - get_agent_status: Get detailed status for a specific agent
- * - add_task: Add a task to an agent
+ * - list_boards: List all task boards
+ * - add_task: Add a task to an agent (with optional board targeting)
  */
 export function createSwarmApiMcpServer(agentManager) {
   const server = new McpServer({
@@ -97,6 +99,7 @@ export function createSwarmApiMcpServer(agentManager) {
           text: t.text,
           status: t.status,
           project: t.project || null,
+          boardId: t.boardId || null,
           createdAt: t.createdAt,
           completedAt: t.completedAt || null,
         })),
@@ -117,19 +120,44 @@ export function createSwarmApiMcpServer(agentManager) {
     }
   );
 
+  // ── list_boards ──────────────────────────────────────────────────────────
+  server.tool(
+    'list_boards',
+    'List all task boards. Each board has its own workflow configuration. Use this to discover board IDs before adding tasks.',
+    {},
+    async () => {
+      const boards = await getAllBoards();
+      const result = boards.map(b => ({
+        id: b.id,
+        name: b.name,
+        user: b.display_name || b.username || null,
+        user_id: b.user_id,
+        columns: (b.workflow?.columns || []).map(c => ({ id: c.id, label: c.label })),
+      }));
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ count: result.length, boards: result }, null, 2),
+        }],
+      };
+    }
+  );
+
   // ── add_task ───────────────────────────────────────────────────────────
   server.tool(
     'add_task',
-    'Add a new task to an agent. The agent will automatically pick it up when idle.',
+    'Add a new task to an agent, optionally on a specific board. If there is only one board it is used automatically; otherwise provide board_id (use list_boards to find IDs).',
     {
       agent_id: z.string().optional().describe('Agent UUID'),
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
       task: z.string().describe('The task description'),
       project: z.string().optional().describe('Optional project to assign the task to'),
       status: z.enum(['backlog', 'pending']).optional().describe('Initial task status: "backlog" (default, agent won\'t auto-pick) or "pending" (agent picks up immediately)'),
+      board_id: z.string().optional().describe('Board UUID to place the task on. If omitted and only one board exists, it is used automatically. Use list_boards to discover board IDs.'),
     },
-    async ({ agent_id, agent_name, task, project, status }) => {
-      console.log(`📥 [SwarmMCP] add_task called — agent_id: ${agent_id || '(none)'}, agent_name: ${agent_name || '(none)'}, project: ${project || '(none)'}, status: ${status || '(default)'}, task: ${task.slice(0, 100)}`);
+    async ({ agent_id, agent_name, task, project, status, board_id }) => {
+      console.log(`\u{1F4E5} [SwarmMCP] add_task called \u2014 agent_id: ${agent_id || '(none)'}, agent_name: ${agent_name || '(none)'}, project: ${project || '(none)'}, status: ${status || '(default)'}, board_id: ${board_id || '(auto)'}, task: ${task.slice(0, 100)}`);
       let agent = null;
 
       if (agent_id) {
@@ -141,7 +169,7 @@ export function createSwarmApiMcpServer(agentManager) {
       }
 
       if (!agent) {
-        console.warn(`⚠️ [SwarmMCP] add_task — Agent not found: agent_id="${agent_id || ''}", agent_name="${agent_name || ''}"`);
+        console.warn(`\u26A0\uFE0F [SwarmMCP] add_task \u2014 Agent not found: agent_id="${agent_id || ''}", agent_name="${agent_name || ''}"`);
         return {
           content: [{
             type: 'text',
@@ -151,8 +179,40 @@ export function createSwarmApiMcpServer(agentManager) {
         };
       }
 
-      const newTask = agentManager.addTask(agent.id, task, project || undefined, { type: 'mcp' }, status);
-      console.log(`✅ [SwarmMCP] add_task — Task created for agent "${agent.name}" (${agent.id}) — task: ${newTask?.id}, project: ${project || '(none)'}, status: ${status || '(default)'}`);
+      // Resolve board_id: auto-pick if only one board exists
+      let resolvedBoardId = board_id || null;
+      if (!resolvedBoardId) {
+        const boards = await getAllBoards();
+        if (boards.length === 1) {
+          resolvedBoardId = boards[0].id;
+        } else if (boards.length > 1) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                error: 'Multiple boards exist. Please specify board_id. Use list_boards to see available boards.',
+                boards: boards.map(b => ({ id: b.id, name: b.name, user: b.display_name || b.username })),
+              }, null, 2),
+            }],
+            isError: true,
+          };
+        }
+      } else {
+        // Validate board exists
+        const board = await getBoardById(resolvedBoardId);
+        if (!board) {
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ error: `Board not found: ${resolvedBoardId}` }),
+            }],
+            isError: true,
+          };
+        }
+      }
+
+      const newTask = agentManager.addTask(agent.id, task, project || undefined, { type: 'mcp' }, status, { boardId: resolvedBoardId });
+      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created for agent "${agent.name}" (${agent.id}) \u2014 task: ${newTask?.id}, project: ${project || '(none)'}, status: ${status || '(default)'}, board: ${resolvedBoardId || '(none)'}`);
 
       return {
         content: [{
@@ -161,6 +221,7 @@ export function createSwarmApiMcpServer(agentManager) {
             success: true,
             task: newTask,
             agent: { id: agent.id, name: agent.name },
+            board_id: resolvedBoardId,
           }, null, 2),
         }],
       };

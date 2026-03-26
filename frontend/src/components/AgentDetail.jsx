@@ -1197,8 +1197,46 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
   const [newTask, setNewTask] = useState('');
   const [executing, setExecuting] = useState(null); // taskId or 'all'
   const [confirmClear, setConfirmClear] = useState(false);
+  const [boardTasks, setBoardTasks] = useState([]);
   const confirmClearTimer = useRef(null);
   const otherAgents = (agents || []).filter(a => a.id !== agent.id && a.enabled !== false);
+
+  // Fetch board tasks where this agent is assignee
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await api.getTasksByAssignee(agent.id);
+        if (!cancelled) setBoardTasks(data || []);
+      } catch { if (!cancelled) setBoardTasks([]); }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [agent.id, agent.todoList]);
+
+  // Merge board tasks (primary) + internal tasks, deduplicate by ID
+  const allTasks = (() => {
+    const seen = new Set();
+    const merged = [];
+    for (const bt of boardTasks) {
+      if (!seen.has(bt.id)) {
+        seen.add(bt.id);
+        merged.push({
+          ...bt,
+          text: bt.title || bt.text || 'Untitled',
+          status: bt.status || (bt.columnName?.toLowerCase().replace(/\s+/g, '_')) || 'pending',
+          _source: 'board',
+        });
+      }
+    }
+    for (const it of (agent.todoList || [])) {
+      if (!seen.has(it.id)) {
+        seen.add(it.id);
+        merged.push({ ...it, _source: 'internal' });
+      }
+    }
+    return merged;
+  })();
 
   const handleAdd = async () => {
     if (!newTask.trim()) return;
@@ -1208,16 +1246,64 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
   };
 
   const handleToggle = async (taskId) => {
+    const task = allTasks.find(t => t.id === taskId);
+    if (task?._source === 'board') {
+      // For board tasks, toggle done status via board workflow update
+      try {
+        const board = await api.getBoard(task.boardId);
+        const wf = board.workflow;
+        for (const col of wf.columns) {
+          const idx = (col.tasks || []).findIndex(t => t.id === taskId);
+          if (idx !== -1) {
+            col.tasks[idx].status = col.tasks[idx].status === 'done' ? 'pending' : 'done';
+            break;
+          }
+        }
+        await api.updateBoardWorkflow(task.boardId, wf);
+        const data = await api.getTasksByAssignee(agent.id);
+        setBoardTasks(data || []);
+      } catch { /* ignore */ }
+      return;
+    }
     await api.toggleTask(agent.id, taskId);
     onRefresh();
   };
 
   const handleDelete = async (taskId) => {
+    const task = allTasks.find(t => t.id === taskId);
+    if (task?._source === 'board') {
+      try {
+        const board = await api.getBoard(task.boardId);
+        const wf = board.workflow;
+        for (const col of wf.columns) {
+          col.tasks = (col.tasks || []).filter(t => t.id !== taskId);
+        }
+        await api.updateBoardWorkflow(task.boardId, wf);
+        const data = await api.getTasksByAssignee(agent.id);
+        setBoardTasks(data || []);
+      } catch { /* ignore */ }
+      return;
+    }
     await api.deleteTask(agent.id, taskId);
     onRefresh();
   };
 
   const handleTransfer = async (taskId, targetAgentId) => {
+    const task = allTasks.find(t => t.id === taskId);
+    if (task?._source === 'board') {
+      try {
+        const board = await api.getBoard(task.boardId);
+        const wf = board.workflow;
+        for (const col of wf.columns) {
+          const t = (col.tasks || []).find(t => t.id === taskId);
+          if (t) { t.assignee = targetAgentId; break; }
+        }
+        await api.updateBoardWorkflow(task.boardId, wf);
+        const data = await api.getTasksByAssignee(agent.id);
+        setBoardTasks(data || []);
+      } catch { /* ignore */ }
+      return;
+    }
     await api.transferTask(agent.id, taskId, targetAgentId);
     onRefresh();
   };
@@ -1253,11 +1339,11 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
     }
   }, [agent.status]);
 
-  const done = agent.todoList?.filter(t => t.status === 'done').length || 0;
-  const inProgress = agent.todoList?.filter(t => t.status === 'in_progress').length || 0;
-  const errors = agent.todoList?.filter(t => t.status === 'error').length || 0;
-  const total = agent.todoList?.length || 0;
-  const runnable = agent.todoList?.filter(t => t.status === 'pending' || t.status === 'error').length || 0;
+  const done = allTasks.filter(t => t.status === 'done').length;
+  const inProgress = allTasks.filter(t => t.status === 'in_progress').length;
+  const errors = allTasks.filter(t => t.status === 'error').length;
+  const total = allTasks.length;
+  const runnable = allTasks.filter(t => t.status === 'pending' || t.status === 'error').length;
 
   return (
     <div className="p-4 space-y-4">
@@ -1334,18 +1420,26 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
 
       {/* Task list */}
       <div className="space-y-2">
-        {(agent.todoList || []).map(task => (
-          <TaskItem
-            key={task.id}
-            task={task}
-            executing={executing}
-            agentStatus={agent.status}
-            agents={otherAgents}
-            onToggle={handleToggle}
-            onExecute={handleExecute}
-            onDelete={handleDelete}
-            onTransfer={handleTransfer}
-          />
+        {allTasks.map(task => (
+          <div key={task.id}>
+            {task._source === 'board' && (
+              <div className="flex items-center gap-1.5 mb-0.5 ml-1">
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-400 ring-1 ring-indigo-500/25">
+                  {task.boardName} / {task.columnName}
+                </span>
+              </div>
+            )}
+            <TaskItem
+              task={task}
+              executing={executing}
+              agentStatus={agent.status}
+              agents={otherAgents}
+              onToggle={handleToggle}
+              onExecute={handleExecute}
+              onDelete={handleDelete}
+              onTransfer={handleTransfer}
+            />
+          </div>
         ))}
       </div>
 

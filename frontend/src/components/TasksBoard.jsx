@@ -81,7 +81,7 @@ const SOURCE_META = {
 
 // ── CreateTaskModal ──────────────────────────────────────────────────────────
 
-function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions, defaultStatus }) {
+function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions, defaultStatus, boardId }) {
   const CREATE_STATUSES = statusOptions.filter(s => ['idea', 'backlog', 'pending'].includes(s.value));
   const initialStatus = defaultStatus && CREATE_STATUSES.some(s => s.value === defaultStatus)
     ? defaultStatus
@@ -111,7 +111,7 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
     if (!trimmed || !defaultAgentId) return;
     setSaving(true);
     try {
-      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status);
+      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId);
       await onCreated();
       onClose();
     } finally {
@@ -1664,21 +1664,27 @@ export default function TasksBoard({ agents, onRefresh, user }) {
   const columns = useMemo(() => workflow ? buildColumns(workflow.columns) : [], [workflow]);
   const statusOptions = useMemo(() => workflow ? buildStatusOptions(workflow.columns) : [], [workflow]);
 
-  // Aggregate all tasks from all agents
+  // Aggregate all tasks from all agents, filtered by active board
   const allTasks = useMemo(() =>
     agents.flatMap(a =>
-      (a.todoList || []).map(t => {
-        const assigneeAgent = t.assignee ? agents.find(ag => ag.id === t.assignee) : null;
-        return {
-          ...t,
-          agentId: a.id,
-          agentName: a.name,
-          assigneeName: assigneeAgent?.name || null,
-          assigneeIcon: assigneeAgent?.icon || null,
-        };
-      })
+      (a.todoList || [])
+        .filter(t => {
+          // Show task if it belongs to this board, or has no board assigned (legacy tasks)
+          if (!activeBoardId) return true;
+          return !t.boardId || t.boardId === activeBoardId;
+        })
+        .map(t => {
+          const assigneeAgent = t.assignee ? agents.find(ag => ag.id === t.assignee) : null;
+          return {
+            ...t,
+            agentId: a.id,
+            agentName: a.name,
+            assigneeName: assigneeAgent?.name || null,
+            assigneeIcon: assigneeAgent?.icon || null,
+          };
+        })
     ),
-    [agents]
+    [agents, activeBoardId]
   );
 
   // Keep modal task in sync with live data
@@ -1947,6 +1953,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
           allProjects={allProjects}
           statusOptions={statusOptions}
           defaultStatus={createDefaultStatus}
+          boardId={activeBoardId}
           onClose={() => { setCreateOpen(false); setCreateDefaultStatus(null); }}
           onCreated={onRefresh}
         />

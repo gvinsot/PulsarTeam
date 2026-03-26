@@ -245,7 +245,7 @@ export function agentRoutes(agentManager) {
 
   // ── Task endpoints ──────────────────────────────────────────────────────
   router.post('/:id/tasks', (req, res) => {
-    const { text, project, source, status } = req.body;
+    const { text, project, source, status, boardId } = req.body;
     if (!text) return res.status(400).json({ error: 'Text required' });
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -256,7 +256,7 @@ export function agentRoutes(agentManager) {
     const resolvedSource = source || { type: 'user' };
     const validStatuses = ['idea', 'backlog', 'pending', 'in_progress', 'done', 'error'];
     const resolvedStatus = status && validStatuses.includes(status) ? status : undefined;
-    const task = agentManager.addTask(req.params.id, text, project, resolvedSource, resolvedStatus);
+    const task = agentManager.addTask(req.params.id, text, project, resolvedSource, resolvedStatus, { boardId: boardId || undefined });
     if (!task) return res.status(404).json({ error: 'Agent not found' });
     res.status(201).json(task);
   });
