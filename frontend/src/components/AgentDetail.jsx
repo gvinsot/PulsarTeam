@@ -930,15 +930,84 @@ function ToolResultItem({ result }) {
         )}
       </button>
       {showOutput && hasContent && (
-        <pre className={`mt-1 ml-3 p-2 rounded text-[11px] overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all ${
-          result.success
-            ? 'bg-dark-900/80 border border-dark-700/50 text-dark-400'
-            : 'bg-red-500/5 border border-red-500/20 text-red-300'
-        }`}>
-          {typeof output === 'string' ? output.slice(0, 3000) : JSON.stringify(output, null, 2).slice(0, 3000)}
-        </pre>
+        <RichToolOutput output={output} success={result.success} tool={result.tool} args={result.args} />
       )}
     </div>
+  );
+}
+
+// ─── Rich Tool Output (git diff/show/log/status rendering) ─────────────────
+function isGitOutput(tool, args, output) {
+  const cmd = (args || []).join(' ').toLowerCase();
+  if (tool === 'run_command' && /^git\s/.test(cmd)) return true;
+  if (tool === 'git_commit_push') return true;
+  // Detect git-like output by content heuristics
+  if (typeof output === 'string' && (
+    output.match(/^commit [0-9a-f]{7,40}/m) ||
+    output.match(/^diff --git /m) ||
+    output.match(/^@@ .+ @@/m)
+  )) return true;
+  return false;
+}
+
+function classifyGitLine(line) {
+  if (line.startsWith('commit ') && /^commit [0-9a-f]{7,40}/.test(line)) return 'commit';
+  if (line.startsWith('Author:') || line.startsWith('Date:') || line.startsWith('Merge:')) return 'meta';
+  if (line.startsWith('diff --git ')) return 'diff-header';
+  if (line.startsWith('index ') && /^index [0-9a-f]+/.test(line)) return 'index';
+  if (line.startsWith('--- ') || line.startsWith('+++ ')) return 'file-header';
+  if (line.startsWith('@@') && line.includes('@@')) return 'hunk';
+  if (line.startsWith('+')) return 'added';
+  if (line.startsWith('-')) return 'removed';
+  if (line.startsWith('new file mode') || line.startsWith('deleted file mode') || line.startsWith('rename ') || line.startsWith('similarity index')) return 'diff-meta';
+  return 'plain';
+}
+
+const gitLineStyles = {
+  'commit':     'text-amber-400 font-semibold',
+  'meta':       'text-dark-400',
+  'diff-header':'text-indigo-400 font-semibold mt-2',
+  'index':      'text-dark-500',
+  'file-header':'text-dark-300 font-medium',
+  'hunk':       'text-cyan-400 bg-cyan-500/5',
+  'added':      'text-emerald-400 bg-emerald-500/10',
+  'removed':    'text-red-400 bg-red-500/10',
+  'diff-meta':  'text-dark-400 italic',
+  'plain':      'text-dark-400',
+};
+
+function RichToolOutput({ output, success, tool, args }) {
+  const text = typeof output === 'string' ? output.slice(0, 5000) : JSON.stringify(output, null, 2).slice(0, 5000);
+
+  if (isGitOutput(tool, args, output)) {
+    const lines = text.split('\n');
+    return (
+      <div className={`mt-1 ml-3 rounded text-[11px] overflow-x-auto max-h-80 overflow-y-auto border ${
+        success ? 'bg-dark-900/80 border-dark-700/50' : 'bg-red-500/5 border-red-500/20'
+      }`}>
+        <div className="p-2 font-mono leading-relaxed">
+          {lines.map((line, i) => {
+            const cls = classifyGitLine(line);
+            return (
+              <div key={i} className={`whitespace-pre-wrap break-all px-1 ${cls === 'commit' && i > 0 ? 'mt-3 pt-2 border-t border-dark-700/50' : ''} ${gitLineStyles[cls]}`}>
+                {line || '\u00A0'}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Default: plain pre output
+  return (
+    <pre className={`mt-1 ml-3 p-2 rounded text-[11px] overflow-x-auto max-h-80 overflow-y-auto whitespace-pre-wrap break-all ${
+      success
+        ? 'bg-dark-900/80 border border-dark-700/50 text-dark-400'
+        : 'bg-red-500/5 border border-red-500/20 text-red-300'
+    }`}>
+      {text}
+    </pre>
   );
 }
 

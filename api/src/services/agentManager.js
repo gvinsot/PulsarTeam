@@ -530,7 +530,7 @@ export class AgentManager {
       'name', 'role', 'description', 'instructions', 'temperature',
       'maxTokens', 'contextLength', 'todoList', 'ragDocuments', 'skills', 'mcpServers', 'handoffTargets',
       'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'enabled',
-      'costPerInputToken', 'costPerOutputToken'
+      'costPerInputToken', 'costPerOutputToken', 'llmConfigId'
     ];
 
     for (const key of allowed) {
@@ -3149,7 +3149,7 @@ export class AgentManager {
   // Terminology:
   //   - agentId (creator): the agent whose todoList stores this task (Task Creator)
   //   - assignee: the agent that actually executes this task (Task Assignee)
-  addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false } = {}) {
+  addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
@@ -3165,6 +3165,15 @@ export class AgentManager {
       createdAt: now,
       history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };
+    // Store recurrence config if provided
+    if (recurrence && recurrence.enabled) {
+      newTask.recurrence = {
+        enabled: true,
+        period: recurrence.period || 'daily',
+        intervalMinutes: recurrence.intervalMinutes || 1440,
+        originalStatus: status, // remember which status to reset to
+      };
+    }
     agent.todoList.push(newTask);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
@@ -3257,6 +3266,26 @@ export class AgentManager {
     const task = agent.todoList.find(t => t.id === taskId);
     if (!task) return null;
     task.project = project;
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return task;
+  }
+
+  updateTaskRecurrence(agentId, taskId, recurrence) {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    if (recurrence && recurrence.enabled) {
+      task.recurrence = {
+        enabled: true,
+        period: recurrence.period || 'daily',
+        intervalMinutes: recurrence.intervalMinutes || 1440,
+        originalStatus: recurrence.originalStatus || task.recurrence?.originalStatus || 'pending',
+      };
+    } else {
+      task.recurrence = null;
+    }
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return task;
@@ -4026,6 +4055,8 @@ export class AgentManager {
     this._workflowManagedStatuses = new Set();
     this._refreshWorkflowManagedStatuses();
     this._taskLoopInterval = setInterval(() => this._processNextPendingTasks(), intervalMs);
+    // Check recurring tasks every 60 seconds
+    this._recurrenceInterval = setInterval(() => this._processRecurringTasks(), 60000);
     // Refresh managed statuses every 30s (picks up workflow config changes)
     this._workflowRefreshInterval = setInterval(() => this._refreshWorkflowManagedStatuses(), 30000);
     console.log(`🔄 Task loop started (every ${intervalMs / 1000}s)`);
@@ -4060,7 +4091,36 @@ export class AgentManager {
       clearInterval(this._workflowRefreshInterval);
       this._workflowRefreshInterval = null;
     }
+    if (this._recurrenceInterval) {
+      clearInterval(this._recurrenceInterval);
+      this._recurrenceInterval = null;
+    }
     console.log('🔄 Task loop stopped');
+  }
+
+  _processRecurringTasks() {
+    const now = Date.now();
+    for (const [agentId, agent] of this.agents) {
+      if (!agent.todoList) continue;
+      for (const task of agent.todoList) {
+        if (!task.recurrence?.enabled) continue;
+        if (task.status !== 'done') continue;
+        if (!task.completedAt) continue;
+        const completedAt = new Date(task.completedAt).getTime();
+        const intervalMs = (task.recurrence.intervalMinutes || 1440) * 60 * 1000;
+        if (now - completedAt >= intervalMs) {
+          const resetStatus = task.recurrence.originalStatus || 'pending';
+          console.log(`🔁 [Recurrence] Resetting task "${task.text.slice(0, 60)}" → ${resetStatus} (interval: ${task.recurrence.intervalMinutes}min)`);
+          task.status = resetStatus;
+          task.completedAt = null;
+          task.startedAt = null;
+          if (!task.history) task.history = [];
+          task.history.push({ from: 'done', status: resetStatus, at: new Date().toISOString(), by: 'recurrence' });
+          saveAgent(agent);
+          this._emit('agent:updated', this._sanitize(agent));
+        }
+      }
+    }
   }
 
   _processNextPendingTasks() {
