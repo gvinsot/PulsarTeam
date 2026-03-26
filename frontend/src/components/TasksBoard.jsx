@@ -2004,7 +2004,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       </div>
 
       {/* Board */}
-      <div className="flex-1 overflow-x-scroll overflow-y-hidden min-h-0 scrollbar-always-visible">
+      <div className="flex-1 overflow-x-scroll overflow-y-auto min-h-0 scrollbar-always-visible">
         <div className="flex gap-4 p-6 h-full min-w-max">
           {columns.map((col, colIdx) => (
             <KanbanColumn
