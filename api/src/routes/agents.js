@@ -423,14 +423,14 @@ export function agentRoutes(agentManager) {
 
 router.get("/tasks/stats", (req, res) => {
   const { project } = req.query;
-  const stats = globalTaskStore.getStats(project || null);
+  const stats = agentManager.getTaskStats(project || null);
   res.json(stats);
 });
 
 router.get("/tasks/stats/timeseries", (req, res) => {
   const { project, days } = req.query;
   const d = Math.min(Math.max(parseInt(days) || 30, 1), 365);
-  const timeseries = globalTaskStore.getTimeSeries(project || null, d);
+  const timeseries = agentManager.getTaskTimeSeries(project || null, d);
   res.json(timeseries);
 });
 
