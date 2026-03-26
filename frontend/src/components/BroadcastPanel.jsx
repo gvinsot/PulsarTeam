@@ -284,12 +284,11 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
   // ── Render ──────────────────────────────────────────────────────────
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
       <div
         className={`w-full h-full sm:h-[80vh] sm:max-h-[800px] sm:rounded-2xl bg-dark-900 border-0 sm:border border-dark-700 shadow-2xl flex flex-row overflow-hidden transition-all duration-300 ${
           editingPlugin ? 'sm:w-[1100px]' : 'sm:w-[700px]'
         }`}
-        onClick={(e) => e.stopPropagation()}
       >
         {/* ── Left panel (main) ── */}
         <div className={`flex flex-col overflow-hidden ${editingPlugin ? 'sm:w-[700px] flex-shrink-0' : 'flex-1'}`}>

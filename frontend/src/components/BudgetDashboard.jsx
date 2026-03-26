@@ -213,8 +213,8 @@ export default function BudgetDashboard({ agents = [] }) {
 
       {/* Settings modal */}
       {showSettings && editConfig && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowSettings(false)}>
-          <div className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-lg p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-dark-900 border border-dark-700 rounded-lg w-full max-w-lg p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-bold text-dark-100">Budget Settings</h2>
               <button onClick={() => setShowSettings(false)} className="text-dark-400 hover:text-dark-200">✕</button>

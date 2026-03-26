@@ -124,7 +124,6 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="w-full max-w-md bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
         {/* Header */}
@@ -320,7 +319,6 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="w-[80vw] max-w-5xl h-[80vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
 
@@ -1168,7 +1166,6 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="w-[90vw] max-h-[90vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl flex flex-col">
         {/* Header */}
