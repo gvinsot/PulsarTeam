@@ -179,25 +179,49 @@ export class AgentManager {
   }
 
   _recordUsage(agent, inputTokens, outputTokens) {
+    if (!inputTokens && !outputTokens) return;
     try {
-      // Per-agent costs take priority over global provider costs
-      let inputRate, outputRate;
+      // 1) Agent-level explicit costs
       if (agent.costPerInputToken != null && agent.costPerOutputToken != null) {
-        // Agent-level costs are stored as $ per 1M tokens
-        inputRate = agent.costPerInputToken;
-        outputRate = agent.costPerOutputToken;
-      } else {
-        const budgetConfig = getSetting("budget_config") || { tokenCosts: {} };
-        const costs = budgetConfig.tokenCosts || {};
-        const providerCosts = costs[agent.provider] || costs["default"] || { input: 2.0, output: 10.0 };
-        inputRate = providerCosts.input;
-        outputRate = providerCosts.output;
+        const cost = (inputTokens / 1e6) * agent.costPerInputToken
+                   + (outputTokens / 1e6) * agent.costPerOutputToken;
+        recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+        return;
       }
-      const cost = (inputTokens * inputRate / 1000000) + (outputTokens * outputRate / 1000000);
+      // 2) LLM config by llmConfigId
+      const configs = this._getLlmConfigsCached();
+      if (agent.llmConfigId) {
+        const cfg = configs.find(c => c.id === agent.llmConfigId);
+        if (cfg && (cfg.inputCostPer1M != null || cfg.outputCostPer1M != null)) {
+          const cost = (inputTokens / 1e6) * (cfg.inputCostPer1M || 0)
+                     + (outputTokens / 1e6) * (cfg.outputCostPer1M || 0);
+          recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+          return;
+        }
+      }
+      // 3) LLM config by model name match
+      const cfgByModel = configs.find(c => c.model === agent.model);
+      if (cfgByModel && (cfgByModel.inputCostPer1M != null || cfgByModel.outputCostPer1M != null)) {
+        const cost = (inputTokens / 1e6) * (cfgByModel.inputCostPer1M || 0)
+                   + (outputTokens / 1e6) * (cfgByModel.outputCostPer1M || 0);
+        recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+        return;
+      }
+      // 4) Fallback: hardcoded defaults
+      const cost = (inputTokens / 1e6) * 3 + (outputTokens / 1e6) * 15;
       recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
     } catch (err) {
       console.warn("Failed to record token usage:", err.message);
     }
+  }
+
+  _getLlmConfigsCached() {
+    if (this._llmConfigsCache && Date.now() - this._llmConfigsCacheTime < 60000) {
+      return this._llmConfigsCache;
+    }
+    this._llmConfigsCache = this.getLlmConfigs();
+    this._llmConfigsCacheTime = Date.now();
+    return this._llmConfigsCache;
   }
 
   async create(config) {
