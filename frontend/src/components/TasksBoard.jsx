@@ -29,10 +29,12 @@ function colorClasses(hex) {
 function buildColumns(workflowColumns) {
   return workflowColumns.map(col => {
     const c = colorClasses(col.color);
+    // Error tasks stay visible in the in_progress column
+    const statuses = col.id === 'in_progress' ? [col.id, 'error'] : [col.id];
     return {
       id: col.id,
       label: col.label,
-      statuses: [col.id],
+      statuses,
       dropStatus: col.id,
       dot: c.dot,
       headerText: c.headerText,
@@ -1516,7 +1518,7 @@ function BoardTabs({ boards, activeBoardId, onSelect, onCreate, onRename, onDele
   };
 
   return (
-    <div className="flex items-center gap-1 px-4 py-1.5 border-b border-dark-700/50 bg-dark-900/50 overflow-x-auto scrollbar-hide">
+    <div className="flex items-center gap-1 px-4 py-1.5 border-b border-dark-700/50 bg-dark-900/50 flex-wrap relative z-20">
       {boards.map(board => (
         <div key={board.id} className="relative flex-shrink-0">
           {renaming === board.id ? (

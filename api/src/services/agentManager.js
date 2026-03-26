@@ -2983,6 +2983,13 @@ export class AgentManager {
     // Fire-and-forget: check if there's an autoRefine transition for this status
     const isManual = by === 'user';
     console.log(`[Workflow] _checkAutoRefine: status="${task.status}" text="${(task.text || '').slice(0, 60)}" agentId="${task.agentId}" by="${by || 'unknown'}"`);
+
+    // ── Guard: never auto-transition tasks in error status ──
+    if (task.status === 'error') {
+      console.log(`[Workflow] _checkAutoRefine: skipping — task is in error status`);
+      return;
+    }
+
     getWorkflow('_default').then(async (workflow) => {
       // ── Auto-assign by column role (independent of transitions) ──
       const currentColumn = workflow.columns?.find(c => c.id === task.status);
@@ -3223,7 +3230,7 @@ export class AgentManager {
     this._emit('agent:updated', this._sanitize(agent));
     // Push status change to Jira (fire-and-forget, skips if no jiraKey or if triggered by jira-sync)
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
-    if (!skipAutoRefine) this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
+    if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;
   }
 
@@ -3905,6 +3912,9 @@ export class AgentManager {
       for (const [agentId, agent] of this.agents) {
         if (!agent.todoList) continue;
         for (const task of agent.todoList) {
+          // Skip tasks in error status — they must not be auto-transitioned
+          if (task.status === 'error') continue;
+
           // Find conditional transitions matching this task's status
           const matching = condTransitions.filter(t => t.from === task.status);
           if (matching.length === 0) continue;
