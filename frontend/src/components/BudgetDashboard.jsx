@@ -229,13 +229,6 @@ export default function BudgetDashboard({ agents = [] }) {
               <p className="text-xs text-dark-500 mt-1">Alert when daily spend exceeds this % of budget</p>
             </div>
           <div className="bg-dark-800/50 rounded-xl border border-dark-700/50 p-4">
-            <p className="text-xs text-dark-400">Token costs are managed via LLM configurations in <span className="text-primary-400">Admin Settings</span>.</p>
-          </div>
-                    <div className="flex-1">
-                      <input type="number" step="0.01" value={costs.output} onChange={e => setEditConfig({ ...editConfig, tokenCosts: { ...editConfig.tokenCosts, [provider]: { ...costs, output: parseFloat(e.target.value) || 0 } } })} className="w-full bg-dark-800 border border-dark-600 rounded px-2 py-1 text-xs text-dark-200" />
-                      <span className="text-[10px] text-dark-500">output</span>
-                    </div>
-                  </div>
                 </div>
               ))}
             </div>
