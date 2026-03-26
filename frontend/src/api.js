@@ -464,6 +464,30 @@ export const api = {
       method: 'POST',
       headers: getHeaders()
     }).then(handleResponse),
+
+  // LLM Configs (admin only)
+  getLlmConfigs: () =>
+    fetch(`${API_BASE}/llm-configs`, { headers: getHeaders() }).then(handleResponse),
+
+  createLlmConfig: (data) =>
+    fetch(`${API_BASE}/llm-configs`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data)
+    }).then(handleResponse),
+
+  updateLlmConfig: (id, data) =>
+    fetch(`${API_BASE}/llm-configs/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(data)
+    }).then(handleResponse),
+
+  deleteLlmConfig: (id) =>
+    fetch(`${API_BASE}/llm-configs/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
 };
 
 // Budget

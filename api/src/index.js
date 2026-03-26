@@ -34,6 +34,7 @@ import { projectContextRoutes } from './routes/projectContexts.js';
 import { jiraRoutes, jiraWebhookRoute } from './routes/jira.js';
 import budgetRoutes from './routes/budget.js';
 import { userRoutes } from './routes/users.js';
+import { llmConfigRoutes } from './routes/llmConfigs.js';
 import { startJiraSync, registerWebhook } from './services/jiraSync.js';
 
 const app = express();
@@ -121,6 +122,7 @@ app.use('/api/realtime', authenticateToken, realtimeRoutes(agentManager));
 app.use('/api/leader-tools', authenticateToken, leaderToolsRoutes(agentManager));
 app.use('/api/budget', authenticateToken, budgetRoutes);
 app.use('/api/settings/api-key', authenticateToken, apiKeyRoutes);
+app.use('/api/llm-configs', authenticateToken, llmConfigRoutes());
 app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes(agentManager));
 

@@ -138,6 +138,17 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
         ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL
       `).catch(() => {});
 
+      // Create llm_configs table if not exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS llm_configs (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          data JSONB NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      console.log('✅ LLM configs table ready');
+
       _dbConnected = true;
 
       // Populate caches
@@ -387,12 +398,13 @@ export async function getTokenUsageByAgent(days = 30) {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      `SELECT agent_id, agent_name, provider, model,
+      `SELECT provider, model,
+              COUNT(DISTINCT agent_id) as agent_count,
               SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost,
               COUNT(*) as request_count
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1
-       GROUP BY agent_id, agent_name, provider, model
+       GROUP BY provider, model
        ORDER BY total_cost DESC`,
       [days]
     );
@@ -587,6 +599,53 @@ export async function getAgentsByOwner(ownerId) {
   } catch (err) {
     console.error('Failed to get agents by owner:', err.message);
     return [];
+  }
+}
+
+// ── LLM Configs CRUD ──────────────────────────────────────────────────────
+
+export async function getAllLlmConfigs() {
+  if (!pool) return [];
+  try {
+    const result = await pool.query('SELECT data FROM llm_configs ORDER BY created_at');
+    return result.rows.map(row => row.data);
+  } catch (err) {
+    console.error('Failed to load LLM configs:', err.message);
+    return [];
+  }
+}
+
+export async function getLlmConfig(id) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT data FROM llm_configs WHERE id = $1', [id]);
+    return result.rows[0]?.data || null;
+  } catch (err) {
+    console.error('Failed to get LLM config:', err.message);
+    return null;
+  }
+}
+
+export async function saveLlmConfig(config) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO llm_configs (id, data, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = NOW()`,
+      [config.id, JSON.stringify(config)]
+    );
+  } catch (err) {
+    console.error('Failed to save LLM config:', err.message);
+  }
+}
+
+export async function deleteLlmConfig(id) {
+  if (!pool) return;
+  try {
+    await pool.query('DELETE FROM llm_configs WHERE id = $1', [id]);
+  } catch (err) {
+    console.error('Failed to delete LLM config:', err.message);
   }
 }
 

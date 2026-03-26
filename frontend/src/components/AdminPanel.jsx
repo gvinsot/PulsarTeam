@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   X, Users, Plus, Trash2, Edit3, Shield, ShieldCheck, ShieldAlert,
-  UserCheck, Eye, Save, AlertCircle, Crown, Settings, ToggleLeft, ToggleRight
+  UserCheck, Eye, Save, AlertCircle, Crown, Settings, ToggleLeft, ToggleRight,
+  Cpu, EyeOff
 } from 'lucide-react';
 import { api } from '../api';
 
@@ -25,6 +26,13 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [customCurrency, setCustomCurrency] = useState('');
+
+  // LLM Configs tab state
+  const [llmConfigs, setLlmConfigs] = useState([]);
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [llmForm, setLlmForm] = useState(null); // null = closed, {} = new, {id} = editing
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [showLlmApiKey, setShowLlmApiKey] = useState({});
 
   const loadUsers = useCallback(async () => {
     try {
@@ -57,6 +65,53 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
   }, [showToast]);
 
   useEffect(() => { if (activeTab === 'settings') loadSettings(); }, [activeTab, loadSettings]);
+
+  const loadLlmConfigs = useCallback(async () => {
+    try {
+      setLlmLoading(true);
+      const data = await api.getLlmConfigs();
+      setLlmConfigs(data);
+    } catch (err) {
+      showToast?.(`Failed to load LLM configs: ${err.message}`, 'error');
+    } finally {
+      setLlmLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => { if (activeTab === 'llm') loadLlmConfigs(); }, [activeTab, loadLlmConfigs]);
+
+  const PROVIDER_OPTIONS = ['anthropic', 'openai', 'google', 'deepseek', 'mistral', 'openrouter', 'vllm', 'ollama'];
+
+  const handleSaveLlmConfig = async (e) => {
+    e.preventDefault();
+    if (!llmForm) return;
+    try {
+      setLlmSaving(true);
+      if (llmForm.id) {
+        await api.updateLlmConfig(llmForm.id, llmForm);
+      } else {
+        await api.createLlmConfig(llmForm);
+      }
+      setLlmForm(null);
+      showToast?.(llmForm.id ? 'LLM config updated' : 'LLM config created', 'success');
+      loadLlmConfigs();
+    } catch (err) {
+      showToast?.(`Failed to save LLM config: ${err.message}`, 'error');
+    } finally {
+      setLlmSaving(false);
+    }
+  };
+
+  const handleDeleteLlmConfig = async (config) => {
+    if (!confirm(`Delete LLM config "${config.name}"? Agents using it will fall back to legacy settings.`)) return;
+    try {
+      await api.deleteLlmConfig(config.id);
+      showToast?.('LLM config deleted', 'success');
+      loadLlmConfigs();
+    } catch (err) {
+      showToast?.(`Failed to delete: ${err.message}`, 'error');
+    }
+  };
 
   const handleSaveSettings = async () => {
     try {
@@ -185,6 +240,17 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
           >
             <Settings className="w-4 h-4" />
             Settings
+          </button>
+          <button
+            onClick={() => setActiveTab('llm')}
+            className={`flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+              activeTab === 'llm'
+                ? 'border-indigo-500 text-indigo-400'
+                : 'border-transparent text-dark-400 hover:text-dark-200'
+            }`}
+          >
+            <Cpu className="w-4 h-4" />
+            LLM Models
           </button>
         </div>
 
@@ -556,6 +622,151 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                 </ul>
               </div>
             </div>
+          </div>
+        </>)}
+
+        {/* ─── LLM Models Tab ─────────────────────────────────────── */}
+        {activeTab === 'llm' && (<>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-dark-300 uppercase tracking-wider flex items-center gap-2">
+              <Cpu className="w-4 h-4" />
+              LLM Configurations ({llmConfigs.length})
+            </h3>
+            <button
+              onClick={() => setLlmForm({ name: '', provider: 'anthropic', model: '', endpoint: '', apiKey: '', isReasoning: false, costPerInputToken: null, costPerOutputToken: null })}
+              className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              New LLM
+            </button>
+          </div>
+
+          {/* Create/Edit Form */}
+          {llmForm && (
+            <form onSubmit={handleSaveLlmConfig} className={`p-4 bg-dark-800 rounded-xl border space-y-4 ${llmForm.id ? 'border-indigo-500/30' : 'border-dark-700'}`}>
+              <h4 className="text-sm font-semibold text-dark-200">{llmForm.id ? 'Edit LLM Config' : 'New LLM Config'}</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Name</label>
+                  <input type="text" value={llmForm.name || ''} onChange={e => setLlmForm(f => ({ ...f, name: e.target.value }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. Claude Opus 4" required />
+                </div>
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Provider</label>
+                  <select value={llmForm.provider || ''} onChange={e => setLlmForm(f => ({ ...f, provider: e.target.value, model: '' }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500" required>
+                    <option value="">Select provider...</option>
+                    {PROVIDER_OPTIONS.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Model ID</label>
+                  <input type="text" value={llmForm.model || ''} onChange={e => setLlmForm(f => ({ ...f, model: e.target.value }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. claude-opus-4-20250514" required />
+                </div>
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Endpoint <span className="text-dark-500">(vLLM/Ollama only)</span></label>
+                  <input type="text" value={llmForm.endpoint || ''} onChange={e => setLlmForm(f => ({ ...f, endpoint: e.target.value }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="http://localhost:8000/v1" />
+                </div>
+                <div className="relative">
+                  <label className="block text-xs text-dark-400 mb-1">API Key</label>
+                  <input type={showLlmApiKey[llmForm.id || '_new'] ? 'text' : 'password'}
+                    value={llmForm.apiKey || ''} onChange={e => setLlmForm(f => ({ ...f, apiKey: e.target.value }))}
+                    className="w-full px-3 py-2 pr-10 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="API key for this LLM" />
+                  <button type="button" onClick={() => setShowLlmApiKey(p => ({ ...p, [llmForm.id || '_new']: !p[llmForm.id || '_new'] }))}
+                    className="absolute right-2 top-7 text-dark-400 hover:text-dark-200">
+                    {showLlmApiKey[llmForm.id || '_new'] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <div className="flex items-center gap-4 pt-5">
+                  <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
+                    <input type="checkbox" checked={llmForm.isReasoning || false} onChange={e => setLlmForm(f => ({ ...f, isReasoning: e.target.checked }))}
+                      className="rounded border-dark-600 bg-dark-900 text-indigo-500 focus:ring-indigo-500" />
+                    Reasoning model
+                  </label>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Cost / 1M input tokens ($)</label>
+                  <input type="number" step="0.01" min="0" value={llmForm.costPerInputToken ?? ''} onChange={e => setLlmForm(f => ({ ...f, costPerInputToken: e.target.value ? Number(e.target.value) : null }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. 15.00" />
+                </div>
+                <div>
+                  <label className="block text-xs text-dark-400 mb-1">Cost / 1M output tokens ($)</label>
+                  <input type="number" step="0.01" min="0" value={llmForm.costPerOutputToken ?? ''} onChange={e => setLlmForm(f => ({ ...f, costPerOutputToken: e.target.value ? Number(e.target.value) : null }))}
+                    className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. 75.00" />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => setLlmForm(null)} className="px-3 py-1.5 text-sm text-dark-400 hover:text-dark-200">Cancel</button>
+                <button type="submit" disabled={llmSaving}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+                  <Save className="w-3.5 h-3.5" />
+                  {llmSaving ? 'Saving...' : llmForm.id ? 'Update' : 'Create'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* LLM Config List */}
+          {llmLoading ? (
+            <div className="text-center py-8">
+              <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          ) : llmConfigs.length === 0 ? (
+            <div className="text-center py-12 text-dark-400">
+              <Cpu className="w-12 h-12 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">No LLM configurations yet.</p>
+              <p className="text-xs mt-1">Create one to make it available for your agents.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {llmConfigs.map(config => (
+                <div key={config.id} className="flex items-center justify-between p-4 bg-dark-800 rounded-xl border border-dark-700 hover:border-dark-600 transition-colors">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-dark-100">{config.name}</span>
+                      {config.isReasoning && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400">Reasoning</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 mt-1">
+                      <span className="text-xs text-dark-400 capitalize">{config.provider}</span>
+                      <span className="text-xs text-dark-500">{config.model}</span>
+                      {config.endpoint && <span className="text-xs text-dark-600 truncate max-w-[200px]">{config.endpoint}</span>}
+                      {config.costPerInputToken != null && (
+                        <span className="text-xs text-dark-500">${config.costPerInputToken}/{config.costPerOutputToken} per 1M</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button onClick={() => setLlmForm({ ...config })}
+                      className="p-2 text-dark-400 hover:text-indigo-400 hover:bg-dark-700 rounded-lg transition-colors" title="Edit">
+                      <Edit3 className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleDeleteLlmConfig(config)}
+                      className="p-2 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors" title="Delete">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="p-4 bg-dark-800/50 rounded-xl border border-dark-700">
+            <p className="text-xs text-dark-400">
+              LLM configurations are shared across the team. When you assign an LLM to an agent, it uses the provider, model, and API key from this configuration.
+              Agents can still override the API key in their own settings.
+            </p>
           </div>
         </>)}
         </div>

@@ -77,7 +77,7 @@ export default function BudgetDashboard({ agents = [] }) {
   };
 
   const agentCostData = {
-    labels: byAgent.map(a => a.agent_name || 'Unknown'),
+    labels: byAgent.map(a => a.model || a.provider || 'Unknown'),
     datasets: [{ data: byAgent.map(a => a.total_cost || 0), backgroundColor: byAgent.map((_, i) => COLORS[i % COLORS.length]), borderWidth: 0 }],
   };
 
@@ -143,7 +143,7 @@ export default function BudgetDashboard({ agents = [] }) {
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
           <div className="text-xs text-dark-400 uppercase tracking-wider mb-1">Active Agents</div>
           <div className="text-2xl font-bold text-dark-100">{byAgent.length}</div>
-          <div className="text-xs text-dark-400 mt-1">Top: {byAgent[0]?.agent_name || 'N/A'}</div>
+          <div className="text-xs text-dark-400 mt-1">Top: {byAgent[0]?.model || 'N/A'}</div>
         </div>
       </div>
 
@@ -154,7 +154,7 @@ export default function BudgetDashboard({ agents = [] }) {
           <div className="h-64">{daily.length > 0 ? <Line data={dailyChartData} options={chartOpts} /> : <div className="h-full flex items-center justify-center text-dark-500 text-sm">No data yet</div>}</div>
         </div>
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-dark-200 mb-3">🍩 Cost by Agent ({timeRange}d)</h3>
+          <h3 className="text-sm font-semibold text-dark-200 mb-3">🍩 Cost by LLM ({timeRange}d)</h3>
           <div className="h-64">{byAgent.length > 0 ? <Doughnut data={agentCostData} options={doughnutOpts} /> : <div className="h-full flex items-center justify-center text-dark-500 text-sm">No data yet</div>}</div>
         </div>
       </div>
@@ -166,15 +166,14 @@ export default function BudgetDashboard({ agents = [] }) {
 
       {/* Agent table */}
       <div className="bg-dark-900 border border-dark-700/50 rounded-lg overflow-hidden">
-        <div className="px-4 py-3 border-b border-dark-700/50"><h3 className="text-sm font-semibold text-dark-200">🤖 Agent Breakdown ({timeRange} days)</h3></div>
+        <div className="px-4 py-3 border-b border-dark-700/50"><h3 className="text-sm font-semibold text-dark-200">🤖 LLM Breakdown ({timeRange} days)</h3></div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-dark-800">
               <tr>
-                <th className="text-left px-4 py-2 text-dark-400 font-medium">Agent</th>
-                <th className="text-right px-4 py-2 text-dark-400 font-medium">Provider</th>
-                <th className="text-right px-4 py-2 text-dark-400 font-medium">Model</th>
-                <th className="text-right px-4 py-2 text-dark-400 font-medium">Rate (in/out)</th>
+                <th className="text-left px-4 py-2 text-dark-400 font-medium">Provider</th>
+                <th className="text-left px-4 py-2 text-dark-400 font-medium">Model</th>
+                <th className="text-right px-4 py-2 text-dark-400 font-medium">Agents</th>
                 <th className="text-right px-4 py-2 text-dark-400 font-medium">Input Tokens</th>
                 <th className="text-right px-4 py-2 text-dark-400 font-medium">Output Tokens</th>
                 <th className="text-right px-4 py-2 text-dark-400 font-medium">Total Cost</th>
@@ -184,35 +183,26 @@ export default function BudgetDashboard({ agents = [] }) {
             </thead>
             <tbody>
               {byAgent.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-8 text-center text-dark-500">No usage data yet</td></tr>
-              ) : byAgent.map((a, i) => {
-                const agentObj = agents.find(ag => ag.id === a.agent_id);
-                const hasCustomRate = agentObj?.costPerInputToken != null && agentObj?.costPerOutputToken != null;
-                return (
-                <tr key={a.agent_id} className="border-t border-dark-800 hover:bg-dark-800/50">
-                  <td className="px-4 py-2 text-dark-200 font-medium"><span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: COLORS[i % COLORS.length] }} />{a.agent_name || 'Unknown'}</td>
-                  <td className="text-right px-4 py-2 text-dark-400">{a.provider || '-'}</td>
-                  <td className="text-right px-4 py-2 text-dark-400 font-mono text-xs">{a.model || '-'}</td>
-                  <td className="text-right px-4 py-2 text-dark-400 font-mono text-xs">
-                    {hasCustomRate
-                      ? <span className="text-indigo-400" title="Custom per-agent rate">{currency}{agentObj.costPerInputToken}/{agentObj.costPerOutputToken}</span>
-                      : <span className="text-dark-500" title="Using global provider default">default</span>}
-                  </td>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-dark-500">No usage data yet</td></tr>
+              ) : byAgent.map((a, i) => (
+                <tr key={`${a.provider}-${a.model}`} className="border-t border-dark-800 hover:bg-dark-800/50">
+                  <td className="px-4 py-2 text-dark-200 font-medium"><span className="inline-block w-2 h-2 rounded-full mr-2" style={{ backgroundColor: COLORS[i % COLORS.length] }} />{a.provider || '-'}</td>
+                  <td className="px-4 py-2 text-dark-300 font-mono text-xs">{a.model || '-'}</td>
+                  <td className="text-right px-4 py-2 text-dark-400">{a.agent_count || 1}</td>
                   <td className="text-right px-4 py-2 text-dark-300">{(a.total_input || 0).toLocaleString()}</td>
                   <td className="text-right px-4 py-2 text-dark-300">{(a.total_output || 0).toLocaleString()}</td>
                   <td className="text-right px-4 py-2 text-green-400 font-medium">{currency}{(a.total_cost || 0).toFixed(4)}</td>
-                  <td className="text-right px-4 py-2 text-dark-300">{a.call_count || 0}</td>
-                  <td className="text-right px-4 py-2 text-dark-400">{currency}{a.call_count ? (a.total_cost / a.call_count).toFixed(6) : '0'}</td>
+                  <td className="text-right px-4 py-2 text-dark-300">{a.request_count || 0}</td>
+                  <td className="text-right px-4 py-2 text-dark-400">{currency}{a.request_count ? (a.total_cost / a.request_count).toFixed(6) : '0'}</td>
                 </tr>
-                );
-              })}
+              ))}
               {byAgent.length > 0 && (
                 <tr className="border-t-2 border-dark-600 bg-dark-800/30 font-medium">
-                  <td className="px-4 py-2 text-dark-200">Total</td><td /><td /><td />
+                  <td className="px-4 py-2 text-dark-200">Total</td><td /><td />
                   <td className="text-right px-4 py-2 text-dark-200">{byAgent.reduce((s,a) => s + (a.total_input||0), 0).toLocaleString()}</td>
                   <td className="text-right px-4 py-2 text-dark-200">{byAgent.reduce((s,a) => s + (a.total_output||0), 0).toLocaleString()}</td>
                   <td className="text-right px-4 py-2 text-green-400">{currency}{byAgent.reduce((s,a) => s + (a.total_cost||0), 0).toFixed(4)}</td>
-                  <td className="text-right px-4 py-2 text-dark-200">{byAgent.reduce((s,a) => s + (a.call_count||0), 0)}</td>
+                  <td className="text-right px-4 py-2 text-dark-200">{byAgent.reduce((s,a) => s + (a.request_count||0), 0)}</td>
                   <td />
                 </tr>
               )}

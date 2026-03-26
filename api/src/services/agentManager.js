@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createProvider, createLoggingProvider } from './llmProviders.js';
-import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage, getSetting, setAgentOwner } from './database.js';
+import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage, getSetting, setAgentOwner, getAllLlmConfigs, getLlmConfig } from './database.js';
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
 import { processTransition } from './transitionProcessor.js';
@@ -75,6 +75,8 @@ export class AgentManager {
     this._updatePending = new Map();  // agentId → latest data to emit
     // TTL-based lock map for condition re-check deduplication (lockKey → timestamp)
     this._conditionProcessing = new Map();
+    // LLM configs cache (id → config)
+    this.llmConfigs = new Map();
   }
 
   async loadFromDatabase() {
@@ -111,9 +113,63 @@ export class AgentManager {
         this.agents.set(agent.id, agent);
       }
       console.log(`📂 Loaded ${agents.length} agents from database`);
+
+      // Load LLM configs
+      const llmConfigs = await getAllLlmConfigs();
+      for (const config of llmConfigs) {
+        this.llmConfigs.set(config.id, config);
+      }
+      console.log(`📂 Loaded ${llmConfigs.length} LLM configurations`);
     } catch (err) {
       console.error('Failed to load agents from database:', err.message);
     }
+  }
+
+  /**
+   * Resolve LLM provider/model/endpoint/apiKey for an agent.
+   * If the agent has a llmConfigId, look up the LLM config.
+   * Otherwise fall back to legacy agent.provider/agent.model fields.
+   */
+  resolveLlmConfig(agent) {
+    if (agent.llmConfigId) {
+      const config = this.llmConfigs.get(agent.llmConfigId);
+      if (config) {
+        return {
+          provider: config.provider,
+          model: config.model,
+          endpoint: config.endpoint || agent.endpoint || '',
+          apiKey: config.apiKey || agent.apiKey || '',
+          isReasoning: config.isReasoning || false,
+          costPerInputToken: config.costPerInputToken ?? agent.costPerInputToken ?? null,
+          costPerOutputToken: config.costPerOutputToken ?? agent.costPerOutputToken ?? null,
+          configName: config.name,
+        };
+      }
+      console.warn(`[LLM] Agent ${agent.name} references unknown llmConfigId: ${agent.llmConfigId}, falling back to legacy fields`);
+    }
+    // Legacy: provider/model stored directly on agent
+    return {
+      provider: agent.provider || '',
+      model: agent.model || '',
+      endpoint: agent.endpoint || '',
+      apiKey: agent.apiKey || '',
+      isReasoning: agent.isReasoning || false,
+      costPerInputToken: agent.costPerInputToken ?? null,
+      costPerOutputToken: agent.costPerOutputToken ?? null,
+      configName: null,
+    };
+  }
+
+  async refreshLlmConfigs() {
+    const configs = await getAllLlmConfigs();
+    this.llmConfigs.clear();
+    for (const config of configs) {
+      this.llmConfigs.set(config.id, config);
+    }
+  }
+
+  getLlmConfigs() {
+    return Array.from(this.llmConfigs.values());
   }
 
   _recordUsage(agent, inputTokens, outputTokens) {
@@ -910,11 +966,12 @@ export class AgentManager {
     let fullResponse = '';
 
     try {
+      const llmConfig = this.resolveLlmConfig(agent);
       const provider = createProvider({
-        provider: agent.provider,
-        model: agent.model,
-        endpoint: agent.endpoint,
-        apiKey: agent.apiKey,
+        provider: llmConfig.provider,
+        model: llmConfig.model,
+        endpoint: llmConfig.endpoint,
+        apiKey: llmConfig.apiKey,
         agentId: id
       });
 
@@ -943,7 +1000,7 @@ export class AgentManager {
         temperature: agent.temperature,
         maxTokens: safeMaxTokens,
         contextLength: agent.contextLength || 0,
-        isReasoning: agent.isReasoning || false,
+        isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
         signal: abortController.signal
       })) {
         // Check if aborted
@@ -1111,7 +1168,7 @@ export class AgentManager {
           temperature: agent.temperature,
           maxTokens: contMaxTokens,
           contextLength: agent.contextLength || 0,
-          isReasoning: agent.isReasoning || false,
+          isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
           signal: abortController.signal
         })) {
           if (abortController.signal.aborted) {
@@ -3738,11 +3795,12 @@ export class AgentManager {
     const summaryInput = summaryParts.join('\n\n');
 
     try {
+      const llmConfig = this.resolveLlmConfig(agent);
       const provider = createProvider({
-        provider: agent.provider,
-        model: agent.model,
-        endpoint: agent.endpoint,
-        apiKey: agent.apiKey,
+        provider: llmConfig.provider,
+        model: llmConfig.model,
+        endpoint: llmConfig.endpoint,
+        apiKey: llmConfig.apiKey,
         agentId: id
       });
 
