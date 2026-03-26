@@ -4,7 +4,7 @@ import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage, getSettin
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
 import { processTransition } from './transitionProcessor.js';
-import { getWorkflow } from './configManager.js';
+import { getWorkflow, getWorkflowForBoard, getAllBoardWorkflows } from './configManager.js';
 import { onTaskStatusChanged } from './jiraSync.js';
 import fs from 'fs/promises';
 import path from 'path';
@@ -3190,7 +3190,7 @@ export class AgentManager {
       return;
     }
 
-    getWorkflow('_default').then(async (workflow) => {
+    getWorkflowForBoard(task.boardId).then(async (workflow) => {
       // ── Auto-assign by column role (independent of transitions) ──
       const currentColumn = workflow.columns?.find(c => c.id === task.status);
       const colIndex = workflow.columns?.findIndex(c => c.id === task.status) ?? -1;
@@ -4122,20 +4122,24 @@ export class AgentManager {
       }
     }
 
-    getWorkflow('_default').then(async (workflow) => {
-      const condTransitions = workflow.transitions
-        .filter(t => this._validTransition(t))
-        .filter(t => {
-          if (!t) return false;
-          // Include condition-based transitions with conditions defined
-          if (t.trigger === 'condition' && (t.conditions || []).length > 0) return true;
-          // Include on_enter transitions with run_agent actions — these need retry
-          // when no agent was available at the time the task entered the status
-          if (t.trigger === 'on_enter' && (t.actions || []).some(a => a.type === 'run_agent')) return true;
-          return false;
-        });
+    getAllBoardWorkflows().then(async (boardWorkflows) => {
+      // Build per-board conditional transitions map
+      const boardTransMap = new Map(); // boardId → condTransitions[]
+      for (const { boardId, workflow } of boardWorkflows) {
+        const condTransitions = workflow.transitions
+          .filter(t => this._validTransition(t))
+          .filter(t => {
+            if (!t) return false;
+            if (t.trigger === 'condition' && (t.conditions || []).length > 0) return true;
+            if (t.trigger === 'on_enter' && (t.actions || []).some(a => a.type === 'run_agent')) return true;
+            return false;
+          });
+        if (condTransitions.length > 0) {
+          boardTransMap.set(boardId, condTransitions);
+        }
+      }
 
-      if (condTransitions.length === 0) return;
+      if (boardTransMap.size === 0) return;
 
       // Collect all tasks across all agents
       for (const [agentId, agent] of this.agents) {
@@ -4144,6 +4148,8 @@ export class AgentManager {
           // Skip tasks in error status — they must not be auto-transitioned
           if (task.status === 'error') continue;
 
+          // Find conditional transitions for this task's board
+          const condTransitions = boardTransMap.get(task.boardId) || (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);
           // Find conditional transitions matching this task's status
           const matching = condTransitions.filter(t => t.from === task.status);
           if (matching.length === 0) continue;
@@ -4257,16 +4263,17 @@ export class AgentManager {
   }
 
   _refreshWorkflowManagedStatuses() {
-    getWorkflow('_default').then(workflow => {
+    getAllBoardWorkflows().then(boardWorkflows => {
       const managed = new Set();
-      for (const t of workflow.transitions) {
-        if (!this._validTransition(t)) continue;
-        const migrated = t;
-        // A status is "managed" if it has a non-empty transition (on_enter with agent actions, or condition-based)
-        const hasAgentAction = (migrated.actions || []).some(a => a.type === 'run_agent');
-        const isConditional = migrated.trigger === 'condition' && (migrated.conditions || []).length > 0;
-        if (hasAgentAction || isConditional) {
-          managed.add(migrated.from);
+      for (const { workflow } of boardWorkflows) {
+        for (const t of workflow.transitions) {
+          if (!this._validTransition(t)) continue;
+          const migrated = t;
+          const hasAgentAction = (migrated.actions || []).some(a => a.type === 'run_agent');
+          const isConditional = migrated.trigger === 'condition' && (migrated.conditions || []).length > 0;
+          if (hasAgentAction || isConditional) {
+            managed.add(migrated.from);
+          }
         }
       }
       this._workflowManagedStatuses = managed;
@@ -4425,7 +4432,7 @@ export class AgentManager {
       // Check if there's a workflow transition from in_progress that defines a target status
       let targetStatus = 'done';
       try {
-        const workflow = await getWorkflow('_default');
+        const workflow = await getWorkflowForBoard(task.boardId);
         const transition = workflow.transitions.find(
           t => t.from === 'in_progress' && t.autoRefine && (t.mode === 'execute' || t.mode === 'decide' || t.agent)
         );

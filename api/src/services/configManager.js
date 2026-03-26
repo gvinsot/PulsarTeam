@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getPool } from './database.js';
+import { getPool, getAllBoards, getBoardById } from './database.js';
 
 const DEFAULTS = {
   ideasAgent: '',
@@ -74,6 +74,22 @@ const DEFAULT_WORKFLOW = {
 };
 
 export async function getWorkflow(project) {
+  // Primary: read from first board in the boards table (new multi-board system)
+  try {
+    const boards = await getAllBoards();
+    if (boards.length > 0 && boards[0].workflow) {
+      const wf = boards[0].workflow;
+      return {
+        columns: wf.columns || DEFAULT_COLUMNS,
+        transitions: wf.transitions || DEFAULT_TRANSITIONS,
+        version: wf.version || 1,
+      };
+    }
+  } catch (err) {
+    console.error('[ConfigManager] Failed to read workflow from boards:', err.message);
+  }
+
+  // Fallback: legacy workflows table (used until first board is created)
   const pool = getPool();
   if (!pool) return { ...DEFAULT_WORKFLOW };
 
@@ -88,6 +104,50 @@ export async function getWorkflow(project) {
     };
   } catch {
     return { ...DEFAULT_WORKFLOW };
+  }
+}
+
+/**
+ * Get workflow for a specific board.
+ * Falls back to getWorkflow('_default') if boardId is null or board not found.
+ */
+export async function getWorkflowForBoard(boardId) {
+  if (!boardId) return getWorkflow('_default');
+  try {
+    const board = await getBoardById(boardId);
+    if (board?.workflow) {
+      return {
+        columns: board.workflow.columns || DEFAULT_COLUMNS,
+        transitions: board.workflow.transitions || DEFAULT_TRANSITIONS,
+        version: board.workflow.version || 1,
+      };
+    }
+  } catch (err) {
+    console.error('[ConfigManager] Failed to read workflow for board:', err.message);
+  }
+  return getWorkflow('_default');
+}
+
+/**
+ * Get all board workflows. Returns array of { boardId, workflow }.
+ * Used by services that need to scan transitions across all boards (e.g. Jira sync).
+ */
+export async function getAllBoardWorkflows() {
+  try {
+    const boards = await getAllBoards();
+    return boards
+      .filter(b => b.workflow)
+      .map(b => ({
+        boardId: b.id,
+        workflow: {
+          columns: b.workflow.columns || DEFAULT_COLUMNS,
+          transitions: b.workflow.transitions || [],
+          version: b.workflow.version || 1,
+        },
+      }));
+  } catch (err) {
+    console.error('[ConfigManager] Failed to read all board workflows:', err.message);
+    return [];
   }
 }
 

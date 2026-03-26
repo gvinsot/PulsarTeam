@@ -1,6 +1,5 @@
-import { getSettings } from './configManager.js';
+import { getSettings, getWorkflowForBoard } from './configManager.js';
 import { saveAgent } from './database.js';
-import { getWorkflow } from './workflowManager.js';
 
 // Lock to prevent concurrent execution of the same task (lockKey → timestamp)
 // Uses a Map with TTL to prevent permanent deadlocks from crashed transitions.
@@ -260,7 +259,7 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
         // If so, let workflow handle it; otherwise move to targetStatus directly
         let workflowManagesInProgress = false;
         try {
-          const wf = await getWorkflow('_default');
+          const wf = await getWorkflowForBoard(task.boardId);
           workflowManagesInProgress = wf.transitions.some(t => {
             if (t.actions) {
               // New format: check for condition trigger or run_agent actions
