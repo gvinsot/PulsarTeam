@@ -1190,7 +1190,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                 .filter(t => t.from === col.id);
 
               return (
-                <div key={col.id} className="flex flex-col min-w-[240px] flex-1">
+                <div key={idx} className="flex flex-col min-w-[240px] flex-1">
                   {/* Column header card */}
                   <div className="bg-dark-800 rounded-lg px-3 py-2.5 space-y-2">
                     <div className="flex items-center gap-2">
