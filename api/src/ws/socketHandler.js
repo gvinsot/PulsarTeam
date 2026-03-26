@@ -33,8 +33,10 @@ export function setupSocketHandlers(io, agentManager) {
     // Track agents with in-flight chat requests on this socket to prevent duplicates
     const chatInFlight = new Set();
 
-    // Send initial state
-    socket.emit('agents:list', agentManager.getAll());
+    // Send initial state — filtered by user (admin sees all, others see own + unowned)
+    const userId = socket.user?.userId;
+    const userRole = socket.user?.role;
+    socket.emit('agents:list', agentManager.getAllForUser(userId, userRole));
 
     // ── Chat with streaming ───────────────────────────────────────────
     socket.on('agent:chat', async (data) => {
@@ -151,7 +153,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Ping agent status ─────────────────────────────────────────────
     socket.on('agents:refresh', () => {
-      socket.emit('agents:list', agentManager.getAll());
+      socket.emit('agents:list', agentManager.getAllForUser(userId, userRole));
     });
 
     // ── Get swarm status with project assignments ─────────────────────

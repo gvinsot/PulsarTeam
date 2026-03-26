@@ -50,9 +50,10 @@ function sanitizeAgent(agent) {
 export function agentRoutes(agentManager) {
   const router = express.Router();
 
-  // List all agents
+  // List agents (filtered by user — admin sees all, others see own + unowned)
   router.get('/', (req, res) => {
-    res.json(agentManager.getAll().map(sanitizeAgent));
+    const agents = agentManager.getAllForUser(req.user.userId, req.user.role);
+    res.json(agents.map(sanitizeAgent));
   });
 
   // Get lightweight status for ALL enabled agents (includes project + currentTask)
@@ -100,10 +101,14 @@ export function agentRoutes(agentManager) {
     res.json(sanitizeAgent(agent));
   });
 
-  // Create agent
+  // Create agent (basic users cannot create)
   router.post('/', async (req, res) => {
+    if (req.user.role === 'basic') {
+      return res.status(403).json({ error: 'Basic users cannot create agents' });
+    }
     try {
       const parsed = createAgentSchema.parse(req.body);
+      parsed.ownerId = req.user.userId;
       const agent = await agentManager.create(parsed);
       res.status(201).json(agent);
     } catch (err) {
@@ -114,8 +119,18 @@ export function agentRoutes(agentManager) {
     }
   });
 
-  // Update agent
+  // Update agent (basic users cannot edit settings, ownership check for non-admin)
   router.put('/:id', async (req, res) => {
+    if (req.user.role === 'basic') {
+      return res.status(403).json({ error: 'Basic users cannot modify agents' });
+    }
+    // Non-admin users can only update their own agents
+    if (req.user.role !== 'admin') {
+      const existing = agentManager.agents.get(req.params.id);
+      if (existing && existing.ownerId && existing.ownerId !== req.user.userId) {
+        return res.status(403).json({ error: 'You can only modify your own agents' });
+      }
+    }
     try {
       const parsed = updateAgentSchema.parse(req.body);
       const agent = await agentManager.update(req.params.id, parsed);
@@ -129,8 +144,17 @@ export function agentRoutes(agentManager) {
     }
   });
 
-  // Delete agent
+  // Delete agent (basic users cannot delete, ownership check for non-admin)
   router.delete('/:id', async (req, res) => {
+    if (req.user.role === 'basic') {
+      return res.status(403).json({ error: 'Basic users cannot delete agents' });
+    }
+    if (req.user.role !== 'admin') {
+      const existing = agentManager.agents.get(req.params.id);
+      if (existing && existing.ownerId && existing.ownerId !== req.user.userId) {
+        return res.status(403).json({ error: 'You can only delete your own agents' });
+      }
+    }
     const success = await agentManager.delete(req.params.id);
     if (!success) return res.status(404).json({ error: 'Agent not found' });
     res.json({ success: true });

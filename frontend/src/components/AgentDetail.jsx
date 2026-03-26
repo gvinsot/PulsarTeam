@@ -296,7 +296,7 @@ function RichAssistantContent({ text }) {
   );
 }
 
-export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab }) {
+export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab, userRole }) {
   const [activeTab, setActiveTab] = useState('chat');
 
   // Notify parent of active tab changes
@@ -520,7 +520,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
 
       {/* Tabs */}
       <div className="flex border-b border-dark-700 px-2 overflow-x-auto">
-        {TABS.map(tab => {
+        {TABS.filter(tab => !(userRole === 'basic' && tab.id === 'settings')).map(tab => {
           const Icon = tab.icon;
           return (
             <button

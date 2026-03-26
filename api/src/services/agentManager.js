@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createProvider, createLoggingProvider } from './llmProviders.js';
-import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage, getSetting } from './database.js';
+import { getAllAgents, saveAgent, deleteAgentFromDb, recordTokenUsage, getSetting, setAgentOwner } from './database.js';
 import { TOOL_DEFINITIONS, parseToolCalls, executeTool } from './agentTools.js';
 import { listStarredRepos, getProjectGitUrl } from './githubProjects.js';
 import { processTransition } from './transitionProcessor.js';
@@ -181,6 +181,7 @@ export class AgentManager {
       template: config.template || null,
       costPerInputToken: config.costPerInputToken ?? null,
       costPerOutputToken: config.costPerOutputToken ?? null,
+      ownerId: config.ownerId || null,
       color: config.color || this._randomColor(),
       icon: config.icon || '🤖',
       createdAt: new Date().toISOString(),
@@ -189,12 +190,22 @@ export class AgentManager {
 
     this.agents.set(id, agent);
     await saveAgent(agent); // Persist to database
+    if (config.ownerId) {
+      await setAgentOwner(id, config.ownerId);
+    }
     this._emit('agent:created', this._sanitize(agent));
     return this._sanitize(agent);
   }
 
   getAll() {
     return Array.from(this.agents.values()).map(a => this._sanitize(a));
+  }
+
+  getAllForUser(userId, role) {
+    if (role === 'admin') return this.getAll();
+    return Array.from(this.agents.values())
+      .filter(a => a.ownerId === userId || !a.ownerId)
+      .map(a => this._sanitize(a));
   }
 
   getById(id) {

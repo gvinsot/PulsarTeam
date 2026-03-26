@@ -118,6 +118,26 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       `);
 
       console.log('✅ Workflows table ready');
+
+      // Create users table if not exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS users (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          username TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT 'basic',
+          display_name TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      console.log('✅ Users table ready');
+
+      // Add owner_id column to agents table (nullable for backwards compat)
+      await pool.query(`
+        ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL
+      `).catch(() => {});
+
       _dbConnected = true;
 
       // Populate caches
@@ -439,6 +459,134 @@ export async function refreshTokenSummaryCache() {
     } catch (err) {
       console.error('Failed to refresh token summary cache:', err.message);
     }
+  }
+}
+
+// ── Users CRUD ──────────────────────────────────────────────────────────────
+
+export async function getAllUsers() {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      'SELECT id, username, role, display_name, created_at, updated_at FROM users ORDER BY created_at'
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Failed to load users:', err.message);
+    return [];
+  }
+}
+
+export async function getUserById(id) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to get user:', err.message);
+    return null;
+  }
+}
+
+export async function getUserByUsername(username) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to get user by username:', err.message);
+    return null;
+  }
+}
+
+export async function createUser(username, hashedPassword, role = 'basic', displayName = '') {
+  if (!pool) throw new Error('Database not connected');
+  try {
+    const result = await pool.query(
+      `INSERT INTO users (username, password, role, display_name)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, username, role, display_name, created_at, updated_at`,
+      [username, hashedPassword, role, displayName || username]
+    );
+    return result.rows[0];
+  } catch (err) {
+    if (err.code === '23505') throw new Error('Username already exists');
+    throw err;
+  }
+}
+
+export async function updateUser(id, fields) {
+  if (!pool) throw new Error('Database not connected');
+  const setClauses = [];
+  const values = [];
+  let idx = 1;
+
+  for (const [key, value] of Object.entries(fields)) {
+    setClauses.push(`${key} = $${idx}`);
+    values.push(value);
+    idx++;
+  }
+  if (setClauses.length === 0) return getUserById(id);
+
+  setClauses.push(`updated_at = NOW()`);
+  values.push(id);
+
+  try {
+    const result = await pool.query(
+      `UPDATE users SET ${setClauses.join(', ')} WHERE id = $${idx}
+       RETURNING id, username, role, display_name, created_at, updated_at`,
+      values
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    if (err.code === '23505') throw new Error('Username already exists');
+    throw err;
+  }
+}
+
+export async function deleteUser(id) {
+  if (!pool) return false;
+  try {
+    const result = await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    return result.rowCount > 0;
+  } catch (err) {
+    console.error('Failed to delete user:', err.message);
+    return false;
+  }
+}
+
+export async function countUsers() {
+  if (!pool) return 0;
+  try {
+    const result = await pool.query('SELECT COUNT(*) as count FROM users');
+    return parseInt(result.rows[0].count, 10);
+  } catch (err) {
+    return 0;
+  }
+}
+
+// ── Agent owner_id helpers ──────────────────────────────────────────────────
+
+export async function setAgentOwner(agentId, ownerId) {
+  if (!pool) return;
+  try {
+    await pool.query('UPDATE agents SET owner_id = $2 WHERE id = $1', [agentId, ownerId]);
+  } catch (err) {
+    console.error('Failed to set agent owner:', err.message);
+  }
+}
+
+export async function getAgentsByOwner(ownerId) {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      'SELECT data FROM agents WHERE owner_id = $1 ORDER BY created_at',
+      [ownerId]
+    );
+    return result.rows.map(row => row.data);
+  } catch (err) {
+    console.error('Failed to get agents by owner:', err.message);
+    return [];
   }
 }
 

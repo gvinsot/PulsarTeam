@@ -433,6 +433,37 @@ export const api = {
 
   getJiraColumns: () =>
     fetch(`${API_BASE}/jira/columns`, { headers: getHeaders() }).then(handleResponse),
+
+  // Users (admin only)
+  getUsers: () =>
+    fetch(`${API_BASE}/users`, { headers: getHeaders() }).then(handleResponse),
+
+  createUser: (data) =>
+    fetch(`${API_BASE}/users`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(data)
+    }).then(handleResponse),
+
+  updateUser: (id, updates) =>
+    fetch(`${API_BASE}/users/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(updates)
+    }).then(handleResponse),
+
+  deleteUser: (id) =>
+    fetch(`${API_BASE}/users/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // Impersonation (admin only)
+  impersonate: (userId) =>
+    fetch(`${API_BASE}/auth/impersonate/${userId}`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
 };
 
 // Budget

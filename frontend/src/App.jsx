@@ -217,7 +217,14 @@ export default function App() {
       api.verify()
         .then(async (data) => {
           if (cancelled) return;
-          setUser(data.user);
+          const u = data.user;
+          setUser({
+            username: u.username,
+            role: u.role,
+            userId: u.userId,
+            displayName: u.displayName,
+            ...(u.impersonatedBy ? { impersonatedBy: u.impersonatedBy } : {}),
+          });
           await loadData();
           if (cancelled) return;
           initSocket(token);
@@ -250,7 +257,7 @@ export default function App() {
   const handleLogin = async (username, password) => {
     const data = await api.login(username, password);
     localStorage.setItem('token', data.token);
-    setUser({ username: data.username, role: data.role });
+    setUser({ username: data.username, role: data.role, userId: data.userId, displayName: data.displayName });
     await loadData();
     initSocket(data.token);
     await checkDbHealth();
@@ -258,9 +265,43 @@ export default function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('originalToken');
     disconnectSocket();
     setUser(null);
     setAgents([]);
+  };
+
+  const handleImpersonate = (data) => {
+    // Save original token so we can return
+    const currentToken = localStorage.getItem('token');
+    localStorage.setItem('originalToken', currentToken);
+    localStorage.setItem('token', data.token);
+    setUser({
+      username: data.username,
+      role: data.role,
+      userId: data.userId,
+      displayName: data.displayName,
+      impersonatedBy: data.impersonatedBy,
+    });
+    disconnectSocket();
+    initSocket(data.token);
+    loadData();
+  };
+
+  const handleStopImpersonation = () => {
+    const originalToken = localStorage.getItem('originalToken');
+    if (!originalToken) return;
+    localStorage.setItem('token', originalToken);
+    localStorage.removeItem('originalToken');
+    // Re-verify to get original user info
+    api.verify().then((verifyData) => {
+      setUser(verifyData.user);
+      disconnectSocket();
+      initSocket(originalToken);
+      loadData();
+    }).catch(() => {
+      handleLogout();
+    });
   };
 
   if (loading) {
@@ -294,6 +335,8 @@ export default function App() {
         onRefresh={loadData}
         socket={getSocket()}
         showToast={showToast}
+        onImpersonate={handleImpersonate}
+        onStopImpersonation={handleStopImpersonation}
       />
 
       {dbUnavailable && (

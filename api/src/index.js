@@ -3,7 +3,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { authRouter, authenticateToken, getJwtSecret } from './middleware/auth.js';
+import { authRouter, authenticateToken, requireRole, getJwtSecret, ensureAdminSeeded } from './middleware/auth.js';
 import { agentRoutes } from './routes/agents.js';
 import { templateRoutes } from './routes/templates.js';
 import { projectRoutes } from './routes/projects.js';
@@ -33,6 +33,7 @@ import { swarmApiRoutes } from './routes/swarmApi.js';
 import { projectContextRoutes } from './routes/projectContexts.js';
 import { jiraRoutes, jiraWebhookRoute } from './routes/jira.js';
 import budgetRoutes from './routes/budget.js';
+import { userRoutes } from './routes/users.js';
 import { startJiraSync, registerWebhook } from './services/jiraSync.js';
 
 const app = express();
@@ -99,6 +100,9 @@ const apiLimiter = rateLimit({
 app.use('/api/', apiLimiter);
 
 app.use('/api/auth', authRouter);
+
+// User management (admin only)
+app.use('/api/users', authenticateToken, requireRole('admin'), userRoutes());
 
 // Jira webhook — public endpoint, secured by shared secret header
 app.use('/api/jira/webhook', jiraWebhookRoute(agentManager));
@@ -204,6 +208,7 @@ const PORT = process.env.PORT || 3001;
 
 async function start() {
   await initDatabase();
+  await ensureAdminSeeded();
   await ensureApiKeysTable();
   await skillManager.loadFromDatabase();
   await skillManager.seedDefaults(BUILTIN_SKILLS);
