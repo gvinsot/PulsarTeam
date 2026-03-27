@@ -271,6 +271,11 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                         updateField('isVoice', isVoice);
                         if (isVoice) {
                           updateField('isLeader', true);
+                          // Auto-select an LLM config with gpt-realtime model
+                          const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
+                          if (realtimeConfig) {
+                            updateField('llmConfigId', realtimeConfig.id);
+                          }
                         }
                       }}
                       className="w-4 h-4 rounded border-dark-600 bg-dark-700 text-amber-500 focus:ring-amber-500 focus:ring-offset-dark-800"
@@ -318,12 +323,18 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                     className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                   >
                     <option value="">-- Select an LLM config --</option>
-                    {llmConfigs.map(c => (
+                    {(form.isVoice
+                      ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+                      : llmConfigs
+                    ).map(c => (
                       <option key={c.id} value={c.id}>
                         {c.name} ({c.provider}/{c.model})
                       </option>
                     ))}
                   </select>
+                  {form.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
+                    <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
+                  )}
                   {form.llmConfigId && (() => {
                     const sel = llmConfigs.find(c => c.id === form.llmConfigId);
                     return sel ? (

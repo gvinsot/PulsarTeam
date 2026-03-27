@@ -2359,12 +2359,18 @@ function SettingsTab({ agent, projects, currentProject, onRefresh }) {
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
           >
             <option value="">-- Select an LLM config --</option>
-            {llmConfigs.map(c => (
+            {(agent.isVoice
+              ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+              : llmConfigs
+            ).map(c => (
               <option key={c.id} value={c.id}>
                 {c.name} ({c.provider}/{c.model})
               </option>
             ))}
           </select>
+          {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
+            <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
+          )}
           {form.llmConfigId && (() => {
             const sel = llmConfigs.find(c => c.id === form.llmConfigId);
             return sel ? (

@@ -109,9 +109,13 @@ export async function processTransition(task, agentManager, io) {
 
   console.log(`[Workflow] processTransition called: task="${task.text?.slice(0, 60)}" from="${task.status}" to="${targetStatus}" mode="${mode}" role="${transitionRole || 'none'}" agentId="${task.agentId}"`);
 
+  // Computed outside try for catch-block access
+  const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
+  let _execAgent = null;       // the agent running the execution (for error-path logging)
+  let _execStartMsgIdx = -1;
+  let _execStartedAt = null;
+
   try {
-    // Explicit mode takes precedence; fall back to legacy heuristic
-    const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
     const isDecide = mode === 'decide';
 
     // Find the agent to run this transition
@@ -225,6 +229,13 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
 
     let fullResponse = '';
 
+    // Track conversation index for execution log (execute mode only)
+    if (isExecution) {
+      _execAgent = agent;
+      _execStartMsgIdx = (agent.conversationHistory || []).length;
+      _execStartedAt = new Date().toISOString();
+    }
+
     io.emit('agent:stream:start', {
       agentId: agent.id,
       agentName: agent.name,
@@ -255,6 +266,9 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
       const response = (result?.content || fullResponse).trim();
 
       if (isExecution) {
+        // Save execution chat log to task history
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true);
+
         // Execution complete — move to targetStatus.
         // This IS the workflow action that just ran; always honour its configured target.
         // Condition-based transitions from in_progress (e.g. "wait for subtasks") are a
@@ -307,6 +321,10 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
   } catch (err) {
     console.error(`[Workflow] Error processing "${task.text}":`, err.message, err.stack);
     try {
+      // Save execution chat log even on error
+      if (isExecution && _execAgent && _execStartMsgIdx >= 0) {
+        agentManager._saveExecutionLog(task.agentId, task.id, _execAgent.id, _execStartMsgIdx, _execStartedAt, false);
+      }
       // On error, always set task to error status — keeps it in the current column and blocks auto-transitions
       // setTaskStatus will store errorFromStatus automatically
       agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
