@@ -1,15 +1,21 @@
 import express from 'express';
 import {
   recordTokenUsage, getTokenUsageByAgent, getTokenUsageTimeline,
-  getTokenUsageSummary, getDailyTokenUsage, getSetting, setSetting
+  getTokenUsageSummary, getTokenUsageSummaryAsync, getDailyTokenUsage, getSetting, setSetting
 } from '../services/database.js';
 
 const router = express.Router();
 
-router.get('/summary', (req, res) => {
+/** Return userId for per-user filtering, or null for admins (see all) */
+function budgetUserId(req) {
+  return req.user.role === 'admin' ? null : req.user.userId;
+}
+
+router.get('/summary', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 1;
-    const summary = getTokenUsageSummary(days);
+    const uid = budgetUserId(req);
+    const summary = uid ? await getTokenUsageSummaryAsync(days, uid) : getTokenUsageSummary(days);
     const budgetConfig = getSetting('budget_config') || { dailyBudget: 0, alertThreshold: 80 };
     res.json({ ...summary, budgetConfig });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -18,7 +24,7 @@ router.get('/summary', (req, res) => {
 router.get('/by-agent', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
-    res.json(await getTokenUsageByAgent(days));
+    res.json(await getTokenUsageByAgent(days, budgetUserId(req)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -26,14 +32,14 @@ router.get('/timeline', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 7;
     const groupBy = req.query.groupBy || 'day';
-    res.json(await getTokenUsageTimeline(days, groupBy));
+    res.json(await getTokenUsageTimeline(days, groupBy, budgetUserId(req)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.get('/daily', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
-    res.json(await getDailyTokenUsage(days));
+    res.json(await getDailyTokenUsage(days, budgetUserId(req)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -54,7 +60,8 @@ router.put('/config', (req, res) => {
 router.get('/alerts', async (req, res) => {
   try {
     const config = getSetting('budget_config') || { dailyBudget: 10.00, alertThreshold: 80 };
-    const todaySummary = getTokenUsageSummary(1);
+    const uid = budgetUserId(req);
+    const todaySummary = uid ? await getTokenUsageSummaryAsync(1, uid) : getTokenUsageSummary(1);
     const todayCost = todaySummary?.total_cost || 0;
     const alerts = [];
     if (config.dailyBudget > 0) {
@@ -62,7 +69,7 @@ router.get('/alerts', async (req, res) => {
       if (pct >= 100) alerts.push({ level: 'critical', message: `Daily budget exceeded: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)` });
       else if (pct >= config.alertThreshold) alerts.push({ level: 'warning', message: `Approaching daily budget: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)` });
     }
-    const byAgent = await getTokenUsageByAgent(1);
+    const byAgent = await getTokenUsageByAgent(1, uid);
     res.json({ alerts, todayCost, dailyBudget: config.dailyBudget, byAgent });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

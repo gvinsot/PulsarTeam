@@ -318,7 +318,7 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
         project: agent.project || null,
       });
       // Emit agent:updated so the frontend gets the updated conversation history
-      io.emit('agent:updated', agentManager._sanitize(agent));
+      agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
     }
   } catch (err) {
     console.error(`[Workflow] Error processing "${task.text}":`, err.message, err.stack);

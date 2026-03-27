@@ -33,9 +33,24 @@ export function setupSocketHandlers(io, agentManager) {
     // Track agents with in-flight chat requests on this socket to prevent duplicates
     const chatInFlight = new Set();
 
-    // Send initial state — filtered by user (admin sees all, others see own + unowned)
+    // ── Per-user rooms for isolation ──────────────────────────────────
     const userId = socket.user?.userId;
     const userRole = socket.user?.role;
+    if (userId) socket.join(`user:${userId}`);
+    if (userRole === 'admin') socket.join('role:admin');
+
+    /** Emit an event scoped to users who can see the given agent */
+    function emitForAgent(agentId, event, data) {
+      const agent = agentManager.agents.get(agentId);
+      const ownerId = agent?.ownerId;
+      if (ownerId) {
+        io.to(`user:${ownerId}`).to('role:admin').emit(event, data);
+      } else {
+        io.emit(event, data);
+      }
+    }
+
+    // Send initial state — filtered by user (admin sees all, others see own + unowned)
     socket.emit('agents:list', agentManager.getAllForUser(userId, userRole));
 
     // ── Chat with streaming ───────────────────────────────────────────
@@ -68,8 +83,8 @@ export function setupSocketHandlers(io, agentManager) {
 
         await agentManager.sendMessage(agentId, message, (chunk) => {
           socket.emit('agent:stream:chunk', { agentId, project, chunk });
-          // Also broadcast the thinking state to all clients
-          io.emit('agent:thinking', {
+          // Also broadcast the thinking state to users who can see this agent
+          emitForAgent(agentId, 'agent:thinking', {
             agentId,
             project,
             thinking: agentManager.agents.get(agentId)?.currentThinking || ''
@@ -102,7 +117,7 @@ export function setupSocketHandlers(io, agentManager) {
           (agentId, chunk) => {
             const a = agentManager.agents.get(agentId);
             socket.emit('agent:stream:chunk', { agentId, project: a?.project || null, chunk });
-            io.emit('agent:thinking', {
+            emitForAgent(agentId, 'agent:thinking', {
               agentId,
               project: a?.project || null,
               thinking: a?.currentThinking || ''
@@ -130,23 +145,23 @@ export function setupSocketHandlers(io, agentManager) {
 
       try {
         // Stream the target agent's response in real-time
-        io.emit('agent:stream:start', { agentId: toId, project: targetProject });
+        emitForAgent(toId, 'agent:stream:start', { agentId: toId, project: targetProject });
 
         const response = await agentManager.handoff(fromId, toId, context, (chunk) => {
-          io.emit('agent:stream:chunk', { agentId: toId, project: targetProject, chunk });
-          io.emit('agent:thinking', {
+          emitForAgent(toId, 'agent:stream:chunk', { agentId: toId, project: targetProject, chunk });
+          emitForAgent(toId, 'agent:thinking', {
             agentId: toId,
             project: targetProject,
             thinking: agentManager.agents.get(toId)?.currentThinking || ''
           });
         });
 
-        io.emit('agent:stream:end', { agentId: toId, project: targetProject });
+        emitForAgent(toId, 'agent:stream:end', { agentId: toId, project: targetProject });
         // Note: agentManager already emits agent:updated internally
 
         socket.emit('agent:handoff:complete', { fromId, toId, response });
       } catch (err) {
-        io.emit('agent:stream:error', { agentId: toId, project: targetProject, error: err.message });
+        emitForAgent(toId, 'agent:stream:error', { agentId: toId, project: targetProject, error: err.message });
         socket.emit('agent:handoff:error', { error: err.message });
       }
     });
@@ -158,12 +173,12 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Get swarm status with project assignments ─────────────────────
     socket.on('agents:swarm-status', () => {
-      socket.emit('agents:swarm-status', agentManager.getSwarmStatus());
+      socket.emit('agents:swarm-status', agentManager.getSwarmStatus(userId, userRole));
     });
 
     // ── Get lightweight status for ALL enabled agents (includes project) ─
     socket.on('agents:statuses', () => {
-      socket.emit('agents:statuses', agentManager.getAllStatuses());
+      socket.emit('agents:statuses', agentManager.getAllStatuses(userId, userRole));
     });
 
     // ── Get single agent detailed status ──────────────────────────────
@@ -180,12 +195,12 @@ export function setupSocketHandlers(io, agentManager) {
     socket.on('agents:by-project', (data) => {
       const { project } = data || {};
       if (!project) return;
-      socket.emit('agents:by-project', agentManager.getAgentsByProject(project));
+      socket.emit('agents:by-project', agentManager.getAgentsByProject(project, userId, userRole));
     });
 
     // ── Get project summary ──────────────────────────────────────────
     socket.on('agents:project-summary', () => {
-      socket.emit('agents:project-summary', agentManager.getProjectSummary());
+      socket.emit('agents:project-summary', agentManager.getProjectSummary(userId, userRole));
     });
 
     // ── Stop agent ────────────────────────────────────────────────────
@@ -196,7 +211,7 @@ export function setupSocketHandlers(io, agentManager) {
       const stopped = agentManager.stopAgent(agentId);
       if (stopped) {
         socket.emit('agent:stream:end', { agentId, stopped: true });
-        io.emit('agent:updated', agentManager.getById(agentId));
+        emitForAgent(agentId, 'agent:updated', agentManager.getById(agentId));
       }
     });
 
@@ -213,7 +228,7 @@ export function setupSocketHandlers(io, agentManager) {
 
         const result = await agentManager.executeTask(agentId, taskId, (chunk) => {
           socket.emit('agent:stream:chunk', { agentId, project: taskProject, chunk });
-          io.emit('agent:thinking', {
+          emitForAgent(agentId, 'agent:thinking', {
             agentId,
             project: taskProject,
             thinking: agentManager.agents.get(agentId)?.currentThinking || ''
@@ -240,7 +255,7 @@ export function setupSocketHandlers(io, agentManager) {
 
         await agentManager.executeAllTasks(agentId, (chunk) => {
           socket.emit('agent:stream:chunk', { agentId, project: execProject, chunk });
-          io.emit('agent:thinking', {
+          emitForAgent(agentId, 'agent:thinking', {
             agentId,
             project: execProject,
             thinking: agentManager.agents.get(agentId)?.currentThinking || ''
@@ -283,7 +298,7 @@ export function setupSocketHandlers(io, agentManager) {
         const voiceTargetProject = targetAgent.project || null;
 
         // Stream to the sub-agent's own chat
-        io.emit('agent:stream:start', { agentId: targetAgent.id, project: voiceTargetProject });
+        emitForAgent(targetAgent.id, 'agent:stream:start', { agentId: targetAgent.id, project: voiceTargetProject });
 
         const leader = agentManager.agents.get(agentId);
         const leaderName = leader?.name || 'Voice Leader';
@@ -295,8 +310,8 @@ export function setupSocketHandlers(io, agentManager) {
           targetAgent.id,
           `[TASK from ${leaderName}]: ${task}`,
           (chunk) => {
-            io.emit('agent:stream:chunk', { agentId: targetAgent.id, project: voiceTargetProject, chunk });
-            io.emit('agent:thinking', {
+            emitForAgent(targetAgent.id, 'agent:stream:chunk', { agentId: targetAgent.id, project: voiceTargetProject, chunk });
+            emitForAgent(targetAgent.id, 'agent:thinking', {
               agentId: targetAgent.id,
               project: voiceTargetProject,
               thinking: agentManager.agents.get(targetAgent.id)?.currentThinking || ''
@@ -304,7 +319,7 @@ export function setupSocketHandlers(io, agentManager) {
           }
         );
 
-        io.emit('agent:stream:end', { agentId: targetAgent.id, project: voiceTargetProject });
+        emitForAgent(targetAgent.id, 'agent:stream:end', { agentId: targetAgent.id, project: voiceTargetProject });
         // Note: agentManager.sendMessage() already emits agent:updated internally
 
         socket.emit('voice:delegate:result', {
@@ -349,19 +364,19 @@ export function setupSocketHandlers(io, agentManager) {
         const voiceName = voiceAgent?.name || 'Voice Leader';
         const targetProject = targetAgent.project || null;
 
-        io.emit('agent:stream:start', { agentId: targetAgent.id, project: targetProject });
+        emitForAgent(targetAgent.id, 'agent:stream:start', { agentId: targetAgent.id, project: targetProject });
 
         const answer = await agentManager.sendMessage(
           targetAgent.id,
           `[QUESTION from ${voiceName}]: ${question}\n\nPlease provide a concise, direct answer.`,
           (chunk) => {
-            io.emit('agent:stream:chunk', { agentId: targetAgent.id, project: targetProject, chunk });
+            emitForAgent(targetAgent.id, 'agent:stream:chunk', { agentId: targetAgent.id, project: targetProject, chunk });
           },
           1,
           { type: 'ask-question', fromAgent: voiceName }
         );
 
-        io.emit('agent:stream:end', { agentId: targetAgent.id, project: targetProject });
+        emitForAgent(targetAgent.id, 'agent:stream:end', { agentId: targetAgent.id, project: targetProject });
         // Note: agentManager.sendMessage() already emits agent:updated internally
 
         socket.emit('voice:ask:result', { agentId, targetAgentName, error: null, result: answer });
@@ -395,7 +410,7 @@ export function setupSocketHandlers(io, agentManager) {
             const target = findAgent(args.agent_name);
             if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
             agentManager.update(target.id, { project: args.project_name });
-            io.emit('agent:updated', agentManager.getById(target.id));
+            emitForAgent(target.id, 'agent:updated', agentManager.getById(target.id));
             result = `Assigned ${target.name} to project "${args.project_name}"`;
             console.log(`🎙️ [Voice] assign_project: ${target.name} → ${args.project_name}`);
             break;
@@ -452,7 +467,7 @@ export function setupSocketHandlers(io, agentManager) {
             target.conversationHistory = target.conversationHistory.slice(0, newLen);
             if (newLen === 0) delete target._compactionArmed;
             agentManager.update(target.id, {});
-            io.emit('agent:updated', agentManager.getById(target.id));
+            emitForAgent(target.id, 'agent:updated', agentManager.getById(target.id));
             result = `Rolled back ${count} message(s) from ${target.name} (${histLen} → ${newLen})`;
             console.log(`🎙️ [Voice] rollback: ${target.name} -${count}`);
             break;
@@ -462,7 +477,7 @@ export function setupSocketHandlers(io, agentManager) {
             if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
             const stopped = agentManager.stopAgent(target.id);
             result = stopped ? `Stopped agent ${target.name}` : `${target.name} is not currently busy`;
-            if (stopped) io.emit('agent:updated', agentManager.getById(target.id));
+            if (stopped) emitForAgent(target.id, 'agent:updated', agentManager.getById(target.id));
             console.log(`🎙️ [Voice] stop_agent: ${target.name} → ${stopped ? 'stopped' : 'not busy'}`);
             break;
           }

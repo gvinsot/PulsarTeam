@@ -56,7 +56,7 @@ export function leaderToolsRoutes(agentManager) {
   // Optional query param: ?project=ProjectName to filter by project
   router.get('/all-statuses', (req, res) => {
     const { project } = req.query;
-    let statuses = agentManager.getAllStatuses();
+    let statuses = agentManager.getAllStatuses(req.user.userId, req.user.role);
 
     // Optional project filter
     if (project) {
@@ -71,18 +71,18 @@ export function leaderToolsRoutes(agentManager) {
 
   // Swarm Leader tool: get swarm-wide status with project assignments
   router.get('/swarm-status', (req, res) => {
-    return res.json(agentManager.getSwarmStatus());
+    return res.json(agentManager.getSwarmStatus(req.user.userId, req.user.role));
   });
 
   // Swarm Leader tool: get agents working on a specific project
   router.get('/by-project/:project', (req, res) => {
-    const agents = agentManager.getAgentsByProject(req.params.project);
+    const agents = agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role);
     return res.json(agents);
   });
 
   // Swarm Leader tool: get project summary — all projects with their agent distribution
   router.get('/project-summary', (req, res) => {
-    return res.json(agentManager.getProjectSummary());
+    return res.json(agentManager.getProjectSummary(req.user.userId, req.user.role));
   });
 
   return router;

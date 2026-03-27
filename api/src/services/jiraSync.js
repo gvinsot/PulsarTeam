@@ -370,7 +370,7 @@ export async function pollJira(agentManager) {
     if (_io) {
       for (const [, agent] of agentManager.agents) {
         if (agent.todoList?.some(t => t.jiraKey)) {
-          _io.emit('agent:updated', agentManager._sanitize(agent));
+          agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
         }
       }
     }
@@ -633,7 +633,7 @@ IMPORTANT: Reply with ONLY the comment text to post on the Jira ticket. Do not i
           agentName: agent.name,
           project: agent.project || null,
         });
-        _io.emit('agent:updated', agentManager._sanitize(agent));
+        agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
     }
   } catch (err) {
@@ -846,7 +846,7 @@ export async function handleWebhook(payload, agentManager) {
         // Execute transition actions (change_status, run_agent, etc.)
         await executeTransitionActions(trigger, actualTask || task, creatorAgent.id, agentManager);
         if (_io) {
-          _io.emit('agent:updated', agentManager._sanitize(creatorAgent));
+          agentManager._emitToOwner('agent:updated', agentManager._sanitize(creatorAgent));
         }
       }
       return;

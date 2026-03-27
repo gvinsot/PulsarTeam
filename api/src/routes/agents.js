@@ -64,7 +64,7 @@ export function agentRoutes(agentManager) {
   // Optional query param: ?project=ProjectName to filter by project
   router.get('/statuses', (req, res) => {
     const { project } = req.query;
-    let statuses = agentManager.getAllStatuses();
+    let statuses = agentManager.getAllStatuses(req.user.userId, req.user.role);
     if (project) {
       const lowerProject = project.toLowerCase();
       statuses = statuses.filter(s =>
@@ -76,18 +76,18 @@ export function agentRoutes(agentManager) {
 
   // Get agents working on a specific project
   router.get('/by-project/:project', (req, res) => {
-    const agents = agentManager.getAgentsByProject(req.params.project);
+    const agents = agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role);
     res.json(agents);
   });
 
   // Get project summary: all projects with their agent counts and assignments
   router.get('/project-summary', (req, res) => {
-    res.json(agentManager.getProjectSummary());
+    res.json(agentManager.getProjectSummary(req.user.userId, req.user.role));
   });
 
   // Get comprehensive swarm status with project assignments
   router.get('/swarm-status', (req, res) => {
-    res.json(agentManager.getSwarmStatus());
+    res.json(agentManager.getSwarmStatus(req.user.userId, req.user.role));
   });
 
   // Get single agent detailed status (lightweight, includes project + currentTask)

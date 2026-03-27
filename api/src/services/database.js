@@ -80,6 +80,10 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_agent ON token_usage_log(agent_id)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage_log(recorded_at)').catch(() => {});
 
+      // Add user_id column for per-user budget tracking (nullable for backwards compat)
+      await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_log(user_id)').catch(() => {});
+
       console.log('✅ Token usage table ready');
 
       // Create project_contexts table if not exists
@@ -390,13 +394,13 @@ export async function loadSettingsCache() {
 
 // ── Token Usage (Budget) ──────────────────────────────────────────────────
 
-export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost) {
+export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null) {
   if (!pool) return;
   try {
     await pool.query(
-      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [agentId, agentName, provider, model, inputTokens, outputTokens, cost]
+      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId]
     );
   } catch (err) {
     console.error('Failed to record token usage:', err.message);
@@ -410,19 +414,42 @@ export function getTokenUsageSummary(days = 1) {
   return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0 };
 }
 
-export async function getTokenUsageByAgent(days = 30) {
+/** Async per-user (or global when userId is null) token usage summary */
+export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
+  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0 };
+  // If no user filter, return from cache for speed
+  if (!userId) return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0 };
+  try {
+    const result = await pool.query(
+      `SELECT COALESCE(SUM(cost), 0) as total_cost,
+              COALESCE(SUM(input_tokens), 0) as total_input,
+              COALESCE(SUM(output_tokens), 0) as total_output
+       FROM token_usage_log
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1 AND user_id = $2`,
+      [days, userId]
+    );
+    return result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0 };
+  } catch (err) {
+    console.error('Failed to get token summary for user:', err.message);
+    return { total_cost: 0, total_input: 0, total_output: 0 };
+  }
+}
+
+export async function getTokenUsageByAgent(days = 30, userId = null) {
   if (!pool) return [];
   try {
+    const userFilter = userId ? ' AND user_id = $2' : '';
+    const params = userId ? [days, userId] : [days];
     const result = await pool.query(
       `SELECT provider, model,
               COUNT(DISTINCT agent_id) as agent_count,
               SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost,
               COUNT(*) as request_count
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
        GROUP BY provider, model
        ORDER BY total_cost DESC`,
-      [days]
+      params
     );
     return result.rows;
   } catch (err) {
@@ -431,17 +458,19 @@ export async function getTokenUsageByAgent(days = 30) {
   }
 }
 
-export async function getTokenUsageTimeline(days = 7, groupBy = 'day') {
+export async function getTokenUsageTimeline(days = 7, groupBy = 'day', userId = null) {
   if (!pool) return [];
   const trunc = groupBy === 'hour' ? 'hour' : 'day';
   try {
+    const userFilter = userId ? ' AND user_id = $3' : '';
+    const params = userId ? [trunc, days, userId] : [trunc, days];
     const result = await pool.query(
       `SELECT date_trunc($1, recorded_at) as period,
               SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2${userFilter}
        GROUP BY period ORDER BY period`,
-      [trunc, days]
+      params
     );
     return result.rows;
   } catch (err) {
@@ -450,16 +479,18 @@ export async function getTokenUsageTimeline(days = 7, groupBy = 'day') {
   }
 }
 
-export async function getDailyTokenUsage(days = 30) {
+export async function getDailyTokenUsage(days = 30, userId = null) {
   if (!pool) return [];
   try {
+    const userFilter = userId ? ' AND user_id = $2' : '';
+    const params = userId ? [days, userId] : [days];
     const result = await pool.query(
       `SELECT date_trunc('day', recorded_at) as day,
               SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost
        FROM token_usage_log
-       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1
+       WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
        GROUP BY day ORDER BY day`,
-      [days]
+      params
     );
     return result.rows;
   } catch (err) {

@@ -180,12 +180,13 @@ export class AgentManager {
 
   _recordUsage(agent, inputTokens, outputTokens) {
     if (!inputTokens && !outputTokens) return;
+    const userId = agent.ownerId || null;
     try {
       // 1) Agent-level explicit costs
       if (agent.costPerInputToken != null && agent.costPerOutputToken != null) {
         const cost = (inputTokens / 1e6) * agent.costPerInputToken
                    + (outputTokens / 1e6) * agent.costPerOutputToken;
-        recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+        recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost, userId);
         return;
       }
       // 2) LLM config by llmConfigId
@@ -195,7 +196,7 @@ export class AgentManager {
         if (cfg && (cfg.inputCostPer1M != null || cfg.outputCostPer1M != null)) {
           const cost = (inputTokens / 1e6) * (cfg.inputCostPer1M || 0)
                      + (outputTokens / 1e6) * (cfg.outputCostPer1M || 0);
-          recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+          recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost, userId);
           return;
         }
       }
@@ -204,12 +205,12 @@ export class AgentManager {
       if (cfgByModel && (cfgByModel.inputCostPer1M != null || cfgByModel.outputCostPer1M != null)) {
         const cost = (inputTokens / 1e6) * (cfgByModel.inputCostPer1M || 0)
                    + (outputTokens / 1e6) * (cfgByModel.outputCostPer1M || 0);
-        recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+        recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost, userId);
         return;
       }
       // 4) Fallback: hardcoded defaults
       const cost = (inputTokens / 1e6) * 3 + (outputTokens / 1e6) * 15;
-      recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost);
+      recordTokenUsage(agent.id, agent.name, agent.provider, agent.model, inputTokens, outputTokens, cost, userId);
     } catch (err) {
       console.warn("Failed to record token usage:", err.message);
     }
@@ -292,6 +293,13 @@ export class AgentManager {
     return Array.from(this.agents.values())
       .filter(a => a.ownerId === userId || !a.ownerId)
       .map(a => this._sanitize(a));
+  }
+
+  /** Return raw agent objects visible to a user (admin → all, else own + unowned) */
+  _agentsForUser(userId, role) {
+    if (role === 'admin') return Array.from(this.agents.values());
+    return Array.from(this.agents.values())
+      .filter(a => a.ownerId === userId || !a.ownerId);
   }
 
   getById(id) {
@@ -412,8 +420,9 @@ export class AgentManager {
    * only the essential status fields for each agent — ideal for dashboards,
    * management tools, and leader queries that need a quick overview.
    */
-  getAllStatuses() {
-    return Array.from(this.agents.values())
+  getAllStatuses(userId = null, role = null) {
+    const agents = (userId && role) ? this._agentsForUser(userId, role) : Array.from(this.agents.values());
+    return agents
       .filter(a => a.enabled !== false)
       .map(a => this.getAgentStatus(a.id))
       .filter(Boolean);
@@ -429,9 +438,10 @@ export class AgentManager {
         await this._execInSandbox(agentId, `cd ${cloneDir} && git config url."https://${gitToken}@github.com/".insteadOf "https://github.com/"`);
       }
    */
-  getAgentsByProject(projectName) {
+  getAgentsByProject(projectName, userId = null, role = null) {
     if (!projectName) return [];
-    return Array.from(this.agents.values())
+    const agents = (userId && role) ? this._agentsForUser(userId, role) : Array.from(this.agents.values());
+    return agents
       .filter(a => a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase())
       .map(a => this.getAgentStatus(a.id))
       .filter(Boolean);
@@ -442,8 +452,9 @@ export class AgentManager {
    * Useful for management dashboards and leader tools that need to quickly
    * see how agents are distributed across projects.
    */
-  getProjectSummary() {
-    const enabled = Array.from(this.agents.values()).filter(a => a.enabled !== false);
+  getProjectSummary(userId = null, role = null) {
+    const agents = (userId && role) ? this._agentsForUser(userId, role) : Array.from(this.agents.values());
+    const enabled = agents.filter(a => a.enabled !== false);
     const projectMap = {};
     const unassigned = [];
 
@@ -660,8 +671,8 @@ export class AgentManager {
    * Get comprehensive swarm status: all agents with their current project assignments.
    * Used by REST API and @swarm_status() leader command.
    */
-  getSwarmStatus() {
-    const allAgents = Array.from(this.agents.values());
+  getSwarmStatus(userId = null, role = null) {
+    const allAgents = (userId && role) ? this._agentsForUser(userId, role) : Array.from(this.agents.values());
     const enabled = allAgents.filter(a => a.enabled !== false);
     const disabled = allAgents.filter(a => a.enabled === false);
 
@@ -750,6 +761,7 @@ export class AgentManager {
     const agent = this.agents.get(id);
     if (!agent) return false;
     // Destroy sandbox container
+    const ownerId = this.agents.get(id)?.ownerId || null;
     if (this.sandboxManager) {
       this.sandboxManager.destroySandbox(id).catch(err => {
         console.error(`Failed to destroy sandbox for agent ${id}:`, err.message);
@@ -757,7 +769,7 @@ export class AgentManager {
     }
     this.agents.delete(id);
     await deleteAgentFromDb(id); // Remove from database
-    this._emit('agent:deleted', { id });
+    this._emit('agent:deleted', { id, ownerId });
     return true;
   }
 
@@ -4733,14 +4745,36 @@ export class AgentManager {
         const pendingData = this._updatePending.get(agentId);
         this._updatePending.delete(agentId);
         if (pendingData) {
-          this.io.emit('agent:updated', pendingData);
+          this._emitToOwner(event, pendingData);
         }
       }, 300);
       this._updateTimers.set(agentId, timer);
       return;
     }
 
+    // For non-agent:updated events, route per-user if data has ownerId
+    if ((event === 'agent:created' || event === 'agent:deleted') && data?.ownerId) {
+      this.io.to(`user:${data.ownerId}`).to('role:admin').emit(event, data);
+      return;
+    }
+
     this.io.emit(event, data);
+  }
+
+  /**
+   * Emit an event only to users who can see the agent (owner + admins).
+   * Unowned agents are broadcast to everyone.
+   */
+  _emitToOwner(event, data) {
+    if (!this.io) return;
+    const ownerId = data?.ownerId;
+    if (ownerId) {
+      // Send to the owner's room + all admins
+      this.io.to(`user:${ownerId}`).to('role:admin').emit(event, data);
+    } else {
+      // Unowned agent → everyone can see it
+      this.io.emit(event, data);
+    }
   }
 
   /** Force-flush any pending throttled agent:updated for a specific agent */
@@ -4753,7 +4787,7 @@ export class AgentManager {
     const pendingData = this._updatePending.get(agentId);
     this._updatePending.delete(agentId);
     if (pendingData && this.io) {
-      this.io.emit('agent:updated', pendingData);
+      this._emitToOwner('agent:updated', pendingData);
     }
   }
 
