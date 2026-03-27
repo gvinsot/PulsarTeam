@@ -29,12 +29,10 @@ function colorClasses(hex) {
 function buildColumns(workflowColumns) {
   return workflowColumns.map(col => {
     const c = colorClasses(col.color);
-    // Error tasks stay visible in the in_progress column
-    const statuses = col.id === 'in_progress' ? [col.id, 'error'] : [col.id];
     return {
       id: col.id,
       label: col.label,
-      statuses,
+      statuses: [col.id],
       dropStatus: col.id,
       dot: c.dot,
       headerText: c.headerText,
@@ -1801,11 +1799,17 @@ export default function TasksBoard({ agents, onRefresh, user }) {
     });
   }, [allTasks, agentFilter, projectFilter, search]);
 
-  // Group by column
+  // Group by column — error tasks stay in the column they were in before the error
   const tasksByColumn = useMemo(() => {
     const groups = {};
     columns.forEach(col => {
-      groups[col.id] = filteredTasks.filter(t => col.statuses.includes(t.status || 'pending'));
+      groups[col.id] = filteredTasks.filter(t => {
+        if (t.status === 'error') {
+          // Use errorFromStatus to keep the task in its original column; default to in_progress for legacy data
+          return (t.errorFromStatus || 'in_progress') === col.id;
+        }
+        return col.statuses.includes(t.status || 'pending');
+      });
     });
     return groups;
   }, [filteredTasks, columns]);
@@ -1828,7 +1832,12 @@ export default function TasksBoard({ agents, onRefresh, user }) {
     } catch { return; }
     try {
       const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
-      if (!task || col.statuses.includes(task.status || 'pending')) return;
+      if (!task) return;
+      // Check if task is already in this column (including error tasks in their original column)
+      const isAlreadyInColumn = task.status === 'error'
+        ? (task.errorFromStatus || 'in_progress') === col.id
+        : col.statuses.includes(task.status || 'pending');
+      if (isAlreadyInColumn) return;
       await api.setTaskStatus(agentId, taskId, col.dropStatus);
       onRefresh();
     } catch (err) {

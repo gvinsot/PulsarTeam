@@ -324,6 +324,7 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
     console.error(`[Workflow] Error processing "${task.text}":`, err.message, err.stack);
     try {
       // On error, always set task to error status — keeps it in the current column and blocks auto-transitions
+      // setTaskStatus will store errorFromStatus automatically
       agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
       // Store the error message on the task for display
       const creatorAgent = agentManager.agents.get(task.agentId);
