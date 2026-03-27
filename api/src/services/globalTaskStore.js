@@ -70,17 +70,54 @@ class GlobalTaskStore {
     const now = new Date().toISOString();
     const oldStatus = task.status;
 
-    if (updates.title !== undefined) task.title = updates.title;
-    if (updates.description !== undefined) task.description = updates.description;
-    if (updates.priority !== undefined) task.priority = updates.priority;
-    if (updates.assignee !== undefined) task.assignee = updates.assignee;
-    if (updates.project !== undefined) task.project = updates.project;
-    if (updates.type !== undefined) task.type = updates.type;
+    if (!task.history) task.history = [];
+
+    // Track field edits in history
+    const editedFields = [];
+    if (updates.title !== undefined && updates.title !== task.title) {
+      editedFields.push({ field: 'title', oldValue: task.title, newValue: updates.title });
+      task.title = updates.title;
+    } else if (updates.title !== undefined) {
+      task.title = updates.title;
+    }
+    if (updates.description !== undefined && updates.description !== task.description) {
+      editedFields.push({ field: 'description', oldValue: task.description, newValue: updates.description });
+      task.description = updates.description;
+    } else if (updates.description !== undefined) {
+      task.description = updates.description;
+    }
+    if (updates.priority !== undefined && updates.priority !== task.priority) {
+      editedFields.push({ field: 'priority', oldValue: task.priority, newValue: updates.priority });
+      task.priority = updates.priority;
+    } else if (updates.priority !== undefined) {
+      task.priority = updates.priority;
+    }
+    if (updates.assignee !== undefined && updates.assignee !== task.assignee) {
+      editedFields.push({ field: 'assignee', oldValue: task.assignee, newValue: updates.assignee });
+      task.assignee = updates.assignee;
+    } else if (updates.assignee !== undefined) {
+      task.assignee = updates.assignee;
+    }
+    if (updates.project !== undefined && updates.project !== task.project) {
+      editedFields.push({ field: 'project', oldValue: task.project, newValue: updates.project });
+      task.project = updates.project;
+    } else if (updates.project !== undefined) {
+      task.project = updates.project;
+    }
+    if (updates.type !== undefined && updates.type !== task.type) {
+      editedFields.push({ field: 'type', oldValue: task.type, newValue: updates.type });
+      task.type = updates.type;
+    } else if (updates.type !== undefined) {
+      task.type = updates.type;
+    }
+
+    if (editedFields.length > 0) {
+      task.history.push({ type: 'edit', fields: editedFields, at: now, by: changedBy });
+    }
 
     // Track status changes in history
     if (updates.status !== undefined && updates.status !== oldStatus) {
       task.status = updates.status;
-      if (!task.history) task.history = [];
       task.history.push({ from: oldStatus, to: updates.status, at: now, by: changedBy });
     }
 

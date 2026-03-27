@@ -702,15 +702,35 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
                       <div className="absolute -left-[17px] top-1 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900" />
                       <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
                         <div className="flex items-center gap-1.5 text-xs min-w-0">
-                          {h.from && (
+                          {h.type === 'edit' ? (
                             <>
-                              <span className="text-dark-500">{h.from}</span>
-                              <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
+                              <Edit3 className="w-2.5 h-2.5 text-dark-400 flex-shrink-0" />
+                              <span className="text-dark-200 font-medium">edited {h.field || (h.fields ? h.fields.map(f => f.field).join(', ') : 'task')}</span>
+                              {h.by && (
+                                <span className="text-dark-500 truncate">by {h.by}</span>
+                              )}
                             </>
-                          )}
-                          <span className="text-dark-200 font-medium">{h.status}</span>
-                          {h.by && (
-                            <span className="text-dark-500 truncate">by {h.by}</span>
+                          ) : h.type === 'reassign' ? (
+                            <>
+                              <User className="w-2.5 h-2.5 text-dark-400 flex-shrink-0" />
+                              <span className="text-dark-200 font-medium">reassigned</span>
+                              {h.by && (
+                                <span className="text-dark-500 truncate">by {h.by}</span>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {h.from && (
+                                <>
+                                  <span className="text-dark-500">{h.from}</span>
+                                  <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
+                                </>
+                              )}
+                              <span className="text-dark-200 font-medium">{h.status}</span>
+                              {h.by && (
+                                <span className="text-dark-500 truncate">by {h.by}</span>
+                              )}
+                            </>
                           )}
                         </div>
                         <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(h.at)}>

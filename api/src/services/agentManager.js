@@ -3481,7 +3481,18 @@ export class AgentManager {
     if (!agent) return null;
     const task = agent.todoList.find(t => t.id === taskId);
     if (!task) return null;
+    const oldText = task.text;
     task.text = text;
+    if (!task.history) task.history = [];
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by: 'user',
+      type: 'edit',
+      field: 'text',
+      oldValue: oldText,
+      newValue: text,
+    });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return task;
@@ -3492,7 +3503,18 @@ export class AgentManager {
     if (!agent) return null;
     const task = agent.todoList.find(t => t.id === taskId);
     if (!task) return null;
+    const oldProject = task.project;
     task.project = project;
+    if (!task.history) task.history = [];
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by: 'user',
+      type: 'edit',
+      field: 'project',
+      oldValue: oldProject,
+      newValue: project,
+    });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return task;
