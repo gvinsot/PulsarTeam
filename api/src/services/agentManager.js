@@ -289,15 +289,13 @@ export class AgentManager {
   }
 
   getAllForUser(userId, role) {
-    if (role === 'admin') return this.getAll();
     return Array.from(this.agents.values())
       .filter(a => a.ownerId === userId || !a.ownerId)
       .map(a => this._sanitize(a));
   }
 
-  /** Return raw agent objects visible to a user (admin → all, else own + unowned) */
+  /** Return raw agent objects visible to a user (own + unowned) */
   _agentsForUser(userId, role) {
-    if (role === 'admin') return Array.from(this.agents.values());
     return Array.from(this.agents.values())
       .filter(a => a.ownerId === userId || !a.ownerId);
   }
@@ -4756,25 +4754,35 @@ export class AgentManager {
       return;
     }
 
-    // For non-agent:updated events, route per-user if data has ownerId
+    // For agent:created / agent:deleted, route by ownerId in the payload
     if ((event === 'agent:created' || event === 'agent:deleted') && data?.ownerId) {
-      this.io.to(`user:${data.ownerId}`).to('role:admin').emit(event, data);
+      this.io.to(`user:${data.ownerId}`).emit(event, data);
       return;
     }
 
+    // For all other agent events, look up the owner from the agents map
+    const agentId = data?.id || data?.agentId;
+    if (agentId) {
+      const agent = this.agents.get(agentId);
+      if (agent?.ownerId) {
+        this.io.to(`user:${agent.ownerId}`).emit(event, data);
+        return;
+      }
+    }
+
+    // Fallback: unowned agent or no agentId → broadcast to all
     this.io.emit(event, data);
   }
 
   /**
-   * Emit an event only to users who can see the agent (owner + admins).
+   * Emit an event only to users who own the agent.
    * Unowned agents are broadcast to everyone.
    */
   _emitToOwner(event, data) {
     if (!this.io) return;
     const ownerId = data?.ownerId;
     if (ownerId) {
-      // Send to the owner's room + all admins
-      this.io.to(`user:${ownerId}`).to('role:admin').emit(event, data);
+      this.io.to(`user:${ownerId}`).emit(event, data);
     } else {
       // Unowned agent → everyone can see it
       this.io.emit(event, data);

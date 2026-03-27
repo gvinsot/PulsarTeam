@@ -53,18 +53,17 @@ function sanitizeAgent(agent) {
 export function agentRoutes(agentManager) {
   const router = express.Router();
 
-  // ── Ownership guard: non-admin users can only access their own agents ──
+  // ── Ownership guard: users can only access their own agents or unowned ones ──
   function requireAgentAccess(req, res, next) {
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    if (req.user.role === 'admin') return next();
     if (agent.ownerId && agent.ownerId !== req.user.userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
     next();
   }
 
-  // List agents (filtered by user — admin sees all, others see own + unowned)
+  // List agents (filtered by user — each user sees own + unowned)
   router.get('/', (req, res) => {
     const agents = agentManager.getAllForUser(req.user.userId, req.user.role);
     res.json(agents.map(sanitizeAgent));

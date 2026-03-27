@@ -39,12 +39,12 @@ export function setupSocketHandlers(io, agentManager) {
     if (userId) socket.join(`user:${userId}`);
     if (userRole === 'admin') socket.join('role:admin');
 
-    /** Emit an event scoped to users who can see the given agent */
+    /** Emit an event scoped to users who own the given agent */
     function emitForAgent(agentId, event, data) {
       const agent = agentManager.agents.get(agentId);
       const ownerId = agent?.ownerId;
       if (ownerId) {
-        io.to(`user:${ownerId}`).to('role:admin').emit(event, data);
+        io.to(`user:${ownerId}`).emit(event, data);
       } else {
         io.emit(event, data);
       }
@@ -57,7 +57,6 @@ export function setupSocketHandlers(io, agentManager) {
     function canAccessAgent(agentId) {
       const agent = agentManager.agents.get(agentId);
       if (!agent) return false;
-      if (userRole === 'admin') return true;
       return !agent.ownerId || agent.ownerId === userId;
     }
 
