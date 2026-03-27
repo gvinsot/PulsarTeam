@@ -97,7 +97,7 @@ export async function getJiraColumns() {
     // Resolve status names (board config only has IDs)
     const columns = [];
     for (const col of jiraColumns) {
-      const statusIds = (col.statuses || []).map(s => s.id);
+      const statusIds = (col.statuses || []).map(s => String(s.id));
       columns.push({
         name: col.name,
         statusIds,
@@ -175,6 +175,14 @@ export async function pollJira(agentManager) {
   }
   if (allTriggers.length === 0) return;
 
+  // Collect all watched status IDs (as strings) for a targeted JQL query
+  const allWatchedIds = new Set();
+  for (const { trigger } of allTriggers) {
+    for (const id of trigger.jiraStatusIds) allWatchedIds.add(String(id));
+  }
+
+  console.log(`[Jira] Poll: ${allTriggers.length} trigger(s), watched status IDs: [${[...allWatchedIds].join(', ')}]`);
+
   // Build set of existing Jira keys
   const existingJiraKeys = new Set();
   for (const [, agent] of agentManager.agents) {
@@ -183,14 +191,15 @@ export async function pollJira(agentManager) {
     }
   }
 
-  // Fetch all board issues
+  // Fetch ONLY issues whose status matches watched IDs (JQL filter)
+  const jqlFilter = `status in (${[...allWatchedIds].map(id => `"${id}"`).join(',')})`;
   let startAt = 0;
   const maxResults = 50;
   const allIssues = [];
   while (true) {
     const data = await jiraFetch(
       cfg,
-      `/rest/agile/1.0/board/${cfg.boardId}/issue?startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
+      `/rest/agile/1.0/board/${cfg.boardId}/issue?jql=${encodeURIComponent(jqlFilter)}&startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
     );
     const issues = data.issues || [];
     allIssues.push(...issues);
@@ -198,14 +207,17 @@ export async function pollJira(agentManager) {
     startAt += maxResults;
   }
 
+  console.log(`[Jira] Poll: fetched ${allIssues.length} issue(s) matching watched statuses`);
+
   let created = 0;
 
   for (const { trigger, boardId } of allTriggers) {
-    const watchedStatusIds = new Set(trigger.jiraStatusIds);
+    // Normalize to strings for safe comparison
+    const watchedStatusIds = new Set(trigger.jiraStatusIds.map(String));
     const targetColumn = trigger.from; // the PulsarTeam column to create the task in
 
     for (const issue of allIssues) {
-      const statusId = issue.fields?.status?.id;
+      const statusId = String(issue.fields?.status?.id || '');
       if (!statusId || !watchedStatusIds.has(statusId)) continue;
       if (existingJiraKeys.has(issue.key)) continue;
 
@@ -237,7 +249,7 @@ export async function pollJira(agentManager) {
         }
         existingJiraKeys.add(issue.key);
         created++;
-        console.log(`[Jira] Imported ${issue.key} "${summary}" → board "${boardId}" column "${targetColumn}"`);
+        console.log(`[Jira] Imported ${issue.key} "${summary}" (status ${statusId}) → board "${boardId}" column "${targetColumn}"`);
         // Execute transition actions (change_status, run_agent, etc.)
         await executeTransitionActions(trigger, actualTask || task, creatorAgent.id, agentManager);
       }
@@ -640,10 +652,10 @@ export async function handleWebhook(payload, agentManager) {
   const issue = payload.issue;
   if (!issue?.key || !issue?.fields?.status) return;
 
-  const statusId = issue.fields.status.id;
+  const statusId = String(issue.fields.status.id);
   const summary = issue.fields.summary || issue.key;
 
-  console.log(`[Jira] Webhook: ${event} ${issue.key} → status "${issue.fields.status.name}" (${statusId})`);
+  console.log(`[Jira] Webhook: ${event} ${issue.key} → status "${issue.fields.status.name}" (id=${statusId})`);
 
   // Scan all board workflows for jira_ticket triggers
   const boardWorkflows = await getAllBoardWorkflows();
@@ -655,7 +667,7 @@ export async function handleWebhook(payload, agentManager) {
       }
     }
   }
-  console.log(`[Jira] Webhook: ${allTriggers.length} jira_ticket trigger(s), statusId="${statusId}", watched: ${allTriggers.map(({ trigger: t }) => JSON.stringify(t.jiraStatusIds)).join(', ') || 'none'}`);
+  console.log(`[Jira] Webhook: ${allTriggers.length} jira_ticket trigger(s), issue statusId="${statusId}", watched: ${allTriggers.map(({ trigger: t }) => JSON.stringify(t.jiraStatusIds)).join(', ') || 'none'}`);
 
   // Check if issue already tracked
   let existingTask = null;
@@ -672,7 +684,12 @@ export async function handleWebhook(payload, agentManager) {
   if (!existingTask) {
     // Try to import as new task
     for (const { trigger, boardId } of allTriggers) {
-      if (!new Set(trigger.jiraStatusIds).has(statusId)) continue;
+      // Normalize to strings for safe comparison
+      const watchedSet = new Set(trigger.jiraStatusIds.map(String));
+      if (!watchedSet.has(statusId)) {
+        console.log(`[Jira] Webhook: ${issue.key} statusId="${statusId}" not in watched [${[...watchedSet].join(',')}] — skipped`);
+        continue;
+      }
 
       let creatorAgent = null;
       for (const [, a] of agentManager.agents) {
@@ -697,7 +714,7 @@ export async function handleWebhook(payload, agentManager) {
           actualTask.jiraStatusId = statusId;
           saveAgent(creatorAgent);
         }
-        console.log(`[Jira] Webhook: imported ${issue.key} → board "${boardId}" column "${trigger.from}"`);
+        console.log(`[Jira] Webhook: imported ${issue.key} (status ${statusId}) → board "${boardId}" column "${trigger.from}"`);
         // Execute transition actions (change_status, run_agent, etc.)
         await executeTransitionActions(trigger, actualTask || task, creatorAgent.id, agentManager);
         if (_io) {
