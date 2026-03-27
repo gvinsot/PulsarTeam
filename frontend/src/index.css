@@ -41,11 +41,12 @@ code, pre, .font-mono {
 
 /* Always-visible horizontal scrollbar */
 .scrollbar-always-visible {
-  overflow-x: scroll !important;
+  overflow: auto !important;
   scrollbar-gutter: stable;
 }
 .scrollbar-always-visible::-webkit-scrollbar {
   height: 8px;
+  width: 8px;
 }
 .scrollbar-always-visible::-webkit-scrollbar-track {
   background: #1e293b;

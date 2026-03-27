@@ -962,7 +962,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
   const [hovered, setHovered] = useState(false);
 
   return (
-    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group h-full"
+    <div className="flex flex-col min-w-[300px] w-[300px] flex-shrink-0 group"
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
       {/* Column header */}
       <div className={`flex items-center justify-between px-3 py-2.5 rounded-t-xl border border-b-2
@@ -994,7 +994,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onDrop, onOpen, onClearAll
 
       {/* Drop zone */}
       <div
-        className={`flex-1 flex flex-col gap-2 p-2 rounded-b-xl border border-t-0 min-h-0 overflow-y-auto
+        className={`flex flex-col gap-2 p-2 rounded-b-xl border border-t-0
           transition-all duration-150
           ${dragOver
             ? `ring-2 ring-inset ${col.dropRing} border-dark-600`
@@ -2007,9 +2007,9 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       {/* Board */}
       <div
         ref={boardScrollRef}
-        className="flex-1 min-h-0 overflow-x-scroll overflow-y-hidden scrollbar-always-visible"
+        className="flex-1 min-h-0 overflow-auto scrollbar-always-visible"
       >
-        <div className="flex gap-4 p-6 h-full min-w-max">
+        <div className="flex gap-4 p-6 min-w-max">
           {columns.map((col, colIdx) => (
             <KanbanColumn
               key={col.id}
