@@ -2280,15 +2280,23 @@ export class AgentManager {
           results.push({ tool: 'link_commit', args: call.args, success: false, error: 'Usage: @link_commit(taskId, commitHash, optionalMessage)' });
           continue;
         }
-        let task = agent.todoList?.find(t => t.id === taskId);
-        if (!task) task = agent.todoList?.find(t => t.id.startsWith(taskId));
+        // Search across ALL agents' todoLists (tasks may be in a different agent's list when auto-assigned)
+        let task = null;
+        let ownerAgentId = agentId;
+        for (const [creatorId, creatorAgent] of this.agents) {
+          if (!creatorAgent.todoList) continue;
+          const found = creatorAgent.todoList.find(t => t.id === taskId) ||
+                        creatorAgent.todoList.find(t => t.id.startsWith(taskId));
+          if (found) { task = found; ownerAgentId = creatorId; break; }
+        }
         if (!task) {
+          // Partial match hint from the executing agent's own list
           const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
           results.push({ tool: 'link_commit', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
-        this.addTaskCommit(agentId, task.id, commitHash, commitMsg || '');
+        this.addTaskCommit(ownerAgentId, task.id, commitHash, commitMsg || '');
         console.log(`🔗 [Commit] Agent "${agent.name}" linked ${commitHash.slice(0, 7)} to task "${task.text.slice(0, 50)}"`);
         results.push({ tool: 'link_commit', args: call.args, success: true, result: `Commit ${commitHash.slice(0, 7)} linked to task "${task.text.slice(0, 60)}"` });
         continue;
@@ -2476,38 +2484,52 @@ export class AgentManager {
           ...result
         });
 
-        // Auto-capture commit hash from git_commit_push and link to current in_progress task
-        // Works even if push failed (commit may still exist) and falls back to recently-done tasks
-        if (call.tool === 'git_commit_push') {
-          // Prefer structured hash from meta, fall back to regex on output
-          let commitHash = result.meta?.commitHash || null;
-          if (!commitHash && result.result) {
-            // Robust regex: [anything HASH] — handles root-commit, detached HEAD, etc.
-            const commitMatch = result.result.match(/\[[^\]]*\s([a-f0-9]{7,40})\]/);
-            if (commitMatch) commitHash = commitMatch[1];
+        // Auto-capture commit hash from git_commit_push or run_command(git commit) and link to task
+        if (call.tool === 'git_commit_push' || (call.tool === 'run_command' && result.success)) {
+          let commitHash = null;
+          let commitMsg = '';
+
+          if (call.tool === 'git_commit_push') {
+            commitHash = result.meta?.commitHash || null;
+            commitMsg = call.args[0] || '';
           }
+          // Extract hash from output (works for both git_commit_push and run_command)
+          if (!commitHash && typeof result.result === 'string') {
+            const rawCmd = (call.args[0] || '').toLowerCase();
+            const isGitCommit = call.tool === 'git_commit_push' ||
+              (rawCmd.includes('git') && (rawCmd.includes('commit') || rawCmd.includes('push')));
+            if (isGitCommit) {
+              const commitMatch = result.result.match(/\[[^\]]*\s([a-f0-9]{7,40})\]/);
+              if (commitMatch) commitHash = commitMatch[1];
+              if (!commitMsg) commitMsg = call.args[0] || '';
+            }
+          }
+
           if (commitHash) {
-            const commitMsg = call.args[0] || '';
-            // Try in_progress task first
-            let targetTask = (agent.todoList || []).find(t => t.status === 'in_progress');
-            // Fallback: if no in_progress task, link to the most recently completed task
-            // (the agent may have called @update_task(done) before @git_commit_push in the same batch)
+            // Search ALL agents' todoLists for tasks assigned to or owned by this agent.
+            // Tasks may live in a different agent's list when auto-assigned via workflow boards.
+            const found = this._findTaskForCommitLink(agentId);
+            let targetTask = found?.task || null;
+            let ownerAgentId = found?.ownerAgentId || agentId;
+
             if (!targetTask) {
-              const doneTasks = (agent.todoList || [])
-                .filter(t => t.status === 'done' && t.completedAt)
-                .sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
-              if (doneTasks.length > 0) {
-                targetTask = doneTasks[0];
-                console.log(`🔗 [Commit] No in_progress task — falling back to most recently done task "${targetTask.text.slice(0, 50)}"`);
+              // No task found anywhere — create one from agent.currentTask
+              const taskText = agent.currentTask || commitMsg || 'Commit without task';
+              const created = this.addTask(agentId, taskText, agent.project || null, { type: 'auto', reason: 'commit-link' }, 'in_progress');
+              if (created) {
+                targetTask = agent.todoList.find(t => t.id === created.id);
+                ownerAgentId = agentId;
+                console.log(`🔗 [Commit] Auto-created task "${taskText.slice(0, 50)}" for commit linking`);
               }
             }
+
             if (targetTask) {
-              this.addTaskCommit(agentId, targetTask.id, commitHash, commitMsg);
-              console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text.slice(0, 50)}" (status=${targetTask.status})`);
+              this.addTaskCommit(ownerAgentId, targetTask.id, commitHash, commitMsg);
+              console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
             } else {
               console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no task found to link it to`);
             }
-          } else if (result.success) {
+          } else if (call.tool === 'git_commit_push' && result.success) {
             console.warn(`⚠️  [Commit] Agent "${agent.name}" git_commit_push succeeded but could not extract commit hash from output`);
           }
         }
@@ -3147,6 +3169,53 @@ export class AgentManager {
     return true;
   }
 
+  // ─── Execution Log ──────────────────────────────────────────────────
+  /**
+   * Save the conversation that happened during a task execution into the task history.
+   * Called after sendMessage completes (or errors) for a task execution.
+   *
+   * @param {string} creatorAgentId - The agent that owns the todoList
+   * @param {string} taskId - The task ID
+   * @param {string} executorId - The agent that actually executed the task
+   * @param {number} startMsgIdx - The conversationHistory index before execution started
+   * @param {string} startedAt - ISO timestamp when execution started
+   * @param {boolean} success - Whether the execution completed successfully
+   */
+  _saveExecutionLog(creatorAgentId, taskId, executorId, startMsgIdx, startedAt, success = true) {
+    const executor = this.agents.get(executorId);
+    const creatorAgent = this.agents.get(creatorAgentId);
+    if (!executor || !creatorAgent) return;
+
+    const task = creatorAgent.todoList.find(t => t.id === taskId);
+    if (!task) return;
+
+    // Extract conversation messages since execution started
+    const rawMessages = executor.conversationHistory.slice(startMsgIdx);
+
+    // Truncate long message contents to keep storage reasonable
+    const MAX_MSG_LENGTH = 5000;
+    const executionMessages = rawMessages.map(m => ({
+      role: m.role,
+      content: (m.content || '').length > MAX_MSG_LENGTH
+        ? m.content.slice(0, MAX_MSG_LENGTH) + '\n\n... (truncated)'
+        : m.content,
+      timestamp: m.timestamp,
+    }));
+
+    if (!task.history) task.history = [];
+    task.history.push({
+      type: 'execution',
+      at: new Date().toISOString(),
+      by: executor.name,
+      startedAt,
+      success,
+      messages: executionMessages,
+    });
+
+    saveAgent(creatorAgent);
+    this._emit('agent:updated', this._sanitize(creatorAgent));
+  }
+
   // ─── Workflow Auto-Refine ───────────────────────────────────────────
   /** Evaluate a condition against the current task/agent state.
    *  Always re-fetches the agent from the live agents map to ensure
@@ -3538,6 +3607,49 @@ export class AgentManager {
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return task;
+  }
+
+  /**
+   * Search ALL agents' todoLists for a task assigned to or owned by the given agent.
+   * Returns { task, ownerAgentId } or null.
+   * Priority: in_progress > most recently done.
+   * Checks the agent's own list first, then all other agents' lists (for auto-assigned tasks).
+   */
+  _findTaskForCommitLink(agentId) {
+    // 1. Check the agent's own todoList first
+    const agent = this.agents.get(agentId);
+    if (agent?.todoList?.length) {
+      const own = agent.todoList.find(t => t.status === 'in_progress');
+      if (own) return { task: own, ownerAgentId: agentId };
+    }
+
+    // 2. Search ALL agents' todoLists for tasks assigned to this agent
+    let bestInProgress = null;
+    let bestDone = null;
+    for (const [creatorId, creatorAgent] of this.agents) {
+      if (!creatorAgent.todoList) continue;
+      for (const task of creatorAgent.todoList) {
+        const isOwnedOrAssigned = creatorId === agentId || task.assignee === agentId;
+        if (!isOwnedOrAssigned) continue;
+        if (task.status === 'in_progress') {
+          bestInProgress = { task, ownerAgentId: creatorId };
+          break; // in_progress is highest priority
+        }
+        if (task.status === 'done' && task.completedAt) {
+          if (!bestDone || new Date(task.completedAt) > new Date(bestDone.task.completedAt)) {
+            bestDone = { task, ownerAgentId: creatorId };
+          }
+        }
+      }
+      if (bestInProgress) break;
+    }
+
+    if (bestInProgress) return bestInProgress;
+    if (bestDone) {
+      console.log(`🔗 [Commit] No in_progress task — falling back to recently done task "${bestDone.task.text?.slice(0, 50)}"`);
+      return bestDone;
+    }
+    return null;
   }
 
   addTaskCommit(agentId, taskId, hash, message) {
@@ -4500,6 +4612,10 @@ export class AgentManager {
 
     this._emit('agent:stream:start', { agentId: executorId });
 
+    // Track conversation index for execution log (declared outside try for catch access)
+    let startMsgIdx = executor.conversationHistory.length;
+    let executionStartedAt = new Date().toISOString();
+
     try {
       // Check if there's a workflow transition from in_progress that defines a target status
       let targetStatus = 'done';
@@ -4533,11 +4649,18 @@ export class AgentManager {
         executor.project = task.project;
       }
 
+      // Update conversation start index right before execution
+      startMsgIdx = executor.conversationHistory.length;
+      executionStartedAt = new Date().toISOString();
+
       const result = await this.sendMessage(
         executorId,
         task.text,
         streamCallback
       );
+
+      // Save execution chat log to task history
+      this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, true);
 
       // Execution complete — always move to the determined targetStatus.
       // The task loop is the fallback executor (no workflow transition fired);
@@ -4547,6 +4670,10 @@ export class AgentManager {
     } catch (err) {
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
       this._emit('agent:stream:error', { agentId: executorId, error: err.message });
+
+      // Save execution chat log even on error
+      this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, false);
+
       // Mark the task as error — stays in its current column (via errorFromStatus) and blocks auto-transitions
       this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
       // Store the error message on the task for display
