@@ -60,6 +60,21 @@ code, pre, .font-mono {
   background: #64748b;
 }
 
+/* Thin dark scrollbar for inner containers (e.g. kanban columns) */
+.scrollbar-thin-dark::-webkit-scrollbar {
+  width: 5px;
+}
+.scrollbar-thin-dark::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin-dark::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+.scrollbar-thin-dark::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
 /* Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }
