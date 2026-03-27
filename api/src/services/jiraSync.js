@@ -94,15 +94,31 @@ export async function getJiraColumns() {
     const boardConfig = await jiraFetch(cfg, `/rest/agile/1.0/board/${cfg.boardId}/configuration`);
     const jiraColumns = boardConfig.columnConfig?.columns || [];
 
-    // Resolve status names (board config only has IDs)
+    // Fetch all project statuses to build a reliable ID→name map
+    let statusNameMap = {};
+    try {
+      const statuses = await jiraFetch(cfg, `/rest/api/3/project/${cfg.projectKey}/statuses`);
+      for (const issueType of (Array.isArray(statuses) ? statuses : [])) {
+        for (const s of issueType.statuses || []) {
+          statusNameMap[String(s.id)] = s.name;
+        }
+      }
+    } catch (e) {
+      console.warn('[Jira] Could not fetch project statuses for name resolution:', e.message);
+    }
+
     const columns = [];
     for (const col of jiraColumns) {
       const statusIds = (col.statuses || []).map(s => String(s.id));
+      const statusNames = statusIds.map(id => statusNameMap[id] || null).filter(Boolean);
       columns.push({
         name: col.name,
         statusIds,
+        statusNames,  // status names for JQL fallback
       });
     }
+
+    console.log(`[Jira] Board columns: ${columns.map(c => `"${c.name}" → IDs=[${c.statusIds.join(',')}] Names=[${c.statusNames.join(',')}]`).join(' | ')}`);
 
     _jiraColumnsCache = columns;
     _jiraColumnsCacheTime = Date.now();
@@ -181,7 +197,48 @@ export async function pollJira(agentManager) {
     for (const id of trigger.jiraStatusIds) allWatchedIds.add(String(id));
   }
 
-  console.log(`[Jira] Poll: ${allTriggers.length} trigger(s), watched status IDs: [${[...allWatchedIds].join(', ')}]`);
+  // Ensure column cache is warm (provides reliable status ID→name mapping)
+  if (!_jiraColumnsCache) {
+    await getJiraColumns().catch(() => {});
+  }
+
+  // Resolve status names for JQL and fallback matching.
+  // Sources: 1) cached column data (authoritative), 2) saved jiraStatusNames in triggers
+  const statusIdToName = {};
+
+  // From cached column data (most reliable — from Jira board config API)
+  const jiraColumnData = _jiraColumnsCache || [];
+  for (const col of jiraColumnData) {
+    for (let i = 0; i < (col.statusIds || []).length; i++) {
+      const sName = col.statusNames?.[i];
+      if (sName) statusIdToName[col.statusIds[i]] = sName;
+    }
+  }
+
+  // From trigger config (saved at workflow-save time) — only fill gaps
+  for (const { trigger } of allTriggers) {
+    const names = trigger.jiraStatusNames || [];
+    const ids = trigger.jiraStatusIds || [];
+    for (let i = 0; i < ids.length; i++) {
+      if (names[i] && !statusIdToName[String(ids[i])]) {
+        statusIdToName[String(ids[i])] = names[i];
+      }
+    }
+  }
+
+  // Build JQL using status names (most reliable across Jira board types)
+  // Fallback to IDs if names aren't available
+  const allWatchedNames = new Set();
+  for (const id of allWatchedIds) {
+    if (statusIdToName[id]) allWatchedNames.add(statusIdToName[id]);
+  }
+  const jqlStatusPart = allWatchedNames.size > 0
+    ? `status in (${[...allWatchedNames].map(n => `"${n}"`).join(',')})`
+    : `status in (${[...allWatchedIds].join(',')})`;
+  const jqlFilter = `project = "${cfg.projectKey}" AND ${jqlStatusPart}`;
+
+  console.log(`[Jira] Poll: ${allTriggers.length} trigger(s), watched IDs: [${[...allWatchedIds].join(', ')}], names: [${[...allWatchedNames].join(', ')}]`);
+  console.log(`[Jira] Poll: JQL = "${jqlFilter}"`);
 
   // Build set of existing Jira keys
   const existingJiraKeys = new Set();
@@ -191,20 +248,17 @@ export async function pollJira(agentManager) {
     }
   }
 
-  // Fetch ONLY issues whose status matches watched IDs (JQL filter)
-  // Use unquoted numeric IDs — quoted values are interpreted as status NAMES by Jira
-  const jqlFilter = `status in (${[...allWatchedIds].join(',')})`;
+  // Use /rest/api/3/search as PRIMARY — it reliably supports JQL filtering
+  // (The Agile board endpoint silently ignores JQL for some board types)
   let startAt = 0;
   const maxResults = 50;
   const allIssues = [];
-
-  console.log(`[Jira] Poll: JQL filter = "${jqlFilter}"`);
 
   try {
     while (true) {
       const data = await jiraFetch(
         cfg,
-        `/rest/agile/1.0/board/${cfg.boardId}/issue?jql=${encodeURIComponent(jqlFilter)}&startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
+        `/rest/api/3/search?jql=${encodeURIComponent(jqlFilter)}&startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
       );
       const issues = data.issues || [];
       allIssues.push(...issues);
@@ -212,24 +266,33 @@ export async function pollJira(agentManager) {
       startAt += maxResults;
     }
   } catch (err) {
-    // If the board endpoint fails with JQL, fall back to project-scoped search
-    console.warn(`[Jira] Board issue endpoint failed: ${err.message} — falling back to /rest/api/3/search`);
+    // Fallback: try Agile board endpoint without JQL filter
+    console.warn(`[Jira] Search API failed: ${err.message} — falling back to board endpoint (unfiltered)`);
     allIssues.length = 0;
     startAt = 0;
-    const searchJql = `project = "${cfg.projectKey}" AND status in (${[...allWatchedIds].join(',')})`;
-    while (true) {
-      const data = await jiraFetch(
-        cfg,
-        `/rest/api/3/search?jql=${encodeURIComponent(searchJql)}&startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
-      );
-      const issues = data.issues || [];
-      allIssues.push(...issues);
-      if (startAt + issues.length >= (data.total || issues.length)) break;
-      startAt += maxResults;
+    try {
+      while (true) {
+        const data = await jiraFetch(
+          cfg,
+          `/rest/agile/1.0/board/${cfg.boardId}/issue?startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
+        );
+        const issues = data.issues || [];
+        allIssues.push(...issues);
+        if (startAt + issues.length >= (data.total || issues.length)) break;
+        startAt += maxResults;
+      }
+    } catch (err2) {
+      console.error(`[Jira] Board endpoint also failed: ${err2.message}`);
+      return;
     }
   }
 
-  console.log(`[Jira] Poll: fetched ${allIssues.length} issue(s) matching watched statuses`);
+  // Log a sample of fetched issues for debugging
+  if (allIssues.length > 0 && allIssues.length <= 5) {
+    console.log(`[Jira] Poll: fetched ${allIssues.length} issue(s): ${allIssues.map(i => `${i.key}(status=${i.fields?.status?.name}/${i.fields?.status?.id})`).join(', ')}`);
+  } else {
+    console.log(`[Jira] Poll: fetched ${allIssues.length} issue(s)`);
+  }
 
   let created = 0;
 
@@ -238,13 +301,24 @@ export async function pollJira(agentManager) {
     const watchedStatusIds = new Set(trigger.jiraStatusIds.map(String));
     const targetColumn = trigger.from; // the PulsarTeam column to create the task in
 
+    // Also resolve names for THIS trigger's specific IDs
+    const triggerWatchedNames = new Set(
+      trigger.jiraStatusIds.map(id => (statusIdToName[String(id)] || '').toLowerCase()).filter(Boolean)
+    );
+
     let matchedCount = 0;
     let skippedStatus = 0;
     let skippedExisting = 0;
 
     for (const issue of allIssues) {
       const statusId = String(issue.fields?.status?.id || '');
-      if (!statusId || !watchedStatusIds.has(statusId)) {
+      const statusName = (issue.fields?.status?.name || '').toLowerCase();
+
+      // Match by status ID (primary) OR status name (fallback)
+      const matchesById = statusId && watchedStatusIds.has(statusId);
+      const matchesByName = statusName && triggerWatchedNames.has(statusName);
+
+      if (!matchesById && !matchesByName) {
         skippedStatus++;
         continue;
       }
@@ -282,15 +356,13 @@ export async function pollJira(agentManager) {
         }
         existingJiraKeys.add(issue.key);
         created++;
-        console.log(`[Jira] Imported ${issue.key} "${summary}" (status ${statusId}) → board "${boardId}" column "${targetColumn}"`);
+        console.log(`[Jira] Imported ${issue.key} "${summary}" (status "${issue.fields?.status?.name}"/${statusId}, matched=${matchesById ? 'id' : 'name'}) → board "${boardId}" column "${targetColumn}"`);
         // Execute transition actions (change_status, run_agent, etc.)
         await executeTransitionActions(trigger, actualTask || task, creatorAgent.id, agentManager);
       }
     }
 
-    if (matchedCount > 0 || skippedStatus > 0) {
-      console.log(`[Jira] Poll trigger "${targetColumn}": watched=[${[...watchedStatusIds].join(',')}], matched=${matchedCount}, skippedStatus=${skippedStatus}, skippedExisting=${skippedExisting}`);
-    }
+    console.log(`[Jira] Poll trigger "${targetColumn}": watchedIds=[${[...watchedStatusIds].join(',')}], watchedNames=[${[...triggerWatchedNames].join(',')}], matched=${matchedCount}, skippedStatus=${skippedStatus}, skippedExisting=${skippedExisting}`);
   }
 
   if (created > 0) {
@@ -719,12 +791,31 @@ export async function handleWebhook(payload, agentManager) {
   }
 
   if (!existingTask) {
+    // Resolve status names from cached column data for fallback matching
+    const jiraColumnData = _jiraColumnsCache || [];
+    const statusIdToName = {};
+    for (const col of jiraColumnData) {
+      for (let i = 0; i < (col.statusIds || []).length; i++) {
+        const sName = col.statusNames?.[i];
+        if (sName) statusIdToName[col.statusIds[i]] = sName;
+      }
+    }
+    const issueStatusName = (issue.fields.status.name || '').toLowerCase();
+
     // Try to import as new task
     for (const { trigger, boardId } of allTriggers) {
       // Normalize to strings for safe comparison
       const watchedSet = new Set(trigger.jiraStatusIds.map(String));
-      if (!watchedSet.has(statusId)) {
-        console.log(`[Jira] Webhook: ${issue.key} statusId="${statusId}" not in watched [${[...watchedSet].join(',')}] — skipped`);
+      // Also build name-based set for fallback
+      const watchedNameSet = new Set(
+        trigger.jiraStatusIds.map(id => (statusIdToName[String(id)] || '').toLowerCase()).filter(Boolean)
+      );
+
+      const matchesById = watchedSet.has(statusId);
+      const matchesByName = issueStatusName && watchedNameSet.has(issueStatusName);
+
+      if (!matchesById && !matchesByName) {
+        console.log(`[Jira] Webhook: ${issue.key} status="${issue.fields.status.name}"/${statusId} not in watched IDs=[${[...watchedSet].join(',')}] names=[${[...watchedNameSet].join(',')}] — skipped`);
         continue;
       }
 

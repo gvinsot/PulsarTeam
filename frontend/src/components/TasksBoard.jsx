@@ -1334,7 +1334,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                     <select value={t.trigger || 'on_enter'}
                       onChange={e => {
                         const patch = { trigger: e.target.value };
-                        if (e.target.value === 'jira_ticket') patch.jiraStatusIds = [];
+                        if (e.target.value === 'jira_ticket') { patch.jiraStatusIds = []; patch.jiraStatusNames = []; }
                         updateTransition(idx, patch);
                       }}
                       className="w-full px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200">
@@ -1352,12 +1352,14 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                               checked={(t.jiraStatusIds || []).some(id => jc.statusIds.includes(id))}
                               onChange={e => {
                                 const current = new Set(t.jiraStatusIds || []);
+                                const currentNames = new Set(t.jiraStatusNames || []);
                                 jc.statusIds.forEach(id => e.target.checked ? current.add(id) : current.delete(id));
-                                updateTransition(idx, { jiraStatusIds: [...current] });
+                                (jc.statusNames || []).forEach(n => e.target.checked ? currentNames.add(n) : currentNames.delete(n));
+                                updateTransition(idx, { jiraStatusIds: [...current], jiraStatusNames: [...currentNames] });
                               }}
                               className="rounded border-dark-600"
                             />
-                            {jc.name}
+                            {jc.name}{jc.statusIds.length === 0 && <span className="text-dark-500 text-[9px] ml-1">(no statuses mapped)</span>}
                           </label>
                         ))}
                         {jiraColumns.length === 0 && <div className="text-[10px] text-dark-500 italic">Loading Jira columns...</div>}
