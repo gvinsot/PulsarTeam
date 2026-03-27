@@ -60,11 +60,11 @@ const DEFAULT_COLUMNS = [
 ];
 
 const DEFAULT_TRANSITIONS = [
-  { from: 'idea', to: 'backlog', triggerType: 'agent', agent: 'product-manager', autoRefine: true, mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.' },
-  { from: 'backlog', to: 'pending', triggerType: 'none', agent: null, autoRefine: false, mode: 'refine', instructions: '' },
-  { from: 'pending', to: 'done', triggerType: 'agent', agent: 'developer', autoRefine: true, mode: 'execute', instructions: '' },
-  { from: 'in_progress', to: 'backlog', triggerType: 'none', agent: null, autoRefine: false, mode: 'refine', instructions: '' },
-  { from: 'done', to: 'backlog', triggerType: 'none', agent: null, autoRefine: false, mode: 'refine', instructions: '' },
+  { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'product-manager', mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.', targetStatus: 'backlog' }] },
+  { from: 'backlog', trigger: 'on_enter', actions: [] },
+  { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: '', targetStatus: 'done' }] },
+  { from: 'in_progress', trigger: 'on_enter', actions: [] },
+  { from: 'done', trigger: 'on_enter', actions: [] },
 ];
 
 const DEFAULT_WORKFLOW = {

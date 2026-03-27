@@ -3604,12 +3604,27 @@ export class AgentManager {
     if (!task) throw new Error('Task not found');
     if (task.status === 'done') throw new Error('Task already completed');
 
-    console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}"`);  
+    console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`);
 
-    // Set to pending — this triggers _checkAutoRefine which will find
-    // the transition (pending -> in_progress with a developer role agent)
-    // and execute the task via the automatic transition system.
-    this.setTaskStatus(agentId, taskId, 'pending');
+    if (task.status === 'pending') {
+      // Check if there's a workflow transition with a run_agent action for pending tasks
+      const workflow = await getWorkflowForBoard(task.boardId);
+      const hasRunAgent = workflow.transitions
+        .filter(t => this._validTransition(t))
+        .some(t => t.from === 'pending' && (t.actions || []).some(a => a.type === 'run_agent'));
+
+      if (hasRunAgent) {
+        // Workflow manages this status — trigger _checkAutoRefine (fire-and-forget)
+        this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
+      } else {
+        // No workflow run_agent transition — move directly to in_progress.
+        // _resumeInProgressTask will pick it up on the next tick and send to LLM.
+        this.setTaskStatus(agentId, taskId, 'in_progress', { skipAutoRefine: true, by: 'task-loop' });
+      }
+    } else {
+      // For other statuses (e.g. error → pending), use setTaskStatus to trigger the chain.
+      this.setTaskStatus(agentId, taskId, 'pending');
+    }
 
     return { taskId, response: null };
   }
@@ -4444,10 +4459,23 @@ export class AgentManager {
       let targetStatus = 'done';
       try {
         const workflow = await getWorkflowForBoard(task.boardId);
-        const transition = workflow.transitions.find(
-          t => t.from === 'in_progress' && t.autoRefine && (t.mode === 'execute' || t.mode === 'decide' || t.agent)
-        );
-        if (transition?.to) targetStatus = transition.to;
+        const transition = workflow.transitions.find(t => {
+          if (t.from !== 'in_progress') return false;
+          // New format: look for run_agent action with a targetStatus
+          if (this._validTransition(t)) {
+            return (t.actions || []).some(a => a.type === 'run_agent' && a.targetStatus);
+          }
+          // Old format fallback
+          return t.autoRefine && (t.mode === 'execute' || t.mode === 'decide' || t.agent);
+        });
+        if (transition) {
+          if (this._validTransition(transition)) {
+            const runAction = (transition.actions || []).find(a => a.type === 'run_agent' && a.targetStatus);
+            if (runAction?.targetStatus) targetStatus = runAction.targetStatus;
+          } else if (transition.to) {
+            targetStatus = transition.to;
+          }
+        }
       } catch (_) { /* use default */ }
 
       // Auto-switch executor to the task's project if needed
