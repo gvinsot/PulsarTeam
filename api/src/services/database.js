@@ -194,8 +194,15 @@ export async function getAllAgents() {
   if (!pool) return [];
   
   try {
-    const result = await pool.query('SELECT data FROM agents ORDER BY created_at');
-    return result.rows.map(row => row.data);
+    const result = await pool.query('SELECT data, owner_id FROM agents ORDER BY created_at');
+    return result.rows.map(row => {
+      const agent = row.data;
+      // Ensure ownerId from the DB column is always present in the agent object
+      if (row.owner_id && !agent.ownerId) {
+        agent.ownerId = row.owner_id;
+      }
+      return agent;
+    });
   } catch (err) {
     console.error('Failed to load agents:', err.message);
     return [];
@@ -207,10 +214,10 @@ export async function saveAgent(agent) {
   
   try {
     await pool.query(
-      `INSERT INTO agents (id, data, updated_at) 
-       VALUES ($1, $2, NOW()) 
-       ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = NOW()`,
-      [agent.id, JSON.stringify(agent)]
+      `INSERT INTO agents (id, data, owner_id, updated_at) 
+       VALUES ($1, $2, $3, NOW()) 
+       ON CONFLICT (id) DO UPDATE SET data = $2, owner_id = COALESCE($3, agents.owner_id), updated_at = NOW()`,
+      [agent.id, JSON.stringify(agent), agent.ownerId || null]
     );
   } catch (err) {
     console.error('Failed to save agent:', err.message);
