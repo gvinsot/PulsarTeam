@@ -294,6 +294,7 @@ export function agentRoutes(agentManager) {
   });
 
   router.patch('/:id/tasks/:taskId', (req, res) => {
+    try {
     const { status, text, project, source, recurrence } = req.body || {};
     // Source is immutable once set at creation — reject any attempt to change it
     if (source !== undefined) {
@@ -326,20 +327,21 @@ export function agentRoutes(agentManager) {
     if (!task) return res.status(404).json({ error: 'Not found' });
     // If task moved OUT of in_progress, stop the agent
     if (oldStatus === 'in_progress' && status && status !== 'in_progress' && agent?.status === 'busy') {
-      console.log(`\u{1F6D1} [Task] Task moved from in_progress to ${status} \u2014 stopping agent "${agent.name}"`);
+      console.log(`\u{1F6D1} [Task] Task moved from in_progress to ${status} — stopping agent "${agent.name}"`);
       agentManager.stopAgent(req.params.id);
     }
-    res.json(task);  } catch (err) {
-    console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
-    // Try to mark the task as error so it doesn't get retried
-    try {
-      agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
-      const errorAgent = agentManager.agents.get(req.params.id);
-      const errorTask = errorAgent?.todoList?.find(t => t.id === req.params.taskId);
-      if (errorTask) errorTask.error = err.message;
-    } catch (_) { /* best effort */ }
-    res.status(500).json({ error: err.message });
-  }  });
+    res.json(task);
+    } catch (err) {
+      console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
+      try {
+        agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
+        const errorAgent = agentManager.agents.get(req.params.id);
+        const errorTask = errorAgent?.todoList?.find(t => t.id === req.params.taskId);
+        if (errorTask) errorTask.error = err.message;
+      } catch (_) { /* best effort */ }
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   router.delete('/:id/tasks', (req, res) => {
     const success = agentManager.clearTasks(req.params.id);
