@@ -189,6 +189,13 @@ export function agentRoutes(agentManager) {
     res.json(agent.conversationHistory);
   });
 
+  // Stop agent
+  router.post('/:id/stop', requireAgentAccess, (req, res) => {
+    const stopped = agentManager.stopAgent(req.params.id);
+    if (stopped === false) return res.status(404).json({ error: 'Agent not found' });
+    res.json({ ok: true, stopped });
+  });
+
   // Clear conversation history
   router.delete('/:id/history', requireAgentAccess, (req, res) => {
     const success = agentManager.clearHistory(req.params.id);

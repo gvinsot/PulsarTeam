@@ -161,6 +161,16 @@ export async function processTransition(task, agentManager, io) {
       return;
     }
 
+    // Store the executing agent ID on the task for stop functionality
+    const creatorAgentForFlag = agentManager.agents.get(task.agentId);
+    const actualTaskForFlag = creatorAgentForFlag?.todoList?.find(t => t.id === task.id);
+    if (actualTaskForFlag) {
+      actualTaskForFlag.actionRunning = true;
+      actualTaskForFlag.actionRunningAgentId = agent.id;
+      saveAgent(creatorAgentForFlag);
+      io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTaskForFlag });
+    }
+
     // Auto-switch agent to the task's project if needed
     if (task.project && task.project !== agent.project) {
       console.log(`[Workflow] Switching "${agent.name}" to project "${task.project}" for transition`);
@@ -174,7 +184,7 @@ export async function processTransition(task, agentManager, io) {
     if (isTitle) {
       const maxLen = agent.contextLength || 4000;
       const description = (task.text || '').slice(0, maxLen);
-      const titlePrompt = `Generate a short, concise title (max 10 words) for the following task description. Reply with ONLY the title, nothing else.\n\n${description}`;
+      const titlePrompt = `Generate a short, concise title (max 20 words) for the following task description. Reply with ONLY the title, nothing else.\n\n${description}`;
 
       console.log(`[Workflow] Generating title for "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
@@ -364,5 +374,14 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
     }
   } finally {
     _executionLocks.delete(lockKey);
+    // Clear actionRunning flag
+    const creatorAgentFinal = agentManager.agents.get(task.agentId);
+    const actualTaskFinal = creatorAgentFinal?.todoList?.find(t => t.id === task.id);
+    if (actualTaskFinal && actualTaskFinal.actionRunning) {
+      actualTaskFinal.actionRunning = false;
+      delete actualTaskFinal.actionRunningAgentId;
+      saveAgent(creatorAgentFinal);
+      io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTaskFinal });
+    }
   }
 }

@@ -134,7 +134,7 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
             <h4 className="text-sm font-medium text-dark-200">MCP associe</h4>
             <p className="text-[11px] text-dark-500">Configurez le serveur MCP dedie a ce plugin (URL, authentification).</p>
           </div>
-          {(value.mcps || []).length === 0 && (
+          {(value.mcps || []).length === 0 && !readOnly && (
             <button
               onClick={addMcp}
               className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors flex items-center gap-1"

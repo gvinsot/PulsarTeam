@@ -74,6 +74,12 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  stopAgent: (id) =>
+    fetch(`${API_BASE}/agents/${id}/stop`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   chatAgent: (id, message) =>
     fetch(`${API_BASE}/agents/${id}/chat`, {
       method: 'POST',

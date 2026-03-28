@@ -2341,6 +2341,17 @@ export class AgentManager {
         continue;
       }
 
+      // ── Handle @list_projects() — list available projects ───────────
+      if (call.tool === 'list_projects') {
+        const projects = await this._listAvailableProjects();
+        if (projects.length === 0) {
+          results.push({ tool: 'list_projects', args: [], success: true, result: 'No projects found.' });
+        } else {
+          results.push({ tool: 'list_projects', args: [], success: true, result: `Available projects:\n${projects.join('\n')}` });
+        }
+        continue;
+      }
+
       // ── Handle @list_my_tasks() — list agent's own tasks ────────────
       if (call.tool === 'list_my_tasks') {
         const tasks = agent.todoList || [];
@@ -4460,7 +4471,9 @@ export class AgentManager {
                 console.log(`[Workflow] Condition re-check: run_agent mode="${action.mode}" role="${action.role}"`);
                 processTransition(enrichedTask, this, this.io)
                   .catch(err => console.error(`[Workflow] Condition re-check error:`, err.message))
-                  .finally(() => this._conditionProcessing.delete(lockKey));
+                  .finally(() => {
+                    this._conditionProcessing.delete(lockKey);
+                  });
                 didReturn = true;
                 break;
               } else if (action.type === 'change_status') {
