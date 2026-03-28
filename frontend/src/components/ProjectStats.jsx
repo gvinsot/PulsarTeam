@@ -5,9 +5,19 @@ import {
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
 import { api } from '../api';
-import { BarChart3, Bug, Sparkles, Clock, TrendingUp, RefreshCw, X } from 'lucide-react';
+import { BarChart3, Bug, Sparkles, Wrench, ArrowUpCircle, BookOpen, HelpCircle, Layers, Clock, TrendingUp, RefreshCw, X } from 'lucide-react';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, Filler);
+
+const TYPE_META = {
+  bug:           { label: 'Bugs',          icon: Bug,           color: 'text-red-400' },
+  feature:       { label: 'Features',      icon: Sparkles,      color: 'text-emerald-400' },
+  technical:     { label: 'Technical',     icon: Wrench,        color: 'text-blue-400' },
+  improvement:   { label: 'Improvements',  icon: ArrowUpCircle, color: 'text-violet-400' },
+  documentation: { label: 'Documentation', icon: BookOpen,      color: 'text-amber-400' },
+  other:         { label: 'Other',         icon: HelpCircle,    color: 'text-slate-400' },
+  untyped:       { label: 'Untyped',       icon: Layers,        color: 'text-dark-400' },
+};
 
 function formatDuration(ms) {
   if (!ms || ms <= 0) return '—';
@@ -182,8 +192,13 @@ export default function ProjectStats({ projectName, onClose, embedded = false })
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <MiniCard label="Total" value={stats.total} />
-        <MiniCard label="Bugs" value={stats.byType?.bug || 0} icon={<Bug size={12} className="text-red-400" />} />
-        <MiniCard label="Features" value={stats.byType?.feature || 0} icon={<Sparkles size={12} className="text-emerald-400" />} />
+        {Object.entries(stats.byType || {}).filter(([, count]) => count > 0).map(([type, count]) => {
+          const meta = TYPE_META[type] || { label: type, icon: Layers, color: 'text-dark-400' };
+          const Icon = meta.icon;
+          return (
+            <MiniCard key={type} label={meta.label} value={count} icon={<Icon size={12} className={meta.color} />} />
+          );
+        })}
         <MiniCard
           label="Avg Resolution"
           value={formatDuration(stats.resolution?.avg)}

@@ -534,14 +534,14 @@ export class AgentManager {
   getTaskStats(projectFilter = null) {
     const tasks = this._collectTasks(projectFilter);
     const total = tasks.length;
-    const byType = { bug: 0, feature: 0 };
+    const byType = {};
     const byStatus = {};
     const resolutionTimes = [];
-    const resolutionByType = { bug: [], feature: [] };
+    const resolutionByType = {};
     const stateDurations = {};
 
     for (const t of tasks) {
-      const typ = t.type || 'bug';
+      const typ = t.taskType || 'untyped';
       byType[typ] = (byType[typ] || 0) + 1;
       byStatus[t.status] = (byStatus[t.status] || 0) + 1;
 
@@ -590,6 +590,11 @@ export class AgentManager {
       };
     }
 
+    const resolutionByTypeStats = {};
+    for (const [typ, arr] of Object.entries(resolutionByType)) {
+      resolutionByTypeStats[typ] = { count: arr.length, avg: Math.round(avg(arr)), median: Math.round(median(arr)) };
+    }
+
     return {
       total,
       byType,
@@ -599,10 +604,7 @@ export class AgentManager {
         avg: Math.round(avg(resolutionTimes)),
         median: Math.round(median(resolutionTimes)),
       },
-      resolutionByType: {
-        bug: { count: resolutionByType.bug.length, avg: Math.round(avg(resolutionByType.bug)), median: Math.round(median(resolutionByType.bug)) },
-        feature: { count: resolutionByType.feature.length, avg: Math.round(avg(resolutionByType.feature)), median: Math.round(median(resolutionByType.feature)) },
-      },
+      resolutionByType: resolutionByTypeStats,
       avgStateDurations,
     };
   }
@@ -3503,7 +3505,7 @@ export class AgentManager {
   // Terminology:
   //   - agentId (creator): the agent whose todoList stores this task (Task Creator)
   //   - assignee: the agent that actually executes this task (Task Assignee)
-  addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence } = {}) {
+  addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence, taskType } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
@@ -3519,6 +3521,7 @@ export class AgentManager {
       createdAt: now,
       history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };
+    if (taskType) newTask.taskType = taskType;
     // Store recurrence config if provided
     if (recurrence && recurrence.enabled) {
       newTask.recurrence = {
@@ -3659,6 +3662,28 @@ export class AgentManager {
       field: 'project',
       oldValue: oldProject,
       newValue: project,
+    });
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return task;
+  }
+
+  updateTaskType(agentId, taskId, taskType, by = 'user') {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    const oldType = task.taskType || null;
+    task.taskType = taskType || null;
+    if (!task.history) task.history = [];
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by,
+      type: 'edit',
+      field: 'taskType',
+      oldValue: oldType,
+      newValue: taskType || null,
     });
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));

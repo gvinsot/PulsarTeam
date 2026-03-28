@@ -117,6 +117,7 @@ export async function processTransition(task, agentManager, io) {
   // Computed outside try for catch-block access
   const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
   const isTitle = mode === 'title';
+  const isSetType = mode === 'set_type';
   let _execAgent = null;       // the agent running the execution (for error-path logging)
   let _execStartMsgIdx = -1;
   let _execStartedAt = null;
@@ -212,6 +213,34 @@ export async function processTransition(task, agentManager, io) {
       } catch (err) {
         console.error(`[Workflow] Title generation failed for "${task.text?.slice(0, 60)}":`, err.message);
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, titleStartMsgIdx, titleStartedAt, false, 'title');
+      } finally {
+        agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
+      }
+      _executionLocks.delete(lockKey);
+      return;
+    }
+
+    // Set-type mode: lightweight — classify task into a type (bug, feature, technical, etc.)
+    if (isSetType) {
+      const maxLen = agent.contextLength || 4000;
+      const description = (task.text || '').slice(0, maxLen);
+      const typePrompt = `Classify the following task into exactly one type. The possible types are: bug, feature, technical, improvement, documentation, other.\n\nReply with ONLY the type (a single word, lowercase), nothing else.\n\nTask:\n${description}`;
+
+      console.log(`[Workflow] Classifying type for "${task.text?.slice(0, 60)}" via ${agent.name}`);
+
+      const typeStartMsgIdx = (agent.conversationHistory || []).length;
+      const typeStartedAt = new Date().toISOString();
+      try {
+        const result = await agentManager.sendMessage(agent.id, typePrompt, () => {});
+        const rawType = (result || '').trim().toLowerCase().replace(/[^a-z_]/g, '');
+        const VALID_TYPES = ['bug', 'feature', 'technical', 'improvement', 'documentation', 'other'];
+        const taskType = VALID_TYPES.includes(rawType) ? rawType : 'other';
+        agentManager.updateTaskType(task.agentId, task.id, taskType, agent.name);
+        console.log(`[Workflow] Type classified: "${taskType}" for "${task.text?.slice(0, 60)}"`);
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, typeStartMsgIdx, typeStartedAt, true, 'set_type');
+      } catch (err) {
+        console.error(`[Workflow] Type classification failed for "${task.text?.slice(0, 60)}":`, err.message);
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, typeStartMsgIdx, typeStartedAt, false, 'set_type');
       } finally {
         agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
@@ -376,7 +405,7 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
     try {
       // Save execution chat log even on error (for all action modes)
       if (_execAgent && _execStartMsgIdx >= 0) {
-        const errorMode = isExecution ? 'execute' : isTitle ? 'title' : mode === 'decide' ? 'decide' : 'refine';
+        const errorMode = isExecution ? 'execute' : isTitle ? 'title' : isSetType ? 'set_type' : mode === 'decide' ? 'decide' : 'refine';
         agentManager._saveExecutionLog(task.agentId, task.id, _execAgent.id, _execStartMsgIdx, _execStartedAt, false, errorMode);
       }
       // On error, always set task to error status — keeps it in the current column and blocks auto-transitions

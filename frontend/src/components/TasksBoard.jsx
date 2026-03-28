@@ -2,7 +2,8 @@ import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   Search, Trash2, Clock, X, AlertTriangle,
   Edit3, Save, Check, Tag, Calendar, ChevronDown, ChevronRight, Plus, Settings,
-  ArrowRight, Zap, User, GitCommit, KanbanSquare, Repeat, MessageSquare, FolderKanban, Code, Loader2, Square
+  ArrowRight, Zap, User, GitCommit, KanbanSquare, Repeat, MessageSquare, FolderKanban, Code, Loader2, Square,
+  Bug, Sparkles, Wrench, BookOpen, ArrowUpCircle, HelpCircle, Layers
 } from 'lucide-react';
 import { api } from '../api';
 import ReactMarkdown from 'react-markdown';
@@ -42,6 +43,7 @@ function buildColumns(workflowColumns) {
       showAgent: col.showAgent || false,
       showCreator: col.showCreator || false,
       showProject: col.showProject || false,
+      showTaskType: col.showTaskType || false,
     };
   });
 }
@@ -82,6 +84,19 @@ const SOURCE_META = {
   recurrence: { label: () => 'Recurring',          cls: 'text-teal-400 bg-teal-500/10 ring-teal-500/20' },
 };
 
+// ── Task type definitions ────────────────────────────────────────────────────
+
+const TASK_TYPES = [
+  { value: 'bug',           label: 'Bug',           icon: Bug,            cls: 'text-red-400 bg-red-500/10 ring-red-500/20' },
+  { value: 'feature',       label: 'Feature',       icon: Sparkles,       cls: 'text-emerald-400 bg-emerald-500/10 ring-emerald-500/20' },
+  { value: 'technical',     label: 'Technical',     icon: Wrench,         cls: 'text-blue-400 bg-blue-500/10 ring-blue-500/20' },
+  { value: 'improvement',   label: 'Improvement',   icon: ArrowUpCircle,  cls: 'text-violet-400 bg-violet-500/10 ring-violet-500/20' },
+  { value: 'documentation', label: 'Documentation', icon: BookOpen,       cls: 'text-amber-400 bg-amber-500/10 ring-amber-500/20' },
+  { value: 'other',         label: 'Other',         icon: HelpCircle,     cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
+];
+
+const TASK_TYPE_MAP = Object.fromEntries(TASK_TYPES.map(t => [t.value, t]));
+
 // ── CreateTaskModal ──────────────────────────────────────────────────────────
 
 function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions, defaultStatus, boardId }) {
@@ -94,6 +109,7 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
   const [text, setText] = useState('');
   const [project, setProject] = useState('');
   const [status, setStatus] = useState(initialStatus);
+  const [taskType, setTaskType] = useState('');
   const [recurring, setRecurring] = useState(false);
   const [recurrencePeriod, setRecurrencePeriod] = useState('daily');
   const [customInterval, setCustomInterval] = useState(60);
@@ -134,7 +150,7 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
           ? customInterval
           : RECURRENCE_PERIODS.find(p => p.value === recurrencePeriod)?.minutes || 1440,
       } : undefined;
-      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId, recurrence);
+      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId, recurrence, taskType || undefined);
       await onCreated();
       onClose();
     } finally {
@@ -213,6 +229,21 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
               >
                 {CREATE_STATUSES.map(opt => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-36">
+              <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+                <Layers className="inline w-3 h-3 mr-1" />Type
+              </label>
+              <select
+                value={taskType}
+                onChange={e => setTaskType(e.target.value)}
+                className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+              >
+                <option value="">None</option>
+                {TASK_TYPES.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
                 ))}
               </select>
             </div>
@@ -298,9 +329,9 @@ function ExecutionLogEntry({ entry, index }) {
     ? duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m${duration % 60}s`
     : null;
 
-  const MODE_LABELS = { execute: 'Execution', refine: 'Refine', decide: 'Decide', title: 'Title' };
-  const MODE_COLORS = { execute: 'text-blue-300', refine: 'text-violet-300', decide: 'text-amber-300', title: 'text-teal-300' };
-  const MODE_ICON_COLORS = { execute: 'text-blue-400', refine: 'text-violet-400', decide: 'text-amber-400', title: 'text-teal-400' };
+  const MODE_LABELS = { execute: 'Execution', refine: 'Refine', decide: 'Decide', title: 'Title', set_type: 'Set Type' };
+  const MODE_COLORS = { execute: 'text-blue-300', refine: 'text-violet-300', decide: 'text-amber-300', title: 'text-teal-300', set_type: 'text-pink-300' };
+  const MODE_ICON_COLORS = { execute: 'text-blue-400', refine: 'text-violet-400', decide: 'text-amber-400', title: 'text-teal-400', set_type: 'text-pink-400' };
   const modeKey = entry.mode || 'execute';
   const modeLabel = MODE_LABELS[modeKey] || 'Execution';
 
@@ -372,6 +403,8 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   const [savingProject, setSavingProject] = useState(false);
   const [editingAgent, setEditingAgent] = useState(false);
   const [transferring, setTransferring] = useState(false);
+  const [editingType, setEditingType] = useState(false);
+  const [savingType, setSavingType] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refining, setRefining] = useState(false);
   const statusRef = useRef(null);
@@ -719,6 +752,70 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
               )}
             </div>
 
+            {/* Task Type */}
+            <div className="flex items-center justify-between py-2 border-b border-dark-800">
+              <div className="flex items-center gap-2 text-xs text-dark-400">
+                <Layers className="w-3.5 h-3.5" />
+                Type
+              </div>
+              {editingType ? (
+                <div className="flex items-center gap-1.5">
+                  <select
+                    autoFocus
+                    defaultValue={task.taskType || ''}
+                    onChange={async e => {
+                      const newType = e.target.value || null;
+                      if (newType === (task.taskType || '')) { setEditingType(false); return; }
+                      setSavingType(true);
+                      try {
+                        await api.updateTask(task.agentId, task.id, { taskType: newType || '' });
+                        onRefresh?.();
+                      } finally {
+                        setSavingType(false);
+                        setEditingType(false);
+                      }
+                    }}
+                    disabled={savingType}
+                    className="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
+                      focus:outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    <option value="">None</option>
+                    {TASK_TYPES.map(t => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setEditingType(false)}
+                    className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
+                    title="Cancel"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  {task.taskType && TASK_TYPE_MAP[task.taskType] ? (() => {
+                    const tt = TASK_TYPE_MAP[task.taskType];
+                    const Icon = tt.icon;
+                    return (
+                      <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${tt.cls}`}>
+                        <Icon className="w-2.5 h-2.5" />
+                        {tt.label}
+                      </span>
+                    );
+                  })() : (
+                    <span className="text-xs text-dark-500 italic">None</span>
+                  )}
+                  <button
+                    onClick={() => setEditingType(true)}
+                    className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
+                    title="Change type"
+                  >
+                    <Edit3 className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Assignee */}
             <div className="flex items-center justify-between py-2 border-b border-dark-800">
@@ -974,7 +1071,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
 
 // ── TaskCard ────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject }) {
+function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType }) {
   const isError = task.status === 'error';
   const isDraggingRef = useRef(false);
 
@@ -1025,6 +1122,16 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
             {task.project}
           </span>
         )}
+        {showTaskType && task.taskType && TASK_TYPE_MAP[task.taskType] && (() => {
+          const tt = TASK_TYPE_MAP[task.taskType];
+          const Icon = tt.icon;
+          return (
+            <span className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${tt.cls}`}>
+              <Icon className="w-2.5 h-2.5" />
+              {tt.label}
+            </span>
+          );
+        })()}
         {showCreator && sourceMeta && (
           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${sourceMeta.cls}`}>
             {sourceMeta.label(task.source)}
@@ -1087,7 +1194,7 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, showAgent, showCreator, showProject }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, showAgent, showCreator, showProject, showTaskType }) {
   const [dragOver, setDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
 
@@ -1145,6 +1252,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
             showAgent={showAgent}
             showCreator={showCreator}
             showProject={showProject}
+            showTaskType={showTaskType}
           />
         ))}
         {tasks.length === 0 && (
@@ -1189,6 +1297,7 @@ const ACTION_OPTIONS = [
   { value: 'run_agent:execute', label: 'Execute task (agent)' },
   { value: 'run_agent:refine', label: 'Refine description (agent)' },
   { value: 'run_agent:title', label: 'Generate title (agent)' },
+  { value: 'run_agent:set_type', label: 'Set task type (agent)' },
   { value: 'run_agent:decide', label: 'Decide to move (agent)' },
   { value: 'change_status', label: 'Move to status' },
   { value: 'move_jira_status', label: '🔗 Move Jira ticket to status', jira: true },
@@ -1200,6 +1309,7 @@ function createAction(key, cols) {
   if (key === 'run_agent:execute') return { type: 'run_agent', mode: 'execute', role: '', instructions: '', targetStatus: cols[cols.length - 1]?.id || '' };
   if (key === 'run_agent:refine') return { type: 'run_agent', mode: 'refine', role: '', instructions: '', targetStatus: cols[1]?.id || '' };
   if (key === 'run_agent:title') return { type: 'run_agent', mode: 'title', role: '' };
+  if (key === 'run_agent:set_type') return { type: 'run_agent', mode: 'set_type', role: '' };
   if (key === 'run_agent:decide') return { type: 'run_agent', mode: 'decide', role: '', instructions: '', targetStatus: cols[1]?.id || '' };
   if (key === 'change_status') return { type: 'change_status', target: cols[1]?.id || '' };
   if (key === 'move_jira_status') return { type: 'move_jira_status', jiraStatusIds: [] };
@@ -1456,6 +1566,12 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                           className="rounded border-dark-600 bg-dark-700 text-indigo-500 focus:ring-indigo-500/30 w-3 h-3" />
                         <FolderKanban className="w-3 h-3" />
                       </label>
+                      <label className="flex items-center gap-1 text-[10px] text-dark-400 cursor-pointer" title="Show task type on cards">
+                        <input type="checkbox" checked={col.showTaskType || false}
+                          onChange={e => updateCol(idx, { showTaskType: e.target.checked })}
+                          className="rounded border-dark-600 bg-dark-700 text-indigo-500 focus:ring-indigo-500/30 w-3 h-3" />
+                        <Layers className="w-3 h-3" />
+                      </label>
                     </div>
                   </div>
 
@@ -1639,7 +1755,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                           </div>
 
                           {/* Instructions for agent actions */}
-                          {action.type === 'run_agent' && action.mode !== 'title' && (
+                          {action.type === 'run_agent' && action.mode !== 'title' && action.mode !== 'set_type' && (
                             <textarea value={action.instructions || ''}
                               onChange={e => updateAction(idx, ai, { instructions: e.target.value })}
                               placeholder={action.mode === 'decide'
@@ -2245,6 +2361,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
               showAgent={col.showAgent}
               showCreator={col.showCreator}
               showProject={col.showProject}
+              showTaskType={col.showTaskType}
             />
           ))}
         </div>

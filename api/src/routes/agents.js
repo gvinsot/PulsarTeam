@@ -261,7 +261,7 @@ export function agentRoutes(agentManager) {
   // ── Task endpoints ──────────────────────────────────────────────────────
   router.post('/:id/tasks', requireAgentAccess, async (req, res) => {
     try {
-      const { text, project, source, status, boardId, recurrence } = req.body;
+      const { text, project, source, status, boardId, recurrence, taskType } = req.body;
       if (!text) return res.status(400).json({ error: 'Text required' });
       const agent = agentManager.agents.get(req.params.id);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -296,7 +296,7 @@ export function agentRoutes(agentManager) {
       }
 
       console.log(`[CreateTask] POST /:id/tasks — input: status="${status}", boardId="${boardId}" → resolved: status="${resolvedStatus}", boardId="${resolvedBoardId}" text="${(text || '').slice(0, 60)}"`);
-      const task = agentManager.addTask(req.params.id, text, project, resolvedSource, resolvedStatus, { boardId: resolvedBoardId, recurrence: recurrence || undefined });
+      const task = agentManager.addTask(req.params.id, text, project, resolvedSource, resolvedStatus, { boardId: resolvedBoardId, recurrence: recurrence || undefined, taskType: taskType || undefined });
       if (!task) return res.status(404).json({ error: 'Agent not found' });
       console.log(`[CreateTask] Task created: id=${task.id} status="${task.status}" boardId="${task.boardId}"`);
       res.status(201).json(task);
@@ -307,7 +307,7 @@ export function agentRoutes(agentManager) {
 
   router.patch('/:id/tasks/:taskId', requireAgentAccess, (req, res) => {
     try {
-    const { status, text, title, project, source, recurrence } = req.body || {};
+    const { status, text, title, project, source, recurrence, taskType } = req.body || {};
     // Source is immutable once set at creation — reject any attempt to change it
     if (source !== undefined) {
       return res.status(400).json({ error: 'Source cannot be modified after creation' });
@@ -320,6 +320,11 @@ export function agentRoutes(agentManager) {
     // Handle recurrence update
     if (recurrence !== undefined && oldTask) {
       agentManager.updateTaskRecurrence(req.params.id, req.params.taskId, recurrence);
+    }
+
+    // Handle taskType update
+    if (taskType !== undefined && oldTask) {
+      agentManager.updateTaskType(req.params.id, req.params.taskId, taskType || null);
     }
 
     let task;
@@ -335,6 +340,9 @@ export function agentRoutes(agentManager) {
       task = agentManager.setTaskStatus(req.params.id, req.params.taskId, status);
     } else if (recurrence !== undefined) {
       // If only recurrence was sent, return the updated task
+      task = agent?.todoList?.find(t => t.id === req.params.taskId);
+    } else if (taskType !== undefined) {
+      // If only taskType was sent, return the updated task
       task = agent?.todoList?.find(t => t.id === req.params.taskId);
     } else {
       task = agentManager.toggleTask(req.params.id, req.params.taskId);
