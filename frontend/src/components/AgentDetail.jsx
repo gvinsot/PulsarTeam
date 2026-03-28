@@ -1291,9 +1291,9 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
   const allTasks = (() => {
     const seen = new Set();
     const merged = [];
-    // 1. Tasks from THIS agent's todoList where this agent is the assignee
+    // 1. Tasks from THIS agent's todoList where this agent is the assignee (or unassigned)
     for (const it of (agent.todoList || [])) {
-      if (!seen.has(it.id) && it.assignee === agent.id) {
+      if (!seen.has(it.id) && (it.assignee === agent.id || !it.assignee)) {
         seen.add(it.id);
         merged.push({ ...it, _source: 'internal' });
       }
@@ -2334,7 +2334,7 @@ function SettingsTab({ agent, projects, currentProject, onRefresh, userRole }) {
             value={form.instructions}
             onChange={(e) => updateField('instructions', e.target.value)}
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono resize-none"
-            rows={6}
+            rows={12}
           />
         </div>
         <div className="col-span-2">
