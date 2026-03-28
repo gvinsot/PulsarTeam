@@ -3234,7 +3234,7 @@ export class AgentManager {
    * @param {string} startedAt - ISO timestamp when execution started
    * @param {boolean} success - Whether the execution completed successfully
    */
-  _saveExecutionLog(creatorAgentId, taskId, executorId, startMsgIdx, startedAt, success = true) {
+  _saveExecutionLog(creatorAgentId, taskId, executorId, startMsgIdx, startedAt, success = true, actionMode = 'execute') {
     const executor = this.agents.get(executorId);
     const creatorAgent = this.agents.get(creatorAgentId);
     if (!executor || !creatorAgent) return;
@@ -3258,6 +3258,7 @@ export class AgentManager {
     if (!task.history) task.history = [];
     task.history.push({
       type: 'execution',
+      mode: actionMode,
       at: new Date().toISOString(),
       by: executor.name,
       startedAt,
@@ -3341,10 +3342,13 @@ export class AgentManager {
       const colIndex = workflow.columns?.findIndex(c => c.id === task.status) ?? -1;
       const isFirstOrLast = colIndex === 0 || colIndex === (workflow.columns?.length || 0) - 1;
       if (currentColumn?.autoAssignRole && !isFirstOrLast) {
-        // Find all matching agents, then pick the one with the fewest tasks across the entire board
+        // Find all matching agents owned by the task owner or unowned
+        const creatorAgent = this.agents.get(task.agentId);
+        const taskOwnerId = creatorAgent?.ownerId || null;
         const candidates = Array.from(this.agents.values()).filter(a =>
           a.enabled !== false &&
-          a.role === currentColumn.autoAssignRole
+          a.role === currentColumn.autoAssignRole &&
+          (!taskOwnerId || !a.ownerId || a.ownerId === taskOwnerId)
         );
         let autoAgent = null;
         let minTasks = Infinity;
@@ -3405,10 +3409,13 @@ export class AgentManager {
 
         for (const action of actions) {
           if (action.type === 'assign_agent') {
-            // Find the agent with the specified role that has the fewest tasks in this column
+            // Find the agent with the specified role that has the fewest tasks (scoped to task owner)
+            const creatorAgentForOwner = this.agents.get(task.agentId);
+            const taskOwnerId = creatorAgentForOwner?.ownerId || null;
             const candidates = Array.from(this.agents.values()).filter(a =>
               a.enabled !== false &&
-              (a.role || '').toLowerCase() === (action.role || '').toLowerCase()
+              (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
+              (!taskOwnerId || !a.ownerId || a.ownerId === taskOwnerId)
             );
             let agent = null;
             let minTasks = Infinity;
@@ -4433,9 +4440,12 @@ export class AgentManager {
             let didReturn = false;
             for (const action of actions) {
               if (action.type === 'assign_agent') {
+                // Scope to task owner's agents or unowned agents
+                const taskOwnerId = agent.ownerId || null;
                 const candidates = Array.from(this.agents.values()).filter(a =>
                   a.enabled !== false &&
-                  (a.role || '').toLowerCase() === (action.role || '').toLowerCase()
+                  (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
+                  (!taskOwnerId || !a.ownerId || a.ownerId === taskOwnerId)
                 );
                 let foundAgent = null;
                 let minTasks = Infinity;

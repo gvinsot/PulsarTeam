@@ -23,12 +23,15 @@ function _acquireExecutionLock(lockKey) {
 /**
  * Find the first available agent matching a role.
  * "Available" = enabled AND idle (not busy/error).
+ * Only considers agents owned by the given user or with no owner.
  * Returns null if no idle agent with the role exists — the task stays pending.
  */
-function findAgentByRole(agentManager, role) {
+function findAgentByRole(agentManager, role, ownerId = null) {
   const agents = Array.from(agentManager.agents.values());
   const matching = agents.filter(
-    a => a.enabled !== false && (a.role || '').toLowerCase() === role.toLowerCase()
+    a => a.enabled !== false
+      && (a.role || '').toLowerCase() === role.toLowerCase()
+      && (!ownerId || !a.ownerId || a.ownerId === ownerId)
   );
   // Only return idle agents that don't already have an in_progress task
   return matching.find(a => {
@@ -120,6 +123,10 @@ export async function processTransition(task, agentManager, io) {
   try {
     const isDecide = mode === 'decide';
 
+    // Determine the owner of the task's creator agent for filtering
+    const creatorAgent = agentManager.agents.get(task.agentId);
+    const taskOwnerId = creatorAgent?.ownerId || null;
+
     // Find the agent to run this transition
     let agent = null;
 
@@ -137,19 +144,21 @@ export async function processTransition(task, agentManager, io) {
         return;
       }
     } else {
-      // Non-execute modes: find agent by role
+      // Non-execute modes: find agent by role (scoped to task owner)
       if (transitionRole) {
-        agent = findAgentByRole(agentManager, transitionRole);
+        agent = findAgentByRole(agentManager, transitionRole, taskOwnerId);
         if (agent) console.log(`[Workflow] Found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
       }
     }
 
-    // Fallback for non-execute modes: try global ideasAgent setting
+    // Fallback for non-execute modes: try global ideasAgent setting (scoped to task owner)
     if (!agent && !isExecution) {
       const settings = await getSettings();
       if (settings.ideasAgent) {
         agent = Array.from(agentManager.agents.values()).find(
-          a => a.enabled !== false && a.status === 'idle' && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
+          a => a.enabled !== false && a.status === 'idle'
+            && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
+            && (!taskOwnerId || !a.ownerId || a.ownerId === taskOwnerId)
         );
         if (agent) console.log(`[Workflow] Found idle agent via ideasAgent setting: ${agent.name}`);
       }
@@ -188,6 +197,8 @@ export async function processTransition(task, agentManager, io) {
 
       console.log(`[Workflow] Generating title for "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
+      const titleStartMsgIdx = (agent.conversationHistory || []).length;
+      const titleStartedAt = new Date().toISOString();
       try {
         const result = await agentManager.sendMessage(agent.id, titlePrompt, () => {});
         const title = (result || '').trim().replace(/^["']|["']$/g, '');
@@ -195,8 +206,10 @@ export async function processTransition(task, agentManager, io) {
           agentManager.updateTaskTitle(task.agentId, task.id, title);
           console.log(`[Workflow] Title generated: "${title}" for "${task.text?.slice(0, 60)}"`);
         }
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, titleStartMsgIdx, titleStartedAt, true, 'title');
       } catch (err) {
         console.error(`[Workflow] Title generation failed for "${task.text?.slice(0, 60)}":`, err.message);
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, titleStartMsgIdx, titleStartedAt, false, 'title');
       } finally {
         agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
@@ -265,12 +278,10 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
 
     let fullResponse = '';
 
-    // Track conversation index for execution log (execute mode only)
-    if (isExecution) {
-      _execAgent = agent;
-      _execStartMsgIdx = (agent.conversationHistory || []).length;
-      _execStartedAt = new Date().toISOString();
-    }
+    // Track conversation index for execution log (ALL modes)
+    _execAgent = agent;
+    _execStartMsgIdx = (agent.conversationHistory || []).length;
+    _execStartedAt = new Date().toISOString();
 
     io.emit('agent:stream:start', {
       agentId: agent.id,
@@ -301,9 +312,12 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
 
       const response = (result?.content || fullResponse).trim();
 
+      // Determine action mode label for history
+      const actionMode = isExecution ? 'execute' : isDecide ? 'decide' : 'refine';
+
       if (isExecution) {
         // Save execution chat log to task history
-        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true);
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'execute');
 
         // Check the task's actual status before logging — sendMessage may have
         // set it to 'error' internally (e.g. rate limit) without throwing.
@@ -315,6 +329,8 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
           console.log(`[Workflow] Execution finished for "${task.text.slice(0, 60)}"`);
         }
       } else if (isDecide) {
+        // Save decide action log to task history
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'decide');
         // Parse the agent's decision
         const { decision, reason } = parseDecision(response);
         console.log(`[Workflow] Decision for "${task.text.slice(0, 60)}": ${decision} — ${reason.slice(0, 100)}`);
@@ -336,9 +352,10 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
           console.log(`[Workflow] Decide: holding "${task.text.slice(0, 60)}" in "${task.status}"`);
         }
       } else {
-        // Refine mode
+        // Refine mode — replace the task description with the refined version
+        agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'refine');
         if (response) {
-          agentManager.updateTaskText(task.agentId, task.id, `${task.text}\n\n---\n${response}`);
+          agentManager.updateTaskText(task.agentId, task.id, response);
         }
       }
 
@@ -355,9 +372,10 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
   } catch (err) {
     console.error(`[Workflow] Error processing "${task.text}":`, err.message, err.stack);
     try {
-      // Save execution chat log even on error
-      if (isExecution && _execAgent && _execStartMsgIdx >= 0) {
-        agentManager._saveExecutionLog(task.agentId, task.id, _execAgent.id, _execStartMsgIdx, _execStartedAt, false);
+      // Save execution chat log even on error (for all action modes)
+      if (_execAgent && _execStartMsgIdx >= 0) {
+        const errorMode = isExecution ? 'execute' : isTitle ? 'title' : mode === 'decide' ? 'decide' : 'refine';
+        agentManager._saveExecutionLog(task.agentId, task.id, _execAgent.id, _execStartMsgIdx, _execStartedAt, false, errorMode);
       }
       // On error, always set task to error status — keeps it in the current column and blocks auto-transitions
       // setTaskStatus will store errorFromStatus automatically

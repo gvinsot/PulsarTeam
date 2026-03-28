@@ -298,15 +298,21 @@ function ExecutionLogEntry({ entry, index }) {
     ? duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m${duration % 60}s`
     : null;
 
+  const MODE_LABELS = { execute: 'Execution', refine: 'Refine', decide: 'Decide', title: 'Title' };
+  const MODE_COLORS = { execute: 'text-blue-300', refine: 'text-violet-300', decide: 'text-amber-300', title: 'text-teal-300' };
+  const MODE_ICON_COLORS = { execute: 'text-blue-400', refine: 'text-violet-400', decide: 'text-amber-400', title: 'text-teal-400' };
+  const modeKey = entry.mode || 'execute';
+  const modeLabel = MODE_LABELS[modeKey] || 'Execution';
+
   return (
     <div className="flex-1 min-w-0">
       <button
         onClick={(e) => { e.stopPropagation(); setExpanded(o => !o); }}
         className="flex items-center gap-1.5 text-xs group/exec hover:opacity-80 transition-opacity w-full"
       >
-        <MessageSquare className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
-        <span className={`font-medium ${entry.success ? 'text-blue-300' : 'text-red-300'}`}>
-          Execution {entry.success ? '✓' : '✗'}
+        <MessageSquare className={`w-2.5 h-2.5 ${MODE_ICON_COLORS[modeKey] || 'text-blue-400'} flex-shrink-0`} />
+        <span className={`font-medium ${entry.success ? (MODE_COLORS[modeKey] || 'text-blue-300') : 'text-red-300'}`}>
+          {modeLabel} {entry.success ? '✓' : '✗'}
         </span>
         <span className="text-dark-500 truncate">by {entry.by}</span>
         {durationLabel && (
