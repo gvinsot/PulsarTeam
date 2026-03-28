@@ -16,17 +16,30 @@ function normalizeMcp(mcp) {
 }
 
 function normalizeSkill(skill, mcpResolver) {
-  const mcps = Array.isArray(skill.mcps)
-    ? skill.mcps.map(normalizeMcp)
-    : Array.isArray(skill.mcpServerIds)
-      ? skill.mcpServerIds.map((id) => {
-          const server = mcpResolver ? mcpResolver(id) : null;
-          if (server) {
-            return normalizeMcp({ id: server.id, name: server.name, url: server.url, description: server.description || '', icon: server.icon || '🔌', apiKey: server.apiKey || '', enabled: server.enabled !== false, userConfig: {} });
-          }
-          return { id, name: 'Linked MCP', url: '', description: '', icon: '🔌', apiKey: '', enabled: true, userConfig: {} };
-        })
+  // Always prefer resolving from mcpServerIds when a resolver is available,
+  // so linked MCPs pick up live name/url/description from the MCP manager
+  const serverIds = Array.isArray(skill.mcpServerIds) && skill.mcpServerIds.length > 0
+    ? skill.mcpServerIds
+    : Array.isArray(skill.mcps)
+      ? skill.mcps.map(m => m.id).filter(Boolean)
       : [];
+
+  let mcps;
+  if (serverIds.length > 0 && mcpResolver) {
+    mcps = serverIds.map((id) => {
+      const server = mcpResolver(id);
+      if (server) {
+        return normalizeMcp({ id: server.id, name: server.name, url: server.url, description: server.description || '', icon: server.icon || '🔌', apiKey: server.apiKey || '', enabled: server.enabled !== false, userConfig: {} });
+      }
+      // Fallback: try to find in existing mcps array for embedded (non-linked) MCPs
+      const existing = Array.isArray(skill.mcps) ? skill.mcps.find(m => m.id === id) : null;
+      return existing ? normalizeMcp(existing) : { id, name: 'Linked MCP', url: '', description: '', icon: '🔌', apiKey: '', enabled: true, userConfig: {} };
+    });
+  } else if (Array.isArray(skill.mcps)) {
+    mcps = skill.mcps.map(normalizeMcp);
+  } else {
+    mcps = [];
+  }
 
   return {
     ...skill,
