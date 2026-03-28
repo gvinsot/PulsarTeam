@@ -4425,14 +4425,30 @@ export class AgentManager {
       // Safety: also truncate summary messages if they'd exceed context
       this._truncateMessagesToFit(summaryMessages, contextLimit, summaryMaxTokens);
 
-      const summaryResponse = await provider.chat(summaryMessages, {
+      let summaryResponse = await provider.chat(summaryMessages, {
         temperature: 0.2,
         maxTokens: summaryMaxTokens,
         contextLength: contextLimit
       });
 
-      const summaryText = summaryResponse.content || '';
-      if (!summaryText.trim()) throw new Error('Empty summary');
+      let summaryText = summaryResponse.content || '';
+
+      // Retry once with a simpler prompt if empty (some models struggle with complex instructions)
+      if (!summaryText.trim()) {
+        console.warn(`🗜️  [Compact] "${agent.name}": first summary attempt returned empty — retrying with simpler prompt`);
+        const retryMessages = [
+          { role: 'user', content: `Summarize the following conversation in bullet points. Keep it concise.\n\n${summaryInput.slice(0, Math.floor(maxSummaryInputChars / 2))}` }
+        ];
+        this._truncateMessagesToFit(retryMessages, contextLimit, summaryMaxTokens);
+        summaryResponse = await provider.chat(retryMessages, {
+          temperature: 0.3,
+          maxTokens: summaryMaxTokens,
+          contextLength: contextLimit
+        });
+        summaryText = summaryResponse.content || '';
+      }
+
+      if (!summaryText.trim()) throw new Error('Empty summary after retry');
 
       // Replace history: one summary message + recent messages
       agent.conversationHistory = [
@@ -4451,11 +4467,37 @@ export class AgentManager {
     } catch (summaryErr) {
       // Summarization failed — hard truncation fallback
       console.warn(`🗜️  [Compact] "${agent.name}": summarization failed (${summaryErr.message}), falling back to hard truncation`);
-      // On hard truncation, still keep existing summary if available
+
+      // Build a basic mechanical summary from discarded messages (no LLM needed)
+      const discardedTopics = [];
+      for (const m of toSummarize) {
+        if (m.role === 'assistant') {
+          // Extract tool calls mentioned
+          const tools = (m.content || '').match(/@\w+\([^)]{0,80}\)/g);
+          if (tools) discardedTopics.push(...tools.slice(0, 5));
+        } else if (m.role === 'user' && m.type === 'tool-result') {
+          // Note tool results
+          const preview = (m.content || '').slice(0, 100).replace(/\n/g, ' ');
+          discardedTopics.push(`[tool-result: ${preview}]`);
+        }
+      }
+      const mechanicalSummary = discardedTopics.length > 0
+        ? `[COMPACTION — ${toSummarize.length} messages were discarded (summarization failed). Key actions: ${discardedTopics.slice(0, 10).join(', ')}]`
+        : `[COMPACTION — ${toSummarize.length} messages were discarded (summarization failed)]`;
+
       if (existingSummary) {
+        existingSummary.content += `\n\n${mechanicalSummary}`;
         agent.conversationHistory = [existingSummary, ...toKeep];
       } else {
-        agent.conversationHistory = toKeep;
+        agent.conversationHistory = [
+          {
+            role: 'assistant',
+            content: mechanicalSummary,
+            timestamp: new Date().toISOString(),
+            type: 'compaction-summary'
+          },
+          ...toKeep
+        ];
       }
       // Also truncate individual large messages to prevent context overflow on next call
       const maxPerMsg = Math.floor((contextLimit * 3) / Math.max(agent.conversationHistory.length, 1) * 0.6);
