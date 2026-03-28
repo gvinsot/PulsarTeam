@@ -328,6 +328,12 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  testMcpServer: (id) =>
+    fetch(`${API_BASE}/mcp-servers/${id}/test`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   // OneDrive OAuth
   getOnedriveStatus: () =>
     fetch(`${API_BASE}/onedrive/status`, { headers: getHeaders() }).then(handleResponse),

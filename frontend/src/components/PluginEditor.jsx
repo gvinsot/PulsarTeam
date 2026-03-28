@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff, Zap, CheckCircle, XCircle, Loader } from 'lucide-react';
+import { api } from '../api';
 
 function createEmptyMcp() {
   return {
@@ -36,9 +37,25 @@ function stringifyKeyValue(obj) {
 
 export default function PluginEditor({ value, onChange, onSubmit, onCancel, saving, submitLabel = 'Save Plugin', readOnly = false }) {
   const [expandedMcps, setExpandedMcps] = useState(() => new Set((value.mcps || []).map((_, i) => i)));
+  const [testResults, setTestResults] = useState({});
+  const [testing, setTesting] = useState({});
   const userConfigText = useMemo(() => stringifyKeyValue(value.userConfig || {}), [value.userConfig]);
 
   const update = (patch) => onChange({ ...value, ...patch });
+
+  const testMcp = async (mcp) => {
+    if (!mcp.id) return;
+    setTesting(prev => ({ ...prev, [mcp.id]: true }));
+    setTestResults(prev => ({ ...prev, [mcp.id]: undefined }));
+    try {
+      const result = await api.testMcpServer(mcp.id);
+      setTestResults(prev => ({ ...prev, [mcp.id]: result }));
+    } catch (err) {
+      setTestResults(prev => ({ ...prev, [mcp.id]: { success: false, error: err.message } }));
+    } finally {
+      setTesting(prev => ({ ...prev, [mcp.id]: false }));
+    }
+  };
 
   const updateMcp = (index, patch) => {
     const mcps = [...(value.mcps || [])];
@@ -179,6 +196,14 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
                     <div className="text-[11px] text-dark-500 truncate font-mono">{mcp.url || 'URL non configuree'}</div>
                   </div>
                   <button
+                    onClick={() => testMcp(mcp)}
+                    disabled={!mcp.id || testing[mcp.id]}
+                    className="p-1 text-dark-500 hover:text-amber-400 transition-colors disabled:opacity-30"
+                    title="Tester la connexion MCP"
+                  >
+                    {testing[mcp.id] ? <Loader className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                  </button>
+                  <button
                     onClick={() => removeMcp(index)}
                     className={`p-1 text-dark-500 hover:text-red-400 transition-colors ${readOnly ? 'hidden' : ''}`}
                     title="Supprimer ce MCP"
@@ -303,6 +328,35 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
                         MCP active
                       </label>
                     </div>
+
+                    {/* Test result */}
+                    {testResults[mcp.id] && (
+                      <div className={`p-2.5 rounded-lg border text-xs ${
+                        testResults[mcp.id].success
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-red-500/10 border-red-500/30 text-red-400'
+                      }`}>
+                        <div className="flex items-center gap-1.5 font-medium">
+                          {testResults[mcp.id].success
+                            ? <><CheckCircle className="w-3.5 h-3.5" /> Connexion reussie — {testResults[mcp.id].toolCount} tool(s)</>
+                            : <><XCircle className="w-3.5 h-3.5" /> Echec de connexion</>
+                          }
+                        </div>
+                        {testResults[mcp.id].success && testResults[mcp.id].tools?.length > 0 && (
+                          <div className="mt-1.5 text-[11px] text-dark-400 space-y-0.5">
+                            {testResults[mcp.id].tools.map(t => (
+                              <div key={t.name} className="flex gap-2">
+                                <span className="text-dark-300 font-mono">{t.name}</span>
+                                {t.description && <span className="truncate">{t.description}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {testResults[mcp.id].error && (
+                          <p className="mt-1 text-[11px] font-mono break-all">{testResults[mcp.id].error}</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

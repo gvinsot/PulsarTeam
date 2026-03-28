@@ -88,5 +88,39 @@ export function mcpServerRoutes(mcpManager) {
     }
   });
 
+  // Test MCP connection by server ID (without persisting state changes)
+  router.post('/:id/test', async (req, res) => {
+    try {
+      const server = mcpManager.getById(req.params.id);
+      if (!server) return res.status(404).json({ error: 'MCP server not found' });
+
+      const { MCPClient } = await import('../services/mcpClient.js');
+      const { resolveInternalMcpConfig } = await import('../services/mcpManager.js');
+
+      const client = new MCPClient('PulsarTeam-Test');
+      const connectOpts = {};
+      if (server.apiKey) {
+        connectOpts.headers = { Authorization: `Bearer ${server.apiKey}` };
+      }
+      const internalConfig = resolveInternalMcpConfig(server.url);
+      const connectUrl = internalConfig.url;
+      if (Object.keys(internalConfig.headers).length > 0) {
+        connectOpts.headers = { ...(connectOpts.headers || {}), ...internalConfig.headers };
+      }
+
+      const { tools } = await client.connect(connectUrl, connectOpts);
+      await client.close();
+
+      res.json({
+        success: true,
+        name: server.name,
+        toolCount: tools.length,
+        tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
+      });
+    } catch (err) {
+      res.status(200).json({ success: false, error: err.message });
+    }
+  });
+
   return router;
 }
