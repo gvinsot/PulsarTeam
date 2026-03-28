@@ -284,6 +284,7 @@ export class AgentManager {
       template: config.template || null,
       costPerInputToken: config.costPerInputToken ?? null,
       costPerOutputToken: config.costPerOutputToken ?? null,
+      llmConfigId: config.llmConfigId || null,
       ownerId: config.ownerId || null,
       color: config.color || this._randomColor(),
       icon: config.icon || '🤖',
