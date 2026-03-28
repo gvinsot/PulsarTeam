@@ -3316,7 +3316,6 @@ export class AgentManager {
 
   _checkAutoRefine(task, { by = null } = {}) {
     // Fire-and-forget: check if there's an autoRefine transition for this status
-    const isManual = by === 'user';
     console.log(`[Workflow] _checkAutoRefine: status="${task.status}" text="${(task.text || '').slice(0, 60)}" agentId="${task.agentId}" by="${by || 'unknown'}"`);
 
     // ── Guard: never auto-transition tasks in error status ──
@@ -3375,15 +3374,6 @@ export class AgentManager {
       for (const transition of matchingTransitions) {
         // ── Skip Jira-managed triggers (handled by jiraSync polling) ──
         if (transition.trigger === 'jira_ticket') continue;
-
-        // ── Skip on_enter transitions for manual user changes ──
-        // When a user manually drags/moves a task, on_enter transitions should not
-        // fire (they would revert the move via change_status or trigger unintended agents).
-        // Condition-based transitions are still handled by the periodic checker.
-        if (isManual && transition.trigger === 'on_enter') {
-          console.log(`[Workflow] Skipping on_enter transition for manual move (from="${transition.from}")`);
-          continue;
-        }
 
         // ── Evaluate trigger ──
         if (transition.trigger === 'condition') {
@@ -3447,10 +3437,25 @@ export class AgentManager {
               }
             };
             console.log(`[Workflow] Action: run_agent mode="${action.mode}" role="${action.role}" target="${action.targetStatus}"`);
-            processTransition(enrichedTask, this, this.io).catch(err => {
+            try {
+              await processTransition(enrichedTask, this, this.io);
+              // Re-read the task after processTransition (it may have been updated)
+              const freshAgent = this.agents.get(task.agentId);
+              const freshTask = freshAgent?.todoList?.find(t => t.id === task.id);
+              if (freshTask) {
+                task.text = freshTask.text;
+                task.title = freshTask.title;
+                task.status = freshTask.status;
+                task.assignee = freshTask.assignee;
+              }
+            } catch (err) {
               console.error(`[Workflow] Error in run_agent for "${(task.text || '').slice(0, 60)}":`, err.message);
-            });
-            return; // run_agent is async — stop processing further transitions
+            }
+            // If the task moved to error, stop processing further actions
+            if (task.status === 'error') {
+              console.log(`[Workflow] Task in error after run_agent — stopping action chain`);
+              return;
+            }
 
           } else if (action.type === 'change_status') {
             if (action.target && action.target !== task.status) {
