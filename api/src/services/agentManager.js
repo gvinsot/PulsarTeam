@@ -2295,11 +2295,26 @@ export class AgentManager {
       // ── Handle @task_execution_complete() — signal task completion ──
       if (call.tool === 'task_execution_complete') {
         const comment = call.args[0] || '';
-        const inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
+        // Search across ALL agents' todoLists (task may be on creator, not executor)
+        let inProgressTask = null;
+        for (const [, ownerAgent] of this.agents) {
+          const found = ownerAgent.todoList?.find(t => t.status === 'in_progress' && t.assignee === agentId);
+          if (found) { inProgressTask = found; break; }
+        }
+        // Fallback: check executor's own todoList
+        if (!inProgressTask) {
+          inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
+        }
         if (inProgressTask) {
           inProgressTask._executionCompleted = true;
           inProgressTask._executionComment = comment;
-          saveAgent(agent);
+          // Save the agent that owns the task
+          for (const [, ownerAgent] of this.agents) {
+            if (ownerAgent.todoList?.includes(inProgressTask)) {
+              saveAgent(ownerAgent);
+              break;
+            }
+          }
           console.log(`✅ [TaskComplete] Agent "${agent.name}" signaled completion: "${comment.slice(0, 120)}"`);
           if (streamCallback) {
             streamCallback(`\n✅ Task execution complete: ${comment.slice(0, 200)}\n`);
@@ -2343,9 +2358,13 @@ export class AgentManager {
       // ── Handle @update_task() — update own task status ──────────────
       if (call.tool === 'update_task') {
         const [taskId, newStatus] = call.args;
-        const validStatuses = ['in_progress', 'done', 'error'];
+        const validStatuses = ['in_progress', 'error'];
+        if (newStatus === 'done') {
+          results.push({ tool: 'update_task', args: call.args, success: false, error: 'Cannot set status to "done" via @update_task. Use @task_execution_complete(summary) instead to signal task completion.' });
+          continue;
+        }
         if (!validStatuses.includes(newStatus)) {
-          results.push({ tool: 'update_task', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}` });
+          results.push({ tool: 'update_task', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}. Use @task_execution_complete(summary) to mark a task as done.` });
           continue;
         }
         let task = agent.todoList?.find(t => t.id === taskId);
@@ -4847,6 +4866,9 @@ export class AgentManager {
         delete freshTask._executionComment;
         this.setTaskStatus(agentId, task.id, targetStatus, { skipAutoRefine: false, by: executor.name });
         console.log(`✅ [TaskLoop] Agent called task_execution_complete for "${task.text.slice(0, 60)}" -> ${targetStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+      } else if (freshTask && freshTask.status !== 'in_progress') {
+        // Task status was changed by another mechanism (e.g. @update_task) — accept it
+        console.log(`🔄 [TaskLoop] Task "${task.text.slice(0, 60)}" already moved to "${freshTask.status}" during execution — accepting`);
       } else {
         // Agent went idle without calling task_execution_complete — start reminder loop
         console.log(`🔔 [TaskLoop] Agent "${executor.name}" went idle without completing "${task.text.slice(0, 60)}" — starting reminder loop`);

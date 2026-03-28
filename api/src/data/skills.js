@@ -124,7 +124,7 @@ DEPLOY:
 - @search_files(pattern, query) — find relevant code
 - @run_command(command) — run tests, builds, git commands, etc.
 - @list_my_tasks() — list your assigned tasks with their status and ID
-- @update_task(taskId, status) — update a task status (in_progress, done, error)
+- @update_task(taskId, status) — update a task status (in_progress, error)
 - @task_execution_complete(comment) — signal that your current task is finished (REQUIRED when executing a task)
 - @link_commit(taskId, commitHash, message) — manually link a commit to a task
 - Use @run_command to execute git commands
