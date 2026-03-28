@@ -33,6 +33,7 @@ function findAgentByRole(agentManager, role, ownerId = null) {
       && (a.role || '').toLowerCase() === role.toLowerCase()
       && (!ownerId || !a.ownerId || a.ownerId === ownerId)
   );
+  console.log(`[Workflow] findAgentByRole: role="${role}" ownerId="${ownerId}" total=${agents.length} matching=${matching.length} names=[${matching.map(a => `${a.name}(owner:${a.ownerId})`).join(', ')}]`);
   // Only return idle agents that don't already have an in_progress task
   return matching.find(a => {
     if (a.status !== 'idle') return false;
@@ -123,9 +124,10 @@ export async function processTransition(task, agentManager, io) {
   try {
     const isDecide = mode === 'decide';
 
-    // Determine the owner of the task's creator agent for filtering
+    // Determine the owner: prefer board-level userId (set by caller), fallback to creator agent's owner
     const creatorAgent = agentManager.agents.get(task.agentId);
-    const taskOwnerId = creatorAgent?.ownerId || null;
+    const taskOwnerId = task._boardUserId || creatorAgent?.ownerId || null;
+    console.log(`[Workflow] Owner filter: _boardUserId="${task._boardUserId}" creatorAgent="${creatorAgent?.name}" resolved ownerId="${taskOwnerId}" agentId="${task.agentId}"`);
 
     // Find the agent to run this transition
     let agent = null;

@@ -3337,14 +3337,17 @@ export class AgentManager {
     }
 
     getWorkflowForBoard(task.boardId).then(async (workflow) => {
+      // Determine the owner: prefer board owner, fallback to creator agent's owner
+      const creatorAgentForOwner = this.agents.get(task.agentId);
+      const boardUserId = workflow.userId || null;
+      const taskOwnerId = boardUserId || creatorAgentForOwner?.ownerId || null;
+
       // ── Auto-assign by column role (independent of transitions) ──
       const currentColumn = workflow.columns?.find(c => c.id === task.status);
       const colIndex = workflow.columns?.findIndex(c => c.id === task.status) ?? -1;
       const isFirstOrLast = colIndex === 0 || colIndex === (workflow.columns?.length || 0) - 1;
       if (currentColumn?.autoAssignRole && !isFirstOrLast) {
         // Find all matching agents owned by the task owner or unowned
-        const creatorAgent = this.agents.get(task.agentId);
-        const taskOwnerId = creatorAgent?.ownerId || null;
         const candidates = Array.from(this.agents.values()).filter(a =>
           a.enabled !== false &&
           a.role === currentColumn.autoAssignRole &&
@@ -3410,8 +3413,6 @@ export class AgentManager {
         for (const action of actions) {
           if (action.type === 'assign_agent') {
             // Find the agent with the specified role that has the fewest tasks (scoped to task owner)
-            const creatorAgentForOwner = this.agents.get(task.agentId);
-            const taskOwnerId = creatorAgentForOwner?.ownerId || null;
             const candidates = Array.from(this.agents.values()).filter(a =>
               a.enabled !== false &&
               (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
@@ -3447,6 +3448,7 @@ export class AgentManager {
             // Build _transition compatible with processTransition
             const enrichedTask = {
               ...task,
+              _boardUserId: taskOwnerId,
               _transition: {
                 agent: action.role || '',
                 mode: action.mode || 'execute',
@@ -4440,8 +4442,9 @@ export class AgentManager {
             let didReturn = false;
             for (const action of actions) {
               if (action.type === 'assign_agent') {
-                // Scope to task owner's agents or unowned agents
-                const taskOwnerId = agent.ownerId || null;
+                // Scope to board owner's agents or unowned agents
+                const boardWf = await getWorkflowForBoard(task.boardId);
+                const taskOwnerId = boardWf.userId || agent.ownerId || null;
                 const candidates = Array.from(this.agents.values()).filter(a =>
                   a.enabled !== false &&
                   (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
@@ -4469,8 +4472,11 @@ export class AgentManager {
                   console.log(`[Workflow] Condition re-check: assigned "${(task.text || '').slice(0, 60)}" to "${foundAgent.name}" (${minTasks} tasks in column, role: ${action.role})`);
                 }
               } else if (action.type === 'run_agent') {
+                const boardWfForRun = await getWorkflowForBoard(task.boardId);
+                const runOwnerId = boardWfForRun.userId || agent.ownerId || null;
                 const enrichedTask = {
                   ...task, agentId,
+                  _boardUserId: runOwnerId,
                   _transition: {
                     agent: action.role || '',
                     mode: action.mode || 'execute',

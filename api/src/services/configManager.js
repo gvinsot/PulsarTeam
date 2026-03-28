@@ -120,6 +120,7 @@ export async function getWorkflowForBoard(boardId) {
         columns: board.workflow.columns || DEFAULT_COLUMNS,
         transitions: board.workflow.transitions || DEFAULT_TRANSITIONS,
         version: board.workflow.version || 1,
+        userId: board.user_id || null,
       };
     }
   } catch (err) {
