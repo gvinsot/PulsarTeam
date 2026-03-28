@@ -128,7 +128,7 @@ export default function TaskList({
                       )}
                       <SourceBadge source={task.source} />
                       <span style={{ textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.75 : 1 }}>
-                        {task.text}
+                        {task.title || task.text}
                       </span>
                     </div>
                     {task.error ? (

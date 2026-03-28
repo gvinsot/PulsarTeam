@@ -300,7 +300,7 @@ export function agentRoutes(agentManager) {
 
   router.patch('/:id/tasks/:taskId', requireAgentAccess, (req, res) => {
     try {
-    const { status, text, project, source, recurrence } = req.body || {};
+    const { status, text, title, project, source, recurrence } = req.body || {};
     // Source is immutable once set at creation — reject any attempt to change it
     if (source !== undefined) {
       return res.status(400).json({ error: 'Source cannot be modified after creation' });
@@ -316,6 +316,9 @@ export function agentRoutes(agentManager) {
     }
 
     let task;
+    if (title !== undefined) {
+      task = agentManager.updateTaskTitle(req.params.id, req.params.taskId, title.trim() || null);
+    }
     if (text !== undefined) {
       if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
       task = agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());

@@ -3573,6 +3573,28 @@ export class AgentManager {
     return task;
   }
 
+  updateTaskTitle(agentId, taskId, title) {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const task = agent.todoList.find(t => t.id === taskId);
+    if (!task) return null;
+    const oldTitle = task.title || null;
+    task.title = title;
+    if (!task.history) task.history = [];
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by: 'user',
+      type: 'edit',
+      field: 'title',
+      oldValue: oldTitle,
+      newValue: title,
+    });
+    saveAgent(agent);
+    this._emit('agent:updated', this._sanitize(agent));
+    return task;
+  }
+
   updateTaskText(agentId, taskId, text) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;

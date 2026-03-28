@@ -60,9 +60,9 @@ const DEFAULT_COLUMNS = [
 ];
 
 const DEFAULT_TRANSITIONS = [
-  { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'product-manager', mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.', targetStatus: 'backlog' }] },
+  { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'product-manager', mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.' }] },
   { from: 'backlog', trigger: 'on_enter', actions: [] },
-  { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: '', targetStatus: 'done' }] },
+  { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: '' }] },
   { from: 'in_progress', trigger: 'on_enter', actions: [] },
   { from: 'done', trigger: 'on_enter', actions: [] },
 ];

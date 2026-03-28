@@ -91,6 +91,7 @@ function parseDecision(response) {
  * - Refinement mode (default): sends a refinement prompt, appends result to task text
  * - Execution mode: sends the task as-is for execution
  * - Decide mode: agent evaluates whether the task should proceed, hold, or be revised
+ * - Title mode: agent generates a short title from the task description
  *
  * The `task._transition` object carries: { agent (role), to (target status or null), instructions, mode }
  */
@@ -111,6 +112,7 @@ export async function processTransition(task, agentManager, io) {
 
   // Computed outside try for catch-block access
   const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
+  const isTitle = mode === 'title';
   let _execAgent = null;       // the agent running the execution (for error-path logging)
   let _execStartMsgIdx = -1;
   let _execStartedAt = null;
@@ -166,6 +168,30 @@ export async function processTransition(task, agentManager, io) {
         agentManager._switchProjectContext(agent, agent.project, task.project);
       }
       agent.project = task.project;
+    }
+
+    // Title mode: lightweight — generate a short title from task description
+    if (isTitle) {
+      const maxLen = agent.contextLength || 4000;
+      const description = (task.text || '').slice(0, maxLen);
+      const titlePrompt = `Generate a short, concise title (max 10 words) for the following task description. Reply with ONLY the title, nothing else.\n\n${description}`;
+
+      console.log(`[Workflow] Generating title for "${task.text?.slice(0, 60)}" via ${agent.name}`);
+
+      try {
+        const result = await agentManager.sendMessage(agent.id, titlePrompt, () => {});
+        const title = (result?.content || '').trim().replace(/^["']|["']$/g, '');
+        if (title) {
+          agentManager.updateTaskTitle(task.agentId, task.id, title);
+          console.log(`[Workflow] Title generated: "${title}" for "${task.text?.slice(0, 60)}"`);
+        }
+      } catch (err) {
+        console.error(`[Workflow] Title generation failed for "${task.text?.slice(0, 60)}":`, err.message);
+      } finally {
+        agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
+      }
+      _executionLocks.delete(lockKey);
+      return;
     }
 
     let prompt;
@@ -269,15 +295,14 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
         // Save execution chat log to task history
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true);
 
-        // Check the task's actual status before moving — sendMessage may have
+        // Check the task's actual status before logging — sendMessage may have
         // set it to 'error' internally (e.g. rate limit) without throwing.
         const creatorAgent = agentManager.agents.get(task.agentId);
         const currentTask = creatorAgent?.todoList?.find(t => t.id === task.id);
         if (currentTask?.status === 'error') {
-          console.log(`[Workflow] Execution of "${task.text.slice(0, 60)}" ended with task in error — blocking transition to ${targetStatus}`);
-        } else if (targetStatus) {
-          agentManager.setTaskStatus(task.agentId, task.id, targetStatus, { skipAutoRefine: false, by: agent.name });
-          console.log(`[Workflow] Execution finished for "${task.text.slice(0, 60)}" — moved to ${targetStatus}`);
+          console.log(`[Workflow] Execution of "${task.text.slice(0, 60)}" ended with task in error`);
+        } else {
+          console.log(`[Workflow] Execution finished for "${task.text.slice(0, 60)}"`);
         }
       } else if (isDecide) {
         // Parse the agent's decision
@@ -304,9 +329,6 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
         // Refine mode
         if (response) {
           agentManager.updateTaskText(task.agentId, task.id, `${task.text}\n\n---\n${response}`);
-        }
-        if (targetStatus) {
-          agentManager.setTaskStatus(task.agentId, task.id, targetStatus, { skipAutoRefine: true, by: agent.name });
         }
       }
 

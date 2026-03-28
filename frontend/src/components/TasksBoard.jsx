@@ -356,6 +356,7 @@ function ExecutionLogEntry({ entry, index }) {
 function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDelete, statusOptions }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
+  const [editTitle, setEditTitle] = useState(task.title || '');
   const [saving, setSaving] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [editingProject, setEditingProject] = useState(false);
@@ -392,7 +393,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape') {
-        if (editing) { setEditing(false); setEditText(task.text); }
+        if (editing) { setEditing(false); setEditText(task.text); setEditTitle(task.title || ''); }
         else onClose();
       }
     };
@@ -401,11 +402,17 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   }, [editing, task.text, onClose]);
 
   const handleSave = async () => {
-    const trimmed = editText.trim();
-    if (!trimmed || trimmed === task.text) { setEditing(false); return; }
+    const trimmedText = editText.trim();
+    const trimmedTitle = editTitle.trim();
+    const textChanged = trimmedText && trimmedText !== task.text;
+    const titleChanged = trimmedTitle !== (task.title || '');
+    if (!textChanged && !titleChanged) { setEditing(false); return; }
     setSaving(true);
     try {
-      await api.updateTaskText(task.agentId, task.id, trimmed);
+      const body = {};
+      if (textChanged) body.text = trimmedText;
+      if (titleChanged) body.title = trimmedTitle;
+      await api.updateTask(task.agentId, task.id, body);
       await onRefresh();
       setEditing(false);
     } finally {
@@ -511,7 +518,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
               <span className="text-xs font-semibold text-dark-400 uppercase tracking-wide">Task</span>
               {!editing && (
                 <button
-                  onClick={() => { setEditText(task.text); setEditing(true); }}
+                  onClick={() => { setEditText(task.text); setEditTitle(task.title || ''); setEditing(true); }}
                   className="flex items-center gap-1 text-xs text-dark-500 hover:text-indigo-400 transition-colors"
                 >
                   <Edit3 className="w-3 h-3" />
@@ -521,6 +528,14 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
             </div>
             {editing ? (
               <div className="space-y-2">
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  className="w-full px-3 py-2 bg-dark-800 border border-indigo-500/50 rounded-lg text-sm
+                    text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
+                  placeholder="Title (optional — displayed on card instead of description)"
+                />
                 <textarea
                   ref={textareaRef}
                   value={editText}
@@ -533,7 +548,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
                 />
                 <div className="flex gap-2 justify-end">
                   <button
-                    onClick={() => { setEditing(false); setEditText(task.text); }}
+                    onClick={() => { setEditing(false); setEditText(task.text); setEditTitle(task.title || ''); }}
                     className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 bg-dark-800
                       border border-dark-600 rounded-lg transition-colors"
                   >
@@ -554,9 +569,12 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
               <div
                 className={`text-sm leading-relaxed cursor-text
                   ${isError ? 'text-red-300' : 'text-dark-200'}`}
-                onClick={() => { setEditText(task.text); setEditing(true); }}
+                onClick={() => { setEditText(task.text); setEditTitle(task.title || ''); setEditing(true); }}
                 title="Click to edit"
               >
+                {task.title && (
+                  <p className="text-base font-semibold text-dark-100 mb-2">{task.title}</p>
+                )}
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   className="prose prose-invert prose-sm max-w-none break-words"
@@ -979,7 +997,7 @@ function TaskCard({ task, agents, onDelete, onOpen, showAgent }) {
       {/* Task text */}
       <p className={`text-sm leading-snug mb-2.5 ${isError ? 'text-red-300' : 'text-dark-200'}`}
         style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-        {task.text}
+        {task.title || task.text}
       </p>
 
       {isError && task.error && (
@@ -1145,7 +1163,8 @@ const ACTION_OPTIONS = [
   { value: 'assign_agent', label: 'Assign to agent (by role)' },
   { value: 'run_agent:execute', label: 'Execute task (agent)' },
   { value: 'run_agent:refine', label: 'Refine description (agent)' },
-  { value: 'run_agent:decide', label: 'Evaluate / Decide (agent)' },
+  { value: 'run_agent:title', label: 'Generate title (agent)' },
+  { value: 'run_agent:decide', label: 'Decide to move (agent)' },
   { value: 'change_status', label: 'Move to status' },
   { value: 'move_jira_status', label: '🔗 Move Jira ticket to status', jira: true },
   { value: 'jira_ai_comment', label: '🤖 AI analyze & comment on Jira ticket', jira: true },
@@ -1155,6 +1174,7 @@ function createAction(key, cols) {
   if (key === 'assign_agent') return { type: 'assign_agent', role: '' };
   if (key === 'run_agent:execute') return { type: 'run_agent', mode: 'execute', role: '', instructions: '', targetStatus: cols[cols.length - 1]?.id || '' };
   if (key === 'run_agent:refine') return { type: 'run_agent', mode: 'refine', role: '', instructions: '', targetStatus: cols[1]?.id || '' };
+  if (key === 'run_agent:title') return { type: 'run_agent', mode: 'title', role: '' };
   if (key === 'run_agent:decide') return { type: 'run_agent', mode: 'decide', role: '', instructions: '', targetStatus: cols[1]?.id || '' };
   if (key === 'change_status') return { type: 'change_status', target: cols[1]?.id || '' };
   if (key === 'move_jira_status') return { type: 'move_jira_status', jiraStatusIds: [] };
@@ -1527,8 +1547,8 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                               </select>
                             )}
 
-                            {/* Target status for run_agent */}
-                            {action.type === 'run_agent' && (
+                            {/* Target status for run_agent (decide mode only) */}
+                            {action.type === 'run_agent' && action.mode === 'decide' && (
                               <>
                                 <ArrowRight className="w-2.5 h-2.5 text-dark-500 flex-shrink-0" />
                                 <select value={action.targetStatus || ''}
@@ -1585,7 +1605,7 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                           </div>
 
                           {/* Instructions for agent actions */}
-                          {action.type === 'run_agent' && (
+                          {action.type === 'run_agent' && action.mode !== 'title' && (
                             <textarea value={action.instructions || ''}
                               onChange={e => updateAction(idx, ai, { instructions: e.target.value })}
                               placeholder={action.mode === 'decide'

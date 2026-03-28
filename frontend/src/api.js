@@ -178,6 +178,13 @@ export const api = {
       body: JSON.stringify({ text })
     }).then(handleResponse),
 
+  updateTask: (agentId, taskId, fields) =>
+    fetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify(fields)
+    }).then(handleResponse),
+
   updateTaskProject: (agentId, taskId, project) =>
     fetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
       method: 'PATCH',
