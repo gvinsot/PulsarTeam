@@ -235,5 +235,7 @@ volumes:
 networks:
   proxy:
     external: true
+  internal:
+    external: true
   postgresqlcluster_internal:
     external: true
