@@ -1181,6 +1181,16 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
           </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
+          {isInProgress && agentStatus === 'idle' && (
+            <button
+              onClick={() => onExecute(task.id)}
+              disabled={!!executing || agentStatus === 'busy'}
+              className="p-1 text-amber-400 hover:text-emerald-400 opacity-0 group-hover:opacity-100 disabled:opacity-30 transition-all"
+              title="Resume this task"
+            >
+              <Play className="w-3.5 h-3.5" />
+            </button>
+          )}
           {(isPending || isError || isBacklog) && (
             <button
               onClick={() => onExecute(task.id)}

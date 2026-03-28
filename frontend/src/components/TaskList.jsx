@@ -147,10 +147,10 @@ export default function TaskList({
                     </button>
                     <button
                       onClick={() => onExecuteTask(task.id)}
-                      disabled={isInProgress}
-                      title={isInProgress ? 'Task already in progress' : 'Execute this task'}
+                      disabled={false}
+                      title={isInProgress ? 'Resume this task' : 'Execute this task'}
                     >
-                      ▶
+                      {isInProgress ? '⏯' : '▶'}
                     </button>
                   </div>
                 </div>

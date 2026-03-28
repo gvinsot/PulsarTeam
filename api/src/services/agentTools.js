@@ -57,6 +57,11 @@ You can interact with project files using these commands. Use the exact format s
   Use this to manually link a commit to a task (e.g. when associating with a different task than the current one).
   Example: @link_commit(abc-123, a1b2c3d, feat: add login page)
 
+@task_execution_complete(comment) - Signal that you have finished executing your current task
+  You MUST call this tool when you are done with your assigned task. Provide a brief summary of what was accomplished.
+  Until you call this, the system will consider your task still in progress.
+  Example: @task_execution_complete(Implemented user authentication with JWT tokens, added tests, all passing.)
+
 IMPORTANT:
 - File paths are relative to the project root
 - Always read files before modifying them
@@ -465,7 +470,7 @@ async function toolGitCommitPush(sandboxMgr, agentId, message) {
 
 // ─── Tool Call Parsing ──────────────────────────────────────────────────────
 
-const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_task', 'link_commit', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
+const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_task', 'link_commit', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'task_execution_complete'];
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
 function jsonToToolCall(name, args) {
@@ -607,7 +612,7 @@ export function parseToolCalls(response) {
     .replace(/<\|?\/?tool_use\|?>/gi, '')
     .replace(/\[TOOL_CALLS?\]/gi, '');
 
-  const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks', 'list_projects', 'check_status', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
+  const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'git_commit_push', 'list_my_tasks', 'list_projects', 'check_status', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'task_execution_complete'];
   const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'update_task'];
   const THREE_ARG_TOOLS = ['mcp_call', 'link_commit'];
   const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
