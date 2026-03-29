@@ -160,16 +160,28 @@ curl -X POST \
 
 ## MCP (Model Context Protocol)
 
-Endpoint: `https://<your-domain>/api/swarm/mcp`
+The Swarm API exposes an MCP server for integration with AI assistants (Claude, Claude Code, Cursor, etc.).
 
-For MCP clients (Claude, Claude Code, etc.), add the following configuration:
+### Endpoint
+
+```
+POST https://<your-domain>/api/swarm/mcp
+```
+
+The server supports **Streamable HTTP** (MCP 2025-03-26 spec) and legacy **SSE** transport.
+
+### Configuration
+
+#### Claude Desktop (JSON config)
 
 ```json
 {
   "mcpServers": {
     "pulsar-team": {
-      "url": "https://swarm.example.com/api/swarm/mcp",
-      "headers": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/cli"],
+      "env": {
+        "MCP_SERVER_URL": "https://swarm.example.com/api/swarm/mcp",
         "Authorization": "Bearer swarm_sk_abc123..."
       }
     }
@@ -177,13 +189,175 @@ For MCP clients (Claude, Claude Code, etc.), add the following configuration:
 }
 ```
 
+#### Using MCP CLI
+
+```bash
+npx -y @modelcontextprotocol/cli \
+  --url https://swarm.example.com/api/swarm/mcp \
+  --header "Authorization: Bearer swarm_sk_abc123..."
+```
+
+#### Programmatic (Node.js)
+
+```javascript
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+const transport = new StreamableHTTPClientTransport(
+  new URL('https://swarm.example.com/api/swarm/mcp'),
+  {
+    requestInit: {
+      headers: { Authorization: 'Bearer swarm_sk_abc123...' }
+    }
+  }
+);
+
+const client = new Client({ name: 'my-app', version: '1.0.0' });
+await client.connect(transport);
+
+// List agents
+const result = await client.callTool({
+  name: 'list_agents',
+  arguments: { status: 'idle' }
+});
+```
+
 ### Available Tools
 
-| Tool               | Description                                              |
-|--------------------|----------------------------------------------------------|
-| `list_agents`      | List agents (optional filters: `project`, `status`)      |
-| `get_agent_status` | Detailed agent status (by `agent_id` or `agent_name`)    |
-| `add_task`         | Add a task (params: `agent_id`/`agent_name`, `task`, `project` — required). The agent is auto-assigned to the project. |
+| Tool               | Description                                              | Parameters |
+|--------------------|----------------------------------------------------------|------------|
+| `list_agents`      | List agents with optional filters                        | `project` (optional), `status` (optional: `idle`, `busy`, `error`) |
+| `get_agent_status` | Detailed agent status                                    | `agent_id` (optional UUID) or `agent_name` (optional string) — at least one required |
+| `list_boards`      | List all task boards and their workflows                 | none |
+| `add_task`         | Add a task to an agent                                   | `agent_id` or `agent_name` (one required), `task` (required), `project` (optional), `status` (optional: `backlog` or `pending`, default: `backlog`), `board_id` (optional — auto-resolved if only one board exists) |
+
+### Tool Examples
+
+#### list_agents
+
+```javascript
+await client.callTool({
+  name: 'list_agents',
+  arguments: { status: 'idle', project: 'my-project' }
+});
+```
+
+**Response:**
+```json
+{
+  "count": 2,
+  "agents": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "QWEN",
+      "role": "Developer",
+      "status": "idle",
+      "project": "my-project",
+      "currentTask": null,
+      "pendingTasks": 3,
+      "totalMessages": 42
+    }
+  ]
+}
+```
+
+#### get_agent_status
+
+```javascript
+await client.callTool({
+  name: 'get_agent_status',
+  arguments: { agent_name: 'QWEN' }
+});
+```
+
+**Response:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "QWEN",
+  "role": "Developer",
+  "description": "Agent specialized in Python code",
+  "status": "busy",
+  "project": "my-project",
+  "currentTask": "Implementing authentication module",
+  "enabled": true,
+  "todoList": [...],
+  "metrics": {
+    "totalMessages": 42,
+    "totalTokensIn": 15000,
+    "totalTokensOut": 8000,
+    "totalErrors": 0
+  }
+}
+```
+
+#### list_boards
+
+```javascript
+await client.callTool({
+  name: 'list_boards'
+});
+```
+
+**Response:**
+```json
+{
+  "count": 2,
+  "boards": [
+    {
+      "id": "board-uuid-1",
+      "name": "Development",
+      "user": "john.doe",
+      "user_id": "user-uuid",
+      "columns": [
+        { "id": "col-1", "label": "Backlog" },
+        { "id": "col-2", "label": "In Progress" },
+        { "id": "col-3", "label": "Done" }
+      ]
+    }
+  ]
+}
+```
+
+#### add_task
+
+```javascript
+await client.callTool({
+  name: 'add_task',
+  arguments: {
+    agent_name: 'QWEN',
+    task: 'Implement user authentication',
+    project: 'my-project',
+    status: 'pending',
+    board_id: 'board-uuid-1'
+  }
+});
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "task": {
+    "id": "new-task-uuid",
+    "text": "Implement user authentication",
+    "status": "pending",
+    "project": "my-project",
+    "boardId": "board-uuid-1",
+    "createdAt": "2026-03-10T14:30:00.000Z"
+  },
+  "agent": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "QWEN"
+  },
+  "board_id": "board-uuid-1"
+}
+```
+
+> **Note on `add_task`:**
+> - If `board_id` is omitted and only one board exists, it is used automatically.
+> - If multiple boards exist and no `board_id` is provided, the tool returns an error with available board options.
+> - `status` defaults to `backlog` (agent won't auto-pick). Use `pending` for immediate execution.
 
 ---
 
@@ -234,3 +408,54 @@ agents = response.json()["agents"]
 for agent in agents:
     print(f"{agent['name']} ({agent['role']}) — {agent['pendingTasks']} pending tasks")
 ```
+
+### MCP Client — list agents and add a task
+
+```javascript
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+const API_KEY = 'swarm_sk_...';
+const MCP_URL = 'https://swarm.example.com/api/swarm/mcp';
+
+const transport = new StreamableHTTPClientTransport(
+  new URL(MCP_URL),
+  { requestInit: { headers: { Authorization: `Bearer ${API_KEY}` } } }
+);
+
+const client = new Client({ name: 'my-script', version: '1.0.0' });
+await client.connect(transport);
+
+// List idle agents
+const agents = await client.callTool({
+  name: 'list_agents',
+  arguments: { status: 'idle' }
+});
+console.log('Available agents:', agents);
+
+// Add a task to the first idle agent
+const firstAgent = JSON.parse(agents.content[0].text).agents[0];
+if (firstAgent) {
+  const task = await client.callTool({
+    name: 'add_task',
+    arguments: {
+      agent_id: firstAgent.id,
+      task: 'Review pull requests',
+      project: 'my-project',
+      status: 'pending'
+    }
+  });
+  console.log('Task created:', task);
+}
+```
+
+---
+
+## Legacy SSE Transport
+
+For clients that don't support Streamable HTTP yet, the server also exposes a legacy SSE endpoint:
+
+- `GET /api/swarm/mcp/sse` — establishes the SSE stream
+- `POST /api/swarm/mcp/messages?sessionId=<id>` — sends JSON-RPC messages
+
+This transport is deprecated and may be removed in future versions. Prefer Streamable HTTP for new integrations.
