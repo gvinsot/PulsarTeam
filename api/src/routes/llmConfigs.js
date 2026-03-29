@@ -44,6 +44,7 @@ export function llmConfigRoutes(agentManager) {
         apiKey: req.body.apiKey || '',
         endpoint: req.body.endpoint || '',
         isReasoning: req.body.isReasoning || false,
+        managesContext: !!req.body.managesContext,
         temperature: req.body.temperature ?? null,
         contextSize: req.body.contextSize ?? null,
         maxOutputTokens: req.body.maxOutputTokens ?? null,

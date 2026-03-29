@@ -633,7 +633,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
               LLM Configurations ({llmConfigs.length})
             </h3>
             <button
-              onClick={() => setLlmForm({ name: '', provider: 'anthropic', model: '', endpoint: '', apiKey: '', isReasoning: false, temperature: null, contextSize: null, maxOutputTokens: null, costPerInputToken: null, costPerOutputToken: null })}
+              onClick={() => setLlmForm({ name: '', provider: 'anthropic', model: '', endpoint: '', apiKey: '', isReasoning: false, managesContext: false, temperature: null, contextSize: null, maxOutputTokens: null, costPerInputToken: null, costPerOutputToken: null })}
               className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -707,6 +707,11 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                     Reasoning model
                   </label>
                 </div>
+                <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
+                  <input type="checkbox" checked={llmForm.managesContext || false} onChange={e => setLlmForm(f => ({ ...f, managesContext: e.target.checked }))}
+                    className="rounded border-dark-600 bg-dark-900 text-teal-500 focus:ring-teal-500" />
+                  Manages own context
+                </label>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -791,6 +796,9 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                     <div className="flex items-center gap-3 mt-1">
                       <span className="text-xs text-dark-400 capitalize">{config.provider}</span>
                       <span className="text-xs text-dark-500">{config.model}</span>
+                      {config.managesContext && (
+                        <span className="ml-1 px-1.5 py-0.5 text-[10px] rounded bg-teal-500/10 text-teal-400 border border-teal-500/20">Managed Context</span>
+                      )}
                       {config.endpoint && <span className="text-xs text-dark-600 truncate max-w-[200px]">{config.endpoint}</span>}
                       {config.contextSize && <span className="text-xs text-dark-500">{(config.contextSize / 1000).toFixed(0)}k ctx</span>}
                       {config.maxOutputTokens && <span className="text-xs text-dark-500">{(config.maxOutputTokens / 1000).toFixed(0)}k out</span>}

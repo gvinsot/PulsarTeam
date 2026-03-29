@@ -158,6 +158,7 @@ export class AgentManager {
           apiKey: config.apiKey || agent.apiKey || '',
           isReasoning: config.isReasoning || false,
           temperature: config.temperature ?? null,
+          managesContext: config.managesContext || false,
           maxTokens: config.maxOutputTokens || agent.maxTokens || 4096,
           contextLength: config.contextSize || agent.contextLength || 0,
           costPerInputToken: config.costPerInputToken ?? agent.costPerInputToken ?? null,
@@ -176,6 +177,7 @@ export class AgentManager {
       isReasoning: agent.isReasoning || false,
       temperature: agent.temperature ?? null,
       maxTokens: agent.maxTokens || 4096,
+      managesContext: false,
       contextLength: agent.contextLength || 0,
       costPerInputToken: agent.costPerInputToken ?? null,
       costPerOutputToken: agent.costPerOutputToken ?? null,
@@ -1159,6 +1161,13 @@ export class AgentManager {
 
     // ── Proactive compaction: summarize older messages when history exceeds threshold ──
     // Thresholds scale with the agent's context window size.
+    // ── Check if the LLM manages its own context (e.g. Claude Code CLI with built-in compaction) ──
+    const earlyLlmConfig = this.resolveLlmConfig(agent);
+    const managesContext = earlyLlmConfig.managesContext || false;
+    if (managesContext) {
+      console.log(`🧠 [Managed Context] "${agent.name}": model manages its own memory/compaction — skipping history \& compaction`);
+    }
+
     const contextLimit = agent.contextLength || 8192;
     const { maxRecent, compactTrigger, compactReset } = this._compactionThresholds(contextLimit);
 
@@ -1167,6 +1176,7 @@ export class AgentManager {
     const shouldCompact = isTopLevelUserMessage || isNewDelegationTask;
     if (shouldCompact) {
       const nonSummaryMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
+    if (!managesContext) {
 
       if (agent._compactionArmed === undefined) {
         agent._compactionArmed = true;
@@ -1199,6 +1209,7 @@ export class AgentManager {
       // For large contexts, allow up to 80% usage before triggering; smaller contexts stay at 75%
       const safetyRatio = contextLimit >= 128000 ? 0.80 : 0.75;
       if (estimatedTokens > contextLimit * safetyRatio && realMessages.length > maxRecent) {
+    } // end !managesContext — skip compaction and history
         // Emergency compact: keep fewer messages (scaled down)
         const emergencyKeep = Math.max(6, Math.floor(maxRecent * 0.6));
         console.log(`🗜️  [Token Compact] "${agent.name}": estimated ${estimatedTokens} tokens vs ${contextLimit} limit — compacting to keep ${emergencyKeep}`);
@@ -1206,6 +1217,7 @@ export class AgentManager {
         await this._compactHistory(agent, emergencyKeep);
         agent._compactionArmed = false;
         // Rebuild messages with compacted history
+    if (!managesContext) {
         messages.length = 0;
         if (systemContent) {
           messages.push({ role: 'system', content: systemContent });
@@ -1237,6 +1249,7 @@ export class AgentManager {
     try {
       const llmConfig = this.resolveLlmConfig(agent);
       const provider = createProvider({
+    } // end !managesContext safety net
         provider: llmConfig.provider,
         model: llmConfig.model,
         endpoint: llmConfig.endpoint,
