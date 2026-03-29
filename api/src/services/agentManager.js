@@ -1534,11 +1534,14 @@ export class AgentManager {
           // Check if there are error reports — add specific instructions for the agent
           const hasErrorReports = toolResults.some(r => r.isErrorReport);
           const hasRealErrors = toolResults.some(r => !r.success && !r.isErrorReport);
-          let continuationPrompt = '--- [TOOL RESULTS]\n';
+          const hasSuccessfulCommit = toolResults.some(r => r.tool === 'git_commit_push' && r.success);
+          let continuationPrompt = 'Continue with your task based on these results.';
           if (hasErrorReports) {
             continuationPrompt = 'You reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
           } else if (hasRealErrors) {
             continuationPrompt = 'Some tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
+          } else if (hasSuccessfulCommit) {
+            continuationPrompt = 'Your code has been committed, pushed, and the task has been auto-completed. Provide a brief summary of what was accomplished.';
           }
 
           const continuedResponse = await this.sendMessage(
@@ -2687,6 +2690,33 @@ export class AgentManager {
             }
           } else if (call.tool === 'git_commit_push' && result.success) {
             console.warn(`⚠️  [Commit] Agent "${agent.name}" git_commit_push succeeded but could not extract commit hash from output`);
+          }
+
+          // Auto-complete task after successful git_commit_push
+          if (call.tool === 'git_commit_push' && result.success) {
+            let inProgressTask = null;
+            let taskOwnerAgent = null;
+            // Search across ALL agents' todoLists (task may be on creator, not executor)
+            for (const [, ownerAg] of this.agents) {
+              const found = ownerAg.todoList?.find(t => t.status === 'in_progress' && t.assignee === agentId);
+              if (found) { inProgressTask = found; taskOwnerAgent = ownerAg; break; }
+            }
+            // Fallback: check executor's own todoList
+            if (!inProgressTask) {
+              inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
+              if (inProgressTask) taskOwnerAgent = agent;
+            }
+            if (inProgressTask) {
+              const autoComment = commitMsg || 'Completed (auto-closed after successful git push)';
+              inProgressTask._executionCompleted = true;
+              inProgressTask._executionComment = autoComment;
+              if (taskOwnerAgent) saveAgent(taskOwnerAgent);
+              console.log(`✅ [AutoComplete] Agent "${agent.name}" git_commit_push → auto-completing task "${inProgressTask.text?.slice(0, 80)}"`);
+              if (streamCallback) {
+                streamCallback(`\n✅ Task auto-completed after successful commit & push.\n`);
+              }
+              result.result = `${result.result}\n\n✅ Task automatically marked as complete.`;
+            }
           }
         }
 
