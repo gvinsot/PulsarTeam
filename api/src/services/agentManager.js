@@ -2643,11 +2643,35 @@ export class AgentManager {
             }
 
             if (targetTask) {
-              this.addTaskCommit(ownerAgentId, targetTask.id, commitHash, commitMsg);
-              console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
+              const linked = this.addTaskCommit(ownerAgentId, targetTask.id, commitHash, commitMsg);
+              if (linked) {
+                console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
                 result.result = `${result.result}\n\n🔗 Commit ${commitHash.slice(0, 8)} automatically linked to task "${targetTask.text?.slice(0, 60)}"`;
+              } else {
+                console.warn(`⚠️  [Commit] addTaskCommit failed for ${commitHash.slice(0, 7)} → task "${targetTask.text?.slice(0, 50)}"`);
+                result.result = `${result.result}\n\n⚠️ Auto-linking failed. Try: @link_commit(${targetTask.id}, ${commitHash}, ${commitMsg.slice(0, 60)})`;
+              }
             } else {
-              console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no task found to link it to`);
+              // No task found — provide agent with real task IDs for manual linking
+              const agentTasks = [];
+              for (const [, ownerAg] of this.agents) {
+                if (!ownerAg.todoList) continue;
+                for (const t of ownerAg.todoList) {
+                  if (t.assignee === agentId || ownerAg.id === agentId) {
+                    agentTasks.push(t);
+                  }
+                }
+              }
+              if (agentTasks.length > 0) {
+                const taskList = agentTasks.slice(0, 5).map(t => 
+                  `  - @link_commit(${t.id}, ${commitHash}, ${commitMsg.slice(0, 60)})  → [${t.status}] ${t.text?.slice(0, 50)}`
+                ).join('\n');
+                console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no in_progress task found. Available tasks:\n${taskList}`);
+                result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not auto-linked (no in_progress task). Link it manually:\n${taskList}`;
+              } else {
+                console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but has no tasks at all`);
+                result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not linked — no tasks found for this agent.`;
+              }
             }
           } else if (call.tool === 'git_commit_push' && result.success) {
             console.warn(`⚠️  [Commit] Agent "${agent.name}" git_commit_push succeeded but could not extract commit hash from output`);
