@@ -1534,7 +1534,7 @@ export class AgentManager {
           // Check if there are error reports — add specific instructions for the agent
           const hasErrorReports = toolResults.some(r => r.isErrorReport);
           const hasRealErrors = toolResults.some(r => !r.success && !r.isErrorReport);
-          let continuationPrompt = 'Continue with your task based on these results.\n';
+          let continuationPrompt = '';
           if (hasErrorReports) {
             continuationPrompt = 'You reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
           } else if (hasRealErrors) {
