@@ -2602,11 +2602,6 @@ export class AgentManager {
         });
 
         const result = await executeTool(call.tool, call.args, agent.project, this.sandboxManager, agentId);
-        results.push({
-          tool: call.tool,
-          args: call.args,
-          ...result
-        });
 
         // Auto-capture commit hash from git_commit_push or run_command(git commit) and link to task
         if (call.tool === 'git_commit_push' || (call.tool === 'run_command' && result.success)) {
@@ -2650,6 +2645,7 @@ export class AgentManager {
             if (targetTask) {
               this.addTaskCommit(ownerAgentId, targetTask.id, commitHash, commitMsg);
               console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
+                result.result = `${result.result}\n\n🔗 Commit ${commitHash.slice(0, 8)} automatically linked to task "${targetTask.text?.slice(0, 60)}"`;
             } else {
               console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no task found to link it to`);
             }
@@ -2657,6 +2653,8 @@ export class AgentManager {
             console.warn(`⚠️  [Commit] Agent "${agent.name}" git_commit_push succeeded but could not extract commit hash from output`);
           }
         }
+
+        results.push({ tool: call.tool, args: call.args, ...result });
 
         // Stream a one-liner per tool execution into the chat
         if (streamCallback) {
