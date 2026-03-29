@@ -1196,6 +1196,10 @@ def _messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optiona
     else:
         prompt = "\n".join(conversation_parts)
 
+    # Guard: ensure prompt is never empty (would cause Claude CLI --print error)
+    if not prompt or not prompt.strip():
+        prompt = "\n".join(conversation_parts) if conversation_parts else "Continue."
+
     return prompt, system_prompt
 
 

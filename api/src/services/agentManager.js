@@ -1174,12 +1174,13 @@ export class AgentManager {
     const isTopLevelUserMessage = delegationDepth === 0 && !messageMeta;
     const isNewDelegationTask = messageMeta?.type === 'delegation-task';
     const shouldCompact = isTopLevelUserMessage || isNewDelegationTask;
-    if (shouldCompact) {
+
+    // ── Proactive compaction (only on top-level or new delegation messages) ──
+    if (shouldCompact && !managesContext) {
       const nonSummaryMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
 
       if (agent._compactionArmed === undefined) {
         agent._compactionArmed = true;
-    if (!managesContext) {
       }
       if (!agent._compactionArmed && nonSummaryMessages.length <= compactReset) {
         agent._compactionArmed = true;
@@ -1193,25 +1194,23 @@ export class AgentManager {
       }
     }
 
-    // Add conversation history: always include compaction summary + last N real messages
-    const summary = agent.conversationHistory.find(m => m.type === 'compaction-summary');
-    const realMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
-    if (summary) messages.push(summary);
-    messages.push(...realMessages.slice(-maxRecent));
+    // Add conversation history (skip for managesContext — Claude Code CLI handles its own memory)
+    if (!managesContext) {
+      const summary = agent.conversationHistory.find(m => m.type === 'compaction-summary');
+      const realMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
+      if (summary) messages.push(summary);
+      messages.push(...realMessages.slice(-maxRecent));
+    }
 
-    // Add user message
+    // Add user message (always — required for all providers)
     messages.push({ role: 'user', content: userMessage });
 
     // ── Safety net: also compact if token budget is exceeded ──
-    if (!managesContext) {
-    // Skip during tool-result continuations to avoid breaking mid-task context
-    } // end !managesContext — skip compaction and history injection
-    if (shouldCompact) {
+    if (shouldCompact && !managesContext) {
+      const realMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
       const estimatedTokens = this._estimateTokens(messages);
       // For large contexts, allow up to 80% usage before triggering; smaller contexts stay at 75%
       if (estimatedTokens > contextLimit * safetyRatio && realMessages.length > maxRecent) {
-    if (!managesContext) {
-    } // end !managesContext — skip compaction and history
         // Emergency compact: keep fewer messages (scaled down)
         const emergencyKeep = Math.max(6, Math.floor(maxRecent * 0.6));
         console.log(`🗜️  [Token Compact] "${agent.name}": estimated ${estimatedTokens} tokens vs ${contextLimit} limit — compacting to keep ${emergencyKeep}`);
@@ -1232,7 +1231,6 @@ export class AgentManager {
     }
 
     // Store user message (with optional metadata for tool/delegation results)
-    } // end !managesContext safety net
     const historyEntry = {
       role: 'user',
       content: userMessage,
