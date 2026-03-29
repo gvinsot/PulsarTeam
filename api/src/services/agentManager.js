@@ -1232,6 +1232,7 @@ export class AgentManager {
     }
 
     // Store user message (with optional metadata for tool/delegation results)
+    } // end !managesContext safety net
     const historyEntry = {
       role: 'user',
       content: userMessage,
@@ -1239,7 +1240,6 @@ export class AgentManager {
     };
     if (messageMeta) {
       historyEntry.type = messageMeta.type;
-    } // end !managesContext safety net
       if (messageMeta.toolResults) historyEntry.toolResults = messageMeta.toolResults;
       if (messageMeta.delegationResults) historyEntry.delegationResults = messageMeta.delegationResults;
       if (messageMeta.fromAgent) historyEntry.fromAgent = messageMeta.fromAgent;
@@ -2176,7 +2176,7 @@ export class AgentManager {
       }
 
       // ── Reactive compaction: context exceeded → compact and retry once ──
-      if (this._isContextExceededError(err.message) && !agent._compactionRetried) {
+      if (this._isContextExceededError(err.message) && !agent._compactionRetried && !managesContext) {
         console.log(`🗜️  [Reactive Compact] "${agent.name}": context exceeded — compacting and retrying`);
         agent._compactionRetried = true;  // Prevent infinite retry loop
         this.addActionLog(id, 'warning', 'Context limit exceeded — compacting conversation and retrying');
