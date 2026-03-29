@@ -1169,7 +1169,7 @@ export class AgentManager {
     }
 
     const contextLimit = agent.contextLength || 8192;
-    const { maxRecent, compactTrigger, compactReset } = this._compactionThresholds(contextLimit);
+    const { maxRecent, compactTrigger, compactReset, safetyRatio } = this._compactionThresholds(contextLimit);
 
     const isTopLevelUserMessage = delegationDepth === 0 && !messageMeta;
     const isNewDelegationTask = messageMeta?.type === 'delegation-task';
@@ -4215,16 +4215,16 @@ export class AgentManager {
   _compactionThresholds(contextLimit) {
     if (contextLimit >= 200000) {
       // 200k+ contexts (e.g. 256k): keep a lot more history
-      return { maxRecent: 40, compactTrigger: 55, compactReset: 45 };
+      return { maxRecent: 40, compactTrigger: 55, compactReset: 45, safetyRatio: 0.80 };
     } else if (contextLimit >= 128000) {
       // 128k contexts: generous history
-      return { maxRecent: 30, compactTrigger: 42, compactReset: 35 };
+      return { maxRecent: 30, compactTrigger: 42, compactReset: 35, safetyRatio: 0.80 };
     } else if (contextLimit >= 32000) {
       // 32k contexts: moderate history
-      return { maxRecent: 16, compactTrigger: 24, compactReset: 20 };
+      return { maxRecent: 16, compactTrigger: 24, compactReset: 20, safetyRatio: 0.75 };
     } else {
       // Small contexts (8k-16k): conservative
-      return { maxRecent: 10, compactTrigger: 15, compactReset: 12 };
+      return { maxRecent: 10, compactTrigger: 15, compactReset: 12, safetyRatio: 0.75 };
     }
   }
 
