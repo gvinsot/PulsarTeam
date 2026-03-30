@@ -353,8 +353,10 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
 
         // Wait for agent to signal completion via @task_execution_complete (or enter reminder loop)
         // This blocks the action chain until the agent explicitly finishes the task.
+        // Pass null as targetStatus — execute mode stays in the current column;
+        // the next change_status action in the chain handles the move.
         console.log(`[Workflow] Execution response received for "${task.text.slice(0, 60)}" — waiting for task_execution_complete`);
-        await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, targetStatus, task.text);
+        await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, null, task.text);
       } else if (isDecide) {
         // Save decide action log to task history
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'decide');

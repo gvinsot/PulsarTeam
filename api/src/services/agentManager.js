@@ -5018,8 +5018,16 @@ export class AgentManager {
   async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
     const freshTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
 
+    // Helper: resolve the status to move to on completion.
+    // If targetStatus is null (execute mode from workflow action chain),
+    // restore to the column the task was in before in_progress so the chain continues.
+    const resolveCompletionStatus = (task) => {
+      if (targetStatus) return targetStatus;
+      return task?.inProgressFromStatus || 'done';
+    };
+
     if (freshTask?.status === 'error') {
-      console.log(`[Execution] Task "${taskText.slice(0, 60)}" ended with error — blocking transition to ${targetStatus}`);
+      console.log(`[Execution] Task "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';
     }
 
@@ -5027,8 +5035,9 @@ export class AgentManager {
       const comment = freshTask._executionComment || '';
       delete freshTask._executionCompleted;
       delete freshTask._executionComment;
-      this.setTaskStatus(creatorAgentId, taskId, targetStatus, { skipAutoRefine: false, by: executorName });
-      console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${targetStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+      const completionStatus = resolveCompletionStatus(freshTask);
+      this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: !targetStatus, by: executorName });
+      console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       return 'completed';
     }
 
@@ -5055,8 +5064,9 @@ export class AgentManager {
         const comment = currentTask._executionComment || '';
         delete currentTask._executionCompleted;
         delete currentTask._executionComment;
-        this.setTaskStatus(creatorAgentId, taskId, targetStatus, { skipAutoRefine: false, by: executorName });
-        console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" -> ${targetStatus}`);
+        const completionStatus = resolveCompletionStatus(currentTask);
+        this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: !targetStatus, by: executorName });
+        console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
         return 'completed';
       }
       if (currentTask.status !== 'in_progress') {
@@ -5112,8 +5122,9 @@ export class AgentManager {
         const comment = afterReminder._executionComment || '';
         delete afterReminder._executionCompleted;
         delete afterReminder._executionComment;
-        this.setTaskStatus(creatorAgentId, taskId, targetStatus, { skipAutoRefine: false, by: executorName });
-        console.log(`✅ [Execution] Completed after reminder: "${taskText.slice(0, 60)}" -> ${targetStatus}`);
+        const completionStatus = resolveCompletionStatus(afterReminder);
+        this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: !targetStatus, by: executorName });
+        console.log(`✅ [Execution] Completed after reminder: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
         return 'completed';
       }
     }
