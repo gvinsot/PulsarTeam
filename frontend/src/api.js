@@ -574,3 +574,5 @@ export const fetchBudgetAlerts = () =>
   fetch(`${API_BASE}/budget/alerts`, { headers: getHeaders() }).then(handleResponse);
 
 export default api;
+/* ── Commit diff ──────────────────────────────────────────────────────────── */
+export const getCommitDiff = (taskId, hash) => request(`/tasks/${taskId}/commits/${hash}/diff`);
