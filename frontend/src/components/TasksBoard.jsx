@@ -1711,6 +1711,19 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                               </>
                             )}
 
+                            {/* Reject target for decide mode */}
+                            {action.type === 'run_agent' && action.mode === 'decide' && (
+                              <>
+                                <span className="text-[10px] text-red-400/70 flex-shrink-0">✗</span>
+                                <select value={action.rejectTarget || ''}
+                                  onChange={e => updateAction(idx, ai, { rejectTarget: e.target.value })}
+                                  className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                                  <option value="">If rejected...</option>
+                                  {cols.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                                </select>
+                              </>
+                            )}
+
                             {/* Target status for change_status */}
                             {action.type === 'change_status' && (
                               <select value={action.target || ''}
