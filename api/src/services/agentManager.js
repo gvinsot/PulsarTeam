@@ -2443,12 +2443,12 @@ export class AgentManager {
         // Find the task (in this agent's todoList or across all agents if assigned)
         let task = agent.todoList?.find(t => t.id === taskId);
         if (!task) task = agent.todoList?.find(t => t.id.startsWith(taskId));
-        let taskAgentId = id;
+        let taskAgentId = agentId;
         // Also search across all agents (for tasks assigned to this agent but owned by another)
         if (!task) {
           for (const [creatorId, creatorAgent] of this.agents) {
             const found = creatorAgent.todoList?.find(t => t.id === taskId || t.id.startsWith(taskId));
-            if (found && (found.assignee === id || creatorId === id)) {
+            if (found && (found.assignee === agentId || creatorId === agentId)) {
               task = found;
               taskAgentId = creatorId;
               break;
