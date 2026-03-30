@@ -3592,6 +3592,7 @@ export class AgentManager {
                 mode: action.mode || 'execute',
                 instructions: action.instructions || '',
                 to: action.targetStatus || null,
+                rejectTarget: action.rejectTarget || null,
               }
             };
             console.log(`[Workflow] Action: run_agent mode="${action.mode}" role="${action.role}" target="${action.targetStatus}"`);
