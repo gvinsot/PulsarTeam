@@ -63,9 +63,15 @@ export async function processTransition(task, agentManager, io) {
   const mode = task._transition?.mode;
   const instructions = task._transition?.instructions || '';
 
+  // Lightweight modes (title, set_type) only update metadata — they don't change task
+  // status or conflict with execute/decide, so they can run without the execution lock.
+  // This prevents a title/set_type LLM call from blocking concurrent execute/decide
+  // transitions triggered by the TaskLoop or other _checkAutoRefine calls.
+  const isLightweightMode = mode === 'title' || mode === 'set_type';
+
   // Prevent concurrent execution of the same task (with TTL-based lock)
   const lockKey = `${task.agentId}:${task.id}`;
-  if (!_acquireExecutionLock(lockKey)) {
+  if (!isLightweightMode && !_acquireExecutionLock(lockKey)) {
     console.log(`[Workflow] Skipping duplicate processTransition for "${task.text?.slice(0, 60)}" — already in progress`);
     return;
   }
@@ -174,7 +180,6 @@ export async function processTransition(task, agentManager, io) {
       } finally {
         agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
-      _executionLocks.delete(lockKey);
       return;
     }
 
@@ -202,7 +207,6 @@ export async function processTransition(task, agentManager, io) {
       } finally {
         agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
-      _executionLocks.delete(lockKey);
       return;
     }
 
@@ -337,7 +341,7 @@ Execute the instructions above and update the task status accordingly.`;
       console.error(`[Workflow] Failed to set status after error:`, e.message);
     }
   } finally {
-    _executionLocks.delete(lockKey);
+    if (!isLightweightMode) _executionLocks.delete(lockKey);
     // Clear actionRunning flag
     const creatorAgentFinal = agentManager.agents.get(task.agentId);
     const actualTaskFinal = creatorAgentFinal?.todoList?.find(t => t.id === task.id);
