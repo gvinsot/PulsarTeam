@@ -47,48 +47,6 @@ function findAgentByRole(agentManager, role, ownerId = null) {
 }
 
 /**
- * Parse a decide-mode response to extract the structured decision.
- * Accepts JSON like { "decision": "proceed" } or plain text containing proceed/hold/revise.
- */
-function parseDecision(response) {
-  // Strip markdown code fences (```json ... ``` or ``` ... ```)
-  let cleaned = response.replace(/```(?:json)?\s*\n?([\s\S]*?)```/g, '$1').trim();
-
-  // Try JSON parse — first the whole cleaned string, then extract via regex
-  for (const candidate of [cleaned, response]) {
-    try {
-      // Try parsing the whole candidate as JSON
-      const direct = JSON.parse(candidate.trim());
-      if (direct.decision) {
-        return { decision: direct.decision.toLowerCase(), reason: direct.reason || '' };
-      }
-    } catch (_) { /* not valid JSON */ }
-
-    // Extract JSON object containing "decision" — use greedy match for last } to handle nested braces
-    try {
-      const jsonMatch = candidate.match(/\{[^{}]*"decision"\s*:\s*"[^"]*"[^{}]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          decision: (parsed.decision || 'hold').toLowerCase(),
-          reason: parsed.reason || '',
-        };
-      }
-    } catch (_) { /* not valid JSON, fall through */ }
-  }
-
-  // Fall back to keyword detection in plain text
-  const lower = response.toLowerCase();
-  if (lower.includes('proceed') || lower.includes('approve') || lower.includes('yes')) {
-    return { decision: 'proceed', reason: response };
-  }
-  if (lower.includes('revise') || lower.includes('reject') || lower.includes('no')) {
-    return { decision: 'revise', reason: response };
-  }
-  return { decision: 'hold', reason: response };
-}
-
-/**
  * Process an automatic workflow transition.
  *
  * Three modes based on transition config:
@@ -101,7 +59,6 @@ function parseDecision(response) {
  */
 export async function processTransition(task, agentManager, io) {
   const targetStatus = task._transition?.to ?? 'backlog';
-  const rejectTarget = task._transition?.rejectTarget || null;
   const transitionRole = task._transition?.agent;
   const mode = task._transition?.mode;
   const instructions = task._transition?.instructions || '';
@@ -260,47 +217,26 @@ export async function processTransition(task, agentManager, io) {
       messagePrefix = '';
       console.log(`[Workflow] Executing "${task.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
     } else if (isDecide) {
-      // Decide mode: agent evaluates based ONLY on configured instructions
+      // Instructions mode: agent receives instructions and can update the task status itself
       if (!instructions) {
-        // No instructions → auto-proceed without LLM call
-        console.log(`[Workflow] Decide: no instructions configured — auto-proceeding "${task.text.slice(0, 60)}"`);
-        task.history = task.history || [];
-        task.history.push({
-          status: targetStatus,
-          from: task.status,
-          timestamp: new Date().toISOString(),
-          agent: agent.name,
-          type: 'decide',
-          decision: 'proceed',
-          reason: 'No decision instructions configured — auto-proceed'
-        });
-        task.status = targetStatus;
-        task.assignee = null;
-        // Update the actual agent's todoList and persist
-        const creatorAgent = agentManager.agents.get(task.agentId);
-        const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
-        if (actualTask) {
-          actualTask.status = targetStatus;
-          actualTask.assignee = null;
-          actualTask.history = task.history;
-          if (targetStatus === 'done') actualTask.completedAt = new Date().toISOString();
-          saveAgent(creatorAgent);
-        }
-        io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
+        console.log(`[Workflow] Instructions: no instructions configured — skipping for "${task.text.slice(0, 60)}"`);
         _executionLocks.delete(lockKey);
         return;
       }
-      prompt = `You are a decision-making agent. Your ONLY job is to evaluate the following instructions and decide if the task should proceed.
+      prompt = `You have been assigned instructions for the following task.
 
-Decision instructions:
-${instructions}
-
+Task ID: ${task.id}
 Task title: ${task.text}
+Current status: ${task.status}
 ${task.error ? `Previous error: ${task.error}` : ''}
 
-Based STRICTLY on the decision instructions above, respond with JSON only: {"decision": "proceed"|"hold"|"revise", "reason": "brief explanation based on the instructions"}`;
-      messagePrefix = '[Decide]';
-      console.log(`[Workflow] Deciding "${task.text.slice(0, 80)}" via ${agent.name}`);
+Instructions:
+${instructions}
+
+You can change the task status using @update_task(${task.id}, <new_status>) where <new_status> is a workflow column ID.
+Execute the instructions above and update the task status accordingly.`;
+      messagePrefix = '';
+      console.log(`[Workflow] Instructions mode: "${task.text.slice(0, 80)}" via ${agent.name}`);
     } else {
       // Refinement mode: ask for an improved description
       prompt = `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved description.`;
@@ -358,39 +294,9 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
         console.log(`[Workflow] Execution response received for "${task.text.slice(0, 60)}" — waiting for task_execution_complete`);
         await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, null, task.text);
       } else if (isDecide) {
-        // Save decide action log to task history
+        // Instructions mode: agent handles status changes itself via @update_task
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'decide');
-        // Parse the agent's decision
-        const { decision, reason } = parseDecision(response);
-        console.log(`[Workflow] Decision for "${task.text.slice(0, 60)}": ${decision} — ${reason.slice(0, 100)}`);
-
-        if (decision === 'proceed') {
-          // Move to target status
-          if (targetStatus) {
-            agentManager.setTaskStatus(task.agentId, task.id, targetStatus, { skipAutoRefine: true, by: agent.name });
-          }
-          console.log(`[Workflow] Decide: proceeding "${task.text.slice(0, 60)}" -> ${targetStatus}`);
-        } else if (decision === 'revise') {
-          // Append feedback
-          if (reason) {
-            agentManager.updateTaskText(task.agentId, task.id, `${task.text}\n\n---\n**Review feedback:** ${reason}`);
-          }
-          // Move to reject target column if configured, otherwise stay
-          if (rejectTarget) {
-            agentManager.setTaskStatus(task.agentId, task.id, rejectTarget, { skipAutoRefine: true, by: agent.name });
-            console.log(`[Workflow] Decide: revision requested for "${task.text.slice(0, 60)}" -> ${rejectTarget}`);
-          } else {
-            console.log(`[Workflow] Decide: revision requested for "${task.text.slice(0, 60)}" — stays in "${task.status}"`);
-          }
-        } else {
-          // hold — move to reject target if configured, otherwise stay
-          if (rejectTarget) {
-            agentManager.setTaskStatus(task.agentId, task.id, rejectTarget, { skipAutoRefine: true, by: agent.name });
-            console.log(`[Workflow] Decide: holding "${task.text.slice(0, 60)}" -> ${rejectTarget}`);
-          } else {
-            console.log(`[Workflow] Decide: holding "${task.text.slice(0, 60)}" in "${task.status}"`);
-          }
-        }
+        console.log(`[Workflow] Instructions completed for "${task.text.slice(0, 60)}" via ${agent.name}`);
       } else {
         // Refine mode — replace the task description with the refined version
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'refine');

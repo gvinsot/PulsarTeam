@@ -36,10 +36,10 @@ You can interact with project files using these commands. Use the exact format s
   Example: @list_my_tasks()
 
 @update_task(taskId, status) - Update the status of one of your tasks
-  Valid statuses: in_progress, error
-  Use this to mark a task as in_progress when you start working on it, or error if you encounter an issue.
-  To mark a task as done, use @task_execution_complete(comment) instead.
-  Example: @update_task(abc-123, in_progress)
+  The status can be any workflow column ID (e.g., backlog, pending, code, build, test, deploy, done) or a system status (in_progress, error).
+  Use this to move a task between workflow columns or mark it as in_progress/error.
+  Example: @update_task(abc-123, build)
+  Example: @update_task(abc-123, done)
   Example: @update_task(abc-123, error)
 
 @check_status() - Check your own detailed status including project assignment, task counts, and metrics

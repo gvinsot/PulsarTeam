@@ -1193,9 +1193,82 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
   );
 }
 
+// ── InstructionsEditModal ────────────────────────────────────────────────────
+
+function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onSave }) {
+  const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
+  const [saving, setSaving] = useState(false);
+
+  const roles = useMemo(() => [...new Set(agents.filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
+
+  const updateField = (idx, field, value) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(items);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="w-[700px] max-h-[80vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
+          <div className="flex items-center gap-2">
+            <Edit3 className="w-4 h-4 text-indigo-400" />
+            <span className="text-sm font-semibold text-dark-100">Instructions — {columnLabel}</span>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto px-5 py-4 space-y-4">
+          {items.map((item, idx) => (
+            <div key={idx} className="space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <User className="w-3.5 h-3.5 text-dark-500" />
+                  <select
+                    value={item.role || ''}
+                    onChange={e => updateField(idx, 'role', e.target.value)}
+                    className="px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    <option value="">Any agent</option>
+                    {roles.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                <span className="text-dark-600 text-[10px]">Transition #{item.transitionIdx + 1}, Action #{item.actionIdx + 1}</span>
+              </div>
+              <textarea
+                value={item.instructions}
+                onChange={e => updateField(idx, 'instructions', e.target.value)}
+                placeholder="Instructions for the agent..."
+                className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2.5 text-sm text-dark-200 placeholder-dark-500 resize-y min-h-[120px] focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-dark-700">
+          <button onClick={onClose}
+            className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 transition-colors">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50">
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, showAgent, showCreator, showProject, showTaskType }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType }) {
   const [dragOver, setDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
 
@@ -1215,6 +1288,15 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
           <span className={`text-sm font-semibold ${col.headerText}`}>{col.label}</span>
         </div>
         <div className="flex items-center gap-1.5">
+          {hasInstructions && (
+            <button
+              onClick={() => onEditInstructions(col.id)}
+              className="p-1 rounded text-dark-500 hover:text-blue-400 hover:bg-dark-700 transition-colors"
+              title="Edit agent instructions for this column"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+          )}
           {onClearAll && tasks.length > 0 && (
             <button
               onClick={onClearAll}
@@ -1299,7 +1381,7 @@ const ACTION_OPTIONS = [
   { value: 'run_agent:refine', label: 'Refine description (agent)' },
   { value: 'run_agent:title', label: 'Generate title (agent)' },
   { value: 'run_agent:set_type', label: 'Set task type (agent)' },
-  { value: 'run_agent:decide', label: 'Decide to move (agent)' },
+  { value: 'run_agent:decide', label: 'Instructions (agent)' },
   { value: 'change_status', label: 'Move to status' },
   { value: 'move_jira_status', label: '🔗 Move Jira ticket to status', jira: true },
   { value: 'jira_ai_comment', label: '🤖 AI analyze & comment on Jira ticket', jira: true },
@@ -1307,11 +1389,11 @@ const ACTION_OPTIONS = [
 
 function createAction(key, cols) {
   if (key === 'assign_agent') return { type: 'assign_agent', role: '' };
-  if (key === 'run_agent:execute') return { type: 'run_agent', mode: 'execute', role: '', instructions: '', targetStatus: cols[cols.length - 1]?.id || '' };
-  if (key === 'run_agent:refine') return { type: 'run_agent', mode: 'refine', role: '', instructions: '', targetStatus: cols[1]?.id || '' };
+  if (key === 'run_agent:execute') return { type: 'run_agent', mode: 'execute', role: '', instructions: '' };
+  if (key === 'run_agent:refine') return { type: 'run_agent', mode: 'refine', role: '', instructions: '' };
   if (key === 'run_agent:title') return { type: 'run_agent', mode: 'title', role: '' };
   if (key === 'run_agent:set_type') return { type: 'run_agent', mode: 'set_type', role: '' };
-  if (key === 'run_agent:decide') return { type: 'run_agent', mode: 'decide', role: '', instructions: '', targetStatus: cols[1]?.id || '', rejectTarget: '' };
+  if (key === 'run_agent:decide') return { type: 'run_agent', mode: 'decide', role: '', instructions: '' };
   if (key === 'change_status') return { type: 'change_status', target: cols[1]?.id || '' };
   if (key === 'move_jira_status') return { type: 'move_jira_status', jiraStatusIds: [] };
   if (key === 'jira_ai_comment') return { type: 'jira_ai_comment', role: '', instructions: '' };
@@ -1698,32 +1780,6 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                               </select>
                             )}
 
-                            {/* Target status for run_agent (decide mode only) */}
-                            {action.type === 'run_agent' && action.mode === 'decide' && (
-                              <>
-                                <ArrowRight className="w-2.5 h-2.5 text-dark-500 flex-shrink-0" />
-                                <select value={action.targetStatus || ''}
-                                  onChange={e => updateAction(idx, ai, { targetStatus: e.target.value })}
-                                  className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                                  <option value="">Then move to...</option>
-                                  {cols.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-                                </select>
-                              </>
-                            )}
-
-                            {/* Reject target for decide mode */}
-                            {action.type === 'run_agent' && action.mode === 'decide' && (
-                              <>
-                                <span className="text-[10px] text-red-400/70 flex-shrink-0">✗</span>
-                                <select value={action.rejectTarget || ''}
-                                  onChange={e => updateAction(idx, ai, { rejectTarget: e.target.value })}
-                                  className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                                  <option value="">If rejected...</option>
-                                  {cols.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-                                </select>
-                              </>
-                            )}
-
                             {/* Target status for change_status */}
                             {action.type === 'change_status' && (
                               <select value={action.target || ''}
@@ -1773,11 +1829,11 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                             <textarea value={action.instructions || ''}
                               onChange={e => updateAction(idx, ai, { instructions: e.target.value })}
                               placeholder={action.mode === 'decide'
-                                ? "Decision criteria... (e.g., 'Approve if task has acceptance criteria and clear scope')"
+                                ? "Instructions for the agent... (e.g., 'Run build_stack. If success, move task to test. If failure, move to backlog.')"
                                 : action.mode === 'refine'
                                 ? "Refinement instructions... (e.g., 'Add acceptance criteria and break into sub-tasks')"
                                 : "Extra instructions (optional)... (e.g., 'Focus on unit tests')"}
-                              className="w-full bg-dark-900 border border-dark-600 rounded px-2 py-1.5 text-xs text-dark-200 placeholder-dark-500 resize-none h-14"
+                              className={`w-full bg-dark-900 border border-dark-600 rounded px-2 py-1.5 text-xs text-dark-200 placeholder-dark-500 resize-none ${action.mode === 'decide' ? 'h-24' : 'h-14'}`}
                             />
                           )}
 
@@ -2021,6 +2077,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [createDefaultStatus, setCreateDefaultStatus] = useState(null);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
+  const [editInstructionsCol, setEditInstructionsCol] = useState(null);
   const [jiraStatus, setJiraStatus] = useState(null);
   const boardScrollRef = useRef(null);
 
@@ -2083,6 +2140,27 @@ export default function TasksBoard({ agents, onRefresh, user }) {
 
   const columns = useMemo(() => workflow ? buildColumns(workflow.columns) : [], [workflow]);
   const statusOptions = useMemo(() => workflow ? buildStatusOptions(workflow.columns) : [], [workflow]);
+
+  // Map column IDs to their "Instructions (agent)" actions from transitions
+  const columnInstructionsMap = useMemo(() => {
+    if (!workflow?.transitions) return {};
+    const map = {};
+    workflow.transitions.forEach((tr, tIdx) => {
+      (tr.actions || []).forEach((act, aIdx) => {
+        if (act.type === 'run_agent' && act.mode === 'decide') {
+          const colId = tr.from;
+          if (!map[colId]) map[colId] = [];
+          map[colId].push({
+            instructions: act.instructions || '',
+            role: act.role || '',
+            transitionIdx: tIdx,
+            actionIdx: aIdx,
+          });
+        }
+      });
+    });
+    return map;
+  }, [workflow]);
 
   // Aggregate all tasks from all agents, filtered by active board
   const firstBoardId = boards.length > 0 ? boards[0].id : null;
@@ -2384,6 +2462,8 @@ export default function TasksBoard({ agents, onRefresh, user }) {
               onOpen={setSelectedTask}
               onClearAll={col.id === lastColId ? handleClearDone : undefined}
               onAddTask={() => { setCreateDefaultStatus(col.id); setCreateOpen(true); }}
+              onEditInstructions={setEditInstructionsCol}
+              hasInstructions={!!columnInstructionsMap[col.id]}
               showAgent={col.showAgent}
               showCreator={col.showCreator}
               showProject={col.showProject}
@@ -2392,6 +2472,29 @@ export default function TasksBoard({ agents, onRefresh, user }) {
           ))}
         </div>
       </div>
+
+      {/* Instructions edit modal */}
+      {editInstructionsCol && columnInstructionsMap[editInstructionsCol] && (
+        <InstructionsEditModal
+          columnLabel={columns.find(c => c.id === editInstructionsCol)?.label || editInstructionsCol}
+          instructions={columnInstructionsMap[editInstructionsCol]}
+          agents={agents}
+          onClose={() => setEditInstructionsCol(null)}
+          onSave={async (updatedEntries) => {
+            if (!workflow) return;
+            const updated = JSON.parse(JSON.stringify(workflow));
+            for (const entry of updatedEntries) {
+              const action = updated.transitions[entry.transitionIdx]?.actions?.[entry.actionIdx];
+              if (action) {
+                action.instructions = entry.instructions;
+                if (entry.role !== undefined) action.role = entry.role;
+              }
+            }
+            await handleSaveWorkflow(updated);
+            setEditInstructionsCol(null);
+          }}
+        />
+      )}
 
       {/* Task detail modal */}
       {liveSelectedTask && (

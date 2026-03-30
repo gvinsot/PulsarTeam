@@ -2432,29 +2432,33 @@ export class AgentManager {
       // ── Handle @update_task() — update own task status ──────────────
       if (call.tool === 'update_task') {
         const [taskId, newStatus] = call.args;
-        const validStatuses = ['in_progress', 'error'];
-        if (newStatus === 'done') {
-          results.push({ tool: 'update_task', args: call.args, success: false, error: 'Cannot set status to "done" via @update_task. Use @task_execution_complete(summary) instead to signal task completion.' });
-          continue;
-        }
-        if (!validStatuses.includes(newStatus)) {
-          results.push({ tool: 'update_task', args: call.args, success: false, error: `Invalid status "${newStatus}". Valid: ${validStatuses.join(', ')}. Use @task_execution_complete(summary) to mark a task as done.` });
-          continue;
-        }
+        // Find the task (in this agent's todoList or across all agents if assigned)
         let task = agent.todoList?.find(t => t.id === taskId);
         if (!task) task = agent.todoList?.find(t => t.id.startsWith(taskId));
+        let taskAgentId = id;
+        // Also search across all agents (for tasks assigned to this agent but owned by another)
         if (!task) {
-          // Look for partial match to give a helpful hint
+          for (const [creatorId, creatorAgent] of this.agents) {
+            const found = creatorAgent.todoList?.find(t => t.id === taskId || t.id.startsWith(taskId));
+            if (found && (found.assignee === id || creatorId === id)) {
+              task = found;
+              taskAgentId = creatorId;
+              break;
+            }
+          }
+        }
+        if (!task) {
           const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
           results.push({ tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
-        task.status = newStatus;
-        if (newStatus === 'in_progress') task.startedAt = new Date().toISOString();
-        if (newStatus === 'done') task.completedAt = new Date().toISOString();
-        saveAgent(agent);
-        this._emit('agent:updated', this._sanitize(agent));
+        // Use setTaskStatus for proper history tracking and workflow triggers
+        const updated = this.setTaskStatus(taskAgentId, task.id, newStatus, { skipAutoRefine: false, by: agent.name });
+        if (!updated) {
+          results.push({ tool: 'update_task', args: call.args, success: false, error: `Cannot move task to "${newStatus}" (blocked by guard or same status).` });
+          continue;
+        }
         console.log(`📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}" → ${newStatus}`);
         results.push({ tool: 'update_task', args: call.args, success: true, result: `Task "${task.text}" updated to ${newStatus}` });
         continue;
@@ -3662,7 +3666,6 @@ export class AgentManager {
                 mode: action.mode || 'execute',
                 instructions: action.instructions || '',
                 to: action.targetStatus || null,
-                rejectTarget: action.rejectTarget || null,
               }
             };
             console.log(`[Workflow] Action: run_agent mode="${action.mode}" role="${action.role}" target="${action.targetStatus}"`);
