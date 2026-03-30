@@ -625,7 +625,17 @@ export function parseToolCalls(response) {
   while ((startMatch = toolStartPattern.exec(cleaned)) !== null) {
     const toolName = startMatch[1].toLowerCase();
     const argsStart = startMatch.index + startMatch[0].length;
-    const closeIdx = _findBalancedClose(cleaned, argsStart);
+    let closeIdx = _findBalancedClose(cleaned, argsStart);
+    // Fallback: if balanced paren tracking fails (free-text args containing unbalanced parens
+    // like "Build successful (action_id: abc, version: 1.0)"), find last ')' before next newline
+    if (closeIdx === -1) {
+      const lineEnd = cleaned.indexOf('\n', argsStart);
+      const searchEnd = lineEnd === -1 ? cleaned.length : lineEnd;
+      const lastParen = cleaned.lastIndexOf(')', searchEnd);
+      if (lastParen >= argsStart) {
+        closeIdx = lastParen;
+      }
+    }
     if (closeIdx === -1) continue;
 
     const argsString = cleaned.slice(argsStart, closeIdx);

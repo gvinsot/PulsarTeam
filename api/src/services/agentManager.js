@@ -2017,8 +2017,13 @@ export class AgentManager {
     {
       const toolResults = await this._processToolCalls(id, responseForParsing, streamCallback, delegationDepth);
       if (toolResults.length > 0) {
-        // Feed tool results back to agent and continue
-        const resultsSummary = toolResults.map(r => {
+        // If ALL tool calls are terminal (e.g. task_execution_complete), don't feed back — agent is done
+        const nonTerminal = toolResults.filter(r => !r.isTerminal);
+        if (nonTerminal.length === 0) {
+          return {};
+        }
+        // Feed non-terminal tool results back to agent and continue
+        const resultsSummary = nonTerminal.map(r => {
           if (r.isErrorReport) {
             return `--- ⚠️ ERROR REPORT ---\n${r.args[0] || r.result}`;
           }
@@ -2032,9 +2037,9 @@ export class AgentManager {
         }).join('\n\n');
 
         // Check if there are error reports — add specific instructions for the agent
-        const hasErrorReports = toolResults.some(r => r.isErrorReport);
-        const hasRealErrors = toolResults.some(r => !r.success && !r.isErrorReport);
-        const hasSuccessfulCommit = toolResults.some(r => r.tool === 'git_commit_push' && r.success);
+        const hasErrorReports = nonTerminal.some(r => r.isErrorReport);
+        const hasRealErrors = nonTerminal.some(r => !r.success && !r.isErrorReport);
+        const hasSuccessfulCommit = nonTerminal.some(r => r.tool === 'git_commit_push' && r.success);
         let continuationPrompt = '\n';
         if (hasErrorReports) {
           continuationPrompt = '\nYou reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
@@ -2049,7 +2054,7 @@ export class AgentManager {
           `\n${resultsSummary}\n\n${continuationPrompt}`,
           streamCallback,
           delegationDepth,  // Same depth — tool continuation is the same agent working
-          { type: 'tool-result', toolResults: toolResults.map(r => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false })) }
+          { type: 'tool-result', toolResults: nonTerminal.map(r => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false })) }
         );
         return { earlyReturn: continuedResponse };
       }
@@ -2399,11 +2404,11 @@ export class AgentManager {
           if (streamCallback) {
             streamCallback(`\n✅ Task execution complete: ${comment.slice(0, 200)}\n`);
           }
-          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}` });
+          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}`, isTerminal: true });
         } else {
           // No in_progress task — silently succeed (agent may call this in non-execute modes)
           console.log(`[TaskComplete] Agent "${agent.name}" called task_execution_complete but no in_progress task found — ignoring.`);
-          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no in_progress task).' });
+          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no in_progress task).', isTerminal: true });
         }
         continue;
       }
