@@ -244,7 +244,7 @@ Execute the instructions above and update the task status accordingly.`;
       console.log(`[Workflow] Instructions mode: "${task.text.slice(0, 80)}" via ${agent.name}`);
     } else {
       // Refinement mode: ask for an improved description
-      prompt = `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved description.`;
+      prompt = `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
       messagePrefix = '[Auto-Transition]';
       console.log(`[Workflow] Refining "${task.text.slice(0, 80)}" via ${agent.name} (role: ${agent.role})`);
     }
@@ -280,7 +280,8 @@ Execute the instructions above and update the task status accordingly.`;
             project: agent.project || null,
             thinking: agentManager.agents.get(agent.id)?.currentThinking || ''
           });
-        }
+        },
+        0 // delegationDepth
       );
 
       const response = (result?.content || fullResponse).trim();

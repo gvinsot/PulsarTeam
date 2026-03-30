@@ -2401,7 +2401,9 @@ export class AgentManager {
           }
           results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}` });
         } else {
-          results.push({ tool: 'task_execution_complete', args: call.args, success: false, error: 'No in_progress task found to mark as complete' });
+          // No in_progress task — silently succeed (agent may call this in non-execute modes)
+          console.log(`[TaskComplete] Agent "${agent.name}" called task_execution_complete but no in_progress task found — ignoring.`);
+          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no in_progress task).' });
         }
         continue;
       }
