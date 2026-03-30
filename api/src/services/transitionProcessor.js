@@ -101,6 +101,7 @@ function parseDecision(response) {
  */
 export async function processTransition(task, agentManager, io) {
   const targetStatus = task._transition?.to ?? 'backlog';
+  const rejectTarget = task._transition?.rejectTarget || null;
   const transitionRole = task._transition?.agent;
   const mode = task._transition?.mode;
   const instructions = task._transition?.instructions || '';
@@ -368,14 +369,25 @@ Based STRICTLY on the decision instructions above, respond with JSON only: {"dec
           }
           console.log(`[Workflow] Decide: proceeding "${task.text.slice(0, 60)}" -> ${targetStatus}`);
         } else if (decision === 'revise') {
-          // Append feedback but keep task in current status
+          // Append feedback
           if (reason) {
             agentManager.updateTaskText(task.agentId, task.id, `${task.text}\n\n---\n**Review feedback:** ${reason}`);
           }
-          console.log(`[Workflow] Decide: revision requested for "${task.text.slice(0, 60)}" — stays in "${task.status}"`);
+          // Move to reject target column if configured, otherwise stay
+          if (rejectTarget) {
+            agentManager.setTaskStatus(task.agentId, task.id, rejectTarget, { skipAutoRefine: true, by: agent.name });
+            console.log(`[Workflow] Decide: revision requested for "${task.text.slice(0, 60)}" -> ${rejectTarget}`);
+          } else {
+            console.log(`[Workflow] Decide: revision requested for "${task.text.slice(0, 60)}" — stays in "${task.status}"`);
+          }
         } else {
-          // hold — task stays in current status, no changes
-          console.log(`[Workflow] Decide: holding "${task.text.slice(0, 60)}" in "${task.status}"`);
+          // hold — move to reject target if configured, otherwise stay
+          if (rejectTarget) {
+            agentManager.setTaskStatus(task.agentId, task.id, rejectTarget, { skipAutoRefine: true, by: agent.name });
+            console.log(`[Workflow] Decide: holding "${task.text.slice(0, 60)}" -> ${rejectTarget}`);
+          } else {
+            console.log(`[Workflow] Decide: holding "${task.text.slice(0, 60)}" in "${task.status}"`);
+          }
         }
       } else {
         // Refine mode — replace the task description with the refined version
