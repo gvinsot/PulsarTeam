@@ -4796,7 +4796,9 @@ export class AgentManager {
           // Skip tasks where the assignee is busy (actively executing).
           // Allow re-evaluation when assignee is idle, error, or absent —
           // the condition evaluator will check the actual status.
-          if (task.assignee) {
+          // Exception: tasks with _pendingOnEnter must be re-evaluated even if
+          // assignee is busy — the on_enter transition may use a different agent by role.
+          if (task.assignee && !task._pendingOnEnter) {
             const assigneeAgent = this.agents.get(task.assignee);
             if (assigneeAgent && assigneeAgent.status === 'busy') continue;
           }
