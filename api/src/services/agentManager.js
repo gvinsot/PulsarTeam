@@ -208,7 +208,9 @@ export class AgentManager {
     const userId = agent.ownerId || null;
     // Resolve actual provider/model (may come from llmConfigId)
     const resolved = this.resolveLlmConfig(agent);
-    const provider = resolved.provider || 'unknown';
+    // Use the LLM config display name when available (e.g. "Anthropic Paid Plan")
+    // instead of the raw provider type (e.g. "vllm", "mistral")
+    const provider = resolved.configName || resolved.provider || 'unknown';
     const model = resolved.model || 'unknown';
     try {
       // 1) Resolved costs (from llmConfig or agent-level explicit costs)

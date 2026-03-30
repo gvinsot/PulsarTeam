@@ -1,10 +1,46 @@
 import express from 'express';
 import {
   recordTokenUsage, getTokenUsageByAgent, getTokenUsageTimeline,
-  getTokenUsageSummary, getTokenUsageSummaryAsync, getDailyTokenUsage, getSetting, setSetting
+  getTokenUsageSummary, getTokenUsageSummaryAsync, getDailyTokenUsage, getSetting, setSetting,
+  getAllLlmConfigs
 } from '../services/database.js';
 
 const router = express.Router();
+
+/**
+ * Build a map from raw (provider, model) pairs to human-friendly config names.
+ * This fixes historical records that stored the raw provider type ("vllm", "mistral", "")
+ * instead of the LLM config display name.
+ */
+async function buildProviderNameMap() {
+  try {
+    const configs = await getAllLlmConfigs();
+    const map = new Map();
+    for (const cfg of configs) {
+      if (cfg.name && cfg.provider) {
+        // Key: raw provider + model → display name
+        map.set(`${cfg.provider}::${cfg.model || ''}`, cfg.name);
+        // Also key by provider alone (for records where model may differ)
+        if (!map.has(`${cfg.provider}::`)) {
+          map.set(`${cfg.provider}::`, cfg.name);
+        }
+      }
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Enrich budget rows: replace raw provider types with config display names */
+function enrichProviderNames(rows, nameMap) {
+  return rows.map(row => {
+    const key = `${row.provider || ''}::${row.model || ''}`;
+    const keyProviderOnly = `${row.provider || ''}::`;
+    const displayName = nameMap.get(key) || nameMap.get(keyProviderOnly);
+    return displayName ? { ...row, provider: displayName } : row;
+  });
+}
 
 /** Return userId for per-user filtering, or null for admins (see all) */
 function budgetUserId(req) {
@@ -24,7 +60,11 @@ router.get('/summary', async (req, res) => {
 router.get('/by-agent', async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
-    res.json(await getTokenUsageByAgent(days, budgetUserId(req)));
+    const [rows, nameMap] = await Promise.all([
+      getTokenUsageByAgent(days, budgetUserId(req)),
+      buildProviderNameMap()
+    ]);
+    res.json(enrichProviderNames(rows, nameMap));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
