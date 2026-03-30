@@ -3572,7 +3572,16 @@ export class AgentManager {
         .filter(t => this._validTransition(t))
         .filter(t => t && t.from === task.status);
 
+      const originalStatus = task.status;
+      let transitionsRan = 0;
+
       for (const transition of matchingTransitions) {
+        // ── Stop if the task moved to a different column ──
+        if (task.status !== originalStatus) {
+          console.log(`[Workflow] Task moved from "${originalStatus}" to "${task.status}" — stopping remaining transitions`);
+          break;
+        }
+
         // ── Skip Jira-managed triggers (handled by jiraSync polling) ──
         if (transition.trigger === 'jira_ticket') continue;
 
@@ -3592,7 +3601,9 @@ export class AgentManager {
         // ── Process actions sequentially ──
         const actions = transition.actions || [];
         console.log(`[Workflow] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} action(s))`);
+        transitionsRan++;
 
+        let stopActionChain = false;
         for (const action of actions) {
           if (action.type === 'assign_agent') {
             // Find the agent with the specified role that has the fewest tasks (scoped to task owner)
@@ -3655,16 +3666,17 @@ export class AgentManager {
             } catch (err) {
               console.error(`[Workflow] Error in run_agent for "${(task.text || '').slice(0, 60)}":`, err.message);
             }
-            // If the task moved to error, stop processing further actions
+            // If the task moved to error, stop everything
             if (task.status === 'error') {
               console.log(`[Workflow] Task in error after run_agent — stopping action chain`);
               return;
             }
-            // If an execute action moved the task out of in_progress (via task_execution_complete),
-            // stop the action chain — don't run subsequent change_status actions
-            if (action.mode === 'execute' && task.status !== 'in_progress') {
+            // If an execute action moved the task out of its original column,
+            // stop this action chain (remaining transitions will be stopped by the column check above)
+            if (action.mode === 'execute' && task.status !== originalStatus) {
               console.log(`[Workflow] Task moved to "${task.status}" after execute — stopping action chain`);
-              return;
+              stopActionChain = true;
+              break;
             }
 
           } else if (action.type === 'change_status') {
@@ -3674,14 +3686,20 @@ export class AgentManager {
               if (!result) {
                 console.warn(`[Workflow] Action: change_status BLOCKED (guard) for "${(task.text || '').slice(0, 60)}"`);
               }
-              return; // status change triggers a new _checkAutoRefine cycle
+              // Task moved to a new column — stop this action chain
+              // (the column check at the top of the loop will stop remaining transitions)
+              stopActionChain = true;
+              break;
             }
           }
         }
-        return; // transition matched and all actions processed
+
+        if (stopActionChain) continue; // move to next transition (column check will stop if needed)
       }
 
-      console.log(`[Workflow] No matching transition for status="${task.status}" (${matchingTransitions.length} candidates checked)`);
+      if (transitionsRan === 0) {
+        console.log(`[Workflow] No matching transition for status="${task.status}" (${matchingTransitions.length} candidates checked)`);
+      }
     }).catch(err => {
       console.error(`[Workflow] Failed to load workflow:`, err.message);
     });
