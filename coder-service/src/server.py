@@ -1090,8 +1090,9 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                 result_text = event.get("result", "")
                 cost = event.get("cost_usd", 0)
                 duration = event.get("duration_ms", 0)
+                total_tokens = event.get("total_tokens", 0)
                 if result_text:
-                    yield {"type": "result", "content": result_text, "cost_usd": cost, "duration_ms": duration}
+                    yield {"type": "result", "content": result_text, "cost_usd": cost, "duration_ms": duration, "total_tokens": total_tokens}
 
             elif event_type == "error":
                 error_msg = event.get("error", {})
@@ -1743,6 +1744,8 @@ async def openai_chat_completions(
         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
 
         has_streamed_text = False
+        total_tokens = 0
+        cost_usd = 0
         async for event in stream_claude_events(prompt, system_prompt, agent_id=x_agent_id):
             event_type = event.get("type", "")
 
@@ -1751,6 +1754,9 @@ async def openai_chat_completions(
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
                 has_streamed_text = True
             elif event_type == "result":
+                # Capture usage metadata from the final result event
+                cost_usd = event.get("cost_usd", 0) or 0
+                total_tokens = event.get("total_tokens", 0) or 0
                 # Only send the final result if we haven't already streamed
                 # text events (which contain the same content).
                 if not has_streamed_text:
@@ -1761,8 +1767,19 @@ async def openai_chat_completions(
                 content = event["content"]
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
 
-        # Send finish
-        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+        # Send finish chunk with usage data (including cost_usd extension)
+        finish_chunk = {
+            "id": completion_id, "object": "chat.completion.chunk",
+            "created": created, "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": total_tokens,
+                "completion_tokens": 0,
+                "total_tokens": total_tokens,
+                "cost_usd": cost_usd,
+            },
+        }
+        yield f"data: {json.dumps(finish_chunk)}\n\n"
         yield "data: [DONE]\n\n"
 
     if request.stream:
@@ -1782,6 +1799,7 @@ async def openai_chat_completions(
             "prompt_tokens": result.get("total_tokens", 0),
             "completion_tokens": 0,
             "total_tokens": result.get("total_tokens", 0),
+            "cost_usd": result.get("cost_usd", 0),
         },
     }
 
@@ -1803,6 +1821,8 @@ async def openai_completions(
         created = int(time.time())
 
         has_streamed_text = False
+        total_tokens = 0
+        cost_usd = 0
         async for event in stream_claude_events(request.prompt, request.system_prompt, agent_id=x_agent_id):
             event_type = event.get("type", "")
 
@@ -1812,6 +1832,8 @@ async def openai_completions(
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': piece, 'finish_reason': None}]})}\n\n"
                 has_streamed_text = True
             elif event_type == "result":
+                cost_usd = event.get("cost_usd", 0) or 0
+                total_tokens = event.get("total_tokens", 0) or 0
                 if not has_streamed_text:
                     content = event["content"]
                     for piece in chunk_text(content):
@@ -1819,7 +1841,19 @@ async def openai_completions(
             elif event_type == "error":
                 yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': event['content'], 'finish_reason': None}]})}\n\n"
 
-        yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': '', 'finish_reason': 'stop'}]})}\n\n"
+        # Send finish chunk with usage data (including cost_usd extension)
+        finish_chunk = {
+            "id": completion_id, "object": "text_completion",
+            "created": created, "model": model,
+            "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": total_tokens,
+                "completion_tokens": 0,
+                "total_tokens": total_tokens,
+                "cost_usd": cost_usd,
+            },
+        }
+        yield f"data: {json.dumps(finish_chunk)}\n\n"
         yield "data: [DONE]\n\n"
 
     if request.stream:
@@ -1838,6 +1872,7 @@ async def openai_completions(
             "prompt_tokens": result.get("total_tokens", 0),
             "completion_tokens": 0,
             "total_tokens": result.get("total_tokens", 0),
+            "cost_usd": result.get("cost_usd", 0),
         },
     }
 
