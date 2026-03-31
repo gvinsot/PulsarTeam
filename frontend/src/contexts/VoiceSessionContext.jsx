@@ -643,7 +643,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       await pc.setLocalDescription(offer);
 
       const realtimeBaseUrl =
-        import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime';
+        import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime/calls';
       const sdpResponse = await fetch(
         `${realtimeBaseUrl}?model=${encodeURIComponent(model || 'gpt-realtime-1.5')}`,
         {
@@ -657,7 +657,9 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       );
 
       if (!sdpResponse.ok) {
-        throw new Error(`Realtime SDP exchange failed (${sdpResponse.status})`);
+        const errorBody = await sdpResponse.text().catch(() => '');
+        console.error('Realtime SDP error body:', errorBody);
+        throw new Error(`Realtime SDP exchange failed (${sdpResponse.status}): ${errorBody}`);
       }
 
       const answerSdp = await sdpResponse.text();
