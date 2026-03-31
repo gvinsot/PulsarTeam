@@ -303,6 +303,7 @@ export const tasksMethods = {
     console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`);
 
     if (task.status === 'pending') {
+      delete task._executionStopped;
       const workflow = await getWorkflowForBoard(task.boardId);
       const hasRunAgent = workflow.transitions
         .filter(t => this._validTransition(t))
@@ -468,6 +469,12 @@ export const tasksMethods = {
       if (!task) continue;
 
       if (this._workflowManagedStatuses?.has(task.status)) continue;
+
+      // Skip tasks that were just stopped by the user — the flag is cleared
+      // on the next manual start so the task won't be blocked forever.
+      if (task._executionStopped) {
+        continue;
+      }
 
       this._loopProcessing.add(agentId);
 
@@ -659,7 +666,6 @@ export const tasksMethods = {
         executor.project = task.project;
       }
 
-      delete task._executionStopped;
       delete task._executionCompleted;
       delete task._executionComment;
 
@@ -672,16 +678,23 @@ export const tasksMethods = {
 
       await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, targetStatus, task.text);
     } catch (err) {
+      const isUserStop = err.message === 'Agent stopped by user';
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
       this._emit('agent:stream:error', { agentId: executorId, error: err.message });
 
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, false);
 
-      this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
-      const actualTask = this.agents.get(agentId)?.todoList?.find(t => t.id === task.id);
-      if (actualTask) {
-        actualTask.error = err.message;
-        saveAgent(this.agents.get(agentId));
+      if (isUserStop) {
+        // User manually stopped — put task back to pending, don't treat as error
+        task._executionStopped = true;
+        this.setTaskStatus(agentId, task.id, 'pending', { skipAutoRefine: true, by: 'user-stop' });
+      } else {
+        this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
+        const actualTask = this.agents.get(agentId)?.todoList?.find(t => t.id === task.id);
+        if (actualTask) {
+          actualTask.error = err.message;
+          saveAgent(this.agents.get(agentId));
+        }
       }
       if (executor.status === 'error') {
         this.setStatus(executorId, 'idle', 'Auto-recovered after resume error');
