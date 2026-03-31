@@ -503,6 +503,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         model,
         voice = 'alloy',
         transcriptionModel = DEFAULT_TRANSCRIPTION_MODEL,
+        session: sessionConfig,
       } = await api.getRealtimeToken(agentId);
 
       if (!token) {
@@ -644,17 +645,16 @@ export function VoiceSessionProvider({ socket, agents, children }) {
 
       const realtimeBaseUrl =
         import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime/calls';
-      const sdpResponse = await fetch(
-        `${realtimeBaseUrl}?model=${encodeURIComponent(model || 'gpt-realtime-1.5')}`,
-        {
-          method: 'POST',
-          body: offer.sdp,
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/sdp',
-          },
+      const fd = new FormData();
+      fd.set('sdp', offer.sdp);
+      fd.set('session', JSON.stringify(sessionConfig));
+      const sdpResponse = await fetch(realtimeBaseUrl, {
+        method: 'POST',
+        body: fd,
+        headers: {
+          Authorization: `Bearer ${token}`,
         },
-      );
+      });
 
       if (!sdpResponse.ok) {
         const errorBody = await sdpResponse.text().catch(() => '');

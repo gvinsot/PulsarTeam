@@ -213,8 +213,7 @@ export function realtimeRoutes(agentManager) {
       return res.status(400).json({ error: 'Agent is not a voice agent' });
     }
 
-    // Resolve API key and model from LLM config (llmConfigId) when available,
-    // falling back to agent-level apiKey field.
+    // Resolve API key from LLM config, falling back to agent-level apiKey field.
     const llmConfig = agentManager.resolveLlmConfig(agent);
     const apiKey = llmConfig.apiKey || agent.apiKey;
     if (!apiKey) {
@@ -258,6 +257,7 @@ export function realtimeRoutes(agentManager) {
       return res.json({
         token: data.client_secret?.value || data.value,
         expiresAt: data.client_secret?.expires_at || data.expires_at,
+        session,
         voice,
         model,
         transcriptionModel,
