@@ -226,7 +226,9 @@ export function realtimeRoutes(agentManager) {
     try {
       const instructions = agentManager.buildVoiceInstructions(agentId);
       const voice = agent.voice || process.env.OPENAI_REALTIME_VOICE || 'alloy';
-      const model = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || agent.model || 'gpt-realtime-1.5';
+      const DEFAULT_REALTIME_MODEL = 'gpt-realtime-1.5';
+      const candidateModel = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || agent.model || '';
+      const model = candidateModel.includes('realtime') ? candidateModel : DEFAULT_REALTIME_MODEL;
       const transcriptionModel =
         process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
 
