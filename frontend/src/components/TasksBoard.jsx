@@ -1149,15 +1149,73 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
 
 // ── TaskCard ────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType }) {
+function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDragStart }) {
   const isError = task.status === 'error';
   const today = isToday(task.createdAt);
   const isDraggingRef = useRef(false);
+  const touchDragRef = useRef(null);
+  const cardRef = useRef(null);
 
   const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
 
+  // Attach non-passive touchmove listener so preventDefault() works on mobile
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+
+    const handleTouchMove = (e) => {
+      if (!touchDragRef.current) return;
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchDragRef.current.startX;
+      const dy = touch.clientY - touchDragRef.current.startY;
+
+      if (!touchDragRef.current.started) {
+        if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+        touchDragRef.current.started = true;
+        isDraggingRef.current = true;
+
+        // Create ghost element
+        const ghost = el.cloneNode(true);
+        ghost.style.position = 'fixed';
+        ghost.style.zIndex = '9999';
+        ghost.style.pointerEvents = 'none';
+        ghost.style.opacity = '0.85';
+        ghost.style.width = el.offsetWidth + 'px';
+        ghost.style.transform = 'rotate(2deg) scale(1.02)';
+        ghost.style.boxShadow = '0 8px 32px rgba(0,0,0,0.4)';
+        document.body.appendChild(ghost);
+        touchDragRef.current.ghost = ghost;
+
+        // Dim the original card
+        el.style.opacity = '0.4';
+      }
+
+      e.preventDefault(); // Prevent scrolling while dragging
+
+      // Move ghost
+      if (touchDragRef.current.ghost) {
+        touchDragRef.current.ghost.style.left = (touch.clientX - el.offsetWidth / 2) + 'px';
+        touchDragRef.current.ghost.style.top = (touch.clientY - 30) + 'px';
+      }
+
+      // Highlight the column under the touch point
+      const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+      const colUnder = elemUnder?.closest?.('[data-column-id]');
+      document.querySelectorAll('[data-column-id]').forEach(colEl => {
+        colEl.classList.remove('touch-drag-over');
+      });
+      if (colUnder) {
+        colUnder.classList.add('touch-drag-over');
+      }
+    };
+
+    el.addEventListener('touchmove', handleTouchMove, { passive: false });
+    return () => el.removeEventListener('touchmove', handleTouchMove);
+  }, []);
+
   return (
     <div
+      ref={cardRef}
       draggable
       onDragStart={(e) => {
         isDraggingRef.current = true;
@@ -1169,6 +1227,54 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         e.target.classList.remove('opacity-40');
         // Reset after a tick so click doesn't fire after drop
         setTimeout(() => { isDraggingRef.current = false; }, 50);
+      }}
+      onTouchStart={(e) => {
+        const touch = e.touches[0];
+        touchDragRef.current = {
+          startX: touch.clientX,
+          startY: touch.clientY,
+          started: false,
+          ghost: null,
+        };
+      }}
+      onTouchEnd={(e) => {
+        if (!touchDragRef.current) return;
+
+        // Restore original card opacity
+        if (cardRef.current) cardRef.current.style.opacity = '';
+
+        if (touchDragRef.current.started) {
+          // Remove ghost
+          if (touchDragRef.current.ghost) {
+            touchDragRef.current.ghost.remove();
+          }
+
+          // Clear all highlights
+          document.querySelectorAll('[data-column-id]').forEach(el => {
+            el.classList.remove('touch-drag-over');
+          });
+
+          // Find drop target
+          const touch = e.changedTouches[0];
+          const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+          const colUnder = elemUnder?.closest?.('[data-column-id]');
+          if (colUnder) {
+            const colId = colUnder.getAttribute('data-column-id');
+            // Dispatch a custom event that the board listens to
+            const dropEvent = new CustomEvent('touch-task-drop', {
+              bubbles: true,
+              detail: { agentId: task.agentId, taskId: task.id, targetColumnId: colId }
+            });
+            colUnder.dispatchEvent(dropEvent);
+          }
+
+          // Prevent click after drag
+          setTimeout(() => { isDraggingRef.current = false; }, 50);
+        } else {
+          isDraggingRef.current = false;
+        }
+
+        touchDragRef.current = null;
       }}
       onClick={() => { if (!isDraggingRef.current) onOpen(task); }}
       className={`group/card bg-dark-800 rounded-lg border p-3 cursor-pointer
@@ -1360,7 +1466,7 @@ function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onS
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDragStart }) {
   const [dragOver, setDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
 
@@ -1406,6 +1512,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
 
       {/* Drop zone */}
       <div
+        data-column-id={col.id}
         className={`flex flex-col gap-2 p-2 rounded-b-xl border border-t-0
           transition-all duration-150 flex-1 min-h-0 overflow-y-auto
           ${dragOver
@@ -1428,6 +1535,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
             showCreator={showCreator}
             showProject={showProject}
             showTaskType={showTaskType}
+            onTouchDragStart={onTouchDragStart}
           />
         ))}
         {tasks.length === 0 && (
@@ -2367,6 +2475,39 @@ export default function TasksBoard({ agents, onRefresh, user }) {
     }
   }, [allTasks, onRefresh]);
 
+  // Touch drag-and-drop handler
+  const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
+    try {
+      const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+      if (!task) return;
+      const col = columns.find(c => c.id === targetColumnId);
+      if (!col) return;
+      const fallbackColId = columns[0]?.id;
+      const isAlreadyInColumn = task.status === 'error'
+        ? (task.errorFromStatus || fallbackColId) === col.id
+        : task.status === 'in_progress'
+          ? (task.inProgressFromStatus || fallbackColId) === col.id
+          : col.statuses.includes(task.status || fallbackColId);
+      if (isAlreadyInColumn) return;
+      await api.setTaskStatus(agentId, taskId, col.dropStatus);
+      onRefresh();
+    } catch (err) {
+      console.error('[TasksBoard] Touch drop status change failed:', err.message);
+    }
+  }, [allTasks, columns, onRefresh]);
+
+  // Listen for custom touch-task-drop events on the board
+  useEffect(() => {
+    const boardEl = boardScrollRef.current;
+    if (!boardEl) return;
+    const handler = (e) => {
+      const { agentId, taskId, targetColumnId } = e.detail;
+      handleTouchDrop(agentId, taskId, targetColumnId);
+    };
+    boardEl.addEventListener('touch-task-drop', handler);
+    return () => boardEl.removeEventListener('touch-task-drop', handler);
+  }, [handleTouchDrop]);
+
   const totalByStatus = useMemo(() => {
     const lastColId = columns[columns.length - 1]?.id;
     return {
@@ -2577,6 +2718,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
               showCreator={col.showCreator}
               showProject={col.showProject}
               showTaskType={col.showTaskType}
+              onTouchDragStart={() => {}}
             />
           ))}
         </div>
