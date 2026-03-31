@@ -85,8 +85,6 @@ services:
     build:
       context: ..
       dockerfile: frontend/Dockerfile
-    volumes:
-      - ${HOST_CODE_PATH}/PulsarTeam/frontend/dist:/usr/share/nginx/html
     networks:
       - proxy
     deploy:
