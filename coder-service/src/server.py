@@ -369,7 +369,10 @@ def _save_token(token: str, refresh_token: Optional[str] = None, expires_in: int
 
 
 def _is_token_expired(margin_seconds: int = 300) -> bool:
-    """Return True if the saved OAuth token is expired (or expires within margin_seconds)."""
+    """Return True if the saved OAuth token is expired (or expires within margin_seconds).
+
+    Also returns True when the token file does not exist (no token = need auth).
+    """
     try:
         with open(TOKEN_JSON_FILE) as f:
             oauth_data = json.load(f)
@@ -378,7 +381,7 @@ def _is_token_expired(margin_seconds: int = 300) -> bool:
             return False
         return time.time() >= (expires_at_ms / 1000) - margin_seconds
     except (OSError, FileNotFoundError, json.JSONDecodeError):
-        return False
+        return True
 
 
 def _get_saved_refresh_token() -> Optional[str]:

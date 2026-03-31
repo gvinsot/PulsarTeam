@@ -574,5 +574,23 @@ export const fetchBudgetAlerts = () =>
   fetch(`${API_BASE}/budget/alerts`, { headers: getHeaders() }).then(handleResponse);
 
 export default api;
+
+/* ── Task CRUD (board-level, uses /api/tasks/:id) ─────────────────────────── */
+export const updateTask = (taskId, fields) =>
+  fetch(`${API_BASE}/tasks/${taskId}`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify(fields),
+  }).then(handleResponse);
+
+export const deleteTask = (taskId) =>
+  fetch(`${API_BASE}/tasks/${taskId}`, {
+    method: 'DELETE',
+    headers: getHeaders(),
+  }).then(handleResponse);
+
 /* ── Commit diff ──────────────────────────────────────────────────────────── */
-export const getCommitDiff = (taskId, hash) => request(`/tasks/${taskId}/commits/${hash}/diff`);
+export const getCommitDiff = (taskId, hash) =>
+  fetch(`${API_BASE}/tasks/${taskId}/commits/${hash}/diff`, {
+    headers: getHeaders(),
+  }).then(handleResponse);

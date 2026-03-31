@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { updateTask, deleteTask, getCommitDiff } from '../api';
 import RealtimeTaskModal from './RealtimeTaskModal';
+import AllCommitsDiffModal from './AllCommitsDiffModal';
 
 // ── Source icons ─────────────────────────────────────────────────────────────
 const SOURCE_ICONS = { github: '🐙', jira: '🔷', manual: '✏️' };
@@ -186,6 +187,7 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
   const [saving, setSaving]             = useState(false);
   const [showRealtime, setShowRealtime] = useState(false);
   const [diffCommit, setDiffCommit]     = useState(null);
+  const [showAllCommits, setShowAllCommits] = useState(false);
   const modalRef = useRef(null);
 
   useEffect(() => {
@@ -350,9 +352,17 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
               {/* Right column: commits */}
               {hasCommits && (
                 <div className="p-3 bg-gray-800/40 rounded-lg border border-white/5">
-                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-                    Commits ({task.commits.length})
-                  </h4>
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                      Commits ({task.commits.length})
+                    </h4>
+                    <button
+                      onClick={() => setShowAllCommits(true)}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+                    >
+                      View all diffs
+                    </button>
+                  </div>
                   <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                     {task.commits.map((c, i) => (
                       <button
@@ -415,9 +425,18 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
         </div>
       </div>
 
-      {/* Commit diff overlay */}
+      {/* Commit diff overlay (single) */}
       {diffCommit && (
         <CommitDiffModal taskId={task.id} commit={diffCommit} onClose={() => setDiffCommit(null)} />
+      )}
+
+      {/* All commits diff overlay */}
+      {showAllCommits && hasCommits && (
+        <AllCommitsDiffModal
+          taskId={task.id}
+          commits={task.commits}
+          onClose={() => setShowAllCommits(false)}
+        />
       )}
 
       {/* Realtime overlay */}

@@ -9,6 +9,7 @@ import {
 import { api } from '../api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import AllCommitsDiffModal from './AllCommitsDiffModal';
 
 // ── Color mapping (hex → Tailwind classes) ──────────────────────────────────
 
@@ -457,6 +458,8 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   const [savingType, setSavingType] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refining, setRefining] = useState(false);
+  const [showAllCommits, setShowAllCommits] = useState(false);
+  const [clickedCommitHash, setClickedCommitHash] = useState(null);
   const statusRef = useRef(null);
   const textareaRef = useRef(null);
   const projectInputRef = useRef(null);
@@ -546,6 +549,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   const lastStatusId = statusOptions[statusOptions.length - 1]?.value;
 
   return (
+    <>
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
     >
@@ -1005,17 +1009,29 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
             {/* Associated commits */}
             {task.commits && task.commits.length > 0 && (
               <div className="space-y-0">
-                <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold mb-1.5">Commits</div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold">Commits ({task.commits.length})</div>
+                  <button
+                    onClick={() => { setClickedCommitHash(null); setShowAllCommits(true); }}
+                    className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+                  >
+                    View all diffs
+                  </button>
+                </div>
                 <div className="space-y-1">
                   {task.commits.map((c, i) => (
-                    <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-dark-800/50 border border-dark-700/50 group">
-                      <div className="flex items-center gap-2 min-w-0">
+                    <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-dark-800/50 border border-dark-700/50 group hover:border-indigo-500/30 transition-colors">
+                      <button
+                        onClick={() => { setClickedCommitHash(c.hash); setShowAllCommits(true); }}
+                        className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
+                        title="View commit diff"
+                      >
                         <GitCommit className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                        <code className="text-xs text-amber-300 font-mono">{c.hash?.slice(0, 7)}</code>
+                        <code className="text-xs text-amber-300 font-mono hover:text-amber-200 transition-colors">{c.hash?.slice(0, 7)}</code>
                         {c.message && (
                           <span className="text-xs text-dark-300 truncate">{c.message}</span>
                         )}
-                      </div>
+                      </button>
                       <div className="flex items-center gap-2">
                         {c.date && (
                           <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(c.date)}>
@@ -1117,6 +1133,17 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
         </div>
       </div>
     </div>
+
+    {/* All commits diff overlay */}
+    {showAllCommits && task.commits?.length > 0 && (
+      <AllCommitsDiffModal
+        taskId={task.id}
+        commits={task.commits}
+        initialHash={clickedCommitHash}
+        onClose={() => { setShowAllCommits(false); setClickedCommitHash(null); }}
+      />
+    )}
+    </>
   );
 }
 
