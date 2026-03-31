@@ -67,11 +67,11 @@ export const toolsMethods = {
         const comment = call.args[0] || '';
         let inProgressTask = null;
         for (const [, ownerAgent] of this.agents) {
-          const found = ownerAgent.todoList?.find(t => t.status === 'in_progress' && t.assignee === agentId);
+          const found = ownerAgent.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
           if (found) { inProgressTask = found; break; }
         }
         if (!inProgressTask) {
-          inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
+          inProgressTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
         }
         if (inProgressTask) {
           inProgressTask._executionCompleted = true;
@@ -453,11 +453,11 @@ export const toolsMethods = {
             let inProgressTask = null;
             let taskOwnerAgent = null;
             for (const [, ownerAg] of this.agents) {
-              const found = ownerAg.todoList?.find(t => t.status === 'in_progress' && t.assignee === agentId);
+              const found = ownerAg.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
               if (found) { inProgressTask = found; taskOwnerAgent = ownerAg; break; }
             }
             if (!inProgressTask) {
-              inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
+              inProgressTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
               if (inProgressTask) taskOwnerAgent = agent;
             }
             if (inProgressTask) {

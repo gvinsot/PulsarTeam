@@ -180,13 +180,22 @@ export const tasksMethods = {
     return task;
   },
 
+  _isActiveTaskStatus(status) {
+    const INACTIVE = new Set(['done', 'pending', 'backlog', 'error']);
+    return !INACTIVE.has(status);
+  },
+
   _findTaskForCommitLink(agentId) {
     const agent = this.agents.get(agentId);
     if (agent?.todoList?.length) {
       const own = agent.todoList.find(t => t.status === 'in_progress');
       if (own) return { task: own, ownerAgentId: agentId };
+      // Also check active workflow statuses (code, build, test, deploy, etc.)
+      const ownActive = agent.todoList.find(t => this._isActiveTaskStatus(t.status) && t.status !== 'in_progress');
+      if (ownActive) return { task: ownActive, ownerAgentId: agentId };
     }
     let bestInProgress = null;
+    let bestActive = null;
     let bestDone = null;
     for (const [creatorId, creatorAgent] of this.agents) {
       if (!creatorAgent.todoList) continue;
@@ -197,6 +206,9 @@ export const tasksMethods = {
           bestInProgress = { task, ownerAgentId: creatorId };
           break;
         }
+        if (this._isActiveTaskStatus(task.status) && !bestActive) {
+          bestActive = { task, ownerAgentId: creatorId };
+        }
         if (task.status === 'done' && task.completedAt) {
           if (!bestDone || new Date(task.completedAt) > new Date(bestDone.task.completedAt)) {
             bestDone = { task, ownerAgentId: creatorId };
@@ -206,6 +218,7 @@ export const tasksMethods = {
       if (bestInProgress) break;
     }
     if (bestInProgress) return bestInProgress;
+    if (bestActive) return bestActive;
     if (bestDone) {
       console.log(`🔗 [Commit] No in_progress task — falling back to recently done task "${bestDone.task.text?.slice(0, 50)}"`);
       return bestDone;
