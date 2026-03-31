@@ -8,12 +8,19 @@ import {
   PointElement, ArcElement, Title, Tooltip, Legend, Filler
 } from 'chart.js';
 import { Bar, Line, Doughnut } from 'react-chartjs-2';
+import { useTheme } from '../contexts/ThemeContext';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, ArcElement, Title, Tooltip, Legend, Filler);
+
+function getChartColors(theme) {
+  if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
+  return { legend: '#94a3b8', tick: '#64748b', grid: '#1e293b' };
+}
 
 const COLORS = ['#6366f1','#22d3ee','#f59e0b','#ef4444','#10b981','#8b5cf6','#f97316','#ec4899','#14b8a6','#a855f7'];
 
 export default function BudgetDashboard({ agents = [] }) {
+  const { theme } = useTheme();
   const [summary, setSummary] = useState(null);
   const [byAgent, setByAgent] = useState([]);
   const [timeline, setTimeline] = useState([]);
@@ -81,12 +88,13 @@ export default function BudgetDashboard({ agents = [] }) {
     datasets: [{ data: byAgent.map(a => a.total_cost || 0), backgroundColor: byAgent.map((_, i) => COLORS[i % COLORS.length]), borderWidth: 0 }],
   };
 
+  const cc = getChartColors(theme);
   const chartOpts = {
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { labels: { color: '#94a3b8', font: { size: 11 } } } },
-    scales: { x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } }, y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' } } },
+    plugins: { legend: { labels: { color: cc.legend, font: { size: 11 } } } },
+    scales: { x: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid } }, y: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid } } },
   };
-  const doughnutOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 }, padding: 12 } } } };
+  const doughnutOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: cc.legend, font: { size: 11 }, padding: 12 } } } };
 
   if (loading && !summary) return <div className="p-6 text-dark-400">Loading budget data...</div>;
 

@@ -6,8 +6,14 @@ import {
 import { Line, Bar } from 'react-chartjs-2';
 import { api } from '../api';
 import { BarChart3, Bug, Sparkles, Wrench, ArrowUpCircle, BookOpen, HelpCircle, Layers, Clock, TrendingUp, RefreshCw, X } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, Filler);
+
+function getChartColors(theme) {
+  if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
+  return { legend: '#94a3b8', tick: '#64748b', grid: '#1e293b' };
+}
 
 const TYPE_META = {
   bug:           { label: 'Bugs',          icon: Bug,           color: 'text-red-400' },
@@ -33,20 +39,21 @@ function formatDuration(ms) {
   return `${days}d ${remainHours}h`;
 }
 
-const chartOpts = {
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: { mode: 'index', intersect: false },
-  plugins: {
-    legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
-  },
-  scales: {
-    x: { ticks: { color: '#64748b', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#1e293b' } },
-    y: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e293b' }, beginAtZero: true },
-  },
-};
-
 export default function ProjectStats({ projectName, onClose, embedded = false }) {
+  const { theme } = useTheme();
+  const cc = getChartColors(theme);
+  const chartOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { labels: { color: cc.legend, font: { size: 11 } } },
+    },
+    scales: {
+      x: { ticks: { color: cc.tick, font: { size: 10 }, maxRotation: 45 }, grid: { color: cc.grid } },
+      y: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid }, beginAtZero: true },
+    },
+  };
   const [stats, setStats] = useState(null);
   const [timeseries, setTimeseries] = useState(null);
   const [loading, setLoading] = useState(true);

@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
-  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu, DollarSign, Eye, ChevronDown
+  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu, DollarSign, Eye, ChevronDown,
+  Sun, Moon
 } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 import AgentCard from './AgentCard';
 import AgentDetail from './AgentDetail';
 import AddAgentModal from './AddAgentModal';
@@ -40,6 +42,7 @@ export default function Dashboard({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const mobileMenuRef = useRef(null);
   const userMenuRef = useRef(null);
+  const { theme, toggleTheme } = useTheme();
   const isAdmin = user?.role === 'admin';
   const isBasic = user?.role === 'basic';
 
@@ -217,6 +220,13 @@ export default function Dashboard({
             >
               <Globe className="w-4 h-4" />
               <span className="hidden sm:inline">Global</span>
+            </button>
+            <button
+              onClick={toggleTheme}
+              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
             <button
               onClick={() => setShowApiKeyModal(true)}

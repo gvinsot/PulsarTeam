@@ -2,6 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Theme color variables ─── */
+:root, .dark {
+  color-scheme: dark;
+  --dark-50: 248 250 252;
+  --dark-100: 241 245 249;
+  --dark-200: 226 232 240;
+  --dark-300: 148 163 184;
+  --dark-400: 100 116 139;
+  --dark-500: 71 85 105;
+  --dark-600: 51 65 85;
+  --dark-700: 30 41 59;
+  --dark-800: 15 23 42;
+  --dark-900: 2 6 23;
+  --dark-950: 1 4 9;
+}
+
+.light {
+  color-scheme: light;
+  --dark-50: 2 6 23;
+  --dark-100: 15 23 42;
+  --dark-200: 30 41 59;
+  --dark-300: 71 85 105;
+  --dark-400: 100 116 139;
+  --dark-500: 148 163 184;
+  --dark-600: 203 213 225;
+  --dark-700: 226 232 240;
+  --dark-800: 241 245 249;
+  --dark-900: 248 250 252;
+  --dark-950: 255 255 255;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -10,8 +41,8 @@
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  background: #010409;
-  color: #e2e8f0;
+  background: rgb(var(--dark-950));
+  color: rgb(var(--dark-200));
   min-height: 100vh;
   overflow-x: hidden;
 }
@@ -31,12 +62,12 @@ code, pre, .font-mono {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: rgb(var(--dark-600));
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: rgb(var(--dark-500));
 }
 
 /* Always-visible horizontal scrollbar */
@@ -49,15 +80,15 @@ code, pre, .font-mono {
   width: 8px;
 }
 .scrollbar-always-visible::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: rgb(var(--dark-700));
   border-radius: 4px;
 }
 .scrollbar-always-visible::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: rgb(var(--dark-500));
   border-radius: 4px;
 }
 .scrollbar-always-visible::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: rgb(var(--dark-400));
 }
 
 /* Thin dark scrollbar for inner containers (e.g. kanban columns) */
@@ -68,11 +99,11 @@ code, pre, .font-mono {
   background: transparent;
 }
 .scrollbar-thin-dark::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: rgb(var(--dark-600));
   border-radius: 3px;
 }
 .scrollbar-thin-dark::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: rgb(var(--dark-500));
 }
 
 /* Animations */
@@ -114,7 +145,7 @@ code, pre, .font-mono {
 
 /* Markdown content styling */
 .markdown-content h1, .markdown-content h2, .markdown-content h3 {
-  color: #f1f5f9;
+  color: rgb(var(--dark-100));
   margin-top: 0.75rem;
   margin-bottom: 0.5rem;
   font-weight: 600;
@@ -135,7 +166,7 @@ code, pre, .font-mono {
 }
 
 .markdown-content code {
-  background: #1e293b;
+  background: rgb(var(--dark-700));
   padding: 0.15rem 0.4rem;
   border-radius: 0.25rem;
   font-size: 0.85em;
@@ -143,8 +174,8 @@ code, pre, .font-mono {
 }
 
 .markdown-content pre {
-  background: #0f172a;
-  border: 1px solid #1e293b;
+  background: rgb(var(--dark-800));
+  border: 1px solid rgb(var(--dark-700));
   border-radius: 0.5rem;
   padding: 1rem;
   overflow-x: auto;
@@ -154,13 +185,13 @@ code, pre, .font-mono {
 .markdown-content pre code {
   background: transparent;
   padding: 0;
-  color: #e2e8f0;
+  color: rgb(var(--dark-200));
 }
 
 .markdown-content blockquote {
   border-left: 3px solid #6366f1;
   padding-left: 1rem;
-  color: #94a3b8;
+  color: rgb(var(--dark-300));
   margin: 0.75rem 0;
 }
 
@@ -172,9 +203,9 @@ code, pre, .font-mono {
 
 /* Glass effect */
 .glass {
-  background: rgba(15, 23, 42, 0.7);
+  background: rgb(var(--dark-800) / 0.7);
   backdrop-filter: blur(12px);
-  border: 1px solid rgba(51, 65, 85, 0.5);
+  border: 1px solid rgb(var(--dark-600) / 0.5);
 }
 
 /* Gradient border */

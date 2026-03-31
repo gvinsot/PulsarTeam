@@ -9,14 +9,8 @@ export function ThemeProvider({ children }) {
 
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-    document.body.className = theme === 'dark'
-      ? 'bg-gray-950 text-white'
-      : 'bg-gray-50 text-gray-900';
+    root.classList.remove('light', 'dark');
+    root.classList.add(theme);
     localStorage.setItem('pulsar_theme', theme);
   }, [theme]);
 
