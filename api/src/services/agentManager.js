@@ -1047,6 +1047,7 @@ export class AgentManager {
     agent.conversationHistory.push(historyEntry);
 
     let fullResponse = '';
+    let toolsExecuted = false; // Track whether tool calls have been dispatched
 
     try {
       // Stream LLM response with auto-continuation
@@ -1069,6 +1070,7 @@ export class AgentManager {
 
       // Process post-response actions (tool calls, delegations, leader commands, rate limits)
       const responseForParsing = this._cleanMarkdown(fullResponse);
+      toolsExecuted = true; // Mark BEFORE executing — if tools throw, we must not retry them
       const actionResult = await this._processPostResponseActions(agent, id, responseForParsing, fullResponse, streamCallback, delegationDepth, messageMeta, delegationPromises, detectedCount);
       if (actionResult.earlyReturn !== null) {
         this.setStatus(id, 'idle');
@@ -1144,13 +1146,17 @@ export class AgentManager {
       // ── Transient stream error → retry with backoff ──
       // Covers: network drops, LLM stream timeouts, server-side 5xx, idle timeouts.
       // Do NOT retry on: user abort, context exceeded (handled above), auth errors.
+      // Do NOT retry if tools have already been dispatched — retrying would re-execute them.
+      // Do NOT retry if the partial response already contains tool calls — retrying would
+      // regenerate the same response and execute those tools from scratch.
       const isUserStop = err.message === 'Agent stopped by user';
       const isAuthError = err.status === 401 || err.status === 403;
+      const hasPartialToolCalls = fullResponse && /@(read_file|write_file|list_dir|search_files|run_command|append_file|git_commit_push|mcp_call|report_error|task_execution_complete)\b/i.test(fullResponse);
       const isTransient = !isUserStop && !isAuthError && !err.isRateLimit && !this._isContextExceededError(err.message);
       const MAX_STREAM_RETRIES = 3;
       const retryCount = agent._streamRetryCount || 0;
 
-      if (isTransient && retryCount < MAX_STREAM_RETRIES && !abortController.signal.aborted) {
+      if (isTransient && !toolsExecuted && !hasPartialToolCalls && retryCount < MAX_STREAM_RETRIES && !abortController.signal.aborted) {
         agent._streamRetryCount = retryCount + 1;
         const delay = 2000 * Math.pow(2, retryCount); // 2s, 4s, 8s
         console.log(`🔄 [Stream Retry] "${agent.name}": ${err.message} — retry ${retryCount + 1}/${MAX_STREAM_RETRIES} in ${delay}ms`);
@@ -1176,6 +1182,10 @@ export class AgentManager {
           if (isTopLevel) this._chatLocks.delete(id);
           throw retryErr;
         }
+      }
+      if (isTransient && (toolsExecuted || hasPartialToolCalls) && retryCount < MAX_STREAM_RETRIES) {
+        console.log(`🛡️ [Stream Retry] "${agent.name}": skipping retry — ${toolsExecuted ? 'tools already executed' : 'partial response contains tool calls'}`);
+        this.addActionLog(id, 'warning', 'Error after tool execution — not retrying to avoid duplicate actions', err.message);
       }
       delete agent._streamRetryCount;
 
