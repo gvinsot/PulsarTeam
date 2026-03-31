@@ -998,6 +998,12 @@ export const chatMethods = {
         const hasRealErrors = nonTerminal.some(r => !r.success && !r.isErrorReport);
         const hasSuccessfulCommit = nonTerminal.some(r => r.tool === 'git_commit_push' && r.success);
         let continuationPrompt = '\nThese are the results of the tools YOU just called. Continue your work based on these results. Do NOT re-explain your plan or re-call the same tools — use the output above and proceed to the next step.';
+        // Remind the LLM of the original task/user message to prevent it from
+        // losing context across multiple tool-result iterations.
+        const originalTask = agent.currentTask || '';
+        if (originalTask) {
+          continuationPrompt += `\nReminder — your current task: "${originalTask}"`;
+        }
         if (hasErrorReports) {
           continuationPrompt = '\nYou reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
         } else if (hasRealErrors) {

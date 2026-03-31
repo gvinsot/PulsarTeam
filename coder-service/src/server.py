@@ -1200,30 +1200,49 @@ def _messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optiona
     """Convert OpenAI chat messages to a single prompt + optional system prompt.
 
     Returns (prompt, system_prompt).
+
+    Claude Code CLI is stateless — each invocation starts a fresh session.
+    Sending the full conversation history as a flat string causes the model to
+    re-read the original user message and restart its reasoning from scratch.
+
+    Strategy:
+    - Extract system messages as the system_prompt.
+    - Use only the LAST user message as the prompt.  When that message is a
+      tool-result continuation (starts with "[TOOL RESULTS"), prepend a brief
+      context line with the original task so Claude Code knows what it's working
+      on, but do NOT replay the full conversation.
     """
     system_parts = []
-    conversation_parts = []
+    user_messages = []
 
     for msg in messages:
         if msg.role == "system":
             system_parts.append(msg.content)
         elif msg.role == "user":
-            conversation_parts.append(f"User: {msg.content}")
-        elif msg.role == "assistant":
-            conversation_parts.append(f"Assistant: {msg.content}")
+            user_messages.append(msg.content)
 
     system_prompt = "\n\n".join(system_parts) if system_parts else None
 
-    # If only one user message with no assistant context, pass it directly
-    user_messages = [m for m in messages if m.role == "user"]
-    if len(conversation_parts) == 1 and len(user_messages) == 1:
-        prompt = user_messages[0].content
-    else:
-        prompt = "\n".join(conversation_parts)
+    if not user_messages:
+        return "Continue.", system_prompt
 
-    # Guard: ensure prompt is never empty (would cause Claude CLI --print error)
-    if not prompt or not prompt.strip():
-        prompt = "\n".join(conversation_parts) if conversation_parts else "Continue."
+    last_user = user_messages[-1]
+
+    # If there's only one user message, pass it directly
+    if len(user_messages) == 1:
+        return last_user, system_prompt
+
+    # Multiple user messages: the last one is likely a tool-result continuation.
+    # Provide the original task as context so Claude Code doesn't lose track,
+    # but keep the prompt focused on the latest message.
+    original_task = user_messages[0]
+    # Truncate the original task for context (avoid bloating the prompt)
+    task_summary = original_task[:500] + ("..." if len(original_task) > 500 else "")
+
+    if last_user.startswith("[TOOL RESULTS"):
+        prompt = f"Original task: {task_summary}\n\n{last_user}"
+    else:
+        prompt = last_user
 
     return prompt, system_prompt
 
