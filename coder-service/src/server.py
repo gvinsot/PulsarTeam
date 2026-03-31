@@ -890,6 +890,16 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
         if code:
             result = await _exchange_auth_code(code)
             if result.get("status") == "authenticated":
+                # Also save the token to the agent's isolated home so it can
+                # use it on subsequent requests.
+                if agent_id:
+                    agent_user_for_auth = await ensure_agent_user(agent_id)
+                    if agent_user_for_auth:
+                        global_token = _load_saved_token()
+                        if global_token:
+                            global_refresh = _get_saved_refresh_token()
+                            _save_agent_token(agent_user_for_auth, global_token, refresh_token=global_refresh)
+                            logger.info(f"[Agent Auth] Copied OAuth token to agent {agent_id[:12]}")
                 yield {
                     "type": "result",
                     "content": f"Authentication successful ({result.get('email', '')}). You can now send your request.",
@@ -907,6 +917,13 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
 
     # Proactively refresh token if expired (skip if in cooldown from a recent 429)
     if agent_user:
+        # If agent has no token at all, copy from global token
+        if not _load_agent_token(agent_user):
+            global_token = _load_saved_token()
+            if global_token:
+                global_refresh = _get_saved_refresh_token()
+                _save_agent_token(agent_user, global_token, refresh_token=global_refresh)
+                logger.info(f"[Agent Auth] Bootstrapped agent {agent_user['username']} with global token")
         if _is_agent_token_expired(agent_user) and time.time() >= _token_cooldown_until:
             refreshed = await _refresh_agent_token(agent_user)
             if not refreshed:
@@ -1011,7 +1028,16 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                     except ProcessLookupError:
                         pass
                     if agent_user:
+                        # First try refreshing the agent's own token
                         refreshed = await _refresh_agent_token(agent_user)
+                        if not refreshed:
+                            # Fallback: copy the global token to the agent if available
+                            global_token = _load_saved_token()
+                            if global_token:
+                                global_refresh = _get_saved_refresh_token()
+                                _save_agent_token(agent_user, global_token, refresh_token=global_refresh)
+                                logger.info(f"[Agent Auth] Copied global token to {agent_user['username']}")
+                                refreshed = True
                         if refreshed:
                             yield {"type": "status", "content": "Agent token refreshed, retrying..."}
                             async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id):
