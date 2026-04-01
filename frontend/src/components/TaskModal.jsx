@@ -251,7 +251,7 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
         <div
           ref={modalRef}
-          className={`bg-gray-900 border border-white/10 rounded-2xl shadow-2xl w-full ${hasCommits ? 'max-w-2xl' : 'max-w-lg'} max-h-[90vh] flex flex-col`}
+          className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-white/10">
@@ -286,104 +286,65 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
               onChange={e => setEditTitle(e.target.value)}
             />
 
-            {/* ── Two-column layout: Meta + Commits ──────────────── */}
-            <div className={`grid gap-4 ${hasCommits ? 'grid-cols-2' : 'grid-cols-1'}`}>
-              {/* Left column: metadata */}
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Source (read-only) */}
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Source</label>
-                    <div className="px-3 py-1.5 bg-gray-800/60 rounded text-sm text-gray-300 capitalize">
-                      {SOURCE_ICONS[task.source] || '📝'} {task.source || 'manual'}
-                    </div>
-                  </div>
-                  {/* Project (read-only) */}
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Project</label>
-                    <div className="px-3 py-1.5 bg-gray-800/60 rounded text-sm text-gray-300 truncate">
-                      {task.project || '—'}
-                    </div>
-                  </div>
-                  {/* Type */}
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Type</label>
-                    <select
-                      className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
-                      value={editType}
-                      onChange={e => setEditType(e.target.value)}
-                    >
-                      {['task', 'bug', 'feature', 'epic', 'story', 'subtask'].map(t => (
-                        <option key={t} value={t}>{t}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {/* Assignee */}
-                  <div>
-                    <label className="block text-xs text-gray-500 mb-1">Assignee</label>
-                    <select
-                      className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
-                      value={editAssignee}
-                      onChange={e => setEditAssignee(e.target.value)}
-                    >
-                      <option value="">Unassigned</option>
-                      {agents?.map(a => (
-                        <option key={a.id} value={a.id}>{a.name}</option>
-                      ))}
-                    </select>
+            {/* ── Metadata fields ──────────────────────────────── */}
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                {/* Source (read-only) */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Source</label>
+                  <div className="px-3 py-1.5 bg-gray-800/60 rounded text-sm text-gray-300 capitalize">
+                    {SOURCE_ICONS[task.source] || '📝'} {task.source || 'manual'}
                   </div>
                 </div>
-
-                {/* Status */}
+                {/* Project (read-only) */}
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Status</label>
+                  <label className="block text-xs text-gray-500 mb-1">Project</label>
+                  <div className="px-3 py-1.5 bg-gray-800/60 rounded text-sm text-gray-300 truncate">
+                    {task.project || '—'}
+                  </div>
+                </div>
+                {/* Type */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Type</label>
                   <select
                     className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
-                    value={editColumn}
-                    onChange={e => setEditColumn(e.target.value)}
+                    value={editType}
+                    onChange={e => setEditType(e.target.value)}
                   >
-                    {columns.map(col => (
-                      <option key={col.id} value={col.id}>{col.title}</option>
+                    {['task', 'bug', 'feature', 'epic', 'story', 'subtask'].map(t => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                {/* Assignee */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Assignee</label>
+                  <select
+                    className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
+                    value={editAssignee}
+                    onChange={e => setEditAssignee(e.target.value)}
+                  >
+                    <option value="">Unassigned</option>
+                    {agents?.map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
                     ))}
                   </select>
                 </div>
               </div>
 
-              {/* Right column: commits */}
-              {hasCommits && (
-                <div className="p-3 bg-gray-800/40 rounded-lg border border-white/5">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                      Commits ({task.commits.length})
-                    </h4>
-                    <button
-                      onClick={() => setShowAllCommits(true)}
-                      className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
-                    >
-                      View all diffs
-                    </button>
-                  </div>
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-                    {task.commits.map((c, i) => (
-                      <button
-                        key={i}
-                        onClick={() => setDiffCommit(c)}
-                        className="w-full flex items-start gap-2 text-xs group text-left rounded-md px-2 py-1.5 hover:bg-white/5 transition-colors cursor-pointer"
-                      >
-                        <span
-                          className="font-mono px-1.5 py-0.5 rounded text-white shrink-0 group-hover:ring-2 ring-white/30 transition-all"
-                          style={{ backgroundColor: commitColor(c.hash) }}
-                        >
-                          {c.hash?.substring(0, 7)}
-                        </span>
-                        <span className="text-gray-300 leading-snug break-all group-hover:text-white transition-colors">
-                          {c.message}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {/* Status */}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Status</label>
+                <select
+                  className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
+                  value={editColumn}
+                  onChange={e => setEditColumn(e.target.value)}
+                >
+                  {columns.map(col => (
+                    <option key={col.id} value={col.id}>{col.title}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* Description */}
@@ -396,6 +357,42 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
                 rows={6}
               />
             </div>
+
+            {/* ── Commits (full-width, below description) ────────── */}
+            {hasCommits && (
+              <div className="p-3 bg-gray-800/40 rounded-lg border border-white/5">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Commits ({task.commits.length})
+                  </h4>
+                  <button
+                    onClick={() => setShowAllCommits(true)}
+                    className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+                  >
+                    View all diffs
+                  </button>
+                </div>
+                <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                  {task.commits.map((c, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setDiffCommit(c)}
+                      className="w-full flex items-start gap-2 text-xs group text-left rounded-md px-2 py-1.5 hover:bg-white/5 transition-colors cursor-pointer"
+                    >
+                      <span
+                        className="font-mono px-1.5 py-0.5 rounded text-white shrink-0 group-hover:ring-2 ring-white/30 transition-all"
+                        style={{ backgroundColor: commitColor(c.hash) }}
+                      >
+                        {c.hash?.substring(0, 7)}
+                      </span>
+                      <span className="text-gray-300 leading-snug break-all group-hover:text-white transition-colors">
+                        {c.message}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Footer */}
