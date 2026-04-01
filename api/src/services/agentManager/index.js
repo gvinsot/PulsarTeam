@@ -43,20 +43,8 @@ export class AgentManager {
         if (agent.projectChangedAt === undefined) {
           agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;
         }
-        // Load tasks from the dedicated tasks table (not from agent JSONB)
-        const dbTasks = await getTasksByAgent(agent.id);
-        agent.todoList = dbTasks;
-        for (const task of agent.todoList) {
-          if (task.status === undefined) {
-            task.status = task.done ? 'done' : 'backlog';
-            delete task.done;
-          }
-          // Reset active tasks to pending on server restart
-          const INACTIVE = new Set(['done', 'backlog', 'error']);
-          if (!INACTIVE.has(task.status)) {
-            task.status = 'backlog';
-          }
-        }
+        // Load tasks from the dedicated tasks table
+        agent.todoList = await getTasksByAgent(agent.id);
         if (agent.mcpServers.includes('mcp-swarm-manager')) {
           agent.mcpServers = agent.mcpServers.filter(id => id !== 'mcp-swarm-manager');
           if (!agent.mcpServers.includes('mcp-pulsarcd-read')) agent.mcpServers.push('mcp-pulsarcd-read');
