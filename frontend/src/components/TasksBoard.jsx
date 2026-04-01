@@ -1565,16 +1565,6 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false); }}
         onDrop={(e) => { e.preventDefault(); setDragOver(false); onDrop(e, col); }}
       >
-        {onAddTask && (
-          <button
-            onClick={onAddTask}
-            className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
-              transition-all duration-150 flex-shrink-0
-              ${hovered || tasks.length === 0 ? 'opacity-100 text-dark-400 hover:text-indigo-400 hover:bg-dark-700/50' : 'opacity-0'}`}
-          >
-            <Plus className="w-3 h-3" /> Add task
-          </button>
-        )}
         {tasks.map(task => (
           <TaskCard
             key={`${task.agentId}-${task.id}`}
@@ -1596,6 +1586,16 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
             transition-colors ${dragOver ? 'text-dark-400' : 'text-dark-700'}`}>
             {dragOver ? '↓ Drop here' : 'No tasks'}
           </div>
+        )}
+        {onAddTask && (
+          <button
+            onClick={onAddTask}
+            className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
+              transition-all duration-150 flex-shrink-0
+              ${hovered || tasks.length === 0 ? 'opacity-100 text-dark-400 hover:text-indigo-400 hover:bg-dark-700/50' : 'opacity-0'}`}
+          >
+            <Plus className="w-3 h-3" /> Add task
+          </button>
         )}
       </div>
     </div>
