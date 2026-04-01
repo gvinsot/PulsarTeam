@@ -1,6 +1,6 @@
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveAgent } from '../database.js';
+import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
 import { processTransition } from '../transitionProcessor.js';
 import { onTaskStatusChanged } from '../jiraSync.js';
@@ -11,7 +11,7 @@ export const tasksMethods = {
   addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence, taskType } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const defaultStatus = source?.type === 'api' ? 'backlog' : 'pending';
+    const defaultStatus = 'backlog';
     const status = initialStatus || defaultStatus;
     const now = new Date().toISOString();
     const newTask = {
@@ -34,7 +34,7 @@ export const tasksMethods = {
       };
     }
     agent.todoList.push(newTask);
-    saveAgent(agent);
+    saveTaskToDb({ ...newTask, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (!skipAutoRefine) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
@@ -46,12 +46,12 @@ export const tasksMethods = {
     const task = agent.todoList.find(t => t.id === taskId);
     if (!task) return null;
     const prevStatus = task.status;
-    task.status = prevStatus === 'done' ? 'pending' : 'done';
+    task.status = prevStatus === 'done' ? 'backlog' : 'done';
     if (task.status === 'done') task.completedAt = new Date().toISOString();
     const now = new Date().toISOString();
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status: task.status, at: now, by: 'user' });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -61,43 +61,22 @@ export const tasksMethods = {
     if (!agent) return null;
     const task = agent.todoList.find(t => t.id === taskId);
     if (!task) return null;
-    if (status === 'in_progress' && task.status !== 'in_progress') {
-      const assigneeId = task.assignee || agentId;
-      for (const [creatorId, creatorAgent] of this.agents) {
-        if (!creatorAgent.todoList) continue;
-        const existing = creatorAgent.todoList.find(t =>
-          t.status === 'in_progress' && t.id !== taskId &&
-          (t.assignee || creatorId) === assigneeId
-        );
-        if (existing) {
-          console.warn(`[Guard] Assignee "${this.agents.get(assigneeId)?.name || assigneeId}" already has in_progress task "${existing.text.slice(0, 60)}" - blocking "${task.text.slice(0, 60)}"`);
-          return null;
-        }
-      }
-    }
     const prevStatus = task.status;
     if (prevStatus === status) return task;
     task.status = status;
     delete task._pendingOnEnter;
     const now = new Date().toISOString();
     if (status === 'done') task.completedAt = now;
-    if (status === 'in_progress') task.startedAt = now;
     if (status === 'error') {
       task.errorFromStatus = prevStatus;
-    }
-    if (status === 'in_progress') {
-      task.inProgressFromStatus = prevStatus;
     }
     if (prevStatus === 'error' && status !== 'error') {
       delete task.errorFromStatus;
       delete task.error;
     }
-    if (prevStatus === 'in_progress' && status !== 'in_progress') {
-      delete task.inProgressFromStatus;
-    }
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
     if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
@@ -113,7 +92,7 @@ export const tasksMethods = {
     task.title = title;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'title', oldValue: oldTitle, newValue: title });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -127,7 +106,7 @@ export const tasksMethods = {
     task.text = text;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'text', oldValue: oldText, newValue: text });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -141,7 +120,7 @@ export const tasksMethods = {
     task.project = project;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'project', oldValue: oldProject, newValue: project });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -155,7 +134,7 @@ export const tasksMethods = {
     task.taskType = taskType || null;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field: 'taskType', oldValue: oldType, newValue: taskType || null });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -170,31 +149,38 @@ export const tasksMethods = {
         enabled: true,
         period: recurrence.period || 'daily',
         intervalMinutes: recurrence.intervalMinutes || 1440,
-        originalStatus: recurrence.originalStatus || task.recurrence?.originalStatus || 'pending',
+        originalStatus: recurrence.originalStatus || task.recurrence?.originalStatus || 'backlog',
       };
     } else {
       task.recurrence = null;
     }
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
   _isActiveTaskStatus(status) {
-    const INACTIVE = new Set(['done', 'pending', 'backlog', 'error']);
+    const INACTIVE = new Set(['done', 'backlog', 'error']);
     return !INACTIVE.has(status);
+  },
+
+  /** Resolve the first column ID of a board's workflow (used as default status) */
+  async _getFirstColumnStatus(boardId) {
+    try {
+      const workflow = await getWorkflowForBoard(boardId);
+      if (workflow?.columns?.length > 0) {
+        return workflow.columns[0].id;
+      }
+    } catch { /* fall through */ }
+    return 'backlog';
   },
 
   _findTaskForCommitLink(agentId) {
     const agent = this.agents.get(agentId);
     if (agent?.todoList?.length) {
-      const own = agent.todoList.find(t => t.status === 'in_progress');
-      if (own) return { task: own, ownerAgentId: agentId };
-      // Also check active workflow statuses (code, build, test, deploy, etc.)
-      const ownActive = agent.todoList.find(t => this._isActiveTaskStatus(t.status) && t.status !== 'in_progress');
+      const ownActive = agent.todoList.find(t => this._isActiveTaskStatus(t.status));
       if (ownActive) return { task: ownActive, ownerAgentId: agentId };
     }
-    let bestInProgress = null;
     let bestActive = null;
     let bestDone = null;
     for (const [creatorId, creatorAgent] of this.agents) {
@@ -202,10 +188,6 @@ export const tasksMethods = {
       for (const task of creatorAgent.todoList) {
         const isOwnedOrAssigned = creatorId === agentId || task.assignee === agentId;
         if (!isOwnedOrAssigned) continue;
-        if (task.status === 'in_progress') {
-          bestInProgress = { task, ownerAgentId: creatorId };
-          break;
-        }
         if (this._isActiveTaskStatus(task.status) && !bestActive) {
           bestActive = { task, ownerAgentId: creatorId };
         }
@@ -215,12 +197,11 @@ export const tasksMethods = {
           }
         }
       }
-      if (bestInProgress) break;
+      if (bestActive) break;
     }
-    if (bestInProgress) return bestInProgress;
     if (bestActive) return bestActive;
     if (bestDone) {
-      console.log(`🔗 [Commit] No in_progress task — falling back to recently done task "${bestDone.task.text?.slice(0, 50)}"`);
+      console.log(`🔗 [Commit] No active task — falling back to recently done task "${bestDone.task.text?.slice(0, 50)}"`);
       return bestDone;
     }
     return null;
@@ -234,7 +215,7 @@ export const tasksMethods = {
     if (!task.commits) task.commits = [];
     if (task.commits.some(c => c.hash === hash)) return task;
     task.commits.push({ hash, message: message || '', date: new Date().toISOString() });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -247,7 +228,7 @@ export const tasksMethods = {
     const before = task.commits.length;
     task.commits = task.commits.filter(c => c.hash !== hash);
     if (task.commits.length === before) return null;
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -260,7 +241,7 @@ export const tasksMethods = {
     task.assignee = assigneeId;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'reassign', assignee: assigneeId });
-    saveAgent(agent);
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     this._recheckConditionalTransitions();
     return task;
@@ -270,7 +251,7 @@ export const tasksMethods = {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
     agent.todoList = agent.todoList.filter(t => t.id !== taskId);
-    saveAgent(agent);
+    deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },
@@ -279,7 +260,7 @@ export const tasksMethods = {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
     agent.todoList = [];
-    saveAgent(agent);
+    deleteTasksByAgent(agentId);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },
@@ -292,14 +273,14 @@ export const tasksMethods = {
     if (!taskToTransfer) return null;
     const prevStatus = taskToTransfer.status;
     fromAgent.todoList = fromAgent.todoList.filter(t => t.id !== taskId);
-    saveAgent(fromAgent);
+    deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(fromAgent));
     const newTask = this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus);
     if (newTask) {
       const actualTask = toAgent.todoList.find(t => t.id === newTask.id);
       if (actualTask) {
         actualTask.assignee = toAgentId;
-        saveAgent(toAgent);
+        saveTaskToDb({ ...actualTask, agentId: toAgentId });
       }
       this._checkAutoRefine({ ...newTask, assignee: toAgentId, agentId: toAgentId });
     }
@@ -315,24 +296,24 @@ export const tasksMethods = {
 
     console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`);
 
-    if (task.status === 'pending') {
-      delete task._executionStopped;
+    delete task._executionStopped;
+    if (this._isActiveTaskStatus(task.status)) {
+      // Task is already in an active status — resume execution
+      saveTaskToDb({ ...task, agentId });
+      this._checkAutoRefine({ ...task, agentId }, { by: 'resume' });
+    } else {
+      // Task is inactive — trigger workflow transitions
       const workflow = await getWorkflowForBoard(task.boardId);
       const hasRunAgent = workflow.transitions
         .filter(t => this._validTransition(t))
-        .some(t => t.from === 'pending' && (t.actions || []).some(a => a.type === 'run_agent'));
+        .some(t => t.from === task.status && (t.actions || []).some(a => a.type === 'run_agent'));
 
       if (hasRunAgent) {
         this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
       } else {
-        this.setTaskStatus(agentId, taskId, 'in_progress', { skipAutoRefine: true, by: 'task-loop' });
+        // No workflow transition — trigger auto-refine directly
+        this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
       }
-    } else if (task.status === 'in_progress') {
-      delete task._executionStopped;
-      saveAgent(agent);
-      this._checkAutoRefine({ ...task, agentId }, { by: 'resume' });
-    } else {
-      this.setTaskStatus(agentId, taskId, 'pending');
     }
 
     return { taskId, response: null };
@@ -341,14 +322,14 @@ export const tasksMethods = {
   async executeAllTasks(agentId, streamCallback) {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
-    const pending = agent.todoList.filter(t => t.status === 'pending' || t.status === 'error');
-    if (pending.length === 0) throw new Error('No pending tasks');
+    const executable = agent.todoList.filter(t => t.status !== 'done' && !this._isActiveTaskStatus(t.status));
+    if (executable.length === 0) throw new Error('No executable tasks');
 
-    console.log(`▶️  Executing ${pending.length} pending task(s) for ${agent.name}`);
-    this._emit('agent:task:executeAll:start', { agentId, count: pending.length });
+    console.log(`▶️  Executing ${executable.length} task(s) for ${agent.name}`);
+    this._emit('agent:task:executeAll:start', { agentId, count: executable.length });
 
     const results = [];
-    for (const task of pending) {
+    for (const task of executable) {
       try {
         const result = await this.executeTask(agentId, task.id, streamCallback);
         results.push({ taskId: task.id, text: task.text, success: true, response: result.response });
@@ -421,14 +402,14 @@ export const tasksMethods = {
         const completedAt = new Date(task.completedAt).getTime();
         const intervalMs = (task.recurrence.intervalMinutes || 1440) * 60 * 1000;
         if (now - completedAt >= intervalMs) {
-          const resetStatus = task.recurrence.originalStatus || 'pending';
+          const resetStatus = task.recurrence.originalStatus || 'backlog';
           console.log(`🔁 [Recurrence] Resetting task "${task.text.slice(0, 60)}" → ${resetStatus} (interval: ${task.recurrence.intervalMinutes}min)`);
           task.status = resetStatus;
           task.completedAt = null;
           task.startedAt = null;
           if (!task.history) task.history = [];
           task.history.push({ from: 'done', status: resetStatus, at: new Date().toISOString(), by: 'recurrence' });
-          saveAgent(agent);
+          saveTaskToDb({ ...task, agentId });
           this._emit('agent:updated', this._sanitize(agent));
         }
       }
@@ -443,88 +424,47 @@ export const tasksMethods = {
       if (agent.status !== 'idle') continue;
       if (this._loopProcessing.has(agentId)) continue;
 
-      let inProgressTask = null;
-      let inProgressCreatorId = null;
-      const ownInProgress = agent.todoList?.find(t =>
-        t.status === 'in_progress' && (!t.assignee || t.assignee === agentId)
+      // Only resume tasks that were genuinely started by the execution system
+      // (startedAt is set when a workflow transition triggers execution).
+      // Simply dragging a task to a column does NOT set startedAt.
+      let activeTask = null;
+      let activeCreatorId = null;
+      const ownActive = agent.todoList?.find(t =>
+        this._isActiveTaskStatus(t.status) && t.startedAt && (!t.assignee || t.assignee === agentId)
       );
-      if (ownInProgress) {
-        inProgressTask = ownInProgress;
-        inProgressCreatorId = agentId;
+      if (ownActive) {
+        activeTask = ownActive;
+        activeCreatorId = agentId;
       } else {
         for (const [oid, oa] of this.agents) {
           if (oid === agentId || !oa.todoList) continue;
-          const found = oa.todoList.find(t => t.status === 'in_progress' && t.assignee === agentId);
-          if (found) { inProgressTask = found; inProgressCreatorId = oid; break; }
+          const found = oa.todoList.find(t => this._isActiveTaskStatus(t.status) && t.startedAt && t.assignee === agentId);
+          if (found) { activeTask = found; activeCreatorId = oid; break; }
         }
       }
-      if (inProgressTask) {
-        if (this._workflowManagedStatuses?.has('in_progress')) continue;
-        // If the task was manually stopped, do NOT auto-resume it.
-        // Move it back to pending so the user can decide when to restart.
-        if (inProgressTask._executionStopped) {
-          console.log(`🛑 [TaskLoop] Skipping auto-resume for "${inProgressTask.text.slice(0, 60)}" — was manually stopped`);
-          this.setTaskStatus(inProgressCreatorId, inProgressTask.id, 'pending', { skipAutoRefine: true, by: 'user-stop' });
+      if (activeTask) {
+        if (this._workflowManagedStatuses?.has(activeTask.status)) continue;
+        if (activeTask._executionStopped) {
+          console.log(`🛑 [TaskLoop] Skipping auto-resume for "${activeTask.text.slice(0, 60)}" — was manually stopped`);
+          this.setTaskStatus(activeCreatorId, activeTask.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
           continue;
         }
-        // Skip if _waitForExecutionComplete is already monitoring this task
-        if (inProgressTask._executionWatching) continue;
+        if (activeTask._executionWatching) continue;
         this._loopProcessing.add(agentId);
-        console.log(`🔄 [TaskLoop] Agent "${agent.name}" is idle but has in_progress task "${inProgressTask.text.slice(0, 60)}" — resuming`);
-        this._resumeInProgressTask(inProgressCreatorId, this.agents.get(inProgressCreatorId), inProgressTask).finally(() => {
+        console.log(`🔄 [TaskLoop] Agent "${agent.name}" is idle but has started task "${activeTask.text.slice(0, 60)}" (${activeTask.status}) — resuming`);
+        this._resumeActiveTask(activeCreatorId, this.agents.get(activeCreatorId), activeTask).finally(() => {
           this._loopProcessing.delete(agentId);
         });
         continue;
       }
-
-      const task = agent.todoList?.find(t =>
-        t.status === 'pending' && (!t.assignee || t.assignee === agentId)
-      );
-      if (!task) continue;
-
-      if (this._workflowManagedStatuses?.has(task.status)) continue;
-
-      // Skip tasks that were just stopped by the user — the flag is cleared
-      // on the next manual start so the task won't be blocked forever.
-      if (task._executionStopped) {
-        continue;
-      }
-
-      this._loopProcessing.add(agentId);
-
-      const streamCallback = (chunk) => {
-        this._emit('agent:stream:chunk', { agentId, chunk });
-        this._emit('agent:thinking', { agentId, thinking: agent.currentThinking || '' });
-      };
-
-      this._emit('agent:stream:start', { agentId });
-
-      this.executeTask(agentId, task.id, streamCallback)
-        .then(() => {
-          this._emit('agent:stream:end', { agentId });
-          this._emit('agent:updated', this._sanitize(agent));
-        })
-        .catch((err) => {
-          if (err) {
-            console.error(`🔄 Task loop error for ${agent.name}:`, err.message);
-            this._emit('agent:stream:error', { agentId, error: err.message });
-          }
-          if (agent.status === 'error') {
-            this.setStatus(agentId, 'idle', 'Auto-recovered after task error');
-          }
-        })
-        .finally(() => {
-          this._loopProcessing.delete(agentId);
-        });
     }
   },
 
   async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
     const freshTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
 
-    const resolveCompletionStatus = (task) => {
-      if (targetStatus) return targetStatus;
-      return task?.inProgressFromStatus || 'done';
+    const resolveCompletionStatus = () => {
+      return targetStatus || 'done';
     };
 
     if (freshTask?.status === 'error') {
@@ -536,13 +476,13 @@ export const tasksMethods = {
       const comment = freshTask._executionComment || '';
       delete freshTask._executionCompleted;
       delete freshTask._executionComment;
-      const completionStatus = resolveCompletionStatus(freshTask);
+      const completionStatus = resolveCompletionStatus();
       this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: !targetStatus, by: executorName });
       console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       return 'completed';
     }
 
-    if (freshTask && freshTask.status !== 'in_progress') {
+    if (freshTask && !this._isActiveTaskStatus(freshTask.status)) {
       console.log(`[Execution] Task "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
       return 'moved';
     }
@@ -569,12 +509,12 @@ export const tasksMethods = {
         const comment = currentTask._executionComment || '';
         delete currentTask._executionCompleted;
         delete currentTask._executionComment;
-        const completionStatus = resolveCompletionStatus(currentTask);
+        const completionStatus = resolveCompletionStatus();
         this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: !targetStatus, by: executorName });
         console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
         return 'completed';
       }
-      if (currentTask.status !== 'in_progress') {
+      if (!this._isActiveTaskStatus(currentTask.status)) {
         console.log(`🔔 [Execution] Task status changed to "${currentTask.status}" — exiting loop`);
         return 'moved';
       }
@@ -604,7 +544,7 @@ export const tasksMethods = {
 
         await this.sendMessage(
           executorId,
-          `[SYSTEM REMINDER] You have an in-progress task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @task_execution_complete(summary of what was done) to signal completion.\n\nIf you have already finished all the work, call @task_execution_complete now with a summary of what was accomplished.`,
+          `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @task_execution_complete(summary of what was done) to signal completion.\n\nIf you have already finished all the work, call @task_execution_complete now with a summary of what was accomplished.`,
           (chunk) => {
             this._emit('agent:stream:chunk', { agentId: executorId, chunk });
             this._emit('agent:thinking', { agentId: executorId, thinking: currentExecutor.currentThinking || '' });
@@ -623,7 +563,7 @@ export const tasksMethods = {
         const comment = afterReminder._executionComment || '';
         delete afterReminder._executionCompleted;
         delete afterReminder._executionComment;
-        const completionStatus = resolveCompletionStatus(afterReminder);
+        const completionStatus = resolveCompletionStatus();
         this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: !targetStatus, by: executorName });
         console.log(`✅ [Execution] Completed after reminder: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
         return 'completed';
@@ -632,9 +572,9 @@ export const tasksMethods = {
 
     if (reminded >= MAX_REMINDERS) {
       const finalTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
-      if (finalTask && finalTask.status === 'in_progress' && !finalTask._executionCompleted) {
-        console.warn(`⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains in_progress`);
-        this.addActionLog(executorId, 'warning', `Task reminder limit reached — task remains in_progress`, taskText.slice(0, 200));
+      if (finalTask && this._isActiveTaskStatus(finalTask.status) && !finalTask._executionCompleted) {
+        console.warn(`⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains active (${finalTask.status})`);
+        this.addActionLog(executorId, 'warning', `Task reminder limit reached — task remains active`, taskText.slice(0, 200));
       }
       return 'timeout';
     }
@@ -647,7 +587,7 @@ export const tasksMethods = {
     }
   },
 
-  async _resumeInProgressTask(agentId, agent, task) {
+  async _resumeActiveTask(agentId, agent, task) {
     const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
 
@@ -666,7 +606,7 @@ export const tasksMethods = {
       try {
         const workflow = await getWorkflowForBoard(task.boardId);
         const transition = workflow.transitions.find(t => {
-          if (t.from !== 'in_progress') return false;
+          if (t.from !== task.status) return false;
           if (this._validTransition(t)) {
             return (t.actions || []).some(a => a.type === 'run_agent' && a.targetStatus);
           }
@@ -704,7 +644,7 @@ export const tasksMethods = {
         msg => msg.role === 'user' && typeof msg.content === 'string' && msg.content.includes(taskPrefix)
       );
       const messageToSend = alreadySent
-        ? `[SYSTEM REMINDER] You have an in-progress task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @task_execution_complete(summary of what was done).`
+        ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @task_execution_complete(summary of what was done).`
         : task.text;
 
       const result = await this.sendMessage(executorId, messageToSend, streamCallback);
@@ -722,13 +662,13 @@ export const tasksMethods = {
       if (isUserStop) {
         // User manually stopped — put task back to pending, don't treat as error
         task._executionStopped = true;
-        this.setTaskStatus(agentId, task.id, 'pending', { skipAutoRefine: true, by: 'user-stop' });
+        this.setTaskStatus(agentId, task.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
       } else {
         this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
         const actualTask = this.agents.get(agentId)?.todoList?.find(t => t.id === task.id);
         if (actualTask) {
           actualTask.error = err.message;
-          saveAgent(this.agents.get(agentId));
+          saveTaskToDb({ ...actualTask, agentId });
         }
       }
       if (executor.status === 'error') {
@@ -738,6 +678,30 @@ export const tasksMethods = {
       this._emit('agent:stream:end', { agentId: executorId });
       this._emit('agent:updated', this._sanitize(executor));
     }
+  },
+
+  /** Find a task by ID across all agents */
+  getTask(taskId) {
+    for (const [agentId, agent] of this.agents) {
+      if (!agent.todoList) continue;
+      const task = agent.todoList.find(t => t.id === taskId);
+      if (task) return { ...task, agentId };
+    }
+    return null;
+  },
+
+  /** Persist a task object to the database (used by routes/tasks.js) */
+  saveTasksToDb() {
+    // With the dedicated tasks table, individual task mutations already persist.
+    // This method exists for compatibility with routes/tasks.js which calls it
+    // after direct field updates. We save the specific task that was modified.
+    // Callers should use saveTaskToDb() directly when possible.
+  },
+
+  /** Save a single in-memory task to the DB (convenience for route handlers) */
+  saveTaskDirectly(task) {
+    if (!task || !task.agentId) return;
+    saveTaskToDb(task);
   },
 
   _enqueueAgentTask(agentId, taskFn) {

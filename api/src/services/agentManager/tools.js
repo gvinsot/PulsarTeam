@@ -88,8 +88,8 @@ export const toolsMethods = {
           }
           results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}`, isTerminal: true });
         } else {
-          console.log(`[TaskComplete] Agent "${agent.name}" called task_execution_complete but no in_progress task found — ignoring.`);
-          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no in_progress task).', isTerminal: true });
+          console.log(`[TaskComplete] Agent "${agent.name}" called task_execution_complete but no active task found — ignoring.`);
+          results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no active task).', isTerminal: true });
         }
         continue;
       }
@@ -215,8 +215,10 @@ export const toolsMethods = {
         if (tasks.length === 0) {
           results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\nNo tasks assigned.` });
         } else {
-          const statusIcons = { pending: '[ ]', in_progress: '[~]', done: '[x]', error: '[!]' };
-          const lines = tasks.map(t => `${statusIcons[t.status] || '[ ]'} ${t.id} — ${t.text}`);
+          const lines = tasks.map(t => {
+            const icon = t.status === 'done' ? '[x]' : t.status === 'error' ? '[!]' : this._isActiveTaskStatus(t.status) ? '[~]' : '[ ]';
+            return `${icon} ${t.id} — ${t.text}`;
+          });
           results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\n${lines.join('\n')}` });
         }
         continue;
@@ -231,18 +233,18 @@ export const toolsMethods = {
         checkStatusDone = true;
         const { AgentManager } = await import('./index.js');
         const todoList = agent.todoList || [];
-        const pendingTasks = todoList.filter(t => t.status === 'pending').length;
-        const inProgressTasks = todoList.filter(t => t.status === 'in_progress').length;
+        const waitingTasks = todoList.filter(t => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
+        const activeCount = todoList.filter(t => this._isActiveTaskStatus(t.status)).length;
         const doneTasks = todoList.filter(t => t.status === 'done').length;
         const errorTasks = todoList.filter(t => t.status === 'error').length;
         const totalTasks = todoList.length;
         const msgCount = (agent.conversationHistory || []).length;
         const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(agent.id) : false;
-        const inProgressTask = todoList.find(t => t.status === 'in_progress');
+        const currentActiveTask = todoList.find(t => this._isActiveTaskStatus(t.status));
         const currentTaskInfo = agent.currentTask
           ? agent.currentTask.slice(0, 120)
-          : inProgressTask
-            ? inProgressTask.text.slice(0, 120)
+          : currentActiveTask
+            ? currentActiveTask.text.slice(0, 120)
             : 'none';
         const projectAssignedAt = agent.projectChangedAt
           ? new Date(agent.projectChangedAt).toLocaleString()
@@ -260,16 +262,16 @@ export const toolsMethods = {
           `Current task: ${currentTaskInfo}`,
           `Provider: ${agent.provider || 'unknown'}/${agent.model || 'unknown'}`,
           `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
-          `Tasks: ${inProgressTasks} in-progress, ${pendingTasks} pending, ${doneTasks} done, ${errorTasks} error / ${totalTasks} total`,
+          `Tasks: ${activeCount} active, ${waitingTasks} waiting, ${doneTasks} done, ${errorTasks} error / ${totalTasks} total`,
           `Messages: ${msgCount}`,
           `Last active: ${agent.metrics?.lastActiveAt || 'never'}`,
           `Errors: ${agent.metrics?.errors || 0}`,
         ];
-        const activeTasks = todoList.filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error');
+        const activeTasks = todoList.filter(t => t.status !== 'done');
         if (activeTasks.length > 0) {
           lines.push(`Active tasks:`);
           for (const t of activeTasks.slice(0, 10)) {
-            const mark = t.status === 'in_progress' ? '~' : t.status === 'error' ? '!' : ' ';
+            const mark = this._isActiveTaskStatus(t.status) ? '~' : t.status === 'error' ? '!' : ' ';
             lines.push(`  [${mark}] ${t.text.slice(0, 100)}${t.text.length > 100 ? '...' : ''}`);
           }
           if (activeTasks.length > 10) lines.push(`  ... and ${activeTasks.length - 10} more`);
@@ -406,7 +408,7 @@ export const toolsMethods = {
 
             if (!targetTask) {
               const taskText = agent.currentTask || commitMsg || 'Commit without task';
-              const created = this.addTask(agentId, taskText, agent.project || null, { type: 'auto', reason: 'commit-link' }, 'in_progress');
+              const created = this.addTask(agentId, taskText, agent.project || null, { type: 'auto', reason: 'commit-link' });
               if (created) {
                 targetTask = agent.todoList.find(t => t.id === created.id);
                 ownerAgentId = agentId;
@@ -437,8 +439,8 @@ export const toolsMethods = {
                 const taskList = agentTasks.slice(0, 5).map(t => 
                   `  - @link_commit(${t.id}, ${commitHash}, ${commitMsg.slice(0, 60)})  → [${t.status}] ${t.text?.slice(0, 50)}`
                 ).join('\n');
-                console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no in_progress task found. Available tasks:\n${taskList}`);
-                result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not auto-linked (no in_progress task). Link it manually:\n${taskList}`;
+                console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no active task found. Available tasks:\n${taskList}`);
+                result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not auto-linked (no active task). Link it manually:\n${taskList}`;
               } else {
                 console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but has no tasks at all`);
                 result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not linked — no tasks found for this agent.`;

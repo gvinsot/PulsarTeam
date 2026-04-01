@@ -5,7 +5,7 @@ import { getAllBoards, getBoardById } from '../services/database.js';
 const createTaskSchema = z.object({
   task: z.string().min(1).max(5000),
   project: z.string().min(1).max(200),
-  status: z.enum(['backlog', 'pending']).optional(),
+  status: z.string().optional(),
   board_id: z.string().uuid().optional(),
 });
 
@@ -40,7 +40,7 @@ export function swarmApiRoutes(agentManager) {
       status: a.status,
       project: a.project || null,
       currentTask: a.currentTask || null,
-      pendingTasks: (a.todoList || []).filter(t => t.status === 'pending').length,
+      openTasks: (a.todoList || []).filter(t => t.status !== 'done').length,
       totalMessages: a.metrics?.totalMessages || 0,
     }));
 

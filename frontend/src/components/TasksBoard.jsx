@@ -571,9 +571,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
                     ? 'bg-red-500/15 text-red-300 border-red-500/30'
                     : task.status === lastStatusId
                       ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                      : task.status === 'in_progress'
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
-                        : 'bg-dark-700 text-dark-300 border-dark-600'
+                      : 'bg-dark-700 text-dark-300 border-dark-600'
                   }`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${currentStatus.dot}`} />
@@ -2416,8 +2414,8 @@ export default function TasksBoard({ agents, onRefresh, user }) {
     });
   }, [allTasks, agentFilter, projectFilter, search]);
 
-  // Group by column — error/in_progress are internal execution states, not workflow columns.
-  // Use errorFromStatus / inProgressFromStatus to keep tasks visible in their originating column.
+  // Group by column — error is an internal state, not a workflow column.
+  // Use errorFromStatus to keep error tasks visible in their originating column.
   const tasksByColumn = useMemo(() => {
     const groups = {};
     const fallbackColId = columns[0]?.id;
@@ -2425,9 +2423,6 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       const colTasks = filteredTasks.filter(t => {
         if (t.status === 'error') {
           return (t.errorFromStatus || fallbackColId) === col.id;
-        }
-        if (t.status === 'in_progress') {
-          return (t.inProgressFromStatus || fallbackColId) === col.id;
         }
         return col.statuses.includes(t.status || fallbackColId);
       });
@@ -2469,9 +2464,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       const fallbackColId = columns[0]?.id;
       const isAlreadyInColumn = task.status === 'error'
         ? (task.errorFromStatus || fallbackColId) === col.id
-        : task.status === 'in_progress'
-          ? (task.inProgressFromStatus || fallbackColId) === col.id
-          : col.statuses.includes(task.status || fallbackColId);
+        : col.statuses.includes(task.status || fallbackColId);
       if (isAlreadyInColumn) return;
       await api.setTaskStatus(agentId, taskId, col.dropStatus);
       onRefresh();
@@ -2490,9 +2483,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
       const fallbackColId = columns[0]?.id;
       const isAlreadyInColumn = task.status === 'error'
         ? (task.errorFromStatus || fallbackColId) === col.id
-        : task.status === 'in_progress'
-          ? (task.inProgressFromStatus || fallbackColId) === col.id
-          : col.statuses.includes(task.status || fallbackColId);
+        : col.statuses.includes(task.status || fallbackColId);
       if (isAlreadyInColumn) return;
       await api.setTaskStatus(agentId, taskId, col.dropStatus);
       onRefresh();
@@ -2516,9 +2507,8 @@ export default function TasksBoard({ agents, onRefresh, user }) {
   const totalByStatus = useMemo(() => {
     const lastColId = columns[columns.length - 1]?.id;
     return {
-      waiting: allTasks.filter(t => t.status !== 'error' && t.status !== 'in_progress' && t.status !== lastColId).length,
+      open: allTasks.filter(t => t.status !== 'error' && t.status !== lastColId).length,
       error: allTasks.filter(t => t.status === 'error').length,
-      in_progress: allTasks.filter(t => t.status === 'in_progress').length,
       done: allTasks.filter(t => t.status === lastColId).length,
     };
   }, [allTasks, columns]);
@@ -2666,8 +2656,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
 
         {/* Stats */}
         <div className="ml-auto flex items-center gap-3 text-xs text-dark-500">
-          <span>{totalByStatus.waiting + totalByStatus.error} pending</span>
-          <span className="text-amber-400/70">{totalByStatus.in_progress} active</span>
+          <span>{totalByStatus.open} open</span>
           <span className="text-emerald-400/70">{totalByStatus.done} done</span>
           {totalByStatus.error > 0 && (
             <span className="text-red-400/70">{totalByStatus.error} errors</span>

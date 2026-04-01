@@ -29,8 +29,6 @@ function timeAgo(iso) {
 
 const TASK_STATUS_META = {
   backlog: { label: 'Backlog', dot: 'bg-purple-400', text: 'text-purple-300', ring: 'ring-purple-500/30 bg-purple-500/10' },
-  pending: { label: 'Pending', dot: 'bg-amber-400', text: 'text-amber-300', ring: 'ring-amber-500/30 bg-amber-500/10' },
-  in_progress: { label: 'In Progress', dot: 'bg-blue-400 animate-pulse', text: 'text-blue-300', ring: 'ring-blue-500/30 bg-blue-500/10' },
   error: { label: 'Error', dot: 'bg-red-400', text: 'text-red-300', ring: 'ring-red-500/30 bg-red-500/10' },
   done: { label: 'Completed', dot: 'bg-emerald-400', text: 'text-emerald-300', ring: 'ring-emerald-500/30 bg-emerald-500/10' }
 };
@@ -1152,14 +1150,14 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
 
   const canExpand = isMultiline || isTruncated;
   const isDone = task.status === 'done';
-  const isInProgress = task.status === 'in_progress';
   const isError = task.status === 'error';
   const isBacklog = task.status === 'backlog';
-  const isPending = task.status === 'pending' || !task.status;
-  const statusKey = task.status || 'pending';
-  const statusMeta = TASK_STATUS_META[statusKey] || TASK_STATUS_META.pending;
+  const INACTIVE_STATUSES = new Set(['done', 'error', 'backlog']);
+  const isActive = !INACTIVE_STATUSES.has(task.status || 'backlog') && task.status !== 'done';
+  const statusKey = task.status || 'backlog';
+  const statusMeta = TASK_STATUS_META[statusKey] || { label: statusKey, dot: 'bg-blue-400', text: 'text-blue-300', ring: 'ring-blue-500/30 bg-blue-500/10' };
 
-  const borderClass = isInProgress
+  const borderClass = isActive
     ? 'border-amber-500/50 bg-amber-500/5'
     : isError
       ? 'border-red-500/50 bg-red-500/5'
@@ -1169,7 +1167,7 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
 
   const checkboxClass = isDone
     ? 'bg-indigo-500 border-indigo-500 text-white'
-    : isInProgress
+    : isActive
       ? 'bg-amber-500/20 border-amber-500 text-amber-400'
       : isError
         ? 'bg-red-500/20 border-red-500 text-red-400'
@@ -1181,7 +1179,7 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
     ? 'line-through text-dark-500'
     : isError
       ? 'text-red-300'
-      : isInProgress
+      : isActive
         ? 'text-amber-200'
         : isBacklog
           ? 'text-purple-200'
@@ -1192,11 +1190,11 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
       <div className="flex items-center gap-3 px-3 py-2">
         <button
           onClick={() => onToggle(task.id)}
-          disabled={isInProgress}
+          disabled={isActive}
           className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${checkboxClass}`}
         >
           {isDone && <span className="text-xs">✓</span>}
-          {isInProgress && <Loader className="w-3 h-3 animate-spin" />}
+          {isActive && <Loader className="w-3 h-3 animate-spin" />}
           {isError && <XCircle className="w-3 h-3" />}
         </button>
         <div
@@ -1210,13 +1208,13 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
                 : <ChevronRight className="w-3 h-3 text-dark-400 flex-shrink-0" />
             )}
             <span ref={textRef} className={expanded ? 'whitespace-normal break-words' : 'truncate'}>{firstLine}</span>
-            {isInProgress && <span className="text-xs text-amber-400 font-medium ml-1 flex-shrink-0">In Progress</span>}
+            {isActive && <span className="text-xs text-amber-400 font-medium ml-1 flex-shrink-0">{statusMeta.label}</span>}
             {isError && <span className="text-xs text-red-400 font-medium ml-1 flex-shrink-0">Error</span>}
             {isBacklog && <span className="text-xs text-purple-400 font-medium ml-1 flex-shrink-0">Backlog</span>}
           </div>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {isInProgress && agentStatus === 'idle' && (
+          {isActive && agentStatus === 'idle' && (
             <button
               onClick={() => onExecute(task.id)}
               disabled={!!executing || agentStatus === 'busy'}
@@ -1226,7 +1224,7 @@ function TaskItem({ task, executing, agentStatus, agents, onToggle, onExecute, o
               <Play className="w-3.5 h-3.5" />
             </button>
           )}
-          {(isPending || isError || isBacklog) && (
+          {(!isDone && !isActive) && (
             <button
               onClick={() => onExecute(task.id)}
               disabled={!!executing || agentStatus === 'busy'}
@@ -1385,7 +1383,7 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
         for (const col of wf.columns) {
           const idx = (col.tasks || []).findIndex(t => t.id === taskId);
           if (idx !== -1) {
-            col.tasks[idx].status = col.tasks[idx].status === 'done' ? 'pending' : 'done';
+            col.tasks[idx].status = col.tasks[idx].status === 'done' ? 'backlog' : 'done';
             break;
           }
         }
@@ -1475,32 +1473,32 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
   }, [agent.status]);
 
   const done = allTasks.filter(t => t.status === 'done').length;
-  const inProgress = allTasks.filter(t => t.status === 'in_progress').length;
   const errors = allTasks.filter(t => t.status === 'error').length;
   const total = allTasks.length;
-  const runnable = allTasks.filter(t => t.status === 'pending' || t.status === 'error').length;
+  const INACTIVE_SET = new Set(['done', 'error', 'backlog']);
+  const active = allTasks.filter(t => !INACTIVE_SET.has(t.status || 'backlog')).length;
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-dark-200 text-sm">Task List</h3>
         <div className="flex items-center gap-2">
-          {runnable > 0 && (
+          {(total - done - active) > 0 && (
             <button
               onClick={handleExecuteAll}
               disabled={!!executing || agent.status === 'busy'}
               className="flex items-center gap-1 px-2 py-1 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-md text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              title="Execute all pending tasks"
+              title="Execute all tasks"
             >
               <PlayCircle className="w-3.5 h-3.5" />
-              Run all ({runnable})
+              Run all ({total - done - active})
             </button>
           )}
           {total > 0 && (
             <>
               <span className="text-xs text-dark-400">
                 {done}/{total} completed
-                {inProgress > 0 && <span className="text-amber-400 ml-1">({inProgress} running)</span>}
+                {active > 0 && <span className="text-amber-400 ml-1">({active} running)</span>}
                 {errors > 0 && <span className="text-red-400 ml-1">({errors} failed)</span>}
               </span>
               <button
@@ -1525,7 +1523,7 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
           />
           <div
             className="bg-amber-500 h-1.5 transition-all duration-500"
-            style={{ width: `${(inProgress / total) * 100}%` }}
+            style={{ width: `${(active / total) * 100}%` }}
           />
           <div
             className="bg-red-500 h-1.5 transition-all duration-500"

@@ -141,6 +141,37 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       `);
       console.log('✅ LLM configs table ready');
 
+      // Create tasks table if not exists
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS tasks (
+          id UUID PRIMARY KEY,
+          agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          text TEXT NOT NULL DEFAULT '',
+          title TEXT,
+          status TEXT NOT NULL DEFAULT 'backlog',
+          project TEXT,
+          board_id UUID,
+          assignee UUID,
+          task_type TEXT,
+          priority TEXT,
+          due_date TIMESTAMPTZ,
+          source JSONB,
+          recurrence JSONB,
+          commits JSONB DEFAULT '[]',
+          history JSONB DEFAULT '[]',
+          error TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          completed_at TIMESTAMPTZ,
+          started_at TIMESTAMPTZ
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(board_id)').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)').catch(() => {});
+      console.log('✅ Tasks table ready');
+
       // Create boards table if not exists
       await pool.query(`
         CREATE TABLE IF NOT EXISTS boards (
@@ -205,13 +236,15 @@ export async function getAllAgents() {
 
 export async function saveAgent(agent) {
   if (!pool) return;
-  
+
   try {
+    // Exclude todoList from JSONB — tasks are now stored in the dedicated tasks table
+    const { todoList, ...agentData } = agent;
     await pool.query(
-      `INSERT INTO agents (id, data, owner_id, updated_at) 
-       VALUES ($1, $2, $3, NOW()) 
+      `INSERT INTO agents (id, data, owner_id, updated_at)
+       VALUES ($1, $2, $3, NOW())
        ON CONFLICT (id) DO UPDATE SET data = $2, owner_id = $3, updated_at = NOW()`,
-      [agent.id, JSON.stringify(agent), agent.ownerId || null]
+      [agent.id, JSON.stringify(agentData), agent.ownerId || null]
     );
   } catch (err) {
     console.error('Failed to save agent:', err.message);
@@ -874,6 +907,132 @@ export async function deleteBoard(id) {
     return false;
   }
 }
+
+// ── Tasks CRUD ──────────────────────────────────────────────────────────────
+
+export async function getTasksByAgent(agentId) {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      'SELECT * FROM tasks WHERE agent_id = $1 ORDER BY created_at',
+      [agentId]
+    );
+    return result.rows.map(rowToTask);
+  } catch (err) {
+    console.error('Failed to load tasks for agent:', err.message);
+    return [];
+  }
+}
+
+export async function getAllTasks() {
+  if (!pool) return [];
+  try {
+    const result = await pool.query('SELECT * FROM tasks ORDER BY created_at');
+    return result.rows.map(rowToTask);
+  } catch (err) {
+    console.error('Failed to load all tasks:', err.message);
+    return [];
+  }
+}
+
+export async function getTaskById(taskId) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+    if (result.rows.length === 0) return null;
+    return rowToTask(result.rows[0]);
+  } catch (err) {
+    console.error('Failed to get task:', err.message);
+    return null;
+  }
+}
+
+export async function saveTaskToDb(task) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO tasks (id, agent_id, text, title, status, project, board_id, assignee,
+                          task_type, priority, due_date, source, recurrence, commits, history,
+                          error, created_at, updated_at, completed_at, started_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19)
+       ON CONFLICT (id) DO UPDATE SET
+         text = $3, title = $4, status = $5, project = $6, board_id = $7, assignee = $8,
+         task_type = $9, priority = $10, due_date = $11, source = $12, recurrence = $13,
+         commits = $14, history = $15, error = $16, updated_at = NOW(),
+         completed_at = $18, started_at = $19`,
+      [
+        task.id,
+        task.agentId,
+        task.text || '',
+        task.title || null,
+        task.status || 'backlog',
+        task.project || null,
+        task.boardId || null,
+        task.assignee || null,
+        task.taskType || null,
+        task.priority || null,
+        task.dueDate || null,
+        task.source ? JSON.stringify(task.source) : null,
+        task.recurrence ? JSON.stringify(task.recurrence) : null,
+        JSON.stringify(task.commits || []),
+        JSON.stringify(task.history || []),
+        task.error || null,
+        task.createdAt || new Date().toISOString(),
+        task.completedAt || null,
+        task.startedAt || null,
+      ]
+    );
+  } catch (err) {
+    console.error('Failed to save task:', err.message);
+  }
+}
+
+export async function deleteTaskFromDb(taskId) {
+  if (!pool) return false;
+  try {
+    const result = await pool.query('DELETE FROM tasks WHERE id = $1', [taskId]);
+    return result.rowCount > 0;
+  } catch (err) {
+    console.error('Failed to delete task:', err.message);
+    return false;
+  }
+}
+
+export async function deleteTasksByAgent(agentId) {
+  if (!pool) return;
+  try {
+    await pool.query('DELETE FROM tasks WHERE agent_id = $1', [agentId]);
+  } catch (err) {
+    console.error('Failed to delete tasks for agent:', err.message);
+  }
+}
+
+/** Convert a DB row to the in-memory task object format */
+function rowToTask(row) {
+  return {
+    id: row.id,
+    agentId: row.agent_id,
+    text: row.text || '',
+    title: row.title || undefined,
+    status: row.status || 'backlog',
+    project: row.project || null,
+    boardId: row.board_id || null,
+    assignee: row.assignee || null,
+    taskType: row.task_type || undefined,
+    priority: row.priority || undefined,
+    dueDate: row.due_date || undefined,
+    source: row.source || null,
+    recurrence: row.recurrence || null,
+    commits: row.commits || [],
+    history: row.history || [],
+    error: row.error || undefined,
+    createdAt: row.created_at?.toISOString?.() || row.created_at,
+    updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
+    completedAt: row.completed_at?.toISOString?.() || row.completed_at || undefined,
+    startedAt: row.started_at?.toISOString?.() || row.started_at || undefined,
+  };
+}
+
 
 export function getPool() {
   return pool;

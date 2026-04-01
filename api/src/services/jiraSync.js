@@ -16,7 +16,7 @@
  */
 
 import { getWorkflow, getSettings, getAllBoardWorkflows, getWorkflowForBoard } from './configManager.js';
-import { saveAgent } from './database.js';
+import { saveTaskToDb } from './database.js';
 import { processTransition } from './transitionProcessor.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ export async function pollJira(agentManager) {
         if (actualTask) {
           actualTask.jiraKey = issue.key;
           actualTask.jiraStatusId = statusId;
-          saveAgent(creatorAgent);
+          saveTaskToDb({ ...actualTask, agentId: creatorAgent.id });
         }
         existingJiraKeys.add(issue.key);
         created++;
@@ -840,7 +840,7 @@ export async function handleWebhook(payload, agentManager) {
         if (actualTask) {
           actualTask.jiraKey = issue.key;
           actualTask.jiraStatusId = statusId;
-          saveAgent(creatorAgent);
+          saveTaskToDb({ ...actualTask, agentId: creatorAgent.id });
         }
         console.log(`[Jira] Webhook: imported ${issue.key} (status ${statusId}) → board "${boardId}" column "${trigger.from}"`);
         // Execute transition actions (change_status, run_agent, etc.)

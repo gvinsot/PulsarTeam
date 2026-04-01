@@ -64,7 +64,7 @@ function assignTaskToAgent(agentName, task, taskId) {
   const newTask = {
     id: taskId || uuidv4(),
     text: task,
-    status: 'in_progress',
+    status: 'backlog',
     assignedAt: new Date().toISOString()
   };
   agent.tasks.push(newTask);

@@ -43,7 +43,7 @@ export function createSwarmApiMcpServer(agentManager) {
         status: a.status,
         project: a.project || null,
         currentTask: a.currentTask || null,
-        pendingTasks: (a.todoList || []).filter(t => t.status === 'pending').length,
+        openTasks: (a.todoList || []).filter(t => t.status !== 'done').length,
         totalMessages: a.metrics?.totalMessages || 0,
       }));
 
@@ -153,7 +153,7 @@ export function createSwarmApiMcpServer(agentManager) {
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
       task: z.string().describe('The task description'),
       project: z.string().optional().describe('Optional project to assign the task to'),
-      status: z.enum(['backlog', 'pending']).optional().describe('Initial task status: "backlog" (default, agent won\'t auto-pick) or "pending" (agent picks up immediately)'),
+      status: z.string().optional().describe('Initial task status (any workflow column ID, defaults to "backlog")'),
       board_id: z.string().optional().describe('Board UUID to place the task on. If omitted and only one board exists, it is used automatically. Use list_boards to discover board IDs.'),
     },
     async ({ agent_id, agent_name, task, project, status, board_id }) => {

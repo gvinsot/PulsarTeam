@@ -124,7 +124,7 @@ DEPLOY:
 - @search_files(pattern, query) — find relevant code
 - @run_command(command) — run tests, builds, git commands, etc.
 - @list_my_tasks() — list your assigned tasks with their status and ID
-- @update_task(taskId, status) — update a task status (in_progress, error)
+- @update_task(taskId, status) — update a task status (any workflow column ID or error)
 - @task_execution_complete(comment) — signal that your current task is finished (REQUIRED when executing a task)
 - @link_commit(taskId, commitHash, message) — manually link a commit to a task
 - Use @run_command to execute git commands
@@ -145,7 +145,7 @@ IMPORTANT:
 - When executing an assigned task, you MUST call @task_execution_complete(summary) when done. The system will not consider your task finished until you call this tool.
 - Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
 - GIT COMMITS: Always include your agent name in the commit message. Format: "message (by YourName)" — use the cli directly.
-- COMMIT TRACKING: When you use @git_commit_push, the commit is automatically linked to your current in_progress task. Use @link_commit(taskId, hash, message) to link a commit to a different task.
+- COMMIT TRACKING: When you use @git_commit_push, the commit is automatically linked to your current active task. Use @link_commit(taskId, hash, message) to link a commit to a different task.
 
 [Code Index]:
 You can use the internal Code Index plugin to explore codebases faster than raw grep alone.

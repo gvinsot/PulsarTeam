@@ -52,12 +52,11 @@ export default function ProjectsView({ agents = [], onSelectProject }) {
     for (const [, p] of projectMap) {
       const total = p.tasks.length;
       const done = p.tasks.filter(t => t.status === 'done').length;
-      const inProgress = p.tasks.filter(t => t.status === 'in_progress').length;
-      const pending = p.tasks.filter(t => t.status === 'pending').length;
-      const backlog = p.tasks.filter(t => t.status === 'backlog').length;
+      const active = p.tasks.filter(t => !['done', 'error', 'backlog'].includes(t.status || 'backlog')).length;
+      const waiting = p.tasks.filter(t => ['error', 'backlog'].includes(t.status || 'backlog')).length;
       const bugs = p.tasks.filter(t => (t.type || 'bug') === 'bug').length;
       const features = p.tasks.filter(t => t.type === 'feature').length;
-      p.stats = { total, done, inProgress, pending, backlog, bugs, features, completion: total ? Math.round((done / total) * 100) : 0 };
+      p.stats = { total, done, active, waiting, bugs, features, completion: total ? Math.round((done / total) * 100) : 0 };
     }
 
     let result = Array.from(projectMap.values());
@@ -160,7 +159,7 @@ export default function ProjectsView({ agents = [], onSelectProject }) {
               </div>
               <div className="flex items-center gap-1.5">
                 <Activity size={12} className="text-yellow-400" />
-                <span className="text-dark-300">{p.stats.inProgress} active</span>
+                <span className="text-dark-300">{p.stats.active} active</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <Clock size={12} className="text-green-400" />

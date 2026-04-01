@@ -288,7 +288,7 @@ export function agentRoutes(agentManager) {
       }
 
       // When no status is provided, resolve default from the board's first column
-      // so the task lands in the correct column (not hardcoded 'pending')
+      // so the task lands in the correct column
       if (!resolvedStatus && resolvedBoardId) {
         try {
           const wf = await getWorkflowForBoard(resolvedBoardId);
@@ -318,7 +318,11 @@ export function agentRoutes(agentManager) {
     // Capture old status before any update
     const agent = agentManager.agents.get(req.params.id);
     const oldTask = agent?.todoList?.find(t => t.id === req.params.taskId);
-    const oldStatus = oldTask?.status;
+
+    // Block status change on tasks being executed — user must stop the agent first
+    if (status && oldTask?.startedAt && agentManager._isActiveTaskStatus(oldTask.status) && agent?.status === 'busy') {
+      return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
+    }
 
     // Handle recurrence update
     if (recurrence !== undefined && oldTask) {
@@ -351,11 +355,6 @@ export function agentRoutes(agentManager) {
       task = agentManager.toggleTask(req.params.id, req.params.taskId);
     }
     if (!task) return res.status(404).json({ error: 'Not found' });
-    // If task moved OUT of in_progress, stop the agent
-    if (oldStatus === 'in_progress' && status && status !== 'in_progress' && agent?.status === 'busy') {
-      console.log(`\u{1F6D1} [Task] Task moved from in_progress to ${status} — stopping agent "${agent.name}"`);
-      agentManager.stopAgent(req.params.id);
-    }
     res.json(task);
     } catch (err) {
       console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
@@ -376,18 +375,14 @@ export function agentRoutes(agentManager) {
   });
 
   router.delete('/:id/tasks/:taskId', requireAgentAccess, (req, res) => {
-    // Check if deleting an in_progress task
     const agent = agentManager.agents.get(req.params.id);
     const taskToDelete = agent?.todoList?.find(t => t.id === req.params.taskId);
-    const wasInProgress = taskToDelete?.status === 'in_progress';
-    
+    // Block deletion of tasks being executed — user must stop the agent first
+    if (taskToDelete?.startedAt && agentManager._isActiveTaskStatus(taskToDelete.status) && agent?.status === 'busy') {
+      return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
+    }
     const success = agentManager.deleteTask(req.params.id, req.params.taskId);
     if (!success) return res.status(404).json({ error: 'Not found' });
-    // If deleted task was in_progress, stop the agent
-    if (wasInProgress && agent?.status === 'busy') {
-      console.log(`\u{1F6D1} [Task] Task deleted while in_progress \u2014 stopping agent "${agent.name}"`);
-      agentManager.stopAgent(req.params.id);
-    }
     res.json({ success: true });
   });
 

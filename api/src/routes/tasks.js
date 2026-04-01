@@ -14,15 +14,15 @@ router.put('/:id', requireAuth, async (req, res) => {
     // Update allowed fields
     const { title, description, column, agentId, type, priority, dueDate } = req.body;
     if (title !== undefined)       task.title       = title;
-    if (description !== undefined) task.description = description;
-    if (column !== undefined)      task.column      = column;
-    if (agentId !== undefined)     task.agentId     = agentId;
-    if (type !== undefined)        task.type        = type;
+    if (description !== undefined) task.text        = description;
+    if (column !== undefined)      task.status      = column;
+    if (agentId !== undefined)     task.assignee    = agentId;
+    if (type !== undefined)        task.taskType    = type;
     if (priority !== undefined)    task.priority    = priority;
     if (dueDate !== undefined)     task.dueDate     = dueDate;
     task.updatedAt = new Date().toISOString();
 
-    mgr.saveTasksToDb();
+    mgr.saveTaskDirectly(task);
     mgr._emit('task:updated', task);
     res.json(task);
   } catch (err) {
@@ -34,7 +34,9 @@ router.put('/:id', requireAuth, async (req, res) => {
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    const ok = mgr.deleteTask(req.params.id);
+    const task = mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const ok = mgr.deleteTask(task.agentId, req.params.id);
     if (!ok) return res.status(404).json({ error: 'Task not found' });
     res.json({ ok: true });
   } catch (err) {

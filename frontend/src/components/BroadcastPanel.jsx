@@ -266,12 +266,16 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
     } catch (err) { console.error('Failed to clear tasks:', err); }
   }, [agents, onRefresh]);
 
-  const handleClearAllInProgressTasks = useCallback(async () => {
+  const handleClearAllActiveTasks = useCallback(async () => {
     if (!agents.length) return;
     try {
-      await Promise.all(agents.map(a => api.clearTasksByStatus?.(a.id, 'in_progress')));
+      // Clear all non-done, non-error, non-backlog tasks for every agent
+      for (const a of agents) {
+        const activeTasks = (a.todoList || []).filter(t => !['done', 'error', 'backlog'].includes(t.status));
+        await Promise.all(activeTasks.map(t => api.deleteTask(a.id, t.id)));
+      }
       if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to clear in-progress tasks:', err); }
+    } catch (err) { console.error('Failed to clear active tasks:', err); }
   }, [agents, onRefresh]);
 
   const handleStopAll = useCallback(() => {
@@ -719,12 +723,12 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <ListX className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Clear In-Progress Tasks</span>
+                      <span className="text-sm font-medium text-dark-200">Clear Active Tasks</span>
                     </div>
-                    <p className="text-xs text-dark-500">Remove in-progress tasks for every agent</p>
+                    <p className="text-xs text-dark-500">Remove active tasks for every agent</p>
                   </div>
                   <ConfirmButton
-                    onConfirm={handleClearAllInProgressTasks}
+                    onConfirm={handleClearAllActiveTasks}
                     disabled={agents.length === 0}
                     icon={ListX}
                     label="Clear"

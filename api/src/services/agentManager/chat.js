@@ -1,7 +1,7 @@
 // ─── Chat: sendMessage, _cleanMarkdown, _buildSystemPrompt, _assembleMessages,
 //     _streamAndContinue, _processLeaderCommands, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
-import { saveAgent } from '../database.js';
+import { saveAgent, saveTaskToDb } from '../database.js';
 import { TOOL_DEFINITIONS } from '../agentTools.js';
 import { getProjectGitUrl } from '../githubProjects.js';
 import { simplifyMcpSchema } from './helpers.js';
@@ -127,11 +127,11 @@ export const chatMethods = {
         if (streamCallback) streamCallback(`\n⏸️ *${err.message}. Task will auto-retry at ${err.resetLabel} + 5min.*\n`);
         this.addActionLog(id, 'error', `Rate limit reached — resets at ${err.resetLabel}`, err.message);
 
-        const inProgressTask = agent.todoList?.find(t => t.status === 'in_progress');
-        if (inProgressTask) {
-          inProgressTask.error = `Rate limit reached — resets at ${err.resetLabel}`;
-          this.setTaskStatus(id, inProgressTask.id, 'error', { skipAutoRefine: true, by: 'rate-limit' });
-          console.log(`🕐 [Rate Limit] Task "${inProgressTask.text.slice(0, 60)}" set to error`);
+        const activeTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
+        if (activeTask) {
+          activeTask.error = `Rate limit reached — resets at ${err.resetLabel}`;
+          this.setTaskStatus(id, activeTask.id, 'error', { skipAutoRefine: true, by: 'rate-limit' });
+          console.log(`🕐 [Rate Limit] Task "${activeTask.text.slice(0, 60)}" set to error`);
         }
 
         setTimeout(() => {
@@ -330,7 +330,7 @@ export const chatMethods = {
     if (agent.todoList.length > 0) {
       systemContent += '\n\n--- Current Task List ---\n';
       for (const task of agent.todoList) {
-        const mark = task.status === 'done' ? 'x' : task.status === 'in_progress' ? '~' : task.status === 'error' ? '!' : ' ';
+        const mark = task.status === 'done' ? 'x' : this._isActiveTaskStatus(task.status) ? '~' : task.status === 'error' ? '!' : ' ';
         systemContent += `- [${mark}] (${task.id.slice(0, 8)}) ${task.text}\n`;
       }
     }
@@ -528,16 +528,6 @@ export const chatMethods = {
             const createdTask = this.addTask(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null, { type: 'agent', name: agent.name, id });
 
             const promise = this._enqueueAgentTask(targetAgent.id, async () => {
-              if (createdTask) {
-                const t = targetAgent.todoList.find(t => t.id === createdTask.id);
-                if (t) {
-                  t.status = 'in_progress';
-                  t.startedAt = new Date().toISOString();
-                  saveAgent(targetAgent);
-                  this._emit('agent:updated', this._sanitize(targetAgent));
-                }
-              }
-
               if (streamCallback) streamCallback(`\n\n--- \uD83D\uDCE8 Delegating to ${targetAgent.name} ---\n`);
 
               this._emit('agent:stream:start', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null });
@@ -561,7 +551,7 @@ export const chatMethods = {
                 if (t) {
                   t.status = 'done';
                   t.completedAt = new Date().toISOString();
-                  saveAgent(targetAgent);
+                  saveTaskToDb({ ...t, agentId: targetAgent.id });
                   this._emit('agent:updated', this._sanitize(targetAgent));
                 }
               }
@@ -576,7 +566,7 @@ export const chatMethods = {
                   t.status = 'error';
                   t.error = err.message;
                   t.completedAt = new Date().toISOString();
-                  saveAgent(targetAgent);
+                  saveTaskToDb({ ...t, agentId: targetAgent.id });
                   this._emit('agent:updated', this._sanitize(targetAgent));
                 }
               }
@@ -801,17 +791,17 @@ export const chatMethods = {
         continue;
       }
       const todoList = targetAgent.todoList || [];
-      const pendingTasks = todoList.filter(t => t.status === 'pending' || t.status === 'error').length;
-      const inProgressTasks = todoList.filter(t => t.status === 'in_progress').length;
+      const waitingTasks = todoList.filter(t => !this._isActiveTaskStatus(t.status) && t.status !== 'done').length;
+      const activeTasksCount = todoList.filter(t => this._isActiveTaskStatus(t.status)).length;
       const doneTasks = todoList.filter(t => t.status === 'done').length;
       const totalTasks = todoList.length;
       const msgCount = (targetAgent.conversationHistory || []).length;
       const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(targetAgent.id) : false;
-      const inProgressTask = todoList.find(t => t.status === 'in_progress');
+      const activeTask = todoList.find(t => this._isActiveTaskStatus(t.status));
       const currentTaskInfo = targetAgent.currentTask
         ? targetAgent.currentTask.slice(0, 120) + (targetAgent.currentTask.length > 120 ? '...' : '')
-        : inProgressTask
-          ? inProgressTask.text.slice(0, 120) + (inProgressTask.text.length > 120 ? '...' : '')
+        : activeTask
+          ? activeTask.text.slice(0, 120) + (activeTask.text.length > 120 ? '...' : '')
           : 'none';
       const projectAssignedAt = targetAgent.projectChangedAt
         ? new Date(targetAgent.projectChangedAt).toLocaleString()
@@ -827,16 +817,16 @@ export const chatMethods = {
         `Current task: ${currentTaskInfo}`,
         `Provider: ${targetAgent.provider || 'unknown'}/${targetAgent.model || 'unknown'}`,
         `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
-        `Tasks: ${inProgressTasks} in-progress, ${pendingTasks} pending, ${doneTasks} done / ${totalTasks} total`,
+        `Tasks: ${activeTasksCount} active, ${waitingTasks} waiting, ${doneTasks} done / ${totalTasks} total`,
         `Messages: ${msgCount}`,
         `Last active: ${targetAgent.metrics?.lastActiveAt || 'never'}`,
         `Errors: ${targetAgent.metrics?.errors || 0}`,
       ];
-      const activeTasks = todoList.filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error');
+      const activeTasks = todoList.filter(t => t.status !== 'done');
       if (activeTasks.length > 0) {
         lines.push(`Active tasks:`);
         for (const t of activeTasks.slice(0, 10)) {
-          const mark = t.status === 'in_progress' ? '~' : t.status === 'error' ? '!' : ' ';
+          const mark = this._isActiveTaskStatus(t.status) ? '~' : t.status === 'error' ? '!' : ' ';
           lines.push(`  [${mark}] ${t.text.slice(0, 100)}${t.text.length > 100 ? '...' : ''}`);
         }
         if (activeTasks.length > 10) lines.push(`  ... and ${activeTasks.length - 10} more`);
@@ -873,12 +863,12 @@ export const chatMethods = {
       const lines = enabled.map(a => {
         const projectTag = a.project ? `project=${a.project}` : 'NO PROJECT';
         const taskCount = (a.todoList || []).filter(t => t.status !== 'done').length;
-        const inProgressTask = (a.todoList || []).find(t => t.status === 'in_progress');
+        const currentActiveTask = (a.todoList || []).find(t => this._isActiveTaskStatus(t.status));
         const taskCountInfo = taskCount > 0 ? ` tasks=${taskCount}` : '';
         const taskInfo = a.currentTask
           ? ` working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
-          : inProgressTask
-            ? ` working on: "${inProgressTask.text.slice(0, 80)}${inProgressTask.text.length > 80 ? '...' : ''}"`
+          : currentActiveTask
+            ? ` working on: "${currentActiveTask.text.slice(0, 80)}${currentActiveTask.text.length > 80 ? '...' : ''}"`
             : '';
         return `- ${a.name} [${a.status}] [${projectTag}] (${a.role || 'worker'})${taskCountInfo}${taskInfo}`;
       });
@@ -1154,16 +1144,6 @@ export const chatMethods = {
         const createdTask = this.addTask(targetAgent.id, `[From ${agent.name}] ${delegation.task}`, agent.project || null, { type: 'agent', name: agent.name, id });
 
         const promise = this._enqueueAgentTask(targetAgent.id, async () => {
-          if (createdTask) {
-            const t = targetAgent.todoList.find(t => t.id === createdTask.id);
-            if (t) {
-              t.status = 'in_progress';
-              t.startedAt = new Date().toISOString();
-              saveAgent(targetAgent);
-              this._emit('agent:updated', this._sanitize(targetAgent));
-            }
-          }
-
           if (streamCallback) streamCallback(`\n\n--- \uD83D\uDCE8 Delegating to ${targetAgent.name} ---\n`);
 
           this._emit('agent:stream:start', { agentId: targetAgent.id, agentName: targetAgent.name, project: targetAgent.project || null });
@@ -1187,7 +1167,7 @@ export const chatMethods = {
             if (t) {
               t.status = 'done';
               t.completedAt = new Date().toISOString();
-              saveAgent(targetAgent);
+              saveTaskToDb({ ...t, agentId: targetAgent.id });
               this._emit('agent:updated', this._sanitize(targetAgent));
             }
           }
@@ -1201,7 +1181,7 @@ export const chatMethods = {
               t.status = 'error';
               t.error = err.message;
               t.completedAt = new Date().toISOString();
-              saveAgent(targetAgent);
+              saveTaskToDb({ ...t, agentId: targetAgent.id });
               this._emit('agent:updated', this._sanitize(targetAgent));
             }
           }

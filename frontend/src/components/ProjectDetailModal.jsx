@@ -23,9 +23,9 @@ export default function ProjectDetailModal({ project, onClose }) {
 
   const { name, agents, tasks, stats } = project;
 
+  const INACTIVE_SET = new Set(['done', 'error', 'backlog']);
   const tasksByStatus = {
-    in_progress: tasks.filter(t => t.status === 'in_progress'),
-    pending: tasks.filter(t => t.status === 'pending'),
+    active: tasks.filter(t => !INACTIVE_SET.has(t.status || 'backlog')),
     backlog: tasks.filter(t => t.status === 'backlog'),
     done: tasks.filter(t => t.status === 'done'),
     error: tasks.filter(t => t.status === 'error'),
@@ -122,17 +122,13 @@ export default function ProjectDetailModal({ project, onClose }) {
               <p className="text-dark-500 text-sm">No tasks in this project</p>
             ) : (
               <div className="space-y-4">
-                {/* In Progress */}
-                {tasksByStatus.in_progress.length > 0 && (
-                  <TaskGroup label="In Progress" tasks={tasksByStatus.in_progress} icon={<Activity size={14} className="text-yellow-400" />} />
+                {/* Active */}
+                {tasksByStatus.active.length > 0 && (
+                  <TaskGroup label="Active" tasks={tasksByStatus.active} icon={<Activity size={14} className="text-yellow-400" />} />
                 )}
                 {/* Error */}
                 {tasksByStatus.error.length > 0 && (
                   <TaskGroup label="Error" tasks={tasksByStatus.error} icon={<AlertCircle size={14} className="text-red-400" />} />
-                )}
-                {/* Pending */}
-                {tasksByStatus.pending.length > 0 && (
-                  <TaskGroup label="Pending" tasks={tasksByStatus.pending} icon={<Clock size={14} className="text-orange-400" />} />
                 )}
                 {/* Backlog */}
                 {tasksByStatus.backlog.length > 0 && (

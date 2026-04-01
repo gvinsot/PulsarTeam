@@ -460,10 +460,10 @@ export function setupSocketHandlers(io, agentManager) {
           case 'agent_status': {
             const target = findAgent(args.agent_name);
             if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
-            const pending = (target.todoList || []).filter(t => t.status === 'pending' || t.status === 'error').length;
+            const notDone = (target.todoList || []).filter(t => t.status !== 'done').length;
             const total = (target.todoList || []).length;
             const msgs = (target.conversationHistory || []).length;
-            result = `${target.name}: status=${target.status}, role=${target.role || 'worker'}, project=${target.project || 'none'}, tasks=${pending} pending/${total} total, messages=${msgs}`;
+            result = `${target.name}: status=${target.status}, role=${target.role || 'worker'}, project=${target.project || 'none'}, tasks=${notDone} open/${total} total, messages=${msgs}`;
             break;
           }
           case 'get_available_agent': {

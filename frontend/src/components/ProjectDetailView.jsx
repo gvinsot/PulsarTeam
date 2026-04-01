@@ -65,11 +65,12 @@ export default function ProjectDetailView() {
   }
 
   // Task stats
+  const INACTIVE = new Set(['done', 'error', 'backlog']);
   const taskStats = {
     total: tasks.length,
     done: tasks.filter(t => t.status === 'done').length,
-    inProgress: tasks.filter(t => t.status === 'in_progress').length,
-    pending: tasks.filter(t => t.status !== 'done' && t.status !== 'in_progress').length,
+    active: tasks.filter(t => !INACTIVE.has(t.status || 'backlog')).length,
+    waiting: tasks.filter(t => INACTIVE.has(t.status || 'backlog') && t.status !== 'done').length,
   };
 
   return (
@@ -98,7 +99,7 @@ export default function ProjectDetailView() {
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard icon={<CheckCircle size={18} />} label="Completed" value={taskStats.done} color="text-green-400" />
-        <StatCard icon={<Activity size={18} />} label="In Progress" value={taskStats.inProgress} color="text-blue-400" />
+        <StatCard icon={<Activity size={18} />} label="Active" value={taskStats.active} color="text-blue-400" />
         <StatCard icon={<Clock size={18} />} label="Pending" value={taskStats.pending} color="text-yellow-400" />
         <StatCard icon={<Users size={18} />} label="Agents" value={agents.length} color="text-purple-400" />
       </div>
@@ -124,7 +125,7 @@ export default function ProjectDetailView() {
                     </div>
                   </div>
                   <span className="text-xs text-gray-500">
-                    {(agent.todoList || []).filter(t => t.status === 'in_progress').length} active
+                    {(agent.todoList || []).filter(t => !['done', 'error', 'backlog'].includes(t.status || 'backlog')).length} active
                   </span>
                 </div>
               ))}
@@ -247,7 +248,7 @@ function StatusDot({ status }) {
 
 function TaskStatusIcon({ status }) {
   if (status === 'done') return <CheckCircle size={14} className="text-green-400" />;
-  if (status === 'in_progress') return <Activity size={14} className="text-blue-400 animate-pulse" />;
+  if (!['done', 'error', 'backlog'].includes(status)) return <Activity size={14} className="text-blue-400 animate-pulse" />;
   if (status === 'error') return <AlertCircle size={14} className="text-red-400" />;
   return <Clock size={14} className="text-gray-400" />;
 }

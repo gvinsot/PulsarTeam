@@ -32,8 +32,6 @@ function SourceBadge({ source }) {
 
 const STATUS_META = {
   backlog: { label: 'Backlog', color: '#a855f7' },
-  pending: { label: 'Pending', color: '#f59e0b' },
-  in_progress: { label: 'In Progress', color: '#3b82f6' },
   error: { label: 'Error', color: '#ef4444' },
   done: { label: 'Completed', color: '#22c55e' }
 };
@@ -77,7 +75,7 @@ export default function TaskList({
   onExecuteTask,
   onExecuteAllTasks
 }) {
-  const pendingCount = tasks.filter(t => t.status === 'pending' || t.status === 'error').length;
+  const openCount = tasks.filter(t => t.status !== 'done').length;
 
   return (
     <div className="task-list">
@@ -85,10 +83,10 @@ export default function TaskList({
         <h4 style={{ margin: 0 }}>Tasks</h4>
         <button
           onClick={onExecuteAllTasks}
-          disabled={pendingCount === 0}
-          title={pendingCount === 0 ? 'No pending tasks' : `Execute ${pendingCount} pending task(s)`}
+          disabled={openCount === 0}
+          title={openCount === 0 ? 'No open tasks' : `Execute ${openCount} task(s)`}
         >
-          Execute pending ({pendingCount})
+          Execute all ({openCount})
         </button>
       </div>
 
@@ -98,7 +96,7 @@ export default function TaskList({
         <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0 0', display: 'grid', gap: 8 }}>
           {tasks.map(task => {
             const isDone = task.status === 'done';
-            const isInProgress = task.status === 'in_progress';
+            const isActive = !['done', 'error', 'backlog'].includes(task.status || 'backlog');
             return (
               <li
                 key={task.id}
@@ -148,9 +146,9 @@ export default function TaskList({
                     <button
                       onClick={() => onExecuteTask(task.id)}
                       disabled={false}
-                      title={isInProgress ? 'Resume this task' : 'Execute this task'}
+                      title={isActive ? 'Resume this task' : 'Execute this task'}
                     >
-                      {isInProgress ? '⏯' : '▶'}
+                      {isActive ? '⏯' : '▶'}
                     </button>
                   </div>
                 </div>

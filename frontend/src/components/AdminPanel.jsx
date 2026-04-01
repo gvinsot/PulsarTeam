@@ -691,6 +691,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                 <div className="relative">
                   <label className="block text-xs text-dark-400 mb-1">API Key</label>
                   <input type={showLlmApiKey[llmForm.id || '_new'] ? 'text' : 'password'}
+                    autoComplete="off"
                     value={llmForm.apiKey || ''} onChange={e => setLlmForm(f => ({ ...f, apiKey: e.target.value }))}
                     className="w-full px-3 py-2 pr-10 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                     placeholder="API key for this LLM" />

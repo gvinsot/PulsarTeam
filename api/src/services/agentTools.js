@@ -36,7 +36,7 @@ You can interact with project files using these commands. Use the exact format s
   Example: @list_my_tasks()
 
 @update_task(taskId, status, details) - Update the status of one of your tasks
-  The status can be any workflow column ID (e.g., backlog, pending, code, build, test, deploy, done) or a system status (in_progress, error).
+  The status can be any workflow column ID (e.g., backlog, pending, code, build, test, deploy, done) or a system status (error).
   The details parameter is optional. When provided, the details text is appended to the task description.
   Use this to move a task between workflow columns, optionally adding context (e.g., error details, build output).
   Example: @update_task(abc-123, build)
@@ -52,7 +52,7 @@ You can interact with project files using these commands. Use the exact format s
   Example: @report_error(Cannot compile: missing dependency 'express'.)
 
 @git_commit_push(message) - Stage all changes, commit with the given message, and push to remote
-  Commits are automatically linked to your current in_progress task.
+  Commits are automatically linked to your current active task.
   Example: @git_commit_push(feat: add user authentication)
 
 @link_commit(taskId, commitHash, message) - Associate a commit with a specific task

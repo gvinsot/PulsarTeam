@@ -86,7 +86,7 @@ function addAgentTask(agentId, text, taskId) {
   const task = {
     id: taskId || uuidv4(),
     text,
-    status: 'pending',
+    status: 'backlog',
     createdAt: new Date().toISOString()
   };
   agent.tasks.push(task);
@@ -150,7 +150,7 @@ function addGlobalTask(text, project, source) {
   const task = {
     id: uuidv4(),
     text,
-    status: 'pending',
+    status: 'backlog',
     project: project || null,
     source: source || null,
     createdAt: new Date().toISOString()

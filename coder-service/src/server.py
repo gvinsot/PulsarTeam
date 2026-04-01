@@ -50,6 +50,7 @@ TIMEOUT = int(os.getenv("TIMEOUT", "600"))
 API_KEY = os.getenv("API_KEY", "change-me-in-production")
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "/projects")
 ALLOWED_TOOLS = os.getenv("CLAUDE_ALLOWED_TOOLS", "")
+DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 # Working directory for Claude Code CLI. Use /app (not PROJECTS_DIR) to avoid
 # loading stale CLAUDE.md files from mounted project volumes.
 CLAUDE_CWD = "/app"
@@ -374,7 +375,6 @@ def _get_subprocess_kwargs(agent_user: dict = None) -> dict:
 
 # --- Authentication Management (OAuth PKCE) -----------------------------------
 
-DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 TOKEN_FILE = os.path.join(DATA_DIR, "oauth_token")
 TOKEN_JSON_FILE = os.path.join(DATA_DIR, "oauth_token.json")
 CREDENTIALS_FILE = os.path.expanduser("~/.claude/.credentials.json")

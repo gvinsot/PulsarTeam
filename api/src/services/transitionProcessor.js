@@ -1,5 +1,5 @@
 import { getSettings, getWorkflowForBoard } from './configManager.js';
-import { saveAgent } from './database.js';
+import { saveAgent, saveTaskToDb } from './database.js';
 
 // Lock to prevent concurrent execution of the same task (lockKey → timestamp)
 // Uses a Map with TTL to prevent permanent deadlocks from crashed transitions.
@@ -34,12 +34,13 @@ function findAgentByRole(agentManager, role, ownerId = null) {
       && (!ownerId || !a.ownerId || a.ownerId === ownerId)
   );
   console.log(`[Workflow] findAgentByRole: role="${role}" ownerId="${ownerId}" total=${agents.length} matching=${matching.length} names=[${matching.map(a => `${a.name}(owner:${a.ownerId})`).join(', ')}]`);
-  // Only return idle agents that don't already have an in_progress task
+  // Only return idle agents that don't already have an active task
+  const INACTIVE = new Set(['done', 'backlog', 'error']);
   return matching.find(a => {
     if (a.status !== 'idle') return false;
-    const hasInProgress = (a.todoList || []).some(t => t.status === 'in_progress');
-    if (hasInProgress) {
-      console.log(`[Workflow] Skipping agent "${a.name}" - already has in_progress task`);
+    const hasActive = (a.todoList || []).some(t => !INACTIVE.has(t.status));
+    if (hasActive) {
+      console.log(`[Workflow] Skipping agent "${a.name}" - already has an active task`);
       return false;
     }
     return true;
@@ -165,7 +166,7 @@ export async function processTransition(task, agentManager, io) {
         });
         console.log(`[Workflow] Updated assignee: "${previousAssignee || 'none'}" → "${agent.id}" (${agent.name}) for task "${task.text?.slice(0, 60)}"`);
       }
-      saveAgent(creatorAgentForFlag);
+      saveTaskToDb({ ...actualTaskForFlag, agentId: task.agentId });
       io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTaskForFlag });
     }
 
@@ -235,10 +236,8 @@ export async function processTransition(task, agentManager, io) {
     let prompt;
     let messagePrefix;
     if (isExecution) {
-      // Execution mode: mark in_progress (only if not already), execute the task
-      if (task.status !== 'in_progress') {
-        agentManager.setTaskStatus(task.agentId, task.id, 'in_progress', { skipAutoRefine: true, by: agent.name });
-      }
+      // Execution mode: mark task as active if not already
+      // (no hardcoded status — workflow transitions handle the status change)
       if (instructions) {
         // When instructions are provided, behave like instructions mode — send structured context
         prompt = `You have been assigned instructions for the following task.
@@ -381,7 +380,7 @@ Execute the instructions above and update the task status accordingly.`;
       const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
       if (actualTask) {
         actualTask.error = err.message;
-        saveAgent(creatorAgent);
+        saveTaskToDb({ ...actualTask, agentId: task.agentId });
       }
     } catch (e) {
       console.error(`[Workflow] Failed to set status after error:`, e.message);

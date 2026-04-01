@@ -131,19 +131,19 @@ export const lifecycleMethods = {
     if (!agent) return null;
 
     const todoList = agent.todoList || [];
-    const pendingTasks = todoList.filter(t => t.status === 'pending').length;
-    const inProgressTasks = todoList.filter(t => t.status === 'in_progress').length;
+    const waitingTasks = todoList.filter(t => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
+    const activeTaskCount = todoList.filter(t => this._isActiveTaskStatus(t.status)).length;
     const doneTasks = todoList.filter(t => t.status === 'done').length;
     const errorTasks = todoList.filter(t => t.status === 'error').length;
     const totalTasks = todoList.length;
     const msgCount = (agent.conversationHistory || []).length;
     const hasSandbox = this.sandboxManager ? this.sandboxManager.hasSandbox(agent.id) : false;
 
-    const currentTaskEntry = todoList.find(t => t.status === 'in_progress');
+    const currentTaskEntry = todoList.find(t => this._isActiveTaskStatus(t.status));
     const currentTask = agent.currentTask || (currentTaskEntry ? currentTaskEntry.text : null);
 
     const activeTasks = todoList
-      .filter(t => t.status === 'in_progress' || t.status === 'pending' || t.status === 'error')
+      .filter(t => t.status !== 'done')
       .map(t => ({ id: t.id, text: t.text, status: t.status, startedAt: t.startedAt || null }));
 
     let projectDurationMs = null;
@@ -168,8 +168,8 @@ export const lifecycleMethods = {
       isLeader: agent.isLeader || false,
       sandbox: hasSandbox ? 'running' : 'not running',
       tasks: {
-        pending: pendingTasks,
-        inProgress: inProgressTasks,
+        waiting: waitingTasks,
+        active: activeTaskCount,
         done: doneTasks,
         error: errorTasks,
         total: totalTasks
@@ -619,7 +619,7 @@ export const lifecycleMethods = {
 
     if (agent.todoList) {
       for (const t of agent.todoList) {
-        if (t.status === 'in_progress') {
+        if (this._isActiveTaskStatus(t.status)) {
           t._executionStopped = true;
         }
       }
@@ -713,16 +713,16 @@ export const lifecycleMethods = {
       }
     }
 
-    // Find the current in_progress task for this agent
+    // Find the current active task for this agent
     let taskId = null;
     let taskTitle = null;
-    const ownTask = agent.todoList?.find(t => t.status === 'in_progress' && (!t.assignee || t.assignee === agentId));
+    const ownTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status) && (!t.assignee || t.assignee === agentId));
     if (ownTask) {
       taskId = ownTask.id;
       taskTitle = ownTask.text?.slice(0, 200) || null;
     } else {
       for (const [, otherAgent] of this.agents) {
-        const delegated = otherAgent.todoList?.find(t => t.status === 'in_progress' && t.assignee === agentId);
+        const delegated = otherAgent.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
         if (delegated) { taskId = delegated.id; taskTitle = delegated.text?.slice(0, 200) || null; break; }
       }
     }
@@ -891,7 +891,7 @@ export const lifecycleMethods = {
     if (agent.todoList && agent.todoList.length > 0) {
       instructions += '\n\n--- Current Task List ---\n';
       for (const task of agent.todoList) {
-        const mark = task.status === 'done' ? 'x' : task.status === 'in_progress' ? '~' : task.status === 'error' ? '!' : ' ';
+        const mark = task.status === 'done' ? 'x' : this._isActiveTaskStatus(task.status) ? '~' : task.status === 'error' ? '!' : ' ';
         instructions += `- [${mark}] ${task.text}\n`;
       }
     }
