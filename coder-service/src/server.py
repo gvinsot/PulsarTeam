@@ -64,7 +64,7 @@ SYSTEM_PROMPT = os.getenv("CLAUDE_SYSTEM_PROMPT", (
     "Be concise and provide actionable results."
 ))
 
-# ─── Per-Agent Linux User Isolation ──────────────────────────────────────────
+# --- Per-Agent Linux User Isolation ------------------------------------------
 import shutil
 
 _agent_user_lock = None  # Lazily initialized (asyncio.Lock needs a running event loop)
@@ -81,7 +81,7 @@ async def ensure_agent_user(agent_id: str) -> dict:
     home directories and override HOME/USER env vars. Claude Code CLI
     uses $HOME to find its config files, so this provides effective isolation.
     
-    Each agent has its OWN OAuth credentials — we only copy settings and
+    Each agent has its OWN OAuth credentials -- we only copy settings and
     onboarding files from the main coder user, NOT credentials.
     """
     if not agent_id:
@@ -102,7 +102,7 @@ async def ensure_agent_user(agent_id: str) -> dict:
             os.makedirs(agent_claude_dir, exist_ok=True)
             # Copy NON-credential config files from the main coder user
             coder_home = os.path.expanduser("~")
-            # 1. Settings (MCP servers config) — shared across agents
+            # 1. Settings (MCP servers config) -- shared across agents
             coder_settings = os.path.join(coder_home, ".claude", "settings.json")
             if os.path.exists(coder_settings):
                 shutil.copy2(coder_settings, os.path.join(agent_claude_dir, "settings.json"))
@@ -245,7 +245,7 @@ def _get_agent_env(agent_user: dict = None) -> dict:
         env["USER"] = agent_user["username"]
         env["LOGNAME"] = agent_user["username"]
         return env
-    # No agent — use global token (fallback for non-agent requests)
+    # No agent -- use global token (fallback for non-agent requests)
     return _get_claude_env()
 
 def _get_subprocess_kwargs(agent_user: dict = None) -> dict:
@@ -253,7 +253,7 @@ def _get_subprocess_kwargs(agent_user: dict = None) -> dict:
     return {}
 
 
-# ─── Authentication Management (OAuth PKCE) ───────────────────────────────────
+# --- Authentication Management (OAuth PKCE) -----------------------------------
 
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 TOKEN_FILE = os.path.join(DATA_DIR, "oauth_token")
@@ -718,7 +718,7 @@ def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] 
     return cmd
 
 
-# ─── Claude Code Execution ────────────────────────────────────────────────────
+# --- Claude Code Execution ----------------------------------------------------
 
 async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None) -> dict:
     """Execute a prompt via Claude Code CLI and return parsed result.
@@ -800,7 +800,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
     stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
     stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
-    # Detect auth errors — auto-trigger login flow or token refresh
+    # Detect auth errors -- auto-trigger login flow or token refresh
     combined = f"{stdout} {stderr}".lower()
     if "token has expired" in combined or ("authentication_error" in combined and "401" in combined):
         if agent_user:
@@ -842,7 +842,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
             return {
                 "status": "auth_required",
                 "output": "",
-                "error": f"Not authenticated. Open this URL: {login_url} — then send the verification code as your next message.",
+                "error": f"Not authenticated. Open this URL: {login_url} -- then send the verification code as your next message.",
                 "login_url": login_url,
             }
         return {
@@ -972,7 +972,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
             if not line:
                 continue
 
-            # Try to parse JSON first — auth checks on raw text cause false
+            # Try to parse JSON first -- auth checks on raw text cause false
             # positives when the CLI includes auth-related words inside normal
             # conversation events (e.g. <synthetic> model messages).
             is_json_event = False
@@ -983,7 +983,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
             except json.JSONDecodeError:
                 pass
 
-            # Detect auth errors — only on non-JSON lines (raw stderr),
+            # Detect auth errors -- only on non-JSON lines (raw stderr),
             # JSON events of type "system"/"error", or synthetic CLI messages
             # (model="<synthetic>").  Normal model responses are skipped to
             # avoid false positives when the conversation text mentions auth.
@@ -1047,7 +1047,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                     if login_url:
                         yield {
                             "type": "error",
-                            "content": f"Not authenticated. Open this URL: {login_url} — then send the verification code as your next message.",
+                            "content": f"Not authenticated. Open this URL: {login_url} -- then send the verification code as your next message.",
                             "login_url": login_url,
                         }
                     else:
@@ -1146,7 +1146,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
             yield {"type": "error", "content": stderr_text}
 
 
-# ─── Direct Code Execution (bypass Claude) ────────────────────────────────────
+# --- Direct Code Execution (bypass Claude) ------------------------------------
 
 MAX_OUTPUT = 2000
 
@@ -1191,7 +1191,7 @@ def execute_shell(code: str) -> str:
         return traceback.format_exc()[:MAX_OUTPUT]
 
 
-# ─── Security Helpers ─────────────────────────────────────────────────────────
+# --- Security Helpers ---------------------------------------------------------
 
 def extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
     if x_api_key:
@@ -1209,7 +1209,7 @@ def verify_api_key(api_key: Optional[str]):
     return api_key
 
 
-# ─── Request/Response Models ──────────────────────────────────────────────────
+# --- Request/Response Models --------------------------------------------------
 
 class MessageRequest(BaseModel):
     content: str
@@ -1260,7 +1260,7 @@ def _messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optiona
 
     Returns (prompt, system_prompt).
 
-    Claude Code CLI is stateless — each invocation starts a fresh session.
+    Claude Code CLI is stateless -- each invocation starts a fresh session.
     When the conversation contains tool-result continuations, we condense the
     history to avoid the model re-reading the original user request and
     restarting its reasoning from scratch.
@@ -1317,7 +1317,7 @@ def _messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optiona
     return prompt, system_prompt
 
 
-# ─── Auth Routes ──────────────────────────────────────────────────────────────
+# --- Auth Routes --------------------------------------------------------------
 
 @app.get("/auth/status")
 async def auth_status(
@@ -1402,7 +1402,7 @@ async def auth_login(
     }
 
 
-# ─── Per-Agent Auth Routes ────────────────────────────────────────────────────
+# --- Per-Agent Auth Routes ----------------------------------------------------
 
 # Per-agent pending OAuth flow state: { agent_id: { code_verifier, state, auth_url } }
 _agent_oauth_flows: dict[str, dict] = {}
@@ -1572,7 +1572,7 @@ async def agent_set_token(
     }
 
 
-# ─── Routes ───────────────────────────────────────────────────────────────────
+# --- Routes -------------------------------------------------------------------
 
 @app.get("/health")
 async def health_check():
@@ -1877,7 +1877,7 @@ async def openai_completions(
     }
 
 
-# ─── Lifespan ─────────────────────────────────────────────────────────────────
+# --- Lifespan -----------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
