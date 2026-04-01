@@ -81,7 +81,7 @@ async def ensure_agent_user(agent_id: str) -> dict:
     home directories and override HOME/USER env vars. Claude Code CLI
     uses $HOME to find its config files, so this provides effective isolation.
     
-    Each agent has its OWN OAuth credentials — we only copy settings and
+    Each agent has its OWN OAuth credentials - we only copy settings and
     onboarding files from the main coder user, NOT credentials.
     """
     if not agent_id:
@@ -102,7 +102,7 @@ async def ensure_agent_user(agent_id: str) -> dict:
             os.makedirs(agent_claude_dir, exist_ok=True)
             # Copy NON-credential config files from the main coder user
             coder_home = os.path.expanduser("~")
-            # 1. Settings (MCP servers config) — shared across agents
+            # 1. Settings (MCP servers config) - shared across agents
             coder_settings = os.path.join(coder_home, ".claude", "settings.json")
             if os.path.exists(coder_settings):
                 shutil.copy2(coder_settings, os.path.join(agent_claude_dir, "settings.json"))
