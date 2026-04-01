@@ -1590,9 +1590,9 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
         {onAddTask && (
           <button
             onClick={onAddTask}
-            className={`flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
+            className="flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs
               transition-all duration-150 flex-shrink-0
-              ${hovered || tasks.length === 0 ? 'opacity-100 text-dark-400 hover:text-indigo-400 hover:bg-dark-700/50' : 'opacity-0'}`}
+              text-dark-400 hover:text-indigo-400 hover:bg-dark-700/50"
           >
             <Plus className="w-3 h-3" /> Add task
           </button>
