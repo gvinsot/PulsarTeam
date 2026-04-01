@@ -7,4 +7,5 @@ devops/.env
 .claude/settings.local.json
 server/.data/
 .data/
+**/*.pyc
 **/__pycache__/
