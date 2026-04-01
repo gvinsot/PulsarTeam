@@ -79,10 +79,7 @@ export const tasksMethods = {
     saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
-    // Only trigger workflow transitions when the change comes from the system, not manual user drag & drop
-    if (!skipAutoRefine && status !== 'error' && by && by !== 'user') {
-      this._checkAutoRefine({ ...task, agentId }, { by });
-    }
+    if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;
   },
 
