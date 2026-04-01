@@ -404,7 +404,10 @@ export const chatMethods = {
       }
     }
 
-    if (!managesContext) {
+    if (managesContext) {
+      // Model manages its own context — send full history, no truncation
+      messages.push(...agent.conversationHistory);
+    } else {
       const summary = agent.conversationHistory.find(m => m.type === 'compaction-summary');
       const realMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
       if (summary) messages.push(summary);
