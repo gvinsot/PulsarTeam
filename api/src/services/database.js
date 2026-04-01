@@ -109,19 +109,7 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
 
       console.log('✅ Settings table ready');
 
-      // Create workflows table if not exists
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS workflows (
-          project TEXT PRIMARY KEY,
-          columns JSONB NOT NULL DEFAULT '[]',
-          transitions JSONB NOT NULL DEFAULT '[]',
-          version INTEGER NOT NULL DEFAULT 1,
-          created_at TIMESTAMPTZ DEFAULT NOW(),
-          updated_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `);
-
-      console.log('✅ Workflows table ready');
+      // (workflows table removed — workflow data now lives in boards.workflow)
 
       // Create users table if not exists
       await pool.query(`
@@ -157,16 +145,22 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS boards (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
           name TEXT NOT NULL DEFAULT 'My Board',
           workflow JSONB NOT NULL DEFAULT '{}',
           filters JSONB NOT NULL DEFAULT '{}',
           position INTEGER NOT NULL DEFAULT 0,
+          is_default BOOLEAN NOT NULL DEFAULT FALSE,
           created_at TIMESTAMPTZ DEFAULT NOW(),
           updated_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
       await pool.query('CREATE INDEX IF NOT EXISTS idx_boards_user ON boards(user_id)').catch(() => {});
+      // Migration: make user_id nullable & add is_default column for existing installs
+      await pool.query('ALTER TABLE boards ALTER COLUMN user_id DROP NOT NULL').catch(() => {});
+      await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE').catch(() => {});
+      // Ensure a single default board exists
+      await ensureDefaultBoard(pool);
       console.log('✅ Boards table ready');
 
       _dbConnected = true;
@@ -703,16 +697,79 @@ export async function deleteLlmConfig(id) {
   }
 }
 
+// ── Default board ────────────────────────────────────────────────────────────
+
+const DEFAULT_BOARD_WORKFLOW = {
+  columns: [
+    { id: 'idea', label: 'Ideas', color: '#a855f7' },
+    { id: 'backlog', label: 'Backlog', color: '#6b7280' },
+    { id: 'pending', label: 'Pending', color: '#3b82f6' },
+    { id: 'in_progress', label: 'In Progress', color: '#eab308' },
+    { id: 'done', label: 'Done', color: '#22c55e' },
+  ],
+  transitions: [
+    { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'product-manager', mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.' }] },
+    { from: 'backlog', trigger: 'on_enter', actions: [] },
+    { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: '' }] },
+    { from: 'in_progress', trigger: 'on_enter', actions: [] },
+    { from: 'done', trigger: 'on_enter', actions: [] },
+  ],
+  version: 1,
+};
+
+async function ensureDefaultBoard(p) {
+  try {
+    const existing = await p.query('SELECT id FROM boards WHERE is_default = TRUE LIMIT 1');
+    if (existing.rows.length > 0) return;
+
+    // Migrate from legacy workflows table if it exists
+    let workflow = DEFAULT_BOARD_WORKFLOW;
+    try {
+      const legacy = await p.query("SELECT columns, transitions, version FROM workflows WHERE project = '_default'");
+      if (legacy.rows.length > 0) {
+        const row = legacy.rows[0];
+        workflow = {
+          columns: row.columns || DEFAULT_BOARD_WORKFLOW.columns,
+          transitions: row.transitions || DEFAULT_BOARD_WORKFLOW.transitions,
+          version: row.version || 1,
+        };
+      }
+    } catch { /* workflows table may not exist */ }
+
+    await p.query(
+      `INSERT INTO boards (name, workflow, filters, position, is_default)
+       VALUES ('Default', $1::jsonb, '{}'::jsonb, 0, TRUE)`,
+      [JSON.stringify(workflow)]
+    );
+    console.log('✅ Default board created');
+  } catch (err) {
+    console.error('Failed to ensure default board:', err.message);
+  }
+}
+
+export async function getDefaultBoard() {
+  if (!pool) return null;
+  try {
+    const result = await pool.query(
+      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE is_default = TRUE LIMIT 1'
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to get default board:', err.message);
+    return null;
+  }
+}
+
 // ── Boards CRUD ──────────────────────────────────────────────────────────────
 
 export async function getAllBoards() {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.created_at, b.updated_at,
+      `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.created_at, b.updated_at,
               u.username, u.display_name
        FROM boards b LEFT JOIN users u ON b.user_id = u.id
-       ORDER BY u.username, b.position, b.created_at`
+       ORDER BY b.is_default DESC, u.username, b.position, b.created_at`
     );
     return result.rows;
   } catch (err) {
@@ -725,7 +782,7 @@ export async function getBoardsByUser(userId) {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      'SELECT id, user_id, name, workflow, filters, position, created_at, updated_at FROM boards WHERE user_id = $1 ORDER BY position, created_at',
+      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE user_id = $1 ORDER BY position, created_at',
       [userId]
     );
     return result.rows;
@@ -739,7 +796,7 @@ export async function getBoardById(id) {
   if (!pool) return null;
   try {
     const result = await pool.query(
-      'SELECT id, user_id, name, workflow, filters, position, created_at, updated_at FROM boards WHERE id = $1',
+      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE id = $1',
       [id]
     );
     return result.rows[0] || null;
@@ -761,7 +818,7 @@ export async function createBoard(userId, name, workflow = {}, filters = {}) {
     const result = await pool.query(
       `INSERT INTO boards (user_id, name, workflow, filters, position)
        VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
-       RETURNING id, user_id, name, workflow, filters, position, created_at, updated_at`,
+       RETURNING id, user_id, name, workflow, filters, position, is_default, created_at, updated_at`,
       [userId, name, JSON.stringify(workflow), JSON.stringify(filters), position]
     );
     return result.rows[0];
@@ -797,7 +854,7 @@ export async function updateBoard(id, fields) {
   try {
     const result = await pool.query(
       `UPDATE boards SET ${setClauses.join(', ')} WHERE id = $${idx}
-       RETURNING id, user_id, name, workflow, filters, position, created_at, updated_at`,
+       RETURNING id, user_id, name, workflow, filters, position, is_default, created_at, updated_at`,
       values
     );
     return result.rows[0] || null;

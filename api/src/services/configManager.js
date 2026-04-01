@@ -1,6 +1,6 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { getPool, getAllBoards, getBoardById } from './database.js';
+import { getPool, getAllBoards, getBoardById, getDefaultBoard } from './database.js';
 
 const DEFAULTS = {
   ideasAgent: '',
@@ -73,12 +73,12 @@ const DEFAULT_WORKFLOW = {
   version: 1,
 };
 
-export async function getWorkflow(project) {
-  // Primary: read from first board in the boards table (new multi-board system)
+export async function getWorkflow(_project) {
+  // Read from the default board
   try {
-    const boards = await getAllBoards();
-    if (boards.length > 0 && boards[0].workflow) {
-      const wf = boards[0].workflow;
+    const board = await getDefaultBoard();
+    if (board?.workflow) {
+      const wf = board.workflow;
       return {
         columns: wf.columns || DEFAULT_COLUMNS,
         transitions: wf.transitions || DEFAULT_TRANSITIONS,
@@ -86,30 +86,14 @@ export async function getWorkflow(project) {
       };
     }
   } catch (err) {
-    console.error('[ConfigManager] Failed to read workflow from boards:', err.message);
+    console.error('[ConfigManager] Failed to read default board workflow:', err.message);
   }
-
-  // Fallback: legacy workflows table (used until first board is created)
-  const pool = getPool();
-  if (!pool) return { ...DEFAULT_WORKFLOW };
-
-  try {
-    const result = await pool.query('SELECT columns, transitions, version FROM workflows WHERE project = $1', [project]);
-    if (result.rows.length === 0) return { ...DEFAULT_WORKFLOW };
-    const row = result.rows[0];
-    return {
-      columns: row.columns || DEFAULT_COLUMNS,
-      transitions: row.transitions || DEFAULT_TRANSITIONS,
-      version: row.version || 1,
-    };
-  } catch {
-    return { ...DEFAULT_WORKFLOW };
-  }
+  return { ...DEFAULT_WORKFLOW };
 }
 
 /**
  * Get workflow for a specific board.
- * Falls back to getWorkflow('_default') if boardId is null or board not found.
+ * Falls back to default board if boardId is null or board not found.
  */
 export async function getWorkflowForBoard(boardId) {
   if (!boardId) return getWorkflow('_default');
@@ -150,42 +134,4 @@ export async function getAllBoardWorkflows() {
     console.error('[ConfigManager] Failed to read all board workflows:', err.message);
     return [];
   }
-}
-
-export async function getAllWorkflows() {
-  const pool = getPool();
-  if (!pool) return {};
-
-  try {
-    const result = await pool.query('SELECT project, columns, transitions, version FROM workflows ORDER BY project');
-    const map = {};
-    for (const row of result.rows) {
-      map[row.project] = { columns: row.columns, transitions: row.transitions, version: row.version };
-    }
-    return map;
-  } catch {
-    return {};
-  }
-}
-
-export async function updateWorkflow(project, workflow) {
-  const pool = getPool();
-  if (!pool) throw new Error('Database not available');
-
-  const columns = JSON.stringify(workflow.columns || DEFAULT_COLUMNS);
-  const transitions = JSON.stringify(workflow.transitions || DEFAULT_TRANSITIONS);
-  const version = (workflow.version || 0) + 1;
-
-  await pool.query(
-    `INSERT INTO workflows (project, columns, transitions, version, updated_at)
-     VALUES ($1, $2::jsonb, $3::jsonb, $4, NOW())
-     ON CONFLICT (project) DO UPDATE SET
-       columns = $2::jsonb,
-       transitions = $3::jsonb,
-       version = $4,
-       updated_at = NOW()`,
-    [project, columns, transitions, version]
-  );
-
-  return { columns: workflow.columns, transitions: workflow.transitions, version };
 }

@@ -423,16 +423,9 @@ export const api = {
       body: JSON.stringify(patch)
     }).then(handleResponse),
 
-  // Workflow
+  // Workflow (read-only — default board workflow)
   getWorkflow: () =>
     fetch(`${API_BASE}/settings/general/workflow`, { headers: getHeaders() }).then(handleResponse),
-
-  updateWorkflow: (workflow) =>
-    fetch(`${API_BASE}/settings/general/workflow`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(workflow)
-    }).then(handleResponse),
 
   // Boards (per-user multi-board)
   getBoards: () =>

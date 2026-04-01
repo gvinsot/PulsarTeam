@@ -82,6 +82,7 @@ export function boardRoutes(agentManager) {
     try {
       const board = await getBoardById(req.params.id);
       if (!board) return res.status(404).json({ error: 'Board not found' });
+      if (board.is_default) return res.status(403).json({ error: 'Default board cannot be modified. Create your own board instead.' });
       if (board.user_id !== req.user.userId) return res.status(403).json({ error: 'Access denied' });
 
       const updated = await updateBoard(req.params.id, req.body);
@@ -96,6 +97,7 @@ export function boardRoutes(agentManager) {
     try {
       const board = await getBoardById(req.params.id);
       if (!board) return res.status(404).json({ error: 'Board not found' });
+      if (board.is_default) return res.status(403).json({ error: 'Default board workflow cannot be modified. Create your own board instead.' });
       if (board.user_id !== req.user.userId) return res.status(403).json({ error: 'Access denied' });
 
       const workflow = req.body;
@@ -121,6 +123,7 @@ export function boardRoutes(agentManager) {
     try {
       const board = await getBoardById(req.params.id);
       if (!board) return res.status(404).json({ error: 'Board not found' });
+      if (board.is_default) return res.status(403).json({ error: 'Default board cannot be deleted.' });
       if (board.user_id !== req.user.userId) return res.status(403).json({ error: 'Access denied' });
 
       await deleteBoard(req.params.id);

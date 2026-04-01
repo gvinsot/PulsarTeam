@@ -743,17 +743,19 @@ export class OpenAIProvider {
 
 // ─── vLLM Provider (OpenAI-compatible) ──────────────────────────────────────
 export class VLLMProvider {
-  constructor(baseUrl, model, apiKey, agentId = null) {
+  constructor(baseUrl, model, apiKey, agentId = null, ownerId = null) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.model = model;
     this.agentId = agentId;
+    this.ownerId = ownerId;
     const clientOpts = {
       apiKey: apiKey || 'dummy',
       baseURL: `${this.baseUrl}/v1`,
     };
-    if (agentId) {
-      clientOpts.defaultHeaders = { 'X-Agent-Id': agentId };
-    }
+    const headers = {};
+    if (agentId) headers['X-Agent-Id'] = agentId;
+    if (ownerId) headers['X-Owner-Id'] = ownerId;
+    if (Object.keys(headers).length) clientOpts.defaultHeaders = headers;
     this.client = new OpenAI(clientOpts);
   }
 
@@ -967,7 +969,8 @@ export function createProvider(config) {
         'http://coder-service:8000',
         config.model || 'claude-sonnet-4-20250514',
         config.apiKey || process.env.CODER_API_KEY || process.env.ANTHROPIC_API_KEY || '',
-        config.agentId || null
+        config.agentId || null,
+        config.ownerId || null
       );
     case 'mistral':
       return new MistralProvider(

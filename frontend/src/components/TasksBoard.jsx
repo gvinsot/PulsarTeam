@@ -2563,12 +2563,7 @@ export default function TasksBoard({ agents, onRefresh, user }) {
   }, [boards.length, activeBoardId]);
 
   const handleSaveWorkflow = useCallback(async (updated) => {
-    if (!activeBoardId) {
-      // Fallback: save to legacy workflow
-      const saved = await api.updateWorkflow(updated);
-      setFallbackWorkflow(saved);
-      return;
-    }
+    if (!activeBoardId) return;
     const updatedBoard = await api.updateBoardWorkflow(activeBoardId, updated);
     setBoards(prev => prev.map(b => b.id === activeBoardId ? updatedBoard : b));
   }, [activeBoardId]);

@@ -189,7 +189,8 @@ export const compactionMethods = {
         model: llmConfig.model,
         endpoint: llmConfig.endpoint,
         apiKey: llmConfig.apiKey,
-        agentId: agent.id
+        agentId: agent.id,
+        ownerId: agent.ownerId || null
       });
 
       const msgCount = toSummarize.length + (existingSummary ? 1 : 0);

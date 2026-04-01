@@ -444,7 +444,8 @@ export const chatMethods = {
       model: llmConfig.model,
       endpoint: llmConfig.endpoint,
       apiKey: llmConfig.apiKey,
-      agentId: id
+      agentId: id,
+      ownerId: agent.ownerId || null
     });
 
     let fullResponse = '';
