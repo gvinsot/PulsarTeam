@@ -219,9 +219,12 @@ export async function getAllAgents() {
   if (!pool) return [];
   
   try {
+    // Clean any leftover todoList from agent JSONB (tasks now live in the tasks table)
+    await pool.query(`UPDATE agents SET data = data - 'todoList' WHERE data ? 'todoList'`).catch(() => {});
+
     const result = await pool.query('SELECT data, owner_id FROM agents ORDER BY created_at');
     return result.rows.map(row => {
-      const agent = row.data;
+      const { todoList, ...agent } = row.data;
       // Ensure ownerId from the DB column is always present in the agent object
       if (row.owner_id && !agent.ownerId) {
         agent.ownerId = row.owner_id;
