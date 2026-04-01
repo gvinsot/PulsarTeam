@@ -384,7 +384,7 @@ Execute the instructions above and update the task status accordingly.`;
         // Execute without instructions: wait for agent to signal completion via @task_execution_complete
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'execute');
         console.log(`[Workflow] Execution response received for "${task.text.slice(0, 60)}" — waiting for task_execution_complete`);
-        await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, null, task.text);
+        await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, targetStatus, task.text);
       } else if (isDecide) {
         // Instructions mode: agent handles status changes itself via @update_task
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'decide');
