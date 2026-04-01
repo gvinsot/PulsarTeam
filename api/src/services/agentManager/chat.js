@@ -405,8 +405,19 @@ export const chatMethods = {
     }
 
     if (managesContext) {
-      // Model manages its own context — send full history, no truncation
-      messages.push(...agent.conversationHistory);
+      // Model manages its own context — only include history relevant to the current task.
+      // Find the active task and include messages from when it started.
+      const activeTask = (agent.todoList || []).find(t => this._isActiveTaskStatus(t.status) && t.startedAt);
+      if (activeTask) {
+        const taskStartTime = new Date(activeTask.startedAt).getTime();
+        const startIdx = agent.conversationHistory.findIndex(
+          m => m.timestamp && new Date(m.timestamp).getTime() >= taskStartTime
+        );
+        if (startIdx >= 0) {
+          messages.push(...agent.conversationHistory.slice(startIdx));
+        }
+      }
+      // If no active task, send no history — the agent starts fresh
     } else {
       const summary = agent.conversationHistory.find(m => m.type === 'compaction-summary');
       const realMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
