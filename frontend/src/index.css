@@ -20,17 +20,17 @@
 
 .light {
   color-scheme: light;
-  --dark-50: 2 6 23;
-  --dark-100: 15 23 42;
-  --dark-200: 30 41 59;
-  --dark-300: 71 85 105;
-  --dark-400: 100 116 139;
-  --dark-500: 148 163 184;
-  --dark-600: 203 213 225;
-  --dark-700: 226 232 240;
-  --dark-800: 249 250 251;
-  --dark-900: 255 255 255;
-  --dark-950: 243 244 246;
+  --dark-50: 17 24 39;       /* #111827 gray-900 — headings */
+  --dark-100: 17 24 39;      /* #111827 gray-900 — headings */
+  --dark-200: 55 65 81;      /* #374151 gray-700 — body text */
+  --dark-300: 75 85 99;      /* #4B5563 gray-600 — secondary text */
+  --dark-400: 107 114 128;   /* #6B7280 gray-500 */
+  --dark-500: 156 163 175;   /* #9CA3AF gray-400 */
+  --dark-600: 209 213 219;   /* #D1D5DB gray-300 — borders */
+  --dark-700: 229 231 235;   /* #E5E7EB gray-200 — borders */
+  --dark-800: 249 250 251;   /* #F9FAFB — subtle bg */
+  --dark-900: 255 255 255;   /* #FFFFFF — cards */
+  --dark-950: 243 244 246;   /* #F3F4F6 — page background */
 }
 
 * {
@@ -173,6 +173,11 @@ code, pre, .font-mono {
   color: #a5b4fc;
 }
 
+.light .markdown-content code {
+  color: #4338ca;
+  background: rgb(var(--dark-700) / 0.5);
+}
+
 .markdown-content pre {
   background: rgb(var(--dark-800));
   border: 1px solid rgb(var(--dark-700));
@@ -214,6 +219,25 @@ code, pre, .font-mono {
   background: rgb(var(--dark-800) / 0.7);
   backdrop-filter: blur(12px);
   border: 1px solid rgb(var(--dark-600) / 0.5);
+}
+
+/* Light mode: card shadows & border reinforcement */
+.light .glass {
+  background: rgb(255 255 255 / 0.85);
+  border: 1px solid rgb(var(--dark-600) / 0.6);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08), 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+/* Light mode: general card elevation */
+.light [class*="bg-dark-900"],
+.light [class*="bg-dark-800"] {
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+/* Light mode: subtle border visibility for panels */
+.light [class*="border-dark-700"],
+.light [class*="border-dark-600"] {
+  border-color: rgb(209 213 219 / 0.8);
 }
 
 /* Gradient border */
