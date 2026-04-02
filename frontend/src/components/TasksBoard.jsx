@@ -1217,13 +1217,19 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
       }
 
       // Highlight the column under the touch point
+      // Hide ghost temporarily so elementFromPoint sees through it (some mobile browsers ignore pointer-events:none)
+      const ghost = touchDragRef.current.ghost;
+      if (ghost) ghost.style.display = 'none';
       const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+      if (ghost) ghost.style.display = '';
       const colUnder = elemUnder?.closest?.('[data-column-id]');
       document.querySelectorAll('[data-column-id]').forEach(colEl => {
         colEl.classList.remove('touch-drag-over');
       });
       if (colUnder) {
         colUnder.classList.add('touch-drag-over');
+        // Store last known column for reliable drop in touchend
+        touchDragRef.current.lastColumnId = colUnder.getAttribute('data-column-id');
       }
     };
 
@@ -1253,7 +1259,7 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         const startX = touch.clientX;
         const startY = touch.clientY;
         longPressArmedRef.current = false;
-        // Wait 1.5s before arming drag — prevents accidental drags on mobile
+        // Wait 500ms before arming drag — prevents accidental drags while allowing scroll
         longPressTimerRef.current = setTimeout(() => {
           longPressArmedRef.current = true;
           touchDragRef.current = {
@@ -1261,13 +1267,14 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
             startY,
             started: false,
             ghost: null,
+            lastColumnId: null,
           };
           // Visual feedback: subtle scale pulse to indicate drag is armed
           if (cardRef.current) {
             cardRef.current.style.transform = 'scale(0.97)';
             cardRef.current.style.transition = 'transform 0.15s ease';
           }
-        }, 1500);
+        }, 500);
       }}
       onTouchEnd={(e) => {
         // Clear long-press timer if still pending
@@ -1298,18 +1305,23 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
             el.classList.remove('touch-drag-over');
           });
 
-          // Find drop target
-          const touch = e.changedTouches[0];
-          const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
-          const colUnder = elemUnder?.closest?.('[data-column-id]');
-          if (colUnder) {
-            const colId = colUnder.getAttribute('data-column-id');
+          // Find drop target — prefer stored column from last touchmove (more reliable on mobile)
+          let dropColId = touchDragRef.current.lastColumnId || null;
+          let dropColEl = dropColId ? document.querySelector(`[data-column-id="${dropColId}"]`) : null;
+          // Fallback: try elementFromPoint with touchend coordinates
+          if (!dropColEl) {
+            const touch = e.changedTouches[0];
+            const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+            dropColEl = elemUnder?.closest?.('[data-column-id]');
+            if (dropColEl) dropColId = dropColEl.getAttribute('data-column-id');
+          }
+          if (dropColEl && dropColId) {
             // Dispatch a custom event that the board listens to
             const dropEvent = new CustomEvent('touch-task-drop', {
               bubbles: true,
-              detail: { agentId: task.agentId, taskId: task.id, targetColumnId: colId }
+              detail: { agentId: task.agentId, taskId: task.id, targetColumnId: dropColId }
             });
-            colUnder.dispatchEvent(dropEvent);
+            dropColEl.dispatchEvent(dropEvent);
           }
 
           // Prevent click after drag
