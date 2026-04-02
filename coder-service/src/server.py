@@ -903,15 +903,14 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
         if _is_token_expired() and time.time() >= _token_cooldown_until:
             await _refresh_oauth_token()
 
-    cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt, agent_id=agent_id)
-
     agent_label = f" (user={agent_user['username']})" if agent_user else ""
-    logger.info(f"Executing Claude Code{agent_label}: {prompt[:100]}...")
-    logger.debug(f"Command: {' '.join(cmd)}")
 
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
+    async def _run_sync_proc(aid: Optional[str]):
+        """Run a Claude CLI subprocess synchronously. Returns (proc, stdout, stderr)."""
+        cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt, agent_id=aid)
+        logger.info(f"Executing Claude Code{agent_label}: {prompt[:100]}...")
+        logger.debug(f"Command: {' '.join(cmd)}")
+        p = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
@@ -920,10 +919,24 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
             env=_get_agent_env(agent_user),
             **_get_subprocess_kwargs(agent_user),
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode("utf-8")),
+        so, se = await asyncio.wait_for(
+            p.communicate(input=prompt.encode("utf-8")),
             timeout=TIMEOUT,
         )
+        return p, so, se
+
+    proc = None
+    try:
+        try:
+            proc, stdout_bytes, stderr_bytes = await _run_sync_proc(agent_id)
+        except BrokenPipeError:
+            # --resume failed (session no longer exists) — reset and retry
+            if agent_id and agent_id in _agent_sessions:
+                logger.warning(f"[Session] Resume failed for agent {agent_id[:12]} — creating new session")
+                _agent_sessions.pop(agent_id, None)
+                proc, stdout_bytes, stderr_bytes = await _run_sync_proc(agent_id)
+            else:
+                raise
     except asyncio.TimeoutError:
         if proc and proc.returncode is None:
             try:
@@ -1099,27 +1112,38 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                 }
                 return
 
-    cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt, agent_id=agent_id)
-
     agent_label = f" (user={agent_user['username']})" if agent_user else ""
-    logger.info(f"Streaming Claude Code{agent_label}: {prompt[:100]}...")
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=CLAUDE_CWD,
-        env=_get_agent_env(agent_user),
-        limit=10 * 1024 * 1024,
-        **_get_subprocess_kwargs(agent_user),  # 10MB readline buffer (default 64KB too small for large JSON events)
-    )
+    async def _start_stream_proc(aid: Optional[str]):
+        """Start a Claude CLI subprocess for streaming. Returns the process."""
+        cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt, agent_id=aid)
+        logger.info(f"Streaming Claude Code{agent_label}: {prompt[:100]}...")
+        p = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=CLAUDE_CWD,
+            env=_get_agent_env(agent_user),
+            limit=10 * 1024 * 1024,
+            **_get_subprocess_kwargs(agent_user),
+        )
+        p.stdin.write(prompt.encode("utf-8"))
+        await p.stdin.drain()
+        p.stdin.close()
+        await p.stdin.wait_closed()
+        return p
 
-    # Send prompt via stdin (avoids ARG_MAX limit) then close stdin
-    proc.stdin.write(prompt.encode("utf-8"))
-    await proc.stdin.drain()
-    proc.stdin.close()
-    await proc.stdin.wait_closed()
+    try:
+        proc = await _start_stream_proc(agent_id)
+    except BrokenPipeError:
+        # --resume failed (session no longer exists) — reset and retry with new session
+        if agent_id and agent_id in _agent_sessions:
+            logger.warning(f"[Session] Resume failed for agent {agent_id[:12]} — creating new session")
+            _agent_sessions.pop(agent_id, None)
+            proc = await _start_stream_proc(agent_id)
+        else:
+            raise
 
     try:
         async for line in proc.stdout:
