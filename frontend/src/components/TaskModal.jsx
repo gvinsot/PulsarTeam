@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { updateTask, deleteTask, getCommitDiff } from '../api';
+import { updateTask, deleteTask, getCommitDiff, getBoards } from '../api';
 import RealtimeTaskModal from './RealtimeTaskModal';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
 
@@ -64,7 +64,7 @@ function CommitDiffModal({ taskId, commit, onClose }) {
 
   const renderPatch = (patch) => {
     if (!patch) return <span className="text-gray-500 italic text-xs">No diff available (binary file?)</span>;
-    return patch.split('\n').map((line, i) => {
+    return patch.split('\\n').map((line, i) => {
       let cls = 'text-gray-300';
       let bg = '';
       if (line.startsWith('+') && !line.startsWith('+++')) {
@@ -181,29 +181,72 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
 
   const [editTitle, setEditTitle]       = useState(task.title);
   const [editDesc, setEditDesc]         = useState(task.description || '');
-  const [editColumn, setEditColumn]     = useState(task.column);
+  const [editColumn, setEditColumn]     = useState(task.column || task.status);
   const [editAssignee, setEditAssignee] = useState(task.agentId || '');
-  const [editType, setEditType]         = useState(task.type || 'task');
+  const [editType, setEditType]         = useState(task.type || task.taskType || 'task');
+  const [editBoardId, setEditBoardId]   = useState(task.boardId || null);
+  const [boards, setBoards]             = useState([]);
+  const [loadingBoards, setLoadingBoards] = useState(true);
   const [saving, setSaving]             = useState(false);
   const [showRealtime, setShowRealtime] = useState(false);
   const [diffCommit, setDiffCommit]     = useState(null);
   const [showAllCommits, setShowAllCommits] = useState(false);
   const modalRef = useRef(null);
 
+  // Load boards on mount
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingBoards(true);
+    getBoards()
+      .then(data => {
+        if (!cancelled) {
+          setBoards(data || []);
+          // If task has a boardId, ensure it's still valid
+          if (task.boardId && !data?.find(b => b.id === task.boardId)) {
+            setEditBoardId(null);
+          } else if (!editBoardId && data?.length > 0) {
+            // Default to first board if none selected
+            setEditBoardId(data[0].id);
+          }
+        }
+      })
+      .catch(err => {
+        console.error('Failed to load boards:', err);
+        if (!cancelled) setBoards([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingBoards(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     setEditTitle(task.title);
     setEditDesc(task.description || '');
-    setEditColumn(task.column);
+    setEditColumn(task.column || task.status);
     setEditAssignee(task.agentId || '');
-    setEditType(task.type || 'task');
-  }, [task.id, task.title, task.description, task.column, task.agentId, task.type]);
+    setEditType(task.type || task.taskType || 'task');
+    setEditBoardId(task.boardId || null);
+  }, [task.id, task.title, task.description, task.column, task.status, task.agentId, task.type, task.taskType, task.boardId]);
+
+  // Get columns for the selected board
+  const availableColumns = useMemo(() => {
+    if (!editBoardId) return columns || [];
+    const board = boards.find(b => b.id === editBoardId);
+    if (!board?.workflow?.columns) return columns || [];
+    return board.workflow.columns.map(col => ({
+      id: col.id,
+      title: col.label,
+    }));
+  }, [editBoardId, boards, columns]);
 
   const isDirty =
     editTitle !== task.title ||
     editDesc !== (task.description || '') ||
-    editColumn !== task.column ||
+    editColumn !== (task.column || task.status) ||
     editAssignee !== (task.agentId || '') ||
-    editType !== (task.type || 'task');
+    editType !== (task.type || task.taskType || 'task') ||
+    editBoardId !== (task.boardId || null);
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -220,8 +263,10 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
         title: editTitle,
         description: editDesc,
         column: editColumn,
+        status: editColumn, // Also update status for backward compatibility
         agentId: editAssignee || null,
         type: editType,
+        boardId: editBoardId || null,
       });
       onTaskUpdated?.(updated);
       onClose();
@@ -332,15 +377,36 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
                 </div>
               </div>
 
-              {/* Status */}
+              {/* Board Selection */}
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Status</label>
+                <label className="block text-xs text-gray-500 mb-1">Board</label>
+                {loadingBoards ? (
+                  <div className="px-3 py-2.5 bg-gray-800/60 rounded text-sm text-gray-400 flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-500 border-t-transparent" />
+                    Loading...
+                  </div>
+                ) : (
+                  <select
+                    className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
+                    value={editBoardId || ''}
+                    onChange={e => setEditBoardId(e.target.value || null)}
+                  >
+                    {boards.map(b => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Status / Column */}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Status (Column)</label>
                 <select
                   className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
                   value={editColumn}
                   onChange={e => setEditColumn(e.target.value)}
                 >
-                  {columns.map(col => (
+                  {availableColumns.map(col => (
                     <option key={col.id} value={col.id}>{col.title}</option>
                   ))}
                 </select>

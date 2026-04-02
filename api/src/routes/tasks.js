@@ -12,7 +12,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     // Update allowed fields
-    const { title, description, column, agentId, type, priority, dueDate } = req.body;
+    const { title, description, column, agentId, type, priority, dueDate, boardId } = req.body;
     if (title !== undefined)       task.title       = title;
     if (description !== undefined) task.text        = description;
     if (column !== undefined)      task.status      = column;
@@ -20,6 +20,7 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (type !== undefined)        task.taskType    = type;
     if (priority !== undefined)    task.priority    = priority;
     if (dueDate !== undefined)     task.dueDate     = dueDate;
+    if (boardId !== undefined)     task.boardId     = boardId;
     task.updatedAt = new Date().toISOString();
 
     mgr.saveTaskDirectly(task);
@@ -94,7 +95,7 @@ function resolveOwnerRepo(task, mgr) {
   if (task.agentId) {
     const agent = mgr.agents.get(task.agentId);
     if (agent?.sshUrl) {
-      const m = agent.sshUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)/);
+      const m = agent.sshUrl.match(/github\\.com[:/]([^/]+)\\/([^/.]+)/);
       if (m) return { owner: m[1], repo: m[2] };
     }
     // 4) agent projectName
