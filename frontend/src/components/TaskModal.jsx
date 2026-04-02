@@ -391,6 +391,16 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
                 </div>
               </div>
 
+              {/* Agent running warning */}
+              {task.actionRunning && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs">
+                  <svg className="w-4 h-4 shrink-0 animate-spin" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span>An agent is currently processing this task. Stop the agent to move or reassign it.</span>
+                </div>
+              )}
+
               {/* Board Selection */}
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Board</label>
@@ -403,9 +413,11 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
                   <>
                     <select
                       className={`w-full bg-gray-800 border rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none ${
+                        task.actionRunning ? 'opacity-50 cursor-not-allowed' :
                         editBoardId !== originalBoardId.current ? 'border-amber-500/60 ring-1 ring-amber-500/30' : 'border-white/10'
                       }`}
                       value={editBoardId || ''}
+                      disabled={task.actionRunning}
                       onChange={e => {
                         const newBoardId = e.target.value || null;
                         setEditBoardId(newBoardId);
@@ -430,8 +442,11 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Status (Column)</label>
                 <select
-                  className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
+                  className={`w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none ${
+                    task.actionRunning ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                   value={editColumn}
+                  disabled={task.actionRunning}
                   onChange={e => setEditColumn(e.target.value)}
                 >
                   {availableColumns.map(col => (

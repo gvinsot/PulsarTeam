@@ -64,6 +64,13 @@ router.put('/:id', async (req, res) => {
     const now = new Date().toISOString();
     const username = req.user?.username || 'user';
 
+    // ── Block column/board move when an agent is actively processing ─────
+    const wantsColumnChange = column !== undefined && column !== task.status;
+    const wantsBoardChange = boardId !== undefined && boardId !== (task.boardId || null);
+    if (task.actionRunning && (wantsColumnChange || wantsBoardChange)) {
+      return res.status(409).json({ error: 'Cannot move task while an agent is processing it. Stop the agent first.' });
+    }
+
     // Track what changed for history / notifications
     const oldBoardId = task.boardId || null;
     const oldStatus = task.status;
@@ -211,6 +218,7 @@ router.post('/bulk-move', async (req, res) => {
       const task = mgr.getTask(taskId);
       if (!task) { results.failed.push({ taskId, error: 'Task not found' }); continue; }
       if (!requireTaskAccess(mgr, task, req.user)) { results.failed.push({ taskId, error: 'Access denied' }); continue; }
+      if (task.actionRunning) { results.failed.push({ taskId, error: 'Task is being processed by an agent. Stop the agent first.' }); continue; }
 
       const oldBoardId = task.boardId;
       const oldStatus = task.status;

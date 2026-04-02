@@ -565,19 +565,23 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
             {/* Status badge / selector */}
             <div className="relative" ref={statusRef}>
               <button
-                onClick={() => setStatusOpen(o => !o)}
+                onClick={() => !task.actionRunning && setStatusOpen(o => !o)}
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
                   border transition-colors hover:opacity-80
+                  ${task.actionRunning ? 'opacity-50 cursor-not-allowed' : ''}
                   ${isError
                     ? 'bg-red-500/15 text-red-300 border-red-500/30'
                     : task.status === lastStatusId
                       ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                       : 'bg-dark-700 text-dark-300 border-dark-600'
                   }`}
+                title={task.actionRunning ? 'Stop the agent first to change status' : undefined}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${currentStatus.dot}`} />
                 {currentStatus.label}
-                <ChevronDown className="w-3 h-3 opacity-60" />
+                {task.actionRunning
+                  ? <Loader2 className="w-3 h-3 animate-spin text-cyan-400" />
+                  : <ChevronDown className="w-3 h-3 opacity-60" />}
               </button>
               {statusOpen && (
                 <div className="absolute left-0 top-8 z-50 bg-dark-800 border border-dark-600 rounded-xl shadow-2xl py-1 min-w-[140px]">
@@ -1229,8 +1233,9 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
   return (
     <div
       ref={cardRef}
-      draggable
+      draggable={!task.actionRunning}
       onDragStart={(e) => {
+        if (task.actionRunning) { e.preventDefault(); return; }
         isDraggingRef.current = true;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('application/json', JSON.stringify({ agentId: task.agentId, taskId: task.id }));
@@ -1242,6 +1247,7 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         setTimeout(() => { isDraggingRef.current = false; }, 50);
       }}
       onTouchStart={(e) => {
+        if (task.actionRunning) return; // Block touch drag for running tasks
         const touch = e.touches[0];
         const startX = touch.clientX;
         const startY = touch.clientY;
@@ -2669,6 +2675,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     try {
       const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
       if (!task) return;
+      if (task.actionRunning) return; // Cannot move task while agent is processing it
       // Check if task is already in this column (including error tasks in their original column)
       const fallbackColId = columns[0]?.id;
       const isAlreadyInColumn = task.status === 'error'
@@ -2687,6 +2694,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     try {
       const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
       if (!task) return;
+      if (task.actionRunning) return; // Cannot move task while agent is processing it
       const col = columns.find(c => c.id === targetColumnId);
       if (!col) return;
       const fallbackColId = columns[0]?.id;
