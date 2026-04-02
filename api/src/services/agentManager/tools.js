@@ -210,6 +210,17 @@ export const toolsMethods = {
           continue;
         }
         listMyTasksDone = true;
+        // Cross-turn dedup: skip if called recently (within 60s) with unchanged task list
+        const now = Date.now();
+        const lastCall = agent._lastListMyTasks || 0;
+        const taskHash = JSON.stringify((agent.todoList || []).map(t => `${t.id}:${t.status}`));
+        if (now - lastCall < 60000 && agent._lastListMyTasksHash === taskHash) {
+          console.log(`[Dedup] Skipping @list_my_tasks from "${agent.name}" — unchanged since ${Math.round((now - lastCall) / 1000)}s ago`);
+          results.push({ tool: 'list_my_tasks', args: [], success: true, result: '[Tasks unchanged since last check — focus on your current task]' });
+          continue;
+        }
+        agent._lastListMyTasks = now;
+        agent._lastListMyTasksHash = taskHash;
         const tasks = agent.todoList || [];
         const header = `Agent: ${agent.name} | Project: ${agent.project || 'none'} | Status: ${agent.status}`;
         if (tasks.length === 0) {
