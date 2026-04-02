@@ -262,6 +262,13 @@ export const workflowMethods = {
                 console.warn(`[Workflow] Action: change_status SKIPPED — target column "${action.target}" does not exist for "${(task.text || '').slice(0, 60)}"`);
                 break;
               }
+              // Clean up chain resume index BEFORE change_status — the new column's
+              // on_enter transition must start fresh, not resume from this chain's index
+              const taskBeforeMove = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+              if (taskBeforeMove) {
+                delete taskBeforeMove._completedActionIdx;
+                delete taskBeforeMove._pendingOnEnter;
+              }
               console.log(`[Workflow] Action: change_status "${task.status}" -> "${action.target}" for "${(task.text || '').slice(0, 60)}"`);
               const result = this.setTaskStatus(task.agentId, task.id, action.target, { skipAutoRefine: false, by: 'workflow' });
               if (!result) {
