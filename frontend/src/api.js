@@ -491,6 +491,36 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  // Board sharing
+  getBoardShares: (boardId) =>
+    fetch(`${API_BASE}/boards/${boardId}/shares`, { headers: getHeaders() }).then(handleResponse),
+
+  shareBoardWith: (boardId, username, permission) =>
+    fetch(`${API_BASE}/boards/${boardId}/shares`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ username, permission })
+    }).then(handleResponse),
+
+  updateBoardShare: (boardId, userId, permission) =>
+    fetch(`${API_BASE}/boards/${boardId}/shares/${userId}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify({ permission })
+    }).then(handleResponse),
+
+  removeBoardShare: (boardId, userId) =>
+    fetch(`${API_BASE}/boards/${boardId}/shares/${userId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  getBoardUsers: () =>
+    fetch(`${API_BASE}/boards/users`, { headers: getHeaders() }).then(handleResponse),
+
+  getBoardAuditLogs: (boardId) =>
+    fetch(`${API_BASE}/boards/${boardId}/audit`, { headers: getHeaders() }).then(handleResponse),
+
   getTasksByAssignee: (agentId) =>
     fetch(`${API_BASE}/boards/tasks/by-assignee/${agentId}`, { headers: getHeaders() }).then(handleResponse),
 

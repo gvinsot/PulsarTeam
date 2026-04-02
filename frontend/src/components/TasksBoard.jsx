@@ -4,13 +4,14 @@ import {
   Edit3, Save, Check, Tag, Calendar, ChevronDown, ChevronRight, Plus, Settings,
   ArrowRight, Zap, User, GitCommit, KanbanSquare, Repeat, MessageSquare, FolderKanban, Code, Loader2, Square,
   Bug, Sparkles, Wrench, BookOpen, ArrowUpCircle, HelpCircle, Layers,
-  ArrowUpDown, Flag, Sun, RotateCcw, Archive
+  ArrowUpDown, Flag, Sun, RotateCcw, Archive, Users, Share2
 } from 'lucide-react';
 import { api } from '../api';
 import { getDeletedTasks, restoreTask as restoreTaskApi, hardDeleteTask as hardDeleteTaskApi } from '../api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
+import ShareBoardModal from './ShareBoardModal';
 import { useTheme } from '../contexts/ThemeContext';
 
 // ── Color mapping (hex → Tailwind classes) ──────────────────────────────────
@@ -2377,7 +2378,7 @@ function DeletedTasksPanel({ onClose, onRestored }) {
 
 // ── BoardTabs ──────────────────────────────────────────────────────────────
 
-function BoardTabs({ boards, activeBoardId, onSelect, onCreate, onRename, onDelete }) {
+function BoardTabs({ boards, activeBoardId, onSelect, onCreate, onRename, onDelete, onShare }) {
   const [renaming, setRenaming] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [contextMenu, setContextMenu] = useState(null);
@@ -2440,6 +2441,11 @@ function BoardTabs({ boards, activeBoardId, onSelect, onCreate, onRename, onDele
             >
               <KanbanSquare className="w-3 h-3" />
               {board.name}
+              {board.share_permission && (
+                <span className="text-[9px] text-dark-500 bg-dark-700/50 px-1 py-0.5 rounded" title={`Shared by ${board.owner_username || 'owner'} (${board.share_permission})`}>
+                  <Users className="w-2.5 h-2.5 inline" />
+                </span>
+              )}
               <ChevronDown
                 className="w-3 h-3 opacity-50 hover:opacity-100"
                 onClick={(e) => { e.stopPropagation(); setContextMenu(contextMenu === board.id ? null : board.id); }}
@@ -2459,7 +2465,13 @@ function BoardTabs({ boards, activeBoardId, onSelect, onCreate, onRename, onDele
               >
                 <Edit3 className="w-3 h-3" /> Rename
               </button>
-              {boards.length > 1 && (
+              <button
+                onClick={() => { onShare(board); setContextMenu(null); }}
+                className="w-full text-left px-3 py-1.5 text-xs text-dark-200 hover:bg-dark-700 flex items-center gap-2"
+              >
+                <Share2 className="w-3 h-3" /> {board.share_permission ? 'Members' : 'Share'}
+              </button>
+              {boards.length > 1 && !board.share_permission && (
                 <button
                   onClick={() => { onDelete(board.id); setContextMenu(null); }}
                   className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-dark-700 flex items-center gap-2"
@@ -2498,6 +2510,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const [editInstructionsCol, setEditInstructionsCol] = useState(null);
   const [jiraStatus, setJiraStatus] = useState(null);
   const [showDeletedTasks, setShowDeletedTasks] = useState(false);
+  const [shareBoard, setShareBoard] = useState(null);
   const boardScrollRef = useRef(null);
 
   // Multi-board state
@@ -2550,6 +2563,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
 
   // Active board data
   const activeBoard = useMemo(() => boards.find(b => b.id === activeBoardId) || null, [boards, activeBoardId]);
+
+  // Permission checks for shared boards
+  const boardPermission = activeBoard?.share_permission || (activeBoard ? 'admin' : 'admin');
+  const isReadOnly = boardPermission === 'read';
+  const canEdit = boardPermission === 'edit' || boardPermission === 'admin';
 
   // Get workflow: from active board, or fallback
   const workflow = useMemo(() => {
@@ -2668,6 +2686,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   }, [allTasks, onRefresh, lastColId]);
 
   const handleDrop = useCallback(async (e, col) => {
+    if (isReadOnly) return;
     let agentId, taskId;
     try {
       ({ agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json')));
@@ -2691,6 +2710,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
 
   // Touch drag-and-drop handler
   const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
+    if (isReadOnly) return;
     try {
       const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
       if (!task) return;
@@ -2794,6 +2814,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           onCreate={handleCreateBoard}
           onRename={handleRenameBoard}
           onDelete={handleDeleteBoard}
+          onShare={setShareBoard}
         />
       )}
 
@@ -2890,23 +2911,27 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         </button>
 
         {/* Workflow settings */}
-        <button
-          onClick={() => setShowWorkflowEditor(true)}
-          className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors"
-          title="Board workflow settings"
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => setShowWorkflowEditor(true)}
+            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors"
+            title="Board workflow settings"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        )}
 
         {/* Create Task */}
-        <button
-          onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white
-            bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors flex-shrink-0"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          New Task
-        </button>
+        {!isReadOnly && (
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white
+              bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors flex-shrink-0"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            New Task
+          </button>
+        )}
       </div>
 
       {/* Board */}
@@ -2926,7 +2951,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
               onDrop={handleDrop}
               onOpen={setSelectedTask}
               onClearAll={col.id === lastColId ? handleClearDone : undefined}
-              onAddTask={() => { setCreateDefaultStatus(col.id); setCreateOpen(true); }}
+              onAddTask={isReadOnly ? undefined : () => { setCreateDefaultStatus(col.id); setCreateOpen(true); }}
               onEditInstructions={setEditInstructionsCol}
               hasInstructions={!!columnInstructionsMap[col.id]}
               showAgent={col.showAgent}
@@ -3006,6 +3031,15 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         <DeletedTasksPanel
           onClose={() => setShowDeletedTasks(false)}
           onRestored={onRefresh}
+        />
+      )}
+
+      {/* Share board modal */}
+      {shareBoard && (
+        <ShareBoardModal
+          board={shareBoard}
+          onClose={() => setShareBoard(null)}
+          currentUserId={user?.id}
         />
       )}
     </div>
