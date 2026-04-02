@@ -183,33 +183,65 @@ export const tasksMethods = {
 
   _findTaskForCommitLink(agentId) {
     const agent = this.agents.get(agentId);
+
+    // Priority 1: Task actively running via this agent (set by processTransition)
+    // This is the most reliable indicator — it means a workflow action is in progress.
+    for (const [creatorId, creatorAgent] of this.agents) {
+      if (!creatorAgent.todoList) continue;
+      for (const task of creatorAgent.todoList) {
+        if (task.actionRunningAgentId === agentId && this._isActiveTaskStatus(task.status)) {
+          console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${task.text?.slice(0, 50)}" (owner=${creatorId.slice(0, 8)})`);
+          return { task, ownerAgentId: creatorId };
+        }
+      }
+    }
+
+    // Priority 2: Active task explicitly assigned to this agent (from any agent's list)
+    // Prefer the most recently started task when multiple are assigned.
+    let bestAssigned = null;
+    for (const [creatorId, creatorAgent] of this.agents) {
+      if (!creatorAgent.todoList) continue;
+      for (const task of creatorAgent.todoList) {
+        if (task.assignee !== agentId || !this._isActiveTaskStatus(task.status)) continue;
+        if (!bestAssigned || (task.startedAt && (!bestAssigned.task.startedAt || new Date(task.startedAt) > new Date(bestAssigned.task.startedAt)))) {
+          bestAssigned = { task, ownerAgentId: creatorId };
+        }
+      }
+    }
+    if (bestAssigned) {
+      console.log(`🔗 [Commit] Found task via assignee: "${bestAssigned.task.text?.slice(0, 50)}" (owner=${bestAssigned.ownerAgentId.slice(0, 8)})`);
+      return bestAssigned;
+    }
+
+    // Priority 3: Agent's own active task (when no assigned/running task found)
     if (agent?.todoList?.length) {
       const ownActive = agent.todoList.find(t => this._isActiveTaskStatus(t.status));
-      if (ownActive) return { task: ownActive, ownerAgentId: agentId };
+      if (ownActive) {
+        console.log(`🔗 [Commit] Found own active task: "${ownActive.text?.slice(0, 50)}"`);
+        return { task: ownActive, ownerAgentId: agentId };
+      }
     }
-    let bestActive = null;
+
+    // Priority 4: Fall back to most recently completed task (owned or assigned)
     let bestDone = null;
     for (const [creatorId, creatorAgent] of this.agents) {
       if (!creatorAgent.todoList) continue;
       for (const task of creatorAgent.todoList) {
         const isOwnedOrAssigned = creatorId === agentId || task.assignee === agentId;
         if (!isOwnedOrAssigned) continue;
-        if (this._isActiveTaskStatus(task.status) && !bestActive) {
-          bestActive = { task, ownerAgentId: creatorId };
-        }
         if (task.status === 'done' && task.completedAt) {
           if (!bestDone || new Date(task.completedAt) > new Date(bestDone.task.completedAt)) {
             bestDone = { task, ownerAgentId: creatorId };
           }
         }
       }
-      if (bestActive) break;
     }
-    if (bestActive) return bestActive;
     if (bestDone) {
-      console.log(`🔗 [Commit] No active task — falling back to recently done task "${bestDone.task.text?.slice(0, 50)}"`);
+      console.log(`🔗 [Commit] No active task — falling back to recently done: "${bestDone.task.text?.slice(0, 50)}"`);
       return bestDone;
     }
+
+    console.log(`🔗 [Commit] No task found for agent ${agentId.slice(0, 8)} (${agent?.name || 'unknown'})`);
     return null;
   },
 
