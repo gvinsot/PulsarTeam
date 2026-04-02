@@ -398,10 +398,12 @@ export const chatMethods = {
     const shouldCompact = isTopLevelUserMessage || isNewDelegationTask;
 
     // Determine if agent is currently executing a task (has an active task with startedAt).
-    // Check both the agent's own todoList AND tasks assigned to this agent on other agents'
-    // todoLists (e.g. titles-manager or product-manager running a workflow transition).
+    // For direct user messages (isTopLevelUserMessage), only check the agent's own todoList
+    // so that chatting with an agent always sends the full history.
+    // For workflow messages (tool-result, delegation, etc.), also check cross-agent assignments
+    // so that utility agents (titles-manager, product-manager) get task-scoped history.
     let activeTask = (agent.todoList || []).find(t => this._isActiveTaskStatus(t.status) && t.startedAt);
-    if (!activeTask) {
+    if (!activeTask && !isTopLevelUserMessage) {
       const agentId = [...this.agents.entries()].find(([, a]) => a === agent)?.[0];
       if (agentId) {
         for (const [, otherAgent] of this.agents) {
