@@ -1035,6 +1035,8 @@ export const lifecycleMethods = {
     }
     // Persist the cleared execution flags to DB
     clearTaskExecutionFlags(agentId);
+    // Reset Claude Code CLI session if this is a claude-paid agent
+    this._resetCoderSession(agentId, agent);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
@@ -1051,6 +1053,26 @@ export const lifecycleMethods = {
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return agent.conversationHistory;
+  },
+
+  // ─── Coder Session Reset ────────────────────────────────────────────
+  _resetCoderSession(agentId, agent) {
+    const llmConfig = this.resolveLlmConfig(agent);
+    if (llmConfig.provider !== 'claude-paid') return;
+    const endpoint = 'http://coder-service:8000';
+    const apiKey = llmConfig.apiKey || process.env.CODER_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    fetch(`${endpoint}/reset`, {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': apiKey,
+        'X-Agent-Id': agentId,
+      },
+    }).then(res => {
+      if (res.ok) console.log(`🔄 [Session] Reset coder-service session for "${agent.name}"`);
+      else console.warn(`⚠️  [Session] Failed to reset coder-service session: ${res.status}`);
+    }).catch(err => {
+      console.warn(`⚠️  [Session] Failed to reset coder-service session: ${err.message}`);
+    });
   },
 
   // ─── Project Context Switching ──────────────────────────────────────

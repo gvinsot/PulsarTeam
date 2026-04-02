@@ -55,6 +55,9 @@ DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 # loading stale CLAUDE.md files from mounted project volumes.
 CLAUDE_CWD = "/app"
 
+# Session management: map agent_id -> UUID session for --resume support
+_agent_sessions: dict[str, str] = {}  # agent_id -> session UUID
+
 # System prompt for Claude Code
 SYSTEM_PROMPT = os.getenv("CLAUDE_SYSTEM_PROMPT", (
     "You are an autonomous code execution agent running inside a Docker container. "
@@ -804,11 +807,16 @@ async def _get_login_url() -> str:
     return url
 
 
-def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] = None) -> list[str]:
+def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] = None, agent_id: Optional[str] = None) -> list[str]:
     """Build the claude CLI command with appropriate flags.
 
     The prompt is passed via stdin (not as a CLI argument) to avoid
     'Argument list too long' errors with large conversation histories.
+
+    When agent_id is provided, session persistence is used:
+    - First call: --session-id <uuid> creates a new named session
+    - Subsequent calls: --resume <uuid> continues the existing session
+    This lets Claude Code maintain full context across invocations.
     """
     cmd = [
         "claude",
@@ -820,6 +828,18 @@ def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] 
         "--dangerously-skip-permissions",
         "--effort", "high",
     ]
+
+    # Session persistence: resume existing session or start a new one
+    if agent_id:
+        session_id = _agent_sessions.get(agent_id)
+        if session_id:
+            cmd.extend(["--resume", session_id])
+            logger.info(f"[Session] Resuming session {session_id[:12]}... for agent {agent_id[:12]}")
+        else:
+            session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"pulsar-agent-{agent_id}"))
+            _agent_sessions[agent_id] = session_id
+            cmd.extend(["--session-id", session_id])
+            logger.info(f"[Session] New session {session_id[:12]}... for agent {agent_id[:12]}")
 
     # Append to the default system prompt instead of replacing it, so Claude Code
     # retains its built-in tool knowledge and capabilities.
@@ -883,7 +903,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
         if _is_token_expired() and time.time() >= _token_cooldown_until:
             await _refresh_oauth_token()
 
-    cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt)
+    cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt, agent_id=agent_id)
 
     agent_label = f" (user={agent_user['username']})" if agent_user else ""
     logger.info(f"Executing Claude Code{agent_label}: {prompt[:100]}...")
@@ -1079,7 +1099,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                 }
                 return
 
-    cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt)
+    cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt, agent_id=agent_id)
 
     agent_label = f" (user={agent_user['username']})" if agent_user else ""
     logger.info(f"Streaming Claude Code{agent_label}: {prompt[:100]}...")
@@ -1430,18 +1450,9 @@ def _messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optiona
                             last_content.lstrip().startswith("[TOOL RESULTS"))
 
     if is_tool_continuation:
-        # For tool-result continuations: send only the original task + the
-        # tool results.  The intermediate assistant responses (which contain
-        # @tool calls already executed) are omitted to prevent Claude Code
-        # from re-reading them and looping.
-        original_task = ""
-        for role, content in conversation_parts:
-            if role == "user" and not content.lstrip().startswith("[TOOL RESULTS"):
-                original_task = content
-                break
-        task_summary = original_task[:800] + ("..." if len(original_task) > 800 else "")
-        prompt = f"{task_summary}\n\nHere are the results of the research so far:\n\n{last_content}\n\nBased on these results, continue working on the task. Do NOT re-explore files you already have results for."
-        return prompt, system_prompt
+        # With session resume, Claude Code already has the full conversation
+        # context. Just send the latest tool results as the new message.
+        return last_content, system_prompt
 
     # Normal multi-turn: flatten as conversation
     parts = []
@@ -1981,11 +1992,16 @@ async def stream_execution(
 async def reset_agent(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_agent_id: Optional[str] = Header(None),
 ):
-    """Reset agent state (no-op, Claude Code is stateless per invocation)."""
+    """Reset agent session — starts a fresh Claude Code session on next invocation."""
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
-    return {"status": "success", "message": "Agent is stateless, no state to reset"}
+    if x_agent_id and x_agent_id in _agent_sessions:
+        old_session = _agent_sessions.pop(x_agent_id)
+        logger.info(f"[Session] Reset session for agent {x_agent_id[:12]} (was {old_session[:12]})")
+        return {"status": "success", "message": f"Session reset for agent {x_agent_id[:12]}"}
+    return {"status": "success", "message": "No session to reset"}
 
 
 @app.get("/v1/models")

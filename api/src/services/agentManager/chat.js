@@ -437,7 +437,6 @@ export const chatMethods = {
 
     if (managesContext) {
       // Model manages its own context — only include history relevant to the current task.
-      // Find the active task and include messages from when it started.
       if (activeTask) {
         const taskStartTime = new Date(activeTask.startedAt).getTime();
         const startIdx = agent.conversationHistory.findIndex(
@@ -446,8 +445,12 @@ export const chatMethods = {
         if (startIdx >= 0) {
           messages.push(...agent.conversationHistory.slice(startIdx));
         }
+      } else if (isTopLevelUserMessage) {
+        // Direct user message with no active task: send full history so the
+        // agent retains context from its recent work (e.g. after being stopped).
+        messages.push(...agent.conversationHistory);
       }
-      // If no active task, send no history — the agent starts fresh
+      // Otherwise (workflow message, no active task): start fresh
     } else if (isTaskExecution) {
       // Task mode: only include messages from when the task started
       const taskStartTime = new Date(activeTask.startedAt).getTime();
