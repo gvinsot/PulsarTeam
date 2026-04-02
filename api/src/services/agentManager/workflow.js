@@ -140,8 +140,15 @@ export const workflowMethods = {
         console.log(`[Workflow] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} action(s))`);
         transitionsRan++;
 
+        // Resume from the last completed action if this is a retry
+        const startActionIdx = (typeof task._completedActionIdx === 'number') ? task._completedActionIdx + 1 : 0;
+        if (startActionIdx > 0) {
+          console.log(`[Workflow] Resuming action chain from index ${startActionIdx}/${actions.length} for "${(task.text || '').slice(0, 60)}"`);
+        }
+
         let stopActionChain = false;
-        for (const action of actions) {
+        for (let actionIdx = startActionIdx; actionIdx < actions.length; actionIdx++) {
+          const action = actions[actionIdx];
           if (action.type === 'assign_agent') {
             const candidates = Array.from(this.agents.values()).filter(a =>
               a.enabled !== false &&
@@ -192,7 +199,9 @@ export const workflowMethods = {
                 const actualTaskForFlag = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
                 if (actualTaskForFlag) {
                   actualTaskForFlag._pendingOnEnter = actualTaskForFlag.status;
-                  console.log(`[Workflow] Flagged task "${(task.text || '').slice(0, 60)}" for on_enter retry in "${actualTaskForFlag.status}" (${result.skipped})`);
+                  // Save which action index to resume from on retry
+                  actualTaskForFlag._completedActionIdx = actionIdx > 0 ? actionIdx - 1 : undefined;
+                  console.log(`[Workflow] Flagged task "${(task.text || '').slice(0, 60)}" for on_enter retry at action ${actionIdx}/${actions.length} (${result.skipped})`);
                   saveAgent(this.agents.get(task.agentId));
                 }
                 stopActionChain = true;
@@ -200,8 +209,12 @@ export const workflowMethods = {
               }
               if (result?.executed) {
                 const actualTaskForClear = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
-                if (actualTaskForClear && actualTaskForClear._pendingOnEnter === originalStatus) {
-                  delete actualTaskForClear._pendingOnEnter;
+                if (actualTaskForClear) {
+                  // Track completed action index for chain resume
+                  actualTaskForClear._completedActionIdx = actionIdx;
+                  if (actualTaskForClear._pendingOnEnter === originalStatus) {
+                    delete actualTaskForClear._pendingOnEnter;
+                  }
                   saveAgent(this.agents.get(task.agentId));
                 }
               }
@@ -241,6 +254,13 @@ export const workflowMethods = {
               break;
             }
           }
+        }
+
+        // Clean up chain resume index when all actions completed or chain stopped normally
+        const taskAfterChain = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+        if (taskAfterChain && typeof taskAfterChain._completedActionIdx === 'number') {
+          delete taskAfterChain._completedActionIdx;
+          saveAgent(this.agents.get(task.agentId));
         }
 
         if (stopActionChain) continue;

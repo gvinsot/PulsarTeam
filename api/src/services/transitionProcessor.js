@@ -198,6 +198,7 @@ export async function processTransition(task, agentManager, io) {
 
     // Store the executing agent ID on the task for stop functionality
     // Also update assignee to reflect which agent is currently working on this task
+    const isLightweight = isTitle || isSetType;
     const creatorAgentForFlag = agentManager.agents.get(task.agentId);
     const actualTaskForFlag = creatorAgentForFlag?.todoList?.find(t => t.id === task.id);
     if (actualTaskForFlag) {
@@ -207,8 +208,9 @@ export async function processTransition(task, agentManager, io) {
       if (!actualTaskForFlag.startedAt) {
         actualTaskForFlag.startedAt = new Date().toISOString();
       }
-      // Update assignee to the agent performing this action
-      if (actualTaskForFlag.assignee !== agent.id) {
+      // Update assignee — skip for lightweight modes (set_type, title) to avoid
+      // blocking subsequent actions in the same chain that use the same role
+      if (!isLightweight && actualTaskForFlag.assignee !== agent.id) {
         const previousAssignee = actualTaskForFlag.assignee;
         actualTaskForFlag.assignee = agent.id;
         if (!actualTaskForFlag.history) actualTaskForFlag.history = [];
