@@ -644,14 +644,20 @@ export const chatMethods = {
       }
       if (chunk.type === 'done') {
         if (chunk.usage) {
-          agent.metrics.totalTokensIn += chunk.usage.inputTokens;
-          agent.metrics.totalTokensOut += chunk.usage.outputTokens;
-          if (chunk.usage.costUsd != null && chunk.usage.costUsd > 0) {
+          const inTok = chunk.usage.inputTokens || 0;
+          const outTok = chunk.usage.outputTokens || 0;
+          const cost = chunk.usage.costUsd ?? null;
+          agent.metrics.totalTokensIn += inTok;
+          agent.metrics.totalTokensOut += outTok;
+          if (cost != null && cost > 0) {
             // Use actual cost reported by provider (e.g. Claude Paid Plan via coder-service)
-            this._recordUsageDirect(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0, chunk.usage.costUsd);
+            this._recordUsageDirect(agent, inTok, outTok, cost);
           } else {
-            this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
+            this._recordUsage(agent, inTok, outTok);
           }
+          console.log(`📊 [Token] "${agent.name}": in=${inTok} out=${outTok} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
+        } else {
+          console.warn(`⚠️ [Token] "${agent.name}": done event with no usage data`);
         }
         if (chunk.finishReason) {
           finishReason = chunk.finishReason;
@@ -695,13 +701,17 @@ export const chatMethods = {
         }
         if (chunk.type === 'done') {
           if (chunk.usage) {
-            agent.metrics.totalTokensIn += chunk.usage.inputTokens;
-            agent.metrics.totalTokensOut += chunk.usage.outputTokens;
-            if (chunk.usage.costUsd != null && chunk.usage.costUsd > 0) {
-              this._recordUsageDirect(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0, chunk.usage.costUsd);
+            const inTok = chunk.usage.inputTokens || 0;
+            const outTok = chunk.usage.outputTokens || 0;
+            const cost = chunk.usage.costUsd ?? null;
+            agent.metrics.totalTokensIn += inTok;
+            agent.metrics.totalTokensOut += outTok;
+            if (cost != null && cost > 0) {
+              this._recordUsageDirect(agent, inTok, outTok, cost);
             } else {
-              this._recordUsage(agent, chunk.usage.inputTokens || 0, chunk.usage.outputTokens || 0);
+              this._recordUsage(agent, inTok, outTok);
             }
+            console.log(`📊 [Token] "${agent.name}" (cont): in=${inTok} out=${outTok} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
           }
           if (chunk.finishReason) {
             finishReason = chunk.finishReason;

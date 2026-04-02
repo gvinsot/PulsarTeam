@@ -1243,13 +1243,13 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                 pass
 
             elif event_type == "result":
-                # Final result
+                # Final result — always yield so cost/token metadata is forwarded
+                # even when result text is empty (text was already streamed)
                 result_text = event.get("result", "")
                 cost = event.get("cost_usd", 0)
                 duration = event.get("duration_ms", 0)
                 total_tokens = event.get("total_tokens", 0)
-                if result_text:
-                    yield {"type": "result", "content": result_text, "cost_usd": cost, "duration_ms": duration, "total_tokens": total_tokens}
+                yield {"type": "result", "content": result_text or "", "cost_usd": cost, "duration_ms": duration, "total_tokens": total_tokens}
 
             elif event_type == "error":
                 error_msg = event.get("error", {})

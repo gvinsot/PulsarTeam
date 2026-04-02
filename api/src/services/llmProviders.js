@@ -772,9 +772,12 @@ export class VLLMProvider {
 
     const response = await this.client.chat.completions.create(params);
 
+    const promptTokens = response.usage?.prompt_tokens || 0;
+    const completionTokens = response.usage?.completion_tokens || 0;
+    const totalTokens = response.usage?.total_tokens || 0;
     const usage = {
-      inputTokens: response.usage?.prompt_tokens || 0,
-      outputTokens: response.usage?.completion_tokens || 0
+      inputTokens: promptTokens || totalTokens,
+      outputTokens: completionTokens
     };
     // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
     if (response.usage?.cost_usd != null) {
@@ -823,9 +826,15 @@ export class VLLMProvider {
       }
 
       if (chunk.usage) {
+        const promptTokens = chunk.usage.prompt_tokens || 0;
+        const completionTokens = chunk.usage.completion_tokens || 0;
+        const totalTokens = chunk.usage.total_tokens || 0;
+        // When only total_tokens is available (e.g. coder-service / Claude Paid Plan),
+        // prompt_tokens == total_tokens and completion_tokens == 0.
+        // Use total_tokens as inputTokens in that case (cost_usd carries the accurate cost).
         const usage = {
-          inputTokens: chunk.usage.prompt_tokens || 0,
-          outputTokens: chunk.usage.completion_tokens || 0
+          inputTokens: promptTokens || totalTokens,
+          outputTokens: completionTokens
         };
         // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
         if (chunk.usage.cost_usd != null) {
