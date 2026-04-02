@@ -170,8 +170,9 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(board_id)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee)').catch(() => {});
-      // Soft delete: add deleted_at column
+      // Soft delete: add deleted_at and deleted_by columns
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_by UUID').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_deleted ON tasks(deleted_at)').catch(() => {});
       // Execution tracking columns (persisted instead of in-memory flags)
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS execution_status TEXT').catch(() => {});
@@ -179,6 +180,22 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running BOOLEAN DEFAULT FALSE').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_agent_id UUID').catch(() => {});
       console.log('✅ Tasks table ready');
+
+      // Create task_audit_logs table for tracking delete/restore actions
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS task_audit_logs (
+          id SERIAL PRIMARY KEY,
+          task_id UUID,
+          action TEXT NOT NULL,
+          user_id UUID,
+          username TEXT,
+          details JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_task_audit_task ON task_audit_logs(task_id)').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_task_audit_date ON task_audit_logs(created_at)').catch(() => {});
+      console.log('✅ Task audit logs table ready');
 
       // Create boards table if not exists
       await pool.query(`
@@ -1004,12 +1021,12 @@ export async function saveTaskToDb(task) {
   }
 }
 
-export async function deleteTaskFromDb(taskId) {
+export async function deleteTaskFromDb(taskId, deletedBy = null) {
   if (!pool) return false;
   try {
     const result = await pool.query(
-      'UPDATE tasks SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
-      [taskId]
+      'UPDATE tasks SET deleted_at = NOW(), deleted_by = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
+      [taskId, deletedBy]
     );
     return result.rowCount > 0;
   } catch (err) {
@@ -1188,6 +1205,7 @@ function rowToTask(row) {
     completedAt: row.completed_at?.toISOString?.() || row.completed_at || undefined,
     startedAt: row.started_at?.toISOString?.() || row.started_at || undefined,
     deletedAt: row.deleted_at?.toISOString?.() || row.deleted_at || undefined,
+    deletedBy: row.deleted_by || undefined,
     executionStatus: row.execution_status || undefined,
     completedActionIdx: row.completed_action_idx != null ? row.completed_action_idx : undefined,
     actionRunning: row.action_running || false,

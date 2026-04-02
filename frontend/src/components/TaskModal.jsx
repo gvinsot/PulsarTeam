@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { updateTask, deleteTask, getCommitDiff, getBoards } from '../api';
 import RealtimeTaskModal from './RealtimeTaskModal';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
@@ -191,7 +191,9 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
   const [showRealtime, setShowRealtime] = useState(false);
   const [diffCommit, setDiffCommit]     = useState(null);
   const [showAllCommits, setShowAllCommits] = useState(false);
+  const [showMoveConfirm, setShowMoveConfirm] = useState(false);
   const modalRef = useRef(null);
+  const originalBoardId = useRef(task.boardId || null);
 
   // Load boards on mount
   useEffect(() => {
@@ -256,14 +258,17 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [onClose]);
 
-  const handleSave = async () => {
+  const boardIsDifferent = editBoardId !== originalBoardId.current;
+  const destBoardName = boards.find(b => b.id === editBoardId)?.name || 'another board';
+  const srcBoardName = boards.find(b => b.id === originalBoardId.current)?.name || 'current board';
+
+  const doSave = useCallback(async () => {
     setSaving(true);
     try {
       const updated = await updateTask(task.id, {
         title: editTitle,
         description: editDesc,
         column: editColumn,
-        status: editColumn, // Also update status for backward compatibility
         agentId: editAssignee || null,
         type: editType,
         boardId: editBoardId || null,
@@ -275,10 +280,19 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
     } finally {
       setSaving(false);
     }
-  };
+  }, [task.id, editTitle, editDesc, editColumn, editAssignee, editType, editBoardId, onTaskUpdated, onClose]);
+
+  const handleSave = useCallback(() => {
+    if (boardIsDifferent) {
+      setShowMoveConfirm(true);
+    } else {
+      doSave();
+    }
+  }, [boardIsDifferent, doSave]);
 
   const handleDelete = async () => {
-    if (!confirm('Delete this task?')) return;
+    const taskLabel = task.title || task.text?.slice(0, 60) || 'this task';
+    if (!confirm(`Delete "${taskLabel}"?\n\nThe task will be moved to trash and can be restored later by an admin.`)) return;
     try {
       await deleteTask(task.id);
       onTaskUpdated?.({ ...task, _deleted: true });
@@ -386,15 +400,29 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
                     Loading...
                   </div>
                 ) : (
-                  <select
-                    className="w-full bg-gray-800 border border-white/10 rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none"
-                    value={editBoardId || ''}
-                    onChange={e => setEditBoardId(e.target.value || null)}
-                  >
-                    {boards.map(b => (
-                      <option key={b.id} value={b.id}>{b.name}</option>
-                    ))}
-                  </select>
+                  <>
+                    <select
+                      className={`w-full bg-gray-800 border rounded px-3 py-2.5 text-base sm:px-2 sm:py-1.5 sm:text-sm text-white focus:outline-none ${
+                        editBoardId !== originalBoardId.current ? 'border-amber-500/60 ring-1 ring-amber-500/30' : 'border-white/10'
+                      }`}
+                      value={editBoardId || ''}
+                      onChange={e => {
+                        const newBoardId = e.target.value || null;
+                        setEditBoardId(newBoardId);
+                        // Auto-reset column to first column of the new board
+                        const newBoard = boards.find(b => b.id === newBoardId);
+                        const firstCol = newBoard?.workflow?.columns?.[0]?.id;
+                        if (firstCol) setEditColumn(firstCol);
+                      }}
+                    >
+                      {boards.map(b => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                    {editBoardId !== originalBoardId.current && (
+                      <p className="mt-1 text-xs text-amber-400">Board will change &mdash; column will be validated</p>
+                    )}
+                  </>
                 )}
               </div>
 
@@ -505,6 +533,54 @@ export default function TaskModal({ task, onClose, columns, agents, onTaskUpdate
       {/* Realtime overlay */}
       {showRealtime && (
         <RealtimeTaskModal task={task} onClose={() => setShowRealtime(false)} />
+      )}
+
+      {/* Board move confirmation modal */}
+      {showMoveConfirm && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-gray-900 border border-amber-500/30 rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-white font-semibold text-sm">Move to another board?</h3>
+                <p className="text-gray-400 text-xs mt-0.5">This will move the task between boards</p>
+              </div>
+            </div>
+            <div className="bg-gray-800/60 rounded-lg p-3 mb-4 text-xs space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 w-12">From:</span>
+                <span className="text-gray-300 font-medium">{srcBoardName}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 w-12">To:</span>
+                <span className="text-amber-300 font-medium">{destBoardName}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 w-12">Column:</span>
+                <span className="text-gray-300">{availableColumns.find(c => c.id === editColumn)?.title || editColumn}</span>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowMoveConfirm(false)}
+                className="px-3 py-1.5 rounded-lg text-sm text-gray-400 hover:bg-white/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setShowMoveConfirm(false); doSave(); }}
+                disabled={saving}
+                className="px-4 py-1.5 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-40 transition-colors"
+              >
+                {saving ? 'Moving…' : 'Confirm move'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
