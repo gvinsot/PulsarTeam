@@ -151,10 +151,6 @@ export const lifecycleMethods = {
       projectDurationMs = Date.now() - new Date(agent.projectChangedAt).getTime();
     }
 
-    // Agent execution lock & queue info
-    const lockInfo = this._agentExecLocks?.get(id) || null;
-    const queuedTasks = this.getAgentQueueLength ? this.getAgentQueueLength(id) : 0;
-
     return {
       id: agent.id,
       name: agent.name,
@@ -171,9 +167,6 @@ export const lifecycleMethods = {
       enabled: agent.enabled !== false,
       isLeader: agent.isLeader || false,
       sandbox: hasSandbox ? 'running' : 'not running',
-      locked: !!lockInfo,
-      lockedTaskId: lockInfo?.taskId || null,
-      queuedTasks,
       tasks: {
         waiting: waitingTasks,
         active: activeTaskCount,
@@ -647,19 +640,6 @@ export const lifecycleMethods = {
     agent.currentThinking = '';
     agent.currentTask = null;
     this._chatLocks.delete(id);
-    // Release agent execution lock (clears queue for this agent)
-    if (this._agentExecLocks?.has(id)) {
-      this._agentExecLocks.delete(id);
-      console.log(`[AgentLock] Force-released lock for stopped agent "${agent.name}"`);
-    }
-    // Clear pending queue for stopped agent
-    if (this._agentPendingQueues?.has(id)) {
-      const queueSize = this._agentPendingQueues.get(id).length;
-      this._agentPendingQueues.delete(id);
-      if (queueSize > 0) {
-        console.log(`[AgentQueue] Cleared ${queueSize} queued task(s) for stopped agent "${agent.name}"`);
-      }
-    }
     this.setStatus(id, 'idle', 'Agent stopped by user');
     saveAgent(agent);
 

@@ -107,53 +107,6 @@ export function agentRoutes(agentManager) {
     res.json(agentManager.getSwarmStatus(req.user.userId, req.user.role));
   });
 
-  // Get agent availability: lock status, queue depth, busy/idle for each agent
-  router.get('/availability', (req, res) => {
-    const availability = agentManager.getAgentAvailability();
-    // Filter by user ownership (like other endpoints)
-    const filtered = availability.filter(a => {
-      const agent = agentManager.agents.get(a.id);
-      if (req.user.role === 'admin') return true;
-      return !agent?.ownerId || agent.ownerId === req.user.userId;
-    });
-    res.json(filtered);
-  });
-
-  // Force-assign a task to a specific agent (admin only, bypasses queue)
-  router.post('/:id/force-assign', requireAgentAccess, async (req, res) => {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Only admins can force-assign tasks' });
-    }
-    const { taskId, creatorAgentId } = req.body;
-    if (!taskId || !creatorAgentId) {
-      return res.status(400).json({ error: 'taskId and creatorAgentId are required' });
-    }
-    const agent = agentManager.agents.get(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const creatorAgent = agentManager.agents.get(creatorAgentId);
-    if (!creatorAgent) return res.status(404).json({ error: 'Creator agent not found' });
-    const task = creatorAgent.todoList?.find(t => t.id === taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
-
-    // Force-release any existing lock for this agent
-    if (agentManager.isAgentLocked(req.params.id)) {
-      const lockInfo = agentManager.getAgentLockInfo(req.params.id);
-      console.log(`[ForceAssign] Admin force-releasing lock on agent "${agent.name}" (was: task "${lockInfo?.taskId}")`);
-      agentManager.releaseAgentLock(req.params.id);
-    }
-
-    // Trigger execution with forceAssign flag
-    task._transition = {
-      agent: agent.role || '',
-      mode: 'execute',
-      instructions: '',
-      to: null,
-      forceAssign: true,
-    };
-    agentManager._checkAutoRefine({ ...task, agentId: creatorAgentId, assignee: agent.id }, { by: 'force-assign' });
-    res.json({ success: true, message: `Task force-assigned to ${agent.name}` });
-  });
-
   // Get single agent detailed status (lightweight, includes project + currentTask)
   router.get('/:id/status', requireAgentAccess, (req, res) => {
     const status = agentManager.getAgentStatus(req.params.id);

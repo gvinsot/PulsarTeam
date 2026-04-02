@@ -66,11 +66,11 @@ function _acquireExecutionLock(lockKey) {
 
 /**
  * Find the first available agent matching a role.
- * "Available" = enabled AND idle (not busy/error) AND not locked by another task.
+ * "Available" = enabled AND idle (not busy/error) AND not already working on an active task.
  * Only considers agents owned by the given user or with no owner.
  * Returns null if no idle agent with the role exists — the task stays pending.
  */
-function findAgentByRole(agentManager, role, ownerId = null, { forTaskId = null } = {}) {
+function findAgentByRole(agentManager, role, ownerId = null) {
   const agents = Array.from(agentManager.agents.values());
   const matching = agents.filter(
     a => a.enabled !== false
@@ -78,24 +78,15 @@ function findAgentByRole(agentManager, role, ownerId = null, { forTaskId = null 
       && (!ownerId || !a.ownerId || a.ownerId === ownerId)
   );
   console.log(`[Workflow] findAgentByRole: role="${role}" ownerId="${ownerId}" total=${agents.length} matching=${matching.length} names=[${matching.map(a => `${a.name}(owner:${a.ownerId})`).join(', ')}]`);
-  // Only return idle agents that don't already have an active task and are not locked
+  // Only return idle agents that don't already have an active task
   const INACTIVE = new Set(['done', 'backlog', 'error']);
   return matching.find(a => {
     if (a.status !== 'idle') return false;
-    // Check agent execution lock (one task at a time)
-    if (agentManager.isAgentLocked(a.id)) {
-      const lockInfo = agentManager.getAgentLockInfo(a.id);
-      // If the lock is for the same task, allow it (re-entry)
-      if (forTaskId && lockInfo?.taskId === forTaskId) return true;
-      console.log(`[Workflow] Skipping agent "${a.name}" — locked by task "${lockInfo?.taskId}" (queued: ${agentManager.getAgentQueueLength(a.id)})`);
-      return false;
-    }
     const hasActive = (a.todoList || []).some(t => !INACTIVE.has(t.status));
     if (hasActive) {
       console.log(`[Workflow] Skipping agent "${a.name}" - already has an active task`);
       return false;
     }
-    // Also check if agent is assigned to active tasks on other agents' boards
     if (agentManager.agentHasActiveTask(a.id)) {
       console.log(`[Workflow] Skipping agent "${a.name}" — has active task assignment (cross-agent check)`);
       return false;
@@ -121,15 +112,9 @@ export async function processTransition(task, agentManager, io) {
   const mode = task._transition?.mode;
   const instructions = task._transition?.instructions || '';
 
-  // Lightweight modes (title, set_type) only update metadata — they don't change task
-  // status or conflict with execute/decide, so they can run without the execution lock.
-  // This prevents a title/set_type LLM call from blocking concurrent execute/decide
-  // transitions triggered by the TaskLoop or other _checkAutoRefine calls.
-  const isLightweightMode = mode === 'title' || mode === 'set_type';
-
   // Prevent concurrent execution of the same task (with TTL-based lock)
-  const lockKey = `${task.agentId}:${task.id}`;
-  if (!isLightweightMode && !_acquireExecutionLock(lockKey)) {
+  const lockKey = `${task.agentId}:${task.id}:${mode || 'refine'}`;
+  if (!_acquireExecutionLock(lockKey)) {
     console.log(`[Workflow] Skipping duplicate processTransition for "${task.text?.slice(0, 60)}" — already in progress`);
     return { skipped: 'lock-held' };
   }
@@ -143,7 +128,6 @@ export async function processTransition(task, agentManager, io) {
   let _execAgent = null;       // the agent running the execution (for error-path logging)
   let _execStartMsgIdx = -1;
   let _execStartedAt = null;
-  let _lockedAgentId = null;   // track which agent we locked (for finally cleanup)
 
   try {
     const isDecide = mode === 'decide';
@@ -153,85 +137,30 @@ export async function processTransition(task, agentManager, io) {
     const taskOwnerId = task._boardUserId || creatorAgent?.ownerId || null;
     console.log(`[Workflow] Owner filter: _boardUserId="${task._boardUserId}" creatorAgent="${creatorAgent?.name}" resolved ownerId="${taskOwnerId}" agentId="${task.agentId}"`);
 
-    // Find the agent to run this transition
+    // Find the agent to run this transition — same logic for all modes
     let agent = null;
-    const forceAssign = task._transition?.forceAssign || false;
 
-    if (isExecution) {
-      // Execute mode: prefer role-based agent selection (like instructions mode)
-      if (transitionRole) {
-        agent = findAgentByRole(agentManager, transitionRole, taskOwnerId, { forTaskId: task.id });
-        if (agent) console.log(`[Workflow] Execute mode: found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
-      }
-      // Fallback to the task's assignee
-      if (!agent) {
-        const assignee = task.assignee ? agentManager.agents.get(task.assignee) : null;
-        if (assignee && assignee.enabled !== false) {
-          if (assignee.status === 'idle' && !agentManager.isAgentLocked(assignee.id)) {
-            agent = assignee;
-            console.log(`[Workflow] Execute mode: using idle assignee "${agent.name}" (${agent.id})`);
-          } else if (forceAssign) {
-            agent = assignee;
-            console.log(`[Workflow] Execute mode: FORCE assigning to "${agent.name}" (${agent.id}) — bypassing lock/queue`);
-          } else if (agentManager.isAgentLocked(assignee.id)) {
-            // Agent is locked — enqueue this task
-            console.log(`[Workflow] Execute mode: assignee "${assignee.name}" is locked — enqueuing task "${task.text?.slice(0, 60)}"`);
-            agentManager.enqueueForAgent(assignee.id, {
-              task: { ...task },
-              retrigger: () => {
-                agentManager._checkAutoRefine({ ...task, agentId: task.agentId }, { by: 'agent-queue' });
-              },
-            });
-            _executionLocks.delete(lockKey);
-            return { skipped: 'agent-busy-queued' };
-          }
-        }
-      }
-      // If no agent available, check if there's a matching but busy agent to queue
-      if (!agent && !forceAssign) {
-        // Look for a matching agent that is locked (to queue the task)
-        const allAgents = Array.from(agentManager.agents.values());
-        const busyCandidate = allAgents.find(a =>
-          a.enabled !== false
-          && (transitionRole ? (a.role || '').toLowerCase() === transitionRole.toLowerCase() : false)
-          && (!taskOwnerId || !a.ownerId || a.ownerId === taskOwnerId)
-          && agentManager.isAgentLocked(a.id)
-        );
-        if (busyCandidate) {
-          console.log(`[Workflow] Execute mode: agent "${busyCandidate.name}" matches role but is locked — enqueuing task "${task.text?.slice(0, 60)}"`);
-          agentManager.enqueueForAgent(busyCandidate.id, {
-            task: { ...task },
-            retrigger: () => {
-              agentManager._checkAutoRefine({ ...task, agentId: task.agentId }, { by: 'agent-queue' });
-            },
-          });
-          _executionLocks.delete(lockKey);
-          return { skipped: 'agent-busy-queued' };
-        }
-        console.log(`[Workflow] Execute mode: no agent available — task stays pending (will retry when an agent is idle)`);
-        _executionLocks.delete(lockKey);
-        return { skipped: 'no-idle-agent' };
-      }
-      if (!agent) {
-        console.log(`[Workflow] Execute mode: no agent available — task stays pending (will retry when an agent is idle)`);
-        _executionLocks.delete(lockKey);
-        return { skipped: 'no-idle-agent' };
-      }
-    } else {
-      // Non-execute modes: find agent by role (scoped to task owner)
-      if (transitionRole) {
-        agent = findAgentByRole(agentManager, transitionRole, taskOwnerId, { forTaskId: task.id });
-        if (agent) console.log(`[Workflow] Found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
+    // 1. Try role-based agent selection
+    if (transitionRole) {
+      agent = findAgentByRole(agentManager, transitionRole, taskOwnerId);
+      if (agent) console.log(`[Workflow] Found agent by role "${transitionRole}": ${agent.name} (${agent.id})`);
+    }
+
+    // 2. Fallback: for execute mode, try the task's assignee
+    if (!agent && isExecution) {
+      const assignee = task.assignee ? agentManager.agents.get(task.assignee) : null;
+      if (assignee && assignee.enabled !== false && assignee.status === 'idle') {
+        agent = assignee;
+        console.log(`[Workflow] Execute mode: using idle assignee "${agent.name}" (${agent.id})`);
       }
     }
 
-    // Fallback for non-execute modes: try global ideasAgent setting (scoped to task owner)
+    // 3. Fallback: for non-execute modes, try global ideasAgent setting
     if (!agent && !isExecution) {
       const settings = await getSettings();
       if (settings.ideasAgent) {
         agent = Array.from(agentManager.agents.values()).find(
           a => a.enabled !== false && a.status === 'idle'
-            && !agentManager.isAgentLocked(a.id)
             && (a.name || '').toLowerCase() === settings.ideasAgent.toLowerCase()
             && (!taskOwnerId || !a.ownerId || a.ownerId === taskOwnerId)
         );
@@ -243,23 +172,6 @@ export async function processTransition(task, agentManager, io) {
       console.log(`[Workflow] No idle agent found for role "${transitionRole || 'any'}" — task stays pending (will be picked up when an agent becomes available)`);
       _executionLocks.delete(lockKey);
       return { skipped: 'no-idle-agent' };
-    }
-
-    // Acquire agent-level lock (one task at a time per agent)
-    if (!isLightweightMode && !forceAssign) {
-      if (!agentManager.acquireAgentLock(agent.id, task.id, task.agentId)) {
-        // Agent became busy between findAgentByRole and lock acquisition — enqueue
-        console.log(`[Workflow] Race condition: agent "${agent.name}" became locked — enqueuing task "${task.text?.slice(0, 60)}"`);
-        agentManager.enqueueForAgent(agent.id, {
-          task: { ...task },
-          retrigger: () => {
-            agentManager._checkAutoRefine({ ...task, agentId: task.agentId }, { by: 'agent-queue' });
-          },
-        });
-        _executionLocks.delete(lockKey);
-        return { skipped: 'agent-busy-queued' };
-      }
-      _lockedAgentId = agent.id;
     }
 
     // Store the executing agent ID on the task for stop functionality
@@ -510,11 +422,7 @@ Execute the instructions above and update the task status accordingly.`;
       console.error(`[Workflow] Failed to set status after error:`, e.message);
     }
   } finally {
-    if (!isLightweightMode) _executionLocks.delete(lockKey);
-    // Release agent-level lock (allows next queued task to run)
-    if (_lockedAgentId) {
-      agentManager.releaseAgentLock(_lockedAgentId, task.id);
-    }
+    _executionLocks.delete(lockKey);
     // Clear actionRunning flag
     const creatorAgentFinal = agentManager.agents.get(task.agentId);
     const actualTaskFinal = creatorAgentFinal?.todoList?.find(t => t.id === task.id);
