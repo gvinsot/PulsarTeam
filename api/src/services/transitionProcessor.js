@@ -234,7 +234,7 @@ export async function processTransition(task, agentManager, io) {
       agent.project = task.project;
     }
 
-    // Title mode: lightweight — generate a short title from task description
+    // Title mode: generate a short title from task description
     if (isTitle) {
       const maxLen = agent.contextLength || 4000;
       const description = (task.text || '').slice(0, maxLen);
@@ -258,10 +258,10 @@ export async function processTransition(task, agentManager, io) {
       } finally {
         agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
-      return;
+      return { executed: true };
     }
 
-    // Set-type mode: lightweight — classify task into a type (bug, feature, technical, etc.)
+    // Set-type mode: classify task into a type (bug, feature, technical, etc.)
     if (isSetType) {
       const maxLen = agent.contextLength || 4000;
       const description = (task.text || '').slice(0, maxLen);
@@ -285,7 +285,7 @@ export async function processTransition(task, agentManager, io) {
       } finally {
         agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
       }
-      return;
+      return { executed: true };
     }
 
     let prompt;
