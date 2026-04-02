@@ -1620,6 +1620,7 @@ const AVAILABLE_COLORS = [
 
 const ACTION_OPTIONS = [
   { value: 'assign_agent', label: 'Assign to agent (by role)' },
+  { value: 'assign_agent_individual', label: 'Assign to agent (individually)' },
   { value: 'run_agent:execute', label: 'Execute task (agent)' },
   { value: 'run_agent:refine', label: 'Refine description (agent)' },
   { value: 'run_agent:title', label: 'Generate title (agent)' },
@@ -1632,6 +1633,7 @@ const ACTION_OPTIONS = [
 
 function createAction(key, cols) {
   if (key === 'assign_agent') return { type: 'assign_agent', role: '' };
+  if (key === 'assign_agent_individual') return { type: 'assign_agent_individual', agentId: '' };
   if (key === 'run_agent:execute') return { type: 'run_agent', mode: 'execute', role: '', instructions: '' };
   if (key === 'run_agent:refine') return { type: 'run_agent', mode: 'refine', role: '', instructions: '' };
   if (key === 'run_agent:title') return { type: 'run_agent', mode: 'title', role: '' };
@@ -2020,6 +2022,16 @@ function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
                                 className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
                                 <option value="">Role...</option>
                                 {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
+                              </select>
+                            )}
+
+                            {/* Agent selector for assign_agent_individual */}
+                            {action.type === 'assign_agent_individual' && (
+                              <select value={action.agentId || ''}
+                                onChange={e => updateAction(idx, ai, { agentId: e.target.value })}
+                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                                <option value="">None (unassign)</option>
+                                {enabledAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                               </select>
                             )}
 

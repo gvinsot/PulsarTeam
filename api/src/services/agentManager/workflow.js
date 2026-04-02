@@ -149,7 +149,24 @@ export const workflowMethods = {
         let stopActionChain = false;
         for (let actionIdx = startActionIdx; actionIdx < actions.length; actionIdx++) {
           const action = actions[actionIdx];
-          if (action.type === 'assign_agent') {
+          if (action.type === 'assign_agent_individual') {
+            // Assign to a specific agent (or unassign if agentId is empty/null)
+            const targetAgentId = action.agentId || null;
+            const creatorAgent = this.agents.get(task.agentId);
+            const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
+            if (actualTask) {
+              const previousAssignee = actualTask.assignee;
+              actualTask.assignee = targetAgentId;
+              if (!actualTask.history) actualTask.history = [];
+              actualTask.history.push({ status: actualTask.status, at: new Date().toISOString(), by: 'workflow', type: 'reassign', assignee: targetAgentId });
+              saveTaskToDb({ ...actualTask, agentId: task.agentId });
+              task.assignee = targetAgentId;
+              this.io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTask });
+              const targetName = targetAgentId ? (this.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
+              console.log(`[Workflow] Action: individually assigned "${(task.text || '').slice(0, 60)}" to "${targetName}" (was: ${previousAssignee || 'none'})`);
+            }
+
+          } else if (action.type === 'assign_agent') {
             const candidates = Array.from(this.agents.values()).filter(a =>
               a.enabled !== false &&
               (a.role || '').toLowerCase() === (action.role || '').toLowerCase() &&
