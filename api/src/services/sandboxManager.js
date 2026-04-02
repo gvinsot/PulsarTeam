@@ -43,15 +43,43 @@ export class SandboxManager {
     }
 
     const username = this._username(agentId);
-    await this._ensureLinuxUser(username);
-    await this._ensureAgentWorkspace(username);
 
-    if (project && gitUrl) {
-      await this._cloneProjectForUser(username, project, gitUrl);
+    // Check if the Linux user and project already exist in the container
+    // (e.g. server restarted but container is the same). This avoids
+    // re-creating the user and re-cloning the project (~3s saved).
+    let userExists = false;
+    let projectExists = false;
+    try {
+      const { stdout } = await this._execAsRoot(
+        `id -u ${this._sh(username)} >/dev/null 2>&1 && echo "user_ok" || echo "user_missing"`,
+        { timeout: 5000 }
+      );
+      userExists = stdout.trim().includes('user_ok');
+      if (userExists && project) {
+        const { stdout: projCheck } = await this._execAsRoot(
+          `test -d ${this._sh(this._userWorkspace(username))}/${this._sh(project)}/.git && echo "proj_ok" || echo "proj_missing"`,
+          { timeout: 5000 }
+        );
+        projectExists = projCheck.trim().includes('proj_ok');
+      }
+    } catch { /* fall through to full setup */ }
+
+    if (userExists && projectExists) {
+      console.log(`📦 [Sandbox] Reusing existing sandbox for "${username}" (project: ${project})`);
+      this.agentUsers.set(agentId, { username, project, _userVerified: true });
+      // Pull latest code
+      if (project && gitUrl) {
+        await this._cloneProjectForUser(username, project, gitUrl);
+      }
+    } else {
+      await this._ensureLinuxUser(username);
+      await this._ensureAgentWorkspace(username);
+      if (project && gitUrl) {
+        await this._cloneProjectForUser(username, project, gitUrl);
+      }
+      this.agentUsers.set(agentId, { username, project, _userVerified: true });
+      console.log(`📦 [Sandbox] Agent ${agentId} mapped to shared container user "${username}" (project: ${project || 'none'})`);
     }
-
-    this.agentUsers.set(agentId, { username, project, _userVerified: true });
-    console.log(`📦 [Sandbox] Agent ${agentId} mapped to shared container user "${username}" (project: ${project || 'none'})`);
 
     // Generate file tree (awaited so it's ready for the system prompt)
     if (project) {
@@ -245,13 +273,21 @@ export class SandboxManager {
   }
 
   async _ensureSharedContainerRunning() {
+    // Skip re-check if we verified recently (avoid docker ps on every tool call)
+    const CONTAINER_CHECK_TTL_MS = 30000; // 30s
+    if (this._resolvedContainerName && this._lastContainerCheck && (Date.now() - this._lastContainerCheck) < CONTAINER_CHECK_TTL_MS) return;
+
     // Check if cached container name is still valid
-    if (this._resolvedContainerName && await this._isRunning(this._resolvedContainerName)) return;
+    if (this._resolvedContainerName && await this._isRunning(this._resolvedContainerName)) {
+      this._lastContainerCheck = Date.now();
+      return;
+    }
 
     const previousContainer = this._resolvedContainerName;
 
     // Discover the Swarm-managed sandbox container
     this._resolvedContainerName = await this._discoverContainer();
+    this._lastContainerCheck = Date.now();
     console.log(`📦 [Sandbox] Connected to Swarm sandbox container: ${this._resolvedContainerName}`);
 
     // If container changed, all previously created users are gone — mark them for re-creation
@@ -320,8 +356,29 @@ export class SandboxManager {
     const userEsc = this._sh(username);
     const workspace = this._userWorkspace(username);
     const target = `${workspace}/${project}`;
+    const targetEsc = this._sh(target);
 
-    await this._execAsRoot(`rm -rf ${this._sh(target)}`);
+    // Check if repo already exists in the container — git pull instead of re-cloning
+    try {
+      const { stdout } = await this._execAsAgentUser(
+        username,
+        `test -d ${targetEsc}/.git && echo "exists" || echo "missing"`,
+        { timeout: 5000 }
+      );
+      if (stdout.trim() === 'exists') {
+        console.log(`📦 [Sandbox] Project "${project}" already exists for "${username}" — pulling latest`);
+        await this._execAsAgentUser(
+          username,
+          `cd ${targetEsc} && git clean -fd && git fetch origin && git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)`,
+          { timeout: 60000 }
+        );
+        return;
+      }
+    } catch {
+      // Could not check — fall through to clone
+    }
+
+    await this._execAsRoot(`rm -rf ${targetEsc}`);
     await this._execAsRoot(`mkdir -p ${this._sh(workspace)} && chown -R ${userEsc}:${userEsc} ${this._sh(workspace)}`);
 
     // Ensure GitHub host key exists for root before cloning.
@@ -332,10 +389,10 @@ export class SandboxManager {
 
     // Clone as root (guaranteed SSH key access), then chown to agent user
     await this._execAsRoot(
-      `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts" git clone ${this._sh(gitUrl)} ${this._sh(target)}`,
+      `GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/etc/ssh/ssh_known_hosts" git clone ${this._sh(gitUrl)} ${targetEsc}`,
       { timeout: 120000 }
     );
-    await this._execAsRoot(`chown -R ${userEsc}:${userEsc} ${this._sh(target)}`);
+    await this._execAsRoot(`chown -R ${userEsc}:${userEsc} ${targetEsc}`);
 
     // Git config per-repo (not --global) so each agent can have distinct identity
     const gitName = process.env.GIT_USER_NAME || 'PulsarTeam';
