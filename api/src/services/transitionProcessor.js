@@ -95,22 +95,15 @@ function findAgentByRole(agentManager, role, ownerId = null, excludeTaskId = nul
   );
   console.log(`[Workflow] findAgentByRole: role="${role}" ownerId="${ownerId}" total=${agents.length} matching=${matching.length} names=[${matching.map(a => `${a.name}(status:${a.status},owner:${a.ownerId})`).join(', ')}]`);
 
-  // Collect all eligible (idle, not busy) agents, then pick the least loaded
-  const INACTIVE = new Set(['done', 'backlog', 'error']);
+  // Collect all eligible agents: idle + not currently running a transition
   const eligible = [];
   for (const a of matching) {
-    if (a.status !== 'idle') continue;
+    if (a.status !== 'idle') {
+      console.log(`[Workflow] Skipping agent "${a.name}" — status: ${a.status}`);
+      continue;
+    }
     if (_busyAgents.has(a.id)) {
       console.log(`[Workflow] Skipping agent "${a.name}" — busy running another transition`);
-      continue;
-    }
-    const hasActive = (a.todoList || []).some(t => !INACTIVE.has(t.status) && t.id !== excludeTaskId);
-    if (hasActive) {
-      console.log(`[Workflow] Skipping agent "${a.name}" — already has an active task`);
-      continue;
-    }
-    if (agentManager.agentHasActiveTask(a.id, excludeTaskId)) {
-      console.log(`[Workflow] Skipping agent "${a.name}" — has active task assignment (cross-agent check)`);
       continue;
     }
     eligible.push(a);
