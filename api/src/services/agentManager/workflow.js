@@ -366,6 +366,18 @@ export const workflowMethods = {
             if (this._conditionProcessing.has(lockKey)) continue;
             this._conditionProcessing.set(lockKey, Date.now());
 
+            const isOnEnterRetry = transition.trigger === 'on_enter';
+
+            // For on_enter retries, re-run the full action chain via _checkAutoRefine
+            // so that _completedActionIdx is respected and subsequent actions (e.g.
+            // change_status) are executed after the skipped action completes.
+            if (isOnEnterRetry) {
+              console.log(`[Workflow] on_enter retry: re-running full action chain for "${(task.text || '').slice(0, 60)}" in status="${task.status}" (completedActionIdx=${task.completedActionIdx ?? task._completedActionIdx ?? 'none'})`);
+              this._checkAutoRefine({ ...task, agentId }, { by: 'on-enter-retry' });
+              this._conditionProcessing.delete(lockKey);
+              break;
+            }
+
             console.log(`[Workflow] Condition re-check: all conditions met for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
 
             const actions = transition.actions || [];
@@ -414,23 +426,9 @@ export const workflowMethods = {
                     rejectTarget: action.rejectTarget || null,
                   }
                 };
-                const isOnEnterRetry = transition.trigger === 'on_enter';
-                const processingStatus = task.status;
-                console.log(`[Workflow] ${isOnEnterRetry ? 'on_enter retry' : 'Condition re-check'}: run_agent mode="${action.mode}" role="${action.role}"`);
+                console.log(`[Workflow] Condition re-check: run_agent mode="${action.mode}" role="${action.role}"`);
                 processTransition(enrichedTask, this, this.io)
-                  .then(result => {
-                    if (isOnEnterRetry && result?.executed) {
-                      const actualTask = this.agents.get(agentId)?.todoList?.find(t => t.id === task.id);
-                      if (actualTask && actualTask._pendingOnEnter === processingStatus) {
-                        delete actualTask._pendingOnEnter;
-                        saveAgent(this.agents.get(agentId));
-                        console.log(`[Workflow] Cleared _pendingOnEnter for "${(task.text || '').slice(0, 60)}" in "${processingStatus}" (agent executed successfully)`);
-                      }
-                    } else if (isOnEnterRetry && result?.skipped) {
-                      console.log(`[Workflow] on_enter retry still pending for "${(task.text || '').slice(0, 60)}" (${result.skipped})`);
-                    }
-                  })
-                  .catch(err => console.error(`[Workflow] ${isOnEnterRetry ? 'on_enter retry' : 'Condition re-check'} error:`, err.message))
+                  .catch(err => console.error(`[Workflow] Condition re-check error:`, err.message))
                   .finally(() => {
                     this._conditionProcessing.delete(lockKey);
                   });

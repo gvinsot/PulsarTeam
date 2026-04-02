@@ -523,7 +523,6 @@ export const chatMethods = {
 
       if (chunk.type === 'text') {
         fullResponse += chunk.text;
-        agent.currentThinking = fullResponse;
         if (streamCallback) streamCallback(chunk.text);
 
         // ── Incremental delegation detection ──────────────────────

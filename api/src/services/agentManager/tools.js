@@ -376,6 +376,19 @@ export const toolsMethods = {
         continue;
       }
 
+      // Cross-turn dedup for list_dir: skip if the same path was listed recently (within 30s)
+      if (call.tool === 'list_dir') {
+        const dirPath = call.args[0] || '.';
+        const ldNow = Date.now();
+        if (!agent._lastListDirCache) agent._lastListDirCache = {};
+        const cached = agent._lastListDirCache[dirPath];
+        if (cached && (ldNow - cached.at) < 30000) {
+          console.log(`[Dedup] Skipping @list_dir(${dirPath}) from "${agent.name}" — listed ${Math.round((ldNow - cached.at) / 1000)}s ago`);
+          results.push({ tool: 'list_dir', args: call.args, success: true, result: cached.result });
+          continue;
+        }
+      }
+
       try {
         const toolLabels = {
           write_file: (a) => `Writing ${a[0] || ''}`,
@@ -496,6 +509,12 @@ export const toolsMethods = {
         }
 
         results.push({ tool: call.tool, args: call.args, ...result });
+
+        // Cache list_dir results for cross-turn dedup
+        if (call.tool === 'list_dir' && result.success) {
+          if (!agent._lastListDirCache) agent._lastListDirCache = {};
+          agent._lastListDirCache[call.args[0] || '.'] = { result: result.result, at: Date.now() };
+        }
 
         if (streamCallback) {
           const statusIcon = result.success ? '✓' : '✗';
