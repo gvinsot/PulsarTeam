@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react';
-import { FolderGit2, Users, ListTodo, Clock, Search, Activity, BarChart3, ExternalLink, GitCommit } from 'lucide-react';
+import { FolderGit2, Users, ListTodo, Clock, Search, Activity, BarChart3, ExternalLink, GitCommit, Plus, X, Loader2, Lock, Unlock } from 'lucide-react';
 import ProjectDetailModal from './ProjectDetailModal';
 import GitHubActivityModal from './GitHubActivityModal';
+import api from '../api';
 
 function GithubIcon({ className }) {
   return (
@@ -16,6 +17,26 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
   const [sortBy, setSortBy] = useState('name');
   const [selectedProject, setSelectedProject] = useState(null);
   const [activityTarget, setActivityTarget] = useState(null); // { owner, repo }
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState(null);
+  const [newProject, setNewProject] = useState({ name: '', description: '', isPrivate: false });
+
+  const handleCreateProject = async () => {
+    if (!newProject.name.trim()) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await api.createProject(newProject.name.trim(), newProject.description, newProject.isPrivate);
+      setShowCreateModal(false);
+      setNewProject({ name: '', description: '', isPrivate: false });
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      setCreateError(err.message || 'Failed to create project');
+    } finally {
+      setCreating(false);
+    }
+  };
 
   // Derive tasks from agents (same approach as TasksBoard)
   const tasks = useMemo(() =>
@@ -131,6 +152,13 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
             <option value="tasks">Sort: Tasks</option>
             <option value="completion">Sort: Completion</option>
           </select>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-sm rounded transition-colors"
+          >
+            <Plus size={14} />
+            <span className="hidden sm:inline">New Project</span>
+          </button>
         </div>
       </div>
 
@@ -152,6 +180,85 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
           repo={activityTarget.repo}
           onClose={() => setActivityTarget(null)}
         />
+      )}
+
+      {/* Create Project Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !creating && setShowCreateModal(false)}>
+          <div className="bg-dark-800 border border-dark-600 rounded-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-white">New Project</h3>
+              <button onClick={() => !creating && setShowCreateModal(false)} className="text-dark-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="text-xs text-dark-400">Creates a new GitHub repository from the BoilerPlate template and adds it to your projects.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-dark-300 mb-1">Project Name *</label>
+                <input
+                  type="text"
+                  value={newProject.name}
+                  onChange={e => setNewProject(p => ({ ...p, name: e.target.value }))}
+                  placeholder="my-new-project"
+                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-dark-500 focus:border-purple-500 focus:outline-none"
+                  disabled={creating}
+                  autoFocus
+                  onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
+                />
+                <p className="text-xs text-dark-500 mt-1">Letters, numbers, hyphens, dots and underscores only.</p>
+              </div>
+              <div>
+                <label className="block text-sm text-dark-300 mb-1">Description</label>
+                <input
+                  type="text"
+                  value={newProject.description}
+                  onChange={e => setNewProject(p => ({ ...p, description: e.target.value }))}
+                  placeholder="A short description..."
+                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-dark-500 focus:border-purple-500 focus:outline-none"
+                  disabled={creating}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
+                <button
+                  type="button"
+                  onClick={() => setNewProject(p => ({ ...p, isPrivate: !p.isPrivate }))}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors ${
+                    newProject.isPrivate
+                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                      : 'bg-dark-700 text-dark-400 border border-dark-600'
+                  }`}
+                  disabled={creating}
+                >
+                  {newProject.isPrivate ? <Lock size={12} /> : <Unlock size={12} />}
+                  {newProject.isPrivate ? 'Private' : 'Public'}
+                </button>
+              </label>
+            </div>
+            {createError && (
+              <div className="bg-red-500/10 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400">
+                {createError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowCreateModal(false)}
+                disabled={creating}
+                className="px-4 py-2 text-sm text-dark-300 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateProject}
+                disabled={creating || !newProject.name.trim()}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-dark-600 disabled:text-dark-400 text-white text-sm rounded transition-colors"
+              >
+                {creating && <Loader2 size={14} className="animate-spin" />}
+                {creating ? 'Creating...' : 'Create Project'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Project Cards */}

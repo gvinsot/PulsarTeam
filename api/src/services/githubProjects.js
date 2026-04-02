@@ -129,6 +129,80 @@ export async function getProjectGitUrl(projectName) {
 }
 
 /**
+ * Create a new GitHub repository from the BoilerPlate template, then star it
+ * so it appears in the projects list.
+ *
+ * Uses the GitHub "Generate from template" API:
+ *   POST /repos/{template_owner}/{template_repo}/generate
+ *
+ * @param {string} name - The name for the new repository
+ * @param {string} [description] - Optional description
+ * @param {boolean} [isPrivate] - Whether the repo should be private (default: false)
+ * @returns {{ name, fullName, sshUrl, htmlUrl }} the created repo info
+ */
+export async function createProjectFromBoilerplate(name, description = '', isPrivate = false) {
+  const token = process.env.GITHUB_TOKEN;
+  const user = process.env.GITHUB_USER;
+  if (!token || !user) {
+    throw new Error('GITHUB_TOKEN or GITHUB_USER not configured');
+  }
+
+  const templateOwner = process.env.BOILERPLATE_OWNER || user;
+  const templateRepo = process.env.BOILERPLATE_REPO || 'BoilerPlate';
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  // 1. Generate repo from template
+  const genRes = await fetch(
+    `https://api.github.com/repos/${templateOwner}/${templateRepo}/generate`,
+    {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        owner: user,
+        name,
+        description,
+        private: isPrivate,
+        include_all_branches: false,
+      }),
+    }
+  );
+
+  if (!genRes.ok) {
+    const err = await genRes.json().catch(() => ({}));
+    const msg = err.message || err.errors?.map(e => e.message).join(', ') || genRes.statusText;
+    throw new Error(`GitHub: failed to create repo — ${msg}`);
+  }
+
+  const repo = await genRes.json();
+
+  // 2. Star the new repo so it appears in the projects list
+  const starRes = await fetch(
+    `https://api.github.com/user/starred/${user}/${name}`,
+    { method: 'PUT', headers: { ...headers, 'Content-Length': '0' } }
+  );
+  if (!starRes.ok) {
+    console.warn(`Warning: created repo ${name} but failed to star it (${starRes.status})`);
+  }
+
+  // 3. Invalidate cache so the new project shows up immediately
+  invalidateProjectCache();
+
+  return {
+    name: repo.name,
+    fullName: repo.full_name,
+    sshUrl: repo.ssh_url,
+    htmlUrl: repo.html_url,
+    description: repo.description || '',
+    defaultBranch: repo.default_branch || 'main',
+  };
+}
+
+/**
  * Invalidate the cache (e.g. after starring a new repo).
  */
 export function invalidateProjectCache() {

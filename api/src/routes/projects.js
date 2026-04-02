@@ -1,5 +1,5 @@
 import express from 'express';
-import { listStarredRepos, invalidateProjectCache } from '../services/githubProjects.js';
+import { listStarredRepos, invalidateProjectCache, createProjectFromBoilerplate } from '../services/githubProjects.js';
 
 // In-memory cache for GitHub activity data (TTL 1h)
 const ACTIVITY_CACHE_TTL = 60 * 60 * 1000;
@@ -24,6 +24,21 @@ export function projectRoutes() {
     } catch (err) {
       console.error('Failed to list projects:', err);
       res.json([]);
+    }
+  });
+
+  // Create a new project (GitHub repo from BoilerPlate template)
+  router.post('/', async (req, res) => {
+    try {
+      const { name, description, isPrivate } = req.body;
+      if (!name || typeof name !== 'string' || !/^[a-zA-Z0-9_.-]+$/.test(name.trim())) {
+        return res.status(400).json({ error: 'Invalid project name. Use only letters, numbers, hyphens, dots, and underscores.' });
+      }
+      const result = await createProjectFromBoilerplate(name.trim(), description || '', !!isPrivate);
+      res.json(result);
+    } catch (err) {
+      console.error('Failed to create project:', err.message);
+      res.status(500).json({ error: err.message });
     }
   });
 

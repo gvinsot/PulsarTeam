@@ -371,6 +371,19 @@ export const api = {
   getProjects: () =>
     fetch(`${API_BASE}/projects`, { headers: getHeaders() }).then(handleResponse),
 
+  createProject: (name, description, isPrivate) =>
+    fetch(`${API_BASE}/projects`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ name, description, isPrivate })
+    }).then(handleResponse),
+
+  refreshProjects: () =>
+    fetch(`${API_BASE}/projects/refresh`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   // Code Index — auto-index project by name
   indexProject: (projectName) =>
     fetch(`${API_BASE}/code-index/index-project`, {
