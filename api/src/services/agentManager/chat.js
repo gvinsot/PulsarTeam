@@ -526,6 +526,9 @@ export const chatMethods = {
 
     this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, safeMaxTokens);
 
+    // Estimate context size (tokens in the messages array sent to the LLM)
+    const estimatedContextTokens = this._estimateTokens(messages);
+
     for await (const chunk of provider.chatStream(messages, {
       temperature: llmConfig.temperature,
       maxTokens: safeMaxTokens,
@@ -652,11 +655,11 @@ export const chatMethods = {
           agent.metrics.totalTokensOut += outTok;
           if (cost != null && cost > 0) {
             // Use actual cost reported by provider (e.g. Claude Paid Plan via coder-service)
-            this._recordUsageDirect(agent, inTok, outTok, cost);
+            this._recordUsageDirect(agent, inTok, outTok, cost, estimatedContextTokens);
           } else {
-            this._recordUsage(agent, inTok, outTok);
+            this._recordUsage(agent, inTok, outTok, estimatedContextTokens);
           }
-          console.log(`📊 [Token] "${agent.name}": in=${inTok} out=${outTok} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
+          console.log(`📊 [Token] "${agent.name}": in=${inTok} out=${outTok} ctx=${estimatedContextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
         } else {
           console.warn(`⚠️ [Token] "${agent.name}": done event with no usage data`);
         }
@@ -680,6 +683,7 @@ export const chatMethods = {
       finishReason = null;
       const contMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
       this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, contMaxTokens);
+      const contContextTokens = this._estimateTokens(messages);
       for await (const chunk of provider.chatStream(messages, {
         temperature: llmConfig.temperature,
         maxTokens: contMaxTokens,
@@ -708,11 +712,11 @@ export const chatMethods = {
             agent.metrics.totalTokensIn += inTok;
             agent.metrics.totalTokensOut += outTok;
             if (cost != null && cost > 0) {
-              this._recordUsageDirect(agent, inTok, outTok, cost);
+              this._recordUsageDirect(agent, inTok, outTok, cost, contContextTokens);
             } else {
-              this._recordUsage(agent, inTok, outTok);
+              this._recordUsage(agent, inTok, outTok, contContextTokens);
             }
-            console.log(`📊 [Token] "${agent.name}" (cont): in=${inTok} out=${outTok} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
+            console.log(`📊 [Token] "${agent.name}" (cont): in=${inTok} out=${outTok} ctx=${contContextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
           }
           if (chunk.finishReason) {
             finishReason = chunk.finishReason;

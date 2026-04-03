@@ -131,7 +131,7 @@ export class AgentManager {
     return Array.from(this.llmConfigs.values());
   }
 
-  _recordUsage(agent, inputTokens, outputTokens) {
+  _recordUsage(agent, inputTokens, outputTokens, contextTokens = 0) {
     if (!inputTokens && !outputTokens) return;
     const userId = agent.ownerId || null;
     const resolved = this.resolveLlmConfig(agent);
@@ -141,7 +141,7 @@ export class AgentManager {
       if (resolved.costPerInputToken != null && resolved.costPerOutputToken != null) {
         const cost = (inputTokens / 1e6) * resolved.costPerInputToken
                    + (outputTokens / 1e6) * resolved.costPerOutputToken;
-        recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId);
+        recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
         return;
       }
       const configs = this._getLlmConfigsCached();
@@ -150,7 +150,7 @@ export class AgentManager {
         if (cfg && (cfg.costPerInputToken != null || cfg.costPerOutputToken != null)) {
           const cost = (inputTokens / 1e6) * (cfg.costPerInputToken || 0)
                      + (outputTokens / 1e6) * (cfg.costPerOutputToken || 0);
-          recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId);
+          recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
           return;
         }
       }
@@ -158,17 +158,17 @@ export class AgentManager {
       if (cfgByModel && (cfgByModel.costPerInputToken != null || cfgByModel.costPerOutputToken != null)) {
         const cost = (inputTokens / 1e6) * (cfgByModel.costPerInputToken || 0)
                    + (outputTokens / 1e6) * (cfgByModel.costPerOutputToken || 0);
-        recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId);
+        recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
         return;
       }
       const cost = (inputTokens / 1e6) * 3 + (outputTokens / 1e6) * 15;
-      recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId);
+      recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
     } catch (err) {
       console.warn("Failed to record token usage:", err.message);
     }
   }
 
-  _recordUsageDirect(agent, inputTokens, outputTokens, costUsd) {
+  _recordUsageDirect(agent, inputTokens, outputTokens, costUsd, contextTokens = 0) {
     // Record usage with the actual cost reported by the provider (e.g. Claude Paid Plan via coder-service).
     // This bypasses the token-based cost calculation used by _recordUsage.
     const userId = agent.ownerId || null;
@@ -176,7 +176,7 @@ export class AgentManager {
     const provider = resolved.configName || resolved.provider || 'unknown';
     const model = resolved.model || 'unknown';
     try {
-      recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, costUsd, userId);
+      recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, costUsd, userId, contextTokens);
     } catch (err) {
       console.warn("Failed to record direct token usage:", err.message);
     }

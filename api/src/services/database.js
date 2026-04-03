@@ -84,6 +84,9 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_log(user_id)').catch(() => {});
 
+      // Add context_tokens column for tracking context window utilization
+      await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS context_tokens INTEGER DEFAULT 0`).catch(() => {});
+
       console.log('✅ Token usage table ready');
 
       // Create project_contexts table if not exists
@@ -489,13 +492,13 @@ export async function loadSettingsCache() {
 
 // ── Token Usage (Budget) ──────────────────────────────────────────────────
 
-export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null) {
+export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null, contextTokens = 0) {
   if (!pool) return;
   try {
     await pool.query(
-      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId]
+      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId, contextTokens || 0]
     );
   } catch (err) {
     console.error('Failed to record token usage:', err.message);
@@ -503,30 +506,28 @@ export async function recordTokenUsage(agentId, agentName, provider, model, inpu
 }
 
 export function getTokenUsageSummary(days = 1) {
-  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0 };
-  // Return a promise — callers in budget.js use it synchronously in try/catch, so we keep sync shape via cache
-  // For now, return empty and let callers use async version
-  return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0 };
+  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
 }
 
 /** Async per-user (or global when userId is null) token usage summary */
 export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
-  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0 };
-  // If no user filter, return from cache for speed
-  if (!userId) return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0 };
+  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  if (!userId) return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   try {
     const result = await pool.query(
       `SELECT COALESCE(SUM(cost), 0) as total_cost,
               COALESCE(SUM(input_tokens), 0) as total_input,
-              COALESCE(SUM(output_tokens), 0) as total_output
+              COALESCE(SUM(output_tokens), 0) as total_output,
+              COALESCE(SUM(context_tokens), 0) as total_context
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1 AND user_id = $2`,
       [days, userId]
     );
-    return result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0 };
+    return result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   } catch (err) {
     console.error('Failed to get token summary for user:', err.message);
-    return { total_cost: 0, total_input: 0, total_output: 0 };
+    return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   }
 }
 
@@ -538,7 +539,8 @@ export async function getTokenUsageByAgent(days = 30, userId = null) {
     const result = await pool.query(
       `SELECT provider, model,
               COUNT(DISTINCT agent_id) as agent_count,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost,
+              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
+              SUM(context_tokens) as total_context, SUM(cost) as total_cost,
               COUNT(*) as request_count
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
@@ -561,7 +563,8 @@ export async function getTokenUsageTimeline(days = 7, groupBy = 'day', userId = 
     const params = userId ? [trunc, days, userId] : [trunc, days];
     const result = await pool.query(
       `SELECT date_trunc($1, recorded_at) as period,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost
+              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
+              SUM(context_tokens) as total_context, SUM(cost) as total_cost
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2${userFilter}
        GROUP BY period ORDER BY period`,
@@ -581,7 +584,8 @@ export async function getDailyTokenUsage(days = 30, userId = null) {
     const params = userId ? [days, userId] : [days];
     const result = await pool.query(
       `SELECT date_trunc('day', recorded_at) as day,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost
+              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
+              SUM(context_tokens) as total_context, SUM(cost) as total_cost
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
        GROUP BY day ORDER BY day`,
@@ -604,12 +608,13 @@ export async function refreshTokenSummaryCache() {
       const result = await pool.query(
         `SELECT COALESCE(SUM(cost), 0) as total_cost,
                 COALESCE(SUM(input_tokens), 0) as total_input,
-                COALESCE(SUM(output_tokens), 0) as total_output
+                COALESCE(SUM(output_tokens), 0) as total_output,
+                COALESCE(SUM(context_tokens), 0) as total_context
          FROM token_usage_log
          WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1`,
         [days]
       );
-      _tokenSummaryCache[days] = result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0 };
+      _tokenSummaryCache[days] = result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
     } catch (err) {
       console.error('Failed to refresh token summary cache:', err.message);
     }
