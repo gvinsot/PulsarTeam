@@ -34,7 +34,7 @@ export function clearTaskSignals(taskId) {
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
-  addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence, taskType } = {}) {
+  async addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence, taskType } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = 'backlog';
@@ -59,43 +59,43 @@ export const tasksMethods = {
         originalStatus: status,
       };
     }
-    agent.todoList.push(newTask);
-    saveTaskToDb({ ...newTask, agentId });
+    await saveTaskToDb({ ...newTask, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (!skipAutoRefine) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },
 
-  toggleTask(agentId, taskId) {
+  async toggleTask(agentId, taskId) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
-    if (!task) return null;
+    const task = await getTaskById(taskId);
+    if (!task || task.agentId !== agentId) return null;
     const prevStatus = task.status;
     task.status = prevStatus === 'done' ? 'backlog' : 'done';
     if (task.status === 'done') task.completedAt = new Date().toISOString();
     const now = new Date().toISOString();
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status: task.status, at: now, by: 'user' });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  setTaskStatus(agentId, taskId, status, { skipAutoRefine = false, by = null } = {}) {
+  async setTaskStatus(agentId, taskId, status, { skipAutoRefine = false, by = null } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const prevStatus = task.status;
     if (prevStatus === status) return task;
     task.status = status;
-    delete task._pendingOnEnter;
+    // Clear pending on enter signal
+    clearTaskSignal(taskId, 'pendingOnEnter');
     // Clear execution state — processTransition will re-set startedAt when
     // a workflow action genuinely starts execution. Without this, stale
     // startedAt from a previous execution causes the task loop to resume
     // tasks that were manually moved (e.g. done → nextsprint).
-    delete task.startedAt;
+    task.startedAt = null;
     task.executionStatus = null;
     const now = new Date().toISOString();
     if (status === 'done') task.completedAt = now;
@@ -103,78 +103,78 @@ export const tasksMethods = {
       task.errorFromStatus = prevStatus;
     }
     if (prevStatus === 'error' && status !== 'error') {
-      delete task.errorFromStatus;
-      delete task.error;
+      task.errorFromStatus = null;
+      task.error = null;
     }
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
     if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;
   },
 
-  updateTaskTitle(agentId, taskId, title) {
+  async updateTaskTitle(agentId, taskId, title) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const oldTitle = task.title || null;
     task.title = title;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'title', oldValue: oldTitle, newValue: title });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  updateTaskText(agentId, taskId, text) {
+  async updateTaskText(agentId, taskId, text) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const oldText = task.text;
     task.text = text;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'text', oldValue: oldText, newValue: text });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  updateTaskProject(agentId, taskId, project) {
+  async updateTaskProject(agentId, taskId, project) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const oldProject = task.project;
     task.project = project;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'project', oldValue: oldProject, newValue: project });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  updateTaskType(agentId, taskId, taskType, by = 'user') {
+  async updateTaskType(agentId, taskId, taskType, by = 'user') {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const oldType = task.taskType || null;
     task.taskType = taskType || null;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field: 'taskType', oldValue: oldType, newValue: taskType || null });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  updateTaskRecurrence(agentId, taskId, recurrence) {
+  async updateTaskRecurrence(agentId, taskId, recurrence) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     if (recurrence && recurrence.enabled) {
       task.recurrence = {
@@ -186,7 +186,7 @@ export const tasksMethods = {
     } else {
       task.recurrence = null;
     }
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -246,85 +246,71 @@ export const tasksMethods = {
         console.log(`🔗 [Commit] Found own active task: "${ownActive.text?.slice(0, 50)}"`);
         return { task: ownActive, ownerAgentId: agentId };
       }
+  async _findTaskForCommitLink(agentId) {
+    // Find active task assigned to or owned by this agent
+    const activeTask = await getActiveTaskForExecutor(agentId);
+    if (activeTask) return { task: activeTask, ownerAgentId: activeTask.agentId };
+    // Fallback: find recently completed task
+    const allTasks = await getTasksByAgent(agentId);
+    const doneTasks = allTasks.filter(t => t.status === 'done' && t.completedAt);
+    if (doneTasks.length > 0) {
+      doneTasks.sort((a, b) => new Date(b.completedAt) - new Date(a.completedAt));
+      console.log(`🔗 [Commit] No active task — falling back to recently done task "${doneTasks[0].text?.slice(0, 50)}"`);
+      return { task: doneTasks[0], ownerAgentId: doneTasks[0].agentId };
     }
-
-    // Priority 4: Fall back to most recently completed task (owned or assigned)
-    let bestDone = null;
-    for (const [creatorId, creatorAgent] of this.agents) {
-      if (!creatorAgent.todoList) continue;
-      for (const task of creatorAgent.todoList) {
-        const isOwnedOrAssigned = creatorId === agentId || task.assignee === agentId;
-        if (!isOwnedOrAssigned) continue;
-        if (task.status === 'done' && task.completedAt) {
-          if (!bestDone || new Date(task.completedAt) > new Date(bestDone.task.completedAt)) {
-            bestDone = { task, ownerAgentId: creatorId };
-          }
-        }
-      }
-    }
-    if (bestDone) {
-      console.log(`🔗 [Commit] No active task — falling back to recently done: "${bestDone.task.text?.slice(0, 50)}"`);
-      return bestDone;
-    }
-
-    console.log(`🔗 [Commit] No task found for agent ${agentId.slice(0, 8)} (${agent?.name || 'unknown'})`);
     return null;
   },
 
-  addTaskCommit(agentId, taskId, hash, message) {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+  async addTaskCommit(agentId, taskId, hash, message) {
+    const task = await getTaskById(taskId);
     if (!task) return null;
     if (!task.commits) task.commits = [];
     if (task.commits.some(c => c.hash === hash)) return task;
     task.commits.push({ hash, message: message || '', date: new Date().toISOString() });
-    saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
+    await saveTaskToDb({ ...task, agentId: task.agentId });
+    const agent = this.agents.get(task.agentId);
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  removeTaskCommit(agentId, taskId, hash) {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+  async removeTaskCommit(agentId, taskId, hash) {
+    const task = await getTaskById(taskId);
     if (!task || !task.commits) return null;
     const before = task.commits.length;
     task.commits = task.commits.filter(c => c.hash !== hash);
     if (task.commits.length === before) return null;
-    saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
+    await saveTaskToDb({ ...task, agentId: task.agentId });
+    const agent = this.agents.get(task.agentId);
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  setTaskAssignee(agentId, taskId, assigneeId) {
+  async setTaskAssignee(agentId, taskId, assigneeId) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     task.assignee = assigneeId;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'reassign', assignee: assigneeId });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     this._recheckConditionalTransitions();
     return task;
   },
 
-  deleteTask(agentId, taskId) {
-    const agent = this.agents.get(agentId);
-    if (!agent) return false;
-    const task = agent.todoList.find(t => t.id === taskId);
+  async deleteTask(agentId, taskId) {
+    const task = await getTaskById(taskId);
     if (!task) return false;
-    // Record deletion in history before removing from memory
+    // Record deletion in history
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'deleted' });
-    saveTaskToDb({ ...task, agentId });
-    // Remove from in-memory list
-    agent.todoList = agent.todoList.filter(t => t.id !== taskId);
+    await saveTaskToDb({ ...task, agentId });
     // Soft-delete in DB (sets deleted_at)
-    deleteTaskFromDb(taskId);
-    this._emit('agent:updated', this._sanitize(agent));
+    await deleteTaskFromDb(taskId);
+    clearTaskSignals(taskId);
+    const agent = this.agents.get(agentId);
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
     this._emit('task:deleted', { taskId, agentId });
     return true;
   },
@@ -332,19 +318,16 @@ export const tasksMethods = {
   async restoreTask(taskId) {
     const restored = await restoreTaskFromDb(taskId);
     if (!restored) return null;
-    // Re-add to in-memory agent todoList
+    if (!restored.history) restored.history = [];
+    restored.history.push({ status: restored.status, at: new Date().toISOString(), by: 'user', type: 'restored' });
+    await saveTaskToDb({ ...restored, agentId: restored.agentId });
     const agent = this.agents.get(restored.agentId);
-    if (agent) {
-      if (!restored.history) restored.history = [];
-      restored.history.push({ status: restored.status, at: new Date().toISOString(), by: 'user', type: 'restored' });
-      agent.todoList.push(restored);
-      saveTaskToDb({ ...restored, agentId: restored.agentId });
-      this._emit('agent:updated', this._sanitize(agent));
-    }
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
     return restored;
   },
 
   async hardDeleteTask(taskId) {
+    clearTaskSignals(taskId);
     const result = await hardDeleteTaskFromDb(taskId);
     return result;
   },
@@ -353,32 +336,27 @@ export const tasksMethods = {
     return getDeletedTasks();
   },
 
-  clearTasks(agentId) {
+  async clearTasks(agentId) {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
-    agent.todoList = [];
-    deleteTasksByAgent(agentId);
+    await deleteTasksByAgent(agentId);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },
 
-  transferTask(fromAgentId, taskId, toAgentId) {
+  async transferTask(fromAgentId, taskId, toAgentId) {
     const fromAgent = this.agents.get(fromAgentId);
     const toAgent = this.agents.get(toAgentId);
     if (!fromAgent || !toAgent) return null;
-    const taskToTransfer = fromAgent.todoList.find(t => t.id === taskId);
+    const taskToTransfer = await getTaskById(taskId);
     if (!taskToTransfer) return null;
     const prevStatus = taskToTransfer.status;
-    fromAgent.todoList = fromAgent.todoList.filter(t => t.id !== taskId);
-    hardDeleteTaskFromDb(taskId); // Hard delete since the task is recreated on the target agent
+    await hardDeleteTaskFromDb(taskId); // Hard delete since the task is recreated on the target agent
     this._emit('agent:updated', this._sanitize(fromAgent));
-    const newTask = this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus);
+    const newTask = await this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus);
     if (newTask) {
-      const actualTask = toAgent.todoList.find(t => t.id === newTask.id);
-      if (actualTask) {
-        actualTask.assignee = toAgentId;
-        saveTaskToDb({ ...actualTask, agentId: toAgentId });
-      }
+      newTask.assignee = toAgentId;
+      await saveTaskToDb({ ...newTask, agentId: toAgentId });
       this._checkAutoRefine({ ...newTask, assignee: toAgentId, agentId: toAgentId });
     }
     return newTask;
@@ -387,32 +365,18 @@ export const tasksMethods = {
   async executeTask(agentId, taskId, streamCallback) {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
-    const task = agent.todoList.find(t => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) throw new Error('Task not found');
     if (task.status === 'done') throw new Error('Task already completed');
 
     console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`);
 
-    delete task._executionStopped;
-    task.executionStatus = null;
-    updateTaskExecutionStatus(task.id, null);
+    clearTaskSignal(taskId, 'stopped');
+    await updateTaskExecutionStatus(taskId, null);
     if (this._isActiveTaskStatus(task.status)) {
-      // Task is already in an active status — resume execution
-      saveTaskToDb({ ...task, agentId });
       this._checkAutoRefine({ ...task, agentId }, { by: 'resume' });
     } else {
-      // Task is inactive — trigger workflow transitions
-      const workflow = await getWorkflowForBoard(task.boardId);
-      const hasRunAgent = workflow.transitions
-        .filter(t => this._validTransition(t))
-        .some(t => t.from === task.status && (t.actions || []).some(a => a.type === 'run_agent'));
-
-      if (hasRunAgent) {
-        this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
-      } else {
-        // No workflow transition — trigger auto-refine directly
-        this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
-      }
+      this._checkAutoRefine({ ...task, agentId }, { by: 'task-loop' });
     }
 
     return { taskId, response: null };
@@ -421,7 +385,8 @@ export const tasksMethods = {
   async executeAllTasks(agentId, streamCallback) {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
-    const executable = agent.todoList.filter(t => t.status !== 'done' && !this._isActiveTaskStatus(t.status));
+    const tasks = await getTasksByAgent(agentId);
+    const executable = tasks.filter(t => t.status !== 'done' && !this._isActiveTaskStatus(t.status));
     if (executable.length === 0) throw new Error('No executable tasks');
 
     console.log(`▶️  Executing ${executable.length} task(s) for ${agent.name}`);
@@ -490,27 +455,23 @@ export const tasksMethods = {
     console.log('🔄 Task loop stopped');
   },
 
-  _processRecurringTasks() {
+  async _processRecurringTasks() {
     const now = Date.now();
-    for (const [agentId, agent] of this.agents) {
-      if (!agent.todoList) continue;
-      for (const task of agent.todoList) {
-        if (!task.recurrence?.enabled) continue;
-        if (task.status !== 'done') continue;
-        if (!task.completedAt) continue;
-        const completedAt = new Date(task.completedAt).getTime();
-        const intervalMs = (task.recurrence.intervalMinutes || 1440) * 60 * 1000;
-        if (now - completedAt >= intervalMs) {
-          const resetStatus = task.recurrence.originalStatus || 'backlog';
-          console.log(`🔁 [Recurrence] Resetting task "${task.text.slice(0, 60)}" → ${resetStatus} (interval: ${task.recurrence.intervalMinutes}min)`);
-          task.status = resetStatus;
-          task.completedAt = null;
-          task.startedAt = null;
-          if (!task.history) task.history = [];
-          task.history.push({ from: 'done', status: resetStatus, at: new Date().toISOString(), by: 'recurrence' });
-          saveTaskToDb({ ...task, agentId });
-          this._emit('agent:updated', this._sanitize(agent));
-        }
+    const recurringTasks = await getRecurringDoneTasks();
+    for (const task of recurringTasks) {
+      const completedAt = new Date(task.completedAt).getTime();
+      const intervalMs = (task.recurrence.intervalMinutes || 1440) * 60 * 1000;
+      if (now - completedAt >= intervalMs) {
+        const resetStatus = task.recurrence.originalStatus || 'backlog';
+        console.log(`🔁 [Recurrence] Resetting task "${task.text.slice(0, 60)}" → ${resetStatus} (interval: ${task.recurrence.intervalMinutes}min)`);
+        task.status = resetStatus;
+        task.completedAt = null;
+        task.startedAt = null;
+        if (!task.history) task.history = [];
+        task.history.push({ from: 'done', status: resetStatus, at: new Date().toISOString(), by: 'recurrence' });
+        await saveTaskToDb(task);
+        const agent = this.agents.get(task.agentId);
+        if (agent) this._emit('agent:updated', this._sanitize(agent));
       }
     }
   },
@@ -518,8 +479,8 @@ export const tasksMethods = {
   _processNextPendingTasks() {
     this._recheckConditionalTransitions();
 
-    // Use DB query to find tasks that need resume, instead of scanning in-memory state
-    getTasksForResume().then(dbTasks => {
+    // Use DB query to find tasks that need resume
+    getTasksForResume().then(async (dbTasks) => {
       for (const dbTask of dbTasks) {
         const executorId = dbTask.assignee || dbTask.agentId;
         const executor = this.agents.get(executorId);
@@ -527,26 +488,20 @@ export const tasksMethods = {
         if (executor.enabled === false) continue;
         if (executor.status !== 'idle') continue;
         if (this._loopProcessing.has(executorId)) continue;
+        if (!this._isActiveTaskStatus(dbTask.status)) continue;
 
-        // Sync: find the in-memory task to operate on
-        const creatorAgent = this.agents.get(dbTask.agentId);
-        if (!creatorAgent) continue;
-        const activeTask = creatorAgent.todoList?.find(t => t.id === dbTask.id);
-        if (!activeTask) continue;
-        if (!this._isActiveTaskStatus(activeTask.status)) continue;
+        if (this._workflowManagedStatuses?.has(dbTask.status)) continue;
 
-        if (this._workflowManagedStatuses?.has(activeTask.status)) continue;
-
-        if (activeTask.executionStatus === 'stopped' || activeTask._executionStopped) {
-          console.log(`🛑 [TaskLoop] Skipping auto-resume for "${activeTask.text.slice(0, 60)}" — was manually stopped`);
-          this.setTaskStatus(dbTask.agentId, activeTask.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
+        if (dbTask.executionStatus === 'stopped' || getTaskSignal(dbTask.id, 'stopped')) {
+          console.log(`🛑 [TaskLoop] Skipping auto-resume for "${dbTask.text.slice(0, 60)}" — was manually stopped`);
+          this.setTaskStatus(dbTask.agentId, dbTask.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
           continue;
         }
-        if (activeTask.executionStatus === 'watching' || activeTask._executionWatching) continue;
+        if (dbTask.executionStatus === 'watching' || getTaskSignal(dbTask.id, 'watching')) continue;
 
         this._loopProcessing.add(executorId);
-        console.log(`🔄 [TaskLoop] Agent "${executor.name}" is idle but has started task "${activeTask.text.slice(0, 60)}" (${activeTask.status}) — resuming`);
-        this._resumeActiveTask(dbTask.agentId, creatorAgent, activeTask).finally(() => {
+        console.log(`🔄 [TaskLoop] Agent "${executor.name}" is idle but has started task "${dbTask.text.slice(0, 60)}" (${dbTask.status}) — resuming`);
+        this._resumeActiveTask(dbTask.agentId, this.agents.get(dbTask.agentId), dbTask).finally(() => {
           this._loopProcessing.delete(executorId);
         });
       }
@@ -558,11 +513,28 @@ export const tasksMethods = {
   async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
     const freshTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
     console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
+    const resolveCompletionStatus = () => targetStatus || 'done';
 
-    const resolveCompletionStatus = () => {
-      return targetStatus || 'done';
+    // Helper: check if task was completed via signal
+    const _checkCompleted = async () => {
+      if (getTaskSignal(taskId, 'completed')) {
+        const comment = getTaskSignal(taskId, 'comment') || '';
+        clearTaskSignal(taskId, 'completed');
+        clearTaskSignal(taskId, 'comment');
+        if (targetStatus) {
+          const completionStatus = resolveCompletionStatus();
+          await this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
+          console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        } else {
+          console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        }
+        return 'completed';
+      }
+      return null;
     };
 
+    // Check immediate completion
+    const freshTask = await getTaskById(taskId);
     if (freshTask?.status === 'error') {
       console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';
@@ -582,18 +554,16 @@ export const tasksMethods = {
       return 'completed';
     }
 
+    const immediateResult = await _checkCompleted();
+    if (immediateResult) return immediateResult;
     if (freshTask && !this._isActiveTaskStatus(freshTask.status)) {
       console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
       return 'moved';
     }
 
-    // Mark the task so the 5-second task loop doesn't re-send the original
-    // message (which causes a full reasoning reset).
-    if (freshTask) {
-      freshTask._executionWatching = true;
-      freshTask.executionStatus = 'watching';
-      updateTaskExecutionStatus(taskId, 'watching');
-    }
+    // Mark task as watching so the task loop doesn't re-send
+    setTaskSignal(taskId, 'watching', true);
+    updateTaskExecutionStatus(taskId, 'watching');
 
     const reminderConfig = await getReminderConfig();
     console.log(`🔔 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — starting reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
@@ -605,7 +575,7 @@ export const tasksMethods = {
     while (reminded < MAX_REMINDERS) {
       await new Promise(resolve => setTimeout(resolve, REMINDER_INTERVAL_MS));
 
-      const currentTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
+      const currentTask = await getTaskById(taskId);
       if (!currentTask) {
         console.log(`🔔 [Execution] Task deleted during reminder wait — exiting loop`);
         return 'deleted';
@@ -623,13 +593,15 @@ export const tasksMethods = {
         }
         return 'completed';
       }
+      const completedResult = await _checkCompleted();
+      if (completedResult) return completedResult;
       if (!this._isActiveTaskStatus(currentTask.status)) {
         console.log(`🔔 [Execution] Task status changed to "${currentTask.status}" — exiting loop`);
         return 'moved';
       }
-      if (currentTask._executionStopped) {
+      if (getTaskSignal(taskId, 'stopped')) {
         console.log(`🛑 [Execution] Task was manually stopped — exiting reminder loop`);
-        delete currentTask._executionStopped;
+        clearTaskSignal(taskId, 'stopped');
         return 'stopped';
       }
 
@@ -675,25 +647,13 @@ export const tasksMethods = {
       this._emit('agent:stream:end', { agentId: executorId });
       this._emit('agent:updated', this._sanitize(currentExecutor));
 
-      const afterReminder = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
-      if (afterReminder?._executionCompleted) {
-        const comment = afterReminder._executionComment || '';
-        delete afterReminder._executionCompleted;
-        delete afterReminder._executionComment;
-        if (targetStatus) {
-          const completionStatus = resolveCompletionStatus();
-          this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-          console.log(`✅ [Execution] Completed after reminder: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
-        } else {
-          console.log(`✅ [Execution] Completed after reminder: "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)`);
-        }
-        return 'completed';
-      }
+      const afterResult = await _checkCompleted();
+      if (afterResult) return afterResult;
     }
 
     if (reminded >= MAX_REMINDERS) {
-      const finalTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
-      if (finalTask && this._isActiveTaskStatus(finalTask.status) && !finalTask._executionCompleted) {
+      const finalTask = await getTaskById(taskId);
+      if (finalTask && this._isActiveTaskStatus(finalTask.status) && !getTaskSignal(taskId, 'completed')) {
         console.warn(`⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains active (${finalTask.status})`);
         this.addActionLog(executorId, 'warning', `Task reminder limit reached — task remains active`, taskText.slice(0, 200));
       }
@@ -703,12 +663,8 @@ export const tasksMethods = {
     return 'unknown';
     } finally {
       // Always clear the watching flag so the task loop can resume if needed
-      const watched = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
-      if (watched) {
-        delete watched._executionWatching;
-        watched.executionStatus = null;
-        updateTaskExecutionStatus(taskId, null);
-      }
+      clearTaskSignal(taskId, 'watching');
+      updateTaskExecutionStatus(taskId, null);
     }
   },
 
@@ -764,8 +720,8 @@ export const tasksMethods = {
         executor.project = task.project;
       }
 
-      delete task._executionCompleted;
-      delete task._executionComment;
+      clearTaskSignal(task.id, 'completed');
+      clearTaskSignal(task.id, 'comment');
 
       startMsgIdx = executor.conversationHistory.length;
       executionStartedAt = new Date().toISOString();
@@ -795,17 +751,12 @@ export const tasksMethods = {
 
       if (isUserStop) {
         // User manually stopped — put task back to pending, don't treat as error
-        task._executionStopped = true;
-        task.executionStatus = 'stopped';
+        setTaskSignal(task.id, 'stopped', true);
         updateTaskExecutionStatus(task.id, 'stopped');
-        this.setTaskStatus(agentId, task.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
+        await this.setTaskStatus(agentId, task.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
       } else {
-        this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
-        const actualTask = this.agents.get(agentId)?.todoList?.find(t => t.id === task.id);
-        if (actualTask) {
-          actualTask.error = err.message;
-          saveTaskToDb({ ...actualTask, agentId });
-        }
+        await this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
+        await updateTaskFields(task.id, { error: err.message });
       }
       if (executor.status === 'error') {
         this.setStatus(executorId, 'idle', 'Auto-recovered after resume error');
@@ -816,28 +767,15 @@ export const tasksMethods = {
     }
   },
 
-  /** Find a task by ID across all agents */
-  getTask(taskId) {
-    for (const [agentId, agent] of this.agents) {
-      if (!agent.todoList) continue;
-      const task = agent.todoList.find(t => t.id === taskId);
-      if (task) return { ...task, agentId };
-    }
-    return null;
+  /** Find a task by ID (from database) */
+  async getTask(taskId) {
+    return getTaskById(taskId);
   },
 
-  /** Persist a task object to the database (used by routes/tasks.js) */
-  saveTasksToDb() {
-    // With the dedicated tasks table, individual task mutations already persist.
-    // This method exists for compatibility with routes/tasks.js which calls it
-    // after direct field updates. We save the specific task that was modified.
-    // Callers should use saveTaskToDb() directly when possible.
-  },
-
-  /** Save a single in-memory task to the DB (convenience for route handlers) */
-  saveTaskDirectly(task) {
+  /** Save a task to the database */
+  async saveTaskDirectly(task) {
     if (!task || !task.agentId) return;
-    saveTaskToDb(task);
+    await saveTaskToDb(task);
   },
 
   _enqueueAgentTask(agentId, taskFn) {
