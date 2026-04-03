@@ -1,18 +1,29 @@
 import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
-import { getPool, getBoardById, rowToTask } from '../services/database.js';
+import { getPool, getBoardById, getBoardShare, rowToTask } from '../services/database.js';
 
 const router = Router();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Check if the authenticated user has access to a task's owning agent */
-function requireTaskAccess(mgr, task, user) {
+/** Check if the authenticated user has access to a task (via agent ownership OR board access) */
+async function requireTaskAccess(mgr, task, user) {
   if (user.role === 'admin') return true;
   const agent = mgr.agents.get(task.agentId);
   if (!agent) return true; // agent deleted — allow access
-  if (agent.ownerId && agent.ownerId !== user.userId) return false;
-  return true;
+  // Agent owner always has access
+  if (!agent.ownerId || agent.ownerId === user.userId) return true;
+  // Also allow if the user has access to the task's board
+  if (task.boardId) {
+    const board = await getBoardById(task.boardId);
+    if (board) {
+      if (board.is_default) return true;
+      if (board.user_id === user.userId) return true;
+      const share = await getBoardShare(task.boardId, user.userId);
+      if (share && share.permission === 'write') return true;
+    }
+  }
+  return false;
 }
 
 /** Log an audit event for task operations */
@@ -102,7 +113,7 @@ router.put('/:id', async (req, res) => {
     const mgr = req.app.get('agentManager');
     const task = mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (!requireTaskAccess(mgr, task, req.user)) {
+    if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -263,7 +274,7 @@ router.post('/bulk-move', async (req, res) => {
     for (const taskId of taskIds) {
       const task = mgr.getTask(taskId);
       if (!task) { results.failed.push({ taskId, error: 'Task not found' }); continue; }
-      if (!requireTaskAccess(mgr, task, req.user)) { results.failed.push({ taskId, error: 'Access denied' }); continue; }
+      if (!await requireTaskAccess(mgr, task, req.user)) { results.failed.push({ taskId, error: 'Access denied' }); continue; }
       if (task.actionRunning) { results.failed.push({ taskId, error: 'Task is being processed by an agent. Stop the agent first.' }); continue; }
 
       const oldBoardId = task.boardId;
@@ -313,7 +324,7 @@ router.delete('/:id', async (req, res) => {
     const mgr = req.app.get('agentManager');
     const task = mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (!requireTaskAccess(mgr, task, req.user)) {
+    if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -396,7 +407,7 @@ router.get('/:id/history', async (req, res) => {
     const mgr = req.app.get('agentManager');
     const task = mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
-    if (!requireTaskAccess(mgr, task, req.user)) {
+    if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     res.json(task.history || []);

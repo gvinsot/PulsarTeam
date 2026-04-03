@@ -6,7 +6,7 @@ import {
   Bug, Sparkles, Wrench, BookOpen, ArrowUpCircle, HelpCircle, Layers,
   ArrowUpDown, Flag, Sun, RotateCcw, Archive, Users, Share2
 } from 'lucide-react';
-import { api } from '../api';
+import { api, deleteTask as deleteTaskById } from '../api';
 import { getDeletedTasks, restoreTask as restoreTaskApi, hardDeleteTask as hardDeleteTaskApi } from '../api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -2687,7 +2687,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   }, [filteredTasks, columns, sortBy]);
 
   const handleDelete = useCallback(async (task) => {
-    await api.deleteTask(task.agentId, task.id);
+    await deleteTaskById(task.id);
     refreshAll();
   }, [refreshAll]);
 
@@ -2703,7 +2703,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
 
   const handleClearDone = useCallback(async () => {
     const doneTasks = allTasks.filter(t => t.status === lastColId);
-    await Promise.all(doneTasks.map(t => api.deleteTask(t.agentId, t.id)));
+    await Promise.all(doneTasks.map(t => deleteTaskById(t.id)));
     refreshAll();
   }, [allTasks, refreshAll, lastColId]);
 

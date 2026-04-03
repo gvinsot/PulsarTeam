@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, ListX, Eraser, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
-import { api } from '../api';
+import { api, deleteTask as deleteTaskById } from '../api';
 import OneDriveConnect from './OneDriveConnect';
 import PluginEditor from './PluginEditor';
 
@@ -273,7 +273,7 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
       for (const a of agents) {
         const allTasks = await api.getAllTasks({ agent_id: a.id });
         const activeTasks = allTasks.filter(t => !['done', 'error', 'backlog'].includes(t.status));
-        await Promise.all(activeTasks.map(t => api.deleteTask(a.id, t.id)));
+        await Promise.all(activeTasks.map(t => deleteTaskById(t.id)));
       }
       if (onRefresh) onRefresh();
     } catch (err) { console.error('Failed to clear active tasks:', err); }
