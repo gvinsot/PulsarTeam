@@ -855,7 +855,7 @@ def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] 
             cmd.extend(["--resume", session_id])
             logger.info(f"[Session] Resuming session {session_id[:12]}... for agent {agent_id[:12]} (task={task_id[:12] if task_id else 'none'})")
         else:
-            session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"pulsar-agent-{session_key}"))
+            session_id = str(uuid.uuid4())
             _agent_sessions[session_key] = session_id
             cmd.extend(["--session-id", session_id])
             logger.info(f"[Session] New session {session_id[:12]}... for agent {agent_id[:12]} (task={task_id[:12] if task_id else 'none'})")
@@ -1145,10 +1145,27 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
             limit=10 * 1024 * 1024,
             **_get_subprocess_kwargs(agent_user),
         )
-        p.stdin.write(prompt.encode("utf-8"))
-        await p.stdin.drain()
-        p.stdin.close()
-        await p.stdin.wait_closed()
+        try:
+            p.stdin.write(prompt.encode("utf-8"))
+            await p.stdin.drain()
+            p.stdin.close()
+            await p.stdin.wait_closed()
+        except BrokenPipeError:
+            # Subprocess exited before reading stdin — capture stderr for diagnostics
+            stderr_out = ""
+            try:
+                stderr_out = (await asyncio.wait_for(p.stderr.read(), timeout=5)).decode("utf-8", errors="replace").strip()
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(p.wait(), timeout=5)
+            except Exception:
+                pass
+            raise BrokenPipeError(
+                f"Claude CLI exited before reading prompt (rc={p.returncode}). "
+                f"stderr: {stderr_out[:500]}" if stderr_out else
+                f"Claude CLI exited before reading prompt (rc={p.returncode})"
+            )
         return p
 
     try:
@@ -1159,7 +1176,11 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
         if session_key and session_key in _agent_sessions:
             logger.warning(f"[Session] Resume failed for agent {agent_id[:12]} — creating new session")
             _agent_sessions.pop(session_key, None)
-            proc = await _start_stream_proc(agent_id)
+            try:
+                proc = await _start_stream_proc(agent_id)
+            except BrokenPipeError as e:
+                logger.error(f"[Session] Retry also failed for agent {agent_id[:12]}: {e}")
+                raise
         else:
             raise
 
@@ -2179,26 +2200,31 @@ async def openai_chat_completions(
         has_streamed_text = False
         total_tokens = 0
         cost_usd = 0
-        async for event in stream_claude_events(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
-            event_type = event.get("type", "")
+        try:
+            async for event in stream_claude_events(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
+                event_type = event.get("type", "")
 
-            if event_type == "text":
-                content = event["content"]
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
-                has_streamed_text = True
-            elif event_type == "result":
-                # Capture usage metadata from the final result event
-                cost_usd = event.get("cost_usd", 0) or 0
-                total_tokens = event.get("total_tokens", 0) or 0
-                # Only send the final result if we haven't already streamed
-                # text events (which contain the same content).
-                if not has_streamed_text:
+                if event_type == "text":
                     content = event["content"]
-                    for piece in chunk_text(content):
-                        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]})}\n\n"
-            elif event_type == "error":
-                content = event["content"]
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
+                    has_streamed_text = True
+                elif event_type == "result":
+                    # Capture usage metadata from the final result event
+                    cost_usd = event.get("cost_usd", 0) or 0
+                    total_tokens = event.get("total_tokens", 0) or 0
+                    # Only send the final result if we haven't already streamed
+                    # text events (which contain the same content).
+                    if not has_streamed_text:
+                        content = event["content"]
+                        for piece in chunk_text(content):
+                            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]})}\n\n"
+                elif event_type == "error":
+                    content = event["content"]
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
+        except BrokenPipeError as e:
+            logger.error(f"Claude CLI subprocess failed: {e}")
+            error_msg = f"Agent subprocess failed to start: {e}"
+            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]})}\n\n"
 
         # Send finish chunk with usage data (including cost_usd extension)
         finish_chunk = {
