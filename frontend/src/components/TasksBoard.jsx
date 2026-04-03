@@ -155,7 +155,7 @@ function sortTasks(tasks, sortBy) {
 
 // ── CreateTaskModal ──────────────────────────────────────────────────────────
 
-function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOptions, defaultStatus, boardId }) {
+function CreateTaskModal({ agents, allProjects, defaultProject, onClose, onCreated, statusOptions, defaultStatus, boardId }) {
   // Allow all columns as creation statuses (don't exclude the last one —
   // custom columns added after "Done" would be wrongly hidden by slice(0, -1))
   const CREATE_STATUSES = statusOptions;
@@ -163,7 +163,7 @@ function CreateTaskModal({ agents, allProjects, onClose, onCreated, statusOption
     ? defaultStatus
     : (CREATE_STATUSES[0]?.value || 'backlog');
   const [text, setText] = useState('');
-  const [project, setProject] = useState('');
+  const [project, setProject] = useState(defaultProject || '');
   const [status, setStatus] = useState(initialStatus);
   const [taskType, setTaskType] = useState('');
   const [recurring, setRecurring] = useState(false);
@@ -2650,6 +2650,14 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     return Array.from(ps).sort();
   }, [allTasks]);
 
+  // Default project = project of the last task created by the user on this board
+  const defaultProject = useMemo(() => {
+    const userTasks = allTasks
+      .filter(t => t.project && t.source?.type === 'user' && t.createdAt)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return userTasks[0]?.project || '';
+  }, [allTasks]);
+
   // Filtered tasks
   const filteredTasks = useMemo(() => {
     const q = search.toLowerCase();
@@ -3032,6 +3040,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         <CreateTaskModal
           agents={agents}
           allProjects={allProjects}
+          defaultProject={defaultProject}
           statusOptions={statusOptions}
           defaultStatus={createDefaultStatus}
           boardId={activeBoardId}
