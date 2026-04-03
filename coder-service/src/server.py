@@ -55,8 +55,10 @@ DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 # loading stale CLAUDE.md files from mounted project volumes.
 CLAUDE_CWD = "/app"
 
-# Session management: map agent_id -> UUID session for --resume support
-_agent_sessions: dict[str, str] = {}  # agent_id -> session UUID
+# Session management: map (agent_id, task_id) -> UUID session for --resume support
+# When task_id changes for an agent, a new session is created automatically.
+_agent_sessions: dict[str, str] = {}  # "agent_id:task_id" -> session UUID
+_agent_current_task: dict[str, str] = {}  # agent_id -> current task_id
 
 # System prompt for Claude Code
 SYSTEM_PROMPT = os.getenv("CLAUDE_SYSTEM_PROMPT", (
@@ -807,16 +809,17 @@ async def _get_login_url() -> str:
     return url
 
 
-def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] = None, agent_id: Optional[str] = None) -> list[str]:
+def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] = None, agent_id: Optional[str] = None, task_id: Optional[str] = None) -> list[str]:
     """Build the claude CLI command with appropriate flags.
 
     The prompt is passed via stdin (not as a CLI argument) to avoid
     'Argument list too long' errors with large conversation histories.
 
     When agent_id is provided, session persistence is used:
-    - First call: --session-id <uuid> creates a new named session
-    - Subsequent calls: --resume <uuid> continues the existing session
-    This lets Claude Code maintain full context across invocations.
+    - Sessions are keyed by (agent_id, task_id) so that each task gets its own session.
+    - When a new task_id is provided, a fresh session is created automatically.
+    - Within the same task, sessions are resumed to maintain context.
+    This lets Claude Code maintain full context within a task execution.
     """
     cmd = [
         "claude",
@@ -829,17 +832,33 @@ def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] 
         "--effort", "high",
     ]
 
-    # Session persistence: resume existing session or start a new one
+    # Session persistence: keyed by (agent_id, task_id)
     if agent_id:
-        session_id = _agent_sessions.get(agent_id)
+        # Determine session key — include task_id when available
+        session_key = f"{agent_id}:{task_id}" if task_id else agent_id
+
+        # Detect task change: if task_id changed for this agent, invalidate old session
+        if task_id:
+            prev_task = _agent_current_task.get(agent_id)
+            if prev_task and prev_task != task_id:
+                # Task changed — remove old session for previous task
+                old_key = f"{agent_id}:{prev_task}"
+                if old_key in _agent_sessions:
+                    old_session = _agent_sessions.pop(old_key)
+                    logger.info(f"[Session] Task changed for agent {agent_id[:12]}: {prev_task[:12]}→{task_id[:12]}, discarding old session {old_session[:12]}")
+                # Also remove agent-only key (legacy)
+                _agent_sessions.pop(agent_id, None)
+            _agent_current_task[agent_id] = task_id
+
+        session_id = _agent_sessions.get(session_key)
         if session_id:
             cmd.extend(["--resume", session_id])
-            logger.info(f"[Session] Resuming session {session_id[:12]}... for agent {agent_id[:12]}")
+            logger.info(f"[Session] Resuming session {session_id[:12]}... for agent {agent_id[:12]} (task={task_id[:12] if task_id else 'none'})")
         else:
-            session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"pulsar-agent-{agent_id}"))
-            _agent_sessions[agent_id] = session_id
+            session_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"pulsar-agent-{session_key}"))
+            _agent_sessions[session_key] = session_id
             cmd.extend(["--session-id", session_id])
-            logger.info(f"[Session] New session {session_id[:12]}... for agent {agent_id[:12]}")
+            logger.info(f"[Session] New session {session_id[:12]}... for agent {agent_id[:12]} (task={task_id[:12] if task_id else 'none'})")
 
     # Append to the default system prompt instead of replacing it, so Claude Code
     # retains its built-in tool knowledge and capabilities.
@@ -867,7 +886,7 @@ def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] 
 
 # --- Claude Code Execution ----------------------------------------------------
 
-async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None, owner_id: Optional[str] = None) -> dict:
+async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None, owner_id: Optional[str] = None, task_id: Optional[str] = None) -> dict:
     """Execute a prompt via Claude Code CLI and return parsed result.
 
     Uses asyncio.create_subprocess_exec instead of asyncio.to_thread to avoid
@@ -907,7 +926,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
 
     async def _run_sync_proc(aid: Optional[str]):
         """Run a Claude CLI subprocess synchronously. Returns (proc, stdout, stderr)."""
-        cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt, agent_id=aid)
+        cmd = _build_claude_cmd(output_format="json", system_prompt=system_prompt, agent_id=aid, task_id=task_id)
         logger.info(f"Executing Claude Code{agent_label}: {prompt[:100]}...")
         logger.debug(f"Command: {' '.join(cmd)}")
         p = await asyncio.create_subprocess_exec(
@@ -931,9 +950,10 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
             proc, stdout_bytes, stderr_bytes = await _run_sync_proc(agent_id)
         except BrokenPipeError:
             # --resume failed (session no longer exists) — reset and retry
-            if agent_id and agent_id in _agent_sessions:
+            session_key = f"{agent_id}:{task_id}" if agent_id and task_id else agent_id
+            if session_key and session_key in _agent_sessions:
                 logger.warning(f"[Session] Resume failed for agent {agent_id[:12]} — creating new session")
-                _agent_sessions.pop(agent_id, None)
+                _agent_sessions.pop(session_key, None)
                 proc, stdout_bytes, stderr_bytes = await _run_sync_proc(agent_id)
             else:
                 raise
@@ -1041,7 +1061,7 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
 
 MAX_AUTH_RETRIES = 2
 
-async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None, owner_id: Optional[str] = None, _auth_retry: int = 0):
+async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None, agent_id: Optional[str] = None, owner_id: Optional[str] = None, task_id: Optional[str] = None, _auth_retry: int = 0):
     """Async generator - streams Claude Code events in real-time.
 
     Yields status updates as the agent works, then the final result.
@@ -1116,7 +1136,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
 
     async def _start_stream_proc(aid: Optional[str]):
         """Start a Claude CLI subprocess for streaming. Returns the process."""
-        cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt, agent_id=aid)
+        cmd = _build_claude_cmd(output_format="stream-json", system_prompt=system_prompt, agent_id=aid, task_id=task_id)
         logger.info(f"Streaming Claude Code{agent_label}: {prompt[:100]}...")
         p = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1138,9 +1158,10 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
         proc = await _start_stream_proc(agent_id)
     except BrokenPipeError:
         # --resume failed (session no longer exists) — reset and retry with new session
-        if agent_id and agent_id in _agent_sessions:
+        session_key = f"{agent_id}:{task_id}" if agent_id and task_id else agent_id
+        if session_key and session_key in _agent_sessions:
             logger.warning(f"[Session] Resume failed for agent {agent_id[:12]} — creating new session")
-            _agent_sessions.pop(agent_id, None)
+            _agent_sessions.pop(session_key, None)
             proc = await _start_stream_proc(agent_id)
         else:
             raise
@@ -1190,7 +1211,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                         refreshed = await _refresh_oauth_token()
                     if refreshed and _auth_retry < MAX_AUTH_RETRIES:
                         yield {"type": "status", "content": "Token refreshed, retrying..."}
-                        async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, _auth_retry=_auth_retry + 1):
+                        async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, _auth_retry=_auth_retry + 1):
                             yield ev
                     else:
                         if _auth_retry >= MAX_AUTH_RETRIES:
@@ -1221,7 +1242,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                                 refreshed = True
                         if refreshed and _auth_retry < MAX_AUTH_RETRIES:
                             yield {"type": "status", "content": "Agent token refreshed, retrying..."}
-                            async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, _auth_retry=_auth_retry + 1):
+                            async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, _auth_retry=_auth_retry + 1):
                                 yield ev
                             return
                     login_url = await _get_login_url()
@@ -1291,7 +1312,7 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
                     if refreshed and _auth_retry < MAX_AUTH_RETRIES:
                         yield {"type": "status", "content": "Token refreshed, retrying..."}
                         # Re-run the full request with the new token
-                        async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, _auth_retry=_auth_retry + 1):
+                        async for ev in stream_claude_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, _auth_retry=_auth_retry + 1):
                             yield ev
                     else:
                         if _auth_retry >= MAX_AUTH_RETRIES:
@@ -2017,14 +2038,33 @@ async def reset_agent(
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
     x_agent_id: Optional[str] = Header(None),
+    x_task_id: Optional[str] = Header(None),
 ):
     """Reset agent session — starts a fresh Claude Code session on next invocation."""
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
-    if x_agent_id and x_agent_id in _agent_sessions:
-        old_session = _agent_sessions.pop(x_agent_id)
-        logger.info(f"[Session] Reset session for agent {x_agent_id[:12]} (was {old_session[:12]})")
-        return {"status": "success", "message": f"Session reset for agent {x_agent_id[:12]}"}
+    if x_agent_id:
+        removed = 0
+        # Remove specific task session if task_id provided
+        if x_task_id:
+            session_key = f"{x_agent_id}:{x_task_id}"
+            if session_key in _agent_sessions:
+                old_session = _agent_sessions.pop(session_key)
+                logger.info(f"[Session] Reset session for agent {x_agent_id[:12]} task {x_task_id[:12]} (was {old_session[:12]})")
+                removed += 1
+        # Also remove agent-only session (legacy) and clear current task tracking
+        if x_agent_id in _agent_sessions:
+            _agent_sessions.pop(x_agent_id)
+            removed += 1
+        _agent_current_task.pop(x_agent_id, None)
+        # Remove ALL sessions for this agent (across all tasks) for a full reset
+        if not x_task_id:
+            keys_to_remove = [k for k in _agent_sessions if k.startswith(f"{x_agent_id}:")]
+            for k in keys_to_remove:
+                _agent_sessions.pop(k)
+                removed += 1
+        if removed:
+            return {"status": "success", "message": f"Reset {removed} session(s) for agent {x_agent_id[:12]}"}
     return {"status": "success", "message": "No session to reset"}
 
 
@@ -2055,6 +2095,7 @@ async def openai_chat_completions(
     authorization: Optional[str] = Header(None),
     x_agent_id: Optional[str] = Header(None),
     x_owner_id: Optional[str] = Header(None),
+    x_task_id: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -2079,7 +2120,7 @@ async def openai_chat_completions(
         has_streamed_text = False
         total_tokens = 0
         cost_usd = 0
-        async for event in stream_claude_events(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id):
+        async for event in stream_claude_events(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
             event_type = event.get("type", "")
 
             if event_type == "text":
@@ -2119,7 +2160,7 @@ async def openai_chat_completions(
         return StreamingResponse(stream_openai_response(), media_type="text/event-stream")
 
     # Non-streaming: run synchronously
-    result = await run_claude_sync(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id)
+    result = await run_claude_sync(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id)
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {
@@ -2144,6 +2185,7 @@ async def openai_completions(
     authorization: Optional[str] = Header(None),
     x_agent_id: Optional[str] = Header(None),
     x_owner_id: Optional[str] = Header(None),
+    x_task_id: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -2157,7 +2199,7 @@ async def openai_completions(
         has_streamed_text = False
         total_tokens = 0
         cost_usd = 0
-        async for event in stream_claude_events(request.prompt, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id):
+        async for event in stream_claude_events(request.prompt, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
             event_type = event.get("type", "")
 
             if event_type == "text":
@@ -2193,7 +2235,7 @@ async def openai_completions(
     if request.stream:
         return StreamingResponse(stream_openai_completion_response(), media_type="text/event-stream")
 
-    result = await run_claude_sync(request.prompt, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id)
+    result = await run_claude_sync(request.prompt, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id)
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {

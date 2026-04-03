@@ -77,7 +77,7 @@ export const chatMethods = {
     const systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
     messages.push({ role: 'system', content: systemContent });
 
-    const { managesContext, isTaskExecution } = await this._assembleMessages(agent, messages, systemContent, userMessage, delegationDepth, messageMeta, streamCallback);
+    const { managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(agent, messages, systemContent, userMessage, delegationDepth, messageMeta, streamCallback);
 
     const historyEntry = {
       role: 'user',
@@ -97,7 +97,7 @@ export const chatMethods = {
 
     try {
       const llmConfig = this.resolveLlmConfig(agent);
-      const streamResult = await this._streamAndContinue(agent, id, messages, llmConfig, streamCallback, abortController, delegationDepth);
+      const streamResult = await this._streamAndContinue(agent, id, messages, llmConfig, streamCallback, abortController, delegationDepth, activeTaskId);
       fullResponse = streamResult.fullResponse;
       const { delegationPromises, detectedCount } = streamResult;
 
@@ -500,10 +500,10 @@ export const chatMethods = {
       }
     }
 
-    return { managesContext, isTaskExecution };
+    return { managesContext, isTaskExecution, activeTaskId: activeTask?.id || null };
   },
 
-  async _streamAndContinue(agent, id, messages, llmConfig, streamCallback, abortController, delegationDepth) {
+  async _streamAndContinue(agent, id, messages, llmConfig, streamCallback, abortController, delegationDepth, activeTaskId = null) {
     const MAX_DELEGATION_DEPTH = 5;
     const provider = createProvider({
       provider: llmConfig.provider,
@@ -531,7 +531,8 @@ export const chatMethods = {
       maxTokens: safeMaxTokens,
       contextLength: llmConfig.contextLength || 0,
       isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
-      signal: abortController.signal
+      signal: abortController.signal,
+      taskId: activeTaskId || undefined,
     })) {
       if (abortController.signal.aborted) {
         throw new Error('Agent stopped by user');

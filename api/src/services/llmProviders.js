@@ -770,7 +770,10 @@ export class VLLMProvider {
       max_tokens: options.maxTokens || 4096,
     };
 
-    const response = await this.client.chat.completions.create(params);
+    const requestOpts = {};
+    if (options.taskId) requestOpts.headers = { 'X-Task-Id': options.taskId };
+
+    const response = await this.client.chat.completions.create(params, requestOpts);
 
     const promptTokens = response.usage?.prompt_tokens || 0;
     const completionTokens = response.usage?.completion_tokens || 0;
@@ -807,6 +810,7 @@ export class VLLMProvider {
 
     const requestOpts = {};
     if (options.signal) requestOpts.signal = options.signal;
+    if (options.taskId) requestOpts.headers = { ...requestOpts.headers, 'X-Task-Id': options.taskId };
 
     const stream = await this.client.chat.completions.create(params, requestOpts);
     let vllmFinishReason = null;
