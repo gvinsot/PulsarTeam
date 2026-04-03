@@ -243,7 +243,7 @@ export async function pollJira(agentManager) {
   // Build set of existing Jira keys
   const existingJiraKeys = new Set();
   for (const [, agent] of agentManager.agents) {
-    for (const task of agent.todoList || []) {
+    for (const task of agentManager._getAgentTasks(agent.id)) {
       if (task.jiraKey) existingJiraKeys.add(task.jiraKey);
     }
   }
@@ -348,7 +348,7 @@ export async function pollJira(agentManager) {
       );
 
       if (task) {
-        const actualTask = creatorAgent.todoList.find(t => t.id === task.id);
+        const actualTask = agentManager._getAgentTasks(creatorAgent.id).find(t => t.id === task.id);
         if (actualTask) {
           actualTask.jiraKey = issue.key;
           actualTask.jiraStatusId = statusId;
@@ -369,7 +369,7 @@ export async function pollJira(agentManager) {
     console.log(`[Jira] Poll: imported ${created} new issue(s)`);
     if (_io) {
       for (const [, agent] of agentManager.agents) {
-        if (agent.todoList?.some(t => t.jiraKey)) {
+        if (agentManager._getAgentTasks(agent.id).some(t => t.jiraKey)) {
           agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
         }
       }
@@ -782,7 +782,7 @@ export async function handleWebhook(payload, agentManager) {
   let existingTask = null;
   let existingAgentId = null;
   for (const [agentId, agent] of agentManager.agents) {
-    const found = (agent.todoList || []).find(t => t.jiraKey === issue.key);
+    const found = agentManager._getAgentTasks(agent.id).find(t => t.jiraKey === issue.key);
     if (found) {
       existingTask = found;
       existingAgentId = agentId;
@@ -836,7 +836,7 @@ export async function handleWebhook(payload, agentManager) {
         { boardId, skipAutoRefine: true }
       );
       if (task) {
-        const actualTask = creatorAgent.todoList.find(t => t.id === task.id);
+        const actualTask = agentManager._getAgentTasks(creatorAgent.id).find(t => t.id === task.id);
         if (actualTask) {
           actualTask.jiraKey = issue.key;
           actualTask.jiraStatusId = statusId;

@@ -404,7 +404,7 @@ export const parsingMethods = {
       );
 
       if (createdTask) {
-        const t = targetAgent.todoList.find(t => t.id === createdTask.id);
+        const t = this._getAgentTasks(targetAgent.id).find(t => t.id === createdTask.id);
         if (t) {
           t.status = 'done';
           t.completedAt = new Date().toISOString();

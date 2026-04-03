@@ -125,7 +125,7 @@ export default function ProjectDetailView() {
                     </div>
                   </div>
                   <span className="text-xs text-gray-500">
-                    {(agent.todoList || []).filter(t => !['done', 'error', 'backlog'].includes(t.status || 'backlog')).length} active
+                    {agent.tasks?.active ?? 0} active
                   </span>
                 </div>
               ))}

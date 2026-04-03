@@ -190,7 +190,7 @@ router.put('/:id', async (req, res) => {
     // ── Sync changes back to in-memory task (getTask returns a copy) ────
     const memAgent = mgr.agents.get(task.agentId);
     if (memAgent) {
-      const memTask = memAgent.todoList?.find(t => t.id === req.params.id);
+      const memTask = mgr._getAgentTasks(task.agentId).find(t => t.id === req.params.id);
       if (memTask) {
         if (title !== undefined) memTask.title = task.title;
         if (description !== undefined) memTask.text = task.text;

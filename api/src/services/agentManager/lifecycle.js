@@ -24,7 +24,6 @@ export const lifecycleMethods = {
       temperature: config.temperature !== undefined ? config.temperature : 0.7,
       maxTokens: config.maxTokens ?? 128000,
       contextLength: config.contextLength ?? 0,
-      todoList: config.todoList || [],
       ragDocuments: config.ragDocuments || [],
       skills: config.skills || [],
       mcpServers: config.mcpServers || [],
@@ -59,6 +58,7 @@ export const lifecycleMethods = {
     };
 
     this.agents.set(id, agent);
+    this._tasks.set(id, config.todoList || []);
     await saveAgent(agent);
     if (config.ownerId) {
       await setAgentOwner(id, config.ownerId);
@@ -130,7 +130,7 @@ export const lifecycleMethods = {
     const agent = this.agents.get(id);
     if (!agent) return null;
 
-    const todoList = agent.todoList || [];
+    const todoList = this._getAgentTasks(id);
     const waitingTasks = todoList.filter(t => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
     const activeTaskCount = todoList.filter(t => this._isActiveTaskStatus(t.status)).length;
     const doneTasks = todoList.filter(t => t.status === 'done').length;
@@ -252,8 +252,9 @@ export const lifecycleMethods = {
   _collectTasks(projectFilter = null) {
     const tasks = [];
     for (const agent of this.agents.values()) {
-      if (!agent.todoList) continue;
-      for (const t of agent.todoList) {
+      const tasks_ = this._getAgentTasks(agent.id);
+      if (!tasks_.length) continue;
+      for (const t of tasks_) {
         const proj = t.project || agent.project || null;
         if (projectFilter && proj !== projectFilter) continue;
         tasks.push({ ...t, _agentId: agent.id, _project: proj });
@@ -578,7 +579,7 @@ export const lifecycleMethods = {
 
     const allowed = [
       'name', 'role', 'description', 'instructions', 'temperature',
-      'maxTokens', 'contextLength', 'todoList', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
+      'maxTokens', 'contextLength', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
       'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'enabled',
       'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId'
     ];
@@ -723,21 +724,18 @@ export const lifecycleMethods = {
       }
     }
 
-    if (agent.todoList) {
-      for (const t of agent.todoList) {
-        if (this._isActiveTaskStatus(t.status)) {
-          t._executionStopped = true;
-          t.executionStatus = 'stopped';
-          saveTaskToDb({ ...t, agentId: id });
-        }
+    for (const t of this._getAgentTasks(id)) {
+      if (this._isActiveTaskStatus(t.status)) {
+        t._executionStopped = true;
+        t.executionStatus = 'stopped';
+        saveTaskToDb({ ...t, agentId: id });
       }
     }
 
     // Clear actionRunning flags for tasks assigned to this agent
     clearActionRunningForAgent(id);
-    for (const [, creatorAgent] of this.agents) {
-      if (!creatorAgent.todoList) continue;
-      for (const t of creatorAgent.todoList) {
+    for (const [creatorId, creatorAgent] of this.agents) {
+      for (const t of this._getAgentTasks(creatorId)) {
         if (t.actionRunning && t.actionRunningAgentId === id) {
           t.actionRunning = false;
           delete t.actionRunningAgentId;
@@ -825,13 +823,13 @@ export const lifecycleMethods = {
     // Find the current active task for this agent
     let taskId = null;
     let taskTitle = null;
-    const ownTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status) && (!t.assignee || t.assignee === agentId));
+    const ownTask = this._getAgentTasks(agentId).find(t => this._isActiveTaskStatus(t.status) && (!t.assignee || t.assignee === agentId));
     if (ownTask) {
       taskId = ownTask.id;
       taskTitle = ownTask.text?.slice(0, 200) || null;
     } else {
-      for (const [, otherAgent] of this.agents) {
-        const delegated = otherAgent.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
+      for (const [otherId] of this.agents) {
+        const delegated = this._getAgentTasks(otherId).find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
         if (delegated) { taskId = delegated.id; taskTitle = delegated.text?.slice(0, 200) || null; break; }
       }
     }
@@ -871,7 +869,7 @@ export const lifecycleMethods = {
     const creatorAgent = this.agents.get(creatorAgentId);
     if (!executor || !creatorAgent) return;
 
-    const task = creatorAgent.todoList.find(t => t.id === taskId);
+    const task = this._getAgentTasks(creatorAgentId).find(t => t.id === taskId);
     if (!task) return;
 
     const rawMessages = executor.conversationHistory.slice(startMsgIdx);
@@ -997,9 +995,10 @@ export const lifecycleMethods = {
       }
     }
 
-    if (agent.todoList && agent.todoList.length > 0) {
+    const voiceTasks = this._getAgentTasks(agentId);
+    if (voiceTasks.length > 0) {
       instructions += '\n\n--- Current Task List ---\n';
-      for (const task of agent.todoList) {
+      for (const task of voiceTasks) {
         const mark = task.status === 'done' ? 'x' : this._isActiveTaskStatus(task.status) ? '~' : task.status === 'error' ? '!' : ' ';
         instructions += `- [${mark}] ${task.text}\n`;
       }
@@ -1016,10 +1015,9 @@ export const lifecycleMethods = {
     agent.currentThinking = '';
     delete agent._compactionArmed;
     // Stop all active reminder loops for tasks involving this agent
-    for (const [, ownerAgent] of this.agents) {
-      if (!ownerAgent.todoList) continue;
-      for (const task of ownerAgent.todoList) {
-        if (task.assignee === agentId || ownerAgent.id === agentId) {
+    for (const [ownerId] of this.agents) {
+      for (const task of this._getAgentTasks(ownerId)) {
+        if (task.assignee === agentId || ownerId === agentId) {
           if (task._executionWatching) {
             task._executionStopped = true;
             delete task._executionWatching;

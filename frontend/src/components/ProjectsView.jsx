@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { FolderGit2, Users, ListTodo, Clock, Search, Activity, BarChart3, ExternalLink, GitCommit, Plus, X, Loader2, Lock, Unlock } from 'lucide-react';
 import ProjectDetailModal from './ProjectDetailModal';
 import GitHubActivityModal from './GitHubActivityModal';
@@ -38,13 +38,11 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
     }
   };
 
-  // Derive tasks from agents (same approach as TasksBoard)
-  const tasks = useMemo(() =>
-    agents.flatMap(a =>
-      (a.todoList || []).map(t => ({ ...t, agentId: a.id, agentName: a.name, project: t.project || a.project }))
-    ),
-    [agents]
-  );
+  // Fetch tasks from API
+  const [tasks, setTasks] = useState([]);
+  useEffect(() => {
+    api.getAllTasks().then(setTasks).catch(() => setTasks([]));
+  }, [agents]);
 
   // Build a lookup of GitHub info by project name
   const githubLookup = useMemo(() => {

@@ -117,7 +117,7 @@ function findAgentByRole(agentManager, role, ownerId = null, excludeTaskId = nul
   for (const candidate of eligible) {
     let count = 0;
     for (const [, creator] of agentManager.agents) {
-      for (const t of creator.todoList || []) {
+      for (const t of agentManager._getAgentTasks(creator.id)) {
         if (t.assignee === candidate.id || (!t.assignee && creator.id === candidate.id)) count++;
       }
     }
@@ -194,7 +194,7 @@ export async function processTransition(task, agentManager, io) {
     // Store the executing agent ID on the task for stop functionality
     // Also update assignee to reflect which agent is currently working on this task
     const creatorAgentForFlag = agentManager.agents.get(task.agentId);
-    const actualTaskForFlag = creatorAgentForFlag?.todoList?.find(t => t.id === task.id);
+    const actualTaskForFlag = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
     if (actualTaskForFlag) {
       actualTaskForFlag.actionRunning = true;
       actualTaskForFlag.actionRunningAgentId = agent.id;
@@ -383,7 +383,7 @@ Execute the instructions above and update the task status accordingly.`;
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'execute');
 
         // Re-fetch the task to pick up the _executionCompleted flag set by _processToolCalls
-        const freshTask = agentManager.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+        const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
         if (freshTask?._executionCompleted) {
           const comment = freshTask._executionComment || '';
           delete freshTask._executionCompleted;
@@ -446,7 +446,7 @@ Execute the instructions above and update the task status accordingly.`;
       agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
       // Store the error message on the task for display
       const creatorAgent = agentManager.agents.get(task.agentId);
-      const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
+      const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
       if (actualTask) {
         actualTask.error = err.message;
         saveTaskToDb({ ...actualTask, agentId: task.agentId });
@@ -459,7 +459,7 @@ Execute the instructions above and update the task status accordingly.`;
     if (_busyAgentId) _busyAgents.delete(_busyAgentId);
     // Clear actionRunning flag
     const creatorAgentFinal = agentManager.agents.get(task.agentId);
-    const actualTaskFinal = creatorAgentFinal?.todoList?.find(t => t.id === task.id);
+    const actualTaskFinal = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
     if (actualTaskFinal && actualTaskFinal.actionRunning) {
       actualTaskFinal.actionRunning = false;
       delete actualTaskFinal.actionRunningAgentId;

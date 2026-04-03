@@ -213,8 +213,8 @@ export const tasksMethods = {
     // Priority 1: Task actively running via this agent (set by processTransition)
     // This is the most reliable indicator — it means a workflow action is in progress.
     for (const [creatorId, creatorAgent] of this.agents) {
-      if (!creatorAgent.todoList) continue;
-      for (const task of creatorAgent.todoList) {
+      const creatorTasks = this._getAgentTasks(creatorId);
+      for (const task of creatorTasks) {
         if (task.actionRunningAgentId === agentId && this._isActiveTaskStatus(task.status)) {
           console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${task.text?.slice(0, 50)}" (owner=${creatorId.slice(0, 8)})`);
           return { task, ownerAgentId: creatorId };
@@ -226,8 +226,8 @@ export const tasksMethods = {
     // Prefer the most recently started task when multiple are assigned.
     let bestAssigned = null;
     for (const [creatorId, creatorAgent] of this.agents) {
-      if (!creatorAgent.todoList) continue;
-      for (const task of creatorAgent.todoList) {
+      const creatorTasks = this._getAgentTasks(creatorId);
+      for (const task of creatorTasks) {
         if (task.assignee !== agentId || !this._isActiveTaskStatus(task.status)) continue;
         if (!bestAssigned || (task.startedAt && (!bestAssigned.task.startedAt || new Date(task.startedAt) > new Date(bestAssigned.task.startedAt)))) {
           bestAssigned = { task, ownerAgentId: creatorId };
@@ -240,8 +240,9 @@ export const tasksMethods = {
     }
 
     // Priority 3: Agent's own active task (when no assigned/running task found)
-    if (agent?.todoList?.length) {
-      const ownActive = agent.todoList.find(t => this._isActiveTaskStatus(t.status));
+    const ownTasks = this._getAgentTasks(agentId);
+    if (ownTasks.length) {
+      const ownActive = ownTasks.find(t => this._isActiveTaskStatus(t.status));
       if (ownActive) {
         console.log(`🔗 [Commit] Found own active task: "${ownActive.text?.slice(0, 50)}"`);
         return { task: ownActive, ownerAgentId: agentId };
@@ -516,7 +517,7 @@ export const tasksMethods = {
   },
 
   async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
-    const freshTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
+    const freshTask = this._getAgentTasks(creatorAgentId).find(t => t.id === taskId);
     console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
     const resolveCompletionStatus = () => targetStatus || 'done';
 
@@ -539,7 +540,6 @@ export const tasksMethods = {
     };
 
     // Check immediate completion
-    const freshTask = await getTaskById(taskId);
     if (freshTask?.status === 'error') {
       console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';

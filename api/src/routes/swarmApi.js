@@ -40,7 +40,7 @@ export function swarmApiRoutes(agentManager) {
       status: a.status,
       project: a.project || null,
       currentTask: a.currentTask || null,
-      openTasks: (a.todoList || []).filter(t => t.status !== 'done').length,
+      openTasks: agentManager._getAgentTasks(a.id).filter(t => t.status !== 'done').length,
       totalMessages: a.metrics?.totalMessages || 0,
     }));
 
@@ -67,7 +67,7 @@ export function swarmApiRoutes(agentManager) {
       project: agent.project || null,
       currentTask: agent.currentTask || null,
       enabled: agent.enabled !== false,
-      todoList: (agent.todoList || []).map(t => ({
+      todoList: agentManager._getAgentTasks(agent.id).map(t => ({
         id: t.id,
         text: t.text,
         status: t.status,

@@ -72,7 +72,7 @@ export function boardRoutes(agentManager) {
       const allAgents = agentManager.getAllForUser(req.user.userId, req.user.role);
       const tasks = [];
       for (const agent of allAgents) {
-        for (const task of (agent.todoList || [])) {
+        for (const task of agentManager._getAgentTasks(agent.id)) {
           if (task.assignee === targetAgentId || (!task.assignee && agent.id === targetAgentId)) {
             tasks.push({ ...task, _ownerId: agent.id, _ownerName: agent.name });
           }

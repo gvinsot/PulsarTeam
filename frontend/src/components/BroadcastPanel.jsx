@@ -271,7 +271,8 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
     try {
       // Clear all non-done, non-error, non-backlog tasks for every agent
       for (const a of agents) {
-        const activeTasks = (a.todoList || []).filter(t => !['done', 'error', 'backlog'].includes(t.status));
+        const allTasks = await api.getAllTasks({ agent_id: a.id });
+        const activeTasks = allTasks.filter(t => !['done', 'error', 'backlog'].includes(t.status));
         await Promise.all(activeTasks.map(t => api.deleteTask(a.id, t.id)));
       }
       if (onRefresh) onRefresh();

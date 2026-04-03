@@ -37,9 +37,9 @@ export const workflowMethods = {
   },
 
   agentHasActiveTask(agentId, excludeTaskId = null) {
-    for (const [creatorId, agent] of this.agents) {
-      if (!agent.todoList) continue;
-      for (const task of agent.todoList) {
+    for (const [creatorId] of this.agents) {
+      const tasks = this._getAgentTasks(creatorId);
+      for (const task of tasks) {
         if (!this._isActiveTaskStatus(task.status)) continue;
         if (excludeTaskId && task.id === excludeTaskId) continue;
         if (creatorId === agentId) return true;
@@ -85,10 +85,10 @@ export const workflowMethods = {
         let minTasks = Infinity;
         for (const candidate of candidates) {
           let count = 0;
-          for (const [, creator] of this.agents) {
-            for (const t of creator.todoList || []) {
+          for (const [cId] of this.agents) {
+            for (const t of this._getAgentTasks(cId)) {
               if (t.id === task.id) continue;
-              if (t.assignee === candidate.id || (!t.assignee && creator.id === candidate.id)) {
+              if (t.assignee === candidate.id || (!t.assignee && this.agents.get(cId)?.id === candidate.id)) {
                 count++;
               }
             }
@@ -102,7 +102,7 @@ export const workflowMethods = {
           console.log(`[Auto-Assign] Task "${(task.text || '').slice(0, 60)}" assigned to "${autoAgent.name}" (${minTasks} tasks in column, role: ${currentColumn.autoAssignRole})`);
           task.assignee = autoAgent.id;
           const creatorAgent = this.agents.get(task.agentId);
-          const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
+          const actualTask = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
           if (actualTask) {
             actualTask.assignee = autoAgent.id;
             saveTaskToDb({ ...actualTask, agentId: task.agentId });
@@ -154,8 +154,7 @@ export const workflowMethods = {
           if (action.type === 'assign_agent_individual') {
             // Assign to a specific agent (or unassign if agentId is empty/null)
             const targetAgentId = action.agentId || null;
-            const creatorAgent = this.agents.get(task.agentId);
-            const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
+            const actualTask = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
             if (actualTask) {
               const previousAssignee = actualTask.assignee;
               actualTask.assignee = targetAgentId;
@@ -178,18 +177,17 @@ export const workflowMethods = {
             let minTasks = Infinity;
             for (const c of candidates) {
               let count = 0;
-              for (const [, creator] of this.agents) {
-                for (const t of creator.todoList || []) {
+              for (const [cId] of this.agents) {
+                for (const t of this._getAgentTasks(cId)) {
                   if (t.id === task.id) continue;
-                  if (t.assignee === c.id || (!t.assignee && creator.id === c.id)) count++;
+                  if (t.assignee === c.id || (!t.assignee && this.agents.get(cId)?.id === c.id)) count++;
                 }
               }
               if (count < minTasks) { minTasks = count; agent = c; }
             }
             if (agent) {
               task.assignee = agent.id;
-              const creatorAgent = this.agents.get(task.agentId);
-              const actualTask = creatorAgent?.todoList?.find(t => t.id === task.id);
+              const actualTask = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
               if (actualTask) {
                 actualTask.assignee = agent.id;
                 saveTaskToDb({ ...actualTask, agentId: task.agentId });
@@ -215,7 +213,7 @@ export const workflowMethods = {
             try {
               const result = await processTransition(enrichedTask, this, this.io);
               if (result?.skipped) {
-                const actualTaskForFlag = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+                const actualTaskForFlag = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
                 if (actualTaskForFlag) {
                   actualTaskForFlag._pendingOnEnter = actualTaskForFlag.status;
                   // Save which action index to resume from on retry
@@ -229,7 +227,7 @@ export const workflowMethods = {
                 break;
               }
               if (result?.executed) {
-                const actualTaskForClear = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+                const actualTaskForClear = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
                 if (actualTaskForClear) {
                   // Track completed action index for chain resume
                   actualTaskForClear._completedActionIdx = actionIdx;
@@ -240,8 +238,7 @@ export const workflowMethods = {
                   saveTaskToDb({ ...actualTaskForClear, agentId: task.agentId });
                 }
               }
-              const freshAgent = this.agents.get(task.agentId);
-              const freshTask = freshAgent?.todoList?.find(t => t.id === task.id);
+              const freshTask = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
               if (freshTask) {
                 task.text = freshTask.text;
                 task.title = freshTask.title;
@@ -269,7 +266,7 @@ export const workflowMethods = {
               }
               // Clean up chain resume index BEFORE change_status — the new column's
               // on_enter transition must start fresh, not resume from this chain's index
-              const taskBeforeMove = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+              const taskBeforeMove = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
               if (taskBeforeMove) {
                 delete taskBeforeMove._completedActionIdx;
                 taskBeforeMove.completedActionIdx = null;
@@ -288,7 +285,7 @@ export const workflowMethods = {
         }
 
         // Clean up chain resume index when all actions completed or chain stopped normally
-        const taskAfterChain = this.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+        const taskAfterChain = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
         if (taskAfterChain && (typeof taskAfterChain._completedActionIdx === 'number' || typeof taskAfterChain.completedActionIdx === 'number')) {
           delete taskAfterChain._completedActionIdx;
           taskAfterChain.completedActionIdx = null;
@@ -339,8 +336,8 @@ export const workflowMethods = {
       if (boardTransMap.size === 0) return;
 
       for (const [agentId, agent] of this.agents) {
-        if (!agent.todoList) continue;
-        for (const task of agent.todoList) {
+        const agentTasks = this._getAgentTasks(agentId);
+        for (const task of agentTasks) {
           if (task.status === 'error') continue;
 
           const condTransitions = boardTransMap.get(task.boardId) || (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);
@@ -395,16 +392,16 @@ export const workflowMethods = {
                 let minTasks = Infinity;
                 for (const c of candidates) {
                   let count = 0;
-                  for (const [, cr] of this.agents) {
-                    for (const t of cr.todoList || []) {
+                  for (const [crId] of this.agents) {
+                    for (const t of this._getAgentTasks(crId)) {
                       if (t.id === task.id) continue;
-                      if (t.assignee === c.id || (!t.assignee && cr.id === c.id)) count++;
+                      if (t.assignee === c.id || (!t.assignee && this.agents.get(crId)?.id === c.id)) count++;
                     }
                   }
                   if (count < minTasks) { minTasks = count; foundAgent = c; }
                 }
                 if (foundAgent) {
-                  const actualTask = agent.todoList.find(t => t.id === task.id);
+                  const actualTask = this._getAgentTasks(agentId).find(t => t.id === task.id);
                   if (actualTask) {
                     actualTask.assignee = foundAgent.id;
                     saveTaskToDb({ ...actualTask, agentId });

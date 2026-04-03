@@ -1328,30 +1328,13 @@ function TaskTab({ agent, agents, socket, onRefresh }) {
     };
     load();
     return () => { cancelled = true; };
-  }, [agent.id, agent.todoList]);
+  }, [agent.id]);
 
-  // Collect all tasks assigned to this agent from all agents' todoLists, deduplicate by ID
+  // Collect all tasks assigned to this agent from the API
   const allTasks = (() => {
     const seen = new Set();
     const merged = [];
-    // 1. Tasks from THIS agent's todoList where this agent is the assignee (or unassigned)
-    for (const it of (agent.todoList || [])) {
-      if (!seen.has(it.id) && (it.assignee === agent.id || !it.assignee)) {
-        seen.add(it.id);
-        merged.push({ ...it, _source: 'internal' });
-      }
-    }
-    // 2. Tasks from OTHER agents' todoLists that are assigned to THIS agent
-    for (const other of (agents || [])) {
-      if (other.id === agent.id) continue;
-      for (const it of (other.todoList || [])) {
-        if (!seen.has(it.id) && it.assignee === agent.id) {
-          seen.add(it.id);
-          merged.push({ ...it, _source: 'internal', _creatorId: other.id, _creatorName: other.name });
-        }
-      }
-    }
-    // 3. Fallback: tasks from API that weren't found in local agent data
+    // Tasks from API (loaded from the tasks table)
     for (const bt of boardTasks) {
       if (!seen.has(bt.id)) {
         seen.add(bt.id);

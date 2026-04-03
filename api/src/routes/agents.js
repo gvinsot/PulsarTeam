@@ -318,7 +318,7 @@ export function agentRoutes(agentManager) {
     }
     // Capture old status before any update
     const agent = agentManager.agents.get(req.params.id);
-    const oldTask = agent?.todoList?.find(t => t.id === req.params.taskId);
+    const oldTask = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
 
     // Block status change on tasks being executed — user must stop the agent first
     if (status && oldTask?.startedAt && agentManager._isActiveTaskStatus(oldTask.status) && agent?.status === 'busy') {
@@ -348,10 +348,10 @@ export function agentRoutes(agentManager) {
       task = agentManager.setTaskStatus(req.params.id, req.params.taskId, status);
     } else if (recurrence !== undefined) {
       // If only recurrence was sent, return the updated task
-      task = agent?.todoList?.find(t => t.id === req.params.taskId);
+      task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
     } else if (taskType !== undefined) {
       // If only taskType was sent, return the updated task
-      task = agent?.todoList?.find(t => t.id === req.params.taskId);
+      task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
     } else {
       task = agentManager.toggleTask(req.params.id, req.params.taskId);
     }
@@ -362,7 +362,7 @@ export function agentRoutes(agentManager) {
       try {
         agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
         const errorAgent = agentManager.agents.get(req.params.id);
-        const errorTask = errorAgent?.todoList?.find(t => t.id === req.params.taskId);
+        const errorTask = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
         if (errorTask) errorTask.error = err.message;
       } catch (_) { /* best effort */ }
       res.status(500).json({ error: err.message });
@@ -377,7 +377,7 @@ export function agentRoutes(agentManager) {
 
   router.delete('/:id/tasks/:taskId', requireAgentAccess, (req, res) => {
     const agent = agentManager.agents.get(req.params.id);
-    const taskToDelete = agent?.todoList?.find(t => t.id === req.params.taskId);
+    const taskToDelete = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
     // Block deletion of tasks being executed — user must stop the agent first
     if (taskToDelete?.startedAt && agentManager._isActiveTaskStatus(taskToDelete.status) && agent?.status === 'busy') {
       return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
@@ -428,7 +428,7 @@ export function agentRoutes(agentManager) {
 
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const task = agent.todoList.find(t => t.id === req.params.taskId);
+    const task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const refineAgent = agentManager.agents.get(refineAgentId);

@@ -67,27 +67,28 @@ export const toolsMethods = {
         const comment = call.args[0] || '';
         let inProgressTask = null;
         // Priority 1: Task actively running via this agent (set by processTransition)
-        for (const [, ownerAgent] of this.agents) {
-          const found = ownerAgent.todoList?.find(t => t.actionRunningAgentId === agentId && this._isActiveTaskStatus(t.status));
+        for (const [ownerId, tasks] of this._tasks) {
+          const found = tasks.find(t => t.actionRunningAgentId === agentId && this._isActiveTaskStatus(t.status));
           if (found) { inProgressTask = found; break; }
         }
         // Priority 2: Active task explicitly assigned to this agent
         if (!inProgressTask) {
-          for (const [, ownerAgent] of this.agents) {
-            const found = ownerAgent.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
+          for (const [ownerId, tasks] of this._tasks) {
+            const found = tasks.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
             if (found) { inProgressTask = found; break; }
           }
         }
         // Priority 3: Agent's own active task
         if (!inProgressTask) {
-          inProgressTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
+          inProgressTask = this._getAgentTasks(agentId).find(t => this._isActiveTaskStatus(t.status));
         }
         if (inProgressTask) {
           inProgressTask._executionCompleted = true;
           inProgressTask._executionComment = comment;
-          for (const [, ownerAgent] of this.agents) {
-            if (ownerAgent.todoList?.includes(inProgressTask)) {
-              saveAgent(ownerAgent);
+          for (const [ownerId, tasks] of this._tasks) {
+            if (tasks.includes(inProgressTask)) {
+              const ownerAgent = this.agents.get(ownerId);
+              if (ownerAgent) saveAgent(ownerAgent);
               break;
             }
           }
@@ -99,8 +100,8 @@ export const toolsMethods = {
         } else {
           // Log diagnostic info to help debug why no task was found
           const allActiveTasks = [];
-          for (const [ownerId, ownerAgent] of this.agents) {
-            for (const t of ownerAgent.todoList || []) {
+          for (const [ownerId, tasks] of this._tasks) {
+            for (const t of tasks) {
               if (this._isActiveTaskStatus(t.status)) {
                 allActiveTasks.push({ id: t.id, status: t.status, assignee: t.assignee, actionRunningAgentId: t.actionRunningAgentId, ownerId });
               }
@@ -139,12 +140,12 @@ export const toolsMethods = {
       // ── @update_task() ──
       if (call.tool === 'update_task') {
         const [taskId, newStatus, details] = call.args;
-        let task = agent.todoList?.find(t => t.id === taskId);
-        if (!task) task = agent.todoList?.find(t => t.id.startsWith(taskId));
+        let task = this._getAgentTasks(agentId).find(t => t.id === taskId);
+        if (!task) task = this._getAgentTasks(agentId).find(t => t.id.startsWith(taskId));
         let taskAgentId = agentId;
         if (!task) {
-          for (const [creatorId, creatorAgent] of this.agents) {
-            const found = creatorAgent.todoList?.find(t => t.id === taskId || t.id.startsWith(taskId));
+          for (const [creatorId, tasks] of this._tasks) {
+            const found = tasks.find(t => t.id === taskId || t.id.startsWith(taskId));
             if (found) {
               task = found;
               taskAgentId = creatorId;
@@ -153,7 +154,7 @@ export const toolsMethods = {
           }
         }
         if (!task) {
-          const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
+          const partial = this._getAgentTasks(agentId).find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
           results.push({ tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
@@ -192,14 +193,13 @@ export const toolsMethods = {
         }
         let task = null;
         let ownerAgentId = agentId;
-        for (const [creatorId, creatorAgent] of this.agents) {
-          if (!creatorAgent.todoList) continue;
-          const found = creatorAgent.todoList.find(t => t.id === taskId) ||
-                        creatorAgent.todoList.find(t => t.id.startsWith(taskId));
+        for (const [creatorId, tasks] of this._tasks) {
+          const found = tasks.find(t => t.id === taskId) ||
+                        tasks.find(t => t.id.startsWith(taskId));
           if (found) { task = found; ownerAgentId = creatorId; break; }
         }
         if (!task) {
-          const partial = agent.todoList?.find(t => t.id.startsWith(taskId.slice(0, 8)));
+          const partial = this._getAgentTasks(agentId).find(t => t.id.startsWith(taskId.slice(0, 8)));
           const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
           results.push({ tool: 'link_commit', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
@@ -231,7 +231,7 @@ export const toolsMethods = {
         // Cross-turn dedup: skip if called recently (within 60s) with unchanged task list
         const now = Date.now();
         const lastCall = agent._lastListMyTasks || 0;
-        const taskHash = JSON.stringify((agent.todoList || []).map(t => `${t.id}:${t.status}`));
+        const taskHash = JSON.stringify(this._getAgentTasks(agentId).map(t => `${t.id}:${t.status}`));
         if (now - lastCall < 60000 && agent._lastListMyTasksHash === taskHash) {
           console.log(`[Dedup] Skipping @list_my_tasks from "${agent.name}" — unchanged since ${Math.round((now - lastCall) / 1000)}s ago`);
           results.push({ tool: 'list_my_tasks', args: [], success: true, result: '[Tasks unchanged since last check — focus on your current task]' });
@@ -239,7 +239,7 @@ export const toolsMethods = {
         }
         agent._lastListMyTasks = now;
         agent._lastListMyTasksHash = taskHash;
-        const tasks = agent.todoList || [];
+        const tasks = this._getAgentTasks(agentId);
         const header = `Agent: ${agent.name} | Project: ${agent.project || 'none'} | Status: ${agent.status}`;
         if (tasks.length === 0) {
           results.push({ tool: 'list_my_tasks', args: [], success: true, result: `${header}\nNo tasks assigned.` });
@@ -269,7 +269,7 @@ export const toolsMethods = {
         }
         agent._lastCheckStatus = csNow;
         const { AgentManager } = await import('./index.js');
-        const todoList = agent.todoList || [];
+        const todoList = this._getAgentTasks(agentId);
         const waitingTasks = todoList.filter(t => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
         const activeCount = todoList.filter(t => this._isActiveTaskStatus(t.status)).length;
         const doneTasks = todoList.filter(t => t.status === 'done').length;
@@ -473,7 +473,7 @@ export const toolsMethods = {
               const taskText = agent.currentTask || commitMsg || 'Commit without task';
               const created = this.addTask(agentId, taskText, agent.project || null, { type: 'auto', reason: 'commit-link' });
               if (created) {
-                targetTask = agent.todoList.find(t => t.id === created.id);
+                targetTask = this._getAgentTasks(agentId).find(t => t.id === created.id);
                 ownerAgentId = agentId;
                 console.log(`🔗 [Commit] Auto-created task "${taskText.slice(0, 50)}" for commit linking`);
               }
@@ -492,10 +492,9 @@ export const toolsMethods = {
               }
             } else {
               const agentTasks = [];
-              for (const [, ownerAg] of this.agents) {
-                if (!ownerAg.todoList) continue;
-                for (const t of ownerAg.todoList) {
-                  if (t.assignee === agentId || ownerAg.id === agentId) {
+              for (const [ownerId, tasks] of this._tasks) {
+                for (const t of tasks) {
+                  if (t.assignee === agentId || ownerId === agentId) {
                     agentTasks.push(t);
                   }
                 }
@@ -529,8 +528,12 @@ export const toolsMethods = {
                 saveAgent(ownerAgent);
               } else {
                 // Fallback: find the agent that owns this task
-                for (const [, ag] of this.agents) {
-                  if (ag.todoList?.includes(inProgressTask)) { saveAgent(ag); break; }
+                for (const [ownerId, tasks] of this._tasks) {
+                  if (tasks.includes(inProgressTask)) {
+                    const ag = this.agents.get(ownerId);
+                    if (ag) saveAgent(ag);
+                    break;
+                  }
                 }
               }
               console.log(`✅ [AutoComplete] Agent "${agent.name}" git_commit_push → auto-completing task "${inProgressTask.text?.slice(0, 80)}"`);

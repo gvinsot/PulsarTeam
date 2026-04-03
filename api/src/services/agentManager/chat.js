@@ -132,7 +132,7 @@ export const chatMethods = {
         if (streamCallback) streamCallback(`\n⏸️ *${err.message}. Task will auto-retry at ${err.resetLabel} + 5min.*\n`);
         this.addActionLog(id, 'error', `Rate limit reached — resets at ${err.resetLabel}`, err.message);
 
-        const activeTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
+        const activeTask = this._getAgentTasks(id).find(t => this._isActiveTaskStatus(t.status));
         if (activeTask) {
           activeTask.error = `Rate limit reached — resets at ${err.resetLabel}`;
           this.setTaskStatus(id, activeTask.id, 'error', { skipAutoRefine: true, by: 'rate-limit' });
@@ -333,8 +333,8 @@ export const chatMethods = {
       }
     }
 
-    const activeTasks = agent.todoList.filter(t => this._isActiveTaskStatus(t.status) || t.status === 'error');
-    const doneTasks = agent.todoList.filter(t => t.status === 'done');
+    const activeTasks = this._getAgentTasks(id).filter(t => this._isActiveTaskStatus(t.status) || t.status === 'error');
+    const doneTasks = this._getAgentTasks(id).filter(t => t.status === 'done');
     if (activeTasks.length > 0 || doneTasks.length > 0) {
       systemContent += '\n\n--- Current Task List ---\n';
       for (const task of activeTasks) {
@@ -398,19 +398,16 @@ export const chatMethods = {
     const shouldCompact = isTopLevelUserMessage || isNewDelegationTask;
 
     // Determine if agent is currently executing a task (has an active task with startedAt).
-    // For direct user messages (isTopLevelUserMessage), only check the agent's own todoList
+    // For direct user messages (isTopLevelUserMessage), only check the agent's own task list
     // so that chatting with an agent always sends the full history.
     // For workflow messages (tool-result, delegation, etc.), also check cross-agent assignments
     // so that utility agents (titles-manager, product-manager) get task-scoped history.
-    let activeTask = (agent.todoList || []).find(t => this._isActiveTaskStatus(t.status) && t.startedAt);
+    const agentId = [...this.agents.entries()].find(([, a]) => a === agent)?.[0];
+    let activeTask = this._getAgentTasks(agentId).find(t => this._isActiveTaskStatus(t.status) && t.startedAt);
     if (!activeTask && !isTopLevelUserMessage) {
-      const agentId = [...this.agents.entries()].find(([, a]) => a === agent)?.[0];
       if (agentId) {
-        for (const [, otherAgent] of this.agents) {
-          if (otherAgent === agent || !otherAgent.todoList) continue;
-          const found = otherAgent.todoList.find(t => this._isActiveTaskStatus(t.status) && t.startedAt && t.assignee === agentId);
-          if (found) { activeTask = found; break; }
-        }
+        const found = this._findTaskAcross(t => this._isActiveTaskStatus(t.status) && t.startedAt && t.assignee === agentId);
+        if (found) { activeTask = found; }
       }
     }
     const isTaskExecution = !!activeTask;
@@ -616,7 +613,7 @@ export const chatMethods = {
               this._emit('agent:updated', this._sanitize(targetAgent));
 
               if (createdTask) {
-                const t = targetAgent.todoList.find(t => t.id === createdTask.id);
+                const t = this._getAgentTasks(targetAgent.id).find(t => t.id === createdTask.id);
                 if (t) {
                   t.status = 'done';
                   t.completedAt = new Date().toISOString();
@@ -629,7 +626,7 @@ export const chatMethods = {
             }).catch(err => {
               if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent?.name || null, project: targetAgent?.project || null });
               if (createdTask && targetAgent) {
-                const t = targetAgent.todoList.find(t => t.id === createdTask.id);
+                const t = this._getAgentTasks(targetAgent.id).find(t => t.id === createdTask.id);
                 if (t) {
                   t.errorFromStatus = t.status;
                   t.status = 'error';
@@ -870,7 +867,7 @@ export const chatMethods = {
         if (streamCallback) streamCallback(`\n⚠️ Agent "${cmd.targetAgentName}" not found in swarm\n`);
         continue;
       }
-      const todoList = targetAgent.todoList || [];
+      const todoList = this._getAgentTasks(targetAgent.id);
       const waitingTasks = todoList.filter(t => !this._isActiveTaskStatus(t.status) && t.status !== 'done').length;
       const activeTasksCount = todoList.filter(t => this._isActiveTaskStatus(t.status)).length;
       const doneTasks = todoList.filter(t => t.status === 'done').length;
@@ -942,8 +939,8 @@ export const chatMethods = {
 
       const lines = enabled.map(a => {
         const projectTag = a.project ? `project=${a.project}` : 'NO PROJECT';
-        const taskCount = (a.todoList || []).filter(t => t.status !== 'done').length;
-        const currentActiveTask = (a.todoList || []).find(t => this._isActiveTaskStatus(t.status));
+        const taskCount = this._getAgentTasks(a.id).filter(t => t.status !== 'done').length;
+        const currentActiveTask = this._getAgentTasks(a.id).find(t => this._isActiveTaskStatus(t.status));
         const taskCountInfo = taskCount > 0 ? ` tasks=${taskCount}` : '';
         const taskInfo = a.currentTask
           ? ` working on: "${a.currentTask.slice(0, 80)}${a.currentTask.length > 80 ? '...' : ''}"`
@@ -966,7 +963,7 @@ export const chatMethods = {
       if (allMatching.length > 0) {
         const lines = allMatching.map(a => {
           const projectInfo = a.project ? `project=${a.project}` : 'no project';
-          const todoCount = (a.todoList || []).filter(t => t.status !== 'done').length;
+          const todoCount = this._getAgentTasks(a.id).filter(t => t.status !== 'done').length;
           const taskInfo = todoCount > 0 ? `, ${todoCount} pending tasks` : '';
           return `  - ${a.name} [idle] (${projectInfo}${taskInfo})`;
         });
@@ -1243,7 +1240,7 @@ export const chatMethods = {
           this._emit('agent:updated', this._sanitize(targetAgent));
 
           if (createdTask) {
-            const t = targetAgent.todoList.find(t => t.id === createdTask.id);
+            const t = this._getAgentTasks(targetAgent.id).find(t => t.id === createdTask.id);
             if (t) {
               t.status = 'done';
               t.completedAt = new Date().toISOString();
@@ -1255,7 +1252,7 @@ export const chatMethods = {
         }).catch(err => {
           if (targetAgent?.id) this._emit('agent:stream:end', { agentId: targetAgent.id, agentName: targetAgent?.name || null, project: targetAgent?.project || null });
           if (createdTask && targetAgent) {
-            const t = targetAgent.todoList.find(t => t.id === createdTask.id);
+            const t = this._getAgentTasks(targetAgent.id).find(t => t.id === createdTask.id);
             if (t) {
               t.errorFromStatus = t.status;
               t.status = 'error';

@@ -24,6 +24,8 @@ export class AgentManager {
     this._updatePending = new Map();
     this._conditionProcessing = new Map();
     this.llmConfigs = new Map();
+    /** Centralized task store: Map<agentId, Task[]> — source of truth is the tasks DB table */
+    this._tasks = new Map();
 
     // Debounced code index re-indexation
     this._codeIndexPending = new Map(); // repoId -> Set<filePath>
@@ -48,8 +50,8 @@ export class AgentManager {
         if (agent.projectChangedAt === undefined) {
           agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;
         }
-        // Load tasks from the dedicated tasks table
-        agent.todoList = await getTasksByAgent(agent.id);
+        // Load tasks from the dedicated tasks table into centralized store
+        this._tasks.set(agent.id, await getTasksByAgent(agent.id));
         if (agent.mcpServers.includes('mcp-swarm-manager')) {
           agent.mcpServers = agent.mcpServers.filter(id => id !== 'mcp-swarm-manager');
           if (!agent.mcpServers.includes('mcp-pulsarcd-read')) agent.mcpServers.push('mcp-pulsarcd-read');
@@ -270,6 +272,48 @@ export class AgentManager {
     if (pendingData && this.io) {
       this._emitToOwner('agent:updated', pendingData);
     }
+  }
+
+  // ─── Task store helpers (replace agent.todoList) ─────────────────────
+  /** Get all tasks for an agent */
+  _getAgentTasks(agentId) {
+    return this._tasks.get(agentId) || [];
+  }
+
+  /** Find a single task by predicate across all agents. Returns { task, agentId } or null */
+  _findTaskAcross(predicate) {
+    for (const [agentId, tasks] of this._tasks) {
+      const task = tasks.find(predicate);
+      if (task) return { task, agentId };
+    }
+    return null;
+  }
+
+  /** Get all tasks from all agents as a flat array (each task has agentId) */
+  _getAllTasks() {
+    const all = [];
+    for (const [agentId, tasks] of this._tasks) {
+      for (const t of tasks) all.push({ ...t, agentId });
+    }
+    return all;
+  }
+
+  /** Add a task to the in-memory store for an agent */
+  _addTaskToStore(agentId, task) {
+    if (!this._tasks.has(agentId)) this._tasks.set(agentId, []);
+    this._tasks.get(agentId).push(task);
+  }
+
+  /** Remove a task from the in-memory store */
+  _removeTaskFromStore(agentId, taskId) {
+    const tasks = this._tasks.get(agentId);
+    if (!tasks) return;
+    this._tasks.set(agentId, tasks.filter(t => t.id !== taskId));
+  }
+
+  /** Clear all tasks for an agent from the in-memory store */
+  _clearAgentTasks(agentId) {
+    this._tasks.set(agentId, []);
   }
 
   _randomColor() {

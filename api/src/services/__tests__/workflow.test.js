@@ -17,7 +17,7 @@ async function setup(agentDefs = []) {
     // Ensure agents start idle
     raw.status = 'idle';
     raw.conversationHistory = [];
-    raw.todoList = [];
+    mgr._tasks.set(created.id, []);
   }
   return mgr;
 }
@@ -27,10 +27,9 @@ function workflow(columns, transitions) {
   return { columns, transitions };
 }
 
-/** Create a task on the first agent's todoList */
+/** Create a task on the first agent's task store */
 function addTask(mgr, text, status, boardId = 'board-1', extra = {}) {
   const [firstAgentId] = mgr.agents.keys();
-  const agent = mgr.agents.get(firstAgentId);
   const task = {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     text,
@@ -39,13 +38,12 @@ function addTask(mgr, text, status, boardId = 'board-1', extra = {}) {
     assignee: null,
     ...extra,
   };
-  agent.todoList.push(task);
+  mgr._addTaskToStore(firstAgentId, task);
   return { task, agentId: firstAgentId };
 }
 
-/** Create a task on a specific agent's todoList */
+/** Create a task on a specific agent's task store */
 function addTaskToAgent(mgr, agentId, text, status, boardId = 'board-1', extra = {}) {
-  const agent = mgr.agents.get(agentId);
   const task = {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     text,
@@ -54,7 +52,7 @@ function addTaskToAgent(mgr, agentId, text, status, boardId = 'board-1', extra =
     assignee: null,
     ...extra,
   };
-  agent.todoList.push(task);
+  mgr._addTaskToStore(agentId, task);
   return task;
 }
 
@@ -264,7 +262,7 @@ test('agentHasActiveTask excludes specific task when excludeTaskId is provided',
   const { id: titlesId } = getAgent(mgr, 'Titles');
 
   const taskId = 'task-chain-1';
-  creator.todoList.push({ id: taskId, text: 'Multi-action task', status: 'refine', assignee: titlesId });
+  mgr._addTaskToStore(creatorId, { id: taskId, text: 'Multi-action task', status: 'refine', assignee: titlesId });
 
   assert.equal(mgr.agentHasActiveTask(titlesId), true);
   assert.equal(mgr.agentHasActiveTask(titlesId, taskId), false);
@@ -281,11 +279,11 @@ test('agentHasActiveTask detects cross-agent assignments', async () => {
 
   assert.equal(mgr.agentHasActiveTask(workerId), false);
 
-  creator.todoList.push({ id: 'task-1', text: 'Build feature', status: 'code', assignee: workerId });
+  mgr._addTaskToStore(creatorId, { id: 'task-1', text: 'Build feature', status: 'code', assignee: workerId });
 
   assert.equal(mgr.agentHasActiveTask(workerId), true);
 
-  creator.todoList[0].status = 'done';
+  mgr._getAgentTasks(creatorId)[0].status = 'done';
   assert.equal(mgr.agentHasActiveTask(workerId), false);
 });
 
@@ -295,10 +293,10 @@ test('agentHasActiveTask: own tasks count', async () => {
 
   assert.equal(mgr.agentHasActiveTask(devId), false);
 
-  dev.todoList.push({ id: 't1', text: 'Own task', status: 'code', assignee: null });
+  mgr._addTaskToStore(devId, { id: 't1', text: 'Own task', status: 'code', assignee: null });
   assert.equal(mgr.agentHasActiveTask(devId), true);
 
-  dev.todoList[0].status = 'backlog';
+  mgr._getAgentTasks(devId)[0].status = 'backlog';
   assert.equal(mgr.agentHasActiveTask(devId), false);
 });
 
@@ -310,10 +308,8 @@ test('agentHasActiveTask: multiple tasks, exclude only one', async () => {
   const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
   const { id: devId } = getAgent(mgr, 'Dev');
 
-  creator.todoList.push(
-    { id: 't1', text: 'Task 1', status: 'code', assignee: devId },
-    { id: 't2', text: 'Task 2', status: 'refine', assignee: devId }
-  );
+  mgr._addTaskToStore(creatorId, { id: 't1', text: 'Task 1', status: 'code', assignee: devId });
+  mgr._addTaskToStore(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: devId });
 
   // Even excluding t1, t2 still makes the agent busy
   assert.equal(mgr.agentHasActiveTask(devId, 't1'), true);
@@ -332,7 +328,7 @@ test('setTaskStatus changes status and emits events', async () => {
   const result = mgr.setTaskStatus(agentId, task.id, 'code');
   assert.ok(result, 'setTaskStatus should return truthy result');
 
-  const updated = mgr.agents.get(agentId).todoList.find(t => t.id === task.id);
+  const updated = mgr._getAgentTasks(agentId).find(t => t.id === task.id);
   assert.equal(updated.status, 'code');
 });
 
@@ -793,7 +789,7 @@ test('multiple agents with same role: load balancing by task count', async () =>
   const { id: pm2Id } = getAgent(mgr, 'PM2');
 
   // PM1 has one task assigned
-  creator.todoList.push({ id: 't1', text: 'Task 1', status: 'done', assignee: pm1Id });
+  mgr._addTaskToStore(creatorId, { id: 't1', text: 'Task 1', status: 'done', assignee: pm1Id });
 
   // Both agents have active tasks counted by agentHasActiveTask
   // PM1 has 0 active (t1 is done), PM2 has 0 active — both are free
@@ -801,7 +797,7 @@ test('multiple agents with same role: load balancing by task count', async () =>
   assert.ok(!mgr.agentHasActiveTask(pm2Id));
 
   // Give PM1 an active task
-  creator.todoList.push({ id: 't2', text: 'Task 2', status: 'refine', assignee: pm1Id });
+  mgr._addTaskToStore(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: pm1Id });
   assert.ok(mgr.agentHasActiveTask(pm1Id));
   assert.ok(!mgr.agentHasActiveTask(pm2Id));
 });
@@ -915,7 +911,7 @@ test('addTask creates task with correct defaults', async () => {
   assert.ok(task.id);
   assert.equal(task.text, 'New task');
   assert.ok(task.createdAt);
-  assert.equal(agent.todoList.length, 1);
+  assert.equal(mgr._getAgentTasks(agentId).length, 1);
 });
 
 test('addTask respects initial status', async () => {

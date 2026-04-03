@@ -61,7 +61,7 @@ export function jiraRoutes(agentManager) {
     let task = null;
     let agentId = null;
     for (const [id, agent] of agentManager.agents) {
-      const found = (agent.todoList || []).find(t => t.jiraKey === jiraKey);
+      const found = agentManager._getAgentTasks(id).find(t => t.jiraKey === jiraKey);
       if (found) {
         task = found;
         agentId = id;
