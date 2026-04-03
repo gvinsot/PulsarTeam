@@ -418,6 +418,7 @@ export const chatMethods = {
 
     const isTopLevelUserMessage = delegationDepth === 0 && !messageMeta;
     const isNewDelegationTask = messageMeta?.type === 'delegation-task';
+    const isWorkflowAction = messageMeta?.type === 'workflow-action';
     const shouldCompact = isTopLevelUserMessage || isNewDelegationTask;
 
     // Determine if agent is currently executing a task (has an active task with startedAt).
@@ -438,7 +439,8 @@ export const chatMethods = {
 
     // Proactive compaction: only during task execution, non-managed context.
     // Chat mode sends the FULL history — no compaction.
-    if (shouldCompact && !managesContext && isTaskExecution) {
+    // Workflow one-shot actions skip compaction (no history included).
+    if (shouldCompact && !managesContext && isTaskExecution && !isWorkflowAction) {
       const nonSummaryMessages = agent.conversationHistory.filter(m => m.type !== 'compaction-summary');
 
       if (agent._compactionArmed === undefined) {
@@ -456,7 +458,13 @@ export const chatMethods = {
       }
     }
 
-    if (managesContext) {
+    // Workflow one-shot actions (title, set_type, refine, decide) don't need
+    // conversation history — they're self-contained prompts. Only 'execute'
+    // mode benefits from task-scoped history for multi-turn agent work.
+    if (isWorkflowAction && messageMeta.mode !== 'execute') {
+      // No history — just system prompt + the action prompt (added below)
+      console.log(`📋 [Workflow Action] "${agent.name}": mode=${messageMeta.mode} — no history (one-shot)`);
+    } else if (managesContext) {
       // Model manages its own context — only include history relevant to the current task.
       if (activeTask) {
         const taskStartTime = new Date(activeTask.startedAt).getTime();

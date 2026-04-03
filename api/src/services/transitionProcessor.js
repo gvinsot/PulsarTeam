@@ -160,14 +160,14 @@ export async function processTransition(task, agentManager, io) {
   const isExecution = mode === 'execute' || (!mode && (!instructions || instructions.includes('[EXECUTE]')));
   const isTitle = mode === 'title';
   const isSetType = mode === 'set_type';
+  const isDecide = mode === 'decide';
+  const actionMode = isExecution ? 'execute' : isDecide ? 'decide' : isTitle ? 'title' : isSetType ? 'set_type' : 'refine';
   let _execAgent = null;       // the agent running the execution (for error-path logging)
   let _execStartMsgIdx = -1;
   let _execStartedAt = null;
   let _busyAgentId = null;     // track which agent we marked busy (for finally cleanup)
 
   try {
-    const isDecide = mode === 'decide';
-
     // Determine the owner: prefer board-level userId (set by caller), fallback to creator agent's owner
     const creatorAgent = agentManager.agents.get(task.agentId);
     const taskOwnerId = task._boardUserId || creatorAgent?.ownerId || null;
@@ -355,6 +355,15 @@ Execute the instructions above and update the task status accordingly.`;
     });
 
     try {
+      // Pass messageMeta so _assembleMessages knows this is a workflow action
+      // and doesn't include the agent's full conversation history.
+      // For one-shot actions (title, set_type, refine), no history is needed.
+      // For execution actions, history is scoped by task startedAt.
+      const workflowMeta = {
+        type: 'workflow-action',
+        mode: actionMode,
+        taskId: task.id,
+      };
       const result = await agentManager.sendMessage(
         agent.id,
         messagePrefix ? `${messagePrefix} ${prompt}` : prompt,
@@ -366,20 +375,17 @@ Execute the instructions above and update the task status accordingly.`;
             project: agent.project || null,
             chunk,
           });
-          // Emit thinking state like the socket handler does
           io.emit('agent:thinking', {
             agentId: agent.id,
             project: agent.project || null,
             thinking: agentManager.agents.get(agent.id)?.currentThinking || ''
           });
         },
-        0 // delegationDepth
+        0, // delegationDepth
+        workflowMeta
       );
 
       const response = (result?.content || fullResponse).trim();
-
-      // Determine action mode label for history
-      const actionMode = isExecution ? 'execute' : isDecide ? 'decide' : 'refine';
 
       if (isExecution && instructions) {
         // Execute with instructions: normally the agent handles status changes via @update_task,
