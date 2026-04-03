@@ -246,6 +246,11 @@ export const tasksMethods = {
         console.log(`🔗 [Commit] Found own active task: "${ownActive.text?.slice(0, 50)}"`);
         return { task: ownActive, ownerAgentId: agentId };
       }
+    }
+
+    return null;
+  },
+
   async _findTaskForCommitLink(agentId) {
     // Find active task assigned to or owned by this agent
     const activeTask = await getActiveTaskForExecutor(agentId);
