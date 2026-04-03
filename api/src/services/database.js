@@ -1117,19 +1117,6 @@ export async function getBoardAuditLogs(boardId, limit = 50) {
   }
 }
 
-export async function getAllUsers() {
-  if (!pool) return [];
-  try {
-    const result = await pool.query(
-      'SELECT id, username, display_name, role FROM users ORDER BY username'
-    );
-    return result.rows;
-  } catch (err) {
-    console.error('Failed to get users:', err.message);
-    return [];
-  }
-}
-
 // ── Tasks CRUD ──────────────────────────────────────────────────────────────
 
 export async function getTasksByAgent(agentId) {
