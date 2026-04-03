@@ -2766,6 +2766,17 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
 
   const activeFilters = [agentFilter, projectFilter, search].filter(Boolean).length;
 
+  const [copiedBoardId, setCopiedBoardId] = useState(false);
+  const handleCopyBoardId = (e) => {
+    e.stopPropagation();
+    if (selectedBoard) {
+      navigator.clipboard.writeText(selectedBoard).then(() => {
+        setCopiedBoardId(true);
+        setTimeout(() => setCopiedBoardId(false), 2000);
+      });
+    }
+  };
+
   // ── Board management handlers ──
   const handleCreateBoard = useCallback(async () => {
     try {
