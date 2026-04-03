@@ -72,13 +72,13 @@ export default function BudgetDashboard({ agents = [] }) {
     ],
   };
 
-  const agentNames = [...new Set(timeline.map(t => t.agent_name))];
+  const agentNames = [...new Set(timeline.map(t => t.agent_name || 'Unknown'))];
   const periods = [...new Set(timeline.map(t => t.period))];
   const timelineChartData = {
     labels: periods.map(p => p?.slice(5) || ''),
     datasets: agentNames.map((name, i) => ({
       label: name,
-      data: periods.map(p => { const e = timeline.find(t => t.period === p && t.agent_name === name); return e ? (e.input_tokens + e.output_tokens) / 1000 : 0; }),
+      data: periods.map(p => { const e = timeline.find(t => t.period === p && (t.agent_name || 'Unknown') === name); return e ? ((e.input_tokens || 0) + (e.output_tokens || 0)) / 1000 : 0; }),
       borderColor: COLORS[i % COLORS.length], backgroundColor: COLORS[i % COLORS.length] + '33', fill: false, tension: 0.3,
     })),
   };

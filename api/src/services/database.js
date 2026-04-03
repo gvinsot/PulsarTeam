@@ -562,12 +562,12 @@ export async function getTokenUsageTimeline(days = 7, groupBy = 'day', userId = 
     const userFilter = userId ? ' AND user_id = $3' : '';
     const params = userId ? [trunc, days, userId] : [trunc, days];
     const result = await pool.query(
-      `SELECT date_trunc($1, recorded_at) as period,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
-              SUM(context_tokens) as total_context, SUM(cost) as total_cost
+      `SELECT date_trunc($1, recorded_at) as period, agent_name,
+              SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens,
+              SUM(context_tokens) as context_tokens, SUM(cost) as total_cost
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2${userFilter}
-       GROUP BY period ORDER BY period`,
+       GROUP BY period, agent_name ORDER BY period`,
       params
     );
     return result.rows;
