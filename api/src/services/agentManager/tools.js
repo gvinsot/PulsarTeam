@@ -91,13 +91,22 @@ export const toolsMethods = {
               break;
             }
           }
-          console.log(`✅ [TaskComplete] Agent "${agent.name}" signaled completion: "${comment.slice(0, 120)}"`);
+          console.log(`✅ [TaskComplete] Agent "${agent.name}" signaled completion for task ${inProgressTask.id} (status="${inProgressTask.status}", assignee="${inProgressTask.assignee || 'none'}"): "${comment.slice(0, 120)}"`);
           if (streamCallback) {
             streamCallback(`\n✅ Task execution complete: ${comment.slice(0, 200)}\n`);
           }
           results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}`, isTerminal: true });
         } else {
-          console.log(`[TaskComplete] Agent "${agent.name}" called task_execution_complete but no active task found — ignoring.`);
+          // Log diagnostic info to help debug why no task was found
+          const allActiveTasks = [];
+          for (const [ownerId, ownerAgent] of this.agents) {
+            for (const t of ownerAgent.todoList || []) {
+              if (this._isActiveTaskStatus(t.status)) {
+                allActiveTasks.push({ id: t.id, status: t.status, assignee: t.assignee, actionRunningAgentId: t.actionRunningAgentId, ownerId });
+              }
+            }
+          }
+          console.log(`⚠️ [TaskComplete] Agent "${agent.name}" (${agentId}) called task_execution_complete but no active task found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`);
           results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no active task).', isTerminal: true });
         }
         continue;

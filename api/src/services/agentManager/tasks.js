@@ -531,13 +531,14 @@ export const tasksMethods = {
 
   async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
     const freshTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
+    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
 
     const resolveCompletionStatus = () => {
       return targetStatus || 'done';
     };
 
     if (freshTask?.status === 'error') {
-      console.log(`[Execution] Task "${taskText.slice(0, 60)}" ended with error — blocking transition`);
+      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';
     }
 
@@ -548,15 +549,15 @@ export const tasksMethods = {
       if (targetStatus) {
         const completionStatus = resolveCompletionStatus();
         this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-        console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       } else {
-        console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       }
       return 'completed';
     }
 
     if (freshTask && !this._isActiveTaskStatus(freshTask.status)) {
-      console.log(`[Execution] Task "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
+      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
       return 'moved';
     }
 
@@ -569,7 +570,7 @@ export const tasksMethods = {
     }
 
     const reminderConfig = await getReminderConfig();
-    console.log(`🔔 [Execution] Agent "${executorName}" went idle without completing "${taskText.slice(0, 60)}" — starting reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
+    console.log(`🔔 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — starting reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
     const { intervalMs: REMINDER_INTERVAL_MS, maxReminders: MAX_REMINDERS, cooldownMs: COOLDOWN_MS } = reminderConfig;
     let reminded = 0;
     let lastReminderSentAt = 0;
@@ -590,9 +591,9 @@ export const tasksMethods = {
         if (targetStatus) {
           const completionStatus = resolveCompletionStatus();
           this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-          console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
+          console.log(`✅ [Execution] Task ${taskId} completed during wait -> ${completionStatus}`);
         } else {
-          console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)`);
+          console.log(`✅ [Execution] Task ${taskId} completed during wait (no targetStatus — action chain continues)`);
         }
         return 'completed';
       }
