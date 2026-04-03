@@ -1018,6 +1018,6 @@ test('setTaskStatus clears startedAt even during workflow transitions', async ()
   mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'workflow' });
 
   // startedAt should be cleared by setTaskStatus
-  assert.equal(task.startedAt, undefined);
+  assert.equal(task.startedAt, null);
   // processTransition would re-set it when the code on_enter run_agent starts
 });

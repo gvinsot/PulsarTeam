@@ -34,7 +34,7 @@ export function clearTaskSignals(taskId) {
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
-  async addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence, taskType } = {}) {
+  addTask(agentId, text, project, source, initialStatus, { boardId, skipAutoRefine = false, recurrence, taskType } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = 'backlog';
@@ -59,32 +59,33 @@ export const tasksMethods = {
         originalStatus: status,
       };
     }
-    await saveTaskToDb({ ...newTask, agentId });
+    this._addTaskToStore(agentId, newTask);
+    saveTaskToDb({ ...newTask, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (!skipAutoRefine) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },
 
-  async toggleTask(agentId, taskId) {
+  toggleTask(agentId, taskId) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
-    if (!task || task.agentId !== agentId) return null;
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
+    if (!task) return null;
     const prevStatus = task.status;
     task.status = prevStatus === 'done' ? 'backlog' : 'done';
     if (task.status === 'done') task.completedAt = new Date().toISOString();
     const now = new Date().toISOString();
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status: task.status, at: now, by: 'user' });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async setTaskStatus(agentId, taskId, status, { skipAutoRefine = false, by = null } = {}) {
+  setTaskStatus(agentId, taskId, status, { skipAutoRefine = false, by = null } = {}) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     const prevStatus = task.status;
     if (prevStatus === status) return task;
@@ -108,73 +109,73 @@ export const tasksMethods = {
     }
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
     if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;
   },
 
-  async updateTaskTitle(agentId, taskId, title) {
+  updateTaskTitle(agentId, taskId, title) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     const oldTitle = task.title || null;
     task.title = title;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'title', oldValue: oldTitle, newValue: title });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async updateTaskText(agentId, taskId, text) {
+  updateTaskText(agentId, taskId, text) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     const oldText = task.text;
     task.text = text;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'text', oldValue: oldText, newValue: text });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async updateTaskProject(agentId, taskId, project) {
+  updateTaskProject(agentId, taskId, project) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     const oldProject = task.project;
     task.project = project;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'project', oldValue: oldProject, newValue: project });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async updateTaskType(agentId, taskId, taskType, by = 'user') {
+  updateTaskType(agentId, taskId, taskType, by = 'user') {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     const oldType = task.taskType || null;
     task.taskType = taskType || null;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field: 'taskType', oldValue: oldType, newValue: taskType || null });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async updateTaskRecurrence(agentId, taskId, recurrence) {
+  updateTaskRecurrence(agentId, taskId, recurrence) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     if (recurrence && recurrence.enabled) {
       task.recurrence = {
@@ -186,7 +187,7 @@ export const tasksMethods = {
     } else {
       task.recurrence = null;
     }
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -267,53 +268,59 @@ export const tasksMethods = {
     return null;
   },
 
-  async addTaskCommit(agentId, taskId, hash, message) {
-    const task = await getTaskById(taskId);
+  addTaskCommit(agentId, taskId, hash, message) {
+    let task = null;
+    let ownerAgentId = agentId;
+    for (const [aid, tasks] of this._tasks) {
+      const found = tasks.find(t => t.id === taskId);
+      if (found) { task = found; ownerAgentId = aid; break; }
+    }
     if (!task) return null;
     if (!task.commits) task.commits = [];
     if (task.commits.some(c => c.hash === hash)) return task;
     task.commits.push({ hash, message: message || '', date: new Date().toISOString() });
-    await saveTaskToDb({ ...task, agentId: task.agentId });
-    const agent = this.agents.get(task.agentId);
+    saveTaskToDb({ ...task, agentId: ownerAgentId });
+    const agent = this.agents.get(ownerAgentId);
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async removeTaskCommit(agentId, taskId, hash) {
-    const task = await getTaskById(taskId);
+  removeTaskCommit(agentId, taskId, hash) {
+    let task = null;
+    let ownerAgentId = agentId;
+    for (const [aid, tasks] of this._tasks) {
+      const found = tasks.find(t => t.id === taskId);
+      if (found) { task = found; ownerAgentId = aid; break; }
+    }
     if (!task || !task.commits) return null;
     const before = task.commits.length;
     task.commits = task.commits.filter(c => c.hash !== hash);
     if (task.commits.length === before) return null;
-    await saveTaskToDb({ ...task, agentId: task.agentId });
-    const agent = this.agents.get(task.agentId);
+    saveTaskToDb({ ...task, agentId: ownerAgentId });
+    const agent = this.agents.get(ownerAgentId);
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  async setTaskAssignee(agentId, taskId, assigneeId) {
+  setTaskAssignee(agentId, taskId, assigneeId) {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = await getTaskById(taskId);
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return null;
     task.assignee = assigneeId;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'reassign', assignee: assigneeId });
-    await saveTaskToDb({ ...task, agentId });
+    saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     this._recheckConditionalTransitions();
     return task;
   },
 
-  async deleteTask(agentId, taskId) {
-    const task = await getTaskById(taskId);
+  deleteTask(agentId, taskId) {
+    const task = this._getAgentTasks(agentId).find(t => t.id === taskId);
     if (!task) return false;
-    // Record deletion in history
-    if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'deleted' });
-    await saveTaskToDb({ ...task, agentId });
-    // Soft-delete in DB (sets deleted_at)
-    await deleteTaskFromDb(taskId);
+    this._removeTaskFromStore(agentId, taskId);
+    deleteTaskFromDb(taskId);
     clearTaskSignals(taskId);
     const agent = this.agents.get(agentId);
     if (agent) this._emit('agent:updated', this._sanitize(agent));
@@ -327,6 +334,7 @@ export const tasksMethods = {
     if (!restored.history) restored.history = [];
     restored.history.push({ status: restored.status, at: new Date().toISOString(), by: 'user', type: 'restored' });
     await saveTaskToDb({ ...restored, agentId: restored.agentId });
+    this._addTaskToStore(restored.agentId, restored);
     const agent = this.agents.get(restored.agentId);
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     return restored;
@@ -342,27 +350,29 @@ export const tasksMethods = {
     return getDeletedTasks();
   },
 
-  async clearTasks(agentId) {
+  clearTasks(agentId) {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
-    await deleteTasksByAgent(agentId);
+    this._clearAgentTasks(agentId);
+    deleteTasksByAgent(agentId);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },
 
-  async transferTask(fromAgentId, taskId, toAgentId) {
+  transferTask(fromAgentId, taskId, toAgentId) {
     const fromAgent = this.agents.get(fromAgentId);
     const toAgent = this.agents.get(toAgentId);
     if (!fromAgent || !toAgent) return null;
-    const taskToTransfer = await getTaskById(taskId);
+    const taskToTransfer = this._getAgentTasks(fromAgentId).find(t => t.id === taskId);
     if (!taskToTransfer) return null;
     const prevStatus = taskToTransfer.status;
-    await hardDeleteTaskFromDb(taskId); // Hard delete since the task is recreated on the target agent
+    this._removeTaskFromStore(fromAgentId, taskId);
+    deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(fromAgent));
-    const newTask = await this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus);
+    const newTask = this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus);
     if (newTask) {
       newTask.assignee = toAgentId;
-      await saveTaskToDb({ ...newTask, agentId: toAgentId });
+      saveTaskToDb({ ...newTask, agentId: toAgentId });
       this._checkAutoRefine({ ...newTask, assignee: toAgentId, agentId: toAgentId });
     }
     return newTask;
@@ -772,15 +782,17 @@ export const tasksMethods = {
     }
   },
 
-  /** Find a task by ID (from database) */
-  async getTask(taskId) {
-    return getTaskById(taskId);
+  /** Find a task by ID (from in-memory store) */
+  getTask(taskId) {
+    const result = this._findTaskAcross(t => t.id === taskId);
+    if (!result) return null;
+    return { ...result.task, agentId: result.agentId };
   },
 
   /** Save a task to the database */
-  async saveTaskDirectly(task) {
+  saveTaskDirectly(task) {
     if (!task || !task.agentId) return;
-    await saveTaskToDb(task);
+    saveTaskToDb(task);
   },
 
   _enqueueAgentTask(agentId, taskFn) {
