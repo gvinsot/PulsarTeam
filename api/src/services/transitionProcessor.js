@@ -216,7 +216,11 @@ export async function processTransition(task, agentManager, io) {
         });
         console.log(`[Workflow] Updated assignee: "${previousAssignee || 'none'}" → "${agent.id}" (${agent.name}) for task "${task.text?.slice(0, 60)}"`);
       }
-      saveTaskToDb({ ...actualTaskForFlag, agentId: task.agentId });
+      // NOTE: Do NOT saveTaskToDb here — this fire-and-forget save carries
+      // status="code" and can arrive at PostgreSQL AFTER the change_status
+      // save (status="check") later in the action chain, reverting the task.
+      // The flags (actionRunning, assignee, startedAt) will be persisted by
+      // the next saveTaskToDb call in the workflow chain or setTaskStatus.
       io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTaskForFlag });
     }
 
