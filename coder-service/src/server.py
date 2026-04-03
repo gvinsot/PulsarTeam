@@ -989,10 +989,12 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
             if refreshed:
                 logger.info(f"Agent token refreshed, retrying request...")
                 return await run_claude_sync(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id)
+            login_url = _initiate_owner_login(agent_user['owner_id']) if agent_user.get('owner_id') else _initiate_agent_login(agent_id)
             return {
                 "status": "auth_required",
                 "output": "",
-                "error": f"OAuth token expired and refresh failed. Authenticate via POST /auth/owner/{agent_user.get('owner_id')}/login" if agent_user.get('owner_id') else f"OAuth token expired and refresh failed. Authenticate via POST /auth/agent/{agent_id}/login",
+                "error": f"OAuth token expired and refresh failed. Please re-authenticate: {login_url}",
+                "login_url": login_url,
             }
         else:
             logger.warning("Claude Code auth error: token expired, attempting refresh...")
@@ -1011,10 +1013,12 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
     if "not logged in" in combined:
         if agent_user:
             logger.warning(f"Agent {agent_user['username']} not logged in")
+            login_url = _initiate_owner_login(agent_user['owner_id']) if agent_user.get('owner_id') else _initiate_agent_login(agent_id)
             return {
                 "status": "auth_required",
                 "output": "",
-                "error": f"Not authenticated. Call POST /auth/owner/{agent_user.get('owner_id')}/login to start." if agent_user.get('owner_id') else f"Not authenticated. Call POST /auth/agent/{agent_id}/login to start.",
+                "error": f"Not authenticated. Please re-authenticate: {login_url}",
+                "login_url": login_url,
             }
         logger.warning("Claude Code auth error: not logged in, initiating login flow...")
         login_url = await _get_login_url()
@@ -1114,10 +1118,11 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
         if _is_agent_token_expired(agent_user) and time.time() >= _token_cooldown_until:
             refreshed = await _refresh_agent_token(agent_user)
             if not refreshed:
-                auth_endpoint = f"POST /auth/owner/{_owner_id}/login" if _owner_id else f"POST /auth/agent/{agent_id}/login"
+                login_url = _initiate_owner_login(_owner_id) if _owner_id else _initiate_agent_login(agent_id)
                 yield {
                     "type": "error",
-                    "content": f"OAuth token expired and refresh failed. Authenticate via {auth_endpoint}",
+                    "content": f"OAuth token expired and refresh failed. Please re-authenticate: {login_url}",
+                    "login_url": login_url,
                 }
                 return
     else:
@@ -1603,6 +1608,34 @@ async def auth_login(
 _agent_oauth_flows: dict[str, dict] = {}
 
 
+def _initiate_agent_login(agent_id: str) -> str:
+    """Generate an OAuth URL for an agent login flow (reuses pending flow if exists)."""
+    if agent_id in _agent_oauth_flows:
+        return _agent_oauth_flows[agent_id]["auth_url"]
+    code_verifier = secrets.token_urlsafe(64)[:128]
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(32)
+    auth_url = (
+        f"{OAUTH_AUTHORIZE_URL}?"
+        f"client_id={OAUTH_CLIENT_ID}&"
+        f"response_type=code&"
+        f"redirect_uri={OAUTH_REDIRECT_URI}&"
+        f"scope={OAUTH_SCOPES.replace(' ', '+')}&"
+        f"code_challenge={code_challenge}&"
+        f"code_challenge_method=S256&"
+        f"state={state}"
+    )
+    _agent_oauth_flows[agent_id] = {
+        "code_verifier": code_verifier,
+        "state": state,
+        "auth_url": auth_url,
+    }
+    logger.info(f"[Agent Auth] Initiated login flow for agent {agent_id}: {auth_url[:80]}...")
+    return auth_url
+
+
 @app.get("/auth/agent/{agent_id}/status")
 async def agent_auth_status(
     agent_id: str,
@@ -1769,6 +1802,34 @@ async def agent_set_token(
 
 # --- Per-Owner (PulsarTeam User) Auth Endpoints --------------------------------
 _owner_oauth_flows: dict[str, dict] = {}
+
+
+def _initiate_owner_login(owner_id: str) -> str:
+    """Generate an OAuth URL for an owner login flow (reuses pending flow if exists)."""
+    if owner_id in _owner_oauth_flows:
+        return _owner_oauth_flows[owner_id]["auth_url"]
+    code_verifier = secrets.token_urlsafe(64)[:128]
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(32)
+    auth_url = (
+        f"{OAUTH_AUTHORIZE_URL}?"
+        f"client_id={OAUTH_CLIENT_ID}&"
+        f"response_type=code&"
+        f"redirect_uri={OAUTH_REDIRECT_URI}&"
+        f"scope={OAUTH_SCOPES.replace(' ', '+')}&"
+        f"code_challenge={code_challenge}&"
+        f"code_challenge_method=S256&"
+        f"state={state}"
+    )
+    _owner_oauth_flows[owner_id] = {
+        "code_verifier": code_verifier,
+        "state": state,
+        "auth_url": auth_url,
+    }
+    logger.info(f"[Owner Auth] Initiated login flow for owner {owner_id}: {auth_url[:80]}...")
+    return auth_url
 
 
 @app.get("/auth/owner/{owner_id}/status")
