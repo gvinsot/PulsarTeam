@@ -1363,7 +1363,7 @@ export async function clearActionRunningForAgent(agentId) {
 }
 
 /** Convert a DB row to the in-memory task object format */
-function rowToTask(row) {
+export function rowToTask(row) {
   return {
     id: row.id,
     agentId: row.agent_id,

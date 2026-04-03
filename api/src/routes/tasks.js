@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { Octokit } from '@octokit/rest';
-import { getPool, getBoardById } from '../services/database.js';
+import { getPool, getBoardById, rowToTask } from '../services/database.js';
 
 const router = Router();
 
@@ -49,6 +49,53 @@ function validateColumn(board, columnId) {
   if (exists) return columnId;
   return board.workflow.columns[0].id;
 }
+
+// ── GET /tasks — list all tasks (from the tasks table) ─────────────────────
+router.get('/', async (req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.json([]);
+
+    const { board_id, agent_id, status } = req.query;
+    let query = 'SELECT * FROM tasks WHERE deleted_at IS NULL';
+    const params = [];
+
+    if (board_id) {
+      params.push(board_id);
+      query += ` AND board_id = $${params.length}`;
+    }
+    if (agent_id) {
+      params.push(agent_id);
+      query += ` AND agent_id = $${params.length}`;
+    }
+    if (status) {
+      params.push(status);
+      query += ` AND status = $${params.length}`;
+    }
+
+    query += ' ORDER BY created_at';
+    const result = await pool.query(query, params);
+
+    // Enrich with agent name
+    const mgr = req.app.get('agentManager');
+    const tasks = result.rows.map(row => {
+      const task = rowToTask(row);
+      const agent = mgr.agents.get(task.agentId);
+      task.agentName = agent?.name || null;
+      // Resolve assignee name
+      if (task.assignee) {
+        const assigneeAgent = mgr.agents.get(task.assignee);
+        task.assigneeName = assigneeAgent?.name || null;
+        task.assigneeIcon = assigneeAgent?.icon || null;
+      }
+      return task;
+    });
+
+    res.json(tasks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── PUT /tasks/:id — update a task ──────────────────────────────────────────
 router.put('/:id', async (req, res) => {

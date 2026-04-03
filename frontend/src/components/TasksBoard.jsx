@@ -2611,30 +2611,32 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     return map;
   }, [workflow]);
 
-  // Aggregate all tasks from all agents, filtered by active board
-  const firstBoardId = boards.length > 0 ? boards[0].id : null;
-  const allTasks = useMemo(() =>
-    agents.flatMap(a =>
-      (a.todoList || [])
-        .filter(t => {
-          if (!activeBoardId) return true;
-          // Tasks without a boardId belong to the first board only
-          if (!t.boardId) return activeBoardId === firstBoardId;
-          return t.boardId === activeBoardId;
-        })
-        .map(t => {
-          const assigneeAgent = t.assignee ? agents.find(ag => ag.id === t.assignee) : null;
-          return {
-            ...t,
-            agentId: a.id,
-            agentName: a.name,
-            assigneeName: assigneeAgent?.name || null,
-            assigneeIcon: assigneeAgent?.icon || null,
-          };
-        })
-    ),
-    [agents, activeBoardId, firstBoardId]
-  );
+  // Fetch tasks directly from the tasks table via API
+  const [dbTasks, setDbTasks] = useState([]);
+  const loadTasks = useCallback(async () => {
+    try {
+      const params = {};
+      if (activeBoardId) params.board_id = activeBoardId;
+      const tasks = await api.getAllTasks(params);
+      setDbTasks(tasks);
+    } catch (err) {
+      console.error('[TasksBoard] Failed to load tasks:', err.message);
+    }
+  }, [activeBoardId]);
+
+  useEffect(() => { loadTasks(); }, [loadTasks]);
+
+  // Re-fetch tasks when agents update (status changes, etc.)
+  const agentRevision = agents.map(a => `${a.id}:${a.status}`).join(',');
+  useEffect(() => { loadTasks(); }, [agentRevision]);
+
+  // Wrap onRefresh to also reload tasks
+  const refreshAll = useCallback(() => {
+    loadTasks();
+    onRefresh();
+  }, [loadTasks, onRefresh]);
+
+  const allTasks = dbTasks;
 
   // Keep modal task in sync with live data
   const liveSelectedTask = useMemo(() => {
@@ -2678,24 +2680,24 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
 
   const handleDelete = useCallback(async (task) => {
     await api.deleteTask(task.agentId, task.id);
-    onRefresh();
-  }, [onRefresh]);
+    refreshAll();
+  }, [refreshAll]);
 
   const handleStopAction = useCallback(async (task) => {
     const agentId = task.actionRunningAgentId || task.assignee;
     if (agentId) {
       await api.stopAgent(agentId);
-      onRefresh();
+      refreshAll();
     }
-  }, [onRefresh]);
+  }, [refreshAll]);
 
   const lastColId = columns[columns.length - 1]?.id;
 
   const handleClearDone = useCallback(async () => {
     const doneTasks = allTasks.filter(t => t.status === lastColId);
     await Promise.all(doneTasks.map(t => api.deleteTask(t.agentId, t.id)));
-    onRefresh();
-  }, [allTasks, onRefresh, lastColId]);
+    refreshAll();
+  }, [allTasks, refreshAll, lastColId]);
 
   const handleDrop = useCallback(async (e, col) => {
     if (isReadOnly) return;
@@ -2714,11 +2716,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         : col.statuses.includes(task.status || fallbackColId);
       if (isAlreadyInColumn) return;
       await api.setTaskStatus(agentId, taskId, col.dropStatus);
-      onRefresh();
+      refreshAll();
     } catch (err) {
       console.error('[TasksBoard] Drop status change failed:', err.message);
     }
-  }, [allTasks, onRefresh]);
+  }, [allTasks, refreshAll]);
 
   // Touch drag-and-drop handler
   const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
@@ -2735,11 +2737,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         : col.statuses.includes(task.status || fallbackColId);
       if (isAlreadyInColumn) return;
       await api.setTaskStatus(agentId, taskId, col.dropStatus);
-      onRefresh();
+      refreshAll();
     } catch (err) {
       console.error('[TasksBoard] Touch drop status change failed:', err.message);
     }
-  }, [allTasks, columns, onRefresh]);
+  }, [allTasks, columns, refreshAll]);
 
   // Listen for custom touch-task-drop events on the board
   useEffect(() => {
@@ -3008,7 +3010,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           allProjects={allProjects}
           statusOptions={statusOptions}
           onClose={() => setSelectedTask(null)}
-          onRefresh={onRefresh}
+          onRefresh={refreshAll}
           onDelete={handleDelete}
           onNavigateToAgent={onNavigateToAgent}
         />
@@ -3023,7 +3025,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           defaultStatus={createDefaultStatus}
           boardId={activeBoardId}
           onClose={() => { setCreateOpen(false); setCreateDefaultStatus(null); }}
-          onCreated={onRefresh}
+          onCreated={refreshAll}
         />
       )}
 
@@ -3042,7 +3044,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
       {showDeletedTasks && (
         <DeletedTasksPanel
           onClose={() => setShowDeletedTasks(false)}
-          onRestored={onRefresh}
+          onRestored={refreshAll}
         />
       )}
 

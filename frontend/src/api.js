@@ -34,6 +34,12 @@ export const api = {
   getAgents: () =>
     fetch(`${API_BASE}/agents`, { headers: getHeaders() }).then(handleResponse),
 
+  // Tasks (direct from tasks table)
+  getAllTasks: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return fetch(`${API_BASE}/tasks${qs ? '?' + qs : ''}`, { headers: getHeaders() }).then(handleResponse);
+  },
+
   getAgent: (id) =>
     fetch(`${API_BASE}/agents/${id}`, { headers: getHeaders() }).then(handleResponse),
 
