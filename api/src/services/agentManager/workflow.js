@@ -235,7 +235,11 @@ export const workflowMethods = {
                   if (actualTaskForClear._pendingOnEnter === originalStatus) {
                     delete actualTaskForClear._pendingOnEnter;
                   }
-                  saveTaskToDb({ ...actualTaskForClear, agentId: task.agentId });
+                  // MUST await to prevent race condition: if the next action is
+                  // change_status, its setTaskStatus save would race with this one.
+                  // Without await, this fire-and-forget can complete AFTER the
+                  // change_status save, overwriting the new status with the old one.
+                  await saveTaskToDb({ ...actualTaskForClear, agentId: task.agentId });
                 }
               }
               const freshTask = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
