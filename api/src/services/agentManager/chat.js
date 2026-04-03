@@ -404,11 +404,12 @@ export const chatMethods = {
     // so that utility agents (titles-manager, product-manager) get task-scoped history.
     const agentId = [...this.agents.entries()].find(([, a]) => a === agent)?.[0];
     let activeTask = this._getAgentTasks(agentId).find(t => this._isActiveTaskStatus(t.status) && t.startedAt);
-    if (!activeTask && !isTopLevelUserMessage) {
-      if (agentId) {
-        const found = this._findTaskAcross(t => this._isActiveTaskStatus(t.status) && t.startedAt && t.assignee === agentId);
-        if (found) { activeTask = found; }
-      }
+    // Also check cross-agent assignments: when an executor is different from the
+    // task creator, _getAgentTasks(executorId) won't find it. We need to search
+    // across all agents for tasks assigned to this executor.
+    if (!activeTask && agentId) {
+      const found = this._findTaskAcross(t => this._isActiveTaskStatus(t.status) && t.startedAt && (t.assignee === agentId || t.actionRunningAgentId === agentId));
+      if (found) { activeTask = found.task; }
     }
     const isTaskExecution = !!activeTask;
 
