@@ -999,12 +999,12 @@ test('setTaskStatus clears startedAt to prevent stale task loop resume', async (
   // Move to done (like after execution completes)
   mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'workflow' });
   assert.equal(task.status, 'done');
-  assert.equal(task.startedAt, undefined, 'startedAt should be cleared on status change');
+  assert.equal(task.startedAt, null, 'startedAt should be cleared on status change');
 
   // User moves done → nextsprint
   mgr.setTaskStatus(agentId, task.id, 'nextsprint', { skipAutoRefine: true, by: 'user' });
   assert.equal(task.status, 'nextsprint');
-  assert.equal(task.startedAt, undefined, 'startedAt must stay cleared — task loop must NOT resume this');
+  assert.equal(task.startedAt, null, 'startedAt must stay cleared — task loop must NOT resume this');
   assert.equal(task.executionStatus, null, 'executionStatus must be cleared');
 });
 
