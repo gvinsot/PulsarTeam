@@ -73,6 +73,7 @@ const mcpManager = new MCPManager();
 const codeIndexService = new CodeIndexService();
 const agentManager = new AgentManager(io, skillManager, sandboxManager, mcpManager, codeIndexService);
 app.set('io', io);
+app.set('agentManager', agentManager);
 
 app.use(cors({
   origin: corsOrigins,
