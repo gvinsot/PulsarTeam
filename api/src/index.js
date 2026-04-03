@@ -37,6 +37,7 @@ import budgetRoutes from './routes/budget.js';
 import { userRoutes } from './routes/users.js';
 import { llmConfigRoutes } from './routes/llmConfigs.js';
 import { boardRoutes } from './routes/boards.js';
+import taskRoutes from './routes/tasks.js';
 import { startJiraSync, registerWebhook } from './services/jiraSync.js';
 
 const app = express();
@@ -128,6 +129,7 @@ app.use('/api/llm-configs', authenticateToken, llmConfigRoutes(agentManager));
 app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes(agentManager));
 app.use('/api/boards', authenticateToken, boardRoutes(agentManager));
+app.use('/api/tasks', authenticateToken, taskRoutes);
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
 const onedriveMcpHandler = createOneDriveMcpHandler();
