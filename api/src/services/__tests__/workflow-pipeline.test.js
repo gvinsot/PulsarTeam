@@ -189,7 +189,9 @@ async function waitForStatus(mgr, agentId, taskId, expectedStatus, timeoutMs = 1
   while (Date.now() - start < timeoutMs) {
     const task = mgr._getAgentTasks(agentId).find(t => t.id === taskId);
     if (task?.status === expectedStatus) return task;
-    await new Promise(r => setTimeout(r, 30));
+    // Trigger the recheck loop manually (simulates the 5s task loop interval)
+    mgr._recheckConditionalTransitions();
+    await new Promise(r => setTimeout(r, 100));
   }
   const task = mgr._getAgentTasks(agentId).find(t => t.id === taskId);
   const transitions = (task?.history || [])

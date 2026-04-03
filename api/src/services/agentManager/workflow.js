@@ -66,16 +66,6 @@ export const workflowMethods = {
       return;
     }
 
-    // Guard against synchronous re-entrant calls for the same task
-    // (e.g. on_enter retry → _checkAutoRefine → skipped → retry → ...)
-    if (!this._autoRefineRunning) this._autoRefineRunning = new Set();
-    const taskKey = `${task.agentId}:${task.id}`;
-    if (this._autoRefineRunning.has(taskKey)) {
-      console.log(`[Workflow] _checkAutoRefine: skipping re-entrant call for task ${task.id?.slice(0, 8)}`);
-      return;
-    }
-    this._autoRefineRunning.add(taskKey);
-
     getWorkflowForBoard(task.boardId).then(async (workflow) => {
       const creatorAgentForOwner = this.agents.get(task.agentId);
       const boardUserId = workflow.userId || null;
@@ -318,8 +308,6 @@ export const workflowMethods = {
       }
     }).catch(err => {
       console.error(`[Workflow] Failed to load workflow:`, err.message);
-    }).finally(() => {
-      this._autoRefineRunning?.delete(taskKey);
     });
   },
 
@@ -391,8 +379,11 @@ export const workflowMethods = {
             // Cooldown: skip if last retry was too recent (prevents infinite loop
             // when no idle agent is available).
             if (isOnEnterRetry) {
-              const ON_ENTER_RETRY_COOLDOWN_MS = 30_000; // 30 seconds between retries
-              const lastRetryKey = `${lockKey}:lastRetry`;
+              // Cooldown: skip if this exact task was retried very recently.
+              // The recheck loop runs every 5s; this prevents synchronous
+              // re-entrancy while still retrying promptly once an agent is free.
+              const ON_ENTER_RETRY_COOLDOWN_MS = 3_000;
+              const lastRetryKey = `${agentId}:${task.id}:lastRetry`;
               if (!this._onEnterRetryTimestamps) this._onEnterRetryTimestamps = new Map();
               const lastRetry = this._onEnterRetryTimestamps.get(lastRetryKey) || 0;
               if (Date.now() - lastRetry < ON_ENTER_RETRY_COOLDOWN_MS) {
