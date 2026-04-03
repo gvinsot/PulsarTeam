@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentManager } from '../agentManager.js';
-import { stripToolCalls } from '../transitionProcessor.js';
+import { stripToolCalls } from '../workflow/index.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -2,8 +2,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getActiveTasksByAgent, getActiveTaskForExecutor, getRecurringDoneTasks, hasActiveTask, updateTaskFields } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
-import { processTransition } from '../transitionProcessor.js';
 import { onTaskStatusChanged } from '../jiraSync.js';
+import { isActiveStatus, getWorkflowManagedStatuses } from '../workflow/index.js';
 
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
@@ -194,8 +194,7 @@ export const tasksMethods = {
   },
 
   _isActiveTaskStatus(status) {
-    const INACTIVE = new Set(['done', 'backlog', 'error']);
-    return !INACTIVE.has(status);
+    return isActiveStatus(status);
   },
 
   /** Resolve the first column ID of a board's workflow (used as default status) */
@@ -437,21 +436,9 @@ export const tasksMethods = {
 
   _refreshWorkflowManagedStatuses() {
     getAllBoardWorkflows().then(boardWorkflows => {
-      const managed = new Set();
-      for (const { workflow } of boardWorkflows) {
-        for (const t of workflow.transitions) {
-          if (!this._validTransition(t)) continue;
-          const migrated = t;
-          const hasAgentAction = (migrated.actions || []).some(a => a.type === 'run_agent');
-          const isConditional = migrated.trigger === 'condition' && (migrated.conditions || []).length > 0;
-          if (hasAgentAction || isConditional) {
-            managed.add(migrated.from);
-          }
-        }
-      }
-      this._workflowManagedStatuses = managed;
-      if (managed.size > 0) {
-        console.log(`🔄 [TaskLoop] Workflow-managed statuses: ${[...managed].join(', ')}`);
+      this._workflowManagedStatuses = getWorkflowManagedStatuses(boardWorkflows);
+      if (this._workflowManagedStatuses.size > 0) {
+        console.log(`🔄 [TaskLoop] Workflow-managed statuses: ${[...this._workflowManagedStatuses].join(', ')}`);
       }
     }).catch(() => {});
   },

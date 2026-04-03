@@ -17,7 +17,7 @@
 
 import { getWorkflow, getSettings, getAllBoardWorkflows, getWorkflowForBoard } from './configManager.js';
 import { saveTaskToDb } from './database.js';
-import { processTransition } from './transitionProcessor.js';
+import { executeAction, ActionType, AgentMode } from './workflow/index.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -142,16 +142,12 @@ async function executeTransitionActions(trigger, task, agentId, agentManager) {
     } else if (action.type === 'assign_agent' && action.role) {
       // Handled by _checkAutoRefine via autoAssignRole on the target column
     } else if (action.type === 'run_agent') {
-      const enrichedTask = {
-        ...task, agentId,
-        _transition: {
-          agent: action.role || '',
-          mode: action.mode || 'execute',
-          instructions: action.instructions || '',
-          to: action.targetStatus || null,
-        }
-      };
-      processTransition(enrichedTask, agentManager, _io).catch(err =>
+      executeAction(action, { ...task, agentId }, {
+        agentManager,
+        io: _io,
+        ownerId: null,
+        workflow: null,
+      }).catch(err =>
         console.error(`[Jira] Action run_agent error:`, err.message)
       );
     } else if (action.type === 'move_jira_status' && action.jiraStatusIds?.length) {

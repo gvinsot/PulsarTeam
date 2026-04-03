@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { globalTaskStore } from '../services/globalTaskStore.js';
 import { getWorkflowForBoard } from '../services/configManager.js';
 import { getAllBoards } from '../services/database.js';
-import { stripToolCalls } from '../services/transitionProcessor.js';
+import { stripToolCalls } from '../services/workflow/index.js';
 
 // Schema for creating a new agent
 const createAgentSchema = z.object({
