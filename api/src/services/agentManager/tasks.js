@@ -209,33 +209,65 @@ export const tasksMethods = {
 
   _findTaskForCommitLink(agentId) {
     const agent = this.agents.get(agentId);
+
+    // Priority 1: Task actively running via this agent (set by processTransition)
+    // This is the most reliable indicator — it means a workflow action is in progress.
+    for (const [creatorId, creatorAgent] of this.agents) {
+      if (!creatorAgent.todoList) continue;
+      for (const task of creatorAgent.todoList) {
+        if (task.actionRunningAgentId === agentId && this._isActiveTaskStatus(task.status)) {
+          console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${task.text?.slice(0, 50)}" (owner=${creatorId.slice(0, 8)})`);
+          return { task, ownerAgentId: creatorId };
+        }
+      }
+    }
+
+    // Priority 2: Active task explicitly assigned to this agent (from any agent's list)
+    // Prefer the most recently started task when multiple are assigned.
+    let bestAssigned = null;
+    for (const [creatorId, creatorAgent] of this.agents) {
+      if (!creatorAgent.todoList) continue;
+      for (const task of creatorAgent.todoList) {
+        if (task.assignee !== agentId || !this._isActiveTaskStatus(task.status)) continue;
+        if (!bestAssigned || (task.startedAt && (!bestAssigned.task.startedAt || new Date(task.startedAt) > new Date(bestAssigned.task.startedAt)))) {
+          bestAssigned = { task, ownerAgentId: creatorId };
+        }
+      }
+    }
+    if (bestAssigned) {
+      console.log(`🔗 [Commit] Found task via assignee: "${bestAssigned.task.text?.slice(0, 50)}" (owner=${bestAssigned.ownerAgentId.slice(0, 8)})`);
+      return bestAssigned;
+    }
+
+    // Priority 3: Agent's own active task (when no assigned/running task found)
     if (agent?.todoList?.length) {
       const ownActive = agent.todoList.find(t => this._isActiveTaskStatus(t.status));
-      if (ownActive) return { task: ownActive, ownerAgentId: agentId };
+      if (ownActive) {
+        console.log(`🔗 [Commit] Found own active task: "${ownActive.text?.slice(0, 50)}"`);
+        return { task: ownActive, ownerAgentId: agentId };
+      }
     }
-    let bestActive = null;
+
+    // Priority 4: Fall back to most recently completed task (owned or assigned)
     let bestDone = null;
     for (const [creatorId, creatorAgent] of this.agents) {
       if (!creatorAgent.todoList) continue;
       for (const task of creatorAgent.todoList) {
         const isOwnedOrAssigned = creatorId === agentId || task.assignee === agentId;
         if (!isOwnedOrAssigned) continue;
-        if (this._isActiveTaskStatus(task.status) && !bestActive) {
-          bestActive = { task, ownerAgentId: creatorId };
-        }
         if (task.status === 'done' && task.completedAt) {
           if (!bestDone || new Date(task.completedAt) > new Date(bestDone.task.completedAt)) {
             bestDone = { task, ownerAgentId: creatorId };
           }
         }
       }
-      if (bestActive) break;
     }
-    if (bestActive) return bestActive;
     if (bestDone) {
-      console.log(`🔗 [Commit] No active task — falling back to recently done task "${bestDone.task.text?.slice(0, 50)}"`);
+      console.log(`🔗 [Commit] No active task — falling back to recently done: "${bestDone.task.text?.slice(0, 50)}"`);
       return bestDone;
     }
+
+    console.log(`🔗 [Commit] No task found for agent ${agentId.slice(0, 8)} (${agent?.name || 'unknown'})`);
     return null;
   },
 
@@ -525,13 +557,14 @@ export const tasksMethods = {
 
   async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
     const freshTask = this.agents.get(creatorAgentId)?.todoList?.find(t => t.id === taskId);
+    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
 
     const resolveCompletionStatus = () => {
       return targetStatus || 'done';
     };
 
     if (freshTask?.status === 'error') {
-      console.log(`[Execution] Task "${taskText.slice(0, 60)}" ended with error — blocking transition`);
+      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';
     }
 
@@ -542,15 +575,15 @@ export const tasksMethods = {
       if (targetStatus) {
         const completionStatus = resolveCompletionStatus();
         this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-        console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       } else {
-        console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       }
       return 'completed';
     }
 
     if (freshTask && !this._isActiveTaskStatus(freshTask.status)) {
-      console.log(`[Execution] Task "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
+      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
       return 'moved';
     }
 
@@ -563,7 +596,7 @@ export const tasksMethods = {
     }
 
     const reminderConfig = await getReminderConfig();
-    console.log(`🔔 [Execution] Agent "${executorName}" went idle without completing "${taskText.slice(0, 60)}" — starting reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
+    console.log(`🔔 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — starting reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
     const { intervalMs: REMINDER_INTERVAL_MS, maxReminders: MAX_REMINDERS, cooldownMs: COOLDOWN_MS } = reminderConfig;
     let reminded = 0;
     let lastReminderSentAt = 0;
@@ -584,9 +617,9 @@ export const tasksMethods = {
         if (targetStatus) {
           const completionStatus = resolveCompletionStatus();
           this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-          console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" -> ${completionStatus}`);
+          console.log(`✅ [Execution] Task ${taskId} completed during wait -> ${completionStatus}`);
         } else {
-          console.log(`✅ [Execution] Completed during wait: "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)`);
+          console.log(`✅ [Execution] Task ${taskId} completed during wait (no targetStatus — action chain continues)`);
         }
         return 'completed';
       }

@@ -66,10 +66,19 @@ export const toolsMethods = {
         taskExecutionCompleteDone = true;
         const comment = call.args[0] || '';
         let inProgressTask = null;
+        // Priority 1: Task actively running via this agent (set by processTransition)
         for (const [, ownerAgent] of this.agents) {
-          const found = ownerAgent.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
+          const found = ownerAgent.todoList?.find(t => t.actionRunningAgentId === agentId && this._isActiveTaskStatus(t.status));
           if (found) { inProgressTask = found; break; }
         }
+        // Priority 2: Active task explicitly assigned to this agent
+        if (!inProgressTask) {
+          for (const [, ownerAgent] of this.agents) {
+            const found = ownerAgent.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
+            if (found) { inProgressTask = found; break; }
+          }
+        }
+        // Priority 3: Agent's own active task
         if (!inProgressTask) {
           inProgressTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
         }
@@ -82,13 +91,22 @@ export const toolsMethods = {
               break;
             }
           }
-          console.log(`✅ [TaskComplete] Agent "${agent.name}" signaled completion: "${comment.slice(0, 120)}"`);
+          console.log(`✅ [TaskComplete] Agent "${agent.name}" signaled completion for task ${inProgressTask.id} (status="${inProgressTask.status}", assignee="${inProgressTask.assignee || 'none'}"): "${comment.slice(0, 120)}"`);
           if (streamCallback) {
             streamCallback(`\n✅ Task execution complete: ${comment.slice(0, 200)}\n`);
           }
           results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}`, isTerminal: true });
         } else {
-          console.log(`[TaskComplete] Agent "${agent.name}" called task_execution_complete but no active task found — ignoring.`);
+          // Log diagnostic info to help debug why no task was found
+          const allActiveTasks = [];
+          for (const [ownerId, ownerAgent] of this.agents) {
+            for (const t of ownerAgent.todoList || []) {
+              if (this._isActiveTaskStatus(t.status)) {
+                allActiveTasks.push({ id: t.id, status: t.status, assignee: t.assignee, actionRunningAgentId: t.actionRunningAgentId, ownerId });
+              }
+            }
+          }
+          console.log(`⚠️ [TaskComplete] Agent "${agent.name}" (${agentId}) called task_execution_complete but no active task found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`);
           results.push({ tool: 'task_execution_complete', args: call.args, success: true, result: 'No action needed (no active task).', isTerminal: true });
         }
         continue;
@@ -422,7 +440,7 @@ export const toolsMethods = {
           }
         }
 
-        // Auto-capture commit hash
+        // Auto-capture commit hash and link to task
         if (call.tool === 'git_commit_push' || (call.tool === 'run_command' && result.success)) {
           let commitHash = null;
           let commitMsg = '';
@@ -442,6 +460,10 @@ export const toolsMethods = {
             }
           }
 
+          // Track the task we link to, so auto-complete can reuse it
+          let commitLinkedTask = null;
+          let commitLinkedOwnerAgentId = null;
+
           if (commitHash) {
             const found = this._findTaskForCommitLink(agentId);
             let targetTask = found?.task || null;
@@ -460,6 +482,8 @@ export const toolsMethods = {
             if (targetTask) {
               const linked = this.addTaskCommit(ownerAgentId, targetTask.id, commitHash, commitMsg);
               if (linked) {
+                commitLinkedTask = targetTask;
+                commitLinkedOwnerAgentId = ownerAgentId;
                 console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
                 result.result = `${result.result}\n\n🔗 Commit ${commitHash.slice(0, 8)} automatically linked to task "${targetTask.text?.slice(0, 60)}"`;
               } else {
@@ -477,7 +501,7 @@ export const toolsMethods = {
                 }
               }
               if (agentTasks.length > 0) {
-                const taskList = agentTasks.slice(0, 5).map(t => 
+                const taskList = agentTasks.slice(0, 5).map(t =>
                   `  - @link_commit(${t.id}, ${commitHash}, ${commitMsg.slice(0, 60)})  → [${t.status}] ${t.text?.slice(0, 50)}`
                 ).join('\n');
                 console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no active task found. Available tasks:\n${taskList}`);
@@ -492,22 +516,23 @@ export const toolsMethods = {
           }
 
           // Auto-complete task after successful git_commit_push
+          // Reuse the task found during commit linking for consistency
           if (call.tool === 'git_commit_push' && result.success) {
-            let inProgressTask = null;
-            let taskOwnerAgent = null;
-            for (const [, ownerAg] of this.agents) {
-              const found = ownerAg.todoList?.find(t => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
-              if (found) { inProgressTask = found; taskOwnerAgent = ownerAg; break; }
-            }
-            if (!inProgressTask) {
-              inProgressTask = agent.todoList?.find(t => this._isActiveTaskStatus(t.status));
-              if (inProgressTask) taskOwnerAgent = agent;
-            }
-            if (inProgressTask) {
+            const inProgressTask = commitLinkedTask;
+            if (inProgressTask && this._isActiveTaskStatus(inProgressTask.status)) {
               const autoComment = commitMsg || 'Completed (auto-closed after successful git push)';
               inProgressTask._executionCompleted = true;
               inProgressTask._executionComment = autoComment;
-              if (taskOwnerAgent) saveAgent(taskOwnerAgent);
+              // Save the owner agent
+              const ownerAgent = commitLinkedOwnerAgentId ? this.agents.get(commitLinkedOwnerAgentId) : null;
+              if (ownerAgent) {
+                saveAgent(ownerAgent);
+              } else {
+                // Fallback: find the agent that owns this task
+                for (const [, ag] of this.agents) {
+                  if (ag.todoList?.includes(inProgressTask)) { saveAgent(ag); break; }
+                }
+              }
               console.log(`✅ [AutoComplete] Agent "${agent.name}" git_commit_push → auto-completing task "${inProgressTask.text?.slice(0, 80)}"`);
               if (streamCallback) {
                 streamCallback(`\n✅ Task auto-completed after successful commit & push.\n`);

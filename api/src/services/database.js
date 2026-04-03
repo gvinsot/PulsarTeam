@@ -84,6 +84,9 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_log(user_id)').catch(() => {});
 
+      // Add context_tokens column for tracking context window utilization
+      await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS context_tokens INTEGER DEFAULT 0`).catch(() => {});
+
       console.log('✅ Token usage table ready');
 
       // Create project_contexts table if not exists
@@ -218,6 +221,39 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       // Ensure a single default board exists
       await ensureDefaultBoard(pool);
       console.log('✅ Boards table ready');
+
+      // Create board_shares table for sharing boards between users
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS board_shares (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          board_id UUID NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          permission TEXT NOT NULL DEFAULT 'read',
+          shared_by UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(board_id, user_id)
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_board_shares_board ON board_shares(board_id)').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_board_shares_user ON board_shares(user_id)').catch(() => {});
+      console.log('✅ Board shares table ready');
+
+      // Create board_audit_logs table for permission change tracking
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS board_audit_logs (
+          id SERIAL PRIMARY KEY,
+          board_id UUID REFERENCES boards(id) ON DELETE CASCADE,
+          action TEXT NOT NULL,
+          actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          actor_username TEXT,
+          target_user_id UUID,
+          target_username TEXT,
+          details JSONB,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_board_audit_board ON board_audit_logs(board_id)').catch(() => {});
+      console.log('✅ Board audit logs table ready');
 
       _dbConnected = true;
 
@@ -456,13 +492,13 @@ export async function loadSettingsCache() {
 
 // ── Token Usage (Budget) ──────────────────────────────────────────────────
 
-export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null) {
+export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null, contextTokens = 0) {
   if (!pool) return;
   try {
     await pool.query(
-      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId]
+      `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId, contextTokens || 0]
     );
   } catch (err) {
     console.error('Failed to record token usage:', err.message);
@@ -470,30 +506,28 @@ export async function recordTokenUsage(agentId, agentName, provider, model, inpu
 }
 
 export function getTokenUsageSummary(days = 1) {
-  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0 };
-  // Return a promise — callers in budget.js use it synchronously in try/catch, so we keep sync shape via cache
-  // For now, return empty and let callers use async version
-  return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0 };
+  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
 }
 
 /** Async per-user (or global when userId is null) token usage summary */
 export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
-  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0 };
-  // If no user filter, return from cache for speed
-  if (!userId) return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0 };
+  if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  if (!userId) return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   try {
     const result = await pool.query(
       `SELECT COALESCE(SUM(cost), 0) as total_cost,
               COALESCE(SUM(input_tokens), 0) as total_input,
-              COALESCE(SUM(output_tokens), 0) as total_output
+              COALESCE(SUM(output_tokens), 0) as total_output,
+              COALESCE(SUM(context_tokens), 0) as total_context
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1 AND user_id = $2`,
       [days, userId]
     );
-    return result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0 };
+    return result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   } catch (err) {
     console.error('Failed to get token summary for user:', err.message);
-    return { total_cost: 0, total_input: 0, total_output: 0 };
+    return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   }
 }
 
@@ -505,7 +539,8 @@ export async function getTokenUsageByAgent(days = 30, userId = null) {
     const result = await pool.query(
       `SELECT provider, model,
               COUNT(DISTINCT agent_id) as agent_count,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost,
+              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
+              SUM(context_tokens) as total_context, SUM(cost) as total_cost,
               COUNT(*) as request_count
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
@@ -527,11 +562,12 @@ export async function getTokenUsageTimeline(days = 7, groupBy = 'day', userId = 
     const userFilter = userId ? ' AND user_id = $3' : '';
     const params = userId ? [trunc, days, userId] : [trunc, days];
     const result = await pool.query(
-      `SELECT date_trunc($1, recorded_at) as period,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost
+      `SELECT date_trunc($1, recorded_at) as period, agent_name,
+              SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens,
+              SUM(context_tokens) as context_tokens, SUM(cost) as total_cost
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $2${userFilter}
-       GROUP BY period ORDER BY period`,
+       GROUP BY period, agent_name ORDER BY period`,
       params
     );
     return result.rows;
@@ -548,7 +584,8 @@ export async function getDailyTokenUsage(days = 30, userId = null) {
     const params = userId ? [days, userId] : [days];
     const result = await pool.query(
       `SELECT date_trunc('day', recorded_at) as day,
-              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output, SUM(cost) as total_cost
+              SUM(input_tokens) as total_input, SUM(output_tokens) as total_output,
+              SUM(context_tokens) as total_context, SUM(cost) as total_cost
        FROM token_usage_log
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1${userFilter}
        GROUP BY day ORDER BY day`,
@@ -571,12 +608,13 @@ export async function refreshTokenSummaryCache() {
       const result = await pool.query(
         `SELECT COALESCE(SUM(cost), 0) as total_cost,
                 COALESCE(SUM(input_tokens), 0) as total_input,
-                COALESCE(SUM(output_tokens), 0) as total_output
+                COALESCE(SUM(output_tokens), 0) as total_output,
+                COALESCE(SUM(context_tokens), 0) as total_context
          FROM token_usage_log
          WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1`,
         [days]
       );
-      _tokenSummaryCache[days] = result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0 };
+      _tokenSummaryCache[days] = result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
     } catch (err) {
       console.error('Failed to refresh token summary cache:', err.message);
     }
@@ -842,8 +880,20 @@ export async function getAllBoards() {
 export async function getBoardsByUser(userId) {
   if (!pool) return [];
   try {
+    // Get user's own boards + shared boards + default board
     const result = await pool.query(
-      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE user_id = $1 ORDER BY position, created_at',
+      `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.created_at, b.updated_at,
+              NULL AS share_permission, NULL AS owner_username
+       FROM boards b
+       WHERE b.user_id = $1
+       UNION ALL
+       SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.created_at, b.updated_at,
+              bs.permission AS share_permission, u.username AS owner_username
+       FROM board_shares bs
+       JOIN boards b ON bs.board_id = b.id
+       LEFT JOIN users u ON b.user_id = u.id
+       WHERE bs.user_id = $1 AND b.user_id != $1
+       ORDER BY position, created_at`,
       [userId]
     );
     return result.rows;
@@ -933,6 +983,137 @@ export async function deleteBoard(id) {
   } catch (err) {
     console.error('Failed to delete board:', err.message);
     return false;
+  }
+}
+
+// ── Board Sharing ────────────────────────────────────────────────────────────
+
+export async function getBoardShares(boardId) {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      `SELECT bs.id, bs.board_id, bs.user_id, bs.permission, bs.shared_by, bs.created_at,
+              u.username, u.display_name,
+              sb.username AS shared_by_username
+       FROM board_shares bs
+       JOIN users u ON bs.user_id = u.id
+       LEFT JOIN users sb ON bs.shared_by = sb.id
+       WHERE bs.board_id = $1
+       ORDER BY bs.created_at`,
+      [boardId]
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Failed to get board shares:', err.message);
+    return [];
+  }
+}
+
+export async function getBoardShare(boardId, userId) {
+  if (!pool) return null;
+  try {
+    const result = await pool.query(
+      'SELECT id, board_id, user_id, permission, shared_by, created_at FROM board_shares WHERE board_id = $1 AND user_id = $2',
+      [boardId, userId]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to get board share:', err.message);
+    return null;
+  }
+}
+
+export async function createBoardShare(boardId, userId, permission, sharedBy) {
+  if (!pool) throw new Error('Database not connected');
+  try {
+    const result = await pool.query(
+      `INSERT INTO board_shares (board_id, user_id, permission, shared_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (board_id, user_id) DO UPDATE SET permission = $3
+       RETURNING id, board_id, user_id, permission, shared_by, created_at`,
+      [boardId, userId, permission, sharedBy]
+    );
+    return result.rows[0];
+  } catch (err) {
+    console.error('Failed to create board share:', err.message);
+    throw err;
+  }
+}
+
+export async function updateBoardShare(boardId, userId, permission) {
+  if (!pool) throw new Error('Database not connected');
+  try {
+    const result = await pool.query(
+      `UPDATE board_shares SET permission = $3 WHERE board_id = $1 AND user_id = $2
+       RETURNING id, board_id, user_id, permission, shared_by, created_at`,
+      [boardId, userId, permission]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to update board share:', err.message);
+    throw err;
+  }
+}
+
+export async function deleteBoardShare(boardId, userId) {
+  if (!pool) return false;
+  try {
+    const result = await pool.query(
+      'DELETE FROM board_shares WHERE board_id = $1 AND user_id = $2',
+      [boardId, userId]
+    );
+    return result.rowCount > 0;
+  } catch (err) {
+    console.error('Failed to delete board share:', err.message);
+    return false;
+  }
+}
+
+export async function getSharedBoardsForUser(userId) {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.created_at, b.updated_at,
+              bs.permission AS share_permission,
+              u.username AS owner_username, u.display_name AS owner_display_name
+       FROM board_shares bs
+       JOIN boards b ON bs.board_id = b.id
+       LEFT JOIN users u ON b.user_id = u.id
+       WHERE bs.user_id = $1
+       ORDER BY b.position, b.created_at`,
+      [userId]
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Failed to get shared boards:', err.message);
+    return [];
+  }
+}
+
+export async function logBoardAudit(boardId, action, actorId, actorUsername, targetUserId, targetUsername, details = null) {
+  if (!pool) return;
+  try {
+    await pool.query(
+      `INSERT INTO board_audit_logs (board_id, action, actor_id, actor_username, target_user_id, target_username, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [boardId, action, actorId, actorUsername, targetUserId, targetUsername, details ? JSON.stringify(details) : null]
+    );
+  } catch (err) {
+    console.error('Failed to log board audit:', err.message);
+  }
+}
+
+export async function getBoardAuditLogs(boardId, limit = 50) {
+  if (!pool) return [];
+  try {
+    const result = await pool.query(
+      'SELECT * FROM board_audit_logs WHERE board_id = $1 ORDER BY created_at DESC LIMIT $2',
+      [boardId, limit]
+    );
+    return result.rows;
+  } catch (err) {
+    console.error('Failed to get board audit logs:', err.message);
+    return [];
   }
 }
 

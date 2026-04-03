@@ -378,14 +378,30 @@ Execute the instructions above and update the task status accordingly.`;
       const actionMode = isExecution ? 'execute' : isDecide ? 'decide' : 'refine';
 
       if (isExecution && instructions) {
-        // Execute with instructions: agent handles status changes itself via @update_task (like instructions mode)
+        // Execute with instructions: normally the agent handles status changes via @update_task,
+        // but if the agent called @task_execution_complete instead, we need to honour it.
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'execute');
+
+        // Re-fetch the task to pick up the _executionCompleted flag set by _processToolCalls
+        const freshTask = agentManager.agents.get(task.agentId)?.todoList?.find(t => t.id === task.id);
+        if (freshTask?._executionCompleted) {
+          const comment = freshTask._executionComment || '';
+          delete freshTask._executionCompleted;
+          delete freshTask._executionComment;
+          const completionStatus = targetStatus || 'done';
+          agentManager.setTaskStatus(task.agentId, task.id, completionStatus, { skipAutoRefine: false, by: agent.name });
+          console.log(`✅ [Workflow] Execute+instructions: task ${task.id} completed via @task_execution_complete -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
+          console.log(`[Workflow] Execute+instructions: task ${task.id} already moved to "${freshTask.status}" by agent`);
+        } else {
+          console.log(`[Workflow] Execute+instructions: task ${task.id} not completed by agent — agent may have used @update_task or other means`);
+        }
+
         _executionLocks.delete(lockKey);
-        console.log(`[Workflow] Execute (with instructions) completed for "${task.text.slice(0, 60)}" via ${agent.name}`);
       } else if (isExecution) {
         // Execute without instructions: wait for agent to signal completion via @task_execution_complete
         agentManager._saveExecutionLog(task.agentId, task.id, agent.id, _execStartMsgIdx, _execStartedAt, true, 'execute');
-        console.log(`[Workflow] Execution response received for "${task.text.slice(0, 60)}" — waiting for task_execution_complete`);
+        console.log(`[Workflow] Execution response received for task ${task.id} "${task.text.slice(0, 60)}" — waiting for task_execution_complete`);
         await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, targetStatus, task.text);
       } else if (isDecide) {
         // Instructions mode: agent handles status changes itself via @update_task

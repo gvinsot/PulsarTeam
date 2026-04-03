@@ -72,15 +72,24 @@ export default function BudgetDashboard({ agents = [] }) {
     ],
   };
 
-  const agentNames = [...new Set(timeline.map(t => t.agent_name))];
+  const agentNames = [...new Set(timeline.map(t => t.agent_name || 'Unknown'))];
   const periods = [...new Set(timeline.map(t => t.period))];
   const timelineChartData = {
     labels: periods.map(p => p?.slice(5) || ''),
     datasets: agentNames.map((name, i) => ({
       label: name,
-      data: periods.map(p => { const e = timeline.find(t => t.period === p && t.agent_name === name); return e ? (e.input_tokens + e.output_tokens) / 1000 : 0; }),
+      data: periods.map(p => { const e = timeline.find(t => t.period === p && (t.agent_name || 'Unknown') === name); return e ? ((e.input_tokens || 0) + (e.output_tokens || 0)) / 1000 : 0; }),
       borderColor: COLORS[i % COLORS.length], backgroundColor: COLORS[i % COLORS.length] + '33', fill: false, tension: 0.3,
     })),
+  };
+
+  const tokenBreakdownData = {
+    labels: daily.map(d => d.day?.slice(5) || ''),
+    datasets: [
+      { label: 'Input Tokens (K)', data: daily.map(d => (d.total_input || 0) / 1000), borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.10)', fill: true, tension: 0.3 },
+      { label: 'Output Tokens (K)', data: daily.map(d => (d.total_output || 0) / 1000), borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.10)', fill: true, tension: 0.3 },
+      { label: 'Context Size (K)', data: daily.map(d => (d.total_context || 0) / 1000), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.10)', fill: true, tension: 0.3 },
+    ],
   };
 
   const agentCostData = {
@@ -141,7 +150,7 @@ export default function BudgetDashboard({ agents = [] }) {
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
           <div className="text-xs text-dark-400 uppercase tracking-wider mb-1">Today's Tokens</div>
           <div className="text-2xl font-bold text-dark-100">{((summary?.total_input || 0) + (summary?.total_output || 0)).toLocaleString()}</div>
-          <div className="text-xs text-dark-400 mt-1">In: {(summary?.total_input || 0).toLocaleString()} · Out: {(summary?.total_output || 0).toLocaleString()}</div>
+          <div className="text-xs text-dark-400 mt-1">In: {(summary?.total_input || 0).toLocaleString()} · Out: {(summary?.total_output || 0).toLocaleString()} · Ctx: {(summary?.total_context || 0).toLocaleString()}</div>
         </div>
         <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
           <div className="text-xs text-dark-400 uppercase tracking-wider mb-1">API Calls Today</div>
@@ -165,6 +174,11 @@ export default function BudgetDashboard({ agents = [] }) {
           <h3 className="text-sm font-semibold text-dark-200 mb-3">🍩 Cost by LLM ({timeRange}d)</h3>
           <div className="h-64">{byAgent.length > 0 ? <Doughnut data={agentCostData} options={doughnutOpts} /> : <div className="h-full flex items-center justify-center text-dark-500 text-sm">No data yet</div>}</div>
         </div>
+      </div>
+
+      <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
+        <h3 className="text-sm font-semibold text-dark-200 mb-3">📊 Token Breakdown — Input / Output / Context (30 days, K tokens)</h3>
+        <div className="h-72">{daily.length > 0 ? <Line data={tokenBreakdownData} options={chartOpts} /> : <div className="h-full flex items-center justify-center text-dark-500 text-sm">No data yet</div>}</div>
       </div>
 
       <div className="bg-dark-900 border border-dark-700/50 rounded-lg p-4">
