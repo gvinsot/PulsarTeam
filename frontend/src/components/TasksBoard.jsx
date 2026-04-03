@@ -2614,10 +2614,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   // Fetch tasks directly from the tasks table via API
   const [dbTasks, setDbTasks] = useState([]);
   const loadTasks = useCallback(async () => {
+    if (!activeBoardId) return; // Wait until a board is selected
     try {
-      const params = {};
-      if (activeBoardId) params.board_id = activeBoardId;
-      const tasks = await api.getAllTasks(params);
+      const tasks = await api.getAllTasks({ board_id: activeBoardId });
       setDbTasks(tasks);
     } catch (err) {
       console.error('[TasksBoard] Failed to load tasks:', err.message);
