@@ -833,9 +833,8 @@ export class VLLMProvider {
         const promptTokens = chunk.usage.prompt_tokens || 0;
         const completionTokens = chunk.usage.completion_tokens || 0;
         const totalTokens = chunk.usage.total_tokens || 0;
-        // When only total_tokens is available (e.g. coder-service / Claude Paid Plan),
-        // prompt_tokens == total_tokens and completion_tokens == 0.
-        // Use total_tokens as inputTokens in that case (cost_usd carries the accurate cost).
+        // coder-service now sends proper prompt_tokens (input) and completion_tokens (output).
+        // Fallback to total_tokens if prompt_tokens is missing (legacy compatibility).
         const usage = {
           inputTokens: promptTokens || totalTokens,
           outputTokens: completionTokens

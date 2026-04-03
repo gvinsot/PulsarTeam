@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { FolderGit2, Users, ListTodo, Clock, Search, Activity, BarChart3, ExternalLink, GitCommit, Plus, X, Loader2, Lock, Unlock } from 'lucide-react';
 import ProjectDetailModal from './ProjectDetailModal';
 import GitHubActivityModal from './GitHubActivityModal';
@@ -10,6 +10,116 @@ function GithubIcon({ className }) {
       <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
     </svg>
   );
+}
+
+// ── Build daily activity data for a set of tasks (last N days) ──────────────
+function buildDailyActivity(tasks, days = 14) {
+  const result = [];
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    const dayStr = d.toISOString().split('T')[0];
+    let created = 0, completed = 0;
+    for (const t of tasks) {
+      if (t.createdAt?.startsWith(dayStr)) created++;
+      if (t.completedAt?.startsWith(dayStr)) completed++;
+    }
+    result.push({ date: dayStr, created, completed, total: created + completed });
+  }
+  return result;
+}
+
+// ── Mini bar chart (canvas) showing daily activity ──────────────────────────
+function MiniActivityChart({ data, height = 48 }) {
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+  const [width, setWidth] = useState(200);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const obs = new ResizeObserver(entries => {
+      for (const e of entries) setWidth(e.contentRect.width);
+    });
+    obs.observe(containerRef.current);
+    return () => obs.disconnect();
+  }, []);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !data?.length) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+
+    const maxVal = Math.max(...data.map(d => d.created + d.completed), 1);
+    const gap = 2;
+    const barW = Math.max(2, (width - gap * (data.length - 1)) / data.length);
+
+    data.forEach((d, i) => {
+      const x = i * (barW + gap);
+      const createdH = (d.created / maxVal) * (height - 2);
+      const completedH = (d.completed / maxVal) * (height - 2);
+
+      // Completed (green) stacked on bottom
+      if (completedH > 0) {
+        ctx.fillStyle = '#22c55e';
+        ctx.globalAlpha = 0.8;
+        const r = Math.min(2, barW / 2);
+        roundRect(ctx, x, height - completedH, barW, completedH, r);
+        ctx.fill();
+      }
+
+      // Created (purple) stacked on top of completed
+      if (createdH > 0) {
+        ctx.fillStyle = '#a855f7';
+        ctx.globalAlpha = 0.8;
+        const r = Math.min(2, barW / 2);
+        roundRect(ctx, x, height - completedH - createdH, barW, createdH, r);
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+    });
+  }, [data, width, height]);
+
+  useEffect(() => { draw(); }, [draw]);
+
+  if (!data?.length || data.every(d => d.created === 0 && d.completed === 0)) {
+    return (
+      <div ref={containerRef} className="w-full flex items-center justify-center text-dark-500 text-xs" style={{ height }}>
+        No activity
+      </div>
+    );
+  }
+
+  return (
+    <div ref={containerRef} className="w-full">
+      <canvas ref={canvasRef} className="w-full" style={{ height }} />
+    </div>
+  );
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  if (h <= 0 || w <= 0) return;
+  r = Math.min(r, h / 2, w / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
 }
 
 export default function ProjectsView({ agents = [], githubProjects = [], projectContexts = [], onRefresh }) {
@@ -97,6 +207,8 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
       p.stats = { total, done, active, inProgress: active, waiting, pending: waiting, bugs, features, completion: total ? Math.round((done / total) * 100) : 0 };
       // Attach GitHub info
       p.github = githubLookup.get(p.name) || null;
+      // Build daily activity for mini chart
+      p.dailyActivity = buildDailyActivity(p.tasks, 14);
     }
 
     let result = Array.from(projectMap.values());
@@ -303,39 +415,23 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
               </div>
             </div>
 
-            {/* Progress bar */}
-            <div className="w-full bg-dark-700 rounded-full h-1.5 mb-3">
-              <div
-                className="bg-green-500 h-1.5 rounded-full transition-all"
-                style={{ width: `${p.stats.completion}%` }}
-              />
+            {/* Activity chart (last 14 days) */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] text-dark-500 uppercase tracking-wider">Activity (14d)</span>
+                <div className="flex items-center gap-3 text-[10px]">
+                  <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-sm bg-purple-500" /> Created</span>
+                  <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-sm bg-green-500" /> Done</span>
+                </div>
+              </div>
+              <MiniActivityChart data={p.dailyActivity} height={40} />
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="flex items-center gap-1.5">
-                <Users size={12} className="text-blue-400" />
-                <span className="text-dark-300">{p.agents.length} agents</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <ListTodo size={12} className="text-purple-400" />
-                <span className="text-dark-300">{p.stats.total} tasks</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-orange-400 text-xs">&#x1f41b;</span>
-                <span className="text-dark-300">{p.stats.bugs} bugs</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-emerald-400 text-xs">&#x2728;</span>
-                <span className="text-dark-300">{p.stats.features} features</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Activity size={12} className="text-yellow-400" />
-                <span className="text-dark-300">{p.stats.active} active</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Clock size={12} className="text-green-400" />
-                <span className="text-dark-300">{p.stats.completion}% done</span>
-              </div>
+            <div className="flex items-center gap-3 text-xs text-dark-400">
+              <span className="flex items-center gap-1"><Users size={11} className="text-blue-400" />{p.agents.length}</span>
+              <span className="flex items-center gap-1"><ListTodo size={11} className="text-purple-400" />{p.stats.total}</span>
+              <span className="flex items-center gap-1"><Activity size={11} className="text-yellow-400" />{p.stats.active} active</span>
+              <span className="flex items-center gap-1"><Clock size={11} className="text-green-400" />{p.stats.completion}%</span>
             </div>
 
             {/* Agent avatars */}
