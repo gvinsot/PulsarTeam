@@ -182,7 +182,6 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_action_idx INTEGER').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running BOOLEAN DEFAULT FALSE').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_agent_id UUID').catch(() => {});
-      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS save_seq INTEGER DEFAULT 0').catch(() => {});
       console.log('✅ Tasks table ready');
 
       // Create task_audit_logs table for tracking delete/restore actions
@@ -1160,38 +1159,39 @@ export async function getTaskById(taskId) {
   }
 }
 
-// Per-task save sequence counter. Ensures that out-of-order fire-and-forget
-// saves don't regress the status: a save with seq=2 will not be overwritten
-// by a belated save with seq=1.
-const _taskSaveSeq = new Map();  // taskId -> number
+// Per-task write queue: serializes all saves for the same task so that
+// fire-and-forget calls cannot overtake each other at the DB level.
+const _taskWriteQueue = new Map();  // taskId -> Promise
 
 export async function saveTaskToDb(task) {
   if (!pool) return;
 
-  // Assign a monotonic sequence number to each save for the same task.
-  const prevSeq = _taskSaveSeq.get(task.id) || 0;
-  const seq = prevSeq + 1;
-  _taskSaveSeq.set(task.id, seq);
+  const taskId = task.id;
 
+  // Chain this save after the previous one for the same task.
+  // This guarantees that even fire-and-forget calls execute in order.
+  const prev = _taskWriteQueue.get(taskId) || Promise.resolve();
+  const current = prev.then(() => _doSaveTask(task)).catch(() => {});
+  _taskWriteQueue.set(taskId, current);
+
+  // Await our own turn so callers who `await saveTaskToDb()` get the guarantee
+  return current;
+}
+
+async function _doSaveTask(task) {
   try {
-    // Use the sequence number as a guard: the ON CONFLICT UPDATE only applies
-    // when our seq ($24) is >= the stored one — this prevents late-arriving
-    // fire-and-forget saves from overwriting newer data.
-    const result = await pool.query(
+    await pool.query(
       `INSERT INTO tasks (id, agent_id, text, title, status, project, board_id, assignee,
                           task_type, priority, due_date, source, recurrence, commits, history,
                           error, created_at, updated_at, completed_at, started_at,
-                          execution_status, completed_action_idx, action_running, action_running_agent_id,
-                          save_seq)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23,$24)
+                          execution_status, completed_action_idx, action_running, action_running_agent_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, project = $6, board_id = $7, assignee = $8,
          task_type = $9, priority = $10, due_date = $11, source = $12, recurrence = $13,
          commits = $14, history = $15, error = $16, updated_at = NOW(),
          completed_at = $18, started_at = $19,
-         execution_status = $20, completed_action_idx = $21, action_running = $22, action_running_agent_id = $23,
-         save_seq = $24
-       WHERE tasks.save_seq IS NULL OR tasks.save_seq <= $24`,
+         execution_status = $20, completed_action_idx = $21, action_running = $22, action_running_agent_id = $23`,
       [
         task.id,
         task.agentId,
@@ -1216,23 +1216,9 @@ export async function saveTaskToDb(task) {
         task.completedActionIdx != null ? task.completedActionIdx : null,
         task.actionRunning || false,
         task.actionRunningAgentId || null,
-        seq,
       ]
     );
-    if (result.rowCount === 0) {
-      console.warn(`⚠️ [DB] saveTaskToDb SKIPPED (stale seq=${seq}) id=${task.id?.slice(0, 8)} status=${task.status}`);
-    }
   } catch (err) {
-    // If save_seq column doesn't exist yet, fall back to unconditional save
-    if (err.message?.includes('save_seq')) {
-      try {
-        await pool.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS save_seq INTEGER DEFAULT 0`);
-        // Retry with the column now in place
-        return saveTaskToDb(task);
-      } catch (alterErr) {
-        console.error('Failed to add save_seq column:', alterErr.message);
-      }
-    }
     console.error('Failed to save task:', err.message);
   }
 }
