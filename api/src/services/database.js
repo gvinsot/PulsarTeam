@@ -253,6 +253,9 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
         )
       `);
       await pool.query('CREATE INDEX IF NOT EXISTS idx_board_audit_board ON board_audit_logs(board_id)').catch(() => {});
+      // Allow null board_id for audit logs not tied to a specific board
+      await pool.query('ALTER TABLE board_audit_logs ALTER COLUMN board_id DROP NOT NULL').catch(() => {});
+      await pool.query('ALTER TABLE board_audit_logs DROP CONSTRAINT IF EXISTS board_audit_logs_board_id_fkey').catch(() => {});
       console.log('✅ Board audit logs table ready');
 
       _dbConnected = true;
