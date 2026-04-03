@@ -265,13 +265,17 @@ export const workflowMethods = {
                 break;
               }
               // Clean up chain resume index BEFORE change_status — the new column's
-              // on_enter transition must start fresh, not resume from this chain's index
+              // on_enter transition must start fresh, not resume from this chain's index.
+              // NOTE: Do NOT call saveTaskToDb here — setTaskStatus below will save the
+              // task with both the cleaned-up fields AND the new status in a single write.
+              // A separate save here races with setTaskStatus's save (both are async
+              // fire-and-forget), and if this one completes last it overwrites the new
+              // status with the old one (e.g. 'code' overwrites 'check').
               const taskBeforeMove = this._getAgentTasks(task.agentId).find(t => t.id === task.id);
               if (taskBeforeMove) {
                 delete taskBeforeMove._completedActionIdx;
                 taskBeforeMove.completedActionIdx = null;
                 delete taskBeforeMove._pendingOnEnter;
-                saveTaskToDb({ ...taskBeforeMove, agentId: task.agentId });
               }
               console.log(`[Workflow] Action: change_status "${task.status}" -> "${action.target}" for "${(task.text || '').slice(0, 60)}"`);
               const result = this.setTaskStatus(task.agentId, task.id, action.target, { skipAutoRefine: false, by: 'workflow' });
