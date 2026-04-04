@@ -30,8 +30,7 @@ import {
 import { findAgentForAssignment } from './agentSelector.js';
 
 // ── Cooldown for on_enter retries ───────────────────────────────────────────
-const ON_ENTER_RETRY_BASE_MS = 5_000;
-const ON_ENTER_RETRY_MAX_MS = 120_000;   // cap at 2min between retries
+const ON_ENTER_RETRY_COOLDOWN_MS = 3_000;
 const ON_ENTER_MAX_RETRIES = 20;
 
 /**
@@ -206,7 +205,7 @@ export async function recheckPendingTransitions(agentManager) {
         agentManager._conditionProcessing.set(lockKey, Date.now());
 
         if (transition.trigger === Trigger.ON_ENTER) {
-          // On-enter retry: apply exponential backoff with max retries
+          // On-enter retry: flat cooldown with max retry count
           if (!agentManager._onEnterRetryTimestamps) agentManager._onEnterRetryTimestamps = new Map();
           if (!agentManager._onEnterRetryCounts) agentManager._onEnterRetryCounts = new Map();
           const retryKey = `${agentId}:${task.id}:lastRetry`;
@@ -228,17 +227,15 @@ export async function recheckPendingTransitions(agentManager) {
             break;
           }
 
-          // Exponential backoff: 5s, 10s, 20s, 40s, ... capped at 2min
-          const cooldown = Math.min(ON_ENTER_RETRY_BASE_MS * Math.pow(2, retryCount), ON_ENTER_RETRY_MAX_MS);
           const lastRetry = agentManager._onEnterRetryTimestamps.get(retryKey) || 0;
-          if (Date.now() - lastRetry < cooldown) {
+          if (Date.now() - lastRetry < ON_ENTER_RETRY_COOLDOWN_MS) {
             agentManager._conditionProcessing.delete(lockKey);
             break;
           }
           agentManager._onEnterRetryTimestamps.set(retryKey, Date.now());
           agentManager._onEnterRetryCounts.set(retryKey, retryCount + 1);
 
-          console.log(`[WorkflowEngine] on_enter retry ${retryCount + 1}/${ON_ENTER_MAX_RETRIES} for "${(task.text || '').slice(0, 60)}" in status="${task.status}" (next cooldown: ${Math.round(cooldown / 1000)}s)`);
+          console.log(`[WorkflowEngine] on_enter retry ${retryCount + 1}/${ON_ENTER_MAX_RETRIES} for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
 
           // Re-run via processColumnEntry to respect completedActionIdx
           processColumnEntry({ ...task, agentId }, agentManager, { by: 'on-enter-retry' })
