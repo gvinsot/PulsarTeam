@@ -1167,6 +1167,7 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
   const cardRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const longPressArmedRef = useRef(false);
+  const autoScrollRef = useRef(null);
 
   const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
 
@@ -1208,6 +1209,9 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         document.body.appendChild(ghost);
         touchDragRef.current.ghost = ghost;
 
+        // Find and store the scroll container for auto-scroll
+        touchDragRef.current.scrollContainer = el.closest('.overflow-auto');
+
         // Dim the original card
         el.style.opacity = '0.4';
       }
@@ -1216,6 +1220,47 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
       if (touchDragRef.current.ghost) {
         touchDragRef.current.ghost.style.left = (touch.clientX - el.offsetWidth / 2) + 'px';
         touchDragRef.current.ghost.style.top = (touch.clientY - 30) + 'px';
+      }
+
+      // Auto-scroll the board when dragging near edges (critical for mobile — columns are wider than screen)
+      const scrollEl = touchDragRef.current.scrollContainer;
+      if (scrollEl) {
+        const rect = scrollEl.getBoundingClientRect();
+        const edgeZone = 60; // px from edge to trigger scroll
+        const scrollSpeed = 12; // px per frame
+
+        // Clear any existing auto-scroll
+        if (autoScrollRef.current) {
+          cancelAnimationFrame(autoScrollRef.current);
+          autoScrollRef.current = null;
+        }
+
+        const touchX = touch.clientX;
+        const touchY = touch.clientY;
+        const startAutoScroll = (direction) => {
+          const tick = () => {
+            scrollEl.scrollLeft += direction * scrollSpeed;
+            // Update column highlight during auto-scroll (finger is stationary but board scrolls)
+            const ghostEl = touchDragRef.current?.ghost;
+            if (ghostEl) ghostEl.style.display = 'none';
+            const el2 = document.elementFromPoint(touchX, touchY);
+            if (ghostEl) ghostEl.style.display = '';
+            const col2 = el2?.closest?.('[data-column-id]');
+            if (col2 && touchDragRef.current) {
+              document.querySelectorAll('[data-column-id]').forEach(c => c.classList.remove('touch-drag-over'));
+              col2.classList.add('touch-drag-over');
+              touchDragRef.current.lastColumnId = col2.getAttribute('data-column-id');
+            }
+            autoScrollRef.current = requestAnimationFrame(tick);
+          };
+          autoScrollRef.current = requestAnimationFrame(tick);
+        };
+
+        if (touch.clientX > rect.right - edgeZone) {
+          startAutoScroll(1); // scroll right
+        } else if (touch.clientX < rect.left + edgeZone) {
+          startAutoScroll(-1); // scroll left
+        }
       }
 
       // Highlight the column under the touch point
@@ -1280,6 +1325,8 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         }, 500);
       }}
       onTouchEnd={(e) => {
+        // Stop auto-scroll
+        if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
         // Clear long-press timer if still pending
         if (longPressTimerRef.current) {
           clearTimeout(longPressTimerRef.current);
@@ -1334,6 +1381,8 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         touchDragRef.current = null;
       }}
       onTouchCancel={() => {
+        // Stop auto-scroll
+        if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
         // Mobile browsers fire touchcancel instead of touchend when they take over the gesture
         // We must handle the drop here too, using lastColumnId stored during touchmove
         if (longPressTimerRef.current) {
@@ -1343,6 +1392,7 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         if (cardRef.current) {
           cardRef.current.style.transform = '';
           cardRef.current.style.transition = '';
+          cardRef.current.style.touchAction = '';
           cardRef.current.style.opacity = '';
         }
         longPressArmedRef.current = false;
