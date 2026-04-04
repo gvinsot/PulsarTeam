@@ -348,6 +348,12 @@ function _autoAssignByColumn(task, workflow, agentManager, ownerId, io) {
       actualTask.assignee = autoAgent.id;
       saveTaskToDb({ ...actualTask, agentId: task.agentId });
     }
-    io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task });
+    // Enrich with assignee info for the frontend
+    if (task.assignee) {
+      const assigneeAgent = agentManager.agents.get(task.assignee);
+      task.assigneeName = assigneeAgent?.name || null;
+      task.assigneeIcon = assigneeAgent?.icon || null;
+    }
+    agentManager._emit('task:updated', { agentId: task.agentId, task });
   }
 }

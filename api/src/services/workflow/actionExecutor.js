@@ -11,7 +11,25 @@
 
 import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
-import { saveAgent, saveTaskToDb } from '../database.js';
+import { saveTaskToDb } from '../database.js';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Emit task:updated through the agentManager so it reaches the user's socket room.
+ * Enriches with assigneeName/assigneeIcon for the frontend.
+ */
+function _emitTaskUpdated(agentManager, agentId, task) {
+  if (task.assignee) {
+    const assigneeAgent = agentManager.agents.get(task.assignee);
+    task.assigneeName = assigneeAgent?.name || null;
+    task.assigneeIcon = assigneeAgent?.icon || null;
+  } else {
+    task.assigneeName = null;
+    task.assigneeIcon = null;
+  }
+  agentManager._emit('task:updated', { agentId, task });
+}
 
 // ── Prompt Builders ─────────────────────────────────────────────────────────
 
@@ -151,7 +169,7 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     });
     saveTaskToDb({ ...actualTask, agentId: task.agentId });
     task.assignee = agent.id;
-    io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTask });
+    _emitTaskUpdated(agentManager, task.agentId, actualTask);
     console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role})`);
   }
 
@@ -176,7 +194,7 @@ function executeAssignAgentIndividual(action, task, { agentManager, io }) {
     });
     saveTaskToDb({ ...actualTask, agentId: task.agentId });
     task.assignee = targetAgentId;
-    io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTask });
+    _emitTaskUpdated(agentManager, task.agentId, actualTask);
     const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
     console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
   }
@@ -268,7 +286,8 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId }) {
         assignee: agent.id,
       });
     }
-    io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTask });
+    _emitTaskUpdated(agentManager, task.agentId, actualTask);
+    saveTaskToDb({ ...actualTask, agentId: task.agentId });
   }
 
   // Auto-switch agent to task project if needed
@@ -329,8 +348,8 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId }) {
     if (actualTask && actualTask.actionRunning) {
       actualTask.actionRunning = false;
       delete actualTask.actionRunningAgentId;
-      saveAgent(agentManager.agents.get(task.agentId));
-      io?.to(`agent:${task.agentId}`)?.emit('task:updated', { agentId: task.agentId, task: actualTask });
+      _emitTaskUpdated(agentManager, task.agentId, actualTask);
+      saveTaskToDb({ ...actualTask, agentId: task.agentId });
     }
     // Non-execute modes (decide, refine, title, set_type) should not leave the
     // agent as the permanent assignee — clear it so the task loop won't send

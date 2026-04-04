@@ -244,7 +244,7 @@ router.put('/:id', async (req, res) => {
         movedBy: username,
       });
     }
-    mgr._emit('task:updated', task);
+    mgr._emit('task:updated', { agentId: task.agentId, task });
     if (task.agentId) {
       const agent = mgr.agents.get(task.agentId);
       if (agent) mgr._emit('agent:updated', mgr._sanitize(agent));
@@ -329,7 +329,7 @@ router.post('/bulk-move', async (req, res) => {
         }
       }
 
-      mgr._emit('task:updated', task);
+      mgr._emit('task:updated', { agentId: task.agentId, task });
       if (task.agentId) {
         const agent = mgr.agents.get(task.agentId);
         if (agent) mgr._emit('agent:updated', mgr._sanitize(agent));

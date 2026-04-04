@@ -13,6 +13,7 @@ import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
 import ShareBoardModal from './ShareBoardModal';
 import { useTheme } from '../contexts/ThemeContext';
+import { getSocket } from '../socket';
 
 // ── Color mapping (hex → Tailwind classes) ──────────────────────────────────
 
@@ -2716,6 +2717,18 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   // Re-fetch tasks when agents update (status changes, etc.)
   const agentRevision = agents.map(a => `${a.id}:${a.status}`).join(',');
   useEffect(() => { loadTasks(); }, [agentRevision]);
+
+  // Real-time task updates via WebSocket
+  useEffect(() => {
+    const sock = getSocket();
+    if (!sock) return;
+    const handler = ({ task }) => {
+      if (!task?.id) return;
+      setDbTasks(prev => prev.map(t => (t.id === task.id ? { ...t, ...task } : t)));
+    };
+    sock.on('task:updated', handler);
+    return () => sock.off('task:updated', handler);
+  }, []);
 
   // Wrap onRefresh to also reload tasks
   const refreshAll = useCallback(() => {
