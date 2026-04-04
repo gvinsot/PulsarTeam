@@ -279,6 +279,30 @@ def _save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str]
     logger.info(f"[Agent Auth] Saved OAuth token for agent {agent_user['username']}")
 
 
+def _invalidate_agent_token(agent_user: dict):
+    """Remove stored OAuth tokens for an agent when the refresh token is permanently invalid."""
+    if not agent_user:
+        return
+    owner_id = agent_user.get("owner_id")
+    if owner_id:
+        _invalidate_owner_token(owner_id)
+        return
+    home = agent_user.get("home")
+    if not home:
+        return
+    token_file = os.path.join(home, "oauth_token.json")
+    try:
+        os.remove(token_file)
+        logger.info(f"[Agent Auth] Cleared invalid token for {agent_user['username']}")
+    except OSError:
+        pass
+    creds_file = os.path.join(home, ".claude", ".credentials.json")
+    try:
+        os.remove(creds_file)
+    except OSError:
+        pass
+
+
 def _is_agent_token_expired(agent_user: dict, margin_seconds: int = 300) -> bool:
     """Check if an agent's OAuth token is expired. Checks owner-level first."""
     if not agent_user:
@@ -312,6 +336,7 @@ def _get_agent_refresh_token(agent_user: dict) -> Optional[str]:
 
 async def _refresh_agent_token(agent_user: dict) -> bool:
     """Refresh an agent's OAuth token. Delegates to owner-level refresh if owner_id is set."""
+    global _token_cooldown_until
     owner_id = agent_user.get("owner_id") if agent_user else None
     if owner_id:
         return await _refresh_owner_token(owner_id)
@@ -328,6 +353,12 @@ async def _refresh_agent_token(agent_user: dict) -> bool:
     result = await _token_http_request(payload, f"agent {agent_user['username']} token refresh", agent_user=agent_user)
     if not result or result.get("_already_valid"):
         return bool(result)
+    # Handle permanently invalid refresh token
+    if result.get("_invalid_grant"):
+        logger.error(f"[Agent Auth] Refresh token for {agent_user['username']} is permanently invalid — clearing stored tokens")
+        _invalidate_agent_token(agent_user)
+        _token_cooldown_until = time.time() + 60
+        return False
     access_token = result.get("access_token")
     if not access_token:
         logger.error(f"[Agent Auth] Refresh response missing access_token for {agent_user['username']}")
@@ -374,6 +405,17 @@ def _save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = 
         json.dump(oauth_data, f, indent=2)
     logger.info(f"[Owner Auth] Saved OAuth token for owner {owner_id}")
 
+def _invalidate_owner_token(owner_id: str):
+    """Remove stored OAuth tokens for an owner when the refresh token is permanently invalid."""
+    if not owner_id:
+        return
+    token_file = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
+    try:
+        os.remove(token_file)
+        logger.info(f"[Owner Auth] Cleared invalid token for owner {owner_id}")
+    except OSError:
+        pass
+
 def _is_owner_token_expired(owner_id: str, margin_seconds: int = 300) -> bool:
     """Check if an owner's OAuth token is expired."""
     if not owner_id:
@@ -402,6 +444,7 @@ def _get_owner_refresh_token(owner_id: str) -> Optional[str]:
 
 async def _refresh_owner_token(owner_id: str) -> bool:
     """Refresh an owner's OAuth token using its refresh token."""
+    global _token_cooldown_until
     refresh_token = _get_owner_refresh_token(owner_id)
     if not refresh_token:
         logger.warning(f"[Owner Auth] No refresh token for owner {owner_id}")
@@ -416,6 +459,12 @@ async def _refresh_owner_token(owner_id: str) -> bool:
     result = await _token_http_request(payload, f"owner {owner_id} token refresh", agent_user=owner_check)
     if not result or result.get("_already_valid"):
         return bool(result)
+    # Handle permanently invalid refresh token (revoked/expired)
+    if result.get("_invalid_grant"):
+        logger.error(f"[Owner Auth] Refresh token for owner {owner_id} is permanently invalid — clearing stored tokens")
+        _invalidate_owner_token(owner_id)
+        _token_cooldown_until = time.time() + 60  # Don't retry for 60s
+        return False
     access_token = result.get("access_token")
     if not access_token:
         logger.error(f"[Owner Auth] Refresh response missing access_token for owner {owner_id}")
@@ -574,6 +623,18 @@ def _save_token(token: str, refresh_token: Optional[str] = None, expires_in: int
     logger.info("OAuth token saved (token file + token.json + credentials.json)")
 
 
+def _invalidate_global_token():
+    """Remove global stored OAuth tokens when the refresh token is permanently invalid."""
+    for path in (TOKEN_FILE, TOKEN_JSON_FILE, CREDENTIALS_FILE):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    # Also clear from environment so _get_claude_env doesn't reuse it
+    os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+    logger.info("[Auth] Cleared invalid global OAuth tokens")
+
+
 def _is_token_expired(margin_seconds: int = 300) -> bool:
     """Return True if the saved OAuth token is expired (or expires within margin_seconds).
 
@@ -667,6 +728,14 @@ async def _token_http_request(payload: dict, description: str, agent_user: dict 
                 return None
             else:
                 logger.error(f"{description}: HTTP {status}, body={body[:500]}")
+                # Detect permanently invalid refresh tokens (revoked, expired, etc.)
+                # so callers can clear the stored tokens instead of retrying forever.
+                try:
+                    err_body = json.loads(body)
+                    if err_body.get("error") == "invalid_grant":
+                        return {"_invalid_grant": True}
+                except (json.JSONDecodeError, TypeError):
+                    pass
                 return None
 
         except asyncio.TimeoutError:
@@ -682,6 +751,7 @@ async def _refresh_oauth_token() -> bool:
 
     Returns True on success, False on failure.
     """
+    global _token_cooldown_until
     refresh_token = _get_saved_refresh_token()
     if not refresh_token:
         logger.warning("No refresh token available - cannot refresh, need full re-auth")
@@ -699,6 +769,12 @@ async def _refresh_oauth_token() -> bool:
             return False
         if result.get("_already_valid"):
             return True
+        # Handle permanently invalid refresh token
+        if result.get("_invalid_grant"):
+            logger.error("Global refresh token is permanently invalid — clearing stored tokens")
+            _invalidate_global_token()
+            _token_cooldown_until = time.time() + 60
+            return False
 
         access_token = result.get("access_token")
         if not access_token:
@@ -1008,10 +1084,27 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
     if agent_user:
         # Per-agent token refresh
         if _is_agent_token_expired(agent_user) and time.time() >= _token_cooldown_until:
-            await _refresh_agent_token(agent_user)
+            refreshed = await _refresh_agent_token(agent_user)
+            if not refreshed and not _resolve_token(agent_user):
+                _owner_id = agent_user.get("owner_id")
+                login_url = _initiate_owner_login(_owner_id) if _owner_id else _initiate_agent_login(agent_id)
+                return {
+                    "status": "auth_required",
+                    "output": "",
+                    "error": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
+                    "login_url": login_url,
+                }
     else:
         if _is_token_expired() and time.time() >= _token_cooldown_until:
-            await _refresh_oauth_token()
+            refreshed = await _refresh_oauth_token()
+            if not refreshed and not _load_saved_token():
+                login_url = await _get_login_url()
+                return {
+                    "status": "auth_required",
+                    "output": "",
+                    "error": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
+                    "login_url": login_url,
+                }
 
     agent_label = f" (user={agent_user['username']})" if agent_user else ""
 
@@ -1216,15 +1309,35 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
             refreshed = await _refresh_agent_token(agent_user)
             if not refreshed:
                 who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
+                # If there's no token left at all (cleared by invalid_grant),
+                # don't launch the CLI — it will just fail immediately.
+                if not _resolve_token(agent_user):
+                    logger.error(f"[Auth] No valid token for {who} — requiring re-authentication")
+                    if agent_user:
+                        login_url = _initiate_owner_login(_owner_id) if _owner_id else _initiate_agent_login(agent_id)
+                    else:
+                        login_url = await _get_login_url()
+                    yield {
+                        "type": "error",
+                        "content": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
+                        "login_url": login_url,
+                    }
+                    return
                 logger.warning(f"[Auth] Proactive token refresh failed for {who}, continuing with existing token...")
-                # Don't stop — let the CLI try with the existing token.
-                # If it truly fails, the mid-stream auth error handler will catch it.
     else:
         if _is_token_expired() and time.time() >= _token_cooldown_until:
             refreshed = await _refresh_oauth_token()
             if not refreshed:
+                if not _load_saved_token():
+                    logger.error("[Auth] No valid global token — requiring re-authentication")
+                    login_url = await _get_login_url()
+                    yield {
+                        "type": "error",
+                        "content": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
+                        "login_url": login_url,
+                    }
+                    return
                 logger.warning("[Auth] Proactive global token refresh failed, continuing with existing token...")
-                # Don't stop — let the CLI try with the existing token.
 
     agent_label = f" (user={agent_user['username']})" if agent_user else ""
 
