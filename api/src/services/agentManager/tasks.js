@@ -507,10 +507,9 @@ export const tasksMethods = {
     });
   },
 
-  async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, targetStatus, taskText) {
+  async _waitForExecutionComplete(creatorAgentId, taskId, executorId, executorName, taskText) {
     const freshTask = this._getAgentTasks(creatorAgentId).find(t => t.id === taskId);
     console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
-    const resolveCompletionStatus = () => targetStatus || 'done';
 
     // Helper: check if task was completed via signal
     const _checkCompleted = async () => {
@@ -518,13 +517,7 @@ export const tasksMethods = {
         const comment = getTaskSignal(taskId, 'comment') || '';
         clearTaskSignal(taskId, 'completed');
         clearTaskSignal(taskId, 'comment');
-        if (targetStatus) {
-          const completionStatus = resolveCompletionStatus();
-          await this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-          console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-        } else {
-          console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}" (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-        }
+        console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`);
         return 'completed';
       }
       return null;
@@ -540,13 +533,7 @@ export const tasksMethods = {
       const comment = freshTask._executionComment || '';
       delete freshTask._executionCompleted;
       delete freshTask._executionComment;
-      if (targetStatus) {
-        const completionStatus = resolveCompletionStatus();
-        this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-        console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete -> ${completionStatus}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-      } else {
-        console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete (no targetStatus — action chain continues)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-      }
+      console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete${comment ? ` (${comment.slice(0, 80)})` : ''}`);
       return 'completed';
     }
 
@@ -585,13 +572,7 @@ export const tasksMethods = {
         const comment = inMemoryTask._executionComment || '';
         delete inMemoryTask._executionCompleted;
         delete inMemoryTask._executionComment;
-        if (targetStatus) {
-          const completionStatus = resolveCompletionStatus();
-          this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-          console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag) -> ${completionStatus}`);
-        } else {
-          console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag, no targetStatus — action chain continues)`);
-        }
+        console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
         return 'completed';
       }
       if (!this._isActiveTaskStatus(currentTask.status)) {
@@ -686,31 +667,6 @@ export const tasksMethods = {
     }
 
     try {
-      let targetStatus = null;
-      try {
-        const workflow = await getWorkflowForBoard(task.boardId);
-        const transition = workflow.transitions.find(t => {
-          if (t.from !== task.status) return false;
-          if (this._validTransition(t)) {
-            return (t.actions || []).some(a => a.type === 'run_agent');
-          }
-          return t.autoRefine && (t.mode === 'execute' || t.mode === 'decide' || t.agent);
-        });
-        if (transition) {
-          if (this._validTransition(transition)) {
-            // Only use an explicit targetStatus set on the run_agent action itself.
-            // Do NOT fallback to change_status — that's a separate action in the
-            // chain and will be handled by _checkAutoRefine after execution completes.
-            const runAction = (transition.actions || []).find(a => a.type === 'run_agent' && a.targetStatus);
-            if (runAction?.targetStatus) {
-              targetStatus = runAction.targetStatus;
-            }
-          } else if (transition.to) {
-            targetStatus = transition.to;
-          }
-        }
-      } catch (_) { /* use default */ }
-
       if (task.project && task.project !== executor.project) {
         console.log(`🔄 [TaskLoop] Switching "${executor.name}" to project "${task.project}" for resume`);
         if (this._switchProjectContext) {
@@ -740,7 +696,7 @@ export const tasksMethods = {
 
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, true);
 
-      await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, targetStatus, task.text);
+      await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text);
     } catch (err) {
       const isUserStop = err.message === 'Agent stopped by user';
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);

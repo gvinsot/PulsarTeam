@@ -228,7 +228,6 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId }) {
   const mode = action.mode || AgentMode.EXECUTE;
   const role = action.role || '';
   const instructions = action.instructions || '';
-  const targetStatus = action.targetStatus || null;
 
   const lockKey = `${task.agentId}:${task.id}:${mode}`;
   if (!acquireLock(lockKey)) {
@@ -300,7 +299,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId }) {
         result = await _runDecideMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       case AgentMode.EXECUTE:
-        result = await _runExecuteMode(agent, task, instructions, targetStatus, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runExecuteMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       default:
         console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
@@ -460,7 +459,7 @@ async function _runDecideMode(agent, task, instructions, { agentManager, io, exe
   return { executed: true };
 }
 
-async function _runExecuteMode(agent, task, instructions, targetStatus, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+async function _runExecuteMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt }) {
   const hasInstructions = !!instructions;
   const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions) : task.text;
   console.log(`[ActionExecutor] execute: "${task.text?.slice(0, 60)}" via ${agent.name}${hasInstructions ? ' (with instructions)' : ''}`);
@@ -492,16 +491,14 @@ async function _runExecuteMode(agent, task, instructions, targetStatus, { agentM
       const comment = freshTask._executionComment || '';
       delete freshTask._executionCompleted;
       delete freshTask._executionComment;
-      const completionStatus = targetStatus || 'done';
-      agentManager.setTaskStatus(task.agentId, task.id, completionStatus, { skipAutoRefine: false, by: agent.name });
-      console.log(`✅ [ActionExecutor] execute: completed immediately → ${completionStatus}${hasInstructions ? ' (with instructions)' : ''}`);
+      console.log(`✅ [ActionExecutor] execute: completed immediately${hasInstructions ? ' (with instructions)' : ''}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
     } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
       // Task was already moved (e.g. via @update_task)
       console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);
     } else {
       // Agent did not complete in first response — wait for @task_execution_complete via reminder loop
       console.log(`[ActionExecutor] execute: waiting for task_execution_complete${hasInstructions ? ' (with instructions)' : ''}`);
-      await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, targetStatus, task.text);
+      await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text);
     }
   } finally {
     io.emit('agent:stream:end', { agentId: agent.id, agentName: agent.name, project: agent.project || null });
