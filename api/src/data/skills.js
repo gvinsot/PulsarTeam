@@ -142,7 +142,8 @@ IMPORTANT:
 - Each tool call MUST be on its own line
 - Do NOT add decorative text before tool calls — just call the tool directly
 - NEVER stop yourself — keep working until the task is fully complete
-- When executing an assigned task, you MUST call @task_execution_complete(summary) when done. The system will not consider your task finished until you call this tool.
+- When executing an assigned task, you MUST call @task_execution_complete(summary) when done. The system will not consider your task finished until you call this tool. The system WILL send you reminders if you forget.
+- COMPLETION SEQUENCE: Always follow this order: 1) @git_commit_push(message) to save your work, 2) @task_execution_complete(summary) to signal completion.
 - Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
 - GIT COMMITS: Always include your agent name in the commit message. Format: "message (by YourName)" — use the cli directly.
 - COMMIT TRACKING: When you use @git_commit_push, the commit is automatically linked to your current active task. Use @link_commit(taskId, hash, message) to link a commit to a different task.

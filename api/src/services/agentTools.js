@@ -61,7 +61,9 @@ You can interact with project files using these commands. Use the exact format s
 
 @task_execution_complete(comment) - Signal that you have finished executing your current task
   You MUST call this tool when you are done with your assigned task. Provide a brief summary of what was accomplished.
-  Until you call this, the system will consider your task still in progress.
+  Until you call this, the system will consider your task still in progress and will send you reminders.
+  CRITICAL: This is the ONLY way the system knows your work is done. Do NOT skip this step.
+  Call this AFTER @git_commit_push — the correct sequence is: commit first, then signal completion.
   Example: @task_execution_complete(Implemented user authentication with JWT tokens, added tests, all passing.)
 
 IMPORTANT:
@@ -73,6 +75,9 @@ IMPORTANT:
 - Do NOT add decorative text like "Editing file..." or "Now I'll read..." before tool calls — just call the tool directly
 - NEVER stop yourself with messages like "[Agent stopped after N turns]" or "I'll stop here" — you have NO turn limit. Keep working until the task is fully complete.
 - Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
+- COMPLETION SEQUENCE: When finishing a task, always follow this order:
+  1. @git_commit_push(message) — save your work
+  2. @task_execution_complete(summary) — signal completion to the system
 `;
 
 // Sanitize a tool argument: only strip a matching pair of surrounding quotes.

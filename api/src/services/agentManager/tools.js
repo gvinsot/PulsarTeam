@@ -2,6 +2,7 @@
 import { parseToolCalls, executeTool } from '../agentTools.js';
 import { getProjectGitUrl } from '../githubProjects.js';
 import { saveAgent } from '../database.js';
+import { setTaskSignal } from './tasks.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const toolsMethods = {
@@ -88,8 +89,11 @@ export const toolsMethods = {
           inProgressTask = this._getAgentTasks(agentId).find(t => this._isActiveTaskStatus(t.status));
         }
         if (inProgressTask) {
+          // Set both legacy in-memory flag AND the signal system for reliable detection
           inProgressTask._executionCompleted = true;
           inProgressTask._executionComment = comment;
+          setTaskSignal(inProgressTask.id, 'completed', true);
+          setTaskSignal(inProgressTask.id, 'comment', comment);
           for (const [ownerId, tasks] of this._tasks) {
             if (tasks.includes(inProgressTask)) {
               const ownerAgent = this.agents.get(ownerId);
@@ -472,7 +476,7 @@ export const toolsMethods = {
           let commitLinkedOwnerAgentId = null;
 
           if (commitHash) {
-            const found = this._findTaskForCommitLink(agentId);
+            const found = await this._findTaskForCommitLink(agentId);
             let targetTask = found?.task || null;
             let ownerAgentId = found?.ownerAgentId || agentId;
 
@@ -527,8 +531,11 @@ export const toolsMethods = {
             const inProgressTask = commitLinkedTask;
             if (inProgressTask && this._isActiveTaskStatus(inProgressTask.status)) {
               const autoComment = commitMsg || 'Completed (auto-closed after successful git push)';
+              // Set both legacy in-memory flag AND the signal system for reliable detection
               inProgressTask._executionCompleted = true;
               inProgressTask._executionComment = autoComment;
+              setTaskSignal(inProgressTask.id, 'completed', true);
+              setTaskSignal(inProgressTask.id, 'comment', autoComment);
               // Save the owner agent
               const ownerAgent = commitLinkedOwnerAgentId ? this.agents.get(commitLinkedOwnerAgentId) : null;
               if (ownerAgent) {

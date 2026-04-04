@@ -208,9 +208,7 @@ export const tasksMethods = {
     return 'backlog';
   },
 
-  _findTaskForCommitLink(agentId) {
-    const agent = this.agents.get(agentId);
-
+  async _findTaskForCommitLink(agentId) {
     // Priority 1: Task actively running via this agent (set by processTransition)
     // This is the most reliable indicator — it means a workflow action is in progress.
     for (const [creatorId, creatorAgent] of this.agents) {
@@ -250,14 +248,9 @@ export const tasksMethods = {
       }
     }
 
-    return null;
-  },
-
-  async _findTaskForCommitLink(agentId) {
-    // Find active task assigned to or owned by this agent
+    // Priority 4 (DB fallback): find active task or recently completed task from DB
     const activeTask = await getActiveTaskForExecutor(agentId);
     if (activeTask) return { task: activeTask, ownerAgentId: activeTask.agentId };
-    // Fallback: find recently completed task
     const allTasks = await getTasksByAgent(agentId);
     const doneTasks = allTasks.filter(t => t.status === 'done' && t.completedAt);
     if (doneTasks.length > 0) {
@@ -583,21 +576,24 @@ export const tasksMethods = {
         console.log(`🔔 [Execution] Task deleted during reminder wait — exiting loop`);
         return 'deleted';
       }
-      if (currentTask._executionCompleted) {
-        const comment = currentTask._executionComment || '';
-        delete currentTask._executionCompleted;
-        delete currentTask._executionComment;
+      // Check signals first (reliable in-memory coordination set by tool handler)
+      const completedResult = await _checkCompleted();
+      if (completedResult) return completedResult;
+      // Also check the in-memory task object's legacy flag (set on the live task ref)
+      const inMemoryTask = this._getAgentTasks(creatorAgentId).find(t => t.id === taskId);
+      if (inMemoryTask?._executionCompleted) {
+        const comment = inMemoryTask._executionComment || '';
+        delete inMemoryTask._executionCompleted;
+        delete inMemoryTask._executionComment;
         if (targetStatus) {
           const completionStatus = resolveCompletionStatus();
           this.setTaskStatus(creatorAgentId, taskId, completionStatus, { skipAutoRefine: false, by: executorName });
-          console.log(`✅ [Execution] Task ${taskId} completed during wait -> ${completionStatus}`);
+          console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag) -> ${completionStatus}`);
         } else {
-          console.log(`✅ [Execution] Task ${taskId} completed during wait (no targetStatus — action chain continues)`);
+          console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag, no targetStatus — action chain continues)`);
         }
         return 'completed';
       }
-      const completedResult = await _checkCompleted();
-      if (completedResult) return completedResult;
       if (!this._isActiveTaskStatus(currentTask.status)) {
         console.log(`🔔 [Execution] Task status changed to "${currentTask.status}" — exiting loop`);
         return 'moved';

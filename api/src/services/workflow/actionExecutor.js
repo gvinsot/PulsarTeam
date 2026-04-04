@@ -487,23 +487,20 @@ async function _runExecuteMode(agent, task, instructions, targetStatus, { agentM
     // Check if agent completed the task via @task_execution_complete
     const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
 
-    if (hasInstructions) {
-      // With instructions: agent may have used @update_task or @task_execution_complete
-      if (freshTask?._executionCompleted) {
-        const comment = freshTask._executionComment || '';
-        delete freshTask._executionCompleted;
-        delete freshTask._executionComment;
-        const completionStatus = targetStatus || 'done';
-        agentManager.setTaskStatus(task.agentId, task.id, completionStatus, { skipAutoRefine: false, by: agent.name });
-        console.log(`✅ [ActionExecutor] execute+instructions: completed → ${completionStatus}`);
-      } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
-        console.log(`[ActionExecutor] execute+instructions: already moved to "${freshTask.status}"`);
-      } else {
-        console.log(`[ActionExecutor] execute+instructions: not completed — agent may have used @update_task`);
-      }
+    if (freshTask?._executionCompleted) {
+      // Immediate completion — agent called @task_execution_complete in its response
+      const comment = freshTask._executionComment || '';
+      delete freshTask._executionCompleted;
+      delete freshTask._executionComment;
+      const completionStatus = targetStatus || 'done';
+      agentManager.setTaskStatus(task.agentId, task.id, completionStatus, { skipAutoRefine: false, by: agent.name });
+      console.log(`✅ [ActionExecutor] execute: completed immediately → ${completionStatus}${hasInstructions ? ' (with instructions)' : ''}`);
+    } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
+      // Task was already moved (e.g. via @update_task)
+      console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);
     } else {
-      // Without instructions: wait for @task_execution_complete via reminder loop
-      console.log(`[ActionExecutor] execute: waiting for task_execution_complete`);
+      // Agent did not complete in first response — wait for @task_execution_complete via reminder loop
+      console.log(`[ActionExecutor] execute: waiting for task_execution_complete${hasInstructions ? ' (with instructions)' : ''}`);
       await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, targetStatus, task.text);
     }
   } finally {
