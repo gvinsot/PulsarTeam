@@ -71,7 +71,7 @@ const skillManager = new SkillManager();
 const executionManager = new ExecutionManager({
   coderOptions: {
     baseUrl: process.env.CODER_SERVICE_URL || 'http://coder-service:8000',
-    apiKey: process.env.CODER_SERVICE_API_KEY || ''
+    apiKey: process.env.CODER_API_KEY || ''
   }
 });
 const mcpManager = new MCPManager();

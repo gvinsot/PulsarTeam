@@ -957,36 +957,36 @@ export function createProvider(config) {
   switch (config.provider) {
     case 'ollama':
       return new OllamaProvider(
-        config.endpoint || process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+        config.endpoint || 'http://localhost:11434',
         config.model
       );
     case 'claude':
       return new ClaudeProvider(
-        config.apiKey || process.env.ANTHROPIC_API_KEY,
+        config.apiKey,
         config.model
       );
     case 'openai':
       return new OpenAIProvider(
-        config.apiKey || process.env.OPENAI_API_KEY,
+        config.apiKey,
         config.model
       );
     case 'vllm':
       return new VLLMProvider(
-        config.endpoint || process.env.VLLM_BASE_URL || 'http://localhost:8000',
+        config.endpoint || 'http://localhost:8000',
         config.model,
-        config.apiKey || process.env.VLLM_API_KEY || ''
+        config.apiKey || ''
       );
     case 'claude-paid':
       return new VLLMProvider(
         'http://coder-service:8000',
         config.model || 'claude-sonnet-4-20250514',
-        config.apiKey || process.env.CODER_API_KEY || process.env.ANTHROPIC_API_KEY || '',
+        process.env.CODER_API_KEY || '',
         config.agentId || null,
         config.ownerId || null
       );
     case 'mistral':
       return new MistralProvider(
-        config.apiKey || process.env.MISTRAL_API_KEY,
+        config.apiKey,
         config.model
       );
     default:

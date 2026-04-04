@@ -1058,7 +1058,7 @@ export const lifecycleMethods = {
     const llmConfig = this.resolveLlmConfig(agent);
     if (llmConfig.provider !== 'claude-paid') return;
     const endpoint = 'http://coder-service:8000';
-    const apiKey = llmConfig.apiKey || process.env.CODER_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    const apiKey = llmConfig.apiKey || process.env.CODER_API_KEY || '';
     fetch(`${endpoint}/reset`, {
       method: 'POST',
       headers: {

@@ -13,7 +13,7 @@ export class CoderExecutionProvider extends ExecutionProvider {
   constructor(options = {}) {
     super();
     this.baseUrl = options.baseUrl || process.env.CODER_SERVICE_URL || 'http://coder-service:8000';
-    this.apiKey = options.apiKey || process.env.CODER_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    this.apiKey = options.apiKey || process.env.CODER_API_KEY || '';
     this._agents = new Map(); // agentId -> { project, ready }
     this._fileTreeCache = new Map(); // agentId -> { project, tree, timestamp }
   }
