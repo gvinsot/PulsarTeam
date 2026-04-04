@@ -81,10 +81,14 @@ IMPORTANT:
 - Do NOT add decorative text like "Editing file..." or "Now I'll read..." before tool calls — just call the tool directly
 - NEVER stop yourself with messages like "[Agent stopped after N turns]" or "I'll stop here" — you have NO turn limit. Keep working until the task is fully complete.
 - Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
-- COMPLETION SEQUENCE: When finishing a task, always follow this order:
-  1. @git_commit_push(message) — save and push your work
-  2. @task_execution_complete(summary) — signal completion to the system
-  You can specify an explicit task: @task_execution_complete(summary, taskId)
+- WORKFLOW — You MUST follow these steps IN ORDER when executing a task:
+  1. READ: Explore the codebase with @read_file, @list_dir, @search_files to understand the current state
+  2. WRITE: Make all necessary changes using @write_file or @append_file
+  3. VERIFY: Read back modified files to confirm correctness
+  4. COMMIT: @git_commit_push(message) — save and push your work
+  5. COMPLETE: @task_execution_complete(summary) — signal completion to the system
+  CRITICAL: You MUST call @write_file BEFORE @git_commit_push. A commit without prior @write_file calls means NOTHING was changed.
+  CRITICAL: Call tools ONE STEP AT A TIME. Do NOT batch all tools in a single response — wait for each tool result before proceeding to the next step.
 `;
 
 // Sanitize a tool argument: only strip a matching pair of surrounding quotes.

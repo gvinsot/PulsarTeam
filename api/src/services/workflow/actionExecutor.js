@@ -59,10 +59,36 @@ ${task.error ? `Previous error: ${task.error}` : ''}
 Instructions:
 ${instructions}
 
-You MUST use @update_task(${task.id}, <new_status>) to change the task status. <new_status> must be one of the valid column IDs listed above (lowercase, exact match).
-You can also append details to the task description: @update_task(${task.id}, <new_status>, <details>).
-Do NOT call @task_execution_complete — use @update_task instead.
-Execute the instructions above and update the task status accordingly.`;
+RULES:
+- Follow the instructions above precisely. Do not take extra actions beyond what is asked.
+- When you are done, call @update_task(${task.id}, <new_status>) to change the task status. <new_status> must be one of the valid column IDs listed above (lowercase, exact match).
+- You can append details: @update_task(${task.id}, <new_status>, <details>).
+- Do NOT call @task_execution_complete — use @update_task instead.
+- Be concise and efficient: execute the instructions, then update the task. Do not explore the codebase unnecessarily.`;
+}
+
+function buildExecutePrompt(task) {
+  return `You have been assigned the following task to execute.
+
+Task ID: ${task.id}
+Task: ${task.text}
+${task.error ? `Previous error: ${task.error}` : ''}
+
+EXECUTION RULES — follow these steps strictly, one at a time:
+1. EXPLORE: Use @list_dir and @read_file to understand the codebase structure and find the relevant files.
+2. PLAN: Identify what files need to be created or modified.
+3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
+4. VERIFY: Use @read_file to confirm your changes are correct.
+5. COMMIT: Call @git_commit_push(message) to save and push your changes.
+6. COMPLETE: Call @task_execution_complete(summary) to signal you are done.
+
+CRITICAL RULES:
+- You MUST call @write_file BEFORE @git_commit_push. Without @write_file, there are NO changes to commit.
+- Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
+- Do NOT batch multiple unrelated tools in a single response.
+- Do NOT call @git_commit_push and @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
+
+Start by exploring the project structure.`;
 }
 
 /**
@@ -494,7 +520,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
 
 async function _runExecuteMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt }) {
   const hasInstructions = !!instructions;
-  const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions, columns) : task.text;
+  const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions, columns) : buildExecutePrompt(task);
   console.log(`[ActionExecutor] execute: "${task.text?.slice(0, 60)}" via ${agent.name}${hasInstructions ? ' (with instructions)' : ''}`);
 
   let fullResponse = '';
