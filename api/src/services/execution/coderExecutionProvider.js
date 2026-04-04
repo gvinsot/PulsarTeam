@@ -16,6 +16,15 @@ export class CoderExecutionProvider extends ExecutionProvider {
     this.apiKey = options.apiKey || process.env.CODER_API_KEY || '';
     this._agents = new Map(); // agentId -> { project, ready }
     this._fileTreeCache = new Map(); // agentId -> { project, tree, timestamp }
+    this.ownerIds = new Map(); // agentId -> ownerId
+  }
+
+  /**
+   * Associate an owner ID with an agent so all HTTP requests include X-Owner-Id.
+   * Called by agentManager when it knows the owner for a coder agent.
+   */
+  setOwner(agentId, ownerId) {
+    if (ownerId) this.ownerIds.set(agentId, ownerId);
   }
 
   // ── ExecutionProvider interface ───────────────────────────────────────
@@ -57,12 +66,14 @@ export class CoderExecutionProvider extends ExecutionProvider {
   async destroySandbox(agentId) {
     this._agents.delete(agentId);
     this._fileTreeCache.delete(agentId);
+    this.ownerIds.delete(agentId);
     console.log(`🗑️  [Coder] Cleared state for agent ${agentId.slice(0, 8)}`);
   }
 
   async destroyAll() {
     this._agents.clear();
     this._fileTreeCache.clear();
+    this.ownerIds.clear();
     console.log('🗑️  [Coder] Cleared all agent states');
   }
 
@@ -247,12 +258,14 @@ export class CoderExecutionProvider extends ExecutionProvider {
   // ── Private HTTP helpers ──────────────────────────────────────────────
 
   _headers(agentId, ownerId = null) {
+    const resolvedOwner = ownerId || (agentId ? this.ownerIds.get(agentId) : null) || null;
     const h = {
       'Content-Type': 'application/json',
       'X-Api-Key': this.apiKey,
+      'Authorization': `Bearer ${this.apiKey}`,
     };
     if (agentId) h['X-Agent-Id'] = agentId;
-    if (ownerId) h['X-Owner-Id'] = ownerId;
+    if (resolvedOwner) h['X-Owner-Id'] = resolvedOwner;
     return h;
   }
 

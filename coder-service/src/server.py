@@ -967,6 +967,98 @@ async def _get_login_url() -> str:
     return url
 
 
+async def _try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = None, owner_id: Optional[str] = None) -> Optional[dict]:
+    """Detect a verification code in the prompt and exchange it for a token.
+
+    Checks ALL pending OAuth flows (per-owner, per-agent, then global) and
+    exchanges the code using the matching flow's code_verifier.
+
+    Returns a dict with {"status": "authenticated", ...} on success,
+    {"status": "error", ...} on failure, or None if no code was detected
+    or no matching flow is pending.
+    """
+    code = _extract_code_from_prompt(prompt)
+    if not code:
+        return None
+
+    # Split code on # to get state (used to match the flow)
+    if "#" in code:
+        auth_code, state = code.split("#", 1)
+    else:
+        auth_code = code
+        state = ""
+
+    # 1. Try per-owner flow
+    if owner_id and owner_id in _owner_oauth_flows:
+        flow = _owner_oauth_flows[owner_id]
+        payload = {
+            "grant_type": "authorization_code",
+            "client_id": OAUTH_CLIENT_ID,
+            "code": auth_code,
+            "redirect_uri": OAUTH_REDIRECT_URI,
+            "code_verifier": flow["code_verifier"],
+        }
+        logger.info(f"[Owner Auth] Exchanging code for owner {owner_id}")
+        try:
+            result = await _token_http_request(payload, f"owner {owner_id} in-chat code exchange")
+            if result and not result.get("_already_valid") and not result.get("_invalid_grant"):
+                access_token = result.get("access_token")
+                if access_token:
+                    refresh_token = result.get("refresh_token")
+                    expires_in = result.get("expires_in", 28800)
+                    _save_owner_token(owner_id, access_token, refresh_token=refresh_token, expires_in=expires_in)
+                    _owner_oauth_flows.pop(owner_id, None)
+                    email = result.get("account", {}).get("email", "")
+                    logger.info(f"[Owner Auth] In-chat OAuth exchange successful for owner {owner_id}: {email}")
+                    return {"status": "authenticated", "email": email}
+            _owner_oauth_flows.pop(owner_id, None)
+            return {"status": "error", "message": "Token exchange failed for owner flow."}
+        except Exception as e:
+            logger.error(f"[Owner Auth] In-chat code exchange error: {e}", exc_info=True)
+            _owner_oauth_flows.pop(owner_id, None)
+            return {"status": "error", "message": f"Token exchange failed: {e}"}
+
+    # 2. Try per-agent flow
+    if agent_id and agent_id in _agent_oauth_flows:
+        flow = _agent_oauth_flows[agent_id]
+        payload = {
+            "grant_type": "authorization_code",
+            "client_id": OAUTH_CLIENT_ID,
+            "code": auth_code,
+            "redirect_uri": OAUTH_REDIRECT_URI,
+            "code_verifier": flow["code_verifier"],
+        }
+        logger.info(f"[Agent Auth] Exchanging code for agent {agent_id[:12]}")
+        try:
+            result = await _token_http_request(payload, f"agent {agent_id[:12]} in-chat code exchange")
+            if result and not result.get("_already_valid") and not result.get("_invalid_grant"):
+                access_token = result.get("access_token")
+                if access_token:
+                    refresh_token = result.get("refresh_token")
+                    expires_in = result.get("expires_in", 28800)
+                    agent_user = await ensure_agent_user(agent_id, owner_id=owner_id)
+                    if agent_user:
+                        _save_agent_token(agent_user, access_token, refresh_token=refresh_token, expires_in=expires_in)
+                    _agent_oauth_flows.pop(agent_id, None)
+                    email = result.get("account", {}).get("email", "")
+                    logger.info(f"[Agent Auth] In-chat OAuth exchange successful for agent {agent_id[:12]}: {email}")
+                    return {"status": "authenticated", "email": email}
+            _agent_oauth_flows.pop(agent_id, None)
+            return {"status": "error", "message": "Token exchange failed for agent flow."}
+        except Exception as e:
+            logger.error(f"[Agent Auth] In-chat code exchange error: {e}", exc_info=True)
+            _agent_oauth_flows.pop(agent_id, None)
+            return {"status": "error", "message": f"Token exchange failed: {e}"}
+
+    # 3. Try global flow (legacy)
+    global _oauth_code_verifier
+    if _oauth_code_verifier:
+        return await _exchange_auth_code(code)
+
+    # No matching flow found — the code-like string is not for us
+    return None
+
+
 def _build_claude_cmd(output_format: str = "json", system_prompt: Optional[str] = None, agent_id: Optional[str] = None, task_id: Optional[str] = None) -> list[str]:
     """Build the claude CLI command with appropriate flags.
 
@@ -1060,22 +1152,20 @@ async def run_claude_sync(prompt: str, system_prompt: Optional[str] = None, agen
     dependency on the thread pool executor (which causes 'Executor shutdown has
     been called' errors during server restart/shutdown).
     """
-    # If an OAuth flow is pending, check if the prompt contains a verification code
-    if _oauth_code_verifier:
-        code = _extract_code_from_prompt(prompt)
-        if code:
-            result = await _exchange_auth_code(code)
-            if result.get("status") == "authenticated":
-                return {
-                    "status": "success",
-                    "output": f"Authentication successful ({result.get('email', '')}). You can now send your request.",
-                }
+    # If any OAuth flow is pending (per-owner, per-agent, or global),
+    # check if the prompt contains a verification code and exchange it.
+    exchange_result = await _try_exchange_code_from_prompt(prompt, agent_id=agent_id, owner_id=owner_id)
+    if exchange_result is not None:
+        if exchange_result.get("status") == "authenticated":
             return {
-                "status": "auth_required",
-                "output": "",
-                "error": result.get("message", "Token exchange failed."),
-                "login_url": _auth_url,
+                "status": "success",
+                "output": f"Authentication successful ({exchange_result.get('email', '')}). You can now send your request.",
             }
+        return {
+            "status": "auth_required",
+            "output": "",
+            "error": exchange_result.get("message", "Token exchange failed."),
+        }
 
     # Resolve agent-specific Linux user for isolation
     agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
@@ -1260,33 +1350,21 @@ async def stream_claude_events(prompt: str, system_prompt: Optional[str] = None,
 
     Yields status updates as the agent works, then the final result.
     """
-    # If an OAuth flow is pending, check if the prompt contains a verification code
-    if _oauth_code_verifier:
-        code = _extract_code_from_prompt(prompt)
-        if code:
-            result = await _exchange_auth_code(code)
-            if result.get("status") == "authenticated":
-                # Also save the token to the agent's isolated home so it can
-                # use it on subsequent requests.
-                if agent_id:
-                    agent_user_for_auth = await ensure_agent_user(agent_id, owner_id=owner_id)
-                    if agent_user_for_auth:
-                        global_token = _load_saved_token()
-                        if global_token:
-                            global_refresh = _get_saved_refresh_token()
-                            _save_agent_token(agent_user_for_auth, global_token, refresh_token=global_refresh)
-                            logger.info(f"[Agent Auth] Copied OAuth token to agent {agent_id[:12]}")
-                yield {
-                    "type": "result",
-                    "content": f"Authentication successful ({result.get('email', '')}). You can now send your request.",
-                }
-                return
+    # If any OAuth flow is pending (per-owner, per-agent, or global),
+    # check if the prompt contains a verification code and exchange it.
+    exchange_result = await _try_exchange_code_from_prompt(prompt, agent_id=agent_id, owner_id=owner_id)
+    if exchange_result is not None:
+        if exchange_result.get("status") == "authenticated":
             yield {
-                "type": "error",
-                "content": result.get("message", "Token exchange failed."),
-                "login_url": _auth_url,
+                "type": "result",
+                "content": f"Authentication successful ({exchange_result.get('email', '')}). You can now send your request.",
             }
             return
+        yield {
+            "type": "error",
+            "content": exchange_result.get("message", "Token exchange failed."),
+        }
+        return
 
     # Resolve agent-specific Linux user for isolation
     agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None

@@ -42,7 +42,7 @@ export const toolsMethods = {
         // Bind agent to the correct execution provider based on LLM config
         const llmCfg = this.resolveLlmConfig(agent);
         const providerType = llmCfg.managesContext ? 'coder' : 'sandbox';
-        this.executionManager.bindAgent(agentId, providerType);
+        this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null });
 
         if (agent.project) {
           const gitUrl = await getProjectGitUrl(agent.project);

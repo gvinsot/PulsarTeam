@@ -57,8 +57,9 @@ export class ExecutionManager {
    *
    * @param {string} agentId
    * @param {'sandbox' | 'coder'} providerType
+   * @param {{ ownerId?: string }} [meta] - optional metadata (e.g. ownerId for coder-service)
    */
-  bindAgent(agentId, providerType) {
+  bindAgent(agentId, providerType, meta = {}) {
     const previous = this._agentProviders.get(agentId);
     if (previous && previous !== providerType) {
       console.log(`🔄 [Execution] Agent ${agentId.slice(0, 8)} switching provider: ${previous} → ${providerType}`);
@@ -67,6 +68,10 @@ export class ExecutionManager {
       oldProvider.destroySandbox(agentId).catch(() => {});
     }
     this._agentProviders.set(agentId, providerType);
+    // Forward owner info to coder provider for X-Owner-Id header
+    if (providerType === 'coder' && meta.ownerId) {
+      this.coder.setOwner(agentId, meta.ownerId);
+    }
   }
 
   /**
