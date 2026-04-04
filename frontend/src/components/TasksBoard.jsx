@@ -1159,7 +1159,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
 
 // ── TaskCard ────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDragStart, onNavigateToAgent }) {
+function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent }) {
   const isError = task.status === 'error';
   const today = isToday(task.createdAt);
   const isDraggingRef = useRef(false);
@@ -1315,13 +1315,9 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
             dropColEl = elemUnder?.closest?.('[data-column-id]');
             if (dropColEl) dropColId = dropColEl.getAttribute('data-column-id');
           }
-          if (dropColEl && dropColId) {
-            // Dispatch a custom event that the board listens to
-            const dropEvent = new CustomEvent('touch-task-drop', {
-              bubbles: true,
-              detail: { agentId: task.agentId, taskId: task.id, targetColumnId: dropColId }
-            });
-            dropColEl.dispatchEvent(dropEvent);
+          if (dropColId) {
+            // Call the drop handler directly via prop (more reliable on mobile than custom events)
+            onTouchDrop(task.agentId, task.id, dropColId);
           }
 
           // Prevent click after drag
@@ -1526,7 +1522,7 @@ function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onS
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDragStart, onNavigateToAgent }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent }) {
   const { theme } = useTheme();
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
@@ -1597,7 +1593,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
             showCreator={showCreator}
             showProject={showProject}
             showTaskType={showTaskType}
-            onTouchDragStart={onTouchDragStart}
+            onTouchDrop={onTouchDrop}
             onNavigateToAgent={onNavigateToAgent}
           />
         ))}
@@ -2748,19 +2744,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     } catch (err) {
       console.error('[TasksBoard] Touch drop status change failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll]);
+  }, [allTasks, columns, refreshAll, isReadOnly]);
 
-  // Listen for custom touch-task-drop events on the board
-  useEffect(() => {
-    const boardEl = boardScrollRef.current;
-    if (!boardEl) return;
-    const handler = (e) => {
-      const { agentId, taskId, targetColumnId } = e.detail;
-      handleTouchDrop(agentId, taskId, targetColumnId);
-    };
-    boardEl.addEventListener('touch-task-drop', handler);
-    return () => boardEl.removeEventListener('touch-task-drop', handler);
-  }, [handleTouchDrop]);
+
 
   const totalByStatus = useMemo(() => {
     const lastColId = columns[columns.length - 1]?.id;
@@ -2990,7 +2976,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
               showCreator={col.showCreator}
               showProject={col.showProject}
               showTaskType={col.showTaskType}
-              onTouchDragStart={() => {}}
+              onTouchDrop={handleTouchDrop}
               onNavigateToAgent={onNavigateToAgent}
             />
           ))}
