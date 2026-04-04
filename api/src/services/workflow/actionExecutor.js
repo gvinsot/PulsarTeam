@@ -45,18 +45,21 @@ function buildRefinePrompt(task, instructions) {
   return `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
 }
 
-function buildInstructionsPrompt(task, instructions) {
+function buildInstructionsPrompt(task, instructions, columns) {
+  const columnList = columns?.length
+    ? `\nValid statuses (column IDs): ${columns.map(c => c.id).join(', ')}`
+    : '';
   return `You have been assigned instructions for the following task.
 
 Task ID: ${task.id}
 Task title: ${task.text}
-Current status: ${task.status}
+Current status: ${task.status}${columnList}
 ${task.error ? `Previous error: ${task.error}` : ''}
 
 Instructions:
 ${instructions}
 
-You MUST use @update_task(${task.id}, <new_status>) to change the task status. <new_status> must be a workflow column ID.
+You MUST use @update_task(${task.id}, <new_status>) to change the task status. <new_status> must be one of the valid column IDs listed above (lowercase, exact match).
 You can also append details to the task description: @update_task(${task.id}, <new_status>, <details>).
 Do NOT call @task_execution_complete — use @update_task instead.
 Execute the instructions above and update the task status accordingly.`;
@@ -243,10 +246,11 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
  * Execute a run_agent action. This is the main entry point that replaces the
  * old monolithic processTransition function.
  */
-async function executeRunAgent(action, task, { agentManager, io, ownerId }) {
+async function executeRunAgent(action, task, { agentManager, io, ownerId, workflow }) {
   const mode = action.mode || AgentMode.EXECUTE;
   const role = action.role || '';
   const instructions = action.instructions || '';
+  const columns = workflow?.columns || [];
 
   const lockKey = `${task.agentId}:${task.id}:${mode}`;
   if (!acquireLock(lockKey)) {
@@ -317,10 +321,10 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId }) {
         result = await _runRefineMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       case AgentMode.DECIDE:
-        result = await _runDecideMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       case AgentMode.EXECUTE:
-        result = await _runExecuteMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runExecuteMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       default:
         console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
@@ -452,13 +456,13 @@ async function _runRefineMode(agent, task, instructions, { agentManager, io, exe
   return { executed: true };
 }
 
-async function _runDecideMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+async function _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt }) {
   if (!instructions) {
     console.log(`[ActionExecutor] decide: no instructions — skipping`);
     return { executed: false, skipped: true, reason: 'no-instructions' };
   }
 
-  const prompt = buildInstructionsPrompt(task, instructions);
+  const prompt = buildInstructionsPrompt(task, instructions, columns);
   console.log(`[ActionExecutor] decide: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
   let fullResponse = '';
@@ -488,9 +492,9 @@ async function _runDecideMode(agent, task, instructions, { agentManager, io, exe
   return { executed: true };
 }
 
-async function _runExecuteMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+async function _runExecuteMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt }) {
   const hasInstructions = !!instructions;
-  const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions) : task.text;
+  const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions, columns) : task.text;
   console.log(`[ActionExecutor] execute: "${task.text?.slice(0, 60)}" via ${agent.name}${hasInstructions ? ' (with instructions)' : ''}`);
 
   let fullResponse = '';

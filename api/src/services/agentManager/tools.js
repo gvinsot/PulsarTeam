@@ -2,6 +2,7 @@
 import { parseToolCalls, executeTool } from '../agentTools.js';
 import { getProjectGitUrl } from '../githubProjects.js';
 import { saveAgent } from '../database.js';
+import { getWorkflowForBoard } from '../configManager.js';
 import { setTaskSignal } from './tasks.js';
 
 /** @this {import('./index.js').AgentManager} */
@@ -195,7 +196,7 @@ export const toolsMethods = {
 
       // ── @update_task() ──
       if (call.tool === 'update_task') {
-        const [taskId, newStatus, details] = call.args;
+        const [taskId, rawStatus, details] = call.args;
         let task = this._getAgentTasks(agentId).find(t => t.id === taskId);
         if (!task) task = this._getAgentTasks(agentId).find(t => t.id.startsWith(taskId));
         let taskAgentId = agentId;
@@ -215,6 +216,25 @@ export const toolsMethods = {
           results.push({ tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` });
           continue;
         }
+
+        // Normalize status to match actual column IDs (case-insensitive).
+        // Agents often pass "Resolution" instead of "resolution".
+        let newStatus = rawStatus;
+        if (task.boardId) {
+          try {
+            const wf = await getWorkflowForBoard(task.boardId);
+            if (wf?.columns) {
+              const match = wf.columns.find(c => c.id.toLowerCase() === rawStatus.toLowerCase());
+              if (match) {
+                if (match.id !== rawStatus) {
+                  console.log(`[UpdateTask] Normalizing status "${rawStatus}" → "${match.id}"`);
+                }
+                newStatus = match.id;
+              }
+            }
+          } catch (_) { /* best-effort, use raw */ }
+        }
+
         if (details && details.trim()) {
           const separator = '\n\n---\n';
           const detailBlock = `**[${agent.name}]** ${details.trim()}`;
