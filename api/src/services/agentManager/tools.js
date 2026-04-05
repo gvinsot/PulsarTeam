@@ -498,19 +498,14 @@ export const toolsMethods = {
           }
         }
 
-        // Auto-capture commit hash and link to task
-        if (call.tool === 'git_commit_push' || (call.tool === 'run_command' && result.success)) {
+        // Auto-capture commit hash from git commands and link to task
+        if (call.tool === 'run_command' && result.success) {
           let commitHash = null;
           let commitMsg = '';
 
-          if (call.tool === 'git_commit_push') {
-            commitHash = result.meta?.commitHash || null;
-            commitMsg = call.args[0] || '';
-          }
-          if (!commitHash && typeof result.result === 'string') {
+          if (typeof result.result === 'string') {
             const rawCmd = (call.args[0] || '').toLowerCase();
-            const isGitCommit = call.tool === 'git_commit_push' ||
-              (rawCmd.includes('git') && (rawCmd.includes('commit') || rawCmd.includes('push')));
+            const isGitCommit = rawCmd.includes('git') && (rawCmd.includes('commit') || rawCmd.includes('push'));
             if (isGitCommit) {
               const commitMatch = result.result.match(/\[[^\]]*\s([a-f0-9]{7,40})\]/);
               if (commitMatch) commitHash = commitMatch[1];
@@ -518,34 +513,14 @@ export const toolsMethods = {
             }
           }
 
-          // Track the task we link to, so auto-complete can reuse it
-          let commitLinkedTask = null;
-          let commitLinkedOwnerAgentId = null;
-
           if (commitHash) {
-            // If explicit taskId provided via @git_commit_push(message, taskId), use it
-            const explicitTaskId = call.tool === 'git_commit_push' ? (call.args[1] || '').trim() : '';
             let targetTask = null;
             let ownerAgentId = agentId;
 
-            if (explicitTaskId) {
-              // Look up the explicit task
-              for (const [creatorId, tasks] of this._tasks) {
-                const found = tasks.find(t => t.id === explicitTaskId) ||
-                              tasks.find(t => t.id.startsWith(explicitTaskId));
-                if (found) { targetTask = found; ownerAgentId = creatorId; break; }
-              }
-              if (!targetTask) {
-                console.warn(`⚠️  [Commit] Explicit taskId "${explicitTaskId}" not found, falling back to auto-detect`);
-              }
-            }
-
-            // Fallback: auto-detect active task
-            if (!targetTask) {
-              const found = await this._findTaskForCommitLink(agentId);
-              targetTask = found?.task || null;
-              ownerAgentId = found?.ownerAgentId || agentId;
-            }
+            // Auto-detect active task
+            const found = await this._findTaskForCommitLink(agentId);
+            targetTask = found?.task || null;
+            ownerAgentId = found?.ownerAgentId || agentId;
 
             if (!targetTask) {
               const taskText = agent.currentTask || commitMsg || 'Commit without task';
@@ -560,68 +535,13 @@ export const toolsMethods = {
             if (targetTask) {
               const linked = this.addTaskCommit(ownerAgentId, targetTask.id, commitHash, commitMsg);
               if (linked) {
-                commitLinkedTask = targetTask;
-                commitLinkedOwnerAgentId = ownerAgentId;
                 console.log(`🔗 [Commit] Auto-linked ${commitHash.slice(0, 7)} to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
                 result.result = `${result.result}\n\n🔗 Commit ${commitHash.slice(0, 8)} automatically linked to task "${targetTask.text?.slice(0, 60)}"`;
               } else {
                 console.warn(`⚠️  [Commit] addTaskCommit failed for ${commitHash.slice(0, 7)} → task "${targetTask.text?.slice(0, 50)}"`);
-                result.result = `${result.result}\n\n⚠️ Auto-linking failed. Try again with explicit taskId: @git_commit_push(${commitMsg.slice(0, 40)}, ${targetTask.id})`;
               }
             } else {
-              const agentTasks = [];
-              for (const [ownerId, tasks] of this._tasks) {
-                for (const t of tasks) {
-                  if (t.assignee === agentId || ownerId === agentId) {
-                    agentTasks.push(t);
-                  }
-                }
-              }
-              if (agentTasks.length > 0) {
-                const taskList = agentTasks.slice(0, 5).map(t =>
-                  `  - ${t.id.slice(0, 8)} → [${t.status}] ${t.text?.slice(0, 50)}`
-                ).join('\n');
-                console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no active task found. Available tasks:\n${taskList}`);
-                result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not auto-linked (no active task). Re-push with explicit taskId: @git_commit_push(message, taskId)`;
-              } else {
-                console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but has no tasks at all`);
-                result.result = `${result.result}\n\n⚠️ Commit ${commitHash.slice(0, 8)} was not linked — no tasks found for this agent.`;
-              }
-            }
-          } else if (call.tool === 'git_commit_push' && result.success) {
-            console.warn(`⚠️  [Commit] Agent "${agent.name}" git_commit_push succeeded but could not extract commit hash from output`);
-          }
-
-          // Auto-complete task after successful git_commit_push
-          // Reuse the task found during commit linking for consistency
-          if (call.tool === 'git_commit_push' && result.success) {
-            const inProgressTask = commitLinkedTask;
-            if (inProgressTask && this._isActiveTaskStatus(inProgressTask.status)) {
-              const autoComment = commitMsg || 'Completed (auto-closed after successful git push)';
-              // Set both legacy in-memory flag AND the signal system for reliable detection
-              inProgressTask._executionCompleted = true;
-              inProgressTask._executionComment = autoComment;
-              setTaskSignal(inProgressTask.id, 'completed', true);
-              setTaskSignal(inProgressTask.id, 'comment', autoComment);
-              // Save the owner agent
-              const ownerAgent = commitLinkedOwnerAgentId ? this.agents.get(commitLinkedOwnerAgentId) : null;
-              if (ownerAgent) {
-                saveAgent(ownerAgent);
-              } else {
-                // Fallback: find the agent that owns this task
-                for (const [ownerId, tasks] of this._tasks) {
-                  if (tasks.includes(inProgressTask)) {
-                    const ag = this.agents.get(ownerId);
-                    if (ag) saveAgent(ag);
-                    break;
-                  }
-                }
-              }
-              console.log(`✅ [AutoComplete] Agent "${agent.name}" git_commit_push → auto-completing task "${inProgressTask.text?.slice(0, 80)}"`);
-              if (streamCallback) {
-                streamCallback(`\n✅ Task auto-completed after successful commit & push.\n`);
-              }
-              result.result = `${result.result}\n\n✅ Task automatically marked as complete.`;
+              console.warn(`⚠️  [Commit] Agent "${agent.name}" committed ${commitHash.slice(0, 7)} but no task found to link`);
             }
           }
         }

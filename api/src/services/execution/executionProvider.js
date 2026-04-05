@@ -150,15 +150,4 @@ export class ExecutionProvider {
     throw new Error('exec() not implemented');
   }
 
-  // ── Git operations ────────────────────────────────────────────────────
-
-  /**
-   * Stage all, commit, pull --rebase, push.
-   * @param {string} agentId
-   * @param {string} message — commit message
-   * @returns {Promise<{ success: boolean, result: string, meta?: { commitHash?: string } }>}
-   */
-  async gitCommitPush(agentId, message) {
-    throw new Error('gitCommitPush() not implemented');
-  }
 }

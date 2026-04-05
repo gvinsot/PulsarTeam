@@ -106,7 +106,7 @@ DEPLOY:
    3. Verify: @mcp_call(PulsarCD Read, list_containers, {}) to check services are running
 
 ## IMPORTANT
-- Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
+- Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.
 - Always check action status after build/test/deploy — do not assume success.`
   },
   {
@@ -126,8 +126,17 @@ DEPLOY:
 - @list_my_tasks() — list your assigned tasks with their status and ID
 - @update_task(taskId, status) — update a task status (any workflow column ID or error)
 - @task_execution_complete(comment, taskId, commits) — signal that your current task is finished (REQUIRED when executing a task). taskId is optional (auto-detected). commits is optional (format: hash:msg, hash:msg — must be already pushed).
-- @git_commit_push(message, taskId) — commit and push changes; optionally specify the taskId to link to
-- Use @run_command to execute git commands
+- Use @run_command to execute git commands and any shell commands
+
+GIT WORKFLOW — use @run_command for all git operations:
+  @run_command(git add -A)
+  @run_command(git commit -m "your message (by YourAgentName)")
+  @run_command(git push)
+  If push fails due to remote changes:
+  @run_command(git pull --rebase)
+  @run_command(git push)
+  IMPORTANT: Always include your agent name in the commit message. Format: "message (by YourName)".
+  Commits from git commands are automatically detected and linked to your current active task.
 
 WORKFLOW:
 1. Always start by exploring the project structure with @list_dir(.)
@@ -143,24 +152,22 @@ IMPORTANT:
 - Do NOT add decorative text before tool calls — just call the tool directly
 - NEVER stop yourself — keep working until the task is fully complete
 - When executing an assigned task, you MUST call @task_execution_complete(summary) when done. The system will not consider your task finished until you call this tool. The system WILL send you reminders if you forget. You can optionally specify the taskId: @task_execution_complete(summary, taskId)
-- COMPLETION SEQUENCE: Always follow this order: 1) @git_commit_push(message) to save and push your work, 2) @task_execution_complete(summary) to signal completion. You can also specify an explicit task: @task_execution_complete(summary, taskId)
-- Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
-- GIT COMMITS: Always include your agent name in the commit message. Format: "message (by YourName)" — use the cli directly.
-- COMMIT TRACKING: When you use @git_commit_push, the commit is automatically linked to your current active task. Use @git_commit_push(message, taskId) to link a commit to a specific task.
+- COMPLETION SEQUENCE: Always follow this order: 1) commit and push with @run_command (git add, git commit, git push), 2) @task_execution_complete(summary) to signal completion. You can also specify an explicit task: @task_execution_complete(summary, taskId)
+- Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.
 
 EXECUTION RULES — follow these steps strictly, one at a time:
 1. EXPLORE: Use @list_dir and @read_file to understand the codebase structure and find the relevant files.
 2. PLAN: Identify what files need to be created or modified.
 3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
 4. VERIFY: Use @read_file to confirm your changes are correct.
-5. COMMIT: Call @git_commit_push(message) to save and push your changes.
+5. COMMIT: Use @run_command with git commands to commit and push: git add -A, git commit -m "message (by YourName)", git push.
 6. COMPLETE: Call @task_execution_complete(summary) to signal you are done.
 
 CRITICAL RULES:
-- You MUST call @write_file BEFORE @git_commit_push. Without @write_file, there are NO changes to commit.
+- You MUST call @write_file BEFORE committing. Without @write_file, there are NO changes to commit.
 - Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
 - Do NOT batch multiple unrelated tools in a single response.
-- Do NOT call @git_commit_push and @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
+- Do NOT call @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
 Call them using the @mcp_call(Code Index, tool_name, {"param": "value"}) syntax.

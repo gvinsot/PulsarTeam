@@ -51,13 +51,6 @@ You can interact with project files using these commands. Use the exact format s
   Use this when you encounter a blocking issue you cannot resolve yourself.
   Example: @report_error(Cannot compile: missing dependency 'express'.)
 
-@git_commit_push(message, taskId) - Stage all changes, commit with the given message, and push to remote
-  Commits are automatically linked to your current active task.
-  - message: (required) The commit message.
-  - taskId: (optional) The task ID to link the commit to. If omitted, the commit is linked to your current active task.
-  Example: @git_commit_push(feat: add user authentication)
-  Example with explicit task: @git_commit_push(feat: add login page, abc-123)
-
 @task_execution_complete(comment, taskId, commits) - Signal that you have finished executing your current task
   You MUST call this tool when you are done with your assigned task. Provide a brief summary of what was accomplished.
   Until you call this, the system will consider your task still in progress and will send you reminders.
@@ -65,9 +58,9 @@ You can interact with project files using these commands. Use the exact format s
   - comment: (required) A brief summary of what was accomplished.
   - taskId: (optional) The task ID to mark as complete. If omitted, the system auto-detects your current active task.
   - commits: (optional) A comma-separated list of commit hashes with messages, format: hash:message, hash:message
-    IMPORTANT: The commit hashes MUST refer to commits that have already been pushed (via @git_commit_push).
+    IMPORTANT: The commit hashes MUST refer to commits that have already been pushed.
     When provided, these commits are linked to the task automatically.
-    If omitted, any commits already pushed via @git_commit_push are already auto-linked.
+    If omitted, any commits already pushed are already auto-linked.
   Example: @task_execution_complete(Implemented user auth with JWT tokens, all tests passing.)
   Example with explicit task: @task_execution_complete(Implemented auth, abc-123)
   Example with commits: @task_execution_complete(Implemented user auth, abc-123, a1b2c3d:feat: add JWT auth, e4f5g6h:fix: token expiry)
@@ -80,14 +73,14 @@ IMPORTANT:
 - Each tool call MUST be on its own line, with an empty line before and after it
 - Do NOT add decorative text like "Editing file..." or "Now I'll read..." before tool calls — just call the tool directly
 - NEVER stop yourself with messages like "[Agent stopped after N turns]" or "I'll stop here" — you have NO turn limit. Keep working until the task is fully complete.
-- Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.
+- Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.
 - WORKFLOW — You MUST follow these steps IN ORDER when executing a task:
   1. READ: Explore the codebase with @read_file, @list_dir, @search_files to understand the current state
   2. WRITE: Make all necessary changes using @write_file or @append_file
   3. VERIFY: Read back modified files to confirm correctness
-  4. COMMIT: @git_commit_push(message) — save and push your work
+  4. COMMIT: Use @run_command with git commands to commit and push your work
   5. COMPLETE: @task_execution_complete(summary) — signal completion to the system
-  CRITICAL: You MUST call @write_file BEFORE @git_commit_push. A commit without prior @write_file calls means NOTHING was changed.
+  CRITICAL: You MUST call @write_file BEFORE committing. A commit without prior @write_file calls means NOTHING was changed.
   CRITICAL: Call tools ONE STEP AT A TIME. Do NOT batch all tools in a single response — wait for each tool result before proceeding to the next step.
 `;
 
@@ -180,9 +173,6 @@ export async function executeTool(toolName, args, projectPath, provider, agentId
 
       case 'append_file':
         return await toolAppendFile(provider, agentId, normalizePath(cleanArgs[0]), cleanArgs[1]);
-
-      case 'git_commit_push':
-        return await provider.gitCommitPush(agentId, cleanArgs[0]);
 
       default:
         return { success: false, error: `Unknown tool: ${toolName}` };
@@ -398,7 +388,7 @@ async function toolAppendFile(provider, agentId, filePath, content) {
 
 // ─── Tool Call Parsing ──────────────────────────────────────────────────────
 
-const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'git_commit_push', 'update_task', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'task_execution_complete'];
+const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'update_task', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'task_execution_complete'];
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
 function jsonToToolCall(name, args) {
@@ -418,8 +408,6 @@ function jsonToToolCall(name, args) {
       return { tool: 'search_files', args: [args.pattern || args.glob || '*', args.query || args.search || ''] };
     case 'report_error':
       return { tool: 'report_error', args: [args.description || args.message || args.error || ''] };
-    case 'git_commit_push':
-      return { tool: 'git_commit_push', args: [args.message || args.msg || '', args.taskId || args.task_id || ''] };
     case 'update_task':
       return { tool: 'update_task', args: [args.taskId || args.task_id || args.id || '', args.status || '', args.details || args.detail || args.message || ''] };
     case 'list_my_tasks':
@@ -542,7 +530,7 @@ export function parseToolCalls(response) {
 
   const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'list_my_tasks', 'list_projects', 'check_status', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata'];
   const READ_FILE_TOOLS = ['read_file'];  // 1-arg or 3-arg (path, startLine, endLine)
-  const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'git_commit_push'];
+  const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files'];
   const THREE_ARG_TOOLS = ['mcp_call', 'update_task', 'task_execution_complete'];
   const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...READ_FILE_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
   const toolStartPattern = new RegExp(`@(${ALL_TOOL_NAMES.join('|')})\\s*\\(`, 'gi');

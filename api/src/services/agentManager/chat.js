@@ -185,7 +185,7 @@ export const chatMethods = {
       // ── Transient stream error → retry with backoff ──
       const isUserStop = err.message === 'Agent stopped by user';
       const isAuthError = err.status === 401 || err.status === 403;
-      const hasPartialToolCalls = fullResponse && /@(read_file|write_file|list_dir|search_files|run_command|append_file|git_commit_push|mcp_call|report_error|task_execution_complete)\b/i.test(fullResponse);
+      const hasPartialToolCalls = fullResponse && /@(read_file|write_file|list_dir|search_files|run_command|append_file|mcp_call|report_error|task_execution_complete)\b/i.test(fullResponse);
       const isTransient = !isUserStop && !isAuthError && !err.isRateLimit && !this._isContextExceededError(err.message);
       const MAX_STREAM_RETRIES = 3;
       const retryCount = agent._streamRetryCount || 0;
@@ -360,7 +360,7 @@ export const chatMethods = {
     } else {
       systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is assigned yet. Use @list_dir(.) to discover available projects. IMPORTANT: You MUST navigate into a project folder before working. Always prefix paths with the project name (e.g. @read_file(my-project/src/index.js), @list_dir(my-project/src)). Do NOT create or modify files at the workspace root — always work inside a project directory.`;
     }
-    systemContent += `\nIMPORTANT: Your workspace is EPHEMERAL. Always @git_commit_push(message) after completing changes to preserve your work.`;
+    systemContent += `\nIMPORTANT: Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.`;
     systemContent += `\n${TOOL_DEFINITIONS}`;
     systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
     systemContent += `\n\nIMPORTANT CONTINUATION RULE: When you receive a message starting with "[TOOL RESULTS", these are the results of tools YOU previously called. Do NOT restart your reasoning from scratch. Do NOT re-call the same tools. Analyze the results and proceed to the NEXT step of your plan.`;
@@ -1064,7 +1064,7 @@ export const chatMethods = {
         const nonTerminal = toolResults.filter(r => !r.isTerminal);
         // If any tool signaled terminal (e.g. @task_execution_complete), stop
         // the continuation loop even if there were other non-terminal results
-        // (e.g. git_commit_push). Those tools already executed; sending their
+        // (e.g. run_command). Those tools already executed; sending their
         // output back to the LLM only causes it to loop and re-call the same
         // terminal tool repeatedly.
         if (hasTerminal || nonTerminal.length === 0) {
@@ -1084,7 +1084,7 @@ export const chatMethods = {
 
         const hasErrorReports = nonTerminal.some(r => r.isErrorReport);
         const hasRealErrors = nonTerminal.some(r => !r.success && !r.isErrorReport);
-        const hasSuccessfulCommit = nonTerminal.some(r => r.tool === 'git_commit_push' && r.success);
+        const hasSuccessfulCommit = nonTerminal.some(r => r.tool === 'run_command' && r.success && (r.args[0] || '').toLowerCase().includes('git push'));
         let continuationPrompt = '\nThese are the results of the tools YOU just called. Continue your work based on these results. Do NOT re-explain your plan or re-call the same tools — use the output above and proceed to the next step.';
         // Remind the LLM of the original task/user message to prevent it from
         // losing context across multiple tool-result iterations.
@@ -1097,7 +1097,7 @@ export const chatMethods = {
         } else if (hasRealErrors) {
           continuationPrompt = '\nSome tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
         } else if (hasSuccessfulCommit) {
-          continuationPrompt = '\n Your code has been committed, pushed, and the task has been auto-completed. Provide a brief summary of what was accomplished.';
+          continuationPrompt = '\nYour code has been committed and pushed. Now call @task_execution_complete(summary) to signal that your task is done.';
         }
 
         const continuedResponse = await this.sendMessage(

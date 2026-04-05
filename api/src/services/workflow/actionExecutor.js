@@ -79,14 +79,14 @@ EXECUTION RULES — follow these steps strictly, one at a time:
 2. PLAN: Identify what files need to be created or modified.
 3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
 4. VERIFY: Use @read_file to confirm your changes are correct.
-5. COMMIT: Call @git_commit_push(message) to save and push your changes.
+5. COMMIT: Use @run_command with git commands to commit and push: git add -A, git commit -m "message (by YourName)", git push.
 6. COMPLETE: Call @task_execution_complete(summary) to signal you are done.
 
 CRITICAL RULES:
-- You MUST call @write_file BEFORE @git_commit_push. Without @write_file, there are NO changes to commit.
+- You MUST call @write_file BEFORE committing. Without @write_file, there are NO changes to commit.
 - Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
 - Do NOT batch multiple unrelated tools in a single response.
-- Do NOT call @git_commit_push and @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
+- Do NOT call @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
 
 Start by exploring the project structure.`;
 }
@@ -100,7 +100,7 @@ export function stripToolCalls(text) {
   let cleaned = text.replace(/<tool_call>\s*[\s\S]*?\s*<\/tool_call>/gi, '');
   const TOOL_NAMES = [
     'read_file', 'write_file', 'append_file', 'list_dir', 'search_files',
-    'run_command', 'report_error', 'git_commit_push', 'mcp_call',
+    'run_command', 'report_error', 'mcp_call',
     'update_task', 'list_my_tasks', 'list_projects', 'check_status',
     'task_execution_complete', 'get_action_status', 'build_stack', 'test_stack',
     'deploy_stack', 'list_stacks', 'list_containers', 'list_computers',

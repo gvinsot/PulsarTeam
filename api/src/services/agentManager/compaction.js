@@ -271,7 +271,7 @@ export const compactionMethods = {
           });
           const cmds = content.match(/@run_command\(([^)]{1,200})\)/g);
           if (cmds) commandsRun.push(...cmds.slice(0, 3).map(c => c.slice(13, -1).slice(0, 80)));
-          const otherTools = content.match(/@(?:search_files|list_dir|append_file|git_commit_push|mcp_call)\([^)]{0,80}\)/g);
+          const otherTools = content.match(/@(?:search_files|list_dir|append_file|mcp_call)\([^)]{0,80}\)/g);
           if (otherTools) toolCalls.push(...otherTools.slice(0, 5));
         } else if (m.role === 'user') {
           if (content.includes('Error') || content.includes('error') || content.includes('failed')) {

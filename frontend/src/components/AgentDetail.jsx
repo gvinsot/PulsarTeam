@@ -113,7 +113,7 @@ export function cleanToolSyntax(text) {
   cleaned = cleaned.replace(/\n?\[Executing: @(?:read_file|write_file|list_dir|search_files|run_command|append_file)\([^)]*\)\.{3}\]\n?/gi, '');
 
   // Use balanced parser to find and replace @tool(...) calls
-  const ALL_TOOLS = 'read_file|write_file|append_file|list_dir|search_files|run_command|report_error|git_commit_push|task_execution_complete|list_my_tasks|check_status|list_projects|mcp_call|update_task';
+  const ALL_TOOLS = 'read_file|write_file|append_file|list_dir|search_files|run_command|report_error|task_execution_complete|list_my_tasks|check_status|list_projects|mcp_call|update_task';
   const toolPattern = new RegExp(`@(${ALL_TOOLS})\\s*\\(`, 'gi');
   let m;
   // Process from end to start so replacements don't shift indices
@@ -159,9 +159,6 @@ export function cleanToolSyntax(text) {
     } else if (toolName === 'report_error') {
       const desc = _stripWrapperQuotes(argsString);
       replacement = `\n> 🚨 **Error reported:** ${desc}\n`;
-    } else if (toolName === 'git_commit_push') {
-      const msg = _stripWrapperQuotes(argsString);
-      replacement = `\n> ✓ **Git commit & push:** ${msg}\n`;
     } else if (toolName === 'task_execution_complete') {
       const summary = _stripWrapperQuotes(argsString);
       replacement = `\n> ✅ **Task complete:** ${summary}\n`;
@@ -964,7 +961,6 @@ function ToolResultItem({ result }) {
 function isGitOutput(tool, args, output) {
   const cmd = (args || []).join(' ').toLowerCase();
   if (tool === 'run_command' && /^git\s/.test(cmd)) return true;
-  if (tool === 'git_commit_push') return true;
   // Detect git-like output by content heuristics
   if (typeof output === 'string' && (
     output.match(/^commit [0-9a-f]{7,40}/m) ||

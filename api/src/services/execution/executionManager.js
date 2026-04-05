@@ -147,10 +147,6 @@ export class ExecutionManager {
     return this._providerFor(agentId).exec(agentId, command, options);
   }
 
-  async gitCommitPush(agentId, message) {
-    return this._providerFor(agentId).gitCommitPush(agentId, message);
-  }
-
   // ── Backward compatibility aliases ────────────────────────────────────
   // Allow drop-in replacement where code still calls sandboxManager methods.
 
