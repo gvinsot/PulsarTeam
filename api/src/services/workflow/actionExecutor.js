@@ -74,20 +74,6 @@ Task ID: ${task.id}
 Task: ${task.text}
 ${task.error ? `Previous error: ${task.error}` : ''}
 
-EXECUTION RULES — follow these steps strictly, one at a time:
-1. EXPLORE: Use @list_dir and @read_file to understand the codebase structure and find the relevant files.
-2. PLAN: Identify what files need to be created or modified.
-3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
-4. VERIFY: Use @read_file to confirm your changes are correct.
-5. COMMIT: Use @run_command with git commands to commit and push: git add -A, git commit -m "message (by YourName)", git push.
-6. COMPLETE: Call @task_execution_complete(summary) to signal you are done.
-
-CRITICAL RULES:
-- You MUST call @write_file BEFORE committing. Without @write_file, there are NO changes to commit.
-- Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
-- Do NOT batch multiple unrelated tools in a single response.
-- Do NOT call @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
-
 Start by exploring the project structure.`;
 }
 
