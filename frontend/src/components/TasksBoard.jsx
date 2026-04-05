@@ -3183,8 +3183,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
       {/* Commit diff modal from card badge */}
       {commitModalTask && commitModalTask.commits?.length > 0 && (
         <AllCommitsDiffModal
-          task={commitModalTask}
-          agentId={commitModalTask.agentId}
+          taskId={commitModalTask.id}
+          commits={commitModalTask.commits}
           onClose={() => setCommitModalTask(null)}
         />
       )}
