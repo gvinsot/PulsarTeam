@@ -193,7 +193,7 @@ export default function AllCommitsDiffModal({ taskId, commits, onClose, initialH
   const totalFiles = Object.values(diffs).reduce((s, d) => s + (d?.files?.length || 0), 0);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
       <div
         ref={modalRef}
         className="bg-gray-900 border border-white/10 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col"
