@@ -125,6 +125,17 @@ export default function App() {
       lastAgentJson.current.set(agent.id, json);
 
       setAgents(prev => prev.map(a => a.id === agent.id ? agent : a));
+      // Safety net: clear thinking when agent data shows it's no longer busy.
+      // This handles cases where agent:stream:end was missed (other clients,
+      // workflow-triggered executions, socket reconnections).
+      if (agent.status !== 'busy') {
+        setThinkingMap(prev => {
+          if (!(agent.id in prev)) return prev;
+          const copy = { ...prev };
+          delete copy[agent.id];
+          return copy;
+        });
+      }
       // When an agent's stream just ended, clear its buffer atomically
       // with the history update so the message never disappears.
       if (streamEndedAgents.current.has(agent.id)) {
@@ -139,6 +150,16 @@ export default function App() {
     sock.on('agent:deleted', ({ id }) => setAgents(prev => prev.filter(a => a.id !== id)));
     sock.on('agent:status', ({ id, status }) => {
       setAgents(prev => prev.map(a => a.id === id ? { ...a, status } : a));
+      // When agent goes idle or error, clear stale thinking state so the
+      // card doesn't keep showing "busy" after the agent has finished.
+      if (status !== 'busy') {
+        setThinkingMap(prev => {
+          if (!(id in prev)) return prev;
+          const copy = { ...prev };
+          delete copy[id];
+          return copy;
+        });
+      }
     });
 
     sock.on('agent:thinking', ({ agentId, thinking }) => {
@@ -192,6 +213,12 @@ export default function App() {
         'error',
         isModelError ? 0 : 8000
       );
+      setThinkingMap(prev => {
+        if (!(agentId in prev)) return prev;
+        const copy = { ...prev };
+        delete copy[agentId];
+        return copy;
+      });
       setStreamBuffers(prev => {
         const copy = { ...prev };
         delete copy[agentId];

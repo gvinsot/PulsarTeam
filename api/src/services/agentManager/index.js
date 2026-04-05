@@ -221,15 +221,20 @@ export class AgentManager {
 
     if (event === 'agent:updated' && data?.id) {
       const agentId = data.id;
-      this._updatePending.set(agentId, data);
+      // Mark that an update is pending — we always re-sanitize the current
+      // agent state when emitting to avoid sending stale snapshots.
+      this._updatePending.set(agentId, true);
       if (this._updateTimers.has(agentId)) return;
 
       const timer = setTimeout(() => {
         this._updateTimers.delete(agentId);
-        const pendingData = this._updatePending.get(agentId);
+        const wasPending = this._updatePending.has(agentId);
         this._updatePending.delete(agentId);
-        if (pendingData) {
-          this._emitToOwner(event, pendingData);
+        if (wasPending) {
+          const agent = this.agents.get(agentId);
+          if (agent) {
+            this._emitToOwner(event, this._sanitize(agent));
+          }
         }
       }, 300);
       this._updateTimers.set(agentId, timer);
@@ -269,10 +274,14 @@ export class AgentManager {
       clearTimeout(timer);
       this._updateTimers.delete(agentId);
     }
-    const pendingData = this._updatePending.get(agentId);
+    const wasPending = this._updatePending.has(agentId);
     this._updatePending.delete(agentId);
-    if (pendingData && this.io) {
-      this._emitToOwner('agent:updated', pendingData);
+    if (wasPending && this.io) {
+      // Always emit the CURRENT agent state to avoid stale snapshots
+      const agent = this.agents.get(agentId);
+      if (agent) {
+        this._emitToOwner('agent:updated', this._sanitize(agent));
+      }
     }
   }
 

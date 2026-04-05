@@ -698,10 +698,6 @@ export const lifecycleMethods = {
       isLeader: agent.isLeader || false
     });
 
-    if (status === 'idle' || status === 'error') {
-      this._flushAgentUpdate(id);
-    }
-
     if (status === 'busy' && prev !== 'busy') {
       const taskInfo = agent.currentTask ? ` — ${agent.currentTask.slice(0, 150)}` : '';
       this.addActionLog(id, 'busy', (detail || 'Agent started working') + taskInfo);
@@ -711,6 +707,12 @@ export const lifecycleMethods = {
     } else if (status === 'error') {
       this.addActionLog(id, 'error', 'Agent encountered an error', detail);
       this._recheckConditionalTransitions();
+    }
+
+    // Flush AFTER addActionLog so the emitted data includes the new log
+    // entry and the current agent state (not a stale snapshot).
+    if (status === 'idle' || status === 'error') {
+      this._flushAgentUpdate(id);
     }
   },
 
