@@ -1169,10 +1169,60 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
   const longPressTimerRef = useRef(null);
   const longPressArmedRef = useRef(false);
   const autoScrollRef = useRef(null);
+  // Refs for native touch listeners (avoid stale closures)
+  const onTouchDropRef = useRef(onTouchDrop);
+  const taskRef = useRef(task);
+  useEffect(() => { onTouchDropRef.current = onTouchDrop; }, [onTouchDrop]);
+  useEffect(() => { taskRef.current = task; }, [task]);
 
   const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
 
-  // Attach non-passive touchmove listener so preventDefault() works on mobile
+  // Find which column contains a given viewport coordinate using bounding rects.
+  // More reliable on mobile than elementFromPoint (no z-index / pointer-events issues).
+  function getColumnAtPoint(x, y) {
+    const cols = document.querySelectorAll('[data-column-id]');
+    for (const col of cols) {
+      const r = col.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+        return col;
+      }
+    }
+    return null;
+  }
+
+  function highlightColumn(colEl) {
+    document.querySelectorAll('[data-column-id]').forEach(c => c.classList.remove('touch-drag-over'));
+    if (colEl) colEl.classList.add('touch-drag-over');
+  }
+
+  // Shared drop cleanup + execution (used by both touchend and touchcancel)
+  function finalizeTouchDrop(touchX, touchY) {
+    const t = taskRef.current;
+    if (!touchDragRef.current) return;
+    if (!touchDragRef.current.started) { isDraggingRef.current = false; touchDragRef.current = null; return; }
+
+    // Remove ghost
+    if (touchDragRef.current.ghost) touchDragRef.current.ghost.remove();
+    highlightColumn(null);
+
+    // Determine target column: prefer lastColumnId stored during touchmove
+    let dropColId = touchDragRef.current.lastColumnId || null;
+    // Fallback: use bounding rect check at the final touch coordinates
+    if (!dropColId && touchX != null && touchY != null) {
+      const col = getColumnAtPoint(touchX, touchY);
+      if (col) dropColId = col.getAttribute('data-column-id');
+    }
+
+    if (dropColId) {
+      onTouchDropRef.current(t.agentId, t.id, dropColId);
+    }
+    setTimeout(() => { isDraggingRef.current = false; }, 50);
+    touchDragRef.current = null;
+  }
+
+  // Attach native touch listeners so preventDefault() works AND events fire
+  // even when the browser's scroll container intercepts the gesture.
+  // React synthetic onTouchEnd/onTouchCancel can be silently swallowed on mobile.
   useEffect(() => {
     const el = cardRef.current;
     if (!el) return;
@@ -1242,14 +1292,9 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
           const tick = () => {
             scrollEl.scrollLeft += direction * scrollSpeed;
             // Update column highlight during auto-scroll (finger is stationary but board scrolls)
-            const ghostEl = touchDragRef.current?.ghost;
-            if (ghostEl) ghostEl.style.display = 'none';
-            const el2 = document.elementFromPoint(touchX, touchY);
-            if (ghostEl) ghostEl.style.display = '';
-            const col2 = el2?.closest?.('[data-column-id]');
+            const col2 = getColumnAtPoint(touchX, touchY);
             if (col2 && touchDragRef.current) {
-              document.querySelectorAll('[data-column-id]').forEach(c => c.classList.remove('touch-drag-over'));
-              col2.classList.add('touch-drag-over');
+              highlightColumn(col2);
               touchDragRef.current.lastColumnId = col2.getAttribute('data-column-id');
             }
             autoScrollRef.current = requestAnimationFrame(tick);
@@ -1264,25 +1309,53 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
         }
       }
 
-      // Highlight the column under the touch point
-      // Hide ghost temporarily so elementFromPoint sees through it (some mobile browsers ignore pointer-events:none)
-      const ghost = touchDragRef.current.ghost;
-      if (ghost) ghost.style.display = 'none';
-      const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
-      if (ghost) ghost.style.display = '';
-      const colUnder = elemUnder?.closest?.('[data-column-id]');
-      document.querySelectorAll('[data-column-id]').forEach(colEl => {
-        colEl.classList.remove('touch-drag-over');
-      });
+      // Highlight the column under the touch point using bounding rects (reliable on mobile)
+      const colUnder = getColumnAtPoint(touch.clientX, touch.clientY);
+      highlightColumn(colUnder);
       if (colUnder) {
-        colUnder.classList.add('touch-drag-over');
-        // Store last known column for reliable drop in touchend
         touchDragRef.current.lastColumnId = colUnder.getAttribute('data-column-id');
       }
     };
 
+    // Native touchend — fires reliably even when React synthetic events are swallowed
+    const handleTouchEnd = (e) => {
+      // Stop auto-scroll
+      if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
+      if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+      if (cardRef.current) {
+        cardRef.current.style.transform = '';
+        cardRef.current.style.transition = '';
+        cardRef.current.style.touchAction = '';
+        cardRef.current.style.opacity = '';
+      }
+      longPressArmedRef.current = false;
+      const touch = e.changedTouches?.[0];
+      finalizeTouchDrop(touch?.clientX ?? null, touch?.clientY ?? null);
+    };
+
+    // Native touchcancel — mobile browsers fire this instead of touchend when they take over the gesture
+    const handleTouchCancel = () => {
+      if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
+      if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+      if (cardRef.current) {
+        cardRef.current.style.transform = '';
+        cardRef.current.style.transition = '';
+        cardRef.current.style.touchAction = '';
+        cardRef.current.style.opacity = '';
+      }
+      longPressArmedRef.current = false;
+      // touchcancel has no reliable coordinates — rely solely on lastColumnId
+      finalizeTouchDrop(null, null);
+    };
+
     el.addEventListener('touchmove', handleTouchMove, { passive: false });
-    return () => el.removeEventListener('touchmove', handleTouchMove);
+    el.addEventListener('touchend', handleTouchEnd, { passive: false });
+    el.addEventListener('touchcancel', handleTouchCancel);
+    return () => {
+      el.removeEventListener('touchmove', handleTouchMove);
+      el.removeEventListener('touchend', handleTouchEnd);
+      el.removeEventListener('touchcancel', handleTouchCancel);
+    };
   }, []);
 
   return (
@@ -1324,102 +1397,6 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
             cardRef.current.style.touchAction = 'none'; // Prevent browser from hijacking touch
           }
         }, 500);
-      }}
-      onTouchEnd={(e) => {
-        // Stop auto-scroll
-        if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
-        // Clear long-press timer if still pending
-        if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-        // Reset visual feedback from long-press arming
-        if (cardRef.current) {
-          cardRef.current.style.transform = '';
-          cardRef.current.style.transition = '';
-          cardRef.current.style.touchAction = '';
-        }
-        longPressArmedRef.current = false;
-
-        if (!touchDragRef.current) return;
-
-        // Restore original card opacity
-        if (cardRef.current) cardRef.current.style.opacity = '';
-
-        if (touchDragRef.current.started) {
-          // Remove ghost
-          if (touchDragRef.current.ghost) {
-            touchDragRef.current.ghost.remove();
-          }
-
-          // Clear all highlights
-          document.querySelectorAll('[data-column-id]').forEach(el => {
-            el.classList.remove('touch-drag-over');
-          });
-
-          // Find drop target — prefer stored column from last touchmove (more reliable on mobile)
-          let dropColId = touchDragRef.current.lastColumnId || null;
-          let dropColEl = dropColId ? document.querySelector(`[data-column-id="${dropColId}"]`) : null;
-          // Fallback: try elementFromPoint with touchend coordinates
-          if (!dropColEl) {
-            const touch = e.changedTouches?.[0];
-            if (touch) {
-              const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
-              dropColEl = elemUnder?.closest?.('[data-column-id]');
-              if (dropColEl) dropColId = dropColEl.getAttribute('data-column-id');
-            }
-          }
-          console.log('[TaskCard] touchEnd drop:', { dropColId, taskId: task.id, agentId: task.agentId });
-          if (dropColId) {
-            onTouchDrop(task.agentId, task.id, dropColId);
-          }
-
-          // Prevent click after drag
-          setTimeout(() => { isDraggingRef.current = false; }, 50);
-        } else {
-          isDraggingRef.current = false;
-        }
-
-        touchDragRef.current = null;
-      }}
-      onTouchCancel={() => {
-        // Stop auto-scroll
-        if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
-        // Mobile browsers fire touchcancel instead of touchend when they take over the gesture
-        // We must handle the drop here too, using lastColumnId stored during touchmove
-        if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-        if (cardRef.current) {
-          cardRef.current.style.transform = '';
-          cardRef.current.style.transition = '';
-          cardRef.current.style.touchAction = '';
-          cardRef.current.style.opacity = '';
-        }
-        longPressArmedRef.current = false;
-
-        if (!touchDragRef.current) return;
-
-        if (touchDragRef.current.started) {
-          if (touchDragRef.current.ghost) {
-            touchDragRef.current.ghost.remove();
-          }
-          document.querySelectorAll('[data-column-id]').forEach(el => {
-            el.classList.remove('touch-drag-over');
-          });
-
-          // Use lastColumnId — touchcancel has no reliable coordinates
-          const dropColId = touchDragRef.current.lastColumnId || null;
-          if (dropColId) {
-            onTouchDrop(task.agentId, task.id, dropColId);
-          }
-          setTimeout(() => { isDraggingRef.current = false; }, 50);
-        } else {
-          isDraggingRef.current = false;
-        }
-
-        touchDragRef.current = null;
       }}
       onClick={() => { if (!isDraggingRef.current) onOpen(task); }}
       className={`group/card bg-dark-800 rounded-lg border p-3 cursor-pointer
