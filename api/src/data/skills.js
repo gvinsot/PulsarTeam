@@ -148,6 +148,20 @@ IMPORTANT:
 - GIT COMMITS: Always include your agent name in the commit message. Format: "message (by YourName)" — use the cli directly.
 - COMMIT TRACKING: When you use @git_commit_push, the commit is automatically linked to your current active task. Use @git_commit_push(message, taskId) to link a commit to a specific task.
 
+EXECUTION RULES — follow these steps strictly, one at a time:
+1. EXPLORE: Use @list_dir and @read_file to understand the codebase structure and find the relevant files.
+2. PLAN: Identify what files need to be created or modified.
+3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
+4. VERIFY: Use @read_file to confirm your changes are correct.
+5. COMMIT: Call @git_commit_push(message) to save and push your changes.
+6. COMPLETE: Call @task_execution_complete(summary) to signal you are done.
+
+CRITICAL RULES:
+- You MUST call @write_file BEFORE @git_commit_push. Without @write_file, there are NO changes to commit.
+- Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
+- Do NOT batch multiple unrelated tools in a single response.
+- Do NOT call @git_commit_push and @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
+
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
 Call them using the @mcp_call(Code Index, tool_name, {"param": "value"}) syntax.
 
