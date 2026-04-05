@@ -147,6 +147,10 @@ app.all('/api/code-index/mcp', authenticateToken, (req, res) => codeIndexMcpHand
 const gandiDnsMcpHandler = createGandiDnsMcpHandler(mcpManager);
 app.all('/api/gandi-dns/mcp', authenticateToken, (req, res) => gandiDnsMcpHandler(req, res));
 
+// Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
+const swarmApiMcpInternalHandler = createSwarmApiMcpHandler(agentManager);
+app.all('/api/swarm-api/mcp', authenticateToken, (req, res) => swarmApiMcpInternalHandler(req, res));
+
 // External Swarm API — secured via API key (Bearer token)
 const swarmApiMcpHandler = createSwarmApiMcpHandler(agentManager);
 app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(req, res));

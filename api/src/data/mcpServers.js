@@ -48,5 +48,15 @@ export const BUILTIN_MCP_SERVERS = [
     apiKey: '',
     builtin: true,
     enabled: true,
+  },
+  {
+    id: 'mcp-swarm-api',
+    name: 'Swarm API',
+    url: '__internal__swarm_api',
+    description: 'Swarm management — list agents, check agent status, list boards, add tasks to agents',
+    icon: '👥',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
   }
 ];

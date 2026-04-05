@@ -184,11 +184,52 @@ RECOMMENDED WORKFLOW:
   {
     "id": "skill-delegation",
     "name": "Delegation & Management",
-    "description": "Delegate tasks to other agents, assign projects, and manage agent context",
+    "description": "Manage agents and create tasks via the Swarm API MCP tools",
     "category": "general",
     "icon": "👥",
     "builtin": true,
-    "instructions": "You can delegate tasks to other agents and manage them.\\n\\n## DELEGATION\\n@delegate(AgentName, \"detailed task description with specific file paths when possible\")\\n\\nExamples:\\n@delegate(Developer, \"Read the auth module at src/auth/ and implement password reset functionality\")\\n@delegate(Security Analyst, \"Scan the codebase for SQL injection vulnerabilities and fix any found\")\\n@delegate(QA Engineer, \"Write unit tests for the user service and run them\")\\n\\nPlease do one delegate per task.\\nAfter delegations complete, you will receive the results and should synthesize them.\\n\\n## PROJECT ASSIGNMENT\\n@assign_project(AgentName, \"project_name\") — Assign an agent to a project so they can use file and command tools on it. Context is automatically saved and restored per-project.\\n\\nExample:\\n@assign_project(Developer, \"MyWebApp\")\\n\\n## AGENT MANAGEMENT\\n@get_project(AgentName) — Check which project an agent is currently working on.\\n@clear_context(AgentName) — Clear an agent's conversation history for a fresh start.\\n@rollback(AgentName, X) — Remove the last X messages from an agent's history.\\n@stop_agent(AgentName) — Stop an agent's current task immediately.\\n@list_projects() — List all available projects.\\n@list_agents() — List all enabled agents with their current status, project, role, and current task (if busy).\\n@agent_status(AgentName) — Check a specific agent's status (busy/idle/error), project, current task, pending tasks, and message count.\\n@clear_all_chats() — Clear ALL agents' conversation histories at once.\\n@clear_all_action_logs() — Clear ALL agents' action logs at once.\\n@get_available_agent(role) — Get the first idle agent with the specified role (e.g. \"developer\"). Returns agent name, status, and project.\\n\\nExamples:\\n@get_project(Developer)\\n@clear_context(QA Engineer)\\n@rollback(Developer, 4)\\n@stop_agent(Developer)\\n@list_projects()\\n@list_agents()\\n@agent_status(Developer)\\n@clear_all_chats()\\n@clear_all_action_logs()\\n@get_available_agent(developer)"
+    "mcpServerIds": [
+      "mcp-swarm-api"
+    ],
+    "instructions": `You can manage agents and delegate work using the Swarm API MCP tools.
+
+The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
+Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax shown there.
+
+## AVAILABLE TOOLS
+
+@mcp_call(Swarm API, list_agents, {})
+  — List all agents with their status, role, project, current task, and open task count.
+  Optional filters: {"project": "MyApp"} or {"status": "idle"}.
+
+@mcp_call(Swarm API, get_agent_status, {"agent_name": "Developer"})
+  — Get detailed status for a specific agent: current task, full task list, metrics.
+  Use agent_name or agent_id.
+
+@mcp_call(Swarm API, list_boards, {})
+  — List all task boards with their workflow columns. Use this to discover board IDs before adding tasks.
+
+@mcp_call(Swarm API, add_task, {"agent_name": "Developer", "task": "Implement password reset in src/auth/"})
+  — Add a task to an agent's queue. The agent will pick it up and execute it autonomously.
+  Optional: project, status (workflow column), board_id.
+
+## DELEGATION WORKFLOW
+
+1. First, check available agents:
+   @mcp_call(Swarm API, list_agents, {"status": "idle"})
+
+2. Then assign tasks to the right agents:
+   @mcp_call(Swarm API, add_task, {"agent_name": "Developer", "task": "Read src/auth/ and implement password reset", "project": "MyApp"})
+   @mcp_call(Swarm API, add_task, {"agent_name": "QA Engineer", "task": "Write unit tests for the user service", "project": "MyApp"})
+
+3. Monitor progress:
+   @mcp_call(Swarm API, get_agent_status, {"agent_name": "Developer"})
+
+## IMPORTANT
+- Tasks are executed asynchronously — agents pick them up from their queue and work autonomously.
+- Use list_boards to discover board IDs if you need to target a specific board.
+- If multiple boards exist, you must provide board_id when adding tasks.
+- Check agent status to monitor task progress and verify completion.`
   },
   {
     "id": "skill-onedrive",
