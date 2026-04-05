@@ -1160,7 +1160,7 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
 
 // ── TaskCard ────────────────────────────────────────────────────────────────
 
-function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent }) {
+function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
   const isError = task.status === 'error';
   const today = isToday(task.createdAt);
   const isDraggingRef = useRef(false);
@@ -1486,7 +1486,7 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
           </span>
         )}
         {task.commits && task.commits.length > 0 && (
-          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
+          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 cursor-pointer hover:bg-amber-500/20 transition-colors" onClick={(e) => { e.stopPropagation(); onOpenCommits?.(task); }}>
             <GitCommit className="w-2.5 h-2.5" />
             {task.commits.length}
           </span>
@@ -1615,7 +1615,7 @@ function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onS
 
 // ── KanbanColumn ────────────────────────────────────────────────────────────
 
-function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent }) {
+function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
   const { theme } = useTheme();
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
@@ -1688,6 +1688,7 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
             showTaskType={showTaskType}
             onTouchDrop={onTouchDrop}
             onNavigateToAgent={onNavigateToAgent}
+            onOpenCommits={onOpenCommits}
           />
         ))}
         {tasks.length === 0 && (
@@ -2605,6 +2606,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('date_desc');
   const [selectedTask, setSelectedTask] = useState(null);
+  const [commitModalTask, setCommitModalTask] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createDefaultStatus, setCreateDefaultStatus] = useState(null);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
@@ -3093,6 +3095,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
               showTaskType={col.showTaskType}
               onTouchDrop={handleTouchDrop}
               onNavigateToAgent={onNavigateToAgent}
+              onOpenCommits={setCommitModalTask}
             />
           ))}
         </div>
@@ -3173,6 +3176,15 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         <ShareBoardModal
           board={shareBoard}
           onClose={() => setShareBoard(null)}
+
+      {/* Commit diff modal from card badge */}
+      {commitModalTask && commitModalTask.commits?.length > 0 && (
+        <AllCommitsDiffModal
+          task={commitModalTask}
+          agentId={commitModalTask.agentId}
+          onClose={() => setCommitModalTask(null)}
+        />
+      )}
           currentUserId={user?.id}
         />
       )}
