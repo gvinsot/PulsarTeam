@@ -3176,6 +3176,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         <ShareBoardModal
           board={shareBoard}
           onClose={() => setShareBoard(null)}
+          currentUserId={user?.id}
+        />
+      )}
 
       {/* Commit diff modal from card badge */}
       {commitModalTask && commitModalTask.commits?.length > 0 && (
@@ -3183,9 +3186,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           task={commitModalTask}
           agentId={commitModalTask.agentId}
           onClose={() => setCommitModalTask(null)}
-        />
-      )}
-          currentUserId={user?.id}
         />
       )}
     </div>
