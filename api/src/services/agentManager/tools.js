@@ -505,11 +505,64 @@ export const toolsMethods = {
 
           if (typeof result.result === 'string') {
             const rawCmd = (call.args[0] || '').toLowerCase();
-            const isGitCommit = rawCmd.includes('git') && (rawCmd.includes('commit') || rawCmd.includes('push'));
-            if (isGitCommit) {
-              const commitMatch = result.result.match(/\[[^\]]*\s([a-f0-9]{7,40})\]/);
-              if (commitMatch) commitHash = commitMatch[1];
+            // Detect any git command that could create or move commits
+            const isGitMutating = rawCmd.includes('git') &&
+              /\b(commit|push|merge|cherry-pick|rebase|am)\b/.test(rawCmd);
+            if (isGitMutating) {
+              const output = result.result;
+
+              // Pattern 1: git commit output — [branch hash] message
+              const commitMatch = output.match(/\[[^\]]*\s([a-f0-9]{7,40})\]/);
+              if (commitMatch) {
+                commitHash = commitMatch[1];
+                // Extract commit message from the same line
+                const fullLineMatch = output.match(/\[[^\]]+\]\s+(.+)/);
+                if (fullLineMatch) commitMsg = fullLineMatch[1].trim().slice(0, 200);
+              }
+
+              // Pattern 2: git push output — old..new branch -> branch
+              if (!commitHash) {
+                const pushMatch = output.match(/([a-f0-9]{7,40})\.\.\.?([a-f0-9]{7,40})\s+\S+\s*->\s*\S+/);
+                if (pushMatch) {
+                  commitHash = pushMatch[2]; // the new (pushed) hash
+                  console.log(`🔗 [Commit] Detected push hash from ref update: ${commitHash.slice(0, 7)}`);
+                }
+              }
+
+              // Pattern 3: HEAD is now at <hash> (from rebase, cherry-pick, etc.)
+              if (!commitHash) {
+                const headMatch = output.match(/HEAD is now at ([a-f0-9]{7,40})/i);
+                if (headMatch) commitHash = headMatch[1];
+              }
+
               if (!commitMsg) commitMsg = call.args[0] || '';
+            }
+          }
+
+          // Fallback: if a git commit/push command ran but regex didn't capture a hash,
+          // query HEAD directly from the execution environment
+          if (!commitHash && typeof result.result === 'string' && this.executionManager?.hasEnvironment(agentId)) {
+            const rawCmd = (call.args[0] || '').toLowerCase();
+            const looksLikeCommit = rawCmd.includes('git') &&
+              (rawCmd.includes('commit') || rawCmd.includes('push')) &&
+              !rawCmd.includes('--dry-run') && !rawCmd.includes('log');
+            // Only run fallback if output suggests a successful commit (file changes present)
+            const outputSuggestsCommit = looksLikeCommit &&
+              /(\d+ files? changed|\d+ insertion|\d+ deletion|create mode|new file)/.test(result.result) &&
+              !/nothing to commit/.test(result.result);
+            if (outputSuggestsCommit) {
+              try {
+                const headResult = await this.executionManager.exec(agentId, 'git log --format="%H %s" -1', { timeout: 10000 });
+                const headOutput = ((headResult.stdout || '') + (headResult.stderr || '')).trim();
+                const headMatch = headOutput.match(/^([a-f0-9]{40})\s+(.*)/);
+                if (headMatch) {
+                  commitHash = headMatch[1];
+                  commitMsg = headMatch[2] || commitMsg;
+                  console.log(`🔗 [Commit] Fallback: captured HEAD ${commitHash.slice(0, 7)} via git log`);
+                }
+              } catch (e) {
+                console.warn(`⚠️  [Commit] Fallback git log failed: ${e.message}`);
+              }
             }
           }
 

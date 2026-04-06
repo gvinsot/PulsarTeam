@@ -330,7 +330,7 @@ async function toolRunCommand(provider, agentId, command) {
 
   try {
     const { stdout, stderr } = await provider.exec(agentId, effectiveCommand, { timeout: COMMAND_TIMEOUT });
-    const output = (stdout || stderr || '(no output)').slice(0, 10000);
+    const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(0, 10000);
     return {
       success: true,
       result: output,
@@ -342,7 +342,7 @@ async function toolRunCommand(provider, agentId, command) {
       console.log(`⚡ [RTK] Rewritten command failed, falling back to original: "${command.slice(0, 80)}"`);
       try {
         const { stdout, stderr } = await provider.exec(agentId, command, { timeout: COMMAND_TIMEOUT });
-        const output = (stdout || stderr || '(no output)').slice(0, 10000);
+        const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(0, 10000);
         return {
           success: true,
           result: output,
