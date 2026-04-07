@@ -273,12 +273,20 @@ export async function recheckPendingTransitions(agentManager) {
  * Execute a chain of actions sequentially, respecting completedActionIdx for resume.
  */
 async function _executeActionChain(actions, task, { agentManager, io, ownerId, workflow, originalStatus }) {
-  // Resume from last completed action if this is a retry
+  // Resume from last completed action ONLY if this is a retry for the same column.
+  // _pendingOnEnter is set by the skipped-action path and tracks the status we were
+  // retrying. If it doesn't match the current status, the saved index belongs to a
+  // previous chain (e.g. qualification chain not yet cleaned up when assignation
+  // chain re-enters from a nested update_task) — ignore it to avoid skipping actions.
+  const pendingFor = task._pendingOnEnter;
   const rawIdx = task.completedActionIdx ?? task._completedActionIdx;
-  const startIdx = typeof rawIdx === 'number' ? rawIdx + 1 : 0;
+  const isResume = typeof rawIdx === 'number' && pendingFor === originalStatus;
+  const startIdx = isResume ? rawIdx + 1 : 0;
 
   if (startIdx > 0) {
     console.log(`[WorkflowEngine] Resuming chain from action ${startIdx}/${actions.length}`);
+  } else if (typeof rawIdx === 'number' && pendingFor !== originalStatus) {
+    console.log(`[WorkflowEngine] Ignoring stale completedActionIdx=${rawIdx} (pendingFor="${pendingFor}" != current="${originalStatus}") — starting fresh`);
   }
 
   for (let i = startIdx; i < actions.length; i++) {
