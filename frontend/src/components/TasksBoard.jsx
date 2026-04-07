@@ -2679,13 +2679,28 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     return map;
   }, [workflow]);
 
-  // Fetch tasks directly from the tasks table via API
+  // Fetch tasks directly from the tasks table via API.
+  // We MERGE results with current state by updatedAt so a slow GET /tasks
+  // (whose SELECT may run on a pool connection in parallel with in-flight
+  // UPDATEs) cannot overwrite a more recent task:updated received via socket.
   const [dbTasks, setDbTasks] = useState([]);
   const loadTasks = useCallback(async () => {
     if (!activeBoardId) return; // Wait until a board is selected
     try {
       const tasks = await api.getAllTasks({ board_id: activeBoardId });
-      setDbTasks(tasks);
+      setDbTasks(prev => {
+        const prevById = new Map(prev.map(t => [t.id, t]));
+        return tasks.map(serverTask => {
+          const local = prevById.get(serverTask.id);
+          if (!local) return serverTask;
+          // Prefer local if it has a strictly newer updatedAt — that means a
+          // task:updated event arrived after the server's SELECT snapshot.
+          const localTs = local.updatedAt ? Date.parse(local.updatedAt) : 0;
+          const serverTs = serverTask.updatedAt ? Date.parse(serverTask.updatedAt) : 0;
+          if (localTs > serverTs) return local;
+          return serverTask;
+        });
+      });
     } catch (err) {
       console.error('[TasksBoard] Failed to load tasks:', err.message);
     }
@@ -2697,13 +2712,21 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const agentRevision = agents.map(a => `${a.id}:${a.status}`).join(',');
   useEffect(() => { loadTasks(); }, [agentRevision]);
 
-  // Real-time task updates via WebSocket
+  // Real-time task updates via WebSocket.
+  // We only accept the incoming task if its updatedAt is >= the local copy.
+  // This prevents an out-of-order or replayed event from undoing a newer state.
   useEffect(() => {
     const sock = getSocket();
     if (!sock) return;
     const handler = ({ task }) => {
       if (!task?.id) return;
-      setDbTasks(prev => prev.map(t => (t.id === task.id ? { ...t, ...task } : t)));
+      setDbTasks(prev => prev.map(t => {
+        if (t.id !== task.id) return t;
+        const localTs = t.updatedAt ? Date.parse(t.updatedAt) : 0;
+        const incomingTs = task.updatedAt ? Date.parse(task.updatedAt) : 0;
+        if (incomingTs && localTs && incomingTs < localTs) return t;
+        return { ...t, ...task };
+      }));
     };
     sock.on('task:updated', handler);
     return () => sock.off('task:updated', handler);

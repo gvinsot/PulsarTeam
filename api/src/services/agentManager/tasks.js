@@ -110,6 +110,12 @@ export const tasksMethods = {
     }
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
+    // Stamp updatedAt so the frontend can detect stale loadTasks() responses.
+    // The DB sets its own updated_at = NOW() inside saveTaskToDb, but a SELECT
+    // on a parallel pool connection may run before that UPDATE commits and
+    // return a stale row. By including this client-side timestamp in the
+    // task:updated payload, the frontend can compare and reject stale data.
+    task.updatedAt = now;
     const savePromise = saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     // Emit task:updated so the TasksBoard UI updates in real-time
