@@ -61,9 +61,9 @@ ${instructions}
 
 RULES:
 - Follow the instructions above precisely. Do not take extra actions beyond what is asked.
-- When you are done, call @update_task(${task.id}, <new_status>) to change the task status. <new_status> must be one of the valid column IDs listed above (lowercase, exact match).
+- MANDATORY: your response MUST contain a call to @update_task(${task.id}, <new_status>) — this is the ONLY way to signal you are done. <new_status> must be one of the valid column IDs listed above (lowercase, exact match). It is acceptable to keep the same status if the instructions only ask you to append details.
 - You can append details: @update_task(${task.id}, <new_status>, <details>).
-- Do NOT call @task_execution_complete — use @update_task instead.
+- Do NOT reply with prose only. Do NOT call @task_execution_complete — use @update_task instead.
 - Be concise and efficient: execute the instructions, then update the task. Do not explore the codebase unnecessarily.`;
 }
 
@@ -477,6 +477,14 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   const prompt = buildInstructionsPrompt(task, instructions, columns);
   console.log(`[ActionExecutor] decide: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
+  // Snapshot task state so we can detect whether the agent actually called @update_task.
+  // The agent is supposed to either move the task to a new status, or at least append
+  // details (which mutates task.text). If neither happens we treat the action as a
+  // no-op and let the WorkflowEngine retry it.
+  const beforeTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const beforeStatus = beforeTask?.status ?? task.status;
+  const beforeTextLen = (beforeTask?.text || '').length;
+
   let fullResponse = '';
 
   io.emit('agent:stream:start', { agentId: agent.id, agentName: agent.name, project: agent.project || null });
@@ -495,12 +503,23 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
     );
 
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
-    console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
   } finally {
     io.emit('agent:stream:end', { agentId: agent.id, agentName: agent.name, project: agent.project || null });
     agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));
   }
 
+  // Verify the agent actually made a decision: status changed OR details appended.
+  const afterTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const afterStatus = afterTask?.status ?? task.status;
+  const afterTextLen = (afterTask?.text || '').length;
+  const decided = afterStatus !== beforeStatus || afterTextLen !== beforeTextLen;
+
+  if (!decided) {
+    console.warn(`[ActionExecutor] decide: agent "${agent.name}" produced no @update_task call for task="${task.id}" — flagging for retry`);
+    return { executed: false, skipped: true, reason: 'no-decision' };
+  }
+
+  console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
   return { executed: true };
 }
 
