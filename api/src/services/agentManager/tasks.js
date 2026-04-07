@@ -112,6 +112,15 @@ export const tasksMethods = {
     task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
     saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
+    // Emit task:updated so the TasksBoard UI updates in real-time
+    // (agent:updated alone is not enough — the board listens on task:updated)
+    const taskPayload = { ...task, agentId };
+    if (task.assignee) {
+      const assigneeAgent = this.agents.get(task.assignee);
+      taskPayload.assigneeName = assigneeAgent?.name || null;
+      taskPayload.assigneeIcon = assigneeAgent?.icon || null;
+    }
+    this._emit('task:updated', { agentId, task: taskPayload });
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
     if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;

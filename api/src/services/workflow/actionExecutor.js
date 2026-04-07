@@ -168,7 +168,7 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
   );
 
   if (!agent) {
-    console.log(`[ActionExecutor] assign_agent: no agent with role "${action.role}" — skipping`);
+    console.log(`[ActionExecutor] assign_agent: no agent with role "${action.role}" — skipping task="${task.id}"`);
     return { executed: false, skipped: true, reason: 'no-agent-for-role' };
   }
 
@@ -186,7 +186,7 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     saveTaskToDb({ ...actualTask, agentId: task.agentId });
     task.assignee = agent.id;
     _emitTaskUpdated(agentManager, task.agentId, actualTask);
-    console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role})`);
+    console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
   }
 
   return { executed: true };
@@ -238,7 +238,7 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
     delete taskBeforeMove._pendingOnEnter;
   }
 
-  console.log(`[ActionExecutor] change_status: "${task.status}" → "${action.target}"`);
+  console.log(`[ActionExecutor] change_status: "${task.status}" → "${action.target}" task="${task.id}"`);
   const result = agentManager.setTaskStatus(task.agentId, task.id, action.target, {
     skipAutoRefine: false,
     by: 'workflow',
@@ -495,7 +495,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
     );
 
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
-    console.log(`[ActionExecutor] decide: completed for "${task.text?.slice(0, 60)}"`);
+    console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
   } finally {
     io.emit('agent:stream:end', { agentId: agent.id, agentName: agent.name, project: agent.project || null });
     agentManager._emitToOwner('agent:updated', agentManager._sanitize(agent));

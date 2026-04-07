@@ -46,7 +46,7 @@ const ON_ENTER_MAX_RETRIES = 20;
 export async function processColumnEntry(task, agentManager, { by = null } = {}) {
   const io = agentManager.io;
 
-  console.log(`[WorkflowEngine] processColumnEntry: status="${task.status}" task="${(task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`);
+  console.log(`[WorkflowEngine] processColumnEntry: status="${task.status}" task="${task.id}" "${(task.title || task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`);
 
   if (task.status === 'error') {
     console.log(`[WorkflowEngine] Skipping — task is in error status`);
@@ -69,7 +69,7 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
   // Find matching transitions for this column
   const transitions = getMatchingTransitions(workflow, task.status);
   if (transitions.length === 0) {
-    console.log(`[WorkflowEngine] No transitions for status="${task.status}"`);
+    console.log(`[WorkflowEngine] No transitions for status="${task.status}" task="${task.id}"`);
     return;
   }
 
@@ -78,7 +78,7 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
   for (const transition of transitions) {
     // If a previous action changed the status, stop processing
     if (task.status !== originalStatus) {
-      console.log(`[WorkflowEngine] Task moved from "${originalStatus}" to "${task.status}" — stopping`);
+      console.log(`[WorkflowEngine] Task "${task.id}" moved from "${originalStatus}" to "${task.status}" — stopping`);
       break;
     }
 
@@ -103,7 +103,7 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
 
     // Execute action chain
     const actions = transition.actions || [];
-    console.log(`[WorkflowEngine] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} actions)`);
+    console.log(`[WorkflowEngine] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} actions) task="${task.id}"`);
 
     await _executeActionChain(actions, task, {
       agentManager,
@@ -330,13 +330,13 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
 
     // Stop chain if task errored
     if (task.status === 'error') {
-      console.log(`[WorkflowEngine] Task in error — stopping chain`);
+      console.log(`[WorkflowEngine] Task "${task.id}" in error — stopping chain`);
       break;
     }
 
     // Stop chain if status changed (change_status or execute moved it)
     if (result.statusChanged || (action.mode === 'execute' && task.status !== originalStatus)) {
-      console.log(`[WorkflowEngine] Status changed to "${task.status}" — stopping chain`);
+      console.log(`[WorkflowEngine] Task "${task.id}" status changed to "${task.status}" — stopping chain`);
       break;
     }
   }

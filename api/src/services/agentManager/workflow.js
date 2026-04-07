@@ -61,7 +61,7 @@ export const workflowMethods = {
    * Delegates to WorkflowEngine.processColumnEntry.
    */
   _checkAutoRefine(task, { by = null } = {}) {
-    console.log(`[Workflow] _checkAutoRefine: status="${task.status}" task="${(task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`);
+    console.log(`[Workflow] _checkAutoRefine: status="${task.status}" task="${task.id}" "${(task.title || task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`);
 
     if (task.status === 'error') {
       console.log(`[Workflow] _checkAutoRefine: skipping — error status`);
