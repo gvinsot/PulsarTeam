@@ -110,17 +110,27 @@ export const tasksMethods = {
     }
     if (!task.history) task.history = [];
     task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
-    saveTaskToDb({ ...task, agentId });
+    const savePromise = saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     // Emit task:updated so the TasksBoard UI updates in real-time
-    // (agent:updated alone is not enough — the board listens on task:updated)
+    // (agent:updated alone is not enough — the board listens on task:updated).
+    //
+    // We defer this emit until after the DB write has committed. The reason:
+    // the debounced agent:updated emit (300ms) triggers a loadTasks() on the
+    // frontend, which re-fetches from the DB. If the DB write hasn't landed
+    // yet, that fetch returns a stale row and overwrites the in-memory state
+    // — and since this is the last transition, no subsequent emit corrects
+    // it. By chaining task:updated after savePromise we guarantee the emit
+    // reflects (and is observed after) the persisted state.
     const taskPayload = { ...task, agentId };
     if (task.assignee) {
       const assigneeAgent = this.agents.get(task.assignee);
       taskPayload.assigneeName = assigneeAgent?.name || null;
       taskPayload.assigneeIcon = assigneeAgent?.icon || null;
     }
-    this._emit('task:updated', { agentId, task: taskPayload });
+    Promise.resolve(savePromise)
+      .catch(() => {})
+      .then(() => this._emit('task:updated', { agentId, task: taskPayload }));
     if (by !== 'jira-sync') onTaskStatusChanged(task, status, this);
     if (!skipAutoRefine && status !== 'error') this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
     return task;
