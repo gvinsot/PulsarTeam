@@ -56,7 +56,7 @@ export default function ProjectDetailView() {
   if (error || !project) {
     return (
       <div className="p-6">
-        <button onClick={() => navigate('/projects')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-4">
+        <button onClick={() => navigate('/projects')} className="flex items-center gap-2 text-dark-400 hover:text-dark-100 mb-4">
           <ArrowLeft size={16} /> Back to Projects
         </button>
         <p className="text-red-400">{error || 'Project not found'}</p>
@@ -77,11 +77,11 @@ export default function ProjectDetailView() {
     <div className="p-6 space-y-6 overflow-y-auto h-full">
       {/* Header */}
       <div className="flex items-center gap-4">
-        <button onClick={() => navigate('/projects')} className="text-gray-400 hover:text-white">
+        <button onClick={() => navigate('/projects')} className="text-dark-400 hover:text-dark-100">
           <ArrowLeft size={20} />
         </button>
         <div>
-          <h1 className="text-2xl font-bold text-white">{project.name}</h1>
+          <h1 className="text-2xl font-bold text-dark-100">{project.name}</h1>
           {project.repoUrl && (
             <a
               href={project.repoUrl}
@@ -108,23 +108,23 @@ export default function ProjectDetailView() {
         {/* Assigned Agents */}
         <Section title="Assigned Agents" icon={<Users size={18} />}>
           {agents.length === 0 ? (
-            <p className="text-gray-500 text-sm">No agents assigned</p>
+            <p className="text-dark-500 text-sm">No agents assigned</p>
           ) : (
             <div className="space-y-2">
               {agents.map(agent => (
                 <div
                   key={agent.id}
                   onClick={() => navigate(`/agent/${agent.id}`)}
-                  className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg hover:bg-gray-700 cursor-pointer transition-colors"
+                  className="flex items-center justify-between p-3 bg-dark-700/50 rounded-lg hover:bg-dark-700 cursor-pointer transition-colors"
                 >
                   <div className="flex items-center gap-3">
                     <StatusDot status={agent.status} />
                     <div>
-                      <p className="text-sm font-medium text-white">{agent.name}</p>
-                      <p className="text-xs text-gray-400">{agent.role || 'worker'} &middot; {agent.provider}/{agent.model}</p>
+                      <p className="text-sm font-medium text-dark-100">{agent.name}</p>
+                      <p className="text-xs text-dark-400">{agent.role || 'worker'} &middot; {agent.provider}/{agent.model}</p>
                     </div>
                   </div>
-                  <span className="text-xs text-gray-500">
+                  <span className="text-xs text-dark-500">
                     {agent.tasks?.active ?? 0} active
                   </span>
                 </div>
@@ -136,20 +136,20 @@ export default function ProjectDetailView() {
         {/* Task Overview */}
         <Section title="Task Overview" icon={<CheckCircle size={18} />}>
           {tasks.length === 0 ? (
-            <p className="text-gray-500 text-sm">No tasks yet</p>
+            <p className="text-dark-500 text-sm">No tasks yet</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {tasks.slice(0, 15).map(task => (
-                <div key={task.id} className="flex items-center gap-3 p-2 rounded-lg bg-gray-700/30">
+                <div key={task.id} className="flex items-center gap-3 p-2 rounded-lg bg-dark-700/30">
                   <TaskStatusIcon status={task.status} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white truncate">{task.text}</p>
-                    <p className="text-xs text-gray-500">{task.agentName} &middot; {task.status}</p>
+                    <p className="text-sm text-dark-100 truncate">{task.text}</p>
+                    <p className="text-xs text-dark-500">{task.agentName} &middot; {task.status}</p>
                   </div>
                 </div>
               ))}
               {tasks.length > 15 && (
-                <p className="text-xs text-gray-500 text-center pt-1">
+                <p className="text-xs text-dark-500 text-center pt-1">
                   +{tasks.length - 15} more tasks
                 </p>
               )}
@@ -160,17 +160,17 @@ export default function ProjectDetailView() {
         {/* Branches */}
         <Section title="Branches" icon={<GitBranch size={18} />}>
           {branches.length === 0 ? (
-            <p className="text-gray-500 text-sm">No branches found</p>
+            <p className="text-dark-500 text-sm">No branches found</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {branches.map(branch => (
-                <div key={branch.name} className="flex items-center justify-between p-2 rounded-lg bg-gray-700/30">
+                <div key={branch.name} className="flex items-center justify-between p-2 rounded-lg bg-dark-700/30">
                   <div className="flex items-center gap-2">
-                    <GitBranch size={14} className="text-gray-400" />
-                    <span className="text-sm text-white font-mono">{branch.name}</span>
+                    <GitBranch size={14} className="text-dark-400" />
+                    <span className="text-sm text-dark-100 font-mono">{branch.name}</span>
                     {branch.protected && <Shield size={12} className="text-yellow-400" title="Protected" />}
                   </div>
-                  <span className="text-xs text-gray-500 font-mono">{branch.sha?.slice(0, 7)}</span>
+                  <span className="text-xs text-dark-500 font-mono">{branch.sha?.slice(0, 7)}</span>
                 </div>
               ))}
             </div>
@@ -180,7 +180,7 @@ export default function ProjectDetailView() {
         {/* Recent Commits */}
         <Section title="Recent Commits" icon={<GitCommit size={18} />}>
           {commits.length === 0 ? (
-            <p className="text-gray-500 text-sm">No commits found</p>
+            <p className="text-dark-500 text-sm">No commits found</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {commits.map(commit => (
@@ -189,13 +189,13 @@ export default function ProjectDetailView() {
                   href={commit.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block p-2 rounded-lg bg-gray-700/30 hover:bg-gray-700/50 transition-colors"
+                  className="block p-2 rounded-lg bg-dark-700/30 hover:bg-dark-700/50 transition-colors"
                 >
                   <div className="flex items-start gap-2">
-                    <Tag size={14} className="text-gray-400 mt-0.5 flex-shrink-0" />
+                    <Tag size={14} className="text-dark-400 mt-0.5 flex-shrink-0" />
                     <div className="min-w-0">
-                      <p className="text-sm text-white truncate">{commit.message?.split('\n')[0]}</p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-sm text-dark-100 truncate">{commit.message?.split('\n')[0]}</p>
+                      <p className="text-xs text-dark-500">
                         {commit.author} &middot; {commit.date ? new Date(commit.date).toLocaleDateString() : ''}
                         <span className="ml-2 font-mono">{commit.sha?.slice(0, 7)}</span>
                       </p>
@@ -215,20 +215,20 @@ export default function ProjectDetailView() {
 
 function StatCard({ icon, label, value, color }) {
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
+    <div className="bg-dark-800 rounded-lg p-4 border border-dark-700">
       <div className={`flex items-center gap-2 ${color} mb-1`}>
         {icon}
         <span className="text-sm">{label}</span>
       </div>
-      <p className="text-2xl font-bold text-white">{value}</p>
+      <p className="text-2xl font-bold text-dark-100">{value}</p>
     </div>
   );
 }
 
 function Section({ title, icon, children }) {
   return (
-    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-      <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2 mb-3">
+    <div className="bg-dark-800 rounded-lg p-4 border border-dark-700">
+      <h3 className="text-sm font-semibold text-dark-300 flex items-center gap-2 mb-3">
         {icon} {title}
       </h3>
       {children}
@@ -238,17 +238,17 @@ function Section({ title, icon, children }) {
 
 function StatusDot({ status }) {
   const colors = {
-    idle: 'bg-gray-400',
+    idle: 'bg-dark-400',
     busy: 'bg-blue-400 animate-pulse',
     error: 'bg-red-400',
-    offline: 'bg-gray-600',
+    offline: 'bg-dark-600',
   };
-  return <Circle size={8} className={`${colors[status] || 'bg-gray-400'} fill-current`} />;
+  return <Circle size={8} className={`${colors[status] || 'bg-dark-400'} fill-current`} />;
 }
 
 function TaskStatusIcon({ status }) {
   if (status === 'done') return <CheckCircle size={14} className="text-green-400" />;
   if (!['done', 'error', 'backlog'].includes(status)) return <Activity size={14} className="text-blue-400 animate-pulse" />;
   if (status === 'error') return <AlertCircle size={14} className="text-red-400" />;
-  return <Clock size={14} className="text-gray-400" />;
+  return <Clock size={14} className="text-dark-400" />;
 }

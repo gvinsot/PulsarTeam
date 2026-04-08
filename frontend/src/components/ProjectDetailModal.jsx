@@ -92,7 +92,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 shrink-0">
           <div className="flex items-center gap-3">
             <FolderGit2 size={22} className="text-purple-400" />
-            <h2 className="text-xl font-bold text-white">{name}</h2>
+            <h2 className="text-xl font-bold text-dark-100">{name}</h2>
             <span className="text-xs text-dark-400 bg-dark-700 px-2 py-0.5 rounded-full">
               {stats.completion}% complete
             </span>
@@ -105,7 +105,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
                   href={resolvedGithubUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dark-300 hover:text-white bg-dark-800 hover:bg-dark-700 border border-dark-600 rounded-lg transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dark-300 hover:text-dark-100 bg-dark-800 hover:bg-dark-700 border border-dark-600 rounded-lg transition-colors"
                   title="Open on GitHub"
                 >
                   <GithubIcon className="w-4 h-4" />
@@ -115,7 +115,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
                 {resolvedFullName && (
                   <button
                     onClick={() => setShowActivity(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dark-300 hover:text-white bg-dark-800 hover:bg-dark-700 border border-dark-600 rounded-lg transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dark-300 hover:text-dark-100 bg-dark-800 hover:bg-dark-700 border border-dark-600 rounded-lg transition-colors"
                     title="View GitHub activity"
                   >
                     <GitCommit size={14} />
@@ -126,7 +126,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
             )}
             <button
               onClick={onClose}
-              className="p-2 text-dark-400 hover:text-white hover:bg-dark-700 rounded-lg transition-colors"
+              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
             >
               <X size={18} />
             </button>
@@ -169,7 +169,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
                   onChange={e => setCtxDescription(e.target.value)}
                   placeholder="Describe this project: tech stack, architecture, key patterns..."
                   rows={3}
-                  className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
+                  className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
                 />
               </div>
               <div>
@@ -179,7 +179,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
                   onChange={e => setCtxRules(e.target.value)}
                   placeholder="Define rules agents must follow when working on this project..."
                   rows={4}
-                  className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
+                  className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
                 />
               </div>
               {/* GitHub URL — editable only if not auto-detected from starred repos */}
@@ -210,7 +210,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
                     value={ctxGithubUrl}
                     onChange={e => setCtxGithubUrl(e.target.value)}
                     placeholder="https://github.com/owner/repo"
-                    className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-white placeholder-dark-500 focus:outline-none focus:border-cyan-500/50"
+                    className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-cyan-500/50"
                   />
                 )}
               </div>
@@ -259,7 +259,7 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
                       {(a.name || '?')[0]}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-white truncate">{a.name}</p>
+                      <p className="text-sm font-medium text-dark-100 truncate">{a.name}</p>
                       <p className="text-xs text-dark-400">{a.role || 'worker'} &middot; {a.status}</p>
                     </div>
                     <StatusDot status={a.status} />
@@ -321,7 +321,7 @@ function SummaryCard({ icon, label, value, color }) {
         {icon}
         <span className="text-xs">{label}</span>
       </div>
-      <p className="text-lg font-bold text-white">{value}</p>
+      <p className="text-lg font-bold text-dark-100">{value}</p>
     </div>
   );
 }
@@ -348,7 +348,7 @@ function StatusDot({ status }) {
 function TaskGroup({ label, tasks, icon, defaultCollapsed = false }) {
   return (
     <details open={!defaultCollapsed}>
-      <summary className="flex items-center gap-2 cursor-pointer select-none text-sm text-dark-300 hover:text-white transition-colors mb-2">
+      <summary className="flex items-center gap-2 cursor-pointer select-none text-sm text-dark-300 hover:text-dark-100 transition-colors mb-2">
         {icon}
         <span className="font-medium">{label}</span>
         <span className="text-xs text-dark-500">({tasks.length})</span>
@@ -357,7 +357,7 @@ function TaskGroup({ label, tasks, icon, defaultCollapsed = false }) {
         {tasks.map(t => (
           <div key={t.id || t.text} className="flex items-center gap-3 p-2 bg-dark-800/60 border border-dark-700/50 rounded-lg">
             <div className="flex-1 min-w-0">
-              <p className="text-sm text-white truncate">{t.text}</p>
+              <p className="text-sm text-dark-100 truncate">{t.text}</p>
               <p className="text-xs text-dark-500">
                 {t.agentName || 'Unassigned'}
                 {t.type && <span className="ml-2 capitalize">&middot; {t.type}</span>}

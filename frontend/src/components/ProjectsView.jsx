@@ -239,7 +239,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-2">
           <FolderGit2 size={20} className="text-purple-400" />
-          <h2 className="text-lg font-semibold text-white">Projects</h2>
+          <h2 className="text-lg font-semibold text-dark-100">Projects</h2>
           <span className="text-xs text-dark-400 bg-dark-700 px-2 py-0.5 rounded-full">{projects.length}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -250,13 +250,13 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
               placeholder="Search projects..."
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="bg-dark-700 border border-dark-600 rounded pl-7 pr-3 py-1.5 text-sm text-white w-48"
+              className="bg-dark-700 border border-dark-600 rounded pl-7 pr-3 py-1.5 text-sm text-dark-100 w-48"
             />
           </div>
           <select
             value={sortBy}
             onChange={e => setSortBy(e.target.value)}
-            className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-white"
+            className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
           >
             <option value="name">Sort: Name</option>
             <option value="tasks">Sort: Tasks</option>
@@ -297,8 +297,8 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => !creating && setShowCreateModal(false)}>
           <div className="bg-dark-800 border border-dark-600 rounded-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">New Project</h3>
-              <button onClick={() => !creating && setShowCreateModal(false)} className="text-dark-400 hover:text-white">
+              <h3 className="text-lg font-semibold text-dark-100">New Project</h3>
+              <button onClick={() => !creating && setShowCreateModal(false)} className="text-dark-400 hover:text-dark-100">
                 <X size={18} />
               </button>
             </div>
@@ -311,7 +311,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
                   value={newProject.name}
                   onChange={e => setNewProject(p => ({ ...p, name: e.target.value }))}
                   placeholder="my-new-project"
-                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-dark-500 focus:border-purple-500 focus:outline-none"
+                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:border-purple-500 focus:outline-none"
                   disabled={creating}
                   autoFocus
                   onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
@@ -325,7 +325,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
                   value={newProject.description}
                   onChange={e => setNewProject(p => ({ ...p, description: e.target.value }))}
                   placeholder="A short description..."
-                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-white placeholder-dark-500 focus:border-purple-500 focus:outline-none"
+                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:border-purple-500 focus:outline-none"
                   disabled={creating}
                 />
               </div>
@@ -354,7 +354,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
               <button
                 onClick={() => setShowCreateModal(false)}
                 disabled={creating}
-                className="px-4 py-2 text-sm text-dark-300 hover:text-white transition-colors"
+                className="px-4 py-2 text-sm text-dark-300 hover:text-dark-100 transition-colors"
               >
                 Cancel
               </button>
@@ -388,21 +388,21 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
             onClick={() => setSelectedProject(p.name)}
           >
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-white truncate">{p.name}</h3>
+              <h3 className="text-sm font-semibold text-dark-100 truncate">{p.name}</h3>
               <div className="flex items-center gap-1">
                 {/* GitHub buttons — only if we have GitHub info */}
                 {p.github?.htmlUrl && (
                   <>
                     <button
                       onClick={(e) => handleOpenGitHub(e, p.github.htmlUrl)}
-                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-white transition-colors"
+                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-dark-100 transition-colors"
                       title="Open on GitHub"
                     >
                       <GithubIcon className="w-3.5 h-3.5" />
                     </button>
                     <button
                       onClick={(e) => handleOpenActivity(e, p.github)}
-                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-white transition-colors"
+                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-dark-100 transition-colors"
                       title="View GitHub activity"
                     >
                       <GitCommit size={14} />
