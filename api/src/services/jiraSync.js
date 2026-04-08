@@ -244,8 +244,10 @@ export async function pollJira(agentManager) {
     }
   }
 
-  // Use /rest/api/3/search as PRIMARY — it reliably supports JQL filtering
+  // Use /rest/api/3/search/jql as PRIMARY — it reliably supports JQL filtering
   // (The Agile board endpoint silently ignores JQL for some board types)
+  // Note: migrated from /rest/api/3/search (removed, HTTP 410) per
+  // https://developer.atlassian.com/changelog/#CHANGE-2046
   let startAt = 0;
   const maxResults = 50;
   const allIssues = [];
@@ -254,7 +256,7 @@ export async function pollJira(agentManager) {
     while (true) {
       const data = await jiraFetch(
         cfg,
-        `/rest/api/3/search?jql=${encodeURIComponent(jqlFilter)}&startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
+        `/rest/api/3/search/jql?jql=${encodeURIComponent(jqlFilter)}&startAt=${startAt}&maxResults=${maxResults}&fields=summary,status`
       );
       const issues = data.issues || [];
       allIssues.push(...issues);
