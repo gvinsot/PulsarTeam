@@ -1205,12 +1205,16 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
     if (touchDragRef.current.ghost) touchDragRef.current.ghost.remove();
     highlightColumn(null);
 
-    // Determine target column: prefer lastColumnId stored during touchmove
-    let dropColId = touchDragRef.current.lastColumnId || null;
-    // Fallback: use bounding rect check at the final touch coordinates
-    if (!dropColId && touchX != null && touchY != null) {
+    // Determine target column.
+    // Prefer fresh touch coordinates at drop time (most accurate on touchend).
+    // Fall back to lastColumnId stored during touchmove (used by touchcancel which has no coordinates).
+    let dropColId = null;
+    if (touchX != null && touchY != null) {
       const col = getColumnAtPoint(touchX, touchY);
       if (col) dropColId = col.getAttribute('data-column-id');
+    }
+    if (!dropColId) {
+      dropColId = touchDragRef.current.lastColumnId || null;
     }
 
     if (dropColId) {
@@ -1322,6 +1326,8 @@ function TaskCard({ task, agents, onDelete, onStop, onOpen, showAgent, showCreat
       // Stop auto-scroll
       if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
       if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+      // Prevent browser from generating synthetic mouse/click events after touch drop
+      if (touchDragRef.current?.started) e.preventDefault();
       if (cardRef.current) {
         cardRef.current.style.transform = '';
         cardRef.current.style.transition = '';
@@ -2816,17 +2822,29 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
       ({ agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json')));
     } catch { return; }
     try {
-      const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+      let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+      if (!task) task = allTasks.find(t => t.id === taskId);
       if (!task) return;
-      if (task.actionRunning) return; // Cannot move task while agent is processing it
-      // Check if task is already in this column (including error tasks in their original column)
+      if (task.actionRunning) return;
       const fallbackColId = columns[0]?.id;
       const isAlreadyInColumn = task.status === 'error'
         ? (task.errorFromStatus || fallbackColId) === col.id
         : col.statuses.includes(task.status || fallbackColId);
       if (isAlreadyInColumn) return;
-      await updateTaskById(taskId, { column: col.dropStatus });
-      refreshAll();
+      // Optimistic UI update
+      const prevStatus = task.status;
+      setDbTasks(prev => prev.map(t =>
+        t.id === taskId ? { ...t, status: col.dropStatus, updatedAt: new Date().toISOString() } : t
+      ));
+      try {
+        await updateTaskById(taskId, { column: col.dropStatus });
+        refreshAll();
+      } catch (apiErr) {
+        console.error('[TasksBoard] Drop API failed, reverting:', apiErr.message);
+        setDbTasks(prev => prev.map(t =>
+          t.id === taskId ? { ...t, status: prevStatus } : t
+        ));
+      }
     } catch (err) {
       console.error('[TasksBoard] Drop status change failed:', err.message);
     }
@@ -2836,7 +2854,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
     if (isReadOnly) return;
     try {
-      const task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+      // Find task — try exact match first, then fall back to id-only (agentId ref can be stale)
+      let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+      if (!task) task = allTasks.find(t => t.id === taskId);
       if (!task) {
         console.warn('[TasksBoard] Touch drop: task not found', { agentId, taskId });
         return;
@@ -2851,15 +2871,27 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
       const isAlreadyInColumn = task.status === 'error'
         ? (task.errorFromStatus || fallbackColId) === col.id
         : col.statuses.includes(task.status || fallbackColId);
-      if (isAlreadyInColumn) {
-        console.log('[TasksBoard] Touch drop: already in column', col.id);
-        return;
+      if (isAlreadyInColumn) return;
+
+      // Optimistic UI update — move the task in local state immediately so the
+      // user sees it snap to the target column without waiting for the server.
+      const prevStatus = task.status;
+      setDbTasks(prev => prev.map(t =>
+        t.id === taskId ? { ...t, status: col.dropStatus, updatedAt: new Date().toISOString() } : t
+      ));
+
+      try {
+        await updateTaskById(taskId, { column: col.dropStatus });
+        refreshAll();
+      } catch (apiErr) {
+        console.error('[TasksBoard] Touch drop API failed, reverting:', apiErr.message);
+        // Revert optimistic update on failure
+        setDbTasks(prev => prev.map(t =>
+          t.id === taskId ? { ...t, status: prevStatus } : t
+        ));
       }
-      console.log('[TasksBoard] Touch drop: moving task', taskId, '→', col.dropStatus);
-      await updateTaskById(taskId, { column: col.dropStatus });
-      refreshAll();
     } catch (err) {
-      console.error('[TasksBoard] Touch drop status change failed:', err.message);
+      console.error('[TasksBoard] Touch drop failed:', err.message);
     }
   }, [allTasks, columns, refreshAll, isReadOnly]);
 
