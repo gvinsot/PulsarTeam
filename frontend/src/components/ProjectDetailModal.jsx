@@ -16,7 +16,16 @@ function GithubIcon({ className }) {
   );
 }
 
+const TABS = [
+  { id: 'overview',   label: 'Overview',    icon: FolderGit2 },
+  { id: 'tasks',      label: 'Tasks',       icon: ListTodo },
+  { id: 'context',    label: 'Context',     icon: FileText },
+  { id: 'statistics', label: 'Statistics',  icon: BarChart3 },
+];
+
 export default function ProjectDetailModal({ project, projectContext, githubInfo, onClose, onRefresh }) {
+  const [activeTab, setActiveTab] = useState('overview');
+
   // Close on Escape key
   useEffect(() => {
     const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -133,172 +142,61 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
           </div>
         </div>
 
-        {/* Body -- scrollable */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* Summary Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <SummaryCard icon={<Users size={16} />} label="Agents" value={agents.length} color="text-blue-400" />
-            <SummaryCard icon={<ListTodo size={16} />} label="Total Tasks" value={stats.total} color="text-purple-400" />
-            <SummaryCard icon={<Activity size={16} />} label="In Progress" value={stats.inProgress} color="text-yellow-400" />
-            <SummaryCard icon={<Clock size={16} />} label="Pending" value={stats.pending} color="text-orange-400" />
-            <SummaryCard icon={<Bug size={16} />} label="Bugs" value={stats.bugs} color="text-red-400" />
-            <SummaryCard icon={<Sparkles size={16} />} label="Features" value={stats.features} color="text-emerald-400" />
-          </div>
-
-          {/* Progress bar */}
-          <div>
-            <div className="flex items-center justify-between text-xs text-dark-300 mb-1.5">
-              <span>Progress</span>
-              <span>{stats.done} / {stats.total} tasks done</span>
-            </div>
-            <div className="w-full bg-dark-700 rounded-full h-2.5">
-              <div
-                className="bg-green-500 h-2.5 rounded-full transition-all"
-                style={{ width: `${stats.completion}%` }}
-              />
-            </div>
-          </div>
-
-          {/* Project Context */}
-          <Section title="Project Context (RAG)" icon={<FileText size={16} className="text-cyan-400" />}>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-dark-400 mb-1">Description</label>
-                <textarea
-                  value={ctxDescription}
-                  onChange={e => setCtxDescription(e.target.value)}
-                  placeholder="Describe this project: tech stack, architecture, key patterns..."
-                  rows={3}
-                  className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-dark-400 mb-1">Rules &amp; Instructions</label>
-                <textarea
-                  value={ctxRules}
-                  onChange={e => setCtxRules(e.target.value)}
-                  placeholder="Define rules agents must follow when working on this project..."
-                  rows={4}
-                  className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
-                />
-              </div>
-              {/* GitHub URL — editable only if not auto-detected from starred repos */}
-              <div>
-                <label className="block text-xs text-dark-400 mb-1">
-                  <span className="flex items-center gap-1">
-                    <GithubIcon className="w-3 h-3" />
-                    GitHub URL
-                    {githubInfo?.htmlUrl && (
-                      <span className="text-green-400 ml-1">(auto-detected)</span>
-                    )}
-                  </span>
-                </label>
-                {githubInfo?.htmlUrl ? (
-                  <div className="flex items-center gap-2 text-sm text-dark-300">
-                    <a
-                      href={githubInfo.htmlUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-purple-400 hover:text-purple-300 underline"
-                    >
-                      {githubInfo.fullName}
-                    </a>
-                  </div>
-                ) : (
-                  <input
-                    type="url"
-                    value={ctxGithubUrl}
-                    onChange={e => setCtxGithubUrl(e.target.value)}
-                    placeholder="https://github.com/owner/repo"
-                    className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-cyan-500/50"
-                  />
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleSaveContext}
-                  disabled={ctxSaving}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
-                >
-                  {ctxSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                  {ctxSaving ? 'Saving...' : 'Save Context'}
-                </button>
-                {ctxSaved && (
-                  <span className="text-xs text-green-400 flex items-center gap-1">
-                    <CheckCircle size={12} /> Saved
+        {/* Tab Bar */}
+        <div className="flex items-center gap-1 px-6 pt-3 pb-0 border-b border-dark-700 shrink-0">
+          {TABS.map(tab => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative ${
+                  isActive
+                    ? 'text-purple-400 bg-dark-800 border border-dark-700 border-b-transparent -mb-px'
+                    : 'text-dark-400 hover:text-dark-200 hover:bg-dark-800/50'
+                }`}
+              >
+                <Icon size={15} />
+                {tab.label}
+                {tab.id === 'tasks' && stats.total > 0 && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                    isActive ? 'bg-purple-500/20 text-purple-400' : 'bg-dark-700 text-dark-500'
+                  }`}>
+                    {stats.total}
                   </span>
                 )}
-                {projectContext?.updatedAt && (
-                  <span className="text-xs text-dark-500 ml-auto">
-                    Last updated: {new Date(projectContext.updatedAt).toLocaleString()}
-                  </span>
-                )}
-              </div>
-            </div>
-          </Section>
+              </button>
+            );
+          })}
+        </div>
 
-          {/* Agents Section */}
-          <Section title="Assigned Agents" icon={<Users size={16} className="text-blue-400" />}>
-            {agents.length === 0 ? (
-              <p className="text-dark-500 text-sm">No agents assigned to this project</p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {agents.map(a => (
-                  <div
-                    key={a.id || a.name}
-                    className="flex items-center gap-3 p-3 bg-dark-800 border border-dark-700 rounded-lg"
-                  >
-                    <div
-                      className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                        a.status === 'busy' ? 'bg-yellow-500/20 text-yellow-400' :
-                        a.status === 'idle' ? 'bg-green-500/20 text-green-400' :
-                        a.status === 'error' ? 'bg-red-500/20 text-red-400' :
-                        'bg-dark-600 text-dark-400'
-                      }`}
-                    >
-                      {(a.name || '?')[0]}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-dark-100 truncate">{a.name}</p>
-                      <p className="text-xs text-dark-400">{a.role || 'worker'} &middot; {a.status}</p>
-                    </div>
-                    <StatusDot status={a.status} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </Section>
-
-          {/* Tasks Section */}
-          <Section title="Tasks" icon={<ListTodo size={16} className="text-purple-400" />}>
-            {tasks.length === 0 ? (
-              <p className="text-dark-500 text-sm">No tasks in this project</p>
-            ) : (
-              <div className="space-y-4">
-                {/* Active */}
-                {tasksByStatus.active.length > 0 && (
-                  <TaskGroup label="Active" tasks={tasksByStatus.active} icon={<Activity size={14} className="text-yellow-400" />} />
-                )}
-                {/* Error */}
-                {tasksByStatus.error.length > 0 && (
-                  <TaskGroup label="Error" tasks={tasksByStatus.error} icon={<AlertCircle size={14} className="text-red-400" />} />
-                )}
-                {/* Backlog */}
-                {tasksByStatus.backlog.length > 0 && (
-                  <TaskGroup label="Backlog" tasks={tasksByStatus.backlog} icon={<ListTodo size={14} className="text-dark-400" />} />
-                )}
-                {/* Done */}
-                {tasksByStatus.done.length > 0 && (
-                  <TaskGroup label="Done" tasks={tasksByStatus.done} icon={<CheckCircle size={14} className="text-green-400" />} defaultCollapsed />
-                )}
-              </div>
-            )}
-          </Section>
-
-          {/* Statistics (charts) */}
-          <Section title="Statistics" icon={<BarChart3 size={16} className="text-purple-400" />}>
-            <ProjectStats projectName={name} onClose={() => {}} embedded />
-          </Section>
+        {/* Tab Content -- scrollable */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === 'overview' && (
+            <OverviewTab agents={agents} tasks={tasks} stats={stats} />
+          )}
+          {activeTab === 'tasks' && (
+            <TasksTab tasks={tasks} tasksByStatus={tasksByStatus} />
+          )}
+          {activeTab === 'context' && (
+            <ContextTab
+              projectContext={projectContext}
+              githubInfo={githubInfo}
+              ctxDescription={ctxDescription}
+              setCtxDescription={setCtxDescription}
+              ctxRules={ctxRules}
+              setCtxRules={setCtxRules}
+              ctxGithubUrl={ctxGithubUrl}
+              setCtxGithubUrl={setCtxGithubUrl}
+              ctxSaving={ctxSaving}
+              ctxSaved={ctxSaved}
+              onSave={handleSaveContext}
+            />
+          )}
+          {activeTab === 'statistics' && (
+            <StatisticsTab projectName={name} />
+          )}
         </div>
       </div>
 
@@ -314,6 +212,194 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tab: Overview
+   ═══════════════════════════════════════════════════════════════════════════ */
+function OverviewTab({ agents, tasks, stats }) {
+  return (
+    <div className="space-y-6">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <SummaryCard icon={<Users size={16} />} label="Agents" value={agents.length} color="text-blue-400" />
+        <SummaryCard icon={<ListTodo size={16} />} label="Total Tasks" value={stats.total} color="text-purple-400" />
+        <SummaryCard icon={<Activity size={16} />} label="In Progress" value={stats.inProgress} color="text-yellow-400" />
+        <SummaryCard icon={<Clock size={16} />} label="Pending" value={stats.pending} color="text-orange-400" />
+        <SummaryCard icon={<Bug size={16} />} label="Bugs" value={stats.bugs} color="text-red-400" />
+        <SummaryCard icon={<Sparkles size={16} />} label="Features" value={stats.features} color="text-emerald-400" />
+      </div>
+
+      {/* Progress bar */}
+      <div>
+        <div className="flex items-center justify-between text-xs text-dark-300 mb-1.5">
+          <span>Progress</span>
+          <span>{stats.done} / {stats.total} tasks done</span>
+        </div>
+        <div className="w-full bg-dark-700 rounded-full h-2.5">
+          <div
+            className="bg-green-500 h-2.5 rounded-full transition-all"
+            style={{ width: `${stats.completion}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Agents Section */}
+      <Section title="Assigned Agents" icon={<Users size={16} className="text-blue-400" />}>
+        {agents.length === 0 ? (
+          <p className="text-dark-500 text-sm">No agents assigned to this project</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {agents.map(a => (
+              <div
+                key={a.id || a.name}
+                className="flex items-center gap-3 p-3 bg-dark-800 border border-dark-700 rounded-lg"
+              >
+                <div
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                    a.status === 'busy' ? 'bg-yellow-500/20 text-yellow-400' :
+                    a.status === 'idle' ? 'bg-green-500/20 text-green-400' :
+                    a.status === 'error' ? 'bg-red-500/20 text-red-400' :
+                    'bg-dark-600 text-dark-400'
+                  }`}
+                >
+                  {(a.name || '?')[0]}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-dark-100 truncate">{a.name}</p>
+                  <p className="text-xs text-dark-400">{a.role || 'worker'} &middot; {a.status}</p>
+                </div>
+                <StatusDot status={a.status} />
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tab: Tasks
+   ═══════════════════════════════════════════════════════════════════════════ */
+function TasksTab({ tasks, tasksByStatus }) {
+  if (tasks.length === 0) {
+    return <p className="text-dark-500 text-sm">No tasks in this project</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {tasksByStatus.active.length > 0 && (
+        <TaskGroup label="Active" tasks={tasksByStatus.active} icon={<Activity size={14} className="text-yellow-400" />} />
+      )}
+      {tasksByStatus.error.length > 0 && (
+        <TaskGroup label="Error" tasks={tasksByStatus.error} icon={<AlertCircle size={14} className="text-red-400" />} />
+      )}
+      {tasksByStatus.backlog.length > 0 && (
+        <TaskGroup label="Backlog" tasks={tasksByStatus.backlog} icon={<ListTodo size={14} className="text-dark-400" />} />
+      )}
+      {tasksByStatus.done.length > 0 && (
+        <TaskGroup label="Done" tasks={tasksByStatus.done} icon={<CheckCircle size={14} className="text-green-400" />} defaultCollapsed />
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tab: Context
+   ═══════════════════════════════════════════════════════════════════════════ */
+function ContextTab({
+  projectContext, githubInfo,
+  ctxDescription, setCtxDescription,
+  ctxRules, setCtxRules,
+  ctxGithubUrl, setCtxGithubUrl,
+  ctxSaving, ctxSaved, onSave,
+}) {
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div>
+        <label className="block text-xs text-dark-400 mb-1">Description</label>
+        <textarea
+          value={ctxDescription}
+          onChange={e => setCtxDescription(e.target.value)}
+          placeholder="Describe this project: tech stack, architecture, key patterns..."
+          rows={3}
+          className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
+        />
+      </div>
+      <div>
+        <label className="block text-xs text-dark-400 mb-1">Rules &amp; Instructions</label>
+        <textarea
+          value={ctxRules}
+          onChange={e => setCtxRules(e.target.value)}
+          placeholder="Define rules agents must follow when working on this project..."
+          rows={4}
+          className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
+        />
+      </div>
+      <div>
+        <label className="block text-xs text-dark-400 mb-1">
+          <span className="flex items-center gap-1">
+            <GithubIcon className="w-3 h-3" />
+            GitHub URL
+            {githubInfo?.htmlUrl && (
+              <span className="text-green-400 ml-1">(auto-detected)</span>
+            )}
+          </span>
+        </label>
+        {githubInfo?.htmlUrl ? (
+          <div className="flex items-center gap-2 text-sm text-dark-300">
+            <a
+              href={githubInfo.htmlUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-purple-400 hover:text-purple-300 underline"
+            >
+              {githubInfo.fullName}
+            </a>
+          </div>
+        ) : (
+          <input
+            type="url"
+            value={ctxGithubUrl}
+            onChange={e => setCtxGithubUrl(e.target.value)}
+            placeholder="https://github.com/owner/repo"
+            className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-cyan-500/50"
+          />
+        )}
+      </div>
+      <div className="flex items-center gap-3 pt-2">
+        <button
+          onClick={onSave}
+          disabled={ctxSaving}
+          className="flex items-center gap-2 px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
+        >
+          {ctxSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          {ctxSaving ? 'Saving...' : 'Save Context'}
+        </button>
+        {ctxSaved && (
+          <span className="text-xs text-green-400 flex items-center gap-1">
+            <CheckCircle size={12} /> Saved
+          </span>
+        )}
+        {projectContext?.updatedAt && (
+          <span className="text-xs text-dark-500 ml-auto">
+            Last updated: {new Date(projectContext.updatedAt).toLocaleString()}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tab: Statistics
+   ═══════════════════════════════════════════════════════════════════════════ */
+function StatisticsTab({ projectName }) {
+  return <ProjectStats projectName={projectName} onClose={() => {}} embedded />;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Shared sub-components
+   ═══════════════════════════════════════════════════════════════════════════ */
 function SummaryCard({ icon, label, value, color }) {
   return (
     <div className="bg-dark-800 border border-dark-700 rounded-lg px-4 py-3">
