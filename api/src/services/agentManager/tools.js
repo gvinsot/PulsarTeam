@@ -648,8 +648,9 @@ export const toolsMethods = {
               }
 
               // Pattern 2: git push output — old..new branch -> branch
+              // Handles standard push (abc..def), force push (+abc...def), and leading whitespace
               if (!commitHash) {
-                const pushMatch = output.match(/([a-f0-9]{7,40})\.\.\.?([a-f0-9]{7,40})\s+\S+\s*->\s*\S+/);
+                const pushMatch = output.match(/\+?([a-f0-9]{7,40})\.\.\.?([a-f0-9]{7,40})\s+\S+\s*->\s*\S+/);
                 if (pushMatch) {
                   commitHash = pushMatch[2]; // the new (pushed) hash
                   console.log(`🔗 [Commit] Detected push hash from ref update: ${commitHash.slice(0, 7)}`);
@@ -662,22 +663,49 @@ export const toolsMethods = {
                 if (headMatch) commitHash = headMatch[1];
               }
 
+              // Pattern 4: git merge output — Merge made by the 'ort'/'recursive' strategy
+              // or fast-forward — the hash is not in the output, but we can detect
+              // that a merge happened and use the fallback
+              // (handled by the broadened fallback below)
+
               if (!commitMsg) commitMsg = call.args[0] || '';
             }
           }
 
-          // Fallback: if a git commit/push command ran but regex didn't capture a hash,
-          // query HEAD directly from the execution environment
+          // Fallback: if a git mutating command ran but regex didn't capture a hash,
+          // query HEAD directly from the execution environment.
+          // This covers: new branch pushes (no hash in output), unusual git output
+          // formats, merge commits, and any other scenario where patterns miss.
           if (!commitHash && typeof result.result === 'string' && this.executionManager?.hasEnvironment(agentId)) {
             const rawCmd = (call.args[0] || '').toLowerCase();
-            const looksLikeCommit = rawCmd.includes('git') &&
-              (rawCmd.includes('commit') || rawCmd.includes('push')) &&
-              !rawCmd.includes('--dry-run') && !rawCmd.includes('log');
-            // Only run fallback if output suggests a successful commit (file changes present)
-            const outputSuggestsCommit = looksLikeCommit &&
-              /(\d+ files? changed|\d+ insertion|\d+ deletion|create mode|new file)/.test(result.result) &&
-              !/nothing to commit/.test(result.result);
-            if (outputSuggestsCommit) {
+            const isGitMutating = rawCmd.includes('git') &&
+              /\b(commit|push|merge|cherry-pick|rebase|am)\b/.test(rawCmd) &&
+              !rawCmd.includes('--dry-run') && !rawCmd.includes('log') &&
+              !rawCmd.includes('--help');
+
+            // Output patterns that indicate nothing actually happened — skip fallback
+            const nothingHappened =
+              /nothing to commit/i.test(result.result) ||
+              /everything up-to-date/i.test(result.result) ||
+              /no changes added to commit/i.test(result.result) ||
+              /nothing added to commit/i.test(result.result);
+
+            // Output patterns that indicate a successful git operation happened
+            const outputSuggestsSuccess =
+              // git commit indicators
+              /(\d+ files? changed|\d+ insertion|\d+ deletion|create mode|new file)/i.test(result.result) ||
+              // git push indicators (ref update, new branch, new tag)
+              /\s*->\s*\S+/.test(result.result) ||
+              /\[new branch\]/i.test(result.result) ||
+              /\[new tag\]/i.test(result.result) ||
+              /\[new ref\]/i.test(result.result) ||
+              // git merge/rebase indicators
+              /merge made by/i.test(result.result) ||
+              /fast-forward/i.test(result.result) ||
+              /successfully rebased/i.test(result.result) ||
+              /applying:/i.test(result.result);
+
+            if (isGitMutating && !nothingHappened && outputSuggestsSuccess) {
               try {
                 const headResult = await this.executionManager.exec(agentId, 'git log --format="%H %s" -1', { timeout: 10000 });
                 const headOutput = ((headResult.stdout || '') + (headResult.stderr || '')).trim();
@@ -685,11 +713,16 @@ export const toolsMethods = {
                 if (headMatch) {
                   commitHash = headMatch[1];
                   commitMsg = headMatch[2] || commitMsg;
-                  console.log(`🔗 [Commit] Fallback: captured HEAD ${commitHash.slice(0, 7)} via git log`);
+                  console.log(`🔗 [Commit] Fallback: captured HEAD ${commitHash.slice(0, 7)} via git log (cmd="${rawCmd.slice(0, 60)}")`);
                 }
               } catch (e) {
                 console.warn(`⚠️  [Commit] Fallback git log failed: ${e.message}`);
               }
+            }
+
+            // Diagnostic: log when a git mutating command ran but no hash was detected
+            if (!commitHash && isGitMutating && !nothingHappened) {
+              console.warn(`⚠️  [Commit] No hash detected for git command. cmd="${rawCmd.slice(0, 120)}" output="${result.result.slice(0, 300)}"`);
             }
           }
 
