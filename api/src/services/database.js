@@ -615,15 +615,27 @@ export async function recordTokenUsage(agentId, agentName, provider, model, inpu
   }
 }
 
+/** Convert PostgreSQL bigint/numeric string fields to JavaScript numbers */
+function parseNumericFields(row) {
+  if (!row) return row;
+  const out = { ...row };
+  for (const key of Object.keys(out)) {
+    if (typeof out[key] === 'string' && /^-?\d+(\.\d+)?$/.test(out[key])) {
+      out[key] = Number(out[key]);
+    }
+  }
+  return out;
+}
+
 export function getTokenUsageSummary(days = 1) {
   if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
-  return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  return parseNumericFields(_tokenSummaryCache[days]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
 }
 
 /** Async per-user (or global when userId is null) token usage summary */
 export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
   if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
-  if (!userId) return _tokenSummaryCache[days] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  if (!userId) return parseNumericFields(_tokenSummaryCache[days]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   try {
     const result = await pool.query(
       `SELECT COALESCE(SUM(cost), 0) as total_cost,
@@ -634,7 +646,7 @@ export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1 AND user_id = $2`,
       [days, userId]
     );
-    return result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+    return parseNumericFields(result.rows[0]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
   } catch (err) {
     console.error('Failed to get token summary for user:', err.message);
     return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
@@ -658,7 +670,7 @@ export async function getTokenUsageByAgent(days = 30, userId = null) {
        ORDER BY total_cost DESC`,
       params
     );
-    return result.rows;
+    return result.rows.map(parseNumericFields);
   } catch (err) {
     console.error('Failed to get token usage by agent:', err.message);
     return [];
@@ -680,7 +692,7 @@ export async function getTokenUsageTimeline(days = 7, groupBy = 'day', userId = 
        GROUP BY period, agent_name ORDER BY period`,
       params
     );
-    return result.rows;
+    return result.rows.map(parseNumericFields);
   } catch (err) {
     console.error('Failed to get token usage timeline:', err.message);
     return [];
@@ -701,7 +713,7 @@ export async function getDailyTokenUsage(days = 30, userId = null) {
        GROUP BY day ORDER BY day`,
       params
     );
-    return result.rows;
+    return result.rows.map(parseNumericFields);
   } catch (err) {
     console.error('Failed to get daily token usage:', err.message);
     return [];
@@ -724,7 +736,7 @@ export async function refreshTokenSummaryCache() {
          WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1`,
         [days]
       );
-      _tokenSummaryCache[days] = result.rows[0] || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+      _tokenSummaryCache[days] = parseNumericFields(result.rows[0]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
     } catch (err) {
       console.error('Failed to refresh token summary cache:', err.message);
     }
