@@ -61,8 +61,15 @@ export const tasksMethods = {
       };
     }
     this._addTaskToStore(agentId, newTask);
-    saveTaskToDb({ ...newTask, agentId });
+    const savePromise = saveTaskToDb({ ...newTask, agentId });
     this._emit('agent:updated', this._sanitize(agent));
+    // Emit task:updated after the DB write has committed so the frontend
+    // can add the new task to its list in real-time (the handler must support
+    // inserting tasks it hasn't seen before, not just patching existing ones).
+    const taskPayload = { ...newTask, agentId };
+    Promise.resolve(savePromise)
+      .catch(() => {})
+      .then(() => this._emit('task:updated', { agentId, task: taskPayload }));
     if (!skipAutoRefine) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },

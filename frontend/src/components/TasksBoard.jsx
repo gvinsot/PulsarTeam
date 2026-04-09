@@ -210,8 +210,11 @@ function CreateTaskModal({ agents, allProjects, defaultProject, onClose, onCreat
           ? customInterval
           : RECURRENCE_PERIODS.find(p => p.value === recurrencePeriod)?.minutes || 1440,
       } : undefined;
-      await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId, recurrence, taskType || undefined);
-      await onCreated();
+      const created = await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId, recurrence, taskType || undefined);
+      // Pass the created task so the parent can optimistically insert it
+      // before the next loadTasks() fetch (avoids the race where the DB
+      // INSERT hasn't committed yet).
+      await onCreated({ ...created, agentId: defaultAgentId });
       onClose();
     } finally {
       setSaving(false);
@@ -2738,7 +2741,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
       const tasks = await api.getAllTasks({ board_id: activeBoardId });
       setDbTasks(prev => {
         const prevById = new Map(prev.map(t => [t.id, t]));
-        return tasks.map(serverTask => {
+        const serverIds = new Set(tasks.map(t => t.id));
+
+        const merged = tasks.map(serverTask => {
           const local = prevById.get(serverTask.id);
           if (!local) return serverTask;
           // Prefer local if it has a strictly newer updatedAt — that means a
@@ -2748,6 +2753,22 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           if (localTs > serverTs) return local;
           return serverTask;
         });
+
+        // Preserve optimistically-inserted tasks that the server doesn't
+        // know about yet (the saveTaskToDb INSERT may not have committed
+        // by the time this GET /tasks query ran). We keep local-only tasks
+        // created in the last 10 seconds to cover the race window.
+        const now = Date.now();
+        for (const local of prev) {
+          if (!serverIds.has(local.id) && local.createdAt) {
+            const age = now - Date.parse(local.createdAt);
+            if (age < 10_000) {
+              merged.push(local);
+            }
+          }
+        }
+
+        return merged;
       });
     } catch (err) {
       console.error('[TasksBoard] Failed to load tasks:', err.message);
@@ -2760,28 +2781,53 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const agentRevision = agents.map(a => `${a.id}:${a.status}`).join(',');
   useEffect(() => { loadTasks(); }, [agentRevision]);
 
+  // Keep a ref to activeBoardId so the WebSocket handler can filter new tasks
+  // without re-subscribing on every board change.
+  const activeBoardIdRef = useRef(activeBoardId);
+  useEffect(() => { activeBoardIdRef.current = activeBoardId; }, [activeBoardId]);
+
   // Real-time task updates via WebSocket.
-  // We only accept the incoming task if its updatedAt is >= the local copy.
-  // This prevents an out-of-order or replayed event from undoing a newer state.
+  // Handles both updates to existing tasks AND insertion of newly created tasks.
+  // For existing tasks, we only accept the incoming data if its updatedAt >= local copy.
   useEffect(() => {
     const sock = getSocket();
     if (!sock) return;
     const handler = ({ task }) => {
       if (!task?.id) return;
-      setDbTasks(prev => prev.map(t => {
-        if (t.id !== task.id) return t;
-        const localTs = t.updatedAt ? Date.parse(t.updatedAt) : 0;
+      setDbTasks(prev => {
+        const idx = prev.findIndex(t => t.id === task.id);
+        if (idx === -1) {
+          // New task — add it only if it belongs to the currently active board
+          if (task.boardId && task.boardId === activeBoardIdRef.current) {
+            return [...prev, task];
+          }
+          return prev;
+        }
+        // Existing task — update in place (reject stale data)
+        const existing = prev[idx];
+        const localTs = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
         const incomingTs = task.updatedAt ? Date.parse(task.updatedAt) : 0;
-        if (incomingTs && localTs && incomingTs < localTs) return t;
-        return { ...t, ...task };
-      }));
+        if (incomingTs && localTs && incomingTs < localTs) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...existing, ...task };
+        return updated;
+      });
     };
     sock.on('task:updated', handler);
     return () => sock.off('task:updated', handler);
   }, []);
 
-  // Wrap onRefresh to also reload tasks
-  const refreshAll = useCallback(() => {
+  // Wrap onRefresh to also reload tasks.
+  // When called with a newly created task, optimistically insert it into
+  // state so it appears immediately — even if the DB write hasn't committed
+  // by the time the subsequent loadTasks() query runs.
+  const refreshAll = useCallback((newTask) => {
+    if (newTask?.id) {
+      setDbTasks(prev => {
+        if (prev.some(t => t.id === newTask.id)) return prev;
+        return [...prev, newTask];
+      });
+    }
     loadTasks();
     onRefresh();
   }, [loadTasks, onRefresh]);
