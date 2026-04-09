@@ -2861,10 +2861,18 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const reorderColumnTasks = useCallback(async (colId, draggedTaskId, dropIdx) => {
     // Get current tasks in this column (sorted by current sort)
     const currentTasks = tasksByColumn[colId] || [];
+    // When dragging downward within the same column, the dragged card is still
+    // in the DOM so computeDropIndex counts it. After removing it from the array,
+    // all items below the original position shift up by one — compensate here.
+    const originalIdx = currentTasks.findIndex(t => t.id === draggedTaskId);
+    let adjustedDropIdx = dropIdx;
+    if (originalIdx !== -1 && originalIdx < dropIdx) {
+      adjustedDropIdx = dropIdx - 1;
+    }
     // Remove the dragged task if already in this column
     const without = currentTasks.filter(t => t.id !== draggedTaskId);
     // Insert at the drop index (clamp)
-    const idx = Math.min(Math.max(0, dropIdx), without.length);
+    const idx = Math.min(Math.max(0, adjustedDropIdx), without.length);
     const reordered = [...without.slice(0, idx), { id: draggedTaskId }, ...without.slice(idx)];
     const orderedIds = reordered.map(t => t.id);
     // Optimistic UI: update positions in local state
