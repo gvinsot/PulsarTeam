@@ -6,7 +6,7 @@ import {
   Bug, Sparkles, Wrench, BookOpen, ArrowUpCircle, HelpCircle, Layers,
   ArrowUpDown, Flag, Sun, RotateCcw, Archive, Users, Share2
 } from 'lucide-react';
-import { api, deleteTask as deleteTaskById, updateTask as updateTaskById } from '../api';
+import { api, deleteTask as deleteTaskById, updateTask as updateTaskById, reorderTasks } from '../api';
 import { getDeletedTasks, restoreTask as restoreTaskApi, hardDeleteTask as hardDeleteTaskApi } from '../api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -128,6 +128,7 @@ function isToday(iso) {
 }
 
 const SORT_OPTIONS = [
+  { value: 'manual',        label: 'Manual (drag & drop)' },
   { value: 'date_desc',     label: 'Date (recent)' },
   { value: 'date_asc',      label: 'Date (oldest)' },
   { value: 'priority_asc',  label: 'Priority (high first)' },
@@ -137,6 +138,8 @@ const SORT_OPTIONS = [
 function sortTasks(tasks, sortBy) {
   const sorted = [...tasks];
   switch (sortBy) {
+    case 'manual':
+      return sorted.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     case 'date_asc':
       return sorted.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
     case 'date_desc':
@@ -1603,6 +1606,21 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [dropIndex, setDropIndex] = useState(-1);
+  const dropZoneRef = useRef(null);
+
+  // Compute which index the dragged item should be inserted at
+  const computeDropIndex = useCallback((e) => {
+    const container = dropZoneRef.current;
+    if (!container) return tasks.length;
+    const cards = container.querySelectorAll('[data-task-id]');
+    for (let i = 0; i < cards.length; i++) {
+      const rect = cards[i].getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) return i;
+    }
+    return tasks.length; // drop at end
+  }, [tasks.length]);
 
   return (
     <div className="flex flex-col min-w-[300px] w-[300px] max-h-[2500px] flex-shrink-0 group"
@@ -1647,33 +1665,57 @@ function KanbanColumn({ col, tasks, agents, onDelete, onStop, onDrop, onOpen, on
 
       {/* Drop zone */}
       <div
+        ref={dropZoneRef}
         className={`flex flex-col gap-2 p-2 rounded-b-xl border border-t-0
           transition-all duration-150 flex-1 min-h-0 overflow-y-auto
           ${dragOver
             ? `ring-2 ring-inset ${col.dropRing} border-dark-600`
             : 'bg-dark-800/20 border-dark-700/30'
           }`}
-        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOver(true); }}
-        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDragOver(false); }}
-        onDrop={(e) => { e.preventDefault(); setDragOver(false); onDrop(e, col); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          setDragOver(true);
+          setDropIndex(computeDropIndex(e));
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) {
+            setDragOver(false);
+            setDropIndex(-1);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          const idx = computeDropIndex(e);
+          setDragOver(false);
+          setDropIndex(-1);
+          onDrop(e, col, idx);
+        }}
       >
-        {tasks.map(task => (
-          <TaskCard
-            key={`${task.agentId}-${task.id}`}
-            task={task}
-            agents={agents}
-            onDelete={onDelete}
-            onStop={onStop}
-            onOpen={onOpen}
-            showAgent={showAgent}
-            showCreator={showCreator}
-            showProject={showProject}
-            showTaskType={showTaskType}
-            onTouchDrop={onTouchDrop}
-            onNavigateToAgent={onNavigateToAgent}
-            onOpenCommits={onOpenCommits}
-          />
+        {tasks.map((task, i) => (
+          <div key={`${task.agentId}-${task.id}`} data-task-id={task.id}>
+            {dragOver && dropIndex === i && (
+              <div className="h-1 rounded-full bg-indigo-500/60 mx-2 mb-1 transition-all" />
+            )}
+            <TaskCard
+              task={task}
+              agents={agents}
+              onDelete={onDelete}
+              onStop={onStop}
+              onOpen={onOpen}
+              showAgent={showAgent}
+              showCreator={showCreator}
+              showProject={showProject}
+              showTaskType={showTaskType}
+              onTouchDrop={onTouchDrop}
+              onNavigateToAgent={onNavigateToAgent}
+              onOpenCommits={onOpenCommits}
+            />
+          </div>
         ))}
+        {dragOver && dropIndex >= tasks.length && (
+          <div className="h-1 rounded-full bg-indigo-500/60 mx-2 transition-all" />
+        )}
         {tasks.length === 0 && (
           <div className={`flex items-center justify-center text-xs py-4
             transition-colors ${dragOver ? 'text-dark-400' : 'text-dark-700'}`}>
@@ -2587,7 +2629,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const [projectFilter, setProjectFilter] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('date_desc');
+  const [sortBy, setSortBy] = useState('manual');
   const [selectedTask, setSelectedTask] = useState(null);
   const [commitModalTask, setCommitModalTask] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -2815,7 +2857,31 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     refreshAll();
   }, [allTasks, refreshAll, lastColId]);
 
-  const handleDrop = useCallback(async (e, col) => {
+  // Helper: reorder tasks in a column after a drop, updating positions via API
+  const reorderColumnTasks = useCallback(async (colId, draggedTaskId, dropIdx) => {
+    // Get current tasks in this column (sorted by current sort)
+    const currentTasks = tasksByColumn[colId] || [];
+    // Remove the dragged task if already in this column
+    const without = currentTasks.filter(t => t.id !== draggedTaskId);
+    // Insert at the drop index (clamp)
+    const idx = Math.min(Math.max(0, dropIdx), without.length);
+    const reordered = [...without.slice(0, idx), { id: draggedTaskId }, ...without.slice(idx)];
+    const orderedIds = reordered.map(t => t.id);
+    // Optimistic UI: update positions in local state
+    setDbTasks(prev => {
+      const posMap = new Map(orderedIds.map((id, i) => [id, i]));
+      return prev.map(t => posMap.has(t.id) ? { ...t, position: posMap.get(t.id) } : t);
+    });
+    // Persist
+    try {
+      await reorderTasks(orderedIds);
+    } catch (err) {
+      console.error('[TasksBoard] Reorder failed:', err.message);
+      refreshAll();
+    }
+  }, [tasksByColumn, refreshAll]);
+
+  const handleDrop = useCallback(async (e, col, dropIdx) => {
     if (isReadOnly) return;
     let agentId, taskId;
     try {
@@ -2830,14 +2896,26 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
       const isAlreadyInColumn = task.status === 'error'
         ? (task.errorFromStatus || fallbackColId) === col.id
         : col.statuses.includes(task.status || fallbackColId);
-      if (isAlreadyInColumn) return;
-      // Optimistic UI update
+
+      if (isAlreadyInColumn) {
+        // Same column — just reorder
+        if (dropIdx !== undefined) {
+          await reorderColumnTasks(col.id, taskId, dropIdx);
+        }
+        return;
+      }
+
+      // Moving to a different column
       const prevStatus = task.status;
       setDbTasks(prev => prev.map(t =>
         t.id === taskId ? { ...t, status: col.dropStatus, updatedAt: new Date().toISOString() } : t
       ));
       try {
         await updateTaskById(taskId, { column: col.dropStatus });
+        // After status change, reorder within the target column at the drop position
+        if (dropIdx !== undefined) {
+          await reorderColumnTasks(col.id, taskId, dropIdx);
+        }
         refreshAll();
       } catch (apiErr) {
         console.error('[TasksBoard] Drop API failed, reverting:', apiErr.message);
@@ -2848,13 +2926,12 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     } catch (err) {
       console.error('[TasksBoard] Drop status change failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll, isReadOnly]);
+  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks]);
 
   // Touch drag-and-drop handler
   const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
     if (isReadOnly) return;
     try {
-      // Find task — try exact match first, then fall back to id-only (agentId ref can be stale)
       let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
       if (!task) task = allTasks.find(t => t.id === taskId);
       if (!task) {
@@ -2873,8 +2950,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
         : col.statuses.includes(task.status || fallbackColId);
       if (isAlreadyInColumn) return;
 
-      // Optimistic UI update — move the task in local state immediately so the
-      // user sees it snap to the target column without waiting for the server.
       const prevStatus = task.status;
       setDbTasks(prev => prev.map(t =>
         t.id === taskId ? { ...t, status: col.dropStatus, updatedAt: new Date().toISOString() } : t
@@ -2882,10 +2957,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
 
       try {
         await updateTaskById(taskId, { column: col.dropStatus });
+        // Touch drop appends to end of target column
+        await reorderColumnTasks(col.id, taskId, (tasksByColumn[col.id] || []).length);
         refreshAll();
       } catch (apiErr) {
         console.error('[TasksBoard] Touch drop API failed, reverting:', apiErr.message);
-        // Revert optimistic update on failure
         setDbTasks(prev => prev.map(t =>
           t.id === taskId ? { ...t, status: prevStatus } : t
         ));
@@ -2893,7 +2969,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     } catch (err) {
       console.error('[TasksBoard] Touch drop failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll, isReadOnly]);
+  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks, tasksByColumn]);
 
 
 

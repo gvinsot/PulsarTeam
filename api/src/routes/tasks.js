@@ -84,7 +84,7 @@ router.get('/', async (req, res) => {
       query += ` AND status = $${params.length}`;
     }
 
-    query += ' ORDER BY created_at';
+    query += ' ORDER BY position ASC, created_at ASC';
     const result = await pool.query(query, params);
 
     // Enrich with agent name
@@ -118,7 +118,7 @@ router.put('/:id', async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const { title, description, column, agentId, type, priority, dueDate, boardId } = req.body;
+    const { title, description, column, agentId, type, priority, dueDate, boardId, position } = req.body;
     const now = new Date().toISOString();
     const username = req.user?.username || 'user';
 
@@ -172,6 +172,7 @@ router.put('/:id', async (req, res) => {
     if (type !== undefined && type !== task.taskType) { task.taskType = type; editedFields.push('taskType'); }
     if (priority !== undefined && priority !== task.priority) { task.priority = priority; editedFields.push('priority'); }
     if (dueDate !== undefined && dueDate !== task.dueDate) { task.dueDate = dueDate; editedFields.push('dueDate'); }
+    if (position !== undefined) { task.position = position; }
     task.updatedAt = now;
 
     // ── History entry ──────────────────────────────────────────────────────
@@ -211,6 +212,7 @@ router.put('/:id', async (req, res) => {
         if (type !== undefined) memTask.taskType = task.taskType;
         if (priority !== undefined) memTask.priority = task.priority;
         if (dueDate !== undefined) memTask.dueDate = task.dueDate;
+        if (position !== undefined) memTask.position = task.position;
         memTask.updatedAt = task.updatedAt;
 
         // When status changed, clear stale execution state so the workflow
@@ -259,6 +261,43 @@ router.put('/:id', async (req, res) => {
     });
 
     res.json(task);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PUT /tasks/reorder — update positions for tasks in a column ────────────
+router.put('/reorder', async (req, res) => {
+  try {
+    const { orderedIds } = req.body;
+    if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+      return res.status(400).json({ error: 'orderedIds must be a non-empty array of task IDs' });
+    }
+
+    const pool = getPool();
+    if (!pool) return res.status(500).json({ error: 'Database not available' });
+
+    const mgr = req.app.get('agentManager');
+
+    // Update position for each task in the given order
+    const promises = orderedIds.map((taskId, index) =>
+      pool.query('UPDATE tasks SET position = $1, updated_at = NOW() WHERE id = $2', [index, taskId])
+    );
+    await Promise.all(promises);
+
+    // Also update in-memory positions
+    for (let i = 0; i < orderedIds.length; i++) {
+      const task = mgr.getTask(orderedIds[i]);
+      if (task) {
+        const memAgent = mgr.agents.get(task.agentId);
+        if (memAgent) {
+          const memTask = mgr._getAgentTasks(task.agentId).find(t => t.id === orderedIds[i]);
+          if (memTask) memTask.position = i;
+        }
+      }
+    }
+
+    res.json({ ok: true, count: orderedIds.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

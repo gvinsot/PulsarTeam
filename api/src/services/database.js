@@ -206,6 +206,9 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_action_idx INTEGER').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running BOOLEAN DEFAULT FALSE').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_agent_id UUID').catch(() => {});
+      // Position column for manual ordering within columns
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position BIGINT NOT NULL DEFAULT 0').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_position ON tasks(board_id, status, position)').catch(() => {});
       console.log('✅ Tasks table ready');
 
       // Create task_audit_logs table for tracking delete/restore actions
@@ -1303,14 +1306,16 @@ async function _doSaveTask(task) {
       `INSERT INTO tasks (id, agent_id, text, title, status, project, board_id, assignee,
                           task_type, priority, due_date, source, recurrence, commits, history,
                           error, created_at, updated_at, completed_at, started_at,
-                          execution_status, completed_action_idx, action_running, action_running_agent_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23)
+                          execution_status, completed_action_idx, action_running, action_running_agent_id,
+                          position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23,$24)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, project = $6, board_id = $7, assignee = $8,
          task_type = $9, priority = $10, due_date = $11, source = $12, recurrence = $13,
          commits = $14, history = $15, error = $16, updated_at = NOW(),
          completed_at = $18, started_at = $19,
-         execution_status = $20, completed_action_idx = $21, action_running = $22, action_running_agent_id = $23`,
+         execution_status = $20, completed_action_idx = $21, action_running = $22, action_running_agent_id = $23,
+         position = $24`,
       [
         task.id,
         task.agentId,
@@ -1335,6 +1340,7 @@ async function _doSaveTask(task) {
         task.completedActionIdx != null ? task.completedActionIdx : null,
         task.actionRunning || false,
         task.actionRunningAgentId || null,
+        task.position ?? 0,
       ]
     );
   } catch (err) {
@@ -1531,6 +1537,7 @@ export function rowToTask(row) {
     completedActionIdx: row.completed_action_idx != null ? row.completed_action_idx : undefined,
     actionRunning: row.action_running || false,
     actionRunningAgentId: row.action_running_agent_id || undefined,
+    position: parseInt(row.position, 10) || 0,
   };
 }
 
@@ -1735,6 +1742,7 @@ export async function updateTaskFields(taskId, fields) {
     'task_type', 'priority', 'due_date', 'source', 'recurrence',
     'commits', 'history', 'error', 'completed_at', 'started_at',
     'execution_status', 'completed_action_idx', 'action_running', 'action_running_agent_id',
+    'position',
   ];
   // Map camelCase to snake_case
   const camelToSnake = {

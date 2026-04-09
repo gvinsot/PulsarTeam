@@ -658,6 +658,14 @@ export const deleteTask = (taskId) =>
     headers: getHeaders(),
   }).then(handleResponse);
 
+/* ── Reorder tasks within a column ──────────────────────────────────── */
+export const reorderTasks = (orderedIds) =>
+  fetch(`${API_BASE}/tasks/reorder`, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify({ orderedIds }),
+  }).then(handleResponse);
+
 /* ── Bulk move ─────────────────────────────────────────────────────────── */
 export const bulkMoveTasks = (taskIds, boardId, column) =>
   fetch(`${API_BASE}/tasks/bulk-move`, {

@@ -47,6 +47,7 @@ export const tasksMethods = {
       project: project !== undefined ? project : (agent.project || null),
       source: source || null,
       boardId: boardId || null,
+      position: Date.now(),
       createdAt: now,
       history: [{ status, at: now, by: source?.name || source?.type || 'user' }],
     };
