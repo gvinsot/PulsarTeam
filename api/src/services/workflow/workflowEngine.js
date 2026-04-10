@@ -339,6 +339,22 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
 
     const result = await executeAction(action, task, { agentManager, io, ownerId, workflow });
 
+    if (result.error) {
+      // Action failed with an error — mark task as error and stop chain.
+      // The task stays in its column (via errorFromStatus) and appears in red.
+      console.log(`[WorkflowEngine] Action ${i} errored: ${result.message} — setting task to error`);
+      const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+      if (actualTask && actualTask.status !== 'error') {
+        actualTask.errorFromStatus = actualTask.status;
+        actualTask.status = 'error';
+        actualTask.error = actualTask.error || result.message;
+        await saveTaskToDb({ ...actualTask, agentId: task.agentId });
+        agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+      }
+      task.status = 'error';
+      break;
+    }
+
     if (result.skipped) {
       // Action could not run (no agent, lock held, etc.) — flag for retry
       hadSkippedAction = true;

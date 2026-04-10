@@ -84,6 +84,13 @@ export class SandboxExecutionProvider extends ExecutionProvider {
   }
 
   async switchProject(agentId, newProject, gitUrl = null) {
+    const entry = this.agentUsers.get(agentId);
+    if (!entry) {
+      // Agent was never initialized in the sandbox — provision it now
+      console.log(`📦 [Sandbox] switchProject: agent ${agentId} not initialized — calling ensureProject`);
+      await this.ensureProject(agentId, newProject, gitUrl);
+      return;
+    }
     await this._switchProject(agentId, newProject, gitUrl);
   }
 
