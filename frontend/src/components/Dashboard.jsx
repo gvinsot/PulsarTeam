@@ -299,7 +299,7 @@ export default function Dashboard({
         <div className="flex-1 flex max-w-[1800px] mx-auto w-full min-h-0 overflow-hidden">
           {activeView === 'tasks' && (
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <TasksBoard agents={sortedAgents} onRefresh={onRefresh} user={user} onNavigateToAgent={handleNavigateToAgent} />
+              <TasksBoard agents={sortedAgents} onRefresh={onRefresh} user={user} onNavigateToAgent={handleNavigateToAgent} githubProjects={projects || []} projectContexts={projectContexts || []} />
             </div>
           )}
           {activeView === 'projects' && (

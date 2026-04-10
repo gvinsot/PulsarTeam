@@ -11,6 +11,7 @@ import { getDeletedTasks, restoreTask as restoreTaskApi, hardDeleteTask as hardD
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
+import GitHubActivityModal from './GitHubActivityModal';
 import ShareBoardModal from './ShareBoardModal';
 import { useTheme } from '../contexts/ThemeContext';
 import { getSocket } from '../socket';
@@ -2753,7 +2754,7 @@ function BoardTabs({ boards, activeBoardId, onSelect, onCreate, onRename, onDele
 
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
-export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent }) {
+export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, githubProjects = [], projectContexts = [] }) {
   const [projectFilter, setProjectFilter] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [search, setSearch] = useState('');
@@ -2767,6 +2768,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
   const [jiraStatus, setJiraStatus] = useState(null);
   const [showDeletedTasks, setShowDeletedTasks] = useState(false);
   const [shareBoard, setShareBoard] = useState(null);
+  const [activityTarget, setActivityTarget] = useState(null);
   const boardScrollRef = useRef(null);
 
   // Multi-board state
@@ -2970,6 +2972,33 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
     const ps = new Set(allTasks.map(t => t.project).filter(Boolean));
     return Array.from(ps).sort();
   }, [allTasks]);
+
+  // GitHub lookup: map project name → { fullName, owner, repo }
+  const githubLookup = useMemo(() => {
+    const map = new Map();
+    for (const gp of githubProjects) {
+      if (gp.fullName) {
+        const [owner, repo] = gp.fullName.split('/');
+        map.set(gp.name, { fullName: gp.fullName, owner, repo });
+      }
+    }
+    for (const ctx of projectContexts) {
+      if (ctx.githubUrl && !map.has(ctx.name)) {
+        const match = ctx.githubUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+        if (match) {
+          map.set(ctx.name, { fullName: `${match[1]}/${match[2]}`, owner: match[1], repo: match[2] });
+        }
+      }
+    }
+    return map;
+  }, [githubProjects, projectContexts]);
+
+  // Projects on this board that have GitHub data
+  const boardProjectsWithGithub = useMemo(() => {
+    return allProjects
+      .map(name => ({ name, github: githubLookup.get(name) }))
+      .filter(p => p.github);
+  }, [allProjects, githubLookup]);
 
   // Default project = project of the last task created by the user on this board
   const defaultProject = useMemo(() => {
@@ -3332,6 +3361,19 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           <Archive className="w-3.5 h-3.5" />
         </button>
 
+        {/* GitHub Activity per project */}
+        {boardProjectsWithGithub.map(p => (
+          <button
+            key={p.name}
+            onClick={() => setActivityTarget(p.github)}
+            className="flex items-center gap-1 px-1.5 py-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors"
+            title={`GitHub activity — ${p.name}`}
+          >
+            <GitCommit className="w-3.5 h-3.5" />
+            <span className="text-[10px] max-w-[80px] truncate">{p.name}</span>
+          </button>
+        ))}
+
         {/* Workflow settings */}
         {canEdit && (
           <button
@@ -3475,6 +3517,15 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           taskId={commitModalTask.id}
           commits={commitModalTask.commits}
           onClose={() => setCommitModalTask(null)}
+        />
+      )}
+
+      {/* GitHub Activity modal */}
+      {activityTarget && (
+        <GitHubActivityModal
+          owner={activityTarget.owner}
+          repo={activityTarget.repo}
+          onClose={() => setActivityTarget(null)}
         />
       )}
     </div>
