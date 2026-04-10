@@ -455,7 +455,7 @@ function ExecutionLogEntry({ entry, index }) {
 
 // ── TaskDetailModal ──────────────────────────────────────────────────────────
 
-function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDelete, statusOptions, onNavigateToAgent }) {
+function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDelete, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
   const [editTitle, setEditTitle] = useState(task.title || '');
@@ -468,6 +468,9 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
   const [transferring, setTransferring] = useState(false);
   const [editingType, setEditingType] = useState(false);
   const [savingType, setSavingType] = useState(false);
+  const [editingBoard, setEditingBoard] = useState(false);
+  const [boardMoveTarget, setBoardMoveTarget] = useState(null);
+  const [movingBoard, setMovingBoard] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refining, setRefining] = useState(false);
   const [showAllCommits, setShowAllCommits] = useState(false);
@@ -554,6 +557,26 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
     await onDelete(task);
     onClose();
   };
+
+  const handleBoardMoveConfirm = async () => {
+    if (!boardMoveTarget) return;
+    setMovingBoard(true);
+    try {
+      const destBoard = boards.find(b => b.id === boardMoveTarget);
+      const firstCol = destBoard?.workflow?.columns?.[0]?.id || 'todo';
+      await updateTaskById(task.id, { boardId: boardMoveTarget, column: firstCol });
+      setBoardMoveTarget(null);
+      setEditingBoard(false);
+      onRefresh?.();
+      onClose();
+    } catch (err) {
+      console.error('Board move failed:', err);
+    } finally {
+      setMovingBoard(false);
+    }
+  };
+
+  const currentBoard = boards?.find(b => b.id === (task.boardId || activeBoardId));
 
   const isError = task.status === 'error';
   const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
@@ -954,6 +977,58 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
               )}
             </div>
 
+            {/* Board */}
+            {boards && boards.length > 1 && (
+              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+                <div className="flex items-center gap-2 text-xs text-dark-400">
+                  <FolderKanban className="w-3.5 h-3.5" />
+                  Board
+                </div>
+                {editingBoard ? (
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      autoFocus
+                      defaultValue={task.boardId || activeBoardId || ''}
+                      onChange={e => {
+                        const targetId = e.target.value;
+                        if (targetId === (task.boardId || activeBoardId)) { setEditingBoard(false); return; }
+                        setBoardMoveTarget(targetId);
+                      }}
+                      disabled={task.actionRunning}
+                      className="px-2 py-0.5 w-40 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
+                        focus:outline-none focus:border-indigo-500 transition-colors"
+                    >
+                      {boards.map(b => (
+                        <option key={b.id} value={b.id}>{b.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => { setEditingBoard(false); setBoardMoveTarget(null); }}
+                      className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
+                      title="Cancel"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                      bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20">
+                      {currentBoard?.name || 'Unknown'}
+                    </span>
+                    <button
+                      onClick={() => !task.actionRunning && setEditingBoard(true)}
+                      className={`p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors
+                        ${task.actionRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      title={task.actionRunning ? 'Stop the agent first to move the task' : 'Move to another board'}
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Transition history */}
             {(task.history && task.history.length > 0) ? (
               <div className="space-y-0">
@@ -1160,6 +1235,56 @@ function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDele
         onClose={() => { setShowAllCommits(false); setClickedCommitHash(null); }}
       />
     )}
+
+    {/* Board move confirmation modal */}
+    {boardMoveTarget && (() => {
+      const destBoard = boards?.find(b => b.id === boardMoveTarget);
+      const destCol = destBoard?.workflow?.columns?.[0]?.label || 'first column';
+      return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="bg-dark-900 border border-amber-500/30 rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center shrink-0">
+                <ArrowRight className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-dark-100 font-semibold text-sm">Move to another board?</h3>
+                <p className="text-dark-400 text-xs mt-0.5">The task will be moved and placed in the first column</p>
+              </div>
+            </div>
+            <div className="bg-dark-800/60 rounded-lg p-3 mb-4 text-xs space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-dark-500 w-12">From:</span>
+                <span className="text-dark-300 font-medium">{currentBoard?.name || 'Current board'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-dark-500 w-12">To:</span>
+                <span className="text-amber-300 font-medium">{destBoard?.name || 'Unknown'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-dark-500 w-12">Column:</span>
+                <span className="text-dark-300">{destCol}</span>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setBoardMoveTarget(null)}
+                className="px-3 py-1.5 rounded-lg text-sm text-dark-400 hover:bg-dark-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBoardMoveConfirm}
+                disabled={movingBoard}
+                className="px-4 py-1.5 rounded-lg text-sm font-medium bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-40 transition-colors"
+              >
+                {movingBoard ? 'Moving...' : 'Confirm move'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    })()}
     </>
   );
 }
@@ -3297,6 +3422,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent 
           onRefresh={refreshAll}
           onDelete={handleDelete}
           onNavigateToAgent={onNavigateToAgent}
+          boards={boards}
+          activeBoardId={activeBoardId}
         />
       )}
 
