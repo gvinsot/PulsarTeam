@@ -253,8 +253,17 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
     return { executed: false, skipped: true, reason: 'column-not-found' };
   }
 
+  // Check if the real task is already at the target status (concurrent chain
+  // may have moved it). This prevents duplicate "stopping chain" log spam and
+  // avoids triggering a redundant _checkAutoRefine for an already-processed column.
+  const realTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  if (realTask && realTask.status === action.target) {
+    console.log(`[ActionExecutor] change_status: task="${task.id}" already at "${action.target}" — no-op`);
+    return { executed: true, statusChanged: true };
+  }
+
   // Clean up chain resume state before moving
-  const taskBeforeMove = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const taskBeforeMove = realTask || agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
   if (taskBeforeMove) {
     delete taskBeforeMove._completedActionIdx;
     taskBeforeMove.completedActionIdx = null;

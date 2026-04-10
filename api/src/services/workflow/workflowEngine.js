@@ -33,6 +33,12 @@ import { findAgentForAssignment } from './agentSelector.js';
 const ON_ENTER_RETRY_COOLDOWN_MS = 3_000;
 const ON_ENTER_MAX_RETRIES = 20;
 
+// ── Per-task processing lock ────────────────────────────────────────────────
+// Prevents concurrent processColumnEntry calls for the same task, which can
+// happen when executeChangeStatus triggers a nested _checkAutoRefine call
+// while the parent chain is still running.
+const _processingTasks = new Map(); // taskId → status being processed
+
 /**
  * Process all transitions triggered when a task enters a column.
  *
@@ -52,6 +58,27 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
     console.log(`[WorkflowEngine] Skipping — task is in error status`);
     return;
   }
+
+  // ── Per-task lock: prevent concurrent processing ────────────────────────
+  // When executeChangeStatus calls setTaskStatus with skipAutoRefine=false,
+  // it triggers a nested processColumnEntry while the parent chain is still
+  // running. This causes race conditions where multiple chains can move the
+  // task concurrently, leading to tasks "jumping" columns or disappearing.
+  // We defer the nested call so recheckPendingTransitions picks it up instead.
+  if (_processingTasks.has(task.id)) {
+    const currentlyProcessing = _processingTasks.get(task.id);
+    console.log(`[WorkflowEngine] processColumnEntry: already processing task="${task.id}" (status="${currentlyProcessing}") — deferring for status="${task.status}"`);
+    // Flag for deferred on_enter so recheckPendingTransitions picks it up
+    const actualTask = agentManager._getAgentTasks(task.agentId)?.find(t => t.id === task.id);
+    if (actualTask && task.status !== currentlyProcessing) {
+      actualTask._pendingOnEnter = task.status;
+      saveTaskToDb({ ...actualTask, agentId: task.agentId }).catch(() => {});
+    }
+    return;
+  }
+  _processingTasks.set(task.id, task.status);
+
+  try {
 
   let workflow;
   try {
@@ -105,13 +132,27 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
     const actions = transition.actions || [];
     console.log(`[WorkflowEngine] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} actions) task="${task.id}"`);
 
-    await _executeActionChain(actions, task, {
+    const chainResult = await _executeActionChain(actions, task, {
       agentManager,
       io,
       ownerId,
       workflow,
       originalStatus,
     });
+
+    // If an action in the chain was skipped (e.g., no idle agent), stop
+    // processing further transitions for this column. Without this, a
+    // subsequent transition could move the task forward (via change_status)
+    // before the skipped action (e.g., run_agent) gets a chance to execute,
+    // causing tasks to "jump" columns without being processed.
+    if (chainResult?.skipped) {
+      console.log(`[WorkflowEngine] Chain had skipped actions — deferring remaining transitions for task="${task.id}"`);
+      break;
+    }
+  }
+
+  } finally {
+    _processingTasks.delete(task.id);
   }
 }
 
@@ -271,6 +312,8 @@ export async function recheckPendingTransitions(agentManager) {
 
 /**
  * Execute a chain of actions sequentially, respecting completedActionIdx for resume.
+ *
+ * @returns {{ skipped: boolean }} — whether an action in the chain was skipped
  */
 async function _executeActionChain(actions, task, { agentManager, io, ownerId, workflow, originalStatus }) {
   // Resume from last completed action ONLY if this is a retry for the same column.
@@ -289,6 +332,8 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
     console.log(`[WorkflowEngine] Ignoring stale completedActionIdx=${rawIdx} (pendingFor="${pendingFor}" != current="${originalStatus}") — starting fresh`);
   }
 
+  let hadSkippedAction = false;
+
   for (let i = startIdx; i < actions.length; i++) {
     const action = actions[i];
 
@@ -296,6 +341,7 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
 
     if (result.skipped) {
       // Action could not run (no agent, lock held, etc.) — flag for retry
+      hadSkippedAction = true;
       const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
       if (actualTask) {
         actualTask._pendingOnEnter = actualTask.status;
@@ -349,13 +395,18 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
     }
   }
 
-  // Clean up chain resume index
-  const taskAfterChain = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-  if (taskAfterChain && (typeof taskAfterChain._completedActionIdx === 'number' || typeof taskAfterChain.completedActionIdx === 'number')) {
-    delete taskAfterChain._completedActionIdx;
-    taskAfterChain.completedActionIdx = null;
-    await saveTaskToDb({ ...taskAfterChain, agentId: task.agentId });
+  // Clean up chain resume index (only if no action was skipped — skipped chains
+  // need the index preserved for retry via recheckPendingTransitions)
+  if (!hadSkippedAction) {
+    const taskAfterChain = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+    if (taskAfterChain && (typeof taskAfterChain._completedActionIdx === 'number' || typeof taskAfterChain.completedActionIdx === 'number')) {
+      delete taskAfterChain._completedActionIdx;
+      taskAfterChain.completedActionIdx = null;
+      await saveTaskToDb({ ...taskAfterChain, agentId: task.agentId });
+    }
   }
+
+  return { skipped: hadSkippedAction };
 }
 
 /**
