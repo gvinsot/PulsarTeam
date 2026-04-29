@@ -1,102 +1,127 @@
-# Coder Service - FastAPI proxy to Claude Code CLI
+# Runner Service — generic agent runtime.
+#
+# A single image that ships every supported CLI; the active backend is
+# selected at startup via RUNNER_TYPE (claude-code, openclaw, hermes,
+# opencode, sandbox).
 FROM python:3.12-slim
 
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Build tools
     build-essential \
     git \
     curl \
     wget \
     ca-certificates \
-    # Development tools
     jq \
     netcat-openbsd \
     dnsutils \
-    # Database clients
     postgresql-client \
     sqlite3 \
-    # Template rendering (envsubst)
     gettext-base \
-    # Chromium headless (for web scraping / browser automation)
     chromium \
     chromium-driver \
     fonts-liberation \
     fonts-noto-color-emoji \
-    # Document conversion (docx, pptx, xlsx, odt, epub, rst, latex → markdown)
     pandoc \
-    # Utilities
     util-linux \
     openssh-client \
-    # Cleanup
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium headless environment
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_FLAGS="--no-sandbox --headless --disable-gpu --disable-dev-shm-usage"
 
-# Install Node.js 22 LTS (required for Claude Code CLI)
+# Install Node.js 22 LTS (required by Claude Code CLI and several other runners)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI globally
+# ─── Agent CLIs ────────────────────────────────────────────────────────────
+# Each runner backend invokes its own CLI binary. We install all of them
+# unconditionally so the same image can act as any backend at runtime.
+# A failed install does NOT abort the image build — the backend will
+# return a clear error from /health if its CLI is missing at runtime.
+
+# Claude Code CLI (Anthropic)
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install Go
+# OpenCode CLI (https://opencode.ai)
+RUN npm install -g opencode-ai \
+    || echo "WARN: opencode-ai install failed — backend will be unavailable"
+
+# OpenClaw CLI (https://openclaw.ai)
+RUN npm install -g openclaw \
+    || (echo "WARN: openclaw npm install failed — installing stub" \
+        && printf '#!/bin/sh\necho "openclaw-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/openclaw \
+        && chmod +x /usr/local/bin/openclaw)
+
+# Hermes Agent (https://github.com/NousResearch/hermes-agent)
+# Their installer is interactive in some paths; we run it non-interactively
+# and fall back to a stub if it fails.
+RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh \
+    && bash /tmp/hermes-install.sh < /dev/null \
+    || (echo "WARN: hermes install failed — installing stub" \
+        && printf '#!/bin/sh\necho "hermes-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/hermes \
+        && chmod +x /usr/local/bin/hermes)
+# Make sure hermes is on PATH (installer may put it under ~/.hermes/bin)
+ENV PATH="/root/.hermes/bin:/usr/local/bin:${PATH}"
+
+# Install Go (dev tool inside agent workspaces)
 RUN curl -fsSL https://go.dev/dl/go1.24.1.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH"
 RUN CGO_ENABLED=0 go install golang.org/x/tools/gopls@latest && \
     CGO_ENABLED=0 go install github.com/go-delve/delve/cmd/dlv@latest && \
     CGO_ENABLED=0 go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
-# Install Docker CLI (for agent to manage containers)
+# Install Docker CLI (for agents that manage containers)
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list \
     && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a dedicated Python virtual environment (PEP 668 compatible)
+# Python virtual environment (PEP 668)
 RUN python3.12 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy and install Python dependencies
-COPY coder-service/requirements.txt .
+COPY runner-service/requirements.txt .
 RUN /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# Make dev tools available globally (for scripts calling /usr/bin/python3 -m pytest)
+# Make dev tools available globally
 RUN pip install --break-system-packages pytest black
 
 # Copy server code (modular Python files) and entrypoint
-COPY coder-service/src/*.py .
-COPY coder-service/src/entrypoint.sh .
+COPY runner-service/src/*.py .
+COPY runner-service/src/backends/*.py ./backends/
+COPY runner-service/src/entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 # Verify installations
 RUN echo "=== Python ===" && python --version && \
     echo "=== Node.js ===" && node --version && \
-    echo "=== npm ===" && npm --version && \
     echo "=== Claude Code ===" && claude --version && \
+    echo "=== OpenCode ===" && (opencode --version 2>&1 || echo "not installed") && \
+    echo "=== OpenClaw ===" && openclaw --version && \
+    echo "=== Hermes ===" && hermes --version && \
     echo "=== Git ===" && git --version && \
     echo "=== Docker ===" && docker --version && \
     echo "=== Chromium ===" && chromium --version && \
     echo "=== Go ===" && go version
 
-# RTK (Rust Token Killer) — reduces LLM token consumption by 60-90%
+# RTK (Rust Token Killer)
 RUN RTK_ARCH=$(uname -m | sed 's/x86_64/x86_64/' | sed 's/aarch64/aarch64/') && \
     RTK_VERSION=$(curl -fsSL https://api.github.com/repos/rtk-ai/rtk/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
     curl -fsSL "https://github.com/rtk-ai/rtk/releases/download/${RTK_VERSION}/rtk-${RTK_ARCH}-unknown-linux-musl.tar.gz" | tar -xz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/rtk && \
     rtk --version
 
-# Install gosu for runtime user switching
+# gosu for runtime user switching
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
     CMD curl -sf http://localhost:8000/health || exit 1
 
-# Start FastAPI server (entrypoint creates user from PUID/PGID env vars)
 CMD ["./entrypoint.sh"]

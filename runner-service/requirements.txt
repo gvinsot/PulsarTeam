@@ -4,12 +4,12 @@ uvicorn[standard]==0.27.0
 pydantic>=2.5.3
 python-dotenv>=1.0.0
 
-# HTTP clients (dev tools available to Claude Code)
+# HTTP clients
 requests>=2.31.0
 aiohttp>=3.9,<4.0
 httpx>=0.27.0
 
-# Web scraping & browser automation (dev tools)
+# Web scraping & browser automation
 beautifulsoup4>=4.12.0
 selenium>=4.20.0
 playwright>=1.44.0
@@ -17,15 +17,15 @@ playwright>=1.44.0
 # Version control
 GitPython>=3.1.40
 
-# Database clients (dev tools)
+# Database clients
 psycopg2-binary>=2.9.9
 pymongo>=4.6.0
 sqlalchemy>=2.0.0
 
-# Docker SDK (dev tool)
+# Docker SDK
 docker>=7.0.0
 
-# Data science & visualization (dev tools)
+# Data science & visualization
 pandas>=2.1.4
 numpy>=1.26.0
 matplotlib>=3.8.2

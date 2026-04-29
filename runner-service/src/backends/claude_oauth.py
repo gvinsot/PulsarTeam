@@ -1,8 +1,5 @@
 """
-Coder Service — OAuth PKCE flow management.
-
-Handles URL generation, code exchange, login initiation for global,
-per-agent, and per-owner OAuth flows.
+Claude Code backend — OAuth PKCE flow management.
 """
 
 import re
@@ -15,11 +12,11 @@ from config import (
     OAUTH_CLIENT_ID, OAUTH_AUTHORIZE_URL, OAUTH_REDIRECT_URI, OAUTH_SCOPES,
     logger,
 )
-from token_store import (
+from agent_user import ensure_agent_user
+from .claude_token_store import (
     token_http_request,
     save_token, save_owner_token, save_agent_token,
 )
-from agent_user import ensure_agent_user
 
 
 # --- Global OAuth flow state --------------------------------------------------
@@ -28,26 +25,16 @@ _auth_url: Optional[str] = None
 _oauth_code_verifier: Optional[str] = None
 _oauth_state: Optional[str] = None
 
-# Per-agent / per-owner pending OAuth flow state
 _agent_oauth_flows: dict[str, dict] = {}
 _owner_oauth_flows: dict[str, dict] = {}
 
 
 # --- Helpers ------------------------------------------------------------------
 
-# Verification code pattern: auth_code#state (long alphanumeric with #, _, -)
 _CODE_RE = re.compile(r'^[A-Za-z0-9_#-]{20,}$')
 
 
 def _extract_code_from_prompt(prompt: str) -> Optional[str]:
-    """Extract a verification code from a prompt (may be wrapped in conversation format).
-
-    Handles:
-    - Raw code: "oAb7X8p0ADm...#state..."
-    - Single message: "User: oAb7X8p0ADm..."
-    - Full conversation: "User: hello\\nAssistant: ...\\nUser: oAb7X8p0ADm..."
-    Returns None if the last user message doesn't look like a code.
-    """
     last_user_msg = prompt.strip()
     for line in reversed(prompt.strip().split('\n')):
         line = line.strip()
@@ -61,13 +48,11 @@ def _extract_code_from_prompt(prompt: str) -> Optional[str]:
 
 
 def requests_encode(value: str) -> str:
-    """URL-encode a value (percent-encoding)."""
     import urllib.parse
     return urllib.parse.quote(value, safe="")
 
 
 def _generate_pkce() -> tuple[str, str]:
-    """Generate PKCE code_verifier and code_challenge (S256)."""
     code_verifier = secrets.token_urlsafe(64)[:128]
     digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
     code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
@@ -77,7 +62,6 @@ def _generate_pkce() -> tuple[str, str]:
 # --- Global OAuth flow --------------------------------------------------------
 
 def _build_auth_url() -> str:
-    """Build OAuth authorization URL with PKCE and store state for later exchange."""
     global _oauth_code_verifier, _oauth_state
 
     _oauth_code_verifier, code_challenge = _generate_pkce()
@@ -98,23 +82,17 @@ def _build_auth_url() -> str:
 
 
 async def get_login_url() -> str:
-    """Generate an OAuth authorization URL with PKCE."""
     url = _build_auth_url()
     logger.info(f"Generated OAuth URL: {url[:80]}...")
     return url
 
 
 async def exchange_auth_code(full_code: str) -> dict:
-    """Exchange the authorization code for OAuth tokens.
-
-    The code from the browser callback is formatted as: {auth_code}#{state}
-    """
     global _oauth_code_verifier, _oauth_state, _auth_url
 
     if not _oauth_code_verifier:
         return {"status": "error", "message": "No login flow in progress. Start one first."}
 
-    # Split code on # - format is auth_code#state
     if "#" in full_code:
         auth_code, state = full_code.split("#", 1)
     else:
@@ -158,7 +136,6 @@ async def exchange_auth_code(full_code: str) -> dict:
         email = result.get("account", {}).get("email", "")
         logger.info(f"OAuth token exchange successful: {email}")
 
-        # Clear OAuth flow state
         _oauth_code_verifier = None
         _oauth_state = None
         _auth_url = None
@@ -179,7 +156,6 @@ async def exchange_auth_code(full_code: str) -> dict:
 
 
 def get_auth_url() -> Optional[str]:
-    """Return the cached global auth URL (if any)."""
     return _auth_url
 
 
@@ -191,7 +167,6 @@ def set_auth_url(url: Optional[str]):
 # --- Per-agent OAuth flow -----------------------------------------------------
 
 def initiate_agent_login(agent_id: str) -> str:
-    """Generate an OAuth URL for an agent login flow (reuses pending flow if exists)."""
     if agent_id in _agent_oauth_flows:
         return _agent_oauth_flows[agent_id]["auth_url"]
     code_verifier = secrets.token_urlsafe(64)[:128]
@@ -219,19 +194,16 @@ def initiate_agent_login(agent_id: str) -> str:
 
 
 def get_agent_oauth_flow(agent_id: str) -> Optional[dict]:
-    """Return the pending OAuth flow for an agent, or None."""
     return _agent_oauth_flows.get(agent_id)
 
 
 def pop_agent_oauth_flow(agent_id: str) -> Optional[dict]:
-    """Remove and return the pending OAuth flow for an agent."""
     return _agent_oauth_flows.pop(agent_id, None)
 
 
 # --- Per-owner OAuth flow -----------------------------------------------------
 
 def initiate_owner_login(owner_id: str) -> str:
-    """Generate an OAuth URL for an owner login flow (reuses pending flow if exists)."""
     if owner_id in _owner_oauth_flows:
         return _owner_oauth_flows[owner_id]["auth_url"]
     code_verifier = secrets.token_urlsafe(64)[:128]
@@ -259,39 +231,26 @@ def initiate_owner_login(owner_id: str) -> str:
 
 
 def get_owner_oauth_flow(owner_id: str) -> Optional[dict]:
-    """Return the pending OAuth flow for an owner, or None."""
     return _owner_oauth_flows.get(owner_id)
 
 
 def pop_owner_oauth_flow(owner_id: str) -> Optional[dict]:
-    """Remove and return the pending OAuth flow for an owner."""
     return _owner_oauth_flows.pop(owner_id, None)
 
 
 # --- In-chat code exchange (tries all pending flows) --------------------------
 
 async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = None, owner_id: Optional[str] = None) -> Optional[dict]:
-    """Detect a verification code in the prompt and exchange it for a token.
-
-    Checks ALL pending OAuth flows (per-owner, per-agent, then global) and
-    exchanges the code using the matching flow's code_verifier.
-
-    Returns a dict with {"status": "authenticated", ...} on success,
-    {"status": "error", ...} on failure, or None if no code was detected
-    or no matching flow is pending.
-    """
     code = _extract_code_from_prompt(prompt)
     if not code:
         return None
 
-    # Split code on # to get state (used to match the flow)
     if "#" in code:
         auth_code, state = code.split("#", 1)
     else:
         auth_code = code
         state = ""
 
-    # 1. Try per-owner flow
     if owner_id and owner_id in _owner_oauth_flows:
         flow = _owner_oauth_flows[owner_id]
         payload = {
@@ -331,7 +290,6 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
             _owner_oauth_flows.pop(owner_id, None)
             return {"status": "error", "message": f"Token exchange failed: {e}"}
 
-    # 2. Try per-agent flow
     if agent_id and agent_id in _agent_oauth_flows:
         flow = _agent_oauth_flows[agent_id]
         payload = {
@@ -373,10 +331,8 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
             _agent_oauth_flows.pop(agent_id, None)
             return {"status": "error", "message": f"Token exchange failed: {e}"}
 
-    # 3. Try global flow (legacy)
     global _oauth_code_verifier
     if _oauth_code_verifier:
         return await exchange_auth_code(code)
 
-    # No matching flow found — the code-like string is not for us
     return None

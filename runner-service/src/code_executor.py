@@ -1,7 +1,5 @@
 """
-Coder Service — Direct code execution (bypass Claude CLI).
-
-Provides Python and shell execution with output capture.
+Runner Service — Direct code execution (bypass any LLM agent).
 """
 
 import io
@@ -16,7 +14,6 @@ MAX_OUTPUT = 2000
 
 
 def execute_python(code: str) -> str:
-    """Execute Python code and capture output."""
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     try:
@@ -33,7 +30,6 @@ def execute_python(code: str) -> str:
 
 
 def execute_shell(code: str) -> str:
-    """Execute shell commands and capture output."""
     try:
         result = subprocess.run(
             code,

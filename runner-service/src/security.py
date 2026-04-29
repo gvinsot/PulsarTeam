@@ -1,3 +1,7 @@
+"""
+Runner Service — API key extraction and verification.
+"""
+
 from typing import Optional
 from fastapi import HTTPException
 

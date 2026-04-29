@@ -100,15 +100,21 @@ services:
       - sandbox-net
     restart: unless-stopped
 
+  # ─── Runner services ─────────────────────────────────────────────────────
+  # Single image, different RUNNER_TYPE per deployment.
+
   coder-service:
     build:
       context: .
-      dockerfile: coder-service/Dockerfile
+      dockerfile: runner-service/Dockerfile
     environment:
+      - RUNNER_TYPE=claude-code
       - TZ=${TZ:-Europe/Paris}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - TIMEOUT=600
       - PORT=8000
@@ -139,9 +145,79 @@ services:
       start_period: 120s
     restart: unless-stopped
 
+  openclaw-service:
+    build:
+      context: .
+      dockerfile: runner-service/Dockerfile
+    environment:
+      - RUNNER_TYPE=openclaw
+      - TZ=${TZ:-Europe/Paris}
+      - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://api:3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+      - ${HOST_CODE_PATH:-~}:/projects
+      - openclaw-data:/app/data
+    networks:
+      - sandbox-net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+  hermes-service:
+    build:
+      context: .
+      dockerfile: runner-service/Dockerfile
+    environment:
+      - RUNNER_TYPE=hermes
+      - TZ=${TZ:-Europe/Paris}
+      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-6}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://api:3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+      - ${HOST_CODE_PATH:-~}:/projects
+      - hermes-data:/app/data
+    networks:
+      - sandbox-net
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   coder-auth-data:
+  openclaw-data:
+  hermes-data:
 
 networks:
   internal:

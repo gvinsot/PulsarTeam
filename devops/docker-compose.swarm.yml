@@ -120,18 +120,21 @@ services:
   coder-service:
     build:
       context: ..
-      dockerfile: coder-service/Dockerfile
+      dockerfile: runner-service/Dockerfile
     image: registry.methodinfo.fr/coder-service:latest
     networks:
       proxy:
         aliases:
           - coder-service
     environment:
+      - RUNNER_TYPE=claude-code
       - TZ=Europe/Paris
       - LOG_LEVEL=info
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
       - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - VERBOSE=${CODER_VERBOSE:-false}
       - TIMEOUT=600
@@ -215,14 +218,16 @@ services:
     image: registry.methodinfo.fr/openclaw-service:latest
     build:
       context: ..
-      dockerfile: openclaw-service/Dockerfile
+      dockerfile: runner-service/Dockerfile
     networks:
       proxy:
         aliases:
           - openclaw-service
     environment:
+      - RUNNER_TYPE=openclaw
       - TZ=Europe/Paris
       - LOG_LEVEL=info
+      - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
       - PORT=8000
       - HOST=0.0.0.0
       - API_KEY=${CODER_API_KEY:-change-me-in-production}

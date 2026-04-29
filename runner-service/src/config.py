@@ -1,9 +1,22 @@
 """
-Coder Service — Configuration, logging, and shared constants.
+Runner Service — Configuration, logging, and shared constants.
+
+The service is generic: a single binary that can act as different agent
+runners by selecting RUNNER_TYPE at startup (claude-code, openclaw,
+hermes, opencode, sandbox).
 """
 
 import os
 import logging
+
+# --- Runner selection ---------------------------------------------------------
+
+RUNNER_TYPE = os.getenv("RUNNER_TYPE", "claude-code").lower().strip()
+VALID_RUNNERS = {"claude-code", "openclaw", "hermes", "opencode", "sandbox"}
+if RUNNER_TYPE not in VALID_RUNNERS:
+    raise RuntimeError(
+        f"Invalid RUNNER_TYPE={RUNNER_TYPE!r}. Must be one of: {sorted(VALID_RUNNERS)}"
+    )
 
 # --- Logging ------------------------------------------------------------------
 
@@ -12,7 +25,7 @@ if LOG_LEVEL not in {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}:
     LOG_LEVEL = "INFO"
 VERBOSE = os.getenv("VERBOSE", "false").lower() in ("true", "1", "yes")
 logging.basicConfig(level=LOG_LEVEL)
-logger = logging.getLogger("coder_service")
+logger = logging.getLogger(f"runner_service[{RUNNER_TYPE}]")
 
 if not VERBOSE:
     for noisy in ("httpx", "httpcore", "urllib3"):
@@ -20,8 +33,6 @@ if not VERBOSE:
 
 
 class HealthCheckFilter(logging.Filter):
-    """Filter out noisy health-check access logs from uvicorn."""
-
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
         if "GET /health" in message and "200" in message:
@@ -31,30 +42,34 @@ class HealthCheckFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 
-# --- Application constants ----------------------------------------------------
+# --- Shared constants ---------------------------------------------------------
 
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-CLAUDE_MAX_TURNS = int(os.getenv("CLAUDE_MAX_TURNS", "50"))
-TIMEOUT = int(os.getenv("TIMEOUT", "600"))
 API_KEY = os.getenv("API_KEY", "change-me-in-production")
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "/projects")
-ALLOWED_TOOLS = os.getenv("CLAUDE_ALLOWED_TOOLS", "")
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
-# Working directory for Claude Code CLI. Use /app (not PROJECTS_DIR) to avoid
-# loading stale CLAUDE.md files from mounted project volumes.
-CLAUDE_CWD = "/app"
+TIMEOUT = int(os.getenv("TIMEOUT", "600"))
+ALLOWED_TOOLS = os.getenv("RUNNER_ALLOWED_TOOLS", os.getenv("CLAUDE_ALLOWED_TOOLS", ""))
 
-# System prompt for Claude Code
-SYSTEM_PROMPT = os.getenv("CLAUDE_SYSTEM_PROMPT", (
+# Working directory for the CLI subprocess. Use /app (not PROJECTS_DIR) to
+# avoid loading stale config files from mounted project volumes.
+CLI_CWD = "/app"
+
+# --- Agent-specific constants -------------------------------------------------
+
+# Generic max-turns / model — each backend may interpret these differently.
+RUNNER_MODEL = os.getenv("RUNNER_MODEL", os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"))
+RUNNER_MAX_TURNS = int(os.getenv("RUNNER_MAX_TURNS", os.getenv("CLAUDE_MAX_TURNS", "50")))
+
+SYSTEM_PROMPT = os.getenv("RUNNER_SYSTEM_PROMPT", os.getenv("CLAUDE_SYSTEM_PROMPT", (
     "You are an autonomous code execution agent running inside a Docker container. "
     "You have full access to: Python 3.12, Node.js 22, bash, git, Docker CLI, "
     "PostgreSQL client, SQLite, and all standard Unix tools. "
     "Your working directory IS the project git repository. "
     "You can read, write, and execute code freely. Use git to commit and push your changes. "
     "Be concise and provide actionable results."
-))
+)))
 
-# --- OAuth constants ----------------------------------------------------------
+# --- Claude Code OAuth constants (only used by claude-code backend) -----------
 
 TOKEN_FILE = os.path.join(DATA_DIR, "oauth_token")
 TOKEN_JSON_FILE = os.path.join(DATA_DIR, "oauth_token.json")
@@ -66,6 +81,9 @@ OAUTH_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 OAUTH_REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
 OAUTH_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_servers"
 
-# --- Users directory (per-owner token storage) --------------------------------
-
 USERS_DIR = os.path.join(DATA_DIR, "users")
+
+# Backwards-compat aliases (so we don't have to update every file at once)
+CLAUDE_MODEL = RUNNER_MODEL
+CLAUDE_MAX_TURNS = RUNNER_MAX_TURNS
+CLAUDE_CWD = CLI_CWD

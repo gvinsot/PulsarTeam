@@ -1,8 +1,5 @@
 """
-Coder Service — Token persistence for global, per-agent, and per-owner OAuth tokens.
-
-Handles loading, saving, invalidation, expiry checks, and refresh for all
-three levels of token storage.
+Claude Code backend — Token persistence (global, per-agent, per-owner).
 """
 
 import os
@@ -24,7 +21,7 @@ from config import (
 # --- Rate limiting ------------------------------------------------------------
 
 _token_request_lock = asyncio.Lock()
-_token_cooldown_until: float = 0  # timestamp: no token request before this time
+_token_cooldown_until: float = 0
 
 
 def get_token_cooldown_until() -> float:
@@ -41,7 +38,6 @@ def set_token_cooldown_until(value: float):
 # =============================================================================
 
 def _restore_credentials_file(oauth_data: dict):
-    """Restore ~/.claude/.credentials.json from persistent OAuth data."""
     try:
         creds_dir = os.path.dirname(CREDENTIALS_FILE)
         os.makedirs(creds_dir, exist_ok=True)
@@ -60,26 +56,18 @@ def _restore_credentials_file(oauth_data: dict):
 
 
 def load_saved_token() -> Optional[str]:
-    """Load persisted OAuth token (check env, persistent JSON, token file, then credentials file).
-
-    When loading from the persistent JSON in /app/data, also restores
-    ~/.claude/.credentials.json so the CLI subprocess can use it.
-    """
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if token:
         return token
-    # Try persistent JSON (has refresh token + expiry)
     try:
         with open(TOKEN_JSON_FILE) as f:
             oauth_data = json.load(f)
         token = oauth_data.get("accessToken")
         if token:
-            # Restore credentials.json for CLI compatibility (lost on container restart)
             _restore_credentials_file(oauth_data)
             return token
     except (OSError, FileNotFoundError, json.JSONDecodeError):
         pass
-    # Fallback: plain text token file
     try:
         with open(TOKEN_FILE) as f:
             token = f.read().strip()
@@ -87,7 +75,6 @@ def load_saved_token() -> Optional[str]:
             return token
     except (OSError, FileNotFoundError):
         pass
-    # Fallback: CLI credentials file
     try:
         with open(CREDENTIALS_FILE) as f:
             creds = json.load(f)
@@ -100,12 +87,9 @@ def load_saved_token() -> Optional[str]:
 
 
 def save_token(token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
-    """Persist OAuth token to multiple locations for CLI compatibility."""
     os.makedirs(DATA_DIR, exist_ok=True)
-    # Plain text token file (backward compat)
     with open(TOKEN_FILE, "w") as f:
         f.write(token)
-    # Full OAuth data as JSON in persistent volume
     oauth_data = {
         "accessToken": token,
         "refreshToken": refresh_token or "",
@@ -116,7 +100,6 @@ def save_token(token: str, refresh_token: Optional[str] = None, expires_in: int 
         json.dump(oauth_data, f, indent=2)
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
-    # Also save to ~/.claude/.credentials.json for CLI compatibility
     creds_dir = os.path.dirname(CREDENTIALS_FILE)
     os.makedirs(creds_dir, exist_ok=True)
     creds = {}
@@ -132,22 +115,16 @@ def save_token(token: str, refresh_token: Optional[str] = None, expires_in: int 
 
 
 def invalidate_global_token():
-    """Remove global stored OAuth tokens when the refresh token is permanently invalid."""
     for path in (TOKEN_FILE, TOKEN_JSON_FILE, CREDENTIALS_FILE):
         try:
             os.remove(path)
         except OSError:
             pass
-    # Also clear from environment so _get_claude_env doesn't reuse it
     os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     logger.info("[Auth] Cleared invalid global OAuth tokens")
 
 
 def is_token_expired(margin_seconds: int = 300) -> bool:
-    """Return True if the saved OAuth token is expired (or expires within margin_seconds).
-
-    Also returns True when the token file does not exist (no token = need auth).
-    """
     try:
         with open(TOKEN_JSON_FILE) as f:
             oauth_data = json.load(f)
@@ -160,7 +137,6 @@ def is_token_expired(margin_seconds: int = 300) -> bool:
 
 
 def get_saved_refresh_token() -> Optional[str]:
-    """Return the saved refresh token from persistent JSON, if any."""
     try:
         with open(TOKEN_JSON_FILE) as f:
             return json.load(f).get("refreshToken") or None
@@ -169,7 +145,7 @@ def get_saved_refresh_token() -> Optional[str]:
 
 
 # =============================================================================
-# Per-owner (PulsarTeam user) token storage
+# Per-owner token storage
 # =============================================================================
 
 def _sanitize_owner_id(owner_id: str) -> str:
@@ -181,7 +157,6 @@ def _owner_token_dir(owner_id: str) -> str:
 
 
 def load_owner_token(owner_id: str) -> Optional[str]:
-    """Load OAuth token for a PulsarTeam user (owner)."""
     if not owner_id:
         return None
     token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
@@ -194,7 +169,6 @@ def load_owner_token(owner_id: str) -> Optional[str]:
 
 
 def save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
-    """Save OAuth token for a PulsarTeam user (owner)."""
     owner_dir = _owner_token_dir(owner_id)
     os.makedirs(owner_dir, exist_ok=True)
     oauth_data = {
@@ -209,7 +183,6 @@ def save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = N
 
 
 def invalidate_owner_token(owner_id: str):
-    """Remove stored OAuth tokens for an owner when the refresh token is permanently invalid."""
     if not owner_id:
         return
     token_file = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
@@ -221,7 +194,6 @@ def invalidate_owner_token(owner_id: str):
 
 
 def is_owner_token_expired(owner_id: str, margin_seconds: int = 300) -> bool:
-    """Check if an owner's OAuth token is expired."""
     if not owner_id:
         return False
     token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
@@ -237,7 +209,6 @@ def is_owner_token_expired(owner_id: str, margin_seconds: int = 300) -> bool:
 
 
 def get_owner_refresh_token(owner_id: str) -> Optional[str]:
-    """Get refresh token for an owner."""
     if not owner_id:
         return None
     token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
@@ -253,17 +224,14 @@ def get_owner_refresh_token(owner_id: str) -> Optional[str]:
 # =============================================================================
 
 def load_agent_token(agent_user: dict) -> Optional[str]:
-    """Load the OAuth token for an agent. Checks owner-level first, then per-agent."""
     if not agent_user:
         return None
-    # Check owner-level token first
     owner_id = agent_user.get("owner_id")
     if owner_id:
         token = load_owner_token(owner_id)
         if token:
             return token
     home = agent_user["home"]
-    # Legacy: agent-specific token JSON
     agent_token_json = os.path.join(home, "oauth_token.json")
     try:
         with open(agent_token_json) as f:
@@ -273,7 +241,6 @@ def load_agent_token(agent_user: dict) -> Optional[str]:
             return token
     except (OSError, FileNotFoundError, json.JSONDecodeError):
         pass
-    # 2. Agent credentials.json
     agent_creds = os.path.join(home, ".claude", ".credentials.json")
     try:
         with open(agent_creds) as f:
@@ -287,12 +254,10 @@ def load_agent_token(agent_user: dict) -> Optional[str]:
 
 
 def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
-    """Save an OAuth token. Redirects to owner-level storage when owner_id is set."""
     owner_id = agent_user.get("owner_id")
     if owner_id:
         save_owner_token(owner_id, token, refresh_token=refresh_token, expires_in=expires_in)
         return
-    # Legacy: per-agent storage
     home = agent_user["home"]
     os.makedirs(home, exist_ok=True)
     oauth_data = {
@@ -318,7 +283,6 @@ def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] 
 
 
 def invalidate_agent_token(agent_user: dict):
-    """Remove stored OAuth tokens for an agent when the refresh token is permanently invalid."""
     if not agent_user:
         return
     owner_id = agent_user.get("owner_id")
@@ -342,7 +306,6 @@ def invalidate_agent_token(agent_user: dict):
 
 
 def is_agent_token_expired(agent_user: dict, margin_seconds: int = 300) -> bool:
-    """Check if an agent's OAuth token is expired. Checks owner-level first."""
     if not agent_user:
         return False
     owner_id = agent_user.get("owner_id")
@@ -361,7 +324,6 @@ def is_agent_token_expired(agent_user: dict, margin_seconds: int = 300) -> bool:
 
 
 def get_agent_refresh_token(agent_user: dict) -> Optional[str]:
-    """Get the refresh token for an agent."""
     if not agent_user:
         return None
     agent_token_json = os.path.join(agent_user["home"], "oauth_token.json")
@@ -373,7 +335,6 @@ def get_agent_refresh_token(agent_user: dict) -> Optional[str]:
 
 
 def resolve_token(agent_user: dict) -> Optional[str]:
-    """Load token for an agent, preferring owner-level token if available."""
     owner_id = agent_user.get("owner_id") if agent_user else None
     if owner_id:
         token = load_owner_token(owner_id)
@@ -391,23 +352,11 @@ async def token_http_request(payload: dict, description: str, agent_user: dict =
 
     Uses Node.js fetch (via subprocess) instead of Python urllib because
     Cloudflare blocks Python's TLS fingerprint with a fake 429 response.
-    Node.js uses the same TLS stack as Claude Code CLI and passes Cloudflare.
-
-    Holds _token_request_lock so only one token request is in flight at a time.
-    Returns parsed JSON on success, None on failure.
     """
-    import urllib.parse as urlparse
-
     async with _token_request_lock:
-        # Skip the "already valid" optimisation for authorization_code exchanges:
-        # the user explicitly provided a code, so we must exchange it even if
-        # a global token happens to be valid (the owner/agent may still need
-        # their own token).
         is_code_exchange = payload.get("grant_type") == "authorization_code"
 
         if not is_code_exchange:
-            # Check if token was refreshed by another coroutine while we waited
-            # Use owner/agent-specific check when refreshing a non-global token
             if agent_user and agent_user.get("_owner_id"):
                 token_expired = is_owner_token_expired(agent_user["_owner_id"])
             elif agent_user:
@@ -419,8 +368,6 @@ async def token_http_request(payload: dict, description: str, agent_user: dict =
                 logger.info("Token already valid (refreshed by another request)")
                 return {"_already_valid": True}
 
-        body_str = urlparse.urlencode(payload)
-        # Use Node.js fetch to avoid Cloudflare blocking Python's TLS fingerprint
         node_script = f"""
         const params = new URLSearchParams({json.dumps(payload)});
         try {{
@@ -461,8 +408,6 @@ async def token_http_request(payload: dict, description: str, agent_user: dict =
                 return None
             else:
                 logger.error(f"{description}: HTTP {status}, body={body[:500]}")
-                # Detect permanently invalid refresh tokens (revoked, expired, etc.)
-                # so callers can clear the stored tokens instead of retrying forever.
                 try:
                     err_body = json.loads(body)
                     if err_body.get("error") == "invalid_grant":
@@ -484,10 +429,6 @@ async def token_http_request(payload: dict, description: str, agent_user: dict =
 # =============================================================================
 
 async def refresh_oauth_token() -> bool:
-    """Use the global refresh token to obtain a new access token.
-
-    Returns True on success, False on failure.
-    """
     global _token_cooldown_until
     refresh_token = get_saved_refresh_token()
     if not refresh_token:
@@ -506,7 +447,6 @@ async def refresh_oauth_token() -> bool:
             return False
         if result.get("_already_valid"):
             return True
-        # Handle permanently invalid refresh token
         if result.get("_invalid_grant"):
             logger.error("Global refresh token is permanently invalid — clearing stored tokens")
             invalidate_global_token()
@@ -530,7 +470,6 @@ async def refresh_oauth_token() -> bool:
 
 
 async def refresh_owner_token(owner_id: str) -> bool:
-    """Refresh an owner's OAuth token using its refresh token."""
     global _token_cooldown_until
     refresh_token = get_owner_refresh_token(owner_id)
     if not refresh_token:
@@ -541,16 +480,14 @@ async def refresh_owner_token(owner_id: str) -> bool:
         "client_id": OAUTH_CLIENT_ID,
         "refresh_token": refresh_token,
     }
-    # Pass a synthetic dict for the token_http_request expiry check
     owner_check = {"_owner_id": owner_id}
     result = await token_http_request(payload, f"owner {owner_id} token refresh", agent_user=owner_check)
     if not result or result.get("_already_valid"):
         return bool(result)
-    # Handle permanently invalid refresh token (revoked/expired)
     if result.get("_invalid_grant"):
         logger.error(f"[Owner Auth] Refresh token for owner {owner_id} is permanently invalid — clearing stored tokens")
         invalidate_owner_token(owner_id)
-        _token_cooldown_until = time.time() + 60  # Don't retry for 60s
+        _token_cooldown_until = time.time() + 60
         return False
     access_token = result.get("access_token")
     if not access_token:
@@ -564,12 +501,10 @@ async def refresh_owner_token(owner_id: str) -> bool:
 
 
 async def refresh_agent_token(agent_user: dict) -> bool:
-    """Refresh an agent's OAuth token. Delegates to owner-level refresh if owner_id is set."""
     global _token_cooldown_until
     owner_id = agent_user.get("owner_id") if agent_user else None
     if owner_id:
         return await refresh_owner_token(owner_id)
-    # Legacy: per-agent refresh
     refresh_token = get_agent_refresh_token(agent_user)
     if not refresh_token:
         logger.warning(f"[Agent Auth] No refresh token for {agent_user['username']}")
@@ -582,7 +517,6 @@ async def refresh_agent_token(agent_user: dict) -> bool:
     result = await token_http_request(payload, f"agent {agent_user['username']} token refresh", agent_user=agent_user)
     if not result or result.get("_already_valid"):
         return bool(result)
-    # Handle permanently invalid refresh token
     if result.get("_invalid_grant"):
         logger.error(f"[Agent Auth] Refresh token for {agent_user['username']} is permanently invalid — clearing stored tokens")
         invalidate_agent_token(agent_user)
@@ -604,7 +538,6 @@ async def refresh_agent_token(agent_user: dict) -> bool:
 # =============================================================================
 
 def get_claude_env() -> dict:
-    """Build environment dict for Claude CLI subprocess, including saved token."""
     env = {**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
     if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
         saved = load_saved_token()
@@ -614,31 +547,25 @@ def get_claude_env() -> dict:
 
 
 def get_agent_env(agent_user: dict = None) -> dict:
-    """Build env for agent subprocess. Uses owner or agent OAuth token."""
     if agent_user:
-        # Build env with owner or agent-specific token (don't use global token)
         env = {**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
         token = resolve_token(agent_user)
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
         elif env.get("CLAUDE_CODE_OAUTH_TOKEN"):
-            # Remove global token so agent doesn't use it
             del env["CLAUDE_CODE_OAUTH_TOKEN"]
         env["HOME"] = agent_user["home"]
         env["USER"] = agent_user["username"]
         env["LOGNAME"] = agent_user["username"]
         return env
-    # No agent -- use global token (fallback for non-agent requests)
     return get_claude_env()
 
 
 def get_subprocess_kwargs(agent_user: dict = None) -> dict:
-    """No-op: all agents run as the same coder user, isolated by HOME dir."""
     return {}
 
 
 def auth_method() -> str:
-    """Return current auth method: oauth, api_key, or none."""
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_saved_token():
         return "oauth"
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -647,7 +574,6 @@ def auth_method() -> str:
 
 
 def claude_auth_status() -> dict:
-    """Get auth status from `claude auth status` (returns JSON)."""
     try:
         result = subprocess.run(
             ["claude", "auth", "status"],
