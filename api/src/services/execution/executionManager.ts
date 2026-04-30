@@ -9,12 +9,23 @@
 import { RunnerExecutionProvider } from './runnerExecutionProvider.js';
 import { ExecutionProvider } from './executionProvider.js';
 
-type ProviderType = 'coder' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode';
+// Canonical provider types. 'coder' is accepted as a deprecated alias for
+// 'claudecode' (existing agents in the DB may still have runner='coder').
+type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode';
+type ProviderTypeInput = ProviderType | 'coder';
+
+function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null): ProviderType {
+  if (t === 'coder') return 'claudecode';
+  if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode') return t;
+  return 'sandbox';
+}
 
 interface RunnerOpts { baseUrl?: string; apiKey?: string }
 
 interface ExecutionManagerOptions {
-  resolveProvider?: (agentId: string) => ProviderType;
+  resolveProvider?: (agentId: string) => ProviderTypeInput;
+  claudecodeOptions?: RunnerOpts;
+  /** @deprecated use claudecodeOptions */
   coderOptions?: RunnerOpts;
   sandboxOptions?: RunnerOpts;
   openclawOptions?: RunnerOpts;
@@ -27,7 +38,7 @@ interface BindAgentMeta {
 }
 
 const DEFAULT_URLS: Record<ProviderType, string> = {
-  coder: 'http://coder-service:8000',
+  claudecode: 'http://claudecode-service:8000',
   sandbox: 'http://sandbox-service:8000',
   openclaw: 'http://openclaw-service:8000',
   hermes: 'http://hermes-service:8000',
@@ -35,7 +46,7 @@ const DEFAULT_URLS: Record<ProviderType, string> = {
 };
 
 const URL_ENV_VARS: Record<ProviderType, string> = {
-  coder: 'CODER_SERVICE_URL',
+  claudecode: 'CLAUDECODE_SERVICE_URL',
   sandbox: 'SANDBOX_SERVICE_URL',
   openclaw: 'OPENCLAW_SERVICE_URL',
   hermes: 'HERMES_SERVICE_URL',
@@ -43,22 +54,26 @@ const URL_ENV_VARS: Record<ProviderType, string> = {
 };
 
 export class ExecutionManager {
-  coder: RunnerExecutionProvider;
+  claudecode: RunnerExecutionProvider;
   sandbox: RunnerExecutionProvider;
   openclaw: RunnerExecutionProvider;
   hermes: RunnerExecutionProvider;
   opencode: RunnerExecutionProvider;
-  _resolveProvider: (agentId: string) => ProviderType;
+  _resolveProvider: (agentId: string) => ProviderTypeInput;
   _agentProviders: Map<string, ProviderType>;
 
   constructor(options: ExecutionManagerOptions = {}) {
     const sharedKey = process.env.CODER_API_KEY || '';
     const make = (type: ProviderType, opts?: RunnerOpts) => new RunnerExecutionProvider({
-      baseUrl: opts?.baseUrl || process.env[URL_ENV_VARS[type]] || DEFAULT_URLS[type],
+      // Backward-compat: fall back to legacy CODER_SERVICE_URL for the claudecode runner.
+      baseUrl: opts?.baseUrl
+        || process.env[URL_ENV_VARS[type]]
+        || (type === 'claudecode' ? process.env.CODER_SERVICE_URL : undefined)
+        || DEFAULT_URLS[type],
       apiKey: opts?.apiKey || sharedKey,
     });
 
-    this.coder = make('coder', options.coderOptions);
+    this.claudecode = make('claudecode', options.claudecodeOptions || options.coderOptions);
     this.sandbox = make('sandbox', options.sandboxOptions);
     this.openclaw = make('openclaw', options.openclawOptions);
     this.hermes = make('hermes', options.hermesOptions);
@@ -68,6 +83,11 @@ export class ExecutionManager {
     this._agentProviders = new Map();
   }
 
+  /** @deprecated alias kept for legacy callers — use `claudecode` */
+  get coder(): RunnerExecutionProvider {
+    return this.claudecode;
+  }
+
   // ── Provider resolution ───────────────────────────────────────────────
 
   _providerFor(agentId: string): ExecutionProvider {
@@ -75,14 +95,14 @@ export class ExecutionManager {
     if (bound) {
       return this._getProvider(bound);
     }
-    const choice = this._resolveProvider(agentId);
+    const choice = _normalizeProviderType(this._resolveProvider(agentId));
     this._agentProviders.set(agentId, choice);
     return this._getProvider(choice);
   }
 
   _getProvider(type: ProviderType): RunnerExecutionProvider {
     switch (type) {
-      case 'coder': return this.coder;
+      case 'claudecode': return this.claudecode;
       case 'openclaw': return this.openclaw;
       case 'hermes': return this.hermes;
       case 'opencode': return this.opencode;
@@ -93,15 +113,16 @@ export class ExecutionManager {
   /**
    * Explicitly bind an agent to a specific provider.
    */
-  bindAgent(agentId: string, providerType: ProviderType, meta: BindAgentMeta = {}): void {
+  bindAgent(agentId: string, providerType: ProviderTypeInput, meta: BindAgentMeta = {}): void {
+    const normalized = _normalizeProviderType(providerType);
     const previous = this._agentProviders.get(agentId);
-    if (previous && previous !== providerType) {
-      console.log(`🔄 [Execution] Agent ${agentId.slice(0, 8)} switching provider: ${previous} → ${providerType}`);
+    if (previous && previous !== normalized) {
+      console.log(`🔄 [Execution] Agent ${agentId.slice(0, 8)} switching provider: ${previous} → ${normalized}`);
       this._getProvider(previous).destroySandbox(agentId).catch(() => {});
     }
-    this._agentProviders.set(agentId, providerType);
+    this._agentProviders.set(agentId, normalized);
     if (meta.ownerId) {
-      this._getProvider(providerType).setOwner(agentId, meta.ownerId);
+      this._getProvider(normalized).setOwner(agentId, meta.ownerId);
     }
   }
 
@@ -127,7 +148,7 @@ export class ExecutionManager {
 
   async destroyAll(): Promise<void> {
     await Promise.all([
-      this.coder.destroyAll(),
+      this.claudecode.destroyAll(),
       this.sandbox.destroyAll(),
       this.openclaw.destroyAll(),
       this.hermes.destroyAll(),

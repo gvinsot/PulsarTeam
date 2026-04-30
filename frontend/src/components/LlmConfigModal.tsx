@@ -55,7 +55,7 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
               <select value={form.provider || ''} onChange={e => {
                   const prov = e.target.value;
                   const updates: any = { provider: prov, model: '' };
-                  if (prov === 'claude-paid') { updates.endpoint = 'http://coder-service:8000'; updates.apiKey = ''; }
+                  if (prov === 'claude-paid') { updates.endpoint = 'http://claudecode-service:8000'; updates.apiKey = ''; }
                   setForm(f => ({ ...f, ...updates }));
                 }}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500" required>
@@ -80,8 +80,8 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
             {form.provider === 'claude-paid' && (
             <div className="sm:col-span-2">
               <div className="px-3 py-2 bg-dark-800/50 border border-dark-700 rounded-lg text-xs text-dark-400">
-                Authentication is handled via OAuth per agent (coder-service). No API key needed.
-                Endpoint is auto-configured to <code className="text-indigo-400">coder-service:8000</code>.
+                Authentication is handled via OAuth per agent (claudecode-service). No API key needed.
+                Endpoint is auto-configured to <code className="text-indigo-400">claudecode-service:8000</code>.
               </div>
             </div>
             )}

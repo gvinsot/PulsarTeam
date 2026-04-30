@@ -1048,7 +1048,7 @@ export function createProvider(config: any): any {
       );
     case 'claude-paid':
       return new VLLMProvider(
-        'http://coder-service:8000',
+        process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
         config.model || 'claude-sonnet-4-20250514',
         process.env.CODER_API_KEY || '',
         config.agentId || null,

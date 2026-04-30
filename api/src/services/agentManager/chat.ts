@@ -75,12 +75,12 @@ export const chatMethods = {
         try {
           // Bind agent to the correct execution provider based on runner field or LLM config
           const earlyLlm = this.resolveLlmConfig(agent);
-          const providerType = agent.runner || (earlyLlm.managesContext ? 'coder' : 'sandbox');
+          const providerType = agent.runner || (earlyLlm.managesContext ? 'claudecode' : 'sandbox');
           this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null });
 
           const gitUrl = await getProjectGitUrl(agent.project);
           if (gitUrl) {
-            // ensureProject handles both sandbox and coder-service cloning
+            // ensureProject handles project cloning across all runner backends
             await this.executionManager.ensureProject(id, agent.project, gitUrl);
             if (!this.executionManager.getFileTree(id)) {
               // Only refresh if the background generation hasn't completed yet

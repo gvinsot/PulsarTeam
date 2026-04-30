@@ -49,11 +49,11 @@ export const conversationMethods = {
     return agent.conversationHistory;
   },
 
-  // ─── Coder Session Reset ────────────────────────────────────────────
+  // ─── Claude Code Session Reset ──────────────────────────────────────
   _resetCoderSession(this: any, agentId: string, agent: any): void {
     const llmConfig = this.resolveLlmConfig(agent);
     if (llmConfig.provider !== 'claude-paid') return;
-    const endpoint = 'http://coder-service:8000';
+    const endpoint = process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000';
     const apiKey = llmConfig.apiKey || process.env.CODER_API_KEY || '';
     fetch(`${endpoint}/reset`, {
       method: 'POST',
@@ -62,10 +62,10 @@ export const conversationMethods = {
         'X-Agent-Id': agentId,
       },
     }).then(res => {
-      if (res.ok) console.log(`🔄 [Session] Reset coder-service session for "${agent.name}"`);
-      else console.warn(`⚠️  [Session] Failed to reset coder-service session: ${res.status}`);
+      if (res.ok) console.log(`🔄 [Session] Reset claudecode-service session for "${agent.name}"`);
+      else console.warn(`⚠️  [Session] Failed to reset claudecode-service session: ${res.status}`);
     }).catch((err: any) => {
-      console.warn(`⚠️  [Session] Failed to reset coder-service session: ${err.message}`);
+      console.warn(`⚠️  [Session] Failed to reset claudecode-service session: ${err.message}`);
     });
   },
 

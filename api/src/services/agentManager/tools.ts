@@ -224,7 +224,7 @@ export const toolsMethods = {
       try {
         // Bind agent to the correct execution provider based on LLM config
         const llmCfg = this.resolveLlmConfig(agent);
-        const providerType = llmCfg.managesContext ? 'coder' : 'sandbox';
+        const providerType = llmCfg.managesContext ? 'claudecode' : 'sandbox';
         this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null });
 
         if (agent.project) {

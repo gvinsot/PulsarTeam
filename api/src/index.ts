@@ -79,8 +79,8 @@ const io = new Server(httpServer, {
 
 const skillManager = new SkillManager();
 const executionManager = new ExecutionManager({
-  coderOptions: {
-    baseUrl: process.env.CODER_SERVICE_URL || 'http://coder-service:8000',
+  claudecodeOptions: {
+    baseUrl: process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
     apiKey: process.env.CODER_API_KEY || ''
   }
 });

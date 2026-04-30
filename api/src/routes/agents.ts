@@ -60,7 +60,8 @@ const createAgentSchema = z.object({
     }).optional(),
   }).optional(),
   credentials: z.record(z.string().max(100), z.string().max(2000)).optional(),
-  runner: z.enum(['sandbox', 'coder', 'openclaw', 'hermes', 'opencode']).optional(),
+  // 'coder' is a deprecated alias for 'claudecode' (kept for backward compat with stored agents)
+  runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode']).optional(),
 });
 
 // Schema for updating an agent (all fields optional)

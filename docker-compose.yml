@@ -39,7 +39,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITHUB_USER=${GITHUB_USER:-}
       - SANDBOX_SERVICE_URL=http://sandbox-service:8000
-      - CODER_SERVICE_URL=http://coder-service:8000
+      - CLAUDECODE_SERVICE_URL=http://claudecode-service:8000
       - OPENCLAW_SERVICE_URL=http://openclaw-service:8000
       - HERMES_SERVICE_URL=http://hermes-service:8000
       - OPENCODE_SERVICE_URL=http://opencode-service:8000
@@ -96,7 +96,7 @@ services:
   # Replaces the previous standalone "sandbox" container — the sandbox runner
   # is now just another mode of the runner-service (no LLM, exec/file ops only).
 
-  coder-service:
+  claudecode-service:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
@@ -123,7 +123,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
       - ${HOST_CODE_PATH:-~}:/projects
-      - coder-auth-data:/app/data
+      - claudecode-auth-data:/app/data
     ports:
       - "8000:8000"
     networks:
@@ -239,7 +239,7 @@ services:
 
 volumes:
   pgdata:
-  coder-auth-data:
+  claudecode-auth-data:
   sandbox-data:
   openclaw-data:
   hermes-data:

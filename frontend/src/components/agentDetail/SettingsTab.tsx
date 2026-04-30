@@ -207,7 +207,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           >
             <option value="">Auto (based on LLM config)</option>
             <option value="sandbox">Pulsar Agent (sandbox)</option>
-            <option value="coder">Claude Code Agent (coder service)</option>
+            <option value="claudecode">Claude Code Agent</option>
             <option value="openclaw">OpenClaw Agent</option>
             <option value="hermes">Hermes Agent</option>
             <option value="opencode">OpenCode Agent</option>
