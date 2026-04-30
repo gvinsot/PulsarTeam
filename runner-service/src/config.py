@@ -12,7 +12,7 @@ import logging
 # --- Runner selection ---------------------------------------------------------
 
 RUNNER_TYPE = os.getenv("RUNNER_TYPE", "claude-code").lower().strip()
-VALID_RUNNERS = {"claude-code", "openclaw", "hermes", "opencode", "sandbox"}
+VALID_RUNNERS = {"claude-code", "openclaw", "hermes", "opencode", "sandbox", "mock"}
 if RUNNER_TYPE not in VALID_RUNNERS:
     raise RuntimeError(
         f"Invalid RUNNER_TYPE={RUNNER_TYPE!r}. Must be one of: {sorted(VALID_RUNNERS)}"

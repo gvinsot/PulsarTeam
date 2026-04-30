@@ -13,6 +13,7 @@ env var.
 | `hermes`      | Hermes CLI                         | yes       | no          |
 | `opencode`    | OpenCode CLI (opencode.ai)         | yes       | no          |
 | `sandbox`     | No LLM — exec/file ops only        | no        | no          |
+| `mock`        | Hard-coded canned responses (test) | simulated | no          |
 
 `claude-code` is the default if `RUNNER_TYPE` is unset.
 
@@ -64,5 +65,28 @@ runner-service/
         ├── openclaw.py
         ├── hermes.py
         ├── opencode.py
-        └── sandbox.py
+        ├── sandbox.py
+        └── mock.py             canned-response LLM (testing)
+```
+
+## Mock backend
+
+Set `RUNNER_TYPE=mock` to run without any real CLI or API key. The backend
+returns deterministic canned responses chosen by simple keyword matching
+against the prompt, with realistic-looking token counts, costs, and
+durations. Streaming splits each response into word-sized SSE chunks.
+
+Useful env vars:
+
+- `MOCK_DELAY_MS` — per-chunk delay when streaming (default: `50`)
+- `MOCK_FAIL_ON` — substring that triggers a simulated error response
+- `MOCK_TIMEOUT_ON` — substring that triggers a simulated timeout
+
+`docker-compose up mock-service` exposes it on `localhost:8010`. Quick test:
+
+```sh
+curl -s -X POST http://localhost:8010/execute \
+  -H "X-API-Key: $CODER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"hello"}'
 ```

@@ -203,6 +203,39 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  mock-service:
+    build:
+      context: .
+      dockerfile: runner-service/Dockerfile
+    environment:
+      - RUNNER_TYPE=mock
+      - TZ=${TZ:-Europe/Paris}
+      - RUNNER_MODEL=mock-llm-1
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - MOCK_DELAY_MS=${MOCK_DELAY_MS:-50}
+      - MOCK_FAIL_ON=${MOCK_FAIL_ON:-}
+      - MOCK_TIMEOUT_ON=${MOCK_TIMEOUT_ON:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ${HOST_CODE_PATH:-~}:/projects
+      - mock-data:/app/data
+    ports:
+      - "8010:8000"
+    networks:
+      - sandbox-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   hermes-service:
     build:
       context: .
@@ -243,6 +276,7 @@ volumes:
   sandbox-data:
   openclaw-data:
   hermes-data:
+  mock-data:
 
 networks:
   internal:

@@ -27,6 +27,9 @@ def make_backend() -> RunnerBackend:
     if RUNNER_TYPE == "sandbox":
         from .sandbox import SandboxBackend
         return SandboxBackend()
+    if RUNNER_TYPE == "mock":
+        from .mock import MockBackend
+        return MockBackend()
     raise RuntimeError(f"Unknown RUNNER_TYPE: {RUNNER_TYPE!r}")
 
 
