@@ -46,9 +46,6 @@ services:
       - JIRA_WEBHOOK_URL=${JIRA_WEBHOOK_URL:-}
       - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
       - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
-      - CLAUDECODE_SERVICE_URL=http://claudecode-service:8000
-      - OPENCLAW_SERVICE_URL=http://openclaw-service:8000
-      - OPENCODE_SERVICE_URL=http://opencode-service:8000
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
