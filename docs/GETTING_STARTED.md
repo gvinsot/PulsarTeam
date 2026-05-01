@@ -132,9 +132,28 @@ CODER_API_KEY=generate-a-secret-here
 ```env
 ONEDRIVE_CLIENT_ID=xxx
 ONEDRIVE_CLIENT_SECRET=xxx
-ONEDRIVE_REDIRECT_URI=https://your-domain.com/api/onedrive/callback
+ONEDRIVE_REDIRECT_URI=https://your-domain.com/onedrive-callback.html
 ONEDRIVE_TENANT_ID=xxx
 ```
+
+> The redirect URI must point to the static callback page served by the
+> frontend (`/onedrive-callback.html`), **not** the backend API. The page
+> captures the auth code and forwards it to the API via `postMessage`.
+> Register the same URL in your Azure App Registration → "Redirect URIs".
+
+### Gmail Integration (Optional)
+
+```env
+GMAIL_CLIENT_ID=xxx
+GMAIL_CLIENT_SECRET=xxx
+GMAIL_REDIRECT_URI=https://your-domain.com/gmail-callback.html
+```
+
+> Same principle as OneDrive: the redirect URI is the frontend callback
+> page (`/gmail-callback.html`). Register it in Google Cloud Console →
+> Credentials → OAuth 2.0 Client → "Authorized redirect URIs".
+> For local dev use `http://localhost/gmail-callback.html` (frontend on
+> port 80) or `http://localhost:5173/gmail-callback.html` (Vite dev server).
 
 ---
 
