@@ -349,7 +349,19 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
       if (actualTask && actualTask.status !== 'error') {
         actualTask.errorFromStatus = actualTask.status;
         actualTask.status = 'error';
-        actualTask.error = actualTask.error || result.message;
+        actualTask.error = result.message;
+        if (!actualTask.history) actualTask.history = [];
+        actualTask.history.push({
+          status: 'error',
+          from: actualTask.errorFromStatus,
+          at: new Date().toISOString(),
+          by: 'workflow',
+          type: 'error',
+          error: result.message,
+          actionIndex: i,
+          actionType: action.type,
+          actionMode: action.mode || null,
+        });
         await saveTaskToDb({ ...actualTask, agentId: task.agentId });
         agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
       }

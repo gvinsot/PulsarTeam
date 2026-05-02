@@ -47,6 +47,7 @@ mock.module('../database.js', {
     updateTaskFields: noop,
     clearTaskExecutionFlags: noop,
     clearActionRunningForAgent: noop,
+    clearAllStaleActionRunning: async () => 0,
     softDeleteTaskFromDb: noop,
     getTasksByStatusAndBoard: async () => [],
     getAllBoards: async () => [],

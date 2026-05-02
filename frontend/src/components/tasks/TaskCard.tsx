@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Trash2, Clock, AlertTriangle, User, GitCommit, Repeat, Loader2, Square,
-  Flag, Sun, Play, Hand,
+  Flag, Sun, Play, Hand, Pause,
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 
 export default function TaskCard({ task, agents, onDelete, onStop, onResume, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
   const isError = task.status === 'error';
+  const isStopped = task.executionStatus === 'stopped';
   const today = isToday(task.createdAt);
   const isDraggingRef = useRef(false);
   const touchDragRef = useRef(null);
@@ -284,11 +285,13 @@ export default function TaskCard({ task, agents, onDelete, onStop, onResume, onO
         transition-all hover:shadow-lg hover:shadow-black/20
         ${isError
           ? 'border-red-500/40 bg-red-500/5 hover:border-red-500/60'
-          : task.isManual
-            ? 'border-orange-500/40 bg-orange-500/5 hover:border-orange-500/60 ring-1 ring-orange-500/20'
-            : today
-              ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60 ring-1 ring-amber-500/20'
-              : 'border-dark-700 hover:border-dark-500'
+          : isStopped
+            ? 'border-yellow-500/40 bg-yellow-500/5 hover:border-yellow-500/60 ring-1 ring-yellow-500/20'
+            : task.isManual
+              ? 'border-orange-500/40 bg-orange-500/5 hover:border-orange-500/60 ring-1 ring-orange-500/20'
+              : today
+                ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60 ring-1 ring-amber-500/20'
+                : 'border-dark-700 hover:border-dark-500'
         }`}
     >
       {/* Task text */}
@@ -304,6 +307,13 @@ export default function TaskCard({ task, agents, onDelete, onStop, onResume, onO
             style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
             {task.error}
           </p>
+        </div>
+      )}
+
+      {isStopped && !isError && (
+        <div className="flex items-center gap-1.5 mb-2 p-1.5 rounded bg-yellow-500/10 border border-yellow-500/20">
+          <Pause className="w-3 h-3 text-yellow-400 flex-shrink-0" />
+          <p className="text-xs text-yellow-400/80">Stopped</p>
         </div>
       )}
 

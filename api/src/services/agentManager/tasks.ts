@@ -564,8 +564,6 @@ export const tasksMethods = {
         if (this._workflowManagedStatuses?.has(dbTask.status)) continue;
 
         if (dbTask.executionStatus === 'stopped' || getTaskSignal(dbTask.id, 'stopped')) {
-          console.log(`🛑 [TaskLoop] Skipping auto-resume for "${dbTask.text.slice(0, 60)}" — was manually stopped`);
-          this.setTaskStatus(dbTask.agentId, dbTask.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
           continue;
         }
         if (dbTask.executionStatus === 'watching' || getTaskSignal(dbTask.id, 'watching')) continue;
@@ -883,23 +881,61 @@ export const tasksMethods = {
 
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, false);
 
+      const errorTimestamp = new Date().toISOString();
+
       if (isUserStop) {
-        // User manually stopped — put task back to pending, don't treat as error
+        // User manually stopped — mark as stopped, keep in current column
         setTaskSignal(task.id, 'stopped', true);
-        updateTaskExecutionStatus(task.id, 'stopped');
-        await this.setTaskStatus(agentId, task.id, 'backlog', { skipAutoRefine: true, by: 'user-stop' });
+        await updateTaskExecutionStatus(task.id, 'stopped');
+        // Add stopped entry to history
+        const stoppedTask = this._getAgentTasks(agentId).find((t: any) => t.id === task.id);
+        if (stoppedTask) {
+          if (!stoppedTask.history) stoppedTask.history = [];
+          stoppedTask.history.push({
+            status: stoppedTask.status,
+            at: errorTimestamp,
+            by: 'user',
+            type: 'stopped',
+          });
+          stoppedTask.startedAt = null;
+          stoppedTask.actionRunning = false;
+          delete stoppedTask.actionRunningAgentId;
+          delete stoppedTask.actionRunningMode;
+          await saveTaskToDb({ ...stoppedTask, agentId });
+          this._emit('task:updated', { agentId, task: { ...stoppedTask, agentId } });
+        }
       } else {
-        await this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
-        await updateTaskFields(task.id, { error: err.message });
-        // Emit system error report for task-level failure.
-        // The agent may be auto-recovered to idle below, so setStatus('error')
-        // might not persist — emit explicitly to notify leader + frontend.
+        // Real error — keep task in current column, mark as error via errorFromStatus
+        const errorTask = this._getAgentTasks(agentId).find((t: any) => t.id === task.id);
+        if (errorTask) {
+          const prevStatus = errorTask.status;
+          errorTask.errorFromStatus = prevStatus;
+          errorTask.status = 'error';
+          errorTask.error = err.message;
+          if (!errorTask.history) errorTask.history = [];
+          errorTask.history.push({
+            status: 'error',
+            from: prevStatus,
+            at: errorTimestamp,
+            by: executor.name,
+            type: 'error',
+            error: err.message,
+          });
+          errorTask.actionRunning = false;
+          delete errorTask.actionRunningAgentId;
+          delete errorTask.actionRunningMode;
+          await saveTaskToDb({ ...errorTask, agentId });
+          this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
+        } else {
+          await this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
+          await updateTaskFields(task.id, { error: err.message });
+        }
         this._emit('agent:error:report', {
           agentId: executorId,
           agentName: executor.name,
           project: executor.project || null,
           description: `[System Error] Task "${task.text?.slice(0, 100)}" failed: ${err.message}`,
-          timestamp: new Date().toISOString(),
+          timestamp: errorTimestamp,
           isSystemError: true,
           taskId: task.id,
         });

@@ -262,11 +262,21 @@ export const statusMethods = {
       }
     }
 
+    const stopTimestamp = new Date().toISOString();
     for (const t of this._getAgentTasks(id)) {
       if (this._isActiveTaskStatus(t.status)) {
         t._executionStopped = true;
         t.executionStatus = 'stopped';
+        t.startedAt = null;
+        if (!t.history) t.history = [];
+        t.history.push({
+          status: t.status,
+          at: stopTimestamp,
+          by: 'user',
+          type: 'stopped',
+        });
         saveTaskToDb({ ...t, agentId: id });
+        this._emit('task:updated', { agentId: id, task: { ...t, agentId: id } });
       }
     }
 

@@ -1,5 +1,5 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, saveAgent, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent } from '../database.js';
+import { getAllAgents, saveAgent, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, clearAllStaleActionRunning } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
@@ -231,6 +231,10 @@ export class AgentManager {
         this.llmConfigs.set(config.id, config);
       }
       console.log(`📂 Loaded ${llmConfigs.length} LLM configurations`);
+
+      // Service restart recovery: clear stale action_running flags from crashed executions.
+      const cleared = await clearAllStaleActionRunning();
+      if (cleared > 0) console.log(`🔄 Cleared ${cleared} stale action_running flags from previous session`);
     } catch (err: any) {
       console.error('Failed to load agents from database:', err.message);
     }

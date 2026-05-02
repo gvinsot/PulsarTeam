@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Trash2, X, AlertTriangle, Edit3, Save, Check, Tag, Calendar,
   ChevronDown, Zap, User, GitCommit, Repeat, FolderKanban, Loader2, Layers,
-  ArrowRight, Hand,
+  ArrowRight, Hand, Pause, XCircle,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -690,6 +690,28 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
                             <>
                               <User className="w-2.5 h-2.5 text-dark-400 flex-shrink-0" />
                               <span className="text-dark-200 font-medium">reassigned</span>
+                              {h.by && (
+                                <span className="text-dark-500 truncate">by {h.by}</span>
+                              )}
+                            </>
+                          ) : h.type === 'error' ? (
+                            <>
+                              <XCircle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
+                              <span className="text-red-300 font-medium">error</span>
+                              {h.from && (
+                                <span className="text-dark-500 truncate">in {h.from}</span>
+                              )}
+                              {h.by && (
+                                <span className="text-dark-500 truncate">by {h.by}</span>
+                              )}
+                              {h.error && (
+                                <span className="text-red-400/70 truncate" title={h.error}>{h.error.slice(0, 80)}</span>
+                              )}
+                            </>
+                          ) : h.type === 'stopped' ? (
+                            <>
+                              <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
+                              <span className="text-yellow-300 font-medium">stopped</span>
                               {h.by && (
                                 <span className="text-dark-500 truncate">by {h.by}</span>
                               )}

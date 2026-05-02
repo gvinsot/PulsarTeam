@@ -29,6 +29,8 @@ export function rowToTask(row) {
     completedActionIdx: row.completed_action_idx != null ? row.completed_action_idx : undefined,
     actionRunning: row.action_running || false,
     actionRunningAgentId: row.action_running_agent_id || undefined,
+    actionRunningMode: row.action_running_mode || undefined,
+    errorFromStatus: row.error_from_status || undefined,
     isManual: row.is_manual || false,
     position: parseInt(row.position, 10) || 0,
   };
@@ -102,15 +104,15 @@ async function _doSaveTask(task) {
                           task_type, priority, due_date, source, recurrence, commits, history,
                           error, created_at, updated_at, completed_at, started_at,
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
-                          is_manual, position)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23,$24,$25)
+                          action_running_mode, error_from_status, is_manual, position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, project = $6, board_id = $7, assignee = $8,
          task_type = $9, priority = $10, due_date = $11, source = $12, recurrence = $13,
          commits = $14, history = $15, error = $16, updated_at = NOW(),
          completed_at = $18, started_at = $19,
          execution_status = $20, completed_action_idx = $21, action_running = $22, action_running_agent_id = $23,
-         is_manual = $24, position = $25`,
+         action_running_mode = $24, error_from_status = $25, is_manual = $26, position = $27`,
       [
         task.id,
         task.agentId,
@@ -135,6 +137,8 @@ async function _doSaveTask(task) {
         task.completedActionIdx != null ? task.completedActionIdx : null,
         task.actionRunning || false,
         task.actionRunningAgentId || null,
+        task.actionRunningMode || null,
+        task.errorFromStatus || null,
         task.isManual || false,
         task.position ?? 0,
       ]
@@ -240,8 +244,7 @@ export async function getTasksForResume() {
       WHERE t.deleted_at IS NULL
         AND t.started_at IS NOT NULL
         AND t.status NOT IN ('done', 'backlog', 'error')
-        AND (t.execution_status IS NULL OR t.execution_status != 'watching')
-        AND t.action_running = FALSE
+        AND (t.execution_status IS NULL OR t.execution_status NOT IN ('watching', 'stopped'))
         AND (t.is_manual IS NULL OR t.is_manual = FALSE)
       ORDER BY t.started_at ASC
     `);
@@ -270,6 +273,8 @@ export async function clearTaskExecutionFlags(agentId) {
         completed_action_idx = NULL,
         action_running = FALSE,
         action_running_agent_id = NULL,
+        action_running_mode = NULL,
+        error_from_status = NULL,
         updated_at = NOW()
       WHERE deleted_at IS NULL
         AND (assignee = $1 OR agent_id = $1)
@@ -307,11 +312,34 @@ export async function clearActionRunningForAgent(agentId) {
       UPDATE tasks SET
         action_running = FALSE,
         action_running_agent_id = NULL,
+        action_running_mode = NULL,
         updated_at = NOW()
       WHERE action_running_agent_id = $1 AND action_running = TRUE
     `, [agentId]);
   } catch (err) {
     console.error('Failed to clear action_running for agent:', err.message);
+  }
+}
+
+/**
+ * Clear action_running flags for ALL tasks on startup (service restart recovery).
+ * After a crash, no actions are actually running — the flags are stale.
+ */
+export async function clearAllStaleActionRunning() {
+  const pool = getPool();
+  if (!pool) return 0;
+  try {
+    const result = await pool.query(`
+      UPDATE tasks SET
+        action_running = FALSE,
+        action_running_agent_id = NULL,
+        updated_at = NOW()
+      WHERE action_running = TRUE AND deleted_at IS NULL
+    `);
+    return result.rowCount || 0;
+  } catch (err) {
+    console.error('Failed to clear stale action_running flags:', err.message);
+    return 0;
   }
 }
 
@@ -557,6 +585,7 @@ export async function updateTaskFields(taskId, fields) {
     'task_type', 'priority', 'due_date', 'source', 'recurrence',
     'commits', 'history', 'error', 'completed_at', 'started_at',
     'execution_status', 'completed_action_idx', 'action_running', 'action_running_agent_id',
+    'action_running_mode', 'error_from_status',
     'is_manual', 'position',
   ];
   // Map camelCase to snake_case
@@ -565,6 +594,7 @@ export async function updateTaskFields(taskId, fields) {
     completedAt: 'completed_at', startedAt: 'started_at',
     executionStatus: 'execution_status', completedActionIdx: 'completed_action_idx',
     actionRunning: 'action_running', actionRunningAgentId: 'action_running_agent_id',
+    actionRunningMode: 'action_running_mode', errorFromStatus: 'error_from_status',
     isManual: 'is_manual',
   };
   const sets = [];

@@ -39,7 +39,7 @@ export {
   deleteTaskFromDb, hardDeleteTaskFromDb, restoreTaskFromDb,
   getDeletedTasks, getDeletedTaskById, deleteTasksByAgent,
   getTasksForResume, clearTaskExecutionFlags, updateTaskExecutionStatus,
-  clearActionRunningForAgent,
+  clearActionRunningForAgent, clearAllStaleActionRunning,
   getActiveTasksByAgent, getTasksByBoard, getBoardWithMostTasksForProject,
   getTasksByAssignee, getActiveTaskForExecutor, hasActiveTask,
   countActiveTasksForAgent, getRecurringDoneTasks, getTaskByJiraKey,

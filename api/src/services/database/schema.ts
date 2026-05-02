@@ -204,6 +204,10 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_action_idx INTEGER').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running BOOLEAN DEFAULT FALSE').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_agent_id UUID').catch(() => {});
+      // Error recovery: remember which column the task was in before entering error status
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_from_status TEXT').catch(() => {});
+      // Action running mode (e.g. execute, refine, title) for restart recovery
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_mode TEXT').catch(() => {});
       // Manual task flag (skips automatic agent processing)
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE').catch(() => {});
       // Position column for manual ordering within columns

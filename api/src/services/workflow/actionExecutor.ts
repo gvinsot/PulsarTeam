@@ -383,24 +383,33 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
       releaseLock(lockKey);
       clearAgentBusy(agent.id);
+      const switchErrTimestamp = new Date().toISOString();
       if (actualTask) {
         actualTask.actionRunning = false;
         delete actualTask.actionRunningAgentId;
         delete actualTask.actionRunningMode;
         actualTask.error = `Project switch failed: ${switchErr.message}`;
+        if (!actualTask.history) actualTask.history = [];
+        actualTask.history.push({
+          status: actualTask.status,
+          at: switchErrTimestamp,
+          by: agent.name || 'workflow',
+          type: 'error',
+          error: `Project switch failed: ${switchErr.message}`,
+          actionMode: mode,
+        });
         const errPayload = { ...actualTask, agentId: task.agentId };
         const errSave = saveTaskToDb({ ...actualTask, agentId: task.agentId });
         Promise.resolve(errSave)
           .catch(() => {})
           .then(() => _emitTaskUpdated(agentManager, task.agentId, errPayload));
       }
-      // Emit system error report for project switch failure
       agentManager._emit('agent:error:report', {
         agentId: agent.id,
         agentName: agent.name,
         project: task.project || null,
         description: `[System Error] Project switch failed for "${agent.name}": ${switchErr.message}`,
-        timestamp: new Date().toISOString(),
+        timestamp: switchErrTimestamp,
         isSystemError: true,
         taskId: task.id,
       });
@@ -439,21 +448,38 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // Save error execution log
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, mode);
     // Emit system error report so leader + frontend are notified
+    const errorTimestamp = new Date().toISOString();
     agentManager._emit('agent:error:report', {
       agentId: agent.id,
       agentName: agent.name,
       project: agent.project || task.project || null,
       description: `[System Error] Workflow action "${mode}" failed for task "${task.text?.slice(0, 100)}": ${err.message}`,
-      timestamp: new Date().toISOString(),
+      timestamp: errorTimestamp,
       isSystemError: true,
       taskId: task.id,
     });
-    // Set task to error status
+    // Log detailed error in task history and set error status
     try {
-      agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
       if (actualTask) {
+        const prevStatus = actualTask.status;
+        actualTask.errorFromStatus = prevStatus;
+        actualTask.status = 'error';
         actualTask.error = err.message;
-        saveTaskToDb({ ...actualTask, agentId: task.agentId });
+        if (!actualTask.history) actualTask.history = [];
+        actualTask.history.push({
+          status: 'error',
+          from: prevStatus,
+          at: errorTimestamp,
+          by: agent.name || 'workflow',
+          type: 'error',
+          error: err.message,
+          actionMode: mode,
+          agentName: agent.name,
+        });
+        await saveTaskToDb({ ...actualTask, agentId: task.agentId });
+        agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+      } else {
+        agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
       }
     } catch (e) {
       console.error(`[ActionExecutor] Failed to set error status:`, e.message);
