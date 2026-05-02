@@ -1,6 +1,6 @@
 // ─── Action Logs & Execution Log ────────────────────────────────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveAgent } from '../database.js';
+import { saveAgent, saveTaskToDb } from '../database.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const actionLogsMethods = {
@@ -88,7 +88,7 @@ export const actionLogsMethods = {
       messages: executionMessages,
     });
 
-    saveAgent(creatorAgent);
-    this._emit('agent:updated', this._sanitize(creatorAgent));
+    saveTaskToDb({ ...task, agentId: creatorAgentId });
+    this._emit('task:updated', { agentId: creatorAgentId, task: { ...task, agentId: creatorAgentId } });
   },
 };
