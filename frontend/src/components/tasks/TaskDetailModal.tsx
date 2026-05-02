@@ -172,7 +172,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
               </button>
               {statusOpen && (
                 <div className="absolute left-0 top-8 z-50 bg-dark-800 border border-dark-600 rounded-xl shadow-2xl py-1 min-w-[140px]">
-                  {statusOptions.map(opt => (
+                  {(statusOptions || []).map(opt => (
                     <button
                       key={opt.value}
                       onClick={() => handleStatusChange(opt.value)}
@@ -230,10 +230,10 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
                         <div className="px-3 py-1.5 text-xs text-dark-400 font-semibold border-b border-dark-700 mb-1">
                           Choose idle agent
                         </div>
-                        {agents.filter(a => a.enabled !== false && a.status === 'idle').length === 0 && (
+                        {(agents || []).filter(a => a.enabled !== false && a.status === 'idle').length === 0 && (
                           <div className="px-3 py-2 text-xs text-dark-500 italic">No idle agents available</div>
                         )}
-                        {agents.filter(a => a.enabled !== false && a.status === 'idle').map(a => (
+                        {(agents || []).filter(a => a.enabled !== false && a.status === 'idle').map(a => (
                           <button
                             key={a.id}
                             onClick={async () => {
@@ -573,7 +573,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
                       focus:outline-none focus:border-indigo-500 transition-colors"
                   >
                     <option value="">Unassigned</option>
-                    {agents.map(a => (
+                    {(agents || []).map(a => (
                       <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
                     ))}
                   </select>
@@ -634,7 +634,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
                       className="px-2 py-0.5 w-40 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
                         focus:outline-none focus:border-indigo-500 transition-colors"
                     >
-                      {boards.map(b => (
+                      {(boards || []).map(b => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
                     </select>
@@ -666,7 +666,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
             )}
 
             {/* Transition history */}
-            {(task.history && task.history.length > 0) ? (
+            {(task.history?.length > 0) ? (
               <div className="space-y-0">
                 <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold mb-1.5">History</div>
                 <div className="relative pl-4 border-l border-dark-700 space-y-1.5">
@@ -757,7 +757,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
             )}
 
             {/* Associated commits */}
-            {task.commits && task.commits.length > 0 && (
+            {task.commits?.length > 0 && (
               <div className="space-y-0">
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold">Commits ({task.commits.length})</div>

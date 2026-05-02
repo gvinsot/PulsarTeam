@@ -122,7 +122,7 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
                   placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
               />
               <datalist id="create-task-projects">
-                {allProjects.map(p => <option key={p} value={p} />)}
+                {(allProjects || []).map(p => <option key={p} value={p} />)}
               </datalist>
             </div>
             <div className="w-36">
