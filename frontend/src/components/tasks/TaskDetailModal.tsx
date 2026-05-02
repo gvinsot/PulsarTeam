@@ -118,7 +118,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
     if (!boardMoveTarget) return;
     setMovingBoard(true);
     try {
-      const destBoard = boards.find(b => b.id === boardMoveTarget);
+      const destBoard = (boards || []).find(b => b.id === boardMoveTarget);
       const firstCol = destBoard?.workflow?.columns?.[0]?.id || 'todo';
       await updateTaskById(task.id, { boardId: boardMoveTarget, column: firstCol });
       setBoardMoveTarget(null);
@@ -136,8 +136,8 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
 
   const isError = task.status === 'error';
   const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
-  const currentStatus = statusOptions.find(s => s.value === task.status) || statusOptions[0];
-  const lastStatusId = statusOptions[statusOptions.length - 1]?.value;
+  const currentStatus = (statusOptions || []).find(s => s.value === task.status) || (statusOptions || [])[0] || { value: task.status, label: task.status, dot: 'bg-dark-500', text: 'text-dark-300' };
+  const lastStatusId = (statusOptions || [])[(statusOptions || []).length - 1]?.value;
 
   return (
     <>
@@ -588,7 +588,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
               ) : (
                 <div className="flex items-center gap-1.5">
                   {(() => {
-                    const assignee = task.assignee ? agents.find(a => a.id === task.assignee) : null;
+                    const assignee = task.assignee ? (agents || []).find(a => a.id === task.assignee) : null;
                     if (assignee) {
                       return (
                         <span

@@ -30,7 +30,7 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
   const textareaRef = useRef(null);
 
   // Auto-pick the first enabled agent as container (tasks are no longer agent-specific)
-  const defaultAgentId = agents.find(a => a.enabled !== false)?.id || '';
+  const defaultAgentId = (agents || []).find(a => a.enabled !== false)?.id || '';
 
   useEffect(() => {
     textareaRef.current?.focus();

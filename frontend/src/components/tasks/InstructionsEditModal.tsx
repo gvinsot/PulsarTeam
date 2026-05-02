@@ -5,7 +5,7 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
   const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
   const [saving, setSaving] = useState(false);
 
-  const roles = useMemo(() => [...new Set(agents.filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
+  const roles = useMemo(() => [...new Set((agents || []).filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
 
   const updateField = (idx, field, value) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
 

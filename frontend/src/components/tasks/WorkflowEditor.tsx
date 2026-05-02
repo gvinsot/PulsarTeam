@@ -22,7 +22,7 @@ function ConditionValueWidget({ cond, onChange, agents = [] }) {
     );
   }
   if (cond.field === 'idle_agent_available') {
-    const roles = [...new Set(agents.map(a => a.role).filter(Boolean))];
+    const roles = [...new Set((agents || []).map(a => a.role).filter(Boolean))];
     return (
       <select value={cond.value || roles[0] || ''} onChange={e => onChange({ ...cond, value: e.target.value })}
         className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
@@ -41,7 +41,7 @@ function ConditionValueWidget({ cond, onChange, agents = [] }) {
     );
   }
   if (cond.field === 'assignee_role') {
-    const roles = [...new Set(agents.map(a => a.role).filter(Boolean))];
+    const roles = [...new Set((agents || []).map(a => a.role).filter(Boolean))];
     return (
       <select value={cond.value || roles[0] || ''} onChange={e => onChange({ ...cond, value: e.target.value })}
         className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
@@ -79,7 +79,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
     }
   }, [jiraEnabled]);
 
-  const enabledAgents = agents.filter(a => a.enabled !== false);
+  const enabledAgents = (agents || []).filter(a => a.enabled !== false);
   const availableRoles = [...new Set(enabledAgents.map(a => a.role).filter(Boolean))].sort();
 
   const handleSave = async () => {
@@ -420,7 +420,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                                 onChange={e => updateAction(idx, ai, { role: e.target.value })}
                                 className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
                                 <option value="">Any agent...</option>
-                                {[...new Set(agents.map(a => a.role).filter(Boolean))].map(r => (
+                                {[...new Set((agents || []).map(a => a.role).filter(Boolean))].map(r => (
                                   <option key={r} value={r}>{r}</option>
                                 ))}
                               </select>
