@@ -49,8 +49,17 @@ export const conversationMethods = {
     return agent.conversationHistory;
   },
 
-  // ─── Claude Code Session Reset ──────────────────────────────────────
+  // ─── Session Reset ─────────────────────────────────────────────────
   _resetCoderSession(this: any, agentId: string, agent: any): void {
+    if (this.executionManager) {
+      const provider = this.executionManager._providerFor(agentId);
+      if (provider?.resetSession) {
+        provider.resetSession(agentId).catch((err: any) => {
+          console.warn(`⚠️  [Session] Failed to reset runner session: ${err.message}`);
+        });
+        return;
+      }
+    }
     const llmConfig = this.resolveLlmConfig(agent);
     if (llmConfig.provider !== 'claude-paid') return;
     const endpoint = process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000';

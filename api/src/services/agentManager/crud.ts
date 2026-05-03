@@ -82,6 +82,17 @@ export const crudMethods = {
       'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId', 'boardId', 'credentials', 'runner', 'toolHooks'
     ];
 
+    const llmFields = ['provider', 'model', 'llmConfigId', 'endpoint'];
+    const llmChanged = llmFields.some(f => updates[f] !== undefined && updates[f] !== agent[f]);
+
+    if (llmChanged) {
+      this._resetCoderSession(id, agent);
+      agent.conversationHistory = [];
+      agent.currentThinking = '';
+      delete agent._compactionArmed;
+      console.log(`🔄 [LLM Change] Reset session and history for "${agent.name}" — LLM config changed`);
+    }
+
     for (const key of allowed) {
       if (updates[key] !== undefined) {
         if (key === 'apiKey' && !updates[key] && agent[key]) continue;
