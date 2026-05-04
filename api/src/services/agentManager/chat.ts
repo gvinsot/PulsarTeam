@@ -134,17 +134,51 @@ export const chatMethods = {
         timestamp: new Date().toISOString()
       });
 
-      // Hard cap: prevent unbounded history growth even if compaction hasn't triggered.
-      // Keep the compaction summary (if any) plus the most recent messages.
-      const MAX_HISTORY_ENTRIES = 200;
+      // Prune old messages: keep max 30 messages, but always preserve messages
+      // from the current active task (to avoid losing context mid-execution).
+      const MAX_HISTORY_ENTRIES = 30;
       if (agent.conversationHistory.length > MAX_HISTORY_ENTRIES) {
-        const summary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
-        const trimmed = agent.conversationHistory.slice(-MAX_HISTORY_ENTRIES);
-        if (summary && !trimmed.includes(summary)) {
-          trimmed.unshift(summary);
+        const agentId = [...this.agents.entries()].find(([, a]: [string, any]) => a === agent)?.[0];
+        let activeTask = agentId ? this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt) : null;
+        if (!activeTask && agentId) {
+          const found = this._findTaskAcross((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt && (t.assignee === agentId || t.actionRunningAgentId === agentId));
+          if (found) activeTask = found.task;
         }
-        agent.conversationHistory = trimmed;
-        console.log(`🗜️  [Hard Cap] "${agent.name}": trimmed history to ${agent.conversationHistory.length} entries`);
+
+        const summary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
+        let taskStartTime: number | null = null;
+        if (activeTask?.startedAt) {
+          taskStartTime = new Date(activeTask.startedAt).getTime();
+        }
+
+        if (taskStartTime) {
+          // Keep: compaction summary + all messages from current task + last N non-task messages up to cap
+          const taskMessages = agent.conversationHistory.filter(
+            (m: any) => m.timestamp && new Date(m.timestamp).getTime() >= taskStartTime!
+          );
+          const preTaskMessages = agent.conversationHistory.filter(
+            (m: any) => m.type !== 'compaction-summary' && (!m.timestamp || new Date(m.timestamp).getTime() < taskStartTime!)
+          );
+          // Keep enough pre-task messages to fill up to MAX, prioritizing recent ones
+          const preTaskSlots = Math.max(0, MAX_HISTORY_ENTRIES - taskMessages.length);
+          const keptPreTask = preTaskMessages.slice(-preTaskSlots);
+          const pruned: any[] = [];
+          if (summary) pruned.push(summary);
+          pruned.push(...keptPreTask, ...taskMessages);
+          const removed = agent.conversationHistory.length - pruned.length;
+          if (removed > 0) {
+            agent.conversationHistory = pruned;
+            console.log(`🗜️  [Prune] "${agent.name}": removed ${removed} old messages, kept ${taskMessages.length} task msgs + ${keptPreTask.length} recent (${pruned.length} total)`);
+          }
+        } else {
+          // No active task: just keep the most recent messages
+          const trimmed = agent.conversationHistory.slice(-MAX_HISTORY_ENTRIES);
+          if (summary && !trimmed.includes(summary)) {
+            trimmed.unshift(summary);
+          }
+          agent.conversationHistory = trimmed;
+          console.log(`🗜️  [Prune] "${agent.name}": trimmed history to ${agent.conversationHistory.length} entries (no active task)`);
+        }
       }
 
       agent.metrics.totalMessages += 1;
