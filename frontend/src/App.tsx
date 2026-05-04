@@ -101,6 +101,34 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [loadData, user]);
 
+  // Safety: clear stale thinking/stream state for agents that are no longer busy.
+  // Handles edge cases where socket events (STREAM_END) were lost due to reconnection.
+  useEffect(() => {
+    const busyIds = new Set(agents.filter(a => a.status === 'busy').map(a => a.id));
+    setThinkingMap(prev => {
+      let changed = false;
+      const copy = { ...prev };
+      for (const agentId of Object.keys(copy)) {
+        if (!busyIds.has(agentId)) {
+          delete copy[agentId];
+          changed = true;
+        }
+      }
+      return changed ? copy : prev;
+    });
+    setStreamBuffers(prev => {
+      let changed = false;
+      const copy = { ...prev };
+      for (const agentId of Object.keys(copy)) {
+        if (!busyIds.has(agentId)) {
+          delete copy[agentId];
+          changed = true;
+        }
+      }
+      return changed ? copy : prev;
+    });
+  }, [agents]);
+
   // Use a ref to hold showToast so socket handlers always call the latest version
   const showToastRef = useRef(showToast);
   useEffect(() => { showToastRef.current = showToast; }, [showToast]);
@@ -164,7 +192,16 @@ export default function App() {
     });
 
     sock.on(WsEvents.AGENT_THINKING, ({ agentId, thinking }) => {
-      setThinkingMap(prev => ({ ...prev, [agentId]: thinking }));
+      if (!thinking) {
+        setThinkingMap(prev => {
+          if (!(agentId in prev)) return prev;
+          const copy = { ...prev };
+          delete copy[agentId];
+          return copy;
+        });
+      } else {
+        setThinkingMap(prev => ({ ...prev, [agentId]: thinking }));
+      }
     });
 
     sock.on(WsEvents.STREAM_START, ({ agentId }) => {

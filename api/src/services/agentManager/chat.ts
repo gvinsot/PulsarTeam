@@ -150,6 +150,7 @@ export const chatMethods = {
       agent.metrics.totalMessages += 1;
       agent.metrics.lastActiveAt = new Date().toISOString();
       agent.currentThinking = '';
+      this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
       saveAgent(agent);
 
       const responseForParsing = this._cleanMarkdown(fullResponse);
@@ -213,6 +214,7 @@ export const chatMethods = {
           this.abortControllers.delete(id);
           agent.metrics.errors += 1;
           agent.currentThinking = '';
+          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
           this.setStatus(id, 'error', retryErr.message);
           saveAgent(agent);
           if (isTopLevel) this._chatLocks.delete(id);
@@ -246,6 +248,7 @@ export const chatMethods = {
           this.abortControllers.delete(id);
           agent.metrics.errors += 1;
           agent.currentThinking = '';
+          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
           const isRetryUserStop = retryErr.message === 'Agent stopped by user';
           this.setStatus(id, isRetryUserStop ? 'idle' : 'error', retryErr.message);
           saveAgent(agent);
@@ -262,6 +265,7 @@ export const chatMethods = {
       this.abortControllers.delete(id);
       agent.metrics.errors += 1;
       agent.currentThinking = '';
+      this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
       this.setStatus(id, isUserStop ? 'idle' : 'error', err.message);
       saveAgent(agent);
       if (isTopLevel) this._chatLocks.delete(id);

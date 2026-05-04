@@ -253,6 +253,7 @@ export const statusMethods = {
           }
           this._taskQueues.delete(subId);
           (subAgent as any).currentThinking = '';
+          this._emit('agent:thinking', { agentId: subId, agentName: (subAgent as any).name, project: (subAgent as any).project || null, thinking: '' });
           (subAgent as any).currentTask = null;
           this._chatLocks.delete(subId);
           this.setStatus(subId, 'idle', 'Stopped by leader');
@@ -297,6 +298,7 @@ export const statusMethods = {
     }
 
     agent.currentThinking = '';
+    this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
     agent.currentTask = null;
     this._chatLocks.delete(id);
     this.setStatus(id, 'idle', 'Agent stopped by user');
