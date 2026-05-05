@@ -857,6 +857,12 @@ export const deleteTask = (taskId) =>
     headers: getHeaders(),
   }).then(handleResponse);
 
+export const clearTaskStopped = (taskId) =>
+  fetch(`${API_BASE}/tasks/${taskId}/clear-stopped`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+  }).then(handleResponse);
+
 /* ── Reorder tasks within a column ──────────────────────────────────── */
 export const reorderTasks = (orderedIds) =>
   fetch(`${API_BASE}/tasks/reorder`, {

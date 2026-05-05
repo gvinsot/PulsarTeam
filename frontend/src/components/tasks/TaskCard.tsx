@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 
-export default function TaskCard({ task, agents, onDelete, onStop, onResume, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
+export default function TaskCard({ task, agents, onDelete, onStop, onResume, onClearStopped, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
   const today = isToday(task.createdAt);
@@ -402,6 +402,15 @@ export default function TaskCard({ task, agents, onDelete, onStop, onResume, onO
               </button>
             ) : (
               <>
+                {isStopped && !task.assignee && onClearStopped && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onClearStopped(task); }}
+                    className="p-1.5 rounded text-yellow-500 hover:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
+                    title="Clear stopped status"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {task.assignee && onResume && (
                   <button
                     onClick={(e) => { e.stopPropagation(); onResume(task); }}

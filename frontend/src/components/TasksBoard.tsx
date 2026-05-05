@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import {
   Search, X, GitCommit, Plus, Settings, ArrowUpDown, Archive, Puzzle,
 } from 'lucide-react';
-import { api, deleteTask as deleteTaskById, updateTask as updateTaskById, reorderTasks } from '../api';
+import { api, deleteTask as deleteTaskById, updateTask as updateTaskById, reorderTasks, clearTaskStopped } from '../api';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
 import GitHubActivityModal from './GitHubActivityModal';
 import ShareBoardModal from './ShareBoardModal';
@@ -349,6 +349,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     const agentId = task.agentId || task.assignee;
     if (!socket || !agentId) return;
     socket.emit(WsEvents.REQ_TASK_EXECUTE, { agentId, taskId: task.id });
+  }, []);
+
+  const handleClearStopped = useCallback(async (task) => {
+    await clearTaskStopped(task.id);
   }, []);
 
   const lastColId = columns[columns.length - 1]?.id;
@@ -756,6 +760,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               onDelete={handleDelete}
               onStop={handleStopAction}
               onResume={handleResumeTask}
+              onClearStopped={handleClearStopped}
               onDrop={handleDrop}
               onOpen={setSelectedTask}
               onClearAll={col.id === lastColId ? handleClearDone : undefined}

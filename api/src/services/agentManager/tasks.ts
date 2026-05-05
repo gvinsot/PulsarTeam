@@ -449,6 +449,14 @@ export const tasksMethods = {
 
     clearTaskSignal(taskId, 'stopped');
     await updateTaskExecutionStatus(taskId, null);
+
+    // Update in-memory task and notify frontend so the yellow "Stopped" state clears
+    const memTask = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    if (memTask) {
+      memTask.executionStatus = null;
+      this._emit('task:updated', { agentId, task: { ...memTask, agentId } });
+    }
+
     if (this._isActiveTaskStatus(task.status)) {
       this._checkAutoRefine({ ...task, agentId }, { by: 'resume' });
     } else {

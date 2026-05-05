@@ -2,7 +2,8 @@ import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { getPool, getBoardById, getBoardShare, rowToTask } from '../services/database.js';
 import { listStarredRepos } from '../services/githubProjects.js';
-import { setTaskSignal } from '../services/agentManager/tasks.js';
+import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
+import { updateTaskExecutionStatus } from '../services/database.js';
 
 const router = Router();
 
@@ -433,6 +434,33 @@ router.post('/bulk-move', async (req, res) => {
     });
 
     res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /tasks/:id/clear-stopped — clear the "stopped" execution status ───
+router.patch('/:id/clear-stopped', async (req, res) => {
+  try {
+    const mgr = req.app.get('agentManager');
+    const task = mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!await requireTaskAccess(mgr, task, req.user)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    clearTaskSignal(req.params.id, 'stopped');
+    await updateTaskExecutionStatus(req.params.id, null);
+
+    // Update in-memory task
+    const memTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === req.params.id);
+    if (memTask) {
+      memTask.executionStatus = null;
+    }
+    task.executionStatus = null;
+
+    mgr._emit('task:updated', { agentId: task.agentId, task: { ...task, agentId: task.agentId } });
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
