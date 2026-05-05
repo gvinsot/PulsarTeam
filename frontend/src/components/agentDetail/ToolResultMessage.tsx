@@ -115,7 +115,7 @@ function ToolResultItem({ result }) {
   const output = result.success
     ? result.result
     : [result.error, result.result].filter(Boolean).join('\n\n--- Output ---\n');
-  const hasContent = !!output;
+  const hasContent = !!output || (result.images && result.images.length > 0);
 
   return (
     <div className="text-xs">
@@ -131,7 +131,22 @@ function ToolResultItem({ result }) {
         )}
       </button>
       {showOutput && hasContent && (
-        <RichToolOutput output={output} success={result.success} tool={result.tool} args={result.args} />
+        <>
+          {result.images && result.images.length > 0 && (
+            <div className="flex gap-2 mt-1 ml-3 flex-wrap">
+              {result.images.map((img, i) => (
+                <img
+                  key={i}
+                  src={`data:${img.mediaType};base64,${img.data}`}
+                  alt={`Tool result ${i + 1}`}
+                  className="max-w-64 max-h-64 rounded-lg border border-dark-600 object-contain cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => window.open(`data:${img.mediaType};base64,${img.data}`, '_blank')}
+                />
+              ))}
+            </div>
+          )}
+          {output && <RichToolOutput output={output} success={result.success} tool={result.tool} args={result.args} />}
+        </>
       )}
     </div>
   );

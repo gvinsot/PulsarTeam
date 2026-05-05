@@ -154,7 +154,7 @@ export class OllamaProvider {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role === 'system' ? 'system' : m.role,
-        content: m.content
+        content: buildOpenAIContent(m.content, m.images),
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens ?? 4096,
@@ -207,7 +207,7 @@ export class OllamaProvider {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role === 'system' ? 'system' : m.role,
-        content: m.content
+        content: buildOpenAIContent(m.content, m.images),
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens ?? 4096,
@@ -445,8 +445,11 @@ export class ClaudeProvider {
 
     for (const msg of messages) {
       if (msg.role === lastRole) {
-        // Merge consecutive same-role messages
-        result[result.length - 1].content += '\\n' + msg.content;
+        const prev = result[result.length - 1];
+        if (msg.images?.length > 0) {
+          prev.images = [...(prev.images || []), ...msg.images];
+        }
+        prev.content += '\\n' + msg.content;
       } else {
         result.push({ ...msg });
         lastRole = msg.role;
@@ -831,7 +834,7 @@ export class VLLMProvider {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role,
-        content: m.content
+        content: buildOpenAIContent(m.content, m.images),
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
@@ -867,7 +870,7 @@ export class VLLMProvider {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role,
-        content: m.content
+        content: buildOpenAIContent(m.content, m.images),
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
@@ -947,7 +950,7 @@ export class MistralProvider {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role,
-        content: m.content
+        content: buildOpenAIContent(m.content, m.images),
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
@@ -971,7 +974,7 @@ export class MistralProvider {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role,
-        content: m.content
+        content: buildOpenAIContent(m.content, m.images),
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,

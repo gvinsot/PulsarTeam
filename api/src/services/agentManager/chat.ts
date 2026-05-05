@@ -863,12 +863,15 @@ export const chatMethods = {
           continuationPrompt = '\nYour code has been committed and pushed. Now call @task_execution_complete(summary) to signal that your task is done.';
         }
 
+        const toolImages = nonTerminal.flatMap((r: any) => r.images || []);
+
         const continuedResponse = await this.sendMessage(
           id,
           `[TOOL RESULTS — DO NOT RESTART YOUR REASONING]\n${resultsSummary}\n\n${continuationPrompt}`,
           streamCallback,
           delegationDepth,
-          { type: 'tool-result', toolResults: nonTerminal.map((r: any) => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false })) }
+          { type: 'tool-result', toolResults: nonTerminal.map((r: any) => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false, images: r.images || undefined })) },
+          toolImages.length > 0 ? toolImages : null
         );
         return { earlyReturn: continuedResponse };
       }

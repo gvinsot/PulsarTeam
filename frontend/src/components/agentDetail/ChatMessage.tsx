@@ -208,8 +208,8 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
       <div className={`flex-1 rounded-xl p-3 ${
         isUser ? 'bg-dark-700/50 border border-dark-600/50' : 'bg-dark-800/50 border border-dark-700/50'
       }`}>
-        {/* Show attached images for user messages */}
-        {isUser && message.images && message.images.length > 0 && (
+        {/* Show attached images for user messages and tool results */}
+        {message.images && message.images.length > 0 && (
           <div className="flex gap-2 mb-2 flex-wrap">
             {message.images.map((img, i) => (
               <img

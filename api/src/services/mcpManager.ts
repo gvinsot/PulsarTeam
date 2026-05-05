@@ -5,6 +5,17 @@ import { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './databa
 import { BUILTIN_MCP_SERVERS } from '../data/mcpServers.js';
 import { MCPClient } from './mcpClient.js';
 
+function extractMcpResult(content: any[]) {
+  const textParts = content.filter((c: any) => c.type === 'text').map((c: any) => c.text);
+  const images = content
+    .filter((c: any) => c.type === 'image' && c.data && c.mimeType)
+    .map((c: any) => ({ data: c.data, mediaType: c.mimeType }));
+  return {
+    text: textParts.join('\n') || JSON.stringify(content),
+    images: images.length > 0 ? images : undefined,
+  };
+}
+
 export function resolveInternalMcpConfig(serverUrl: string, {
   port = process.env.PORT || 3001,
   jwtSecret = null,
@@ -372,14 +383,11 @@ export class MCPManager {
 
     try {
       const result = await client.callTool(toolName, args);
-      const textParts = result.content
-        .filter(c => c.type === 'text')
-        .map(c => c.text);
-      const output = textParts.join('\\n') || JSON.stringify(result.content);
-
+      const extracted = extractMcpResult(result.content);
       return {
         success: !result.isError,
-        result: output,
+        result: extracted.text,
+        images: extracted.images,
         raw: result.content
       };
     } catch (err) {
@@ -390,10 +398,11 @@ export class MCPManager {
           const retryClient = this.clients.get(serverId);
           if (retryClient) {
             const result = await retryClient.callTool(toolName, args);
-            const textParts = result.content.filter(c => c.type === 'text').map(c => c.text);
+            const extracted = extractMcpResult(result.content);
             return {
               success: !result.isError,
-              result: textParts.join('\\n') || JSON.stringify(result.content),
+              result: extracted.text,
+              images: extracted.images,
               raw: result.content
             };
           }
@@ -492,10 +501,11 @@ export class MCPManager {
 
     try {
       const result = await client.callTool(toolName, args);
-      const textParts = result.content.filter(c => c.type === 'text').map(c => c.text);
+      const extracted = extractMcpResult(result.content);
       return {
         success: !result.isError,
-        result: textParts.join('\n') || JSON.stringify(result.content),
+        result: extracted.text,
+        images: extracted.images,
         raw: result.content
       };
     } catch (err) {
@@ -511,10 +521,11 @@ export class MCPManager {
         await newClient.connect(internalConfig.url, connectOpts);
         this.agentClients.set(cacheKey, newClient);
         const result = await newClient.callTool(toolName, args);
-        const textParts = result.content.filter(c => c.type === 'text').map(c => c.text);
+        const extracted = extractMcpResult(result.content);
         return {
           success: !result.isError,
-          result: textParts.join('\n') || JSON.stringify(result.content),
+          result: extracted.text,
+          images: extracted.images,
           raw: result.content
         };
       }
@@ -549,10 +560,11 @@ export class MCPManager {
 
     try {
       const result = await client.callTool(toolName, args);
-      const textParts = result.content.filter(c => c.type === 'text').map(c => c.text);
+      const extracted = extractMcpResult(result.content);
       return {
         success: !result.isError,
-        result: textParts.join('\n') || JSON.stringify(result.content),
+        result: extracted.text,
+        images: extracted.images,
         raw: result.content
       };
     } catch (err) {
@@ -571,10 +583,11 @@ export class MCPManager {
         await newClient.connect(internalConfig.url, connectOpts);
         this.agentClients.set(cacheKey, newClient);
         const result = await newClient.callTool(toolName, args);
-        const textParts = result.content.filter(c => c.type === 'text').map(c => c.text);
+        const extracted = extractMcpResult(result.content);
         return {
           success: !result.isError,
-          result: textParts.join('\n') || JSON.stringify(result.content),
+          result: extracted.text,
+          images: extracted.images,
           raw: result.content
         };
       }

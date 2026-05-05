@@ -225,8 +225,34 @@ export async function executeTool(toolName, args, projectPath, provider, agentId
 
 // ─── Tool implementations (all via execution provider) ──────────────────
 
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']);
+
+function getFileExtension(path) {
+  const dot = path.lastIndexOf('.');
+  return dot >= 0 ? path.slice(dot).toLowerCase() : '';
+}
+
 async function toolReadFile(provider, agentId, filePath, startLineArg, endLineArg) {
   try {
+    const ext = getFileExtension(filePath);
+    if (IMAGE_EXTENSIONS.has(ext) && ext !== '.svg') {
+      const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.ico': 'image/x-icon' };
+      const mediaType = mimeMap[ext] || 'image/png';
+      try {
+        const result = await provider.exec(agentId, `base64 -w0 "${filePath.replace(/"/g, '\\"')}"`, { timeout: 30000 });
+        const b64 = ((result.stdout || '') + (result.stderr || '')).trim();
+        if (b64 && b64.length < 10 * 1024 * 1024) {
+          return {
+            success: true,
+            result: `[Image file: ${filePath} (${mediaType}, ${Math.round(b64.length * 3 / 4 / 1024)}KB)]`,
+            images: [{ data: b64, mediaType }],
+            meta: { path: filePath, isImage: true }
+          };
+        }
+      } catch {}
+      return { success: true, result: `[Binary image file: ${filePath} — too large to display or base64 failed]`, meta: { path: filePath, isImage: true } };
+    }
+
     const content = await provider.readFile(agentId, filePath);
     const allLines = content.split('\n');
 
