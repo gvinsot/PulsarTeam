@@ -5,7 +5,7 @@ export async function getAllUsers() {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      'SELECT id, username, role, display_name, google_id, avatar_url, created_at, updated_at FROM users ORDER BY created_at'
+      'SELECT id, username, role, display_name, google_id, avatar_url, last_seen, created_at, updated_at FROM users ORDER BY created_at'
     );
     return result.rows;
   } catch (err) {
@@ -140,6 +140,16 @@ export async function linkGoogleId(userId, googleId, avatarUrl) {
   } catch (err) {
     console.error('Failed to link google_id:', err.message);
     return null;
+  }
+}
+
+export async function updateLastSeen(userId: string) {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    await pool.query('UPDATE users SET last_seen = NOW() WHERE id = $1', [userId]);
+  } catch (err) {
+    console.error('Failed to update last_seen:', err.message);
   }
 }
 

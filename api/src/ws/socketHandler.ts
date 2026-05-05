@@ -1,5 +1,11 @@
-import { getBoardsByUser } from '../services/database.js';
+import { getBoardsByUser, updateLastSeen } from '../services/database.js';
 import { WsEvents } from './events.js';
+
+const connectedUserIds = new Set<string>();
+
+export function getConnectedUserIds(): Set<string> {
+  return connectedUserIds;
+}
 
 // ── Per-socket rate limiter for mutating WebSocket events ────────────
 function createSocketRateLimiter(maxEvents = 30, windowMs = 60_000) {
@@ -34,7 +40,11 @@ export function setupSocketHandlers(io, agentManager) {
     // ── Per-user & per-board rooms for isolation ─────────────────────
     const userId = socket.user?.userId;
     const userRole = socket.user?.role;
-    if (userId) socket.join(`user:${userId}`);
+    if (userId) {
+      socket.join(`user:${userId}`);
+      connectedUserIds.add(userId);
+      updateLastSeen(userId).catch(() => {});
+    }
     if (userRole === 'admin') socket.join('role:admin');
 
     let userBoardIds = new Set<string>();
@@ -519,6 +529,14 @@ export function setupSocketHandlers(io, agentManager) {
 
     socket.on('disconnect', () => {
       console.log(`🔌 Client disconnected: ${socket.user?.username}`);
+      if (userId) {
+        const still = Array.from(io.sockets.sockets.values())
+          .some(s => (s as any).user?.userId === userId && s.id !== socket.id);
+        if (!still) {
+          connectedUserIds.delete(userId);
+          updateLastSeen(userId).catch(() => {});
+        }
+      }
     });
   });
 }

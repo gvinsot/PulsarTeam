@@ -140,6 +140,8 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       // Google OAuth columns
       await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE').catch(() => {});
       await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT').catch(() => {});
+      // Connection tracking
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ').catch(() => {});
       // Allow null password for OAuth-only users
       await pool.query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
       console.log('✅ Users table ready');

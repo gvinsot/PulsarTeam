@@ -7,6 +7,22 @@ import {
 import { api } from '../api';
 import LlmConfigModal from './LlmConfigModal';
 
+function timeAgo(date: string | null): string {
+  if (!date) return 'never';
+  const ms = Date.now() - new Date(date).getTime();
+  if (ms < 0) return 'just now';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return 'just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hrs = Math.floor(min / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
+}
+
 const ROLE_CONFIG = {
   admin: { label: 'Admin', icon: ShieldAlert, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30' },
   advanced: { label: 'Advanced', icon: ShieldCheck, color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30' },
@@ -1070,58 +1086,53 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
               <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1">
               {users.map(user => {
                 const rc = ROLE_CONFIG[user.role] || ROLE_CONFIG.basic;
                 const RoleIcon = rc.icon;
                 return (
                   <div
                     key={user.id}
-                    className="flex items-center justify-between p-4 bg-dark-800 rounded-xl border border-dark-700 hover:border-dark-600 transition-colors"
+                    className="flex items-center justify-between px-3 py-2 bg-dark-800 rounded-lg border border-dark-700 hover:border-dark-600 transition-colors"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center border ${rc.bg}`}>
-                        <RoleIcon className={`w-5 h-5 ${rc.color}`} />
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="relative flex-shrink-0">
+                        <RoleIcon className={`w-4 h-4 ${rc.color}`} />
+                        <span className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-dark-800 ${user.is_online ? 'bg-green-400' : 'bg-dark-600'}`} />
                       </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-dark-100 truncate">{user.display_name || user.username}</span>
-                          {user.display_name && user.display_name !== user.username && (
-                            <span className="text-xs text-dark-500">@{user.username}</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className={`text-xs font-medium px-1.5 py-0.5 rounded border ${rc.bg} ${rc.color}`}>
-                            {rc.label}
-                          </span>
-                          <span className="text-xs text-dark-500">
-                            Created {new Date(user.created_at).toLocaleDateString()}
-                          </span>
-                        </div>
-                      </div>
+                      <span className="text-sm font-medium text-dark-100 truncate">{user.display_name || user.username}</span>
+                      {user.display_name && user.display_name !== user.username && (
+                        <span className="text-xs text-dark-500 hidden sm:inline">@{user.username}</span>
+                      )}
+                      <span className={`text-[10px] px-1 py-0.5 rounded ${rc.bg} ${rc.color}`}>{rc.label}</span>
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        onClick={() => handleImpersonate(user)}
-                        className="p-2 text-dark-400 hover:text-emerald-400 hover:bg-dark-700 rounded-lg transition-colors"
-                        title={`Impersonate ${user.username}`}
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => startEdit(user)}
-                        className="p-2 text-dark-400 hover:text-indigo-400 hover:bg-dark-700 rounded-lg transition-colors"
-                        title="Edit"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(user)}
-                        className="p-2 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`text-[11px] ${user.is_online ? 'text-green-400' : 'text-dark-500'}`}>
+                        {user.is_online ? 'online' : timeAgo(user.last_seen)}
+                      </span>
+                      <div className="flex items-center gap-0.5">
+                        <button
+                          onClick={() => handleImpersonate(user)}
+                          className="p-1.5 text-dark-400 hover:text-emerald-400 hover:bg-dark-700 rounded transition-colors"
+                          title={`Impersonate ${user.username}`}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => startEdit(user)}
+                          className="p-1.5 text-dark-400 hover:text-indigo-400 hover:bg-dark-700 rounded transition-colors"
+                          title="Edit"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(user)}
+                          className="p-1.5 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   getAllUsers, getUserById, createUser, updateUser, deleteUser
 } from '../services/database.js';
+import { getConnectedUserIds } from '../ws/socketHandler.js';
 
 const createUserSchema = z.object({
   username: z.string().min(2).max(100),
@@ -26,7 +27,8 @@ export function userRoutes() {
   router.get('/', async (req, res) => {
     try {
       const users = await getAllUsers();
-      res.json(users);
+      const connected = getConnectedUserIds();
+      res.json(users.map(u => ({ ...u, is_online: connected.has(u.id) })));
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
