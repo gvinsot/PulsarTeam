@@ -72,7 +72,7 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
     >
-      <div className="w-full max-w-md bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
+      <div className="w-full max-w-xl bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl shadow-black/50 flex flex-col animate-fadeIn">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
           <div className="flex items-center gap-2">
@@ -98,7 +98,7 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
               ref={textareaRef}
               value={text}
               onChange={e => setText(e.target.value)}
-              rows={4}
+              rows={6}
               placeholder="Describe the task..."
               className="w-full px-3 py-2.5 bg-dark-800 border border-dark-700 rounded-lg text-sm
                 text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500
