@@ -100,7 +100,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       return {
         content: [{
           type: 'text',
-          text: `Bucket "${bucket}" prefix "${prefix || '/'" — ${objects.length} object(s)${result.IsTruncated ? ` (truncated, ${result.KeyCount} shown)` : ''}:\n\n${summary}${prefixes.length ? `\n\nCommon prefixes: ${prefixes.join(', ')}` : ''}${pagination}\n\nJSON:\n${JSON.stringify(objects, null, 2)}`,
+          text: `Bucket "${bucket}" prefix "${prefix || "/"}" — ${objects.length} object(s)${result.IsTruncated ? ` (truncated, ${result.KeyCount} shown)` : ""}:\n\n${summary}${prefixes.length ? `\n\nCommon prefixes: ${prefixes.join(", ")}` : ""}${pagination}\n\nJSON:\n${JSON.stringify(objects, null, 2)}`,
         }],
       };
     }
