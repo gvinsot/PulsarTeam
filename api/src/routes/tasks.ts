@@ -564,6 +564,81 @@ router.get('/:id/history', async (req, res) => {
   }
 });
 
+// ── GET /tasks/project-stats — lightweight aggregated stats for Projects view ─
+router.get('/project-stats', async (req, res) => {
+  try {
+    const pool = getPool();
+    if (!pool) return res.json({ projects: [], daily: [] });
+
+    const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
+
+    // 1. Per-project summary counts (only non-deleted tasks)
+    const summaryResult = await pool.query(`
+      SELECT
+        project,
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE status = 'done')::int AS done,
+        COUNT(*) FILTER (WHERE status NOT IN ('done','error','backlog'))::int AS active,
+        COUNT(*) FILTER (WHERE status IN ('error','backlog'))::int AS waiting,
+        COUNT(*) FILTER (WHERE task_type = 'bug')::int AS bugs,
+        COUNT(*) FILTER (WHERE task_type = 'feature')::int AS features
+      FROM tasks
+      WHERE deleted_at IS NULL AND project IS NOT NULL AND project != ''
+      GROUP BY project
+      ORDER BY project
+    `);
+
+    // 2. Daily created/completed counts per project (last N days)
+    const dailyResult = await pool.query(`
+      SELECT project, day::date AS day, created, completed FROM (
+        SELECT project, d.day,
+          COUNT(*) FILTER (WHERE created_at::date = d.day)::int AS created,
+          COUNT(*) FILTER (WHERE completed_at::date = d.day)::int AS completed
+        FROM tasks
+        CROSS JOIN generate_series(
+          (CURRENT_DATE - ($1 || ' days')::interval)::date,
+          CURRENT_DATE,
+          '1 day'::interval
+        ) AS d(day)
+        WHERE deleted_at IS NULL AND project IS NOT NULL AND project != ''
+          AND (created_at >= CURRENT_DATE - ($1 || ' days')::interval
+               OR completed_at >= CURRENT_DATE - ($1 || ' days')::interval)
+        GROUP BY project, d.day
+      ) sub
+      WHERE created > 0 OR completed > 0
+      ORDER BY project, day
+    `, [days]);
+
+    // Group daily data by project
+    const dailyByProject: Record<string, { date: string; created: number; completed: number }[]> = {};
+    for (const row of dailyResult.rows) {
+      const key = row.project;
+      if (!dailyByProject[key]) dailyByProject[key] = [];
+      dailyByProject[key].push({
+        date: row.day instanceof Date ? row.day.toISOString().split('T')[0] : String(row.day).split('T')[0],
+        created: row.created,
+        completed: row.completed,
+      });
+    }
+
+    const projects = summaryResult.rows.map(r => ({
+      name: r.project,
+      total: r.total,
+      done: r.done,
+      active: r.active,
+      waiting: r.waiting,
+      bugs: r.bugs,
+      features: r.features,
+      completion: r.total > 0 ? Math.round((r.done / r.total) * 100) : 0,
+      daily: dailyByProject[r.project] || [],
+    }));
+
+    res.json({ projects });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /tasks/stats — task statistics ──────────────────────────────────────
 router.get('/stats', async (req, res) => {
   try {

@@ -12,20 +12,22 @@ function GithubIcon({ className }) {
   );
 }
 
-// ── Build daily activity data for a set of tasks (last N days) ──────────────
-function buildDailyActivity(tasks, days = 14) {
+// ── Build daily activity data from sparse daily stats (fill gaps with zeros) ─
+function buildDailyActivity(dailyStats: { date: string; created: number; completed: number }[], days = 30) {
+  const lookup = new Map(dailyStats.map(d => [d.date, d]));
   const result = [];
   const now = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now);
     d.setDate(d.getDate() - i);
     const dayStr = d.toISOString().split('T')[0];
-    let created = 0, completed = 0;
-    for (const t of tasks) {
-      if (t.createdAt?.startsWith(dayStr)) created++;
-      if (t.completedAt?.startsWith(dayStr)) completed++;
-    }
-    result.push({ date: dayStr, created, completed, total: created + completed });
+    const entry = lookup.get(dayStr);
+    result.push({
+      date: dayStr,
+      created: entry?.created || 0,
+      completed: entry?.completed || 0,
+      total: (entry?.created || 0) + (entry?.completed || 0),
+    });
   }
   return result;
 }
@@ -197,19 +199,12 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
     }
   };
 
-  // Fetch tasks and boards from API — only keep tasks on boards the user can see
-  const [tasks, setTasks] = useState([]);
-  const [userBoardIds, setUserBoardIds] = useState(null); // null = loading, Set = ready
+  // Fetch lightweight project stats instead of full task objects
+  const [projectStats, setProjectStats] = useState<any[]>([]);
   useEffect(() => {
-    Promise.all([
-      api.getAllTasks().catch(() => []),
-      api.getBoards().catch(() => []),
-    ]).then(([allTasks, boards]) => {
-      const boardIds = new Set(boards.map(b => b.id));
-      setUserBoardIds(boardIds);
-      // Only keep tasks that belong to a board the user can see
-      setTasks(allTasks.filter(t => t.boardId && boardIds.has(t.boardId)));
-    });
+    api.getProjectStats(30).then(data => {
+      setProjectStats(data.projects || []);
+    }).catch(() => setProjectStats([]));
   }, [agents]);
 
   // Build a lookup of GitHub info by project name
@@ -235,37 +230,33 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
     return map;
   }, [githubProjects, projectContexts]);
 
-  // Derive projects — only show projects that have tasks on the user's boards
+  // Derive projects from lightweight stats (no full task objects)
   const projects = useMemo(() => {
     const projectMap = new Map();
 
-    // First, collect projects from tasks (only tasks on user's boards are in `tasks`)
-    for (const t of tasks) {
-      if (!t.project) continue;
-      if (!projectMap.has(t.project)) {
-        projectMap.set(t.project, { name: t.project, agents: [], tasks: [], stats: {} });
-      }
-      projectMap.get(t.project).tasks.push(t);
+    for (const ps of projectStats) {
+      projectMap.set(ps.name, {
+        name: ps.name,
+        agents: [],
+        stats: {
+          total: ps.total,
+          done: ps.done,
+          active: ps.active,
+          inProgress: ps.active,
+          waiting: ps.waiting,
+          pending: ps.waiting,
+          bugs: ps.bugs,
+          features: ps.features,
+          completion: ps.completion,
+        },
+        github: githubLookup.get(ps.name) || null,
+        dailyActivity: buildDailyActivity(ps.daily || [], 30),
+      });
     }
 
-    // Attach agents to projects that already have tasks
     for (const a of agents) {
       if (!a.project || !projectMap.has(a.project)) continue;
       projectMap.get(a.project).agents.push(a);
-    }
-
-    for (const [, p] of projectMap) {
-      const total = p.tasks.length;
-      const done = p.tasks.filter(t => t.status === 'done').length;
-      const active = p.tasks.filter(t => !['done', 'error', 'backlog'].includes(t.status || 'backlog')).length;
-      const waiting = p.tasks.filter(t => ['error', 'backlog'].includes(t.status || 'backlog')).length;
-      const bugs = p.tasks.filter(t => (t.type || 'bug') === 'bug').length;
-      const features = p.tasks.filter(t => t.type === 'feature').length;
-      p.stats = { total, done, active, inProgress: active, waiting, pending: waiting, bugs, features, completion: total ? Math.round((done / total) * 100) : 0 };
-      // Attach GitHub info
-      p.github = githubLookup.get(p.name) || null;
-      // Build daily activity for mini chart
-      p.dailyActivity = buildDailyActivity(p.tasks, 30);
     }
 
     let result = Array.from(projectMap.values());
@@ -276,7 +267,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
     else if (sortBy === 'tasks') result.sort((a, b) => b.stats.total - a.stats.total);
     else if (sortBy === 'completion') result.sort((a, b) => b.stats.completion - a.stats.completion);
     return result;
-  }, [agents, tasks, search, sortBy, githubLookup]);
+  }, [agents, projectStats, search, sortBy, githubLookup]);
 
   const handleOpenGitHub = (e, htmlUrl) => {
     e.stopPropagation();
