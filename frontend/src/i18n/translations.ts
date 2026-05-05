@@ -155,6 +155,8 @@ const translations = {
     en: 'Open-source multi-agent orchestration platform. Licensed under AGPL-3.0.',
     fr: 'Plateforme open-source d\'orchestration multi-agents. Sous licence AGPL-3.0.',
   },
+  'footer.terms': { en: 'Terms and Conditions', fr: 'Conditions générales' },
+  'footer.privacy': { en: 'Data & Privacy', fr: 'Données & Confidentialité' },
 
   // Login panel
   'login.title': { en: 'Sign In', fr: 'Connexion' },

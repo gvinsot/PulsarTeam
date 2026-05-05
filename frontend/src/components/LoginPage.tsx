@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { Lock, User, AlertCircle, ChevronRight, Bot, LayoutDashboard, FolderKanban, DollarSign, Zap, Shield, Globe, ArrowRight, Play, X, ChevronDown, Mail, Phone, Building2, MessageSquare, Github, Headphones, Send } from 'lucide-react';
 import { api } from '../api';
 import { useLanguage } from '../contexts/LanguageContext';
+import TermsPage from './TermsPage';
+import PrivacyPage from './PrivacyPage';
 
 /* ── Reusable tiny components ── */
 
@@ -506,6 +508,7 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
   const [googleEnabled, setGoogleEnabled] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [contactModal, setContactModal] = useState<{ open: boolean; type: 'contact' | 'support' }>({ open: false, type: 'contact' });
+  const [legalPage, setLegalPage] = useState<'terms' | 'privacy' | null>(null);
 
   useEffect(() => {
     api.googleStatus().then(data => setGoogleEnabled(!!data.enabled)).catch(() => {});
@@ -521,6 +524,9 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
       setGoogleBusy(false);
     }
   };
+
+  if (legalPage === 'terms') return <TermsPage onBack={() => setLegalPage(null)} />;
+  if (legalPage === 'privacy') return <PrivacyPage onBack={() => setLegalPage(null)} />;
 
   return (
     <div className="min-h-screen bg-dark-950 text-dark-200">
@@ -747,6 +753,14 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
           <p className="text-dark-500 text-xs">
             {t('footer.tagline')}
           </p>
+          <div className="flex items-center gap-4">
+            <button onClick={() => setLegalPage('terms')} className="text-dark-500 hover:text-dark-300 text-xs transition-colors">
+              {t('footer.terms')}
+            </button>
+            <button onClick={() => setLegalPage('privacy')} className="text-dark-500 hover:text-dark-300 text-xs transition-colors">
+              {t('footer.privacy')}
+            </button>
+          </div>
         </div>
       </footer>
 
