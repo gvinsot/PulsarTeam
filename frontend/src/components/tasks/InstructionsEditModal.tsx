@@ -20,7 +20,7 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="w-[700px] max-h-[80vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl flex flex-col">
+      <div className="w-[900px] max-h-[90vh] bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
           <div className="flex items-center gap-2">
             <Edit3 className="w-4 h-4 text-indigo-400" />
@@ -51,7 +51,7 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
                 value={item.instructions}
                 onChange={e => updateField(idx, 'instructions', e.target.value)}
                 placeholder="Instructions for the agent..."
-                className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2.5 text-sm text-dark-200 placeholder-dark-500 resize-y min-h-[120px] focus:outline-none focus:border-indigo-500 transition-colors"
+                className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2.5 text-sm text-dark-200 placeholder-dark-500 resize-y min-h-[180px] focus:outline-none focus:border-indigo-500 transition-colors"
               />
             </div>
           ))}
