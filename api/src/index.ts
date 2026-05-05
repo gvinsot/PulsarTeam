@@ -101,8 +101,11 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Content-Security-Policy', contentSecurityPolicy);
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  // OAuth callback pages set their own CSP with a nonce for inline scripts
+  if (req.path !== '/gmail-callback.html' && !req.path.endsWith('/oauth-redirect')) {
+    res.setHeader('Content-Security-Policy', contentSecurityPolicy);
+  }
   next();
 });
 
