@@ -3,7 +3,7 @@ import { Trash2, Edit3, Plus, ArrowRight } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import TaskCard from './TaskCard';
 
-export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onResume, onClearStopped, onDrop, onOpen, onClearAll, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits, columns, onBatchMove, onBatchDelete }) {
+export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onResume, onClearStopped, onDrop, onOpen, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits, columns, onBatchMove, onBatchDelete }) {
   const { theme } = useTheme();
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
@@ -88,15 +88,6 @@ export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onR
               title="Edit agent instructions for this column"
             >
               <Edit3 className="w-3.5 h-3.5" />
-            </button>
-          )}
-          {onClearAll && tasks.length > 0 && (
-            <button
-              onClick={onClearAll}
-              className="p-1 rounded text-dark-500 hover:text-red-400 hover:bg-dark-700 transition-colors"
-              title="Delete all done tasks"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
           <div className="relative" ref={batchMenuRef}>

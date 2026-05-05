@@ -355,14 +355,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     await clearTaskStopped(task.id);
   }, []);
 
-  const lastColId = columns[columns.length - 1]?.id;
-
-  const handleClearDone = useCallback(async () => {
-    const doneTasks = allTasks.filter(t => t.status === lastColId);
-    await Promise.all(doneTasks.map(t => deleteTaskById(t.id)));
-    refreshAll();
-  }, [allTasks, refreshAll, lastColId]);
-
   // Helper: reorder tasks in a column after a drop, updating positions via API
   const reorderColumnTasks = useCallback(async (colId, draggedTaskId, dropIdx) => {
     // Get current tasks in this column (sorted by current sort)
@@ -747,7 +739,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               onClearStopped={handleClearStopped}
               onDrop={handleDrop}
               onOpen={setSelectedTask}
-              onClearAll={col.id === lastColId ? handleClearDone : undefined}
               onAddTask={isReadOnly ? undefined : () => { setCreateDefaultStatus(col.id); setCreateOpen(true); }}
               onEditInstructions={setEditInstructionsCol}
               hasInstructions={!!columnInstructionsMap[col.id]}
