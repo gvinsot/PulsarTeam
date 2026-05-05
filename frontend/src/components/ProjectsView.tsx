@@ -316,7 +316,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
             className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
           >
             <option value="name">Sort: Name</option>
-            <option value="tasks">Sort: Tasks</option>
+            <option value="tasks">Sort: Workflows</option>
             <option value="completion">Sort: Completion</option>
           </select>
           <button

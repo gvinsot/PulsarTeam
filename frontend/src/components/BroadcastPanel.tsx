@@ -720,14 +720,14 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                   />
                 </div>
 
-                {/* Clear In-Progress Tasks */}
+                {/* Clear In-Progress Workflows */}
                 <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <ListX className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Clear Active Tasks</span>
+                      <span className="text-sm font-medium text-dark-200">Clear Active Workflows</span>
                     </div>
-                    <p className="text-xs text-dark-500">Remove active tasks for every agent</p>
+                    <p className="text-xs text-dark-500">Remove active workflows for every agent</p>
                   </div>
                   <ConfirmButton
                     onConfirm={handleClearAllActiveTasks}
@@ -740,14 +740,14 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                   />
                 </div>
 
-                {/* Clear All Tasks */}
+                {/* Clear All Workflows */}
                 <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5">
                       <Eraser className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Clear All Tasks</span>
+                      <span className="text-sm font-medium text-dark-200">Clear All Workflows</span>
                     </div>
-                    <p className="text-xs text-dark-500">Delete all tasks for every agent</p>
+                    <p className="text-xs text-dark-500">Delete all workflows for every agent</p>
                   </div>
                   <ConfirmButton
                     onConfirm={handleClearAllTasks}

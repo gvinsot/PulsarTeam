@@ -132,7 +132,7 @@ const translations = {
     en: 'Choose models, set system prompts, assign plugins and tools. Each agent gets its own sandboxed workspace.',
     fr: 'Choisissez les modèles, définissez les prompts système, assignez des plugins et outils. Chaque agent a son propre espace de travail isolé.',
   },
-  'howItWorks.step2.title': { en: 'Create Tasks', fr: 'Créez les tâches' },
+  'howItWorks.step2.title': { en: 'Create Workflows', fr: 'Créez les workflows' },
   'howItWorks.step2.desc': {
     en: 'Add tasks to your Kanban board. Assign them to agents or let the Swarm Leader delegate automatically.',
     fr: 'Ajoutez des tâches à votre tableau Kanban. Assignez-les aux agents ou laissez le Swarm Leader les déléguer automatiquement.',

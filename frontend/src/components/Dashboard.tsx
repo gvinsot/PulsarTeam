@@ -165,7 +165,7 @@ export default function Dashboard({
                 <div className="absolute left-0 top-full mt-2 w-48 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
                   {[
                     { key: 'agents', label: 'Agents', icon: Users },
-                    { key: 'tasks', label: 'Tasks', icon: KanbanSquare },
+                    { key: 'tasks', label: 'Workflows', icon: KanbanSquare },
                     { key: 'projects', label: 'Projects', icon: Tag },
                     { key: 'budget', label: 'Budget', icon: DollarSign },
                     ...(isAdmin ? [{ key: 'processes', label: 'Processes', icon: GitBranch }] : []),
@@ -206,10 +206,10 @@ export default function Dashboard({
                 className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
                   activeView === 'tasks' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
                 }`}
-                title="Tasks board"
+                title="Workflows board"
               >
                 <KanbanSquare className="w-4 h-4" />
-                <span className="hidden md:inline">Tasks</span>
+                <span className="hidden md:inline">Workflows</span>
               </button>
               <button
                 onClick={() => setActiveView('projects')}

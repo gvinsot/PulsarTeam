@@ -80,7 +80,7 @@ export default function TaskList({
   return (
     <div className="task-list">
       <div className="task-list-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h4 style={{ margin: 0 }}>Tasks</h4>
+        <h4 style={{ margin: 0 }}>Workflows</h4>
         <button
           onClick={onExecuteAllTasks}
           disabled={openCount === 0}

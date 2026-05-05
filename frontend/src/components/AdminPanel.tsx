@@ -1398,9 +1398,9 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                             <Bot className="w-3 h-3" />
                             {agentCount} agents
                           </span>
-                          <span className="flex items-center gap-1 text-xs text-dark-400" title="Tasks">
+                          <span className="flex items-center gap-1 text-xs text-dark-400" title="Workflows">
                             <ListTodo className="w-3 h-3" />
-                            {taskCount} tasks
+                            {taskCount} workflows
                           </span>
                           {board.username && (
                             <span className="text-xs text-dark-500">

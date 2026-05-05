@@ -18,7 +18,7 @@ function GithubIcon({ className }) {
 
 const TABS = [
   { id: 'overview',   label: 'Overview',    icon: FolderGit2 },
-  { id: 'tasks',      label: 'Tasks',       icon: ListTodo },
+  { id: 'tasks',      label: 'Workflows',   icon: ListTodo },
   { id: 'context',    label: 'Context',     icon: FileText },
   { id: 'statistics', label: 'Statistics',  icon: BarChart3 },
 ];
@@ -221,7 +221,7 @@ function OverviewTab({ agents, tasks, stats }) {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <SummaryCard icon={<Users size={16} />} label="Agents" value={agents.length} color="text-blue-400" />
-        <SummaryCard icon={<ListTodo size={16} />} label="Total Tasks" value={stats.total} color="text-purple-400" />
+        <SummaryCard icon={<ListTodo size={16} />} label="Total Workflows" value={stats.total} color="text-purple-400" />
         <SummaryCard icon={<Activity size={16} />} label="In Progress" value={stats.inProgress} color="text-yellow-400" />
         <SummaryCard icon={<Clock size={16} />} label="Pending" value={stats.pending} color="text-orange-400" />
         <SummaryCard icon={<Bug size={16} />} label="Bugs" value={stats.bugs} color="text-red-400" />
