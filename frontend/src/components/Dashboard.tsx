@@ -24,7 +24,8 @@ const AdminPanel = lazy(() => import('./AdminPanel'));
 export default function Dashboard({
   user, agents, templates, projects, skills, mcpServers, projectContexts, thinkingMap, streamBuffers,
   onLogout, onRefresh, socket, showToast, onImpersonate, onStopImpersonation,
-  loadTemplates, loadProjects, loadSkills, loadMcpServers, loadProjectContexts
+  loadTemplates, loadProjects, loadSkills, loadMcpServers, loadProjectContexts,
+  onAgentCreated
 }) {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -479,6 +480,7 @@ export default function Dashboard({
             onClose={() => setShowAddModal(false)}
             onCreated={(agent) => {
               setShowAddModal(false);
+              if (onAgentCreated) onAgentCreated(agent);
               setSelectedAgent(agent.id);
             }}
           />

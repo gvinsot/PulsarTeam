@@ -169,7 +169,9 @@ export default function App() {
     SOCKET_EVENTS.forEach(ev => sock.off(ev));
 
     sock.on(WsEvents.AGENTS_LIST, (list) => setAgents(list));
-    sock.on(WsEvents.AGENT_CREATED, (agent) => setAgents(prev => [...prev, agent]));
+    sock.on(WsEvents.AGENT_CREATED, (agent) => setAgents(prev =>
+      prev.some(a => a.id === agent.id) ? prev.map(a => a.id === agent.id ? agent : a) : [...prev, agent]
+    ));
     sock.on(WsEvents.AGENT_UPDATED, (agent) => {
       // Dedup: skip if the payload is identical to the last one for this agent
       const json = JSON.stringify(agent);
@@ -467,6 +469,9 @@ export default function App() {
         loadSkills={loadSkills}
         loadMcpServers={loadMcpServers}
         loadProjectContexts={loadProjectContexts}
+        onAgentCreated={(agent) => setAgents(prev =>
+          prev.some(a => a.id === agent.id) ? prev : [...prev, agent]
+        )}
       />
 
       {dbUnavailable && (
