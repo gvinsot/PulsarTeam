@@ -4,6 +4,8 @@ import { api } from './api';
 import { WsEvents } from './socketEvents';
 import LoginPage from './components/LoginPage';
 import Dashboard from './components/Dashboard';
+import TermsPage from './components/TermsPage';
+import PrivacyPage from './components/PrivacyPage';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
 
@@ -401,6 +403,10 @@ export default function App() {
       handleLogout();
     });
   };
+
+  const pathname = window.location.pathname;
+  if (pathname === '/terms') return <TermsPage />;
+  if (pathname === '/privacy') return <PrivacyPage />;
 
   if (loading) {
     return (

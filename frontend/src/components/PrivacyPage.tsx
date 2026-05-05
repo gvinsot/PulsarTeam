@@ -152,15 +152,20 @@ const content = {
   }
 };
 
-export default function PrivacyPage({ onBack }: { onBack: () => void }) {
+export default function PrivacyPage({ onBack }: { onBack?: () => void }) {
   const { lang } = useLanguage();
   const c = content[lang];
+
+  const handleBack = () => {
+    if (onBack) return onBack();
+    window.history.length > 1 ? window.history.back() : (window.location.href = '/');
+  };
 
   return (
     <div className="min-h-screen bg-dark-950 text-dark-200">
       <div className="max-w-3xl mx-auto px-6 py-16">
         <button
-          onClick={onBack}
+          onClick={handleBack}
           className="flex items-center gap-2 text-sm text-dark-400 hover:text-dark-200 transition-colors mb-8"
         >
           <ArrowLeft className="w-4 h-4" />
