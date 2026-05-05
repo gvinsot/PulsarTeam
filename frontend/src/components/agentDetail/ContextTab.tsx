@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Plus, Trash2, FileText, ArrowRightLeft, AlertCircle, BarChart3, Globe, RefreshCw, Link } from 'lucide-react';
+import { Plus, Trash2, FileText, ArrowRightLeft, AlertCircle, BarChart3, Globe, RefreshCw, Link, Save, ScrollText } from 'lucide-react';
 import { api } from '../../api';
 import { WsEvents } from '../../socketEvents';
 
@@ -19,6 +19,30 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState('');
   const [refreshingDocId, setRefreshingDocId] = useState<string | null>(null);
+
+  // System Instructions state
+  const [instructions, setInstructions] = useState(agent.instructions || '');
+  const [instructionsSaving, setInstructionsSaving] = useState(false);
+  const [instructionsSaved, setInstructionsSaved] = useState(false);
+
+  useEffect(() => {
+    setInstructions(agent.instructions || '');
+    setInstructionsSaved(false);
+  }, [agent.id]);
+
+  const handleSaveInstructions = async () => {
+    setInstructionsSaving(true);
+    try {
+      await api.updateAgent(agent.id, { instructions });
+      setInstructionsSaved(true);
+      setTimeout(() => setInstructionsSaved(false), 2000);
+      onRefresh();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setInstructionsSaving(false);
+    }
+  };
 
   // Handoff state
   const [targetId, setTargetId] = useState('');
@@ -148,6 +172,39 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
 
   return (
     <div className="p-4 space-y-6">
+      {/* System Instructions */}
+      <div>
+        <h3 className="font-medium text-dark-200 text-sm flex items-center gap-2 mb-3">
+          <ScrollText className="w-4 h-4 text-indigo-400" />
+          System Instructions
+        </h3>
+        <textarea
+          value={instructions}
+          onChange={(e) => { setInstructions(e.target.value); setInstructionsSaved(false); }}
+          className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono resize-none"
+          rows={10}
+          placeholder="Enter system instructions for this agent..."
+        />
+        <div className="flex items-center justify-between mt-2">
+          <p className="text-[10px] text-dark-500">
+            ~{formatNumber(estimateTokens(instructions))} tokens
+          </p>
+          <button
+            onClick={handleSaveInstructions}
+            disabled={instructionsSaving || instructions === (agent.instructions || '')}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs font-medium disabled:opacity-40 transition-colors"
+          >
+            {instructionsSaving ? (
+              <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : instructionsSaved ? (
+              <span className="text-emerald-300">&#10003; Saved</span>
+            ) : (
+              <><Save className="w-3 h-3" /> Save</>
+            )}
+          </button>
+        </div>
+      </div>
+
       {/* Context Stats */}
       <div>
         <h3 className="font-medium text-dark-200 text-sm flex items-center gap-2 mb-3">

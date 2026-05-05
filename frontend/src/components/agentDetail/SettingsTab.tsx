@@ -7,7 +7,6 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
     name: agent.name,
     role: agent.role,
     description: agent.description,
-    instructions: agent.instructions,
     llmConfigId: agent.llmConfigId || '',
     icon: agent.icon,
     color: agent.color,
@@ -35,7 +34,6 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
       name: agent.name,
       role: agent.role,
       description: agent.description,
-      instructions: agent.instructions,
       llmConfigId: agent.llmConfigId || '',
       icon: agent.icon,
       color: agent.color,
@@ -150,15 +148,6 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             onChange={(e) => updateField('description', e.target.value)}
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 resize-none"
             rows={2}
-          />
-        </div>
-        <div className="col-span-2">
-          <label className="block text-xs text-dark-400 mb-1.5">System Instructions</label>
-          <textarea
-            value={form.instructions}
-            onChange={(e) => updateField('instructions', e.target.value)}
-            className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono resize-none"
-            rows={12}
           />
         </div>
         <div className="col-span-2">
