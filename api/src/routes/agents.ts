@@ -379,13 +379,15 @@ export function agentRoutes(agentManager) {
     }
   });
 
-  router.patch('/:id/tasks/:taskId', requireAgentAccess, (req, res) => {
+  router.patch('/:id/tasks/:taskId', requireAgentAccess, async (req, res) => {
     try {
     const { status, text, title, project, source, recurrence, taskType, isManual } = req.body || {};
     // Source is immutable once set at creation — reject any attempt to change it
     if (source !== undefined) {
       return res.status(400).json({ error: 'Source cannot be modified after creation' });
     }
+    // Recover from any in-memory drift before reading the task
+    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     // Capture old status before any update
     const agent = agentManager.agents.get(req.params.id);
     const oldTask = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
@@ -457,7 +459,8 @@ export function agentRoutes(agentManager) {
     res.json({ success: true });
   });
 
-  router.delete('/:id/tasks/:taskId', requireAgentAccess, (req, res) => {
+  router.delete('/:id/tasks/:taskId', requireAgentAccess, async (req, res) => {
+    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const agent = agentManager.agents.get(req.params.id);
     const taskToDelete = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
     // Block deletion of tasks being executed — user must stop the agent first
@@ -469,35 +472,39 @@ export function agentRoutes(agentManager) {
     res.json({ success: true });
   });
 
-  router.post('/:id/tasks/:taskId/transfer', requireAgentAccess, (req, res) => {
+  router.post('/:id/tasks/:taskId/transfer', requireAgentAccess, async (req, res) => {
     const { targetAgentId } = req.body;
     if (!targetAgentId) return res.status(400).json({ error: 'targetAgentId required' });
+    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const task = agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });
     res.status(201).json(task);
   });
 
-  router.patch('/:id/tasks/:taskId/assignee', requireAgentAccess, (req, res) => {
+  router.patch('/:id/tasks/:taskId/assignee', requireAgentAccess, async (req, res) => {
     const { assigneeId } = req.body;
     // assigneeId can be null to unassign
     if (assigneeId && !agentManager.agents.get(assigneeId)) {
       return res.status(404).json({ error: 'Assignee agent not found' });
     }
+    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const task = agentManager.setTaskAssignee(req.params.id, req.params.taskId, assigneeId || null);
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });
     res.json(task);
   });
 
   // ── Task commit association ────────────────────────────────────────
-  router.post('/:id/tasks/:taskId/commits', requireAgentAccess, (req, res) => {
+  router.post('/:id/tasks/:taskId/commits', requireAgentAccess, async (req, res) => {
     const { hash, message } = req.body;
     if (!hash) return res.status(400).json({ error: 'Commit hash required' });
+    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const task = agentManager.addTaskCommit(req.params.id, req.params.taskId, hash, message || '');
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });
     res.status(201).json(task);
   });
 
-  router.delete('/:id/tasks/:taskId/commits/:hash', requireAgentAccess, (req, res) => {
+  router.delete('/:id/tasks/:taskId/commits/:hash', requireAgentAccess, async (req, res) => {
+    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const task = agentManager.removeTaskCommit(req.params.id, req.params.taskId, req.params.hash);
     if (!task) return res.status(404).json({ error: 'Not found' });
     res.json(task);

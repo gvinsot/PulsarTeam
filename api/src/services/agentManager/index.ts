@@ -1,5 +1,5 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, saveAgent, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, clearAllStaleActionRunning } from '../database.js';
+import { getAllAgents, saveAgent, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, getTaskById, clearAllStaleActionRunning } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
@@ -114,6 +114,7 @@ export interface AgentManager {
   getTask(taskId: string): any | null;
   saveTaskDirectly(task: any): any;
   _enqueueAgentTask(agentId: string, taskFn: () => Promise<any>): Promise<any>;
+  _ensureTaskInMemory(agentId: string, taskId: string): Promise<boolean>;
 
   // ── workflow.ts ──
   _evaluateCondition(cond: any, task: any): boolean;
@@ -436,6 +437,34 @@ export class AgentManager {
   /** Clear all tasks for an agent from the in-memory store */
   _clearAgentTasks(agentId: string) {
     this._tasks.set(agentId, []);
+  }
+
+  /**
+   * Ensure a task is loaded in the in-memory `_tasks` store for the given agent.
+   * Falls back to the DB if missing, and rehydrates the store under the task's
+   * actual `agent_id` (which may differ from the requested `agentId`).
+   * Returns true iff after this call the task is present in `_tasks.get(agentId)`.
+   *
+   * Why: in-memory `_tasks` is populated at startup via `getTasksByAgent` and
+   * mutated by addTask/_addTaskToStore. Any drift (orphaned agent_id, manual
+   * DB edit, missed in-memory insert) leaves PATCH/DELETE routes 404'ing on
+   * tasks that exist in the DB. This helper is the recovery path.
+   */
+  async _ensureTaskInMemory(agentId: string, taskId: string): Promise<boolean> {
+    const tasks = this._tasks.get(agentId) || [];
+    if (tasks.some((t: any) => t.id === taskId)) return true;
+    const dbTask = await getTaskById(taskId);
+    if (!dbTask) return false;
+    const ownerId = dbTask.agentId;
+    if (ownerId) {
+      if (!this._tasks.has(ownerId)) this._tasks.set(ownerId, []);
+      const ownerTasks = this._tasks.get(ownerId)!;
+      if (!ownerTasks.some((t: any) => t.id === taskId)) {
+        ownerTasks.push(dbTask);
+        console.warn(`[AgentManager] Rehydrated task ${taskId} into memory under agent ${ownerId} (requested via ${agentId})`);
+      }
+    }
+    return ownerId === agentId;
   }
 
   _randomColor() {
