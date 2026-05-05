@@ -517,15 +517,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     }
   }, [refreshAll, isReadOnly]);
 
-  const totalByStatus = useMemo(() => {
-    const lastColId = columns[columns.length - 1]?.id;
-    return {
-      open: allTasks.filter(t => t.status !== 'error' && t.status !== lastColId).length,
-      error: allTasks.filter(t => t.status === 'error').length,
-      done: allTasks.filter(t => t.status === lastColId).length,
-    };
-  }, [allTasks, columns]);
-
   const activeFilters = [agentFilter, projectFilter, search].filter(Boolean).length;
 
   const [copiedBoardId, setCopiedBoardId] = useState(false);
@@ -679,14 +670,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           </button>
         )}
 
-        {/* Stats */}
-        <div className="ml-auto flex items-center gap-3 text-xs text-dark-500 flex-shrink-0 whitespace-nowrap">
-          <span>{totalByStatus.open} open</span>
-          <span className="text-emerald-400/70">{totalByStatus.done} done</span>
-          {totalByStatus.error > 0 && (
-            <span className="text-red-400/70">{totalByStatus.error} errors</span>
-          )}
-        </div>
+        <div className="ml-auto" />
 
         {/* Deleted tasks */}
         <button
