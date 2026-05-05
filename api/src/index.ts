@@ -27,7 +27,7 @@ import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected } from './services/database.js';
 import { onedriveRoutes } from './routes/onedrive.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
-import { gmailRoutes, gmailOAuthRedirectRouter } from './routes/gmail.js';
+import { gmailRoutes, gmailOAuthRedirectRouter, gmailCallbackHandler } from './routes/gmail.js';
 import { createGmailMcpHandler } from './services/gmailMcp.js';
 import { slackRoutes } from './routes/slack.js';
 import { createSlackMcpHandler } from './services/slackMcp.js';
@@ -129,6 +129,8 @@ app.use('/api/contact', contactRoutes(agentManager));
 
 // Public Gmail OAuth redirect — Google redirects here after consent (no auth needed)
 app.use('/api/gmail', gmailOAuthRedirectRouter());
+// Legacy callback path — Traefik routes /gmail-callback.html to the API to bypass global@file middleware
+app.get('/gmail-callback.html', gmailCallbackHandler());
 
 app.use('/api/agents', authenticateToken, agentRoutes(agentManager));
 app.use('/api/templates', authenticateToken, templateRoutes());

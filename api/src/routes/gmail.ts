@@ -111,88 +111,92 @@ export async function getGmailAccessTokenForAgent(agentId, boardId = null) {
  * We exchange the code server-side then return a minimal HTML page
  * that notifies the opener via postMessage and closes the popup.
  */
+async function handleOAuthCallback(req, res) {
+  const error = req.query.error as string | undefined;
+  if (error) {
+    const desc = req.query.error_description || error;
+    return res.send(oauthResultPage(false, String(desc)));
+  }
+
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+
+  if (!code || !state) {
+    return res.send(oauthResultPage(false, 'Missing code or state parameter'));
+  }
+
+  const config = getConfig();
+  if (!config) {
+    return res.send(oauthResultPage(false, 'Gmail not configured on server'));
+  }
+
+  const stateData = consumeOAuthState(state);
+  if (!stateData) {
+    return res.send(oauthResultPage(false, 'Invalid or expired state. Please try again.'));
+  }
+
+  try {
+    const body = new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      code,
+      redirect_uri: config.redirectUri,
+      grant_type: 'authorization_code',
+    });
+
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error('[Gmail] Token exchange failed:', data);
+      return res.send(oauthResultPage(false, 'Token exchange failed: ' + (data.error_description || data.error || 'unknown')));
+    }
+
+    let email = null;
+    try {
+      const profileRes = await fetch('https://www.googleapis.com/gmail/v1/users/me/profile', {
+        headers: { Authorization: `Bearer ${data.access_token}` },
+      });
+      if (profileRes.ok) {
+        const profile = await profileRes.json();
+        email = profile.emailAddress;
+      }
+    } catch (err) {
+      console.warn('[Gmail] Could not fetch profile email:', err.message);
+    }
+
+    const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
+
+    await storeOAuthToken({
+      provider: 'gmail',
+      scopeType,
+      scopeId,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+      meta: { email },
+    });
+
+    console.log(`✅ [Gmail] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`);
+    return res.send(oauthResultPage(true, null, email));
+  } catch (err) {
+    console.error('[Gmail] OAuth redirect error:', err);
+    return res.send(oauthResultPage(false, 'Internal error during token exchange'));
+  }
+}
+
 export function gmailOAuthRedirectRouter() {
   const router = express.Router();
-
-  router.get('/oauth-redirect', async (req, res) => {
-    const error = req.query.error as string | undefined;
-    if (error) {
-      const desc = req.query.error_description || error;
-      return res.send(oauthResultPage(false, String(desc)));
-    }
-
-    const code = req.query.code as string | undefined;
-    const state = req.query.state as string | undefined;
-
-    if (!code || !state) {
-      return res.send(oauthResultPage(false, 'Missing code or state parameter'));
-    }
-
-    const config = getConfig();
-    if (!config) {
-      return res.send(oauthResultPage(false, 'Gmail not configured on server'));
-    }
-
-    const stateData = consumeOAuthState(state);
-    if (!stateData) {
-      return res.send(oauthResultPage(false, 'Invalid or expired state. Please try again.'));
-    }
-
-    try {
-      const body = new URLSearchParams({
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        code,
-        redirect_uri: config.redirectUri,
-        grant_type: 'authorization_code',
-      });
-
-      const response = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        console.error('[Gmail] Token exchange failed:', data);
-        return res.send(oauthResultPage(false, 'Token exchange failed: ' + (data.error_description || data.error || 'unknown')));
-      }
-
-      let email = null;
-      try {
-        const profileRes = await fetch('https://www.googleapis.com/gmail/v1/users/me/profile', {
-          headers: { Authorization: `Bearer ${data.access_token}` },
-        });
-        if (profileRes.ok) {
-          const profile = await profileRes.json();
-          email = profile.emailAddress;
-        }
-      } catch (err) {
-        console.warn('[Gmail] Could not fetch profile email:', err.message);
-      }
-
-      const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
-
-      await storeOAuthToken({
-        provider: 'gmail',
-        scopeType,
-        scopeId,
-        accessToken: data.access_token,
-        refreshToken: data.refresh_token,
-        expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-        meta: { email },
-      });
-
-      console.log(`✅ [Gmail] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`);
-      return res.send(oauthResultPage(true, null, email));
-    } catch (err) {
-      console.error('[Gmail] OAuth redirect error:', err);
-      return res.send(oauthResultPage(false, 'Internal error during token exchange'));
-    }
-  });
-
+  router.get('/oauth-redirect', handleOAuthCallback);
   return router;
+}
+
+export function gmailCallbackHandler() {
+  return handleOAuthCallback;
 }
 
 function oauthResultPage(success: boolean, error?: string | null, email?: string | null): string {
