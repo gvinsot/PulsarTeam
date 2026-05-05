@@ -266,7 +266,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - openclaw-data:/app/data
     deploy:
-      replicas: 0
+      replicas: 1
       placement:
         constraints:
           - node.hostname == server-b
@@ -318,7 +318,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - opencode-data:/app/data
     deploy:
-      replicas: 0
+      replicas: 1
       placement:
         constraints:
           - node.hostname == server-b
@@ -374,7 +374,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - hermes-data:/app/data
     deploy:
-      replicas: 0
+      replicas: 1
       placement:
         constraints:
           - node.hostname == server-b
