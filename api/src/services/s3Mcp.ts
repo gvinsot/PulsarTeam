@@ -11,6 +11,7 @@ import {
   CopyObjectCommand,
   HeadObjectCommand,
   CreateBucketCommand,
+  type BucketLocationConstraint,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getS3CredentialsForAgent } from '../routes/s3.js';
@@ -269,7 +270,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       await client.send(new CreateBucketCommand({
         Bucket: bucket,
         ...(bucketRegion !== 'us-east-1' ? {
-          CreateBucketConfiguration: { LocationConstraint: bucketRegion },
+          CreateBucketConfiguration: { LocationConstraint: bucketRegion as BucketLocationConstraint },
         } : {}),
       }));
 
