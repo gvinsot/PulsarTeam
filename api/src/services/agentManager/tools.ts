@@ -253,8 +253,18 @@ export const toolsMethods = {
           continue;
         }
         taskExecutionCompleteDone = true;
-        const comment = call.args[0] || '';
-        const explicitTaskId = (call.args[1] || '').trim();
+        // Validate args: taskId (arg[1]) must look like a UUID or UUID prefix.
+        // If it doesn't, it's part of the comment (the parser split on a comma in natural language).
+        const UUID_PREFIX_RE = /^[a-f0-9]{8,}(-[a-f0-9]{4,}){0,4}$/i;
+        let comment = call.args[0] || '';
+        let explicitTaskId = (call.args[1] || '').trim();
+        let commitsArgRaw = call.args[2] || '';
+        if (explicitTaskId && !UUID_PREFIX_RE.test(explicitTaskId)) {
+          // Not a valid taskId — merge back into comment
+          comment = call.args.filter(Boolean).join(', ');
+          explicitTaskId = '';
+          commitsArgRaw = '';
+        }
         let inProgressTask: any = null;
 
         // If explicit taskId provided, look it up directly
@@ -312,7 +322,7 @@ export const toolsMethods = {
           ownerAgentId = ownerAgentId || agentId;
 
           // Link commits if provided (format: "hash:message, hash:message")
-          const commitsArg = call.args[2] || '';
+          const commitsArg = commitsArgRaw;
           let linkedCommitCount = 0;
           if (commitsArg) {
             const commitEntries = commitsArg.split(/,\s*(?=[a-f0-9])/).map((s: string) => s.trim()).filter(Boolean);
@@ -360,10 +370,11 @@ export const toolsMethods = {
                 }
                 if (linkedCommitCount === 0) {
                   // Fallback: if no commits matched by agent name, try HEAD commit
-                  // if it was made within the task timeframe
+                  // but ONLY if the commit message contains the agent name (to avoid
+                  // linking another agent's commit in shared-repo multi-agent setups)
                   const firstLine = logOutput.split('\n')[0];
                   const headMatch = firstLine?.match(/^([a-f0-9]{40})\s+(.*)/);
-                  if (headMatch && taskStartedAt) {
+                  if (headMatch && taskStartedAt && agentNameLower && headMatch[2].toLowerCase().includes(agentNameLower)) {
                     try {
                       const dateResult = await this.executionManager.exec(agentId, `git log --format="%aI" -1`, { timeout: 5000 });
                       const commitDate = ((dateResult.stdout || '') + (dateResult.stderr || '')).trim();
