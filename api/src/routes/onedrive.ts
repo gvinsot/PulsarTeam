@@ -4,6 +4,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
+import { sendOAuthResult } from './oauthHelper.js';
 
 /**
  * OneDrive OAuth2 routes — unified token store.
@@ -94,6 +95,76 @@ async function refreshOnedriveToken(record: OAuthTokenRecord): Promise<string> {
 
 export async function getAccessTokenForAgent(agentId, boardId = null) {
   return resolveAccessToken('onedrive', agentId, boardId, refreshOnedriveToken);
+}
+
+async function handleOAuthRedirect(req, res) {
+  const error = req.query.error as string | undefined;
+  if (error) {
+    const desc = req.query.error_description || error;
+    return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', false, String(desc));
+  }
+
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  if (!code || !state) {
+    return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', false, 'Missing code or state parameter');
+  }
+
+  const config = getConfig();
+  if (!config) {
+    return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', false, 'OneDrive not configured on server');
+  }
+
+  const stateData = consumeOAuthState(state);
+  if (!stateData) {
+    return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', false, 'Invalid or expired state. Please try again.');
+  }
+
+  try {
+    const body = new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      code,
+      redirect_uri: config.redirectUri,
+      grant_type: 'authorization_code',
+    });
+
+    const response = await fetch(`https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      console.error('[OneDrive] Token exchange failed:', data);
+      return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', false, 'Token exchange failed: ' + (data.error_description || data.error || 'unknown'));
+    }
+
+    const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
+
+    await storeOAuthToken({
+      provider: 'onedrive',
+      scopeType,
+      scopeId,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+      meta: {},
+    });
+
+    console.log(`✅ [OneDrive] OAuth token stored for ${scopeType}:${scopeId} via redirect`);
+    return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', true);
+  } catch (err) {
+    console.error('[OneDrive] OAuth redirect error:', err);
+    return sendOAuthResult(res, 'OneDrive', 'onedrive-oauth-callback', false, 'Internal error during token exchange');
+  }
+}
+
+export function onedriveOAuthRedirectRouter() {
+  const router = express.Router();
+  router.get('/oauth-redirect', handleOAuthRedirect);
+  return router;
 }
 
 export function onedriveRoutes() {

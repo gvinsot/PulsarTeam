@@ -4,6 +4,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
+import { sendOAuthResult } from './oauthHelper.js';
 
 /**
  * Slack OAuth2 routes — unified token store.
@@ -56,6 +57,78 @@ export function hasSlackTokensForBoard(boardId) {
 export function getSlackAccessTokenForAgent(agentId, boardId = null) {
   // Slack tokens don't expire, no refresh needed
   return resolveAccessToken('slack', agentId, boardId);
+}
+
+async function handleOAuthRedirect(req, res) {
+  const error = req.query.error as string | undefined;
+  if (error) {
+    const desc = req.query.error_description || error;
+    return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', false, String(desc));
+  }
+
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  if (!code || !state) {
+    return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', false, 'Missing code or state parameter');
+  }
+
+  const config = getConfig();
+  if (!config) {
+    return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', false, 'Slack not configured on server');
+  }
+
+  const stateData = consumeOAuthState(state);
+  if (!stateData) {
+    return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', false, 'Invalid or expired state. Please try again.');
+  }
+
+  try {
+    const body = new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      code,
+      redirect_uri: config.redirectUri,
+    });
+
+    const response = await fetch('https://slack.com/api/oauth.v2.access', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+
+    const data = await response.json();
+    if (!data.ok) {
+      console.error('[Slack] Token exchange failed:', data);
+      return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', false, `Token exchange failed: ${data.error}`);
+    }
+
+    const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
+
+    await storeOAuthToken({
+      provider: 'slack',
+      scopeType,
+      scopeId,
+      accessToken: data.access_token,
+      meta: {
+        teamId: data.team?.id,
+        teamName: data.team?.name,
+        botUserId: data.bot_user_id,
+        authedUser: data.authed_user,
+      },
+    });
+
+    console.log(`✅ [Slack] OAuth token stored for ${scopeType}:${scopeId} (team: ${data.team?.name || 'unknown'}) via redirect`);
+    return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', true, null, { teamName: data.team?.name });
+  } catch (err) {
+    console.error('[Slack] OAuth redirect error:', err);
+    return sendOAuthResult(res, 'Slack', 'slack-oauth-callback', false, 'Internal error during token exchange');
+  }
+}
+
+export function slackOAuthRedirectRouter() {
+  const router = express.Router();
+  router.get('/oauth-redirect', handleOAuthRedirect);
+  return router;
 }
 
 export function slackRoutes() {

@@ -4,6 +4,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
+import { sendOAuthResult } from './oauthHelper.js';
 
 /**
  * GitHub OAuth2 routes — unified token store.
@@ -56,6 +57,84 @@ export function hasGitHubTokensForBoard(boardId) {
 export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
   // GitHub tokens don't expire
   return resolveAccessToken('github', agentId, boardId);
+}
+
+async function handleOAuthRedirect(req, res) {
+  const error = req.query.error as string | undefined;
+  if (error) {
+    const desc = req.query.error_description || error;
+    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, String(desc));
+  }
+
+  const code = req.query.code as string | undefined;
+  const state = req.query.state as string | undefined;
+  if (!code || !state) {
+    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'Missing code or state parameter');
+  }
+
+  const config = getConfig();
+  if (!config) {
+    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'GitHub OAuth not configured on server');
+  }
+
+  const stateData = consumeOAuthState(state);
+  if (!stateData) {
+    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'Invalid or expired state. Please try again.');
+  }
+
+  try {
+    const response = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        code,
+        redirect_uri: config.redirectUri,
+      }),
+    });
+
+    const data = await response.json();
+    if (data.error) {
+      console.error('[GitHub] Token exchange failed:', data);
+      return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, data.error_description || 'Token exchange failed');
+    }
+
+    let login = null;
+    try {
+      const userRes = await fetch('https://api.github.com/user', {
+        headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'PulsarTeam' },
+      });
+      if (userRes.ok) {
+        const user = await userRes.json();
+        login = user.login;
+      }
+    } catch (err) {
+      console.warn('[GitHub] Could not fetch user profile:', err.message);
+    }
+
+    const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
+
+    await storeOAuthToken({
+      provider: 'github',
+      scopeType,
+      scopeId,
+      accessToken: data.access_token,
+      meta: { scope: data.scope, tokenType: data.token_type, login },
+    });
+
+    console.log(`✅ [GitHub] OAuth token stored for ${scopeType}:${scopeId} (${login || 'unknown'}) via redirect`);
+    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', true, null, { login });
+  } catch (err) {
+    console.error('[GitHub] OAuth redirect error:', err);
+    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'Internal error during token exchange');
+  }
+}
+
+export function githubOAuthRedirectRouter() {
+  const router = express.Router();
+  router.get('/oauth-redirect', handleOAuthRedirect);
+  return router;
 }
 
 export function githubRoutes() {

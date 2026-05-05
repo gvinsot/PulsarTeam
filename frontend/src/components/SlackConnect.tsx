@@ -39,12 +39,15 @@ export default function SlackConnect({ agentId, boardId, onStatusChange }) {
   // Listen for OAuth callback messages from the popup window
   useEffect(() => {
     const handleMessage = async (event) => {
-      if (event.data?.type === 'slack-oauth-callback' && event.data?.code) {
+      if (event.data?.type === 'slack-oauth-callback') {
         setConnecting(true);
         setError(null);
         try {
-          await api.slackCallback(event.data.code, event.data.state);
-          await fetchStatus();
+          if (event.data.success) {
+            await fetchStatus();
+          } else {
+            setError(event.data.error || 'OAuth failed');
+          }
         } catch (err: any) {
           setError(err.message);
         } finally {

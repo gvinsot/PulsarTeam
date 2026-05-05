@@ -25,11 +25,11 @@ import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected } from './services/database.js';
-import { onedriveRoutes } from './routes/onedrive.js';
+import { onedriveRoutes, onedriveOAuthRedirectRouter } from './routes/onedrive.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
 import { gmailRoutes, gmailOAuthRedirectRouter, gmailCallbackHandler } from './routes/gmail.js';
 import { createGmailMcpHandler } from './services/gmailMcp.js';
-import { slackRoutes } from './routes/slack.js';
+import { slackRoutes, slackOAuthRedirectRouter } from './routes/slack.js';
 import { createSlackMcpHandler } from './services/slackMcp.js';
 import { createAutoLearnMcpHandler } from './services/autoLearnMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
@@ -41,7 +41,7 @@ import { swarmApiRoutes } from './routes/swarmApi.js';
 import { projectContextRoutes } from './routes/projectContexts.js';
 import { jiraRoutes } from './routes/jira.js';
 import { createJiraMcpHandler } from './services/jiraMcp.js';
-import { githubRoutes } from './routes/github.js';
+import { githubRoutes, githubOAuthRedirectRouter } from './routes/github.js';
 import { createGitHubMcpHandler } from './services/githubMcp.js';
 import budgetRoutes from './routes/budget.js';
 import { userRoutes } from './routes/users.js';
@@ -130,8 +130,11 @@ app.use('/api/users', authenticateToken, requireRole('admin'), userRoutes());
 // Public contact form — rate-limited, no auth required
 app.use('/api/contact', contactRoutes(agentManager));
 
-// Public Gmail OAuth redirect — Google redirects here after consent (no auth needed)
+// Public OAuth redirect handlers — providers redirect here after consent (no auth needed)
 app.use('/api/gmail', gmailOAuthRedirectRouter());
+app.use('/api/github', githubOAuthRedirectRouter());
+app.use('/api/slack', slackOAuthRedirectRouter());
+app.use('/api/onedrive', onedriveOAuthRedirectRouter());
 // Legacy callback path — Traefik routes /gmail-callback.html to the API to bypass global@file middleware
 app.get('/gmail-callback.html', gmailCallbackHandler());
 

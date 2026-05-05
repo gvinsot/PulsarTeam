@@ -41,12 +41,15 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
   // Listen for OAuth callback messages from the popup window
   useEffect(() => {
     const handleMessage = async (event) => {
-      if (event.data?.type === 'onedrive-oauth-callback' && event.data?.code) {
+      if (event.data?.type === 'onedrive-oauth-callback') {
         setConnecting(true);
         setError(null);
         try {
-          await api.onedriveCallback(event.data.code, event.data.state);
-          await fetchStatus();
+          if (event.data.success) {
+            await fetchStatus();
+          } else {
+            setError(event.data.error || 'OAuth failed');
+          }
         } catch (err) {
           setError(err.message);
         } finally {
