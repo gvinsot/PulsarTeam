@@ -82,20 +82,16 @@ router.get('/', async (req, res) => {
     const pool = getPool();
     if (!pool) return res.json([]);
 
-    const { board_id, agent_id, status, project, repo_id } = req.query;
-    // JOIN-based query: project name is derived from boards.project_id, and the
-    // task's repo metadata comes from board_repos.
+    const { board_id, agent_id, status, project, repo_full_name } = req.query;
+    // JOIN-based query: project name is derived from boards.project_id.
+    // Repo + storage live directly on the task row.
     let query = `
       SELECT t.*,
              p.id   AS _project_id,
-             p.name AS _project_name,
-             r.provider  AS _repo_provider,
-             r.full_name AS _repo_full_name,
-             r.html_url  AS _repo_html_url
+             p.name AS _project_name
       FROM tasks t
       LEFT JOIN boards   b ON t.board_id = b.id
       LEFT JOIN projects p ON b.project_id = p.id
-      LEFT JOIN board_repos r ON t.repo_id = r.id
       WHERE t.deleted_at IS NULL`;
     const params: any[] = [];
 
@@ -124,9 +120,9 @@ router.get('/', async (req, res) => {
       params.push(project);
       query += ` AND p.name = $${params.length}`;
     }
-    if (repo_id) {
-      params.push(repo_id);
-      query += ` AND t.repo_id = $${params.length}`;
+    if (repo_full_name) {
+      params.push(repo_full_name);
+      query += ` AND t.repo_full_name = $${params.length}`;
     }
 
     query += ' ORDER BY t.position ASC, t.created_at ASC';

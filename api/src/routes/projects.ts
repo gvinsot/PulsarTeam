@@ -30,6 +30,16 @@ const projectUpdateSchema = z.object({
   description: z.string().max(10000).optional(),
   rules: z.string().max(10000).optional(),
 });
+// Guard for routes whose `:id` must be a UUID — falls through to the next
+// matching route when the path segment is a literal (e.g. `available-repos`).
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+function uuidOnly(handler: any) {
+  return (req: any, res: any, next: any) => {
+    if (!UUID_RE.test(req.params.id || '')) return next();
+    return handler(req, res, next);
+  };
+}
+
 export function projectRoutes() {
   const router = express.Router();
 
@@ -57,7 +67,7 @@ export function projectRoutes() {
     }
   });
 
-  router.get('/:id', async (req: any, res) => {
+  router.get('/:id', uuidOnly(async (req: any, res: any) => {
     try {
       const project = await getProjectById(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -68,7 +78,7 @@ export function projectRoutes() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
   router.post('/', async (req: any, res) => {
     try {
@@ -83,7 +93,7 @@ export function projectRoutes() {
     }
   });
 
-  router.put('/:id', async (req: any, res) => {
+  router.put('/:id', uuidOnly(async (req: any, res: any) => {
     try {
       const body = projectUpdateSchema.parse(req.body);
       const updated = await updateProject(req.params.id, body);
@@ -93,9 +103,9 @@ export function projectRoutes() {
       if (err instanceof z.ZodError) return res.status(400).json({ error: 'Validation failed', details: err.issues });
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
-  router.delete('/:id', async (req: any, res) => {
+  router.delete('/:id', uuidOnly(async (req: any, res: any) => {
     try {
       const ok = await deleteProject(req.params.id);
       if (!ok) return res.status(404).json({ error: 'Project not found' });
@@ -103,20 +113,20 @@ export function projectRoutes() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
   // ── Project ↔ Board linking ──────────────────────────────────────────────
 
-  router.get('/:id/boards', async (req, res) => {
+  router.get('/:id/boards', uuidOnly(async (req: any, res: any) => {
     try {
       const boards = await getBoardsForProject(req.params.id);
       res.json(boards);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
-  router.post('/:id/boards/:boardId', async (req, res) => {
+  router.post('/:id/boards/:boardId', uuidOnly(async (req: any, res: any) => {
     try {
       const project = await getProjectById(req.params.id);
       if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -127,16 +137,16 @@ export function projectRoutes() {
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
-  router.delete('/:id/boards/:boardId', async (req, res) => {
+  router.delete('/:id/boards/:boardId', uuidOnly(async (req: any, res: any) => {
     try {
       await setBoardProject(req.params.boardId, null);
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
-  });
+  }));
 
   // ── Board storages (mounted under /projects for cohesion) ───────────────
   // Repos used on a board are derived from tasks (see /boards/:id/repos below).
