@@ -16,14 +16,14 @@ const translations = {
   },
 
   // CTA cards
-  'cta.contact.title': { en: 'Contact Us', fr: 'Nous contacter' },
+  'cta.contact.title': { en: 'Free to Test', fr: 'Essai gratuit' },
   'cta.contact.desc': {
-    en: 'We\'ll help you set up PulsarTeam in your organization with full onboarding support.',
-    fr: 'Nous vous accompagnons dans la mise en place de PulsarTeam avec un support complet.',
+    en: 'Try PulsarTeam free for 15 days with 1 AI agent. Just log in — no credit card required.',
+    fr: 'Essayez PulsarTeam gratuitement pendant 15 jours avec 1 agent IA. Connectez-vous, c\'est tout — aucune carte bancaire requise.',
   },
   'cta.contact.descShort': {
-    en: 'Full setup and onboarding for your team.',
-    fr: 'Installation complète et accompagnement de votre équipe.',
+    en: '15 days free with 1 AI agent. Just log in!',
+    fr: '15 jours gratuits avec 1 agent IA. Connectez-vous !',
   },
   'cta.enterprise.title': { en: 'Enterprise', fr: 'Entreprise' },
   'cta.enterprise.desc': {
@@ -45,6 +45,7 @@ const translations = {
   },
   'cta.contactUs': { en: 'Contact us', fr: 'Nous contacter' },
   'cta.getStarted': { en: 'Get started', fr: 'Commencer' },
+  'cta.tryFree': { en: 'Try it free', fr: 'Essayer gratuitement' },
 
   // Features section
   'features.title': { en: 'Everything you need to run an AI team', fr: 'Tout ce qu\'il faut pour gérer une équipe IA' },

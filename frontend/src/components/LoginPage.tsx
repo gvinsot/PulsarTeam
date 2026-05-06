@@ -628,11 +628,11 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
             {/* Get Started — 3 options */}
             <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto text-left">
               <CtaOptionCard
-                icon={Mail}
+                icon={Play}
                 title={t('cta.contact.title')}
                 desc={t('cta.contact.desc')}
-                onClick={() => setContactModal({ open: true, type: 'contact' })}
-                ctaLabel={t('cta.getStarted')}
+                onClick={() => setLoginOpen(true)}
+                ctaLabel={t('cta.tryFree')}
                 accent
               />
               <CtaOptionCard
@@ -752,11 +752,11 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
               </p>
               <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl mx-auto text-left">
                 <CtaOptionCard
-                  icon={Mail}
+                  icon={Play}
                   title={t('cta.contact.title')}
                   desc={t('cta.contact.descShort')}
-                  onClick={() => setContactModal({ open: true, type: 'contact' })}
-                  ctaLabel={t('cta.getStarted')}
+                  onClick={() => setLoginOpen(true)}
+                  ctaLabel={t('cta.tryFree')}
                   accent
                 />
                 <CtaOptionCard
