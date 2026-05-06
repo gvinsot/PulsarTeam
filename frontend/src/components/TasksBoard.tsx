@@ -22,7 +22,7 @@ import BoardPluginsTab from './tasks/BoardPluginsTab';
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
 export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, onBoardChange }) {
-  const [projectFilter, setProjectFilter] = useState(() => localStorage.getItem('tasks_projectFilter') || '');
+  const [repoFilter, setRepoFilter] = useState(() => localStorage.getItem('tasks_repoFilter') || '');
   const [agentFilter, setAgentFilter] = useState(() => localStorage.getItem('tasks_agentFilter') || '');
   const [search, setSearch] = useState(() => localStorage.getItem('tasks_search') || '');
   const [sortBy, setSortBy] = useState(() => localStorage.getItem('tasks_sortBy') || 'manual');
@@ -91,7 +91,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   }, [activeBoardId, onBoardChange]);
 
   // Persist filter state
-  useEffect(() => { localStorage.setItem('tasks_projectFilter', projectFilter); }, [projectFilter]);
+  useEffect(() => { localStorage.setItem('tasks_repoFilter', repoFilter); }, [repoFilter]);
   useEffect(() => { localStorage.setItem('tasks_agentFilter', agentFilter); }, [agentFilter]);
   useEffect(() => { localStorage.setItem('tasks_search', search); }, [search]);
   useEffect(() => { localStorage.setItem('tasks_sortBy', sortBy); }, [sortBy]);
@@ -262,13 +262,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     return allTasks.find(t => t.id === selectedTask.id && t.agentId === selectedTask.agentId) || null;
   }, [selectedTask, allTasks]);
 
-  // Unique projects for filter
-  const allProjects = useMemo(() => {
-    const ps = new Set(allTasks.filter(t => !t.deletedAt).map(t => t.project).filter(Boolean));
-    return Array.from(ps).sort();
-  }, [allTasks]);
-
-  // Repos linked to the active board (via board_repos)
+  // Repos linked to the active board (via board_repos) — also drives the repo filter
   const [boardRepos, setBoardRepos] = useState([]);
   useEffect(() => {
     if (!activeBoardId) { setBoardRepos([]); return; }
@@ -284,24 +278,22 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       });
   }, [boardRepos]);
 
-  // Default project = project of the last task created by the user on this board
-  const defaultProject = useMemo(() => {
-    const userTasks = allTasks
-      .filter(t => t.project && t.source?.type === 'user' && t.createdAt)
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return userTasks[0]?.project || '';
-  }, [allTasks]);
+  // Active board's project name (derived). Used by CreateTaskModal as the read-only label.
+  const activeProjectName = useMemo(() => {
+    const fromTask = allTasks.find(t => !t.deletedAt && t.project)?.project;
+    return fromTask || activeBoard?.project_name || null;
+  }, [allTasks, activeBoard]);
 
   // Filtered tasks
   const filteredTasks = useMemo(() => {
     const q = search.toLowerCase();
     return allTasks.filter(t => {
       if (agentFilter && t.agentId !== agentFilter) return false;
-      if (projectFilter && t.project !== projectFilter) return false;
+      if (repoFilter && t.repoId !== repoFilter) return false;
       if (q && !t.text.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [allTasks, agentFilter, projectFilter, search]);
+  }, [allTasks, agentFilter, repoFilter, search]);
 
   // Group by column — error is an internal state, not a workflow column.
   // Use errorFromStatus to keep error tasks visible in their originating column.
@@ -498,7 +490,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     }
   }, [refreshAll, isReadOnly]);
 
-  const activeFilters = [agentFilter, projectFilter, search].filter(Boolean).length;
+  const activeFilters = [agentFilter, repoFilter, search].filter(Boolean).length;
 
   const [copiedBoardId, setCopiedBoardId] = useState(false);
   const handleCopyBoardId = (e) => {
@@ -639,16 +631,16 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           ))}
         </select>
 
-        {/* Project filter */}
-        {allProjects.length > 0 && (
+        {/* Repo filter */}
+        {boardRepos.length > 0 && (
           <select
-            value={projectFilter}
-            onChange={e => setProjectFilter(e.target.value)}
+            value={repoFilter}
+            onChange={e => setRepoFilter(e.target.value)}
             className="px-3 py-1.5 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
               focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
           >
-            <option value="">All projects</option>
-            {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
+            <option value="">All repos</option>
+            {boardRepos.map(r => <option key={r.id} value={r.id}>{r.full_name}</option>)}
           </select>
         )}
 
@@ -670,7 +662,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         {/* Clear filters */}
         {activeFilters > 0 && (
           <button
-            onClick={() => { setAgentFilter(''); setProjectFilter(''); setSearch(''); }}
+            onClick={() => { setAgentFilter(''); setRepoFilter(''); setSearch(''); }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-400 bg-amber-500/10
               border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors flex-shrink-0 whitespace-nowrap"
           >
@@ -814,7 +806,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         <TaskDetailModal
           task={liveSelectedTask}
           agents={agents}
-          allProjects={allProjects}
           statusOptions={statusOptions}
           onClose={() => setSelectedTask(null)}
           onRefresh={refreshAll}
@@ -829,8 +820,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       {createOpen && (
         <CreateTaskModal
           agents={agents}
-          allProjects={allProjects}
-          defaultProject={defaultProject}
+          projectName={activeProjectName}
           statusOptions={statusOptions}
           defaultStatus={createDefaultStatus}
           boardId={activeBoardId}

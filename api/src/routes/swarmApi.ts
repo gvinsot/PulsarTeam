@@ -162,7 +162,7 @@ export function swarmApiRoutes(agentManager: any) {
       }
     }
 
-    const newTask = agentManager.addTask(agent.id, task, project, { type: 'api' }, status, { boardId: resolvedBoardId });
+    const newTask = agentManager.addTask(agent.id, task, { type: 'api' }, status, { boardId: resolvedBoardId });
     console.log(`\u2705 [SwarmAPI] Task created for agent "${agent.name}" (${agent.id}) \u2014 task: ${newTask?.id}, project: ${project}, board: ${resolvedBoardId || '(none)'}`);
 
     res.status(201).json({

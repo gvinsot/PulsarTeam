@@ -905,7 +905,7 @@ test('addTask creates task with correct defaults', async () => {
   const [agentId] = mgr.agents.keys();
   const agent = mgr.agents.get(agentId);
 
-  const task = mgr.addTask(agentId, 'New task', null, null, null, { skipAutoRefine: true });
+  const task = mgr.addTask(agentId, 'New task', null, null, { skipAutoRefine: true });
   assert.ok(task);
   assert.equal(task.status, 'backlog');
   assert.ok(task.id);
@@ -918,20 +918,20 @@ test('addTask respects initial status', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
 
-  const task = mgr.addTask(agentId, 'Code task', null, null, 'code', { skipAutoRefine: true });
+  const task = mgr.addTask(agentId, 'Code task', null, 'code', { skipAutoRefine: true });
   assert.equal(task.status, 'code');
 });
 
 test('addTask returns null for invalid agent', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  assert.equal(mgr.addTask('fake-agent', 'Task', null, null), null);
+  assert.equal(mgr.addTask('fake-agent', 'Task', null), null);
 });
 
 test('addTask with recurrence config', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
 
-  const task = mgr.addTask(agentId, 'Daily task', null, null, null, {
+  const task = mgr.addTask(agentId, 'Daily task', null, null, {
     skipAutoRefine: true,
     recurrence: { enabled: true, period: 'daily', intervalMinutes: 1440 },
   });

@@ -218,7 +218,7 @@ export function createSwarmApiMcpServer(agentManager) {
         }
       }
 
-      const newTask = agentManager.addTask(agent.id, task, project || undefined, { type: 'mcp' }, status, { boardId: resolvedBoardId });
+      const newTask = agentManager.addTask(agent.id, task, { type: 'mcp' }, status, { boardId: resolvedBoardId });
       console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created for agent "${agent.name}" (${agent.id}) \u2014 task: ${newTask?.id}, project: ${project || '(none)'}, status: ${status || '(default)'}, board: ${resolvedBoardId || '(none)'}`);
 
       return {

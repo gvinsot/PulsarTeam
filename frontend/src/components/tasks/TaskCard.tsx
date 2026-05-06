@@ -330,6 +330,11 @@ export default function TaskCard({ task, agents, onDelete, onStop, onResume, onC
             {task.project}
           </span>
         )}
+        {task.repoFullName && (
+          <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20" title={`Repo: ${task.repoFullName}`}>
+            {task.repoFullName.split('/').pop()}
+          </span>
+        )}
         {showTaskType && task.taskType && TASK_TYPE_MAP[task.taskType] && (() => {
           const tt = TASK_TYPE_MAP[task.taskType];
           const Icon = tt.icon;

@@ -161,11 +161,11 @@ export const api = {
     }).then(handleResponse),
 
   // Tasks
-  addTask: (agentId, text, project, status, boardId, recurrence, taskType, isManual) =>
+  addTask: (agentId, text, status, boardId, repoId, recurrence, taskType, isManual) =>
     fetch(`${API_BASE}/agents/${agentId}/tasks`, {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ text, ...(project !== undefined && { project }), ...(status && { status }), ...(boardId && { boardId }), ...(recurrence && { recurrence }), ...(taskType && { taskType }), ...(isManual && { isManual }) })
+      body: JSON.stringify({ text, ...(status && { status }), ...(boardId && { boardId }), ...(repoId && { repoId }), ...(recurrence && { recurrence }), ...(taskType && { taskType }), ...(isManual && { isManual }) })
     }).then(handleResponse),
 
   toggleTask: (agentId, taskId) =>
@@ -228,11 +228,11 @@ export const api = {
       body: JSON.stringify(fields)
     }).then(handleResponse),
 
-  updateTaskProject: (agentId, taskId, project) =>
+  updateTaskRepo: (agentId, taskId, repoId) =>
     fetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
       method: 'PATCH',
       headers: getHeaders(),
-      body: JSON.stringify({ project: project || '' })
+      body: JSON.stringify({ repoId: repoId || null })
     }).then(handleResponse),
 
   addTaskCommit: (agentId, taskId, hash, message) =>

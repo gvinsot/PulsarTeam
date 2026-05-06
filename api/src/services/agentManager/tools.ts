@@ -1056,7 +1056,7 @@ export const toolsMethods = {
 
             if (!targetTask) {
               const taskText = agent.currentTask || detectedCommits[0].msg || 'Commit without task';
-              const created = this.addTask(agentId, taskText, agent.project || null, { type: 'auto', reason: 'commit-link' });
+              const created = this.addTask(agentId, taskText, { type: 'auto', reason: 'commit-link' });
               if (created) {
                 targetTask = this._getAgentTasks(agentId).find((t: any) => t.id === created.id);
                 ownerAgentId = agentId;

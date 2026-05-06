@@ -43,7 +43,7 @@ export function purgeStaleTaskSignals(activeTaskIds: Set<string>): void {
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
-  addTask(this: any, agentId: string, text: string, project: any, source: any, initialStatus?: string, { boardId, skipAutoRefine = false, recurrence, taskType, isManual }: { boardId?: string; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean } = {}): any {
+  addTask(this: any, agentId: string, text: string, source: any, initialStatus?: string, { boardId, repoId, skipAutoRefine = false, recurrence, taskType, isManual }: { boardId?: string; repoId?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean } = {}): any {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const defaultStatus = 'backlog';
@@ -53,7 +53,8 @@ export const tasksMethods = {
       id: uuidv4(),
       text,
       status,
-      project: project !== undefined ? project : (agent.project || null),
+      // project is derived server-side from board.project_id; no longer stored on the task
+      repoId: repoId || null,
       source: source || null,
       boardId: boardId || null,
       isManual: isManual || false,
@@ -192,15 +193,15 @@ export const tasksMethods = {
     return task;
   },
 
-  updateTaskProject(this: any, agentId: string, taskId: string, project: string): any {
+  updateTaskRepo(this: any, agentId: string, taskId: string, repoId: string | null): any {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
     if (!task) return null;
-    const oldProject = task.project;
-    task.project = project;
+    const oldRepoId = task.repoId || null;
+    task.repoId = repoId || null;
     if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'project', oldValue: oldProject, newValue: project });
+    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'repoId', oldValue: oldRepoId, newValue: repoId || null });
     saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
@@ -429,7 +430,7 @@ export const tasksMethods = {
     this._removeTaskFromStore(fromAgentId, taskId);
     deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(fromAgent));
-    const newTask = this.addTask(toAgentId, taskToTransfer.text, taskToTransfer.project, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus);
+    const newTask = this.addTask(toAgentId, taskToTransfer.text, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus, { boardId: taskToTransfer.boardId, repoId: taskToTransfer.repoId });
     if (newTask) {
       newTask.assignee = toAgentId;
       saveTaskToDb({ ...newTask, agentId: toAgentId });
@@ -834,32 +835,33 @@ export const tasksMethods = {
     }
 
     try {
-      if (task.project && task.project !== executor.project) {
-        console.log(`🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to project "${task.project}" for resume`);
-        // 1. Switch conversation context (saves/restores history)
+      // Repo selection drives the executor's project context. The task carries
+      // a `repoFullName` (hydrated from board_repos via the JOIN); if it
+      // differs from the executor's current repo we switch sandbox + history.
+      const taskRepo = task.repoFullName || null;
+      if (taskRepo && taskRepo !== executor.project) {
+        console.log(`🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`);
         if (this._switchProjectContext) {
-          this._switchProjectContext(executor, executor.project, task.project);
+          this._switchProjectContext(executor, executor.project, taskRepo);
         }
-        // 2. Switch execution environment (coder-service / sandbox)
         if (this.executionManager) {
           try {
-            const gitUrl = await getProjectGitUrl(task.project);
+            const gitUrl = task.repoHtmlUrl || (taskRepo ? `https://github.com/${taskRepo}.git` : null);
             if (gitUrl) {
               const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
               const gitCreds = await getGitHubCredentialsForAgent(executorId, executor.boardId || null);
-              await this.executionManager.switchProject(executorId, task.project, gitUrl, gitCreds);
+              await this.executionManager.switchProject(executorId, taskRepo, gitUrl, gitCreds);
             }
-            // Verify execution environment matches
             const envProject = this.executionManager.getProject(executorId);
-            if (envProject && envProject !== task.project) {
-              throw new Error(`Execution environment is on "${envProject}" but task requires "${task.project}"`);
+            if (envProject && envProject !== taskRepo) {
+              throw new Error(`Execution environment is on "${envProject}" but task requires "${taskRepo}"`);
             }
           } catch (switchErr: any) {
             console.error(`🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`);
             throw switchErr;
           }
         }
-        executor.project = task.project;
+        executor.project = taskRepo;
       }
 
       clearTaskSignal(task.id, 'completed');

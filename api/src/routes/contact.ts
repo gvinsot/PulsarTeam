@@ -108,7 +108,6 @@ export function contactRoutes(agentManager: any) {
       const task = agentManager.addTask(
         targetAgentId,
         taskText,
-        'PulsarTeam',
         source,
         targetColumn,
         { boardId: targetBoardId, skipAutoRefine: true, taskType: type === 'contact' ? 'feature' : 'bug' }

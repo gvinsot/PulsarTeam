@@ -340,7 +340,6 @@ export async function pollJira(agentManager) {
       const task = agentManager.addTask(
         creatorAgent.id,
         `[${issue.key}] ${summary}`,
-        null,
         { type: 'jira', name: 'Jira', key: issue.key },
         targetColumn,
         { boardId, skipAutoRefine: true }
@@ -810,7 +809,6 @@ export async function handleWebhook(payload, agentManager) {
       const task = agentManager.addTask(
         creatorAgent.id,
         `[${issue.key}] ${summary}`,
-        null,
         { type: 'jira', name: 'Jira', key: issue.key },
         trigger.from,
         { boardId, skipAutoRefine: true }

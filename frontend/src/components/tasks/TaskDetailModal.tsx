@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   Trash2, X, AlertTriangle, Edit3, Save, Check, Tag, Calendar,
-  ChevronDown, Zap, User, GitCommit, Repeat, FolderKanban, Loader2, Layers,
+  ChevronDown, Zap, User, GitCommit, GitBranch, Repeat, FolderKanban, Loader2, Layers,
   ArrowRight, Hand, Pause, XCircle, MessageSquare,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
@@ -11,15 +11,15 @@ import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
 import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, timeAgo, formatDate } from './taskConstants';
 
-export default function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDelete, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
+export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
   const [editTitle, setEditTitle] = useState(task.title || '');
   const [saving, setSaving] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
-  const [editingProject, setEditingProject] = useState(false);
-  const [editProject, setEditProject] = useState(task.project || '');
-  const [savingProject, setSavingProject] = useState(false);
+  const [editingRepo, setEditingRepo] = useState(false);
+  const [savingRepo, setSavingRepo] = useState(false);
+  const [boardRepos, setBoardRepos] = useState([]);
   const [editingAgent, setEditingAgent] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [editingType, setEditingType] = useState(false);
@@ -34,8 +34,14 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
   const [historyDetail, setHistoryDetail] = useState(null);
   const statusRef = useRef(null);
   const textareaRef = useRef(null);
-  const projectInputRef = useRef(null);
   const refineRef = useRef(null);
+
+  // Load the board's repos so the user can re-target the task to a different one
+  useEffect(() => {
+    const bid = task.boardId;
+    if (!bid) { setBoardRepos([]); return; }
+    api.getBoardRepos(bid).then(setBoardRepos).catch(() => setBoardRepos([]));
+  }, [task.boardId]);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -97,16 +103,15 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
     }
   };
 
-  const handleProjectSave = async () => {
-    const trimmed = editProject.trim();
-    if (trimmed === (task.project || '')) { setEditingProject(false); return; }
-    setSavingProject(true);
+  const handleRepoChange = async (newRepoId) => {
+    if ((newRepoId || null) === (task.repoId || null)) { setEditingRepo(false); return; }
+    setSavingRepo(true);
     try {
-      await api.updateTaskProject(task.agentId, task.id, trimmed || null);
+      await api.updateTaskRepo(task.agentId, task.id, newRepoId || null);
       await onRefresh();
-      setEditingProject(false);
+      setEditingRepo(false);
     } finally {
-      setSavingProject(false);
+      setSavingRepo(false);
     }
   };
 
@@ -421,39 +426,44 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
               </label>
             </div>
 
-            {/* Project */}
+            {/* Project (read-only — derived from the board) */}
             <div className="flex items-center justify-between py-2 border-b border-dark-800">
               <div className="flex items-center gap-2 text-xs text-dark-400">
                 <Tag className="w-3.5 h-3.5" />
                 Project
               </div>
-              {editingProject ? (
+              {task.project ? (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20">
+                  {task.project}
+                </span>
+              ) : (
+                <span className="text-xs text-dark-500 italic">None</span>
+              )}
+            </div>
+
+            {/* Repo (editable, scoped to the board's repos) */}
+            <div className="flex items-center justify-between py-2 border-b border-dark-800">
+              <div className="flex items-center gap-2 text-xs text-dark-400">
+                <GitBranch className="w-3.5 h-3.5" />
+                Repo
+              </div>
+              {editingRepo ? (
                 <div className="flex items-center gap-1.5">
-                  <input
-                    ref={projectInputRef}
-                    type="text"
-                    value={editProject}
-                    onChange={e => setEditProject(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') handleProjectSave(); if (e.key === 'Escape') { setEditingProject(false); setEditProject(task.project || ''); } }}
-                    list="detail-task-projects"
-                    placeholder="No project"
-                    className="px-2 py-0.5 w-32 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
-                      placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                  <select
                     autoFocus
-                  />
-                  <datalist id="detail-task-projects">
-                    {(allProjects || []).map(p => <option key={p} value={p} />)}
-                  </datalist>
-                  <button
-                    onClick={handleProjectSave}
-                    disabled={savingProject}
-                    className="p-0.5 rounded text-emerald-400 hover:text-emerald-300 hover:bg-dark-700 transition-colors"
-                    title="Save"
+                    defaultValue={task.repoId || ''}
+                    onChange={e => handleRepoChange(e.target.value || null)}
+                    disabled={savingRepo}
+                    className="px-2 py-0.5 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
                   >
-                    <Check className="w-3 h-3" />
-                  </button>
+                    <option value="">None</option>
+                    {boardRepos.map(r => (
+                      <option key={r.id} value={r.id}>[{r.provider}] {r.full_name}</option>
+                    ))}
+                  </select>
                   <button
-                    onClick={() => { setEditingProject(false); setEditProject(task.project || ''); }}
+                    onClick={() => setEditingRepo(false)}
                     className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
                     title="Cancel"
                   >
@@ -462,21 +472,23 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
                 </div>
               ) : (
                 <div className="flex items-center gap-1.5">
-                  {task.project ? (
+                  {task.repoFullName ? (
                     <span className="text-xs px-2 py-0.5 rounded-full font-medium
-                      bg-violet-500/10 text-violet-400 ring-1 ring-violet-500/20">
-                      {task.project}
+                      bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20">
+                      {task.repoFullName}
                     </span>
                   ) : (
                     <span className="text-xs text-dark-500 italic">None</span>
                   )}
-                  <button
-                    onClick={() => { setEditProject(task.project || ''); setEditingProject(true); }}
-                    className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
-                    title="Change project"
-                  >
-                    <Edit3 className="w-3 h-3" />
-                  </button>
+                  {boardRepos.length > 0 && (
+                    <button
+                      onClick={() => setEditingRepo(true)}
+                      className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
+                      title="Change repo"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
+                  )}
                 </div>
               )}
             </div>

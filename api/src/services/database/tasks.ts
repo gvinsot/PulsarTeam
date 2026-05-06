@@ -1,5 +1,21 @@
 import { getPool } from './connection.js';
 
+// SELECT clause + joins shared by every task read query.
+// Hydrates `project` (name, derived from board.project_id) and the linked repo
+// so `rowToTask` doesn't need a separate fetch.
+const TASK_SELECT = `
+  SELECT t.*,
+         p.id   AS _project_id,
+         p.name AS _project_name,
+         r.provider  AS _repo_provider,
+         r.full_name AS _repo_full_name,
+         r.html_url  AS _repo_html_url
+  FROM tasks t
+  LEFT JOIN boards   b ON t.board_id = b.id
+  LEFT JOIN projects p ON b.project_id = p.id
+  LEFT JOIN board_repos r ON t.repo_id = r.id
+`;
+
 /** Convert a DB row to the in-memory task object format */
 export function rowToTask(row) {
   return {
@@ -8,8 +24,15 @@ export function rowToTask(row) {
     text: row.text || '',
     title: row.title || undefined,
     status: row.status || 'backlog',
-    project: row.project || null,
     boardId: row.board_id || null,
+    // Project is derived from board.project_id (read-only on the task object)
+    projectId: row._project_id || null,
+    project: row._project_name || null,
+    // Repo selection — points at a board_repos row
+    repoId: row.repo_id || null,
+    repoProvider: row._repo_provider || null,
+    repoFullName: row._repo_full_name || null,
+    repoHtmlUrl: row._repo_html_url || null,
     assignee: row.assignee || null,
     taskType: row.task_type || undefined,
     priority: row.priority || undefined,
@@ -41,7 +64,7 @@ export async function getTasksByAgent(agentId) {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      'SELECT * FROM tasks WHERE agent_id = $1 AND deleted_at IS NULL ORDER BY created_at',
+      `${TASK_SELECT} WHERE t.agent_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at`,
       [agentId]
     );
     return result.rows.map(rowToTask);
@@ -55,7 +78,7 @@ export async function getAllTasks() {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const result = await pool.query('SELECT * FROM tasks WHERE deleted_at IS NULL ORDER BY created_at');
+    const result = await pool.query(`${TASK_SELECT} WHERE t.deleted_at IS NULL ORDER BY t.created_at`);
     return result.rows.map(rowToTask);
   } catch (err) {
     console.error('Failed to load all tasks:', err.message);
@@ -67,7 +90,7 @@ export async function getTaskById(taskId) {
   const pool = getPool();
   if (!pool) return null;
   try {
-    const result = await pool.query('SELECT * FROM tasks WHERE id = $1 AND deleted_at IS NULL', [taskId]);
+    const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NULL`, [taskId]);
     if (result.rows.length === 0) return null;
     return rowToTask(result.rows[0]);
   } catch (err) {
@@ -100,14 +123,14 @@ async function _doSaveTask(task) {
   const pool = getPool();
   try {
     await pool.query(
-      `INSERT INTO tasks (id, agent_id, text, title, status, project, board_id, assignee,
+      `INSERT INTO tasks (id, agent_id, text, title, status, repo_id, board_id, assignee,
                           task_type, priority, due_date, source, recurrence, commits, history,
                           error, created_at, updated_at, completed_at, started_at,
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
                           action_running_mode, error_from_status, is_manual, position)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW(),$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
        ON CONFLICT (id) DO UPDATE SET
-         text = $3, title = $4, status = $5, project = $6, board_id = $7, assignee = $8,
+         text = $3, title = $4, status = $5, repo_id = $6, board_id = $7, assignee = $8,
          task_type = $9, priority = $10, due_date = $11, source = $12, recurrence = $13,
          commits = $14, history = $15, error = $16, updated_at = NOW(),
          completed_at = $18, started_at = $19,
@@ -119,7 +142,7 @@ async function _doSaveTask(task) {
         task.text || '',
         task.title || null,
         task.status || 'backlog',
-        task.project || null,
+        task.repoId || null,
         task.boardId || null,
         task.assignee || null,
         task.taskType || null,
@@ -179,12 +202,13 @@ export async function restoreTaskFromDb(taskId) {
   const pool = getPool();
   if (!pool) return null;
   try {
-    const result = await pool.query(
-      'UPDATE tasks SET deleted_at = NULL, updated_at = NOW() WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *',
+    const updated = await pool.query(
+      'UPDATE tasks SET deleted_at = NULL, updated_at = NOW() WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id',
       [taskId]
     );
-    if (result.rows.length === 0) return null;
-    return rowToTask(result.rows[0]);
+    if (updated.rows.length === 0) return null;
+    const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1`, [taskId]);
+    return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
   } catch (err) {
     console.error('Failed to restore task:', err.message);
     return null;
@@ -195,7 +219,7 @@ export async function getDeletedTasks() {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const result = await pool.query('SELECT * FROM tasks WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
+    const result = await pool.query(`${TASK_SELECT} WHERE t.deleted_at IS NOT NULL ORDER BY t.deleted_at DESC`);
     return result.rows.map(rowToTask);
   } catch (err) {
     console.error('Failed to get deleted tasks:', err.message);
@@ -207,7 +231,7 @@ export async function getDeletedTaskById(taskId) {
   const pool = getPool();
   if (!pool) return null;
   try {
-    const result = await pool.query('SELECT * FROM tasks WHERE id = $1 AND deleted_at IS NOT NULL', [taskId]);
+    const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NOT NULL`, [taskId]);
     if (result.rows.length === 0) return null;
     return rowToTask(result.rows[0]);
   } catch (err) {
@@ -238,8 +262,17 @@ export async function getTasksForResume() {
   if (!pool) return [];
   try {
     const result = await pool.query(`
-      SELECT t.*, a.data as agent_data
+      SELECT t.*,
+             p.id   AS _project_id,
+             p.name AS _project_name,
+             r.provider  AS _repo_provider,
+             r.full_name AS _repo_full_name,
+             r.html_url  AS _repo_html_url,
+             a.data AS agent_data
       FROM tasks t
+      LEFT JOIN boards   b ON t.board_id = b.id
+      LEFT JOIN projects p ON b.project_id = p.id
+      LEFT JOIN board_repos r ON t.repo_id = r.id
       JOIN agents a ON COALESCE(t.assignee, t.agent_id) = a.id
       WHERE t.deleted_at IS NULL
         AND t.started_at IS NOT NULL
@@ -353,7 +386,7 @@ export async function getActiveTasksByAgent(agentId) {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      `SELECT * FROM tasks WHERE agent_id = $1 AND status NOT IN ('done','backlog','error') AND deleted_at IS NULL ORDER BY created_at`,
+      `${TASK_SELECT} WHERE t.agent_id = $1 AND t.status NOT IN ('done','backlog','error') AND t.deleted_at IS NULL ORDER BY t.created_at`,
       [agentId]
     );
     return result.rows.map(rowToTask);
@@ -371,7 +404,7 @@ export async function getTasksByBoard(boardId) {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      'SELECT * FROM tasks WHERE board_id = $1 AND deleted_at IS NULL ORDER BY created_at',
+      `${TASK_SELECT} WHERE t.board_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at`,
       [boardId]
     );
     return result.rows.map(rowToTask);
@@ -382,21 +415,23 @@ export async function getTasksByBoard(boardId) {
 }
 
 /**
- * Find the board that has the most tasks for a given project.
- * Returns the board_id or null if no tasks exist for this project.
+ * Find the board that has the most tasks for a given project name.
+ * Resolved through boards.project_id → projects.name. Returns the board_id or null.
  */
-export async function getBoardWithMostTasksForProject(project) {
+export async function getBoardWithMostTasksForProject(projectName) {
   const pool = getPool();
-  if (!pool || !project) return null;
+  if (!pool || !projectName) return null;
   try {
     const result = await pool.query(
-      `SELECT board_id, COUNT(*) as task_count
-       FROM tasks
-       WHERE project ILIKE $1 AND board_id IS NOT NULL AND deleted_at IS NULL
-       GROUP BY board_id
+      `SELECT t.board_id, COUNT(*) AS task_count
+       FROM tasks t
+       JOIN boards b   ON t.board_id = b.id
+       JOIN projects p ON b.project_id = p.id
+       WHERE p.name ILIKE $1 AND t.deleted_at IS NULL
+       GROUP BY t.board_id
        ORDER BY task_count DESC
        LIMIT 1`,
-      [project]
+      [projectName]
     );
     return result.rows.length > 0 ? result.rows[0].board_id : null;
   } catch (err) {
@@ -413,7 +448,7 @@ export async function getTasksByAssignee(agentId) {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      `SELECT * FROM tasks WHERE (assignee = $1 OR (assignee IS NULL AND agent_id = $1)) AND deleted_at IS NULL ORDER BY created_at`,
+      `${TASK_SELECT} WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1)) AND t.deleted_at IS NULL ORDER BY t.created_at`,
       [agentId]
     );
     return result.rows.map(rowToTask);
@@ -432,12 +467,12 @@ export async function getActiveTaskForExecutor(agentId) {
   if (!pool) return null;
   try {
     const result = await pool.query(
-      `SELECT * FROM tasks
-       WHERE (assignee = $1 OR (assignee IS NULL AND agent_id = $1))
-         AND status NOT IN ('done','backlog','error')
-         AND started_at IS NOT NULL
-         AND deleted_at IS NULL
-       ORDER BY started_at ASC LIMIT 1`,
+      `${TASK_SELECT}
+       WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1))
+         AND t.status NOT IN ('done','backlog','error')
+         AND t.started_at IS NOT NULL
+         AND t.deleted_at IS NULL
+       ORDER BY t.started_at ASC LIMIT 1`,
       [agentId]
     );
     return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
@@ -511,11 +546,11 @@ export async function getRecurringDoneTasks() {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      `SELECT * FROM tasks
-       WHERE recurrence IS NOT NULL
-         AND status = 'done'
-         AND completed_at IS NOT NULL
-         AND deleted_at IS NULL`
+      `${TASK_SELECT}
+       WHERE t.recurrence IS NOT NULL
+         AND t.status = 'done'
+         AND t.completed_at IS NOT NULL
+         AND t.deleted_at IS NULL`
     );
     return result.rows.map(rowToTask);
   } catch (err) {
@@ -532,21 +567,21 @@ export async function getTasksByStatusAndBoard(status = null, boardId = null) {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const conditions = ['deleted_at IS NULL'];
+    const conditions = ['t.deleted_at IS NULL'];
     const params = [];
     let idx = 1;
     if (status) {
-      conditions.push(`status = $${idx}`);
+      conditions.push(`t.status = $${idx}`);
       params.push(status);
       idx++;
     }
     if (boardId) {
-      conditions.push(`board_id = $${idx}`);
+      conditions.push(`t.board_id = $${idx}`);
       params.push(boardId);
       idx++;
     }
     const result = await pool.query(
-      `SELECT * FROM tasks WHERE ${conditions.join(' AND ')} ORDER BY position, created_at`,
+      `${TASK_SELECT} WHERE ${conditions.join(' AND ')} ORDER BY t.position, t.created_at`,
       params
     );
     return result.rows.map(rowToTask);
@@ -564,7 +599,7 @@ export async function getTaskByJiraKey(jiraKey) {
   if (!pool) return null;
   try {
     const result = await pool.query(
-      `SELECT * FROM tasks WHERE source->>'jiraKey' = $1 AND deleted_at IS NULL LIMIT 1`,
+      `${TASK_SELECT} WHERE t.source->>'jiraKey' = $1 AND t.deleted_at IS NULL LIMIT 1`,
       [jiraKey]
     );
     return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
@@ -581,7 +616,7 @@ export async function updateTaskFields(taskId, fields) {
   const pool = getPool();
   if (!pool) return null;
   const allowed = [
-    'text', 'title', 'status', 'project', 'board_id', 'assignee',
+    'text', 'title', 'status', 'repo_id', 'board_id', 'assignee',
     'task_type', 'priority', 'due_date', 'source', 'recurrence',
     'commits', 'history', 'error', 'completed_at', 'started_at',
     'execution_status', 'completed_action_idx', 'action_running', 'action_running_agent_id',
@@ -595,7 +630,7 @@ export async function updateTaskFields(taskId, fields) {
     executionStatus: 'execution_status', completedActionIdx: 'completed_action_idx',
     actionRunning: 'action_running', actionRunningAgentId: 'action_running_agent_id',
     actionRunningMode: 'action_running_mode', errorFromStatus: 'error_from_status',
-    isManual: 'is_manual',
+    isManual: 'is_manual', repoId: 'repo_id',
   };
   const sets = [];
   const values = [taskId];
@@ -613,10 +648,12 @@ export async function updateTaskFields(taskId, fields) {
   if (sets.length === 0) return null;
   sets.push('updated_at = NOW()');
   try {
-    const result = await pool.query(
-      `UPDATE tasks SET ${sets.join(', ')} WHERE id = $1 RETURNING *`,
+    const updated = await pool.query(
+      `UPDATE tasks SET ${sets.join(', ')} WHERE id = $1 RETURNING id`,
       values
     );
+    if (updated.rows.length === 0) return null;
+    const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1`, [taskId]);
     return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
   } catch (err) {
     console.error('Failed to update task fields:', err.message);

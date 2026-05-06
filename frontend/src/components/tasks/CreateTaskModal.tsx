@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Plus, X, Tag, Repeat, Layers, Hand } from 'lucide-react';
+import { Plus, X, GitBranch, Repeat, Layers, Hand } from 'lucide-react';
 import { api } from '../../api';
 import { TASK_TYPES } from './taskConstants';
 
@@ -11,7 +11,7 @@ const RECURRENCE_PERIODS = [
   { value: 'custom', label: 'Custom interval', minutes: null },
 ];
 
-export default function CreateTaskModal({ agents, allProjects, defaultProject, onClose, onCreated, statusOptions, defaultStatus, boardId }) {
+export default function CreateTaskModal({ agents, onClose, onCreated, statusOptions, defaultStatus, boardId, projectName }) {
   // Allow all columns as creation statuses (don't exclude the last one —
   // custom columns added after "Done" would be wrongly hidden by slice(0, -1))
   const CREATE_STATUSES = statusOptions;
@@ -19,7 +19,6 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
     ? defaultStatus
     : (CREATE_STATUSES[0]?.value || 'backlog');
   const [text, setText] = useState('');
-  const [project, setProject] = useState(defaultProject || '');
   const [status, setStatus] = useState(initialStatus);
   const [taskType, setTaskType] = useState('');
   const [isManual, setIsManual] = useState(false);
@@ -28,6 +27,18 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
   const [customInterval, setCustomInterval] = useState(60);
   const [saving, setSaving] = useState(false);
   const textareaRef = useRef(null);
+
+  // Repos linked to the board — task can target one of them
+  const [boardRepos, setBoardRepos] = useState([]);
+  const [repoId, setRepoId] = useState('');
+  useEffect(() => {
+    if (!boardId) { setBoardRepos([]); return; }
+    api.getBoardRepos(boardId).then(setBoardRepos).catch(() => setBoardRepos([]));
+  }, [boardId]);
+  // Default to the only repo when there's exactly one
+  useEffect(() => {
+    if (!repoId && boardRepos.length === 1) setRepoId(boardRepos[0].id);
+  }, [boardRepos, repoId]);
 
   // Auto-pick the first enabled agent as container (tasks are no longer agent-specific)
   const defaultAgentId = (agents || []).find(a => a.enabled !== false)?.id || '';
@@ -55,7 +66,7 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
           ? customInterval
           : RECURRENCE_PERIODS.find(p => p.value === recurrencePeriod)?.minutes || 1440,
       } : undefined;
-      const created = await api.addTask(defaultAgentId, trimmed, project.trim() || undefined, status, boardId, recurrence, taskType || undefined, isManual || undefined);
+      const created = await api.addTask(defaultAgentId, trimmed, status, boardId, repoId || undefined, recurrence, taskType || undefined, isManual || undefined);
       // Pass the created task so the parent can optimistically insert it
       // before the next loadTasks() fetch (avoids the race where the DB
       // INSERT hasn't committed yet).
@@ -106,24 +117,32 @@ export default function CreateTaskModal({ agents, allProjects, defaultProject, o
             />
           </div>
 
-          {/* Project */}
-          <div>
-            <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
-              <Tag className="inline w-3 h-3 mr-1" />Project
-            </label>
-            <input
-              type="text"
-              value={project}
-              onChange={e => setProject(e.target.value)}
-              placeholder={allProjects[0] || 'e.g. backend'}
-              list="create-task-projects"
-              className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
-                placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
-            />
-            <datalist id="create-task-projects">
-              {(allProjects || []).map(p => <option key={p} value={p} />)}
-            </datalist>
-          </div>
+          {/* Project (read-only — derived from the board) */}
+          {projectName && (
+            <div className="flex items-center justify-between text-xs text-dark-400 bg-dark-800/60 border border-dark-700 rounded-lg px-3 py-2">
+              <span className="uppercase tracking-wide">Project</span>
+              <span className="text-dark-200 font-medium">{projectName}</span>
+            </div>
+          )}
+
+          {/* Repo (optional, scoped to the board's repos) */}
+          {boardRepos.length > 0 && (
+            <div>
+              <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
+                <GitBranch className="inline w-3 h-3 mr-1" />Repo
+              </label>
+              <select
+                value={repoId}
+                onChange={e => setRepoId(e.target.value)}
+                className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+              >
+                <option value="">No specific repo</option>
+                {boardRepos.map(r => (
+                  <option key={r.id} value={r.id}>[{r.provider}] {r.full_name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Status + Type row */}
           <div className="flex gap-3">

@@ -357,6 +357,13 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       // Drop legacy project_contexts table — replaced by projects + board_repos
       await pool.query('DROP TABLE IF EXISTS project_contexts').catch(() => {});
 
+      // ── Tasks: drop legacy project text column, add repo_id ───────────────
+      // task.project is now derived from board.project_id at read-time (JOIN).
+      // task.repo_id targets a specific board repo for execution context.
+      await pool.query('ALTER TABLE tasks DROP COLUMN IF EXISTS project').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS repo_id UUID REFERENCES board_repos(id) ON DELETE SET NULL').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_repo ON tasks(repo_id)').catch(() => {});
+
       // ── Finalize ──────────────────────────────────────────────────────────
       setPool(pool);
       setDatabaseConnected(true);
