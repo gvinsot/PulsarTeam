@@ -21,6 +21,7 @@ from models import (
 from security import extract_api_key, verify_api_key
 from agent_user import get_agent_project_dir, ensure_agent_project
 from code_executor import execute_python, execute_shell
+from command_security import validate_command, sanitize_env
 from backends import BACKEND
 
 router = APIRouter()
@@ -140,6 +141,11 @@ async def exec_shell(
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
 
+    # Security: validate command against blocklist
+    block_reason = validate_command(request.command)
+    if block_reason:
+        return ExecutionResponse(status="error", output="", error=f"🛡️ {block_reason}")
+
     cwd = request.cwd
     if not cwd and x_agent_id:
         cwd = get_agent_project_dir(x_agent_id)
@@ -150,12 +156,16 @@ async def exec_shell(
 
     timeout = min(request.timeout, 120)
 
+    # Security: use sanitized environment to prevent secret leakage
+    safe_env = sanitize_env(os.environ)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             "bash", "-c", request.command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=safe_env,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         stdout = stdout_bytes.decode("utf-8", errors="replace")

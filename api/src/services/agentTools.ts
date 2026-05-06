@@ -119,17 +119,56 @@ function sanitizeArg(arg) {
   return arg.trim();
 }
 
-// Normalize path: strip absolute prefixes the LLM might hallucinate
+// Normalize path: strip absolute prefixes and prevent traversal attacks
 function normalizePath(pathArg) {
   let p = sanitizeArg(pathArg);
+  // Decode any URL-encoded characters that could bypass path checks
+  try { p = decodeURIComponent(p); } catch {}
   // Strip /workspace/<project>/ or /projects/<project>/ prefixes
   p = p.replace(/^\/workspace\/[^/]+\//, '');
   p = p.replace(/^\/projects\/[^/]+\//, '');
   // Strip any remaining leading slashes
   if (p.startsWith('/')) p = p.replace(/^\/+/, '');
-  // Prevent path traversal
-  p = p.split('/').filter(seg => seg !== '..').join('/');
+  // Remove ALL path traversal segments (.. in any form)
+  p = p.split('/').filter(seg => seg !== '..' && seg !== '.').join('/');
+  // Block null bytes (classic injection vector)
+  p = p.replace(/\0/g, '');
+  // Validate the result stays within project — no absolute paths after normalization
+  if (p.startsWith('/') || p.includes('/../') || p.endsWith('/..')) {
+    console.warn(`🛡️ [Security] Path traversal blocked: ${pathArg}`);
+    return '__blocked_path__';
+  }
   return p || '.';
+}
+
+// Blocked shell command patterns — prevent agents from escaping sandbox or exfiltrating data
+const BLOCKED_COMMAND_PATTERNS = [
+  /\bshutdown\b/, /\breboot\b/, /\bpoweroff\b/, /\bhalt\b/,
+  /\bmkfs\b/, /\bfdisk\b/,
+  /\biptables\b/, /\bnft\b/, /\bufw\b/,
+  /\buseradd\b/, /\buserdel\b/, /\busermod\b/, /\bpasswd\b/,
+  /\bcrontab\b/,
+  /\bsystemctl\b/, /\bservice\s/,
+  /\/proc\/self\/environ/,
+  /\/proc\/\d+\/environ/,
+  /\/dev\/tcp\//,
+  /\/dev\/udp\//,
+  /\bbash\s+-i\s+>&/,
+  /\bnc\s+-l/, /\bncat\s+-l/, /\bsocat\s/,
+  /\bnmap\s/, /\bmasscan\s/,
+  /\btcpdump\b/, /\btshark\b/,
+  /\bmkfifo\s/, /\bmknod\s/,
+];
+
+function validateCommand(command: string): string | null {
+  if (!command?.trim()) return 'Empty command';
+  for (const pattern of BLOCKED_COMMAND_PATTERNS) {
+    if (pattern.test(command)) {
+      console.warn(`🛡️ [Security] Blocked command from agent: ${command.slice(0, 100)}`);
+      return 'Command blocked for security reasons';
+    }
+  }
+  return null;
 }
 
 /**
@@ -233,6 +272,9 @@ function getFileExtension(path) {
 }
 
 async function toolReadFile(provider, agentId, filePath, startLineArg, endLineArg) {
+  if (filePath === '__blocked_path__') {
+    return { success: false, error: 'Path blocked: detected path traversal attempt' };
+  }
   try {
     const ext = getFileExtension(filePath);
     if (IMAGE_EXTENSIONS.has(ext) && ext !== '.svg') {
@@ -302,6 +344,9 @@ async function toolReadFile(provider, agentId, filePath, startLineArg, endLineAr
 }
 
 async function toolWriteFile(provider, agentId, filePath, content) {
+  if (filePath === '__blocked_path__') {
+    return { success: false, error: 'Path blocked: detected path traversal attempt' };
+  }
   await provider.writeFile(agentId, filePath, content);
   return {
     success: true,
@@ -383,6 +428,12 @@ function rtkRewrite(command) {
 }
 
 async function toolRunCommand(provider, agentId, command) {
+  // Security: validate command before execution
+  const blockReason = validateCommand(command);
+  if (blockReason) {
+    return { success: false, error: `🛡️ ${blockReason}` };
+  }
+
   // 5 minutes — long-running commands like npm install, builds, test suites
   const COMMAND_TIMEOUT = 5 * 60 * 1000;
 
@@ -445,6 +496,9 @@ async function toolRunCommand(provider, agentId, command) {
 }
 
 async function toolAppendFile(provider, agentId, filePath, content) {
+  if (filePath === '__blocked_path__') {
+    return { success: false, error: 'Path blocked: detected path traversal attempt' };
+  }
   await provider.appendFile(agentId, filePath, content);
   return {
     success: true,

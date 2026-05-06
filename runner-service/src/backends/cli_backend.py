@@ -183,12 +183,8 @@ class CliBackend(RunnerBackend):
     # ── Common helpers ────────────────────────────────────────────────────
 
     def _agent_env(self, agent_user: Optional[dict]) -> dict:
-        env = {**os.environ}
-        if agent_user:
-            env["HOME"] = agent_user["home"]
-            env["USER"] = agent_user["username"]
-            env["LOGNAME"] = agent_user["username"]
-        return env
+        from command_security import sanitize_env
+        return sanitize_env(os.environ, agent_user)
 
     def _resolve_cwd(self, agent_id: Optional[str]) -> str:
         agent_project_dir = get_agent_project_dir(agent_id) if agent_id else None

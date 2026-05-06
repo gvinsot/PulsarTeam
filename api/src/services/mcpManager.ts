@@ -241,6 +241,26 @@ export class MCPManager {
   }
 
   async create(config) {
+    // Validate MCP server URL — must be a valid http(s) or sse URL
+    if (config.url) {
+      try {
+        const parsed = new URL(config.url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          throw new Error(`Invalid MCP server URL protocol: ${parsed.protocol}. Only http/https allowed.`);
+        }
+        // Block localhost/private IPs to prevent SSRF (except for internal services)
+        const hostname = parsed.hostname.toLowerCase();
+        if (hostname === '169.254.169.254' || hostname.startsWith('169.254.')) {
+          throw new Error('MCP server URL points to cloud metadata service — blocked for security');
+        }
+      } catch (err) {
+        if (err.message.includes('Invalid URL')) {
+          throw new Error(`Invalid MCP server URL: ${config.url}`);
+        }
+        throw err;
+      }
+    }
+
     const id = uuidv4();
     const server = {
       id,

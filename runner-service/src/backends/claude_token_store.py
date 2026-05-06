@@ -538,7 +538,9 @@ async def refresh_agent_token(agent_user: dict) -> bool:
 # =============================================================================
 
 def get_claude_env() -> dict:
-    env = {**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+    from command_security import sanitize_env
+    env = sanitize_env(os.environ)
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     if not env.get("CLAUDE_CODE_OAUTH_TOKEN"):
         saved = load_saved_token()
         if saved:
@@ -547,16 +549,15 @@ def get_claude_env() -> dict:
 
 
 def get_agent_env(agent_user: dict = None) -> dict:
+    from command_security import sanitize_env
     if agent_user:
-        env = {**os.environ, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+        env = sanitize_env(os.environ, agent_user)
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         token = resolve_token(agent_user)
         if token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
         elif env.get("CLAUDE_CODE_OAUTH_TOKEN"):
             del env["CLAUDE_CODE_OAUTH_TOKEN"]
-        env["HOME"] = agent_user["home"]
-        env["USER"] = agent_user["username"]
-        env["LOGNAME"] = agent_user["username"]
         return env
     return get_claude_env()
 
