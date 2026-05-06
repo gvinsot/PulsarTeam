@@ -394,6 +394,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                                 onChange={e => updateAction(idx, ai, { target: e.target.value })}
                                 className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
                                 <option value="">Select status...</option>
+                                <option value="__next__">→ Next column (auto)</option>
                                 {cols.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
                               </select>
                             )}

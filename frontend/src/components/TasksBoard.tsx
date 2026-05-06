@@ -565,6 +565,34 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     setBoards(prev => prev.map(b => b.id === activeBoardId ? updatedBoard : b));
   }, [activeBoardId]);
 
+  const handleAddColumn = useCallback(async () => {
+    if (!workflow || !activeBoardId) return;
+    const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'step';
+    const baseName = 'New Step';
+    let name = baseName;
+    let suffix = 2;
+    const existingIds = new Set(workflow.columns.map(c => c.id));
+    while (existingIds.has(slugify(name))) {
+      name = `${baseName} ${suffix++}`;
+    }
+    const newCol = { id: slugify(name), label: name, color: '#6b7280' };
+    const newTransition = {
+      from: newCol.id,
+      trigger: 'on_enter',
+      conditions: [],
+      actions: [
+        { type: 'run_agent', mode: 'decide', role: '', instructions: '' },
+        { type: 'change_status', target: '__next__' },
+      ],
+    };
+    const updated = {
+      columns: [...workflow.columns, newCol],
+      transitions: [...workflow.transitions, newTransition],
+      version: workflow.version,
+    };
+    await handleSaveWorkflow(updated);
+  }, [workflow, activeBoardId, handleSaveWorkflow]);
+
   if (!boardsLoaded) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -754,6 +782,18 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               onBatchDelete={isReadOnly ? undefined : handleBatchDelete}
             />
           ))}
+          {canEdit && (
+            <div className="flex flex-col min-w-[120px] w-[120px] flex-shrink-0">
+              <button
+                onClick={handleAddColumn}
+                className="flex items-center justify-center gap-1.5 h-[52px] border-2 border-dashed border-dark-700
+                  rounded-xl text-xs text-dark-500 hover:text-indigo-400 hover:border-indigo-500/30 transition-colors"
+                title="Add a new column"
+              >
+                <Plus className="w-3.5 h-3.5" /> Column
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

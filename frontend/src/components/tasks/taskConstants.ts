@@ -188,7 +188,7 @@ export function createAction(key, cols) {
   if (key === 'run_agent:title') return { type: 'run_agent', mode: 'title', role: '' };
   if (key === 'run_agent:set_type') return { type: 'run_agent', mode: 'set_type', role: '' };
   if (key === 'run_agent:decide') return { type: 'run_agent', mode: 'decide', role: '', instructions: '' };
-  if (key === 'change_status') return { type: 'change_status', target: cols[1]?.id || '' };
+  if (key === 'change_status') return { type: 'change_status', target: '__next__' };
   if (key === 'move_jira_status') return { type: 'move_jira_status', jiraStatusIds: [] };
   if (key === 'jira_ai_comment') return { type: 'jira_ai_comment', role: '', instructions: '' };
   return { type: 'change_status', target: '' };

@@ -244,13 +244,26 @@ function executeAssignAgentIndividual(action, task, { agentManager, io }) {
 // ── change_status ───────────────────────────────────────────────────────────
 
 function executeChangeStatus(action, task, { agentManager, workflow }) {
-  if (!action.target || action.target === task.status) {
+  let target = action.target;
+
+  // Resolve __next__ to the column immediately after the current one
+  if (target === '__next__') {
+    const cols = workflow?.columns || [];
+    const curIdx = cols.findIndex(c => c.id === task.status);
+    if (curIdx === -1 || curIdx >= cols.length - 1) {
+      console.log(`[ActionExecutor] change_status: __next__ — no column after "${task.status}" — skipping`);
+      return { executed: false, skipped: true, reason: 'no-next-column' };
+    }
+    target = cols[curIdx + 1].id;
+  }
+
+  if (!target || target === task.status) {
     return { executed: false, skipped: true, reason: 'same-status' };
   }
 
   // Validate target column exists
-  if (!columnExists(workflow, action.target)) {
-    console.warn(`[ActionExecutor] change_status: target "${action.target}" does not exist — skipping`);
+  if (!columnExists(workflow, target)) {
+    console.warn(`[ActionExecutor] change_status: target "${target}" does not exist — skipping`);
     return { executed: false, skipped: true, reason: 'column-not-found' };
   }
 
@@ -258,8 +271,8 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
   // may have moved it). This prevents duplicate "stopping chain" log spam and
   // avoids triggering a redundant _checkAutoRefine for an already-processed column.
   const realTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-  if (realTask && realTask.status === action.target) {
-    console.log(`[ActionExecutor] change_status: task="${task.id}" already at "${action.target}" — no-op`);
+  if (realTask && realTask.status === target) {
+    console.log(`[ActionExecutor] change_status: task="${task.id}" already at "${target}" — no-op`);
     return { executed: true, statusChanged: true };
   }
 
@@ -271,8 +284,8 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
     delete taskBeforeMove._pendingOnEnter;
   }
 
-  console.log(`[ActionExecutor] change_status: "${task.status}" → "${action.target}" task="${task.id}"`);
-  const result = agentManager.setTaskStatus(task.agentId, task.id, action.target, {
+  console.log(`[ActionExecutor] change_status: "${task.status}" → "${target}" task="${task.id}"`);
+  const result = agentManager.setTaskStatus(task.agentId, task.id, target, {
     skipAutoRefine: false,
     by: 'workflow',
   });
