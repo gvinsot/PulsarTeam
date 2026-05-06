@@ -2,13 +2,13 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Trash2, X, AlertTriangle, Edit3, Save, Check, Tag, Calendar,
   ChevronDown, Zap, User, GitCommit, Repeat, FolderKanban, Loader2, Layers,
-  ArrowRight, Hand, Pause, XCircle,
+  ArrowRight, Hand, Pause, XCircle, MessageSquare,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
-import ExecutionLogEntry from './ExecutionLogEntry';
+import HistoryDetailModal from './HistoryDetailModal';
 import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, timeAgo, formatDate } from './taskConstants';
 
 export default function TaskDetailModal({ task, agents, allProjects, onClose, onRefresh, onDelete, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
@@ -31,6 +31,7 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
   const [refining, setRefining] = useState(false);
   const [showAllCommits, setShowAllCommits] = useState(false);
   const [clickedCommitHash, setClickedCommitHash] = useState(null);
+  const [historyDetail, setHistoryDetail] = useState(null);
   const statusRef = useRef(null);
   const textareaRef = useRef(null);
   const projectInputRef = useRef(null);
@@ -672,70 +673,82 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
                 <div className="relative pl-4 border-l border-dark-700 space-y-1.5">
                   {task.history.map((h, i) => (
                     <div key={i} className="relative">
-                      <div className="flex items-start gap-2">
-                        <div className="absolute -left-[17px] top-1 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900" />
+                      <button
+                        className="w-full flex items-start gap-2 text-left rounded-md px-1 py-0.5 -ml-1 hover:bg-dark-800/60 transition-colors cursor-pointer group"
+                        onClick={() => setHistoryDetail(h)}
+                      >
+                        <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900 group-hover:bg-indigo-500 group-hover:ring-indigo-500/30 transition-colors" />
                         <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
                           <div className="flex items-center gap-1.5 text-xs min-w-0">
                             {h.type === 'execution' ? (
-                              <ExecutionLogEntry entry={h} index={i} />
+                              <>
+                                <MessageSquare className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
+                                <span className={`font-medium ${h.success ? 'text-blue-300' : 'text-red-300'}`}>
+                                  {h.mode === 'refine' ? 'Refine' : h.mode === 'decide' ? 'Decide' : h.mode === 'title' ? 'Title' : h.mode === 'set_type' ? 'Set Type' : 'Execution'} {h.success ? '✓' : '✗'}
+                                </span>
+                                <span className="text-dark-500 truncate">by {h.by}</span>
+                                {h.messages?.length > 0 && (
+                                  <span className="text-[10px] text-dark-500">— {h.messages.length} msg{h.messages.length > 1 ? 's' : ''}</span>
+                                )}
+                              </>
                             ) : h.type === 'edit' ? (
-                            <>
-                              <Edit3 className="w-2.5 h-2.5 text-dark-400 flex-shrink-0" />
-                              <span className="text-dark-200 font-medium">edited {h.field || (h.fields ? h.fields.map(f => f.field).join(', ') : 'task')}</span>
-                              {h.by && (
-                                <span className="text-dark-500 truncate">by {h.by}</span>
-                              )}
-                            </>
-                          ) : h.type === 'reassign' ? (
-                            <>
-                              <User className="w-2.5 h-2.5 text-dark-400 flex-shrink-0" />
-                              <span className="text-dark-200 font-medium">reassigned</span>
-                              {h.by && (
-                                <span className="text-dark-500 truncate">by {h.by}</span>
-                              )}
-                            </>
-                          ) : h.type === 'error' ? (
-                            <>
-                              <XCircle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
-                              <span className="text-red-300 font-medium">error</span>
-                              {h.from && (
-                                <span className="text-dark-500 truncate">in {h.from}</span>
-                              )}
-                              {h.by && (
-                                <span className="text-dark-500 truncate">by {h.by}</span>
-                              )}
-                              {h.error && (
-                                <span className="text-red-400/70 truncate" title={h.error}>{h.error.slice(0, 80)}</span>
-                              )}
-                            </>
-                          ) : h.type === 'stopped' ? (
-                            <>
-                              <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
-                              <span className="text-yellow-300 font-medium">stopped</span>
-                              {h.by && (
-                                <span className="text-dark-500 truncate">by {h.by}</span>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              {h.from && (
-                                <>
-                                  <span className="text-dark-500">{h.from}</span>
-                                  <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
-                                </>
-                              )}
-                              <span className="text-dark-200 font-medium">{h.status}</span>
-                              {h.by && (
-                                <span className="text-dark-500 truncate">by {h.by}</span>
-                              )}
-                            </>
-                          )}
+                              <>
+                                <Edit3 className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
+                                <span className="text-dark-200 font-medium">edited {h.field || (h.fields ? h.fields.map(f => f.field).join(', ') : 'task')}</span>
+                                {h.by && (
+                                  <span className="text-dark-500 truncate">by {h.by}</span>
+                                )}
+                              </>
+                            ) : h.type === 'reassign' ? (
+                              <>
+                                <User className="w-2.5 h-2.5 text-indigo-400 flex-shrink-0" />
+                                <span className="text-dark-200 font-medium">reassigned</span>
+                                {h.by && (
+                                  <span className="text-dark-500 truncate">by {h.by}</span>
+                                )}
+                              </>
+                            ) : h.type === 'error' ? (
+                              <>
+                                <XCircle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
+                                <span className="text-red-300 font-medium">error</span>
+                                {h.from && (
+                                  <span className="text-dark-500 truncate">in {h.from}</span>
+                                )}
+                                {h.by && (
+                                  <span className="text-dark-500 truncate">by {h.by}</span>
+                                )}
+                                {h.error && (
+                                  <span className="text-red-400/70 truncate" title={h.error}>{h.error.slice(0, 80)}</span>
+                                )}
+                              </>
+                            ) : h.type === 'stopped' ? (
+                              <>
+                                <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
+                                <span className="text-yellow-300 font-medium">stopped</span>
+                                {h.by && (
+                                  <span className="text-dark-500 truncate">by {h.by}</span>
+                                )}
+                              </>
+                            ) : (
+                              <>
+                                {h.from && (
+                                  <>
+                                    <span className="text-dark-500">{h.from}</span>
+                                    <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
+                                  </>
+                                )}
+                                <span className="text-dark-200 font-medium">{h.status}</span>
+                                {h.by && (
+                                  <span className="text-dark-500 truncate">by {h.by}</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(h.at)}>
+                            {timeAgo(h.at)}
+                          </span>
                         </div>
-                        <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(h.at)}>
-                          {timeAgo(h.at)}
-                        </span>
-                      </div>
-                    </div>
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -892,6 +905,15 @@ export default function TaskDetailModal({ task, agents, allProjects, onClose, on
         </div>
       );
     })()}
+
+    {/* History detail modal */}
+    {historyDetail && (
+      <HistoryDetailModal
+        entry={historyDetail}
+        agents={agents}
+        onClose={() => setHistoryDetail(null)}
+      />
+    )}
     </>
   );
 }
