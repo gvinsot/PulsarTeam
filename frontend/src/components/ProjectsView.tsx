@@ -1,18 +1,12 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { FolderGit2, Users, ListTodo, Clock, Search, Activity, BarChart3, ExternalLink, GitCommit, Plus, X, Loader2, Lock, Unlock } from 'lucide-react';
+import {
+  FolderGit2, Users, ListTodo, Clock, Search, Activity, BarChart3,
+  Plus, X, Loader2, Trash2,
+} from 'lucide-react';
 import ProjectDetailModal from './ProjectDetailModal';
-import GitHubActivityModal from './GitHubActivityModal';
 import api from '../api';
 
-function GithubIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
-    </svg>
-  );
-}
-
-// ── Build daily activity data from sparse daily stats (fill gaps with zeros) ─
+// ── Build daily activity series (fill gaps with zeros) ──────────────────────
 function buildDailyActivity(dailyStats: { date: string; created: number; completed: number }[], days = 30) {
   const lookup = new Map(dailyStats.map(d => [d.date, d]));
   const result = [];
@@ -32,7 +26,7 @@ function buildDailyActivity(dailyStats: { date: string; created: number; complet
   return result;
 }
 
-// ── Mini bar chart (canvas) showing daily activity ──────────────────────────
+// ── Mini bar chart (canvas) ──────────────────────────────────────────────────
 const AXIS_COLOR = '#6b7280';
 const AXIS_LABEL_FONT = '9px system-ui, sans-serif';
 const PADDING_LEFT = 20;
@@ -71,30 +65,24 @@ function MiniActivityChart({ data, height = 48 }) {
     const chartH = height;
     const maxVal = Math.max(...data.map(d => d.created + d.completed), 1);
 
-    // Y axis line
     ctx.strokeStyle = AXIS_COLOR;
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.moveTo(PADDING_LEFT, 0);
     ctx.lineTo(PADDING_LEFT, chartH);
     ctx.stroke();
-
-    // X axis line
     ctx.beginPath();
     ctx.moveTo(PADDING_LEFT, chartH);
     ctx.lineTo(width, chartH);
     ctx.stroke();
 
-    // Y axis labels (0 and max)
     ctx.fillStyle = AXIS_COLOR;
     ctx.font = AXIS_LABEL_FONT;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
     ctx.fillText(String(maxVal), PADDING_LEFT - 3, 10);
-    ctx.textBaseline = 'bottom';
     ctx.fillText('0', PADDING_LEFT - 3, chartH);
 
-    // Bars
     const gap = 2;
     const barW = Math.max(2, (chartW - gap * (data.length - 1)) / data.length);
 
@@ -102,7 +90,6 @@ function MiniActivityChart({ data, height = 48 }) {
       const x = PADDING_LEFT + i * (barW + gap);
       const createdH = (d.created / maxVal) * (chartH - 2);
       const completedH = (d.completed / maxVal) * (chartH - 2);
-
       if (completedH > 0) {
         ctx.fillStyle = '#22c55e';
         ctx.globalAlpha = 0.8;
@@ -110,7 +97,6 @@ function MiniActivityChart({ data, height = 48 }) {
         roundRect(ctx, x, chartH - completedH, barW, completedH, r);
         ctx.fill();
       }
-
       if (createdH > 0) {
         ctx.fillStyle = '#a855f7';
         ctx.globalAlpha = 0.8;
@@ -118,24 +104,19 @@ function MiniActivityChart({ data, height = 48 }) {
         roundRect(ctx, x, chartH - completedH - createdH, barW, createdH, r);
         ctx.fill();
       }
-
       ctx.globalAlpha = 1;
     });
 
-    // X axis labels (first, middle, last dates)
     ctx.fillStyle = AXIS_COLOR;
     ctx.font = AXIS_LABEL_FONT;
     ctx.textBaseline = 'top';
     const labelY = chartH + 3;
     const fmtDate = (d) => d?.date?.slice(5) || '';
-
     ctx.textAlign = 'left';
     ctx.fillText(fmtDate(data[0]), PADDING_LEFT, labelY);
-
     const mid = Math.floor(data.length / 2);
     ctx.textAlign = 'center';
     ctx.fillText(fmtDate(data[mid]), PADDING_LEFT + mid * (barW + gap) + barW / 2, labelY);
-
     ctx.textAlign = 'right';
     ctx.fillText(fmtDate(data[data.length - 1]), width, labelY);
   }, [data, width, height, totalH]);
@@ -149,7 +130,6 @@ function MiniActivityChart({ data, height = 48 }) {
       </div>
     );
   }
-
   return (
     <div ref={containerRef} className="w-full">
       <canvas ref={canvasRef} className="w-full" style={{ height: totalH }} />
@@ -173,113 +153,102 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-export default function ProjectsView({ agents = [], githubProjects = [], projectContexts = [], onRefresh }) {
+// ────────────────────────────────────────────────────────────────────────────
+
+export default function ProjectsView({ agents = [], onRefresh }) {
+  const [projects, setProjects] = useState([]);
+  const [projectStats, setProjectStats] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('name');
-  const [selectedProject, setSelectedProject] = useState(null);
-  const [activityTarget, setActivityTarget] = useState(null); // { owner, repo }
+  const [selectedProjectId, setSelectedProjectId] = useState(null);
+
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
-  const [newProject, setNewProject] = useState({ name: '', description: '', isPrivate: false });
+  const [newProject, setNewProject] = useState({ name: '', description: '' });
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [list, stats] = await Promise.all([
+        api.getProjects(),
+        api.getProjectStats(30).then(d => d.projects || []).catch(() => []),
+      ]);
+      setProjects(list);
+      setProjectStats(stats);
+    } catch (err) {
+      console.error('Failed to load projects:', err);
+      setProjects([]);
+      setProjectStats([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
 
   const handleCreateProject = async () => {
     if (!newProject.name.trim()) return;
     setCreating(true);
     setCreateError(null);
     try {
-      await api.createProject(newProject.name.trim(), newProject.description, newProject.isPrivate);
+      await api.createProject(newProject.name.trim(), newProject.description, '');
       setShowCreateModal(false);
-      setNewProject({ name: '', description: '', isPrivate: false });
+      setNewProject({ name: '', description: '' });
+      await reload();
       if (onRefresh) onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       setCreateError(err.message || 'Failed to create project');
     } finally {
       setCreating(false);
     }
   };
 
-  // Fetch lightweight project stats instead of full task objects
-  const [projectStats, setProjectStats] = useState<any[]>([]);
-  useEffect(() => {
-    api.getProjectStats(30).then(data => {
-      setProjectStats(data.projects || []);
-    }).catch(() => setProjectStats([]));
-  }, [agents]);
-
-  // Build a lookup of GitHub info by project name
-  const githubLookup = useMemo(() => {
-    const map = new Map();
-    for (const gp of githubProjects) {
-      map.set(gp.name, gp);
+  const handleDeleteProject = async (e, project) => {
+    e.stopPropagation();
+    if (!confirm(`Delete project "${project.name}"? Linked boards will be detached but not deleted.`)) return;
+    try {
+      await api.deleteProject(project.id);
+      await reload();
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete project');
     }
-    // Also check project contexts for manual github_url
-    for (const ctx of projectContexts) {
-      if (ctx.githubUrl && !map.has(ctx.name)) {
-        // Parse owner/repo from URL
-        const match = ctx.githubUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-        if (match) {
-          map.set(ctx.name, {
-            name: ctx.name,
-            fullName: `${match[1]}/${match[2]}`,
-            htmlUrl: ctx.githubUrl,
-          });
-        }
-      }
-    }
-    return map;
-  }, [githubProjects, projectContexts]);
+  };
 
-  // Derive projects from lightweight stats (no full task objects)
-  const projects = useMemo(() => {
-    const projectMap = new Map();
+  // Merge project rows with their stats and the agents whose tasks live on a project board
+  const enrichedProjects = useMemo(() => {
+    const statsById = new Map(projectStats.map(s => [s.id, s]));
+    return projects.map(p => {
+      const s = statsById.get(p.id) || {};
+      const stats = {
+        total: s.total || 0,
+        done: s.done || 0,
+        active: s.active || 0,
+        waiting: s.waiting || 0,
+        bugs: s.bugs || 0,
+        features: s.features || 0,
+        completion: s.completion || 0,
+      };
+      return {
+        ...p,
+        stats,
+        dailyActivity: buildDailyActivity(s.daily || [], 30),
+      };
+    });
+  }, [projects, projectStats]);
 
-    for (const ps of projectStats) {
-      projectMap.set(ps.name, {
-        name: ps.name,
-        agents: [],
-        stats: {
-          total: ps.total,
-          done: ps.done,
-          active: ps.active,
-          inProgress: ps.active,
-          waiting: ps.waiting,
-          pending: ps.waiting,
-          bugs: ps.bugs,
-          features: ps.features,
-          completion: ps.completion,
-        },
-        github: githubLookup.get(ps.name) || null,
-        dailyActivity: buildDailyActivity(ps.daily || [], 30),
-      });
-    }
-
-    for (const a of agents) {
-      if (!a.project || !projectMap.has(a.project)) continue;
-      projectMap.get(a.project).agents.push(a);
-    }
-
-    let result = Array.from(projectMap.values());
+  const filteredProjects = useMemo(() => {
+    let result = enrichedProjects;
     if (search) {
-      result = result.filter(p => p.name.toLowerCase().includes(search.toLowerCase()));
+      const q = search.toLowerCase();
+      result = result.filter(p => p.name.toLowerCase().includes(q));
     }
-    if (sortBy === 'name') result.sort((a, b) => a.name.localeCompare(b.name));
-    else if (sortBy === 'tasks') result.sort((a, b) => b.stats.total - a.stats.total);
-    else if (sortBy === 'completion') result.sort((a, b) => b.stats.completion - a.stats.completion);
+    if (sortBy === 'name') result = [...result].sort((a, b) => a.name.localeCompare(b.name));
+    else if (sortBy === 'tasks') result = [...result].sort((a, b) => b.stats.total - a.stats.total);
+    else if (sortBy === 'completion') result = [...result].sort((a, b) => b.stats.completion - a.stats.completion);
     return result;
-  }, [agents, projectStats, search, sortBy, githubLookup]);
-
-  const handleOpenGitHub = (e, htmlUrl) => {
-    e.stopPropagation();
-    window.open(htmlUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleOpenActivity = (e, github) => {
-    e.stopPropagation();
-    if (!github?.fullName) return;
-    const [owner, repo] = github.fullName.split('/');
-    setActivityTarget({ owner, repo });
-  };
+  }, [enrichedProjects, search, sortBy]);
 
   return (
     <div className="space-y-4">
@@ -288,7 +257,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
         <div className="flex items-center gap-2">
           <FolderGit2 size={20} className="text-purple-400" />
           <h2 className="text-lg font-semibold text-dark-100">Projects</h2>
-          <span className="text-xs text-dark-400 bg-dark-700 px-2 py-0.5 rounded-full">{projects.length}</span>
+          <span className="text-xs text-dark-400 bg-dark-700 px-2 py-0.5 rounded-full">{filteredProjects.length}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -307,7 +276,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
             className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
           >
             <option value="name">Sort: Name</option>
-            <option value="tasks">Sort: Workflows</option>
+            <option value="tasks">Sort: Tasks</option>
             <option value="completion">Sort: Completion</option>
           </select>
           <button
@@ -321,22 +290,12 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
       </div>
 
       {/* Project Detail Modal */}
-      {selectedProject && (
+      {selectedProjectId && (
         <ProjectDetailModal
-          project={projects.find(p => p.name === selectedProject)}
-          projectContext={projectContexts.find(c => c.name === selectedProject)}
-          githubInfo={githubLookup.get(selectedProject) || null}
-          onClose={() => setSelectedProject(null)}
-          onRefresh={onRefresh}
-        />
-      )}
-
-      {/* GitHub Activity Modal */}
-      {activityTarget && (
-        <GitHubActivityModal
-          owner={activityTarget.owner}
-          repo={activityTarget.repo}
-          onClose={() => setActivityTarget(null)}
+          projectId={selectedProjectId}
+          agents={agents}
+          onClose={() => setSelectedProjectId(null)}
+          onChange={reload}
         />
       )}
 
@@ -350,7 +309,7 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
                 <X size={18} />
               </button>
             </div>
-            <p className="text-xs text-dark-400">Creates a new GitHub repository from the BoilerPlate template and adds it to your projects.</p>
+            <p className="text-xs text-dark-400">A project groups one or more boards. Each board can later be linked to git repos and cloud storage.</p>
             <div className="space-y-3">
               <div>
                 <label className="block text-sm text-dark-300 mb-1">Project Name *</label>
@@ -358,40 +317,24 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
                   type="text"
                   value={newProject.name}
                   onChange={e => setNewProject(p => ({ ...p, name: e.target.value }))}
-                  placeholder="my-new-project"
+                  placeholder="My Project"
                   className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:border-purple-500 focus:outline-none"
                   disabled={creating}
                   autoFocus
                   onKeyDown={e => e.key === 'Enter' && handleCreateProject()}
                 />
-                <p className="text-xs text-dark-500 mt-1">Letters, numbers, hyphens, dots and underscores only.</p>
               </div>
               <div>
                 <label className="block text-sm text-dark-300 mb-1">Description</label>
-                <input
-                  type="text"
+                <textarea
                   value={newProject.description}
                   onChange={e => setNewProject(p => ({ ...p, description: e.target.value }))}
                   placeholder="A short description..."
-                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:border-purple-500 focus:outline-none"
+                  rows={3}
+                  className="w-full bg-dark-700 border border-dark-600 rounded px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:border-purple-500 focus:outline-none resize-y"
                   disabled={creating}
                 />
               </div>
-              <label className="flex items-center gap-2 text-sm text-dark-300 cursor-pointer">
-                <button
-                  type="button"
-                  onClick={() => setNewProject(p => ({ ...p, isPrivate: !p.isPrivate }))}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors ${
-                    newProject.isPrivate
-                      ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-                      : 'bg-dark-700 text-dark-400 border border-dark-600'
-                  }`}
-                  disabled={creating}
-                >
-                  {newProject.isPrivate ? <Lock size={12} /> : <Unlock size={12} />}
-                  {newProject.isPrivate ? 'Private' : 'Public'}
-                </button>
-              </label>
             </div>
             {createError && (
               <div className="bg-red-500/10 border border-red-500/30 rounded px-3 py-2 text-sm text-red-400">
@@ -420,92 +363,79 @@ export default function ProjectsView({ agents = [], githubProjects = [], project
       )}
 
       {/* Project Cards */}
-      {projects.length === 0 && (
+      {loading ? (
+        <div className="flex items-center justify-center py-12 text-dark-400">
+          <Loader2 size={20} className="animate-spin mr-2" />
+          Loading projects...
+        </div>
+      ) : filteredProjects.length === 0 ? (
         <div className="text-center py-12 text-dark-400">
           <FolderGit2 size={48} className="mx-auto mb-3 opacity-30" />
-          <p>No projects found</p>
-          <p className="text-xs mt-1">Projects are derived from agent assignments and task projects</p>
+          <p>No projects yet</p>
+          <p className="text-xs mt-1">Click "New Project" to create your first one.</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredProjects.map(p => (
+            <div
+              key={p.id}
+              className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-purple-500/50 transition-colors cursor-pointer"
+              onClick={() => setSelectedProjectId(p.id)}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-dark-100 truncate">{p.name}</h3>
+                <div className="flex items-center gap-1">
+                  <div className="p-1 rounded hover:bg-dark-600 text-dark-400" title="View details">
+                    <BarChart3 size={14} />
+                  </div>
+                  <button
+                    onClick={(e) => handleDeleteProject(e, p)}
+                    className="p-1 rounded hover:bg-red-600/20 text-dark-400 hover:text-red-400 transition-colors"
+                    title="Delete project"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {p.description && (
+                <p className="text-xs text-dark-400 mb-3 line-clamp-2">{p.description}</p>
+              )}
+
+              <div className="mb-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] text-dark-500 uppercase tracking-wider">Activity (30d)</span>
+                  <div className="flex items-center gap-3 text-[10px]">
+                    <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-sm bg-purple-500" /> Created</span>
+                    <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-sm bg-green-500" /> Done</span>
+                  </div>
+                </div>
+                <MiniActivityChart data={p.dailyActivity} height={40} />
+              </div>
+
+              <div className="flex items-center gap-3 text-xs text-dark-400 flex-wrap">
+                <span className="flex items-center gap-1" title="Boards"><KanbanIcon /> {p.boardCount || 0}</span>
+                <span className="flex items-center gap-1" title="Repos"><GitIcon /> {p.repoCount || 0}</span>
+                <span className="flex items-center gap-1" title="Storage"><CloudIcon /> {p.storageCount || 0}</span>
+                <span className="flex items-center gap-1"><ListTodo size={11} className="text-purple-400" />{p.stats.total}</span>
+                <span className="flex items-center gap-1"><Activity size={11} className="text-yellow-400" />{p.stats.active}</span>
+                <span className="flex items-center gap-1"><Clock size={11} className="text-green-400" />{p.stats.completion}%</span>
+              </div>
+            </div>
+          ))}
         </div>
       )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {projects.map(p => (
-          <div
-            key={p.name}
-            className="bg-dark-800 border border-dark-700 rounded-xl p-4 hover:border-purple-500/50 transition-colors cursor-pointer"
-            onClick={() => setSelectedProject(p.name)}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-dark-100 truncate">{p.name}</h3>
-              <div className="flex items-center gap-1">
-                {/* GitHub buttons — only if we have GitHub info */}
-                {p.github?.htmlUrl && (
-                  <>
-                    <button
-                      onClick={(e) => handleOpenGitHub(e, p.github.htmlUrl)}
-                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-dark-100 transition-colors"
-                      title="Open on GitHub"
-                    >
-                      <GithubIcon className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={(e) => handleOpenActivity(e, p.github)}
-                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-dark-100 transition-colors"
-                      title="View GitHub activity"
-                    >
-                      <GitCommit size={14} />
-                    </button>
-                  </>
-                )}
-                <div className="p-1 rounded hover:bg-dark-600 text-dark-400" title="View details">
-                  <BarChart3 size={14} />
-                </div>
-              </div>
-            </div>
-
-            {/* Activity chart (last 14 days) */}
-            <div className="mb-3">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[10px] text-dark-500 uppercase tracking-wider">Activity (30d)</span>
-                <div className="flex items-center gap-3 text-[10px]">
-                  <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-sm bg-purple-500" /> Created</span>
-                  <span className="flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-sm bg-green-500" /> Done</span>
-                </div>
-              </div>
-              <MiniActivityChart data={p.dailyActivity} height={40} />
-            </div>
-
-            <div className="flex items-center gap-3 text-xs text-dark-400">
-              <span className="flex items-center gap-1"><Users size={11} className="text-blue-400" />{p.agents.length}</span>
-              <span className="flex items-center gap-1"><ListTodo size={11} className="text-purple-400" />{p.stats.total}</span>
-              <span className="flex items-center gap-1"><Activity size={11} className="text-yellow-400" />{p.stats.active} active</span>
-              <span className="flex items-center gap-1"><Clock size={11} className="text-green-400" />{p.stats.completion}%</span>
-            </div>
-
-            {/* Agent avatars */}
-            {p.agents.length > 0 && (
-              <div className="flex items-center gap-1 mt-3 pt-3 border-t border-dark-700">
-                {p.agents.slice(0, 5).map(a => (
-                  <div
-                    key={a.id || a.name}
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                      a.status === 'busy' ? 'bg-yellow-500/20 text-yellow-400' :
-                      a.status === 'idle' ? 'bg-green-500/20 text-green-400' :
-                      'bg-dark-600 text-dark-400'
-                    }`}
-                    title={`${a.name} (${a.status})`}
-                  >
-                    {(a.name || '?')[0]}
-                  </div>
-                ))}
-                {p.agents.length > 5 && (
-                  <span className="text-xs text-dark-400">+{p.agents.length - 5}</span>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
     </div>
   );
+}
+
+// Tiny inline icons (avoid extra imports)
+function KanbanIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2"><rect x="3" y="3" width="6" height="18" rx="1"/><rect x="11" y="3" width="6" height="11" rx="1"/><rect x="19" y="3" width="2" height="7" rx="1"/></svg>;
+}
+function GitIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#34d399" strokeWidth="2"><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M6 8v8a4 4 0 0 0 4 4h0"/><path d="M18 8v2a4 4 0 0 1-4 4h-2"/></svg>;
+}
+function CloudIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" strokeWidth="2"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.7 1.5A4 4 0 0 0 6 19h11.5z"/></svg>;
 }

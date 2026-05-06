@@ -104,17 +104,6 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS context_tokens INTEGER DEFAULT 0`).catch(() => {});
       console.log('✅ Token usage table ready');
 
-      // ── Project Contexts table ────────────────────────────────────────────
-      await pool.query(`
-        CREATE TABLE IF NOT EXISTS project_contexts (
-          name TEXT PRIMARY KEY,
-          data JSONB NOT NULL,
-          created_at TIMESTAMPTZ DEFAULT NOW(),
-          updated_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `);
-      console.log('✅ Project contexts table ready');
-
       // ── Settings table ────────────────────────────────────────────────────
       await pool.query(`
         CREATE TABLE IF NOT EXISTS settings (
@@ -317,6 +306,56 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS plugins JSONB NOT NULL DEFAULT \'[]\'').catch(() => {});
       await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS mcp_auth JSONB NOT NULL DEFAULT \'{}\'').catch(() => {});
       console.log('✅ Board plugins columns ready');
+
+      // ── Projects table (DB-managed projects, M:1 boards → projects) ───────
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS projects (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name TEXT UNIQUE NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          rules TEXT NOT NULL DEFAULT '',
+          owner_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL').catch(() => {});
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_boards_project ON boards(project_id)').catch(() => {});
+      console.log('✅ Projects table ready');
+
+      // ── Board git repos table ─────────────────────────────────────────────
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS board_repos (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          board_id UUID NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          full_name TEXT NOT NULL,
+          html_url TEXT,
+          default_branch TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(board_id, provider, full_name)
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_board_repos_board ON board_repos(board_id)').catch(() => {});
+      console.log('✅ Board repos table ready');
+
+      // ── Board cloud-storage links table ───────────────────────────────────
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS board_storages (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          board_id UUID NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          provider TEXT NOT NULL,
+          display_name TEXT NOT NULL DEFAULT '',
+          path TEXT,
+          root_id TEXT,
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_board_storages_board ON board_storages(board_id)').catch(() => {});
+      console.log('✅ Board storages table ready');
+
+      // Drop legacy project_contexts table — replaced by projects + board_repos
+      await pool.query('DROP TABLE IF EXISTS project_contexts').catch(() => {});
 
       // ── Finalize ──────────────────────────────────────────────────────────
       setPool(pool);

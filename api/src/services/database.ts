@@ -7,7 +7,19 @@ export { getAllAgents, saveAgent, deleteAgentFromDb, setAgentOwner, getAgentsByO
 export { getAllSkills, saveSkill, deleteSkillFromDb } from './database/skills.js';
 export { getAllAgentSkills, searchAgentSkills, getAgentSkillById, saveAgentSkill, deleteAgentSkillFromDb } from './database/agentSkills.js';
 export { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database/mcpServers.js';
-export { getAllProjectContexts, saveProjectContext, deleteProjectContextFromDb } from './database/projectContexts.js';
+export {
+  getAllProjects, getProjectById, getProjectByName, createProject, updateProject, deleteProject,
+  getBoardsForProject, setBoardProject,
+} from './database/projects.js';
+export type { Project } from './database/projects.js';
+export {
+  getReposForBoard, getReposForProject, createBoardRepo, deleteBoardRepo,
+} from './database/boardRepos.js';
+export type { BoardRepo } from './database/boardRepos.js';
+export {
+  getStoragesForBoard, getStoragesForProject, createBoardStorage, deleteBoardStorage,
+} from './database/boardStorages.js';
+export type { BoardStorage } from './database/boardStorages.js';
 export { getSetting, getSettingAsync, setSetting, loadSettingsCache } from './database/settings.js';
 export {
   recordTokenUsage, getTokenUsageSummary, getTokenUsageSummaryAsync,

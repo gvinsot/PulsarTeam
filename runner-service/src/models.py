@@ -50,6 +50,23 @@ class ShellExecRequest(BaseModel):
 class EnsureProjectRequest(BaseModel):
     project: str
     git_url: str
+    git_credentials: Optional["GitCredentials"] = None
+
+
+class GitCredentials(BaseModel):
+    """Per-agent git authentication forwarded by the API when an agent (or its
+    parent board) has a connected git plugin (currently GitHub OAuth).
+
+    The runner installs these credentials in the agent's HOME using the
+    `store` credential helper so that subsequent `git` invocations from the
+    LLM agent (clone, fetch, push, gh CLI, ...) authenticate transparently.
+    """
+    provider: str = "github"  # 'github' for now
+    token: str
+    username: Optional[str] = None  # GitHub login — used as the credential username
+
+
+EnsureProjectRequest.model_rebuild()
 
 
 class AgentAuthCallback(BaseModel):

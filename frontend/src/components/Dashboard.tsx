@@ -22,9 +22,9 @@ const BudgetDashboard = lazy(() => import('./BudgetDashboard'));
 const AdminPanel = lazy(() => import('./AdminPanel'));
 
 export default function Dashboard({
-  user, agents, templates, projects, skills, mcpServers, projectContexts, thinkingMap, streamBuffers,
+  user, agents, templates, projects, skills, mcpServers, thinkingMap, streamBuffers,
   onLogout, onRefresh, socket, showToast, onImpersonate, onStopImpersonation,
-  loadTemplates, loadProjects, loadSkills, loadMcpServers, loadProjectContexts,
+  loadTemplates, loadProjects, loadSkills, loadMcpServers,
   onAgentCreated
 }) {
   const [selectedAgent, setSelectedAgent] = useState(null);
@@ -66,15 +66,13 @@ export default function Dashboard({
   useEffect(() => {
     if (activeView === 'tasks') {
       loadProjects();
-      loadProjectContexts();
     } else if (activeView === 'projects') {
       loadProjects();
-      loadProjectContexts();
     } else if (activeView === 'agents') {
       loadProjects();
       loadSkills();
     }
-  }, [activeView, loadProjects, loadProjectContexts, loadSkills]);
+  }, [activeView, loadProjects, loadSkills]);
 
   useEffect(() => {
     const onHashChange = () => {
@@ -335,7 +333,7 @@ export default function Dashboard({
           {activeView === 'tasks' && (
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                <TasksBoard agents={sortedAgents} onRefresh={onRefresh} user={user} onNavigateToAgent={handleNavigateToAgent} githubProjects={projects || []} projectContexts={projectContexts || []} onBoardChange={setBoardFilter} />
+                <TasksBoard agents={sortedAgents} onRefresh={onRefresh} user={user} onNavigateToAgent={handleNavigateToAgent} onBoardChange={setBoardFilter} />
               </div>
             </Suspense>
           )}
@@ -344,8 +342,6 @@ export default function Dashboard({
               <div className="flex-1 min-h-0 flex flex-col overflow-auto p-4 sm:p-6">
                 <ProjectsView
                   agents={sortedAgents}
-                  githubProjects={projects || []}
-                  projectContexts={projectContexts || []}
                   onRefresh={onRefresh}
                 />
               </div>

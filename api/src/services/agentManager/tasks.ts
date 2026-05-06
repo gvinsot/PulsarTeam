@@ -845,7 +845,9 @@ export const tasksMethods = {
           try {
             const gitUrl = await getProjectGitUrl(task.project);
             if (gitUrl) {
-              await this.executionManager.switchProject(executorId, task.project, gitUrl);
+              const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
+              const gitCreds = await getGitHubCredentialsForAgent(executorId, executor.boardId || null);
+              await this.executionManager.switchProject(executorId, task.project, gitUrl, gitCreds);
             }
             // Verify execution environment matches
             const envProject = this.executionManager.getProject(executorId);

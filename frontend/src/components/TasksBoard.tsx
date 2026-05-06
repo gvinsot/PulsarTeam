@@ -21,7 +21,7 @@ import BoardPluginsTab from './tasks/BoardPluginsTab';
 
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
-export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, githubProjects = [], projectContexts = [], onBoardChange }) {
+export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, onBoardChange }) {
   const [projectFilter, setProjectFilter] = useState(() => localStorage.getItem('tasks_projectFilter') || '');
   const [agentFilter, setAgentFilter] = useState(() => localStorage.getItem('tasks_agentFilter') || '');
   const [search, setSearch] = useState(() => localStorage.getItem('tasks_search') || '');
@@ -268,32 +268,21 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     return Array.from(ps).sort();
   }, [allTasks]);
 
-  // GitHub lookup: map project name → { fullName, owner, repo }
-  const githubLookup = useMemo(() => {
-    const map = new Map();
-    for (const gp of githubProjects) {
-      if (gp.fullName) {
-        const [owner, repo] = gp.fullName.split('/');
-        map.set(gp.name, { fullName: gp.fullName, owner, repo });
-      }
-    }
-    for (const ctx of projectContexts) {
-      if (ctx.githubUrl && !map.has(ctx.name)) {
-        const match = ctx.githubUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-        if (match) {
-          map.set(ctx.name, { fullName: `${match[1]}/${match[2]}`, owner: match[1], repo: match[2] });
-        }
-      }
-    }
-    return map;
-  }, [githubProjects, projectContexts]);
+  // Repos linked to the active board (via board_repos)
+  const [boardRepos, setBoardRepos] = useState([]);
+  useEffect(() => {
+    if (!activeBoardId) { setBoardRepos([]); return; }
+    api.getBoardRepos(activeBoardId).then(setBoardRepos).catch(() => setBoardRepos([]));
+  }, [activeBoardId]);
 
-  // Projects on this board that have GitHub data
   const boardProjectsWithGithub = useMemo(() => {
-    return allProjects
-      .map(name => ({ name, github: githubLookup.get(name) }))
-      .filter(p => p.github);
-  }, [allProjects, githubLookup]);
+    return boardRepos
+      .filter(r => r.provider === 'github' && r.full_name)
+      .map(r => {
+        const [owner, repo] = r.full_name.split('/');
+        return { name: r.full_name, github: { fullName: r.full_name, owner, repo } };
+      });
+  }, [boardRepos]);
 
   // Default project = project of the last task created by the user on this board
   const defaultProject = useMemo(() => {

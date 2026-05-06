@@ -7,7 +7,7 @@
 // (typically inspecting agent.runner or llmConfig.managesContext).
 
 import { RunnerExecutionProvider } from './runnerExecutionProvider.js';
-import { ExecutionProvider } from './executionProvider.js';
+import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
 
 // Canonical provider types. 'coder' is accepted as a deprecated alias for
@@ -36,6 +36,7 @@ interface ExecutionManagerOptions {
 
 interface BindAgentMeta {
   ownerId?: string;
+  gitCredentials?: GitCredentials | null;
 }
 
 const DEFAULT_URLS: Record<ProviderType, string> = {
@@ -125,6 +126,9 @@ export class ExecutionManager {
     if (meta.ownerId) {
       this._getProvider(normalized).setOwner(agentId, meta.ownerId);
     }
+    if (meta.gitCredentials !== undefined) {
+      this._getProvider(normalized).setGitCredentials(agentId, meta.gitCredentials);
+    }
   }
 
   getProviderType(agentId: string): ProviderType | undefined {
@@ -133,12 +137,31 @@ export class ExecutionManager {
 
   // ── ExecutionProvider interface (delegated) ───────────────────────────
 
-  async ensureProject(agentId: string, project: string | null = null, gitUrl: string | null = null): Promise<void> {
-    return this._providerFor(agentId).ensureProject(agentId, project, gitUrl);
+  /**
+   * Update (or clear) the GitHub/git credentials associated with an agent.
+   * Forwarded to the runner-service on the next ensureProject/switchProject
+   * call so the agent container can clone/push via authenticated HTTPS.
+   */
+  setGitCredentials(agentId: string, creds: GitCredentials | null): void {
+    this._providerFor(agentId).setGitCredentials(agentId, creds);
   }
 
-  async switchProject(agentId: string, newProject: string, gitUrl: string | null = null): Promise<void> {
-    return this._providerFor(agentId).switchProject(agentId, newProject, gitUrl);
+  async ensureProject(
+    agentId: string,
+    project: string | null = null,
+    gitUrl: string | null = null,
+    gitCredentials: GitCredentials | null = null,
+  ): Promise<void> {
+    return this._providerFor(agentId).ensureProject(agentId, project, gitUrl, gitCredentials);
+  }
+
+  async switchProject(
+    agentId: string,
+    newProject: string,
+    gitUrl: string | null = null,
+    gitCredentials: GitCredentials | null = null,
+  ): Promise<void> {
+    return this._providerFor(agentId).switchProject(agentId, newProject, gitUrl, gitCredentials);
   }
 
   async destroySandbox(agentId: string): Promise<void> {

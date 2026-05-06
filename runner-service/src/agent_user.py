@@ -156,10 +156,150 @@ def _chown_recursive(path: str, uid: int, gid: int):
         logger.warning(f"[Agent User] chown {path} -> uid={uid} failed: {e}")
 
 
-async def ensure_agent_project(agent_id: str, project: str, git_url: str) -> str:
+_SSH_GIT_RE = re.compile(r"^(?:ssh://)?(?:git@)?([^:/]+)[:/](.+?)(?:\.git)?/?$")
+
+
+def _ssh_to_https(git_url: str) -> Optional[str]:
+    """Convert an SSH-style git URL (git@github.com:owner/repo.git) to HTTPS.
+
+    Returns None if the URL is already HTTPS or cannot be parsed.
+    """
+    if git_url.startswith(("http://", "https://")):
+        return git_url
+    m = _SSH_GIT_RE.match(git_url.strip())
+    if not m:
+        return None
+    host, path = m.group(1), m.group(2)
+    return f"https://{host}/{path}.git"
+
+
+def _authenticated_https_url(git_url: str, creds: dict) -> Optional[str]:
+    """Embed the OAuth token in the HTTPS clone URL so the initial clone
+    succeeds even before the credential helper is wired up."""
+    https_url = _ssh_to_https(git_url) if not git_url.startswith(("http://", "https://")) else git_url
+    if not https_url:
+        return None
+    token = creds.get("token")
+    if not token:
+        return None
+    user = creds.get("username") or "x-access-token"
+    # GitHub accepts either the OAuth token in place of the password (with any
+    # username) or the special user "x-access-token". Use the login when known
+    # to keep credential helpers happy on subsequent push/pull invocations.
+    from urllib.parse import quote
+    safe_user = quote(user, safe="")
+    safe_token = quote(token, safe="")
+    # Strip any existing credentials prefix
+    bare = https_url.split("://", 1)[1]
+    if "@" in bare.split("/", 1)[0]:
+        bare = bare.split("@", 1)[1]
+    return f"https://{safe_user}:{safe_token}@{bare}"
+
+
+def _credential_host(git_url: str) -> Optional[str]:
+    """Extract the host (e.g. 'github.com') from a git URL for the credential
+    helper entry."""
+    if git_url.startswith(("http://", "https://")):
+        try:
+            return git_url.split("://", 1)[1].split("/", 1)[0].split("@")[-1]
+        except IndexError:
+            return None
+    m = _SSH_GIT_RE.match(git_url.strip())
+    return m.group(1) if m else None
+
+
+def _install_git_credentials(home_dir: str, agent_uid: int, agent_gid: int,
+                             git_url: str, creds: dict) -> None:
+    """Persist git credentials in the agent's HOME so that any subsequent
+    `git` invocation (push, pull, fetch, gh CLI, ...) authenticates without
+    re-prompting.
+
+    Writes:
+      ~/.git-credentials   (chmod 0600, owned by the agent UID)
+      ~/.gitconfig         (adds [credential] helper = store)
+    """
+    host = _credential_host(git_url)
+    if not host:
+        return
+
+    token = creds.get("token")
+    if not token:
+        return
+    user = creds.get("username") or "x-access-token"
+
+    from urllib.parse import quote
+    line = f"https://{quote(user, safe='')}:{quote(token, safe='')}@{host}\n"
+
+    cred_path = os.path.join(home_dir, ".git-credentials")
+    try:
+        existing = ""
+        if os.path.exists(cred_path):
+            with open(cred_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        # Replace any prior entry for the same host
+        kept = "\n".join(
+            l for l in existing.splitlines()
+            if l.strip() and not l.rstrip("/").endswith(f"@{host}")
+        )
+        body = (kept + "\n" if kept else "") + line
+        with open(cred_path, "w", encoding="utf-8") as f:
+            f.write(body)
+        os.chmod(cred_path, 0o600)
+        try:
+            os.chown(cred_path, agent_uid, agent_gid)
+        except (PermissionError, OSError):
+            pass
+    except OSError as e:
+        logger.warning(f"[Project] Failed to write {cred_path}: {e}")
+        return
+
+    # Wire up credential.helper=store + force HTTPS for this host so that
+    # SSH-style remotes added by the agent still authenticate via the token.
+    gitconfig = os.path.join(home_dir, ".gitconfig")
+    try:
+        for cfg_args in (
+            ["credential.helper", "store"],
+            [f"url.https://{host}/.insteadOf", f"git@{host}:"],
+            [f"url.https://{host}/.insteadOf", f"ssh://git@{host}/"],
+        ):
+            # `git config -f <file>` doesn't need a working tree.
+            p = await_blocking_call(
+                ["git", "config", "-f", gitconfig, "--replace-all", *cfg_args]
+            )
+            if p != 0:
+                logger.warning(f"[Project] git config {cfg_args} returned {p}")
+        try:
+            os.chown(gitconfig, agent_uid, agent_gid)
+            os.chmod(gitconfig, 0o600)
+        except (PermissionError, OSError):
+            pass
+    except OSError as e:
+        logger.warning(f"[Project] Failed to update {gitconfig}: {e}")
+
+
+def await_blocking_call(cmd: list) -> int:
+    """Tiny synchronous helper for short-lived `git config` invocations."""
+    import subprocess
+    try:
+        return subprocess.call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return -1
+
+
+async def ensure_agent_project(
+    agent_id: str,
+    project: str,
+    git_url: str,
+    git_credentials: Optional[dict] = None,
+) -> str:
     """Clone or update a project repo for a specific agent.
 
     Each agent gets its own clone at DATA_DIR/agents/<username>/projects/<project>.
+
+    When `git_credentials` is provided (typically resolved by the API from the
+    GitHub plugin connected to the agent or its board), the token is installed
+    in the agent's HOME via `~/.git-credentials` + credential.helper=store so
+    `git push/pull` from the LLM agent works against the connected repo.
     """
     username = _sanitize_agent_id(agent_id)
     agent_data_dir = os.path.join(DATA_DIR, "agents", username)
@@ -168,6 +308,17 @@ async def ensure_agent_project(agent_id: str, project: str, git_url: str) -> str
     cached_user = _agent_users.get(agent_id) or {}
     agent_uid = cached_user.get("uid", os.getuid())
     agent_gid = cached_user.get("gid", os.getgid())
+    home_dir = cached_user.get("home", agent_data_dir)
+
+    # Install plugin credentials before any git operation so updates and clones
+    # both benefit from them.
+    if git_credentials and git_credentials.get("token"):
+        try:
+            os.makedirs(home_dir, exist_ok=True)
+            _install_git_credentials(home_dir, agent_uid, agent_gid, git_url, git_credentials)
+            logger.info(f"[Project] Installed git credentials for agent {agent_id[:12]} (host={_credential_host(git_url)})")
+        except Exception as e:
+            logger.warning(f"[Project] Failed to install git credentials for agent {agent_id[:12]}: {e}")
 
     cached = _agent_projects.get(agent_id)
     if cached and cached["project"] == project and os.path.isdir(os.path.join(project_dir, ".git")):
@@ -197,10 +348,18 @@ async def ensure_agent_project(agent_id: str, project: str, git_url: str) -> str
         shutil.rmtree(project_dir, ignore_errors=True)
 
     ssh_cmd = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-    env = {**os.environ, "GIT_SSH_COMMAND": ssh_cmd}
+    env = {**os.environ, "GIT_SSH_COMMAND": ssh_cmd, "GIT_TERMINAL_PROMPT": "0"}
+
+    # Prefer authenticated HTTPS when we have a token \u2014 avoids depending on
+    # SSH keys being mounted in the runner container.
+    clone_url = git_url
+    if git_credentials and git_credentials.get("token"):
+        auth_url = _authenticated_https_url(git_url, git_credentials)
+        if auth_url:
+            clone_url = auth_url
 
     proc = await asyncio.create_subprocess_exec(
-        "git", "clone", git_url, project_dir,
+        "git", "clone", clone_url, project_dir,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
@@ -208,7 +367,22 @@ async def ensure_agent_project(agent_id: str, project: str, git_url: str) -> str
     stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
     if proc.returncode != 0:
         err_msg = stderr.decode("utf-8", errors="replace").strip()
+        # Never echo the token back to the API/log.
+        if git_credentials and git_credentials.get("token"):
+            err_msg = err_msg.replace(git_credentials["token"], "***")
         raise RuntimeError(f"git clone failed: {err_msg}")
+
+    # Reset the remote URL so the embedded token (if any) doesn't end up in
+    # `.git/config`. The credential helper installed above takes over.
+    if clone_url != git_url:
+        public_url = _ssh_to_https(git_url) or git_url
+        p = await asyncio.create_subprocess_exec(
+            "git", "remote", "set-url", "origin", public_url,
+            cwd=project_dir,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await p.wait()
 
     git_name = os.getenv("GIT_USER_NAME", "PulsarTeam")
     git_email = os.getenv("GIT_USER_EMAIL", "agent@pulsarteam.local")

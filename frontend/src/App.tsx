@@ -19,7 +19,6 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [skills, setSkills] = useState([]);
   const [mcpServers, setMcpServers] = useState([]);
-  const [projectContexts, setProjectContexts] = useState([]);
   const [thinkingMap, setThinkingMap] = useState({});
   const [streamBuffers, setStreamBuffers] = useState({});
   const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
@@ -41,7 +40,7 @@ export default function App() {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  const loadedRef = useRef({ templates: false, projects: false, skills: false, mcpServers: false, projectContexts: false });
+  const loadedRef = useRef({ templates: false, projects: false, skills: false, mcpServers: false });
 
   const loadData = useCallback(async () => {
     try {
@@ -99,19 +98,8 @@ export default function App() {
     }
   }, []);
 
-  const loadProjectContexts = useCallback(async (force = false) => {
-    if (loadedRef.current.projectContexts && !force) return;
-    loadedRef.current.projectContexts = true;
-    try {
-      setProjectContexts(await api.getProjectContexts());
-    } catch (err) {
-      setProjectContexts([]);
-      loadedRef.current.projectContexts = false;
-    }
-  }, []);
-
   const refreshAll = useCallback(async () => {
-    loadedRef.current = { templates: false, projects: false, skills: false, mcpServers: false, projectContexts: false };
+    loadedRef.current = { templates: false, projects: false, skills: false, mcpServers: false };
     await loadData();
   }, [loadData]);
 
@@ -466,7 +454,6 @@ export default function App() {
         projects={projects}
         skills={skills}
         mcpServers={mcpServers}
-        projectContexts={projectContexts}
         thinkingMap={thinkingMap}
         streamBuffers={streamBuffers}
         onLogout={handleLogout}
@@ -479,7 +466,6 @@ export default function App() {
         loadProjects={loadProjects}
         loadSkills={loadSkills}
         loadMcpServers={loadMcpServers}
-        loadProjectContexts={loadProjectContexts}
         onAgentCreated={(agent) => setAgents(prev =>
           prev.some(a => a.id === agent.id) ? prev : [...prev, agent]
         )}

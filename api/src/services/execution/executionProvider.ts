@@ -5,6 +5,21 @@
 // uniform API regardless of the underlying execution engine.
 
 /**
+ * Per-agent git authentication, resolved from a connected plugin
+ * (GitHub OAuth on the agent / board / user). The runner-service installs
+ * these credentials in the agent's HOME so subsequent `git` invocations from
+ * the LLM agent (clone, fetch, push, gh CLI, ...) authenticate transparently.
+ */
+export interface GitCredentials {
+  /** 'github' for now — gitlab/bitbucket can be wired in later. */
+  provider: 'github';
+  /** OAuth access token (or PAT). */
+  token: string;
+  /** GitHub login used as the username in the credential helper (optional). */
+  username?: string | null;
+}
+
+/**
  * @abstract
  * Base class that defines the contract every execution provider must fulfill.
  * Consumers (agentTools, agentManager) call these methods without knowing
@@ -20,19 +35,28 @@ export class ExecutionProvider {
    * @param agentId
    * @param project — project name
    * @param gitUrl  — git clone URL
+   * @param gitCredentials — optional git auth (e.g. GitHub token from the
+   *        connected plugin) to inject into the runner so the agent can
+   *        clone / push via authenticated HTTPS.
    */
-  async ensureProject(agentId: string, project: string | null = null, gitUrl: string | null = null): Promise<void> {
+  async ensureProject(
+    agentId: string,
+    project: string | null = null,
+    gitUrl: string | null = null,
+    gitCredentials: GitCredentials | null = null,
+  ): Promise<void> {
     throw new Error('ensureProject() not implemented');
   }
 
   /**
    * Switch the agent to a different project, cleaning up the old one.
-   *
-   * @param agentId
-   * @param newProject
-   * @param gitUrl
    */
-  async switchProject(agentId: string, newProject: string, gitUrl: string | null = null): Promise<void> {
+  async switchProject(
+    agentId: string,
+    newProject: string,
+    gitUrl: string | null = null,
+    gitCredentials: GitCredentials | null = null,
+  ): Promise<void> {
     throw new Error('switchProject() not implemented');
   }
 

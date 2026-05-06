@@ -7,7 +7,7 @@
 // handled by the runner-service itself; this provider is a thin HTTP shim
 // over /exec-shell, /projects/ensure, /reset, ...
 
-import { ExecutionProvider } from './executionProvider.js';
+import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
 
 interface AgentEntry {
@@ -32,6 +32,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   _agents: Map<string, AgentEntry>;
   _fileTreeCache: Map<string, FileTreeCacheEntry>;
   ownerIds: Map<string, string>;
+  /** Git credentials per agent, forwarded to the runner on /projects/ensure. */
+  gitCredentials: Map<string, GitCredentials>;
 
   constructor(options: RunnerOptions = {}) {
     super();
@@ -40,6 +42,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this._agents = new Map();
     this._fileTreeCache = new Map();
     this.ownerIds = new Map();
+    this.gitCredentials = new Map();
   }
 
   /**
@@ -47,6 +50,20 @@ export class RunnerExecutionProvider extends ExecutionProvider {
    */
   setOwner(agentId: string, ownerId: string): void {
     if (ownerId) this.ownerIds.set(agentId, ownerId);
+  }
+
+  /**
+   * Associate (or clear) per-agent git credentials. Stored in-memory only —
+   * forwarded to the runner-service on the next ensureProject/switchProject
+   * call so the runner can install them in the agent's HOME.
+   */
+  setGitCredentials(agentId: string, creds: GitCredentials | null): void {
+    if (!agentId) return;
+    if (creds && creds.token) {
+      this.gitCredentials.set(agentId, creds);
+    } else {
+      this.gitCredentials.delete(agentId);
+    }
   }
 
   // ── ExecutionProvider interface ───────────────────────────────────────
@@ -106,6 +123,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this._agents.delete(agentId);
     this._fileTreeCache.delete(agentId);
     this.ownerIds.delete(agentId);
+    this.gitCredentials.delete(agentId);
     console.log(`🗑️  [Runner] Cleared state for agent ${agentId.slice(0, 8)}`);
   }
 
@@ -113,6 +131,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this._agents.clear();
     this._fileTreeCache.clear();
     this.ownerIds.clear();
+    this.gitCredentials.clear();
     console.log('🗑️  [Runner] Cleared all agent states');
   }
 

@@ -60,6 +60,42 @@ export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
   return resolveAccessToken('github', agentId, boardId);
 }
 
+/**
+ * Resolve GitHub credentials for an agent (agent → board → user fallback).
+ * Returns null if no GitHub plugin is connected for any of those scopes.
+ * Used to inject the access token into the runner container so the agent
+ * can perform `git clone/pull/push` via HTTPS against the connected repo.
+ */
+export async function getGitHubCredentialsForAgent(
+  agentId: string | null,
+  boardId: string | null = null,
+): Promise<{ token: string; login: string | null; provider: 'github' } | null> {
+  // Try agent then board scope first (cheap, in-memory)
+  const directScopes: Array<{ type: ScopeType; id: string }> = [];
+  if (agentId) directScopes.push({ type: 'agent', id: agentId });
+  if (boardId) directScopes.push({ type: 'board', id: boardId });
+
+  for (const scope of directScopes) {
+    const tok = getOAuthToken('github', scope.type, scope.id);
+    if (tok && tok.accessToken) {
+      return {
+        token: tok.accessToken,
+        login: (tok.meta && (tok.meta as any).login) || null,
+        provider: 'github',
+      };
+    }
+  }
+
+  // Fall back to user-level via the unified resolver (which scans user-scoped
+  // tokens). resolveAccessToken throws when nothing matches — swallow that.
+  try {
+    const token = await resolveAccessToken('github', agentId, boardId);
+    return { token, login: null, provider: 'github' };
+  } catch {
+    return null;
+  }
+}
+
 async function handleOAuthRedirect(req, res) {
   const error = req.query.error as string | undefined;
   if (error) {

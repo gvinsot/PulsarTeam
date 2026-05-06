@@ -488,22 +488,83 @@ export const api = {
       headers: getHeaders(),
     }).then(handleResponse),
 
-  // Projects (GitHub starred repos)
+  // Projects (DB-backed)
   getProjects: () =>
     fetch(`${API_BASE}/projects`, { headers: getHeaders() }).then(handleResponse),
 
-  createProject: (name, description, isPrivate) =>
+  getProject: (id) =>
+    fetch(`${API_BASE}/projects/${id}`, { headers: getHeaders() }).then(handleResponse),
+
+  createProject: (name, description = '', rules = '') =>
     fetch(`${API_BASE}/projects`, {
       method: 'POST',
       headers: getHeaders(),
-      body: JSON.stringify({ name, description, isPrivate })
+      body: JSON.stringify({ name, description, rules })
     }).then(handleResponse),
 
-  refreshProjects: () =>
-    fetch(`${API_BASE}/projects/refresh`, {
+  updateProject: (id, fields) =>
+    fetch(`${API_BASE}/projects/${id}`, {
+      method: 'PUT',
+      headers: getHeaders(),
+      body: JSON.stringify(fields)
+    }).then(handleResponse),
+
+  deleteProject: (id) =>
+    fetch(`${API_BASE}/projects/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // Project ↔ Board linking
+  attachBoardToProject: (projectId, boardId) =>
+    fetch(`${API_BASE}/projects/${projectId}/boards/${boardId}`, {
       method: 'POST',
       headers: getHeaders()
     }).then(handleResponse),
+
+  detachBoardFromProject: (projectId, boardId) =>
+    fetch(`${API_BASE}/projects/${projectId}/boards/${boardId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // Board repos
+  getBoardRepos: (boardId) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/repos`, { headers: getHeaders() }).then(handleResponse),
+
+  addBoardRepo: (boardId, repo) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/repos`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(repo)
+    }).then(handleResponse),
+
+  removeBoardRepo: (boardId, repoId) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/repos/${repoId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // Board storages (OneDrive / Google Drive)
+  getBoardStorages: (boardId) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/storages`, { headers: getHeaders() }).then(handleResponse),
+
+  addBoardStorage: (boardId, storage) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/storages`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify(storage)
+    }).then(handleResponse),
+
+  removeBoardStorage: (boardId, storageId) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/storages/${storageId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
+  // Available repos from configured git connections (for the picker)
+  getAvailableRepos: () =>
+    fetch(`${API_BASE}/projects/available-repos`, { headers: getHeaders() }).then(handleResponse),
 
   // Code Index — auto-index project by name
   indexProject: (projectName) =>
@@ -511,23 +572,6 @@ export const api = {
       method: 'POST',
       headers: getHeaders(),
       body: JSON.stringify({ projectName })
-    }).then(handleResponse),
-
-  // Project Contexts (description + rules per project)
-  getProjectContexts: () =>
-    fetch(`${API_BASE}/project-contexts`, { headers: getHeaders() }).then(handleResponse),
-
-  saveProjectContext: (name, description, rules, githubUrl) =>
-    fetch(`${API_BASE}/project-contexts/${encodeURIComponent(name)}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify({ description, rules, ...(githubUrl !== undefined && { githubUrl }) })
-    }).then(handleResponse),
-
-  deleteProjectContext: (name) =>
-    fetch(`${API_BASE}/project-contexts/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-      headers: getHeaders()
     }).then(handleResponse),
 
   // GitHub activity (commits + tags for a repo)

@@ -4,6 +4,7 @@ import { createProvider } from '../llmProviders.js';
 import { saveAgent, saveTaskToDb, getBoardById } from '../database.js';
 import { TOOL_DEFINITIONS } from '../agentTools.js';
 import { getProjectGitUrl } from '../githubProjects.js';
+import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
 import { AgentManager } from './index.js';
 
@@ -64,7 +65,8 @@ export const chatMethods = {
         try {
           const gitUrl = await getProjectGitUrl(agent.project);
           if (gitUrl) {
-            await this.executionManager.switchProject(id, agent.project, gitUrl);
+            const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
+            await this.executionManager.switchProject(id, agent.project, gitUrl, gitCreds);
           }
         } catch (syncErr: any) {
           console.error(`⚠️  [Chat] Failed to re-sync execution env for "${agent.name}": ${syncErr.message}`);
@@ -76,12 +78,13 @@ export const chatMethods = {
           // Bind agent to the correct execution provider based on runner field or LLM config
           const earlyLlm = this.resolveLlmConfig(agent);
           const providerType = agent.runner || (earlyLlm.managesContext ? 'claudecode' : 'sandbox');
-          this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null });
+          const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
+          this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds });
 
           const gitUrl = await getProjectGitUrl(agent.project);
           if (gitUrl) {
             // ensureProject handles project cloning across all runner backends
-            await this.executionManager.ensureProject(id, agent.project, gitUrl);
+            await this.executionManager.ensureProject(id, agent.project, gitUrl, gitCreds);
             if (!this.executionManager.getFileTree(id)) {
               // Only refresh if the background generation hasn't completed yet
               await this.executionManager.refreshFileTree(id);

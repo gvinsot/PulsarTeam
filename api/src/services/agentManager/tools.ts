@@ -226,12 +226,14 @@ export const toolsMethods = {
         // Bind agent to the correct execution provider based on LLM config
         const llmCfg = this.resolveLlmConfig(agent);
         const providerType = llmCfg.managesContext ? 'claudecode' : 'sandbox';
-        this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null });
+        const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
+        const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
+        this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds });
 
         if (agent.project) {
           const gitUrl = await getProjectGitUrl(agent.project);
           if (gitUrl) {
-            await this.executionManager.ensureProject(agentId, agent.project, gitUrl);
+            await this.executionManager.ensureProject(agentId, agent.project, gitUrl, gitCreds);
           } else {
             console.warn(`⚠️  [Execution] No git URL found for project "${agent.project}" — environment will NOT be initialized`);
           }

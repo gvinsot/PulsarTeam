@@ -1,89 +1,65 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
-  X, Users, ListTodo, Activity, Clock, CheckCircle, AlertCircle,
-  FolderGit2, Bug, Sparkles, BarChart3, FileText, Save, Loader2,
-  ExternalLink, GitCommit
+  X, Users, ListTodo, Activity, FolderGit2, BarChart3, FileText, Save, Loader2,
+  KanbanSquare, Plus, Trash2, GitBranch, Cloud, Link as LinkIcon, ExternalLink, GitCommit,
 } from 'lucide-react';
 import ProjectStats from './ProjectStats';
 import GitHubActivityModal from './GitHubActivityModal';
 import { api } from '../api';
 
-function GithubIcon({ className }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
-    </svg>
-  );
-}
-
 const TABS = [
   { id: 'overview',   label: 'Overview',    icon: FolderGit2 },
-  { id: 'tasks',      label: 'Workflows',   icon: ListTodo },
+  { id: 'boards',     label: 'Boards',      icon: KanbanSquare },
+  { id: 'repos',      label: 'Repos',       icon: GitBranch },
+  { id: 'storage',    label: 'Storage',     icon: Cloud },
   { id: 'context',    label: 'Context',     icon: FileText },
   { id: 'statistics', label: 'Statistics',  icon: BarChart3 },
 ];
 
-export default function ProjectDetailModal({ project, projectContext, githubInfo, onClose, onRefresh }) {
+export default function ProjectDetailModal({ projectId, agents = [], onClose, onChange }) {
+  const [project, setProject] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
 
-  // Close on Escape key
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.getProject(projectId);
+      setProject(data);
+    } catch (err) {
+      console.error('Failed to load project:', err);
+      setProject(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => { reload(); }, [reload]);
+
   useEffect(() => {
     const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
-  // Prevent body scroll while modal is open
   useEffect(() => {
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = ''; };
   }, []);
 
-  // Project context editing state
-  const [ctxDescription, setCtxDescription] = useState(projectContext?.description || '');
-  const [ctxRules, setCtxRules] = useState(projectContext?.rules || '');
-  const [ctxGithubUrl, setCtxGithubUrl] = useState(projectContext?.githubUrl || '');
-  const [ctxSaving, setCtxSaving] = useState(false);
-  const [ctxSaved, setCtxSaved] = useState(false);
-  const [showActivity, setShowActivity] = useState(false);
+  const projectAgents = useMemo(() => {
+    if (!project?.boards?.length) return [];
+    const boardIds = new Set(project.boards.map(b => b.id));
+    return agents.filter(a => boardIds.has(a.board_id || a.boardId));
+  }, [project, agents]);
 
-  useEffect(() => {
-    setCtxDescription(projectContext?.description || '');
-    setCtxRules(projectContext?.rules || '');
-    setCtxGithubUrl(projectContext?.githubUrl || '');
-  }, [projectContext]);
-
-  // Resolve GitHub URL: from starred repos or from project context
-  const resolvedGithubUrl = githubInfo?.htmlUrl || ctxGithubUrl || '';
-  const resolvedFullName = githubInfo?.fullName || (() => {
-    const m = resolvedGithubUrl.match(/github\.com\/([^/]+\/[^/]+)/);
-    return m ? m[1].replace(/\.git$/, '') : '';
-  })();
-
-  const handleSaveContext = async () => {
-    setCtxSaving(true);
-    setCtxSaved(false);
-    try {
-      await api.saveProjectContext(project.name, ctxDescription, ctxRules, ctxGithubUrl);
-      setCtxSaved(true);
-      if (onRefresh) onRefresh();
-      setTimeout(() => setCtxSaved(false), 2000);
-    } catch (err) {
-      console.error('Failed to save project context:', err);
-    } finally {
-      setCtxSaving(false);
-    }
+  const handleChanged = () => {
+    reload();
+    if (onChange) onChange();
   };
 
-  if (!project) return null;
-
-  const { name, agents, stats } = project;
-
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
         className="bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         style={{ width: '90vw', height: '90vh' }}
@@ -93,48 +69,14 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700 shrink-0">
           <div className="flex items-center gap-3">
             <FolderGit2 size={22} className="text-purple-400" />
-            <h2 className="text-xl font-bold text-dark-100">{name}</h2>
-            <span className="text-xs text-dark-400 bg-dark-700 px-2 py-0.5 rounded-full">
-              {stats.completion}% complete
-            </span>
+            <h2 className="text-xl font-bold text-dark-100">{project?.name || '...'}</h2>
           </div>
-          <div className="flex items-center gap-2">
-            {/* GitHub buttons */}
-            {resolvedGithubUrl && (
-              <>
-                <a
-                  href={resolvedGithubUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dark-300 hover:text-dark-100 bg-dark-800 hover:bg-dark-700 border border-dark-600 rounded-lg transition-colors"
-                  title="Open on GitHub"
-                >
-                  <GithubIcon className="w-4 h-4" />
-                  <span className="hidden sm:inline">GitHub</span>
-                  <ExternalLink size={12} />
-                </a>
-                {resolvedFullName && (
-                  <button
-                    onClick={() => setShowActivity(true)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-dark-300 hover:text-dark-100 bg-dark-800 hover:bg-dark-700 border border-dark-600 rounded-lg transition-colors"
-                    title="View GitHub activity"
-                  >
-                    <GitCommit size={14} />
-                    <span className="hidden sm:inline">Activity</span>
-                  </button>
-                )}
-              </>
-            )}
-            <button
-              onClick={onClose}
-              className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
-            >
-              <X size={18} />
-            </button>
-          </div>
+          <button onClick={onClose} className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
+            <X size={18} />
+          </button>
         </div>
 
-        {/* Tab Bar */}
+        {/* Tabs */}
         <div className="flex items-center gap-1 px-6 pt-3 pb-0 border-b border-dark-700 shrink-0">
           {TABS.map(tab => {
             const Icon = tab.icon;
@@ -151,196 +93,475 @@ export default function ProjectDetailModal({ project, projectContext, githubInfo
               >
                 <Icon size={15} />
                 {tab.label}
-                {tab.id === 'tasks' && stats.total > 0 && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-                    isActive ? 'bg-purple-500/20 text-purple-400' : 'bg-dark-700 text-dark-500'
-                  }`}>
-                    {stats.total}
-                  </span>
-                )}
               </button>
             );
           })}
         </div>
 
-        {/* Tab Content -- scrollable */}
+        {/* Content */}
         <div className="flex-1 overflow-y-auto p-6">
-          {activeTab === 'overview' && (
-            <OverviewTab agents={agents} stats={stats} />
-          )}
-          {activeTab === 'tasks' && (
-            <TasksTab projectName={name} />
-          )}
-          {activeTab === 'context' && (
-            <ContextTab
-              projectContext={projectContext}
-              githubInfo={githubInfo}
-              ctxDescription={ctxDescription}
-              setCtxDescription={setCtxDescription}
-              ctxRules={ctxRules}
-              setCtxRules={setCtxRules}
-              ctxGithubUrl={ctxGithubUrl}
-              setCtxGithubUrl={setCtxGithubUrl}
-              ctxSaving={ctxSaving}
-              ctxSaved={ctxSaved}
-              onSave={handleSaveContext}
-            />
-          )}
-          {activeTab === 'statistics' && (
-            <StatisticsTab projectName={name} />
+          {loading || !project ? (
+            <div className="flex items-center justify-center py-12 text-dark-400">
+              <Loader2 size={20} className="animate-spin mr-2" />
+              Loading...
+            </div>
+          ) : (
+            <>
+              {activeTab === 'overview' && <OverviewTab project={project} agents={projectAgents} />}
+              {activeTab === 'boards' && <BoardsTab project={project} onChanged={handleChanged} />}
+              {activeTab === 'repos' && <ReposTab project={project} onChanged={handleChanged} />}
+              {activeTab === 'storage' && <StoragesTab project={project} onChanged={handleChanged} />}
+              {activeTab === 'context' && <ContextTab project={project} onSaved={handleChanged} />}
+              {activeTab === 'statistics' && <StatisticsTab project={project} />}
+            </>
           )}
         </div>
       </div>
-
-      {/* GitHub Activity sub-modal */}
-      {showActivity && resolvedFullName && (
-        <GitHubActivityModal
-          owner={resolvedFullName.split('/')[0]}
-          repo={resolvedFullName.split('/')[1]}
-          onClose={() => setShowActivity(false)}
-        />
-      )}
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Tab: Overview
-   ═══════════════════════════════════════════════════════════════════════════ */
-function OverviewTab({ agents, stats }) {
+/* ── Overview ─────────────────────────────────────────────────────────────── */
+function OverviewTab({ project, agents }) {
+  const boards = project.boards || [];
+  const repos = project.repos || [];
+  const storages = project.storages || [];
+
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <SummaryCard icon={<Users size={16} />} label="Agents" value={agents.length} color="text-blue-400" />
-        <SummaryCard icon={<ListTodo size={16} />} label="Total Workflows" value={stats.total} color="text-purple-400" />
-        <SummaryCard icon={<Activity size={16} />} label="In Progress" value={stats.inProgress} color="text-yellow-400" />
-        <SummaryCard icon={<Clock size={16} />} label="Pending" value={stats.pending} color="text-orange-400" />
-        <SummaryCard icon={<Bug size={16} />} label="Bugs" value={stats.bugs} color="text-red-400" />
-        <SummaryCard icon={<Sparkles size={16} />} label="Features" value={stats.features} color="text-emerald-400" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <SummaryCard icon={<KanbanSquare size={16} />} label="Boards" value={boards.length} color="text-blue-400" />
+        <SummaryCard icon={<GitBranch size={16} />} label="Repos" value={repos.length} color="text-green-400" />
+        <SummaryCard icon={<Cloud size={16} />} label="Storage" value={storages.length} color="text-amber-400" />
+        <SummaryCard icon={<Users size={16} />} label="Agents" value={agents.length} color="text-purple-400" />
       </div>
 
-      {/* Progress bar */}
-      <div>
-        <div className="flex items-center justify-between text-xs text-dark-300 mb-1.5">
-          <span>Progress</span>
-          <span>{stats.done} / {stats.total} tasks done</span>
-        </div>
-        <div className="w-full bg-dark-700 rounded-full h-2.5">
-          <div
-            className="bg-green-500 h-2.5 rounded-full transition-all"
-            style={{ width: `${stats.completion}%` }}
-          />
-        </div>
-      </div>
+      {project.description && (
+        <Section title="Description" icon={<FileText size={16} className="text-dark-400" />}>
+          <p className="text-sm text-dark-200 whitespace-pre-wrap">{project.description}</p>
+        </Section>
+      )}
 
-      {/* Agents Section */}
-      <Section title="Assigned Agents" icon={<Users size={16} className="text-blue-400" />}>
-        {agents.length === 0 ? (
-          <p className="text-dark-500 text-sm">No agents assigned to this project</p>
+      <Section title="Boards" icon={<KanbanSquare size={16} className="text-blue-400" />}>
+        {boards.length === 0 ? (
+          <p className="text-dark-500 text-sm">No boards linked yet. Add one from the Boards tab.</p>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {agents.map(a => (
-              <div
-                key={a.id || a.name}
-                className="flex items-center gap-3 p-3 bg-dark-800 border border-dark-700 rounded-lg"
-              >
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                    a.status === 'busy' ? 'bg-yellow-500/20 text-yellow-400' :
-                    a.status === 'idle' ? 'bg-green-500/20 text-green-400' :
-                    a.status === 'error' ? 'bg-red-500/20 text-red-400' :
-                    'bg-dark-600 text-dark-400'
-                  }`}
-                >
-                  {(a.name || '?')[0]}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-dark-100 truncate">{a.name}</p>
-                  <p className="text-xs text-dark-400">{a.role || 'worker'} &middot; {a.status}</p>
-                </div>
-                <StatusDot status={a.status} />
-              </div>
+          <ul className="space-y-1.5">
+            {boards.map(b => (
+              <li key={b.id} className="flex items-center gap-2 text-sm text-dark-200 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2">
+                <KanbanSquare size={14} className="text-blue-400 shrink-0" />
+                <span className="truncate">{b.name}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </Section>
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Tab: Tasks
-   ═══════════════════════════════════════════════════════════════════════════ */
-function TasksTab({ projectName }) {
-  const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(true);
+/* ── Boards (link/unlink) ─────────────────────────────────────────────────── */
+function BoardsTab({ project, onChanged }) {
+  const [allBoards, setAllBoards] = useState([]);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    setLoading(true);
-    api.getAllTasks({ project: projectName })
-      .then(data => setTasks(data || []))
-      .catch(() => setTasks([]))
-      .finally(() => setLoading(false));
-  }, [projectName]);
+    api.getBoards().then(setAllBoards).catch(() => setAllBoards([]));
+  }, []);
 
-  const INACTIVE_SET = new Set(['done', 'error', 'backlog']);
-  const tasksByStatus = useMemo(() => ({
-    active: tasks.filter(t => !INACTIVE_SET.has(t.status || 'backlog')),
-    backlog: tasks.filter(t => t.status === 'backlog'),
-    done: tasks.filter(t => t.status === 'done'),
-    error: tasks.filter(t => t.status === 'error'),
-  }), [tasks]);
+  const linkedIds = new Set((project.boards || []).map(b => b.id));
+  const linkable = allBoards.filter(b => !linkedIds.has(b.id) && !b.project_id);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12 text-dark-400">
-        <Loader2 size={20} className="animate-spin mr-2" />
-        Loading tasks...
+  const link = async (boardId) => {
+    setBusy(true);
+    try { await api.attachBoardToProject(project.id, boardId); onChanged(); }
+    finally { setBusy(false); }
+  };
+  const unlink = async (boardId) => {
+    setBusy(true);
+    try { await api.detachBoardFromProject(project.id, boardId); onChanged(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      <div>
+        <h3 className="text-sm font-semibold text-dark-200 mb-3">Linked Boards</h3>
+        {(project.boards || []).length === 0 ? (
+          <p className="text-dark-500 text-sm">No boards linked.</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {project.boards.map(b => (
+              <li key={b.id} className="flex items-center justify-between bg-dark-800 border border-dark-700 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-dark-100">
+                  <KanbanSquare size={14} className="text-blue-400" />
+                  {b.name}
+                </div>
+                <button
+                  disabled={busy}
+                  onClick={() => unlink(b.id)}
+                  className="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 flex items-center gap-1"
+                >
+                  <Trash2 size={12} /> Unlink
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-    );
-  }
 
-  if (tasks.length === 0) {
-    return <p className="text-dark-500 text-sm">No tasks in this project</p>;
+      <div>
+        <h3 className="text-sm font-semibold text-dark-200 mb-3">Available Boards</h3>
+        {linkable.length === 0 ? (
+          <p className="text-dark-500 text-sm">No free boards. Each board can belong to a single project.</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {linkable.map(b => (
+              <li key={b.id} className="flex items-center justify-between bg-dark-800 border border-dark-700 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-dark-200">
+                  <KanbanSquare size={14} className="text-dark-500" />
+                  {b.name}
+                </div>
+                <button
+                  disabled={busy}
+                  onClick={() => link(b.id)}
+                  className="text-xs text-purple-400 hover:text-purple-300 disabled:opacity-50 flex items-center gap-1"
+                >
+                  <LinkIcon size={12} /> Link
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ── Repos ────────────────────────────────────────────────────────────────── */
+function ReposTab({ project, onChanged }) {
+  const boards = project.boards || [];
+  const [activityTarget, setActivityTarget] = useState(null);
+
+  if (boards.length === 0) {
+    return <p className="text-dark-500 text-sm">Link at least one board first to attach git repos.</p>;
   }
 
   return (
-    <div className="space-y-4">
-      {tasksByStatus.active.length > 0 && (
-        <TaskGroup label="Active" tasks={tasksByStatus.active} icon={<Activity size={14} className="text-yellow-400" />} />
-      )}
-      {tasksByStatus.error.length > 0 && (
-        <TaskGroup label="Error" tasks={tasksByStatus.error} icon={<AlertCircle size={14} className="text-red-400" />} />
-      )}
-      {tasksByStatus.backlog.length > 0 && (
-        <TaskGroup label="Backlog" tasks={tasksByStatus.backlog} icon={<ListTodo size={14} className="text-dark-400" />} />
-      )}
-      {tasksByStatus.done.length > 0 && (
-        <TaskGroup label="Done" tasks={tasksByStatus.done} icon={<CheckCircle size={14} className="text-green-400" />} defaultCollapsed />
+    <div className="space-y-6 max-w-4xl">
+      {boards.map(b => (
+        <BoardReposPanel key={b.id} board={b} onChanged={onChanged} onShowActivity={setActivityTarget} />
+      ))}
+      {activityTarget && (
+        <GitHubActivityModal
+          owner={activityTarget.owner}
+          repo={activityTarget.repo}
+          onClose={() => setActivityTarget(null)}
+        />
       )}
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Tab: Context
-   ═══════════════════════════════════════════════════════════════════════════ */
-function ContextTab({
-  projectContext, githubInfo,
-  ctxDescription, setCtxDescription,
-  ctxRules, setCtxRules,
-  ctxGithubUrl, setCtxGithubUrl,
-  ctxSaving, ctxSaved, onSave,
-}) {
+function BoardReposPanel({ board, onChanged, onShowActivity }) {
+  const [repos, setRepos] = useState([]);
+  const [available, setAvailable] = useState([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [pickedRepo, setPickedRepo] = useState('');
+
+  const reload = useCallback(async () => {
+    const list = await api.getBoardRepos(board.id).catch(() => []);
+    setRepos(list);
+  }, [board.id]);
+
+  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    api.getAvailableRepos().then(setAvailable).catch(() => setAvailable([]));
+  }, []);
+
+  const onAdd = async () => {
+    if (!pickedRepo) return;
+    setBusy(true);
+    try {
+      const repo = available.find(r => r.fullName === pickedRepo);
+      if (!repo) return;
+      await api.addBoardRepo(board.id, {
+        provider: repo.provider,
+        fullName: repo.fullName,
+        htmlUrl: repo.htmlUrl,
+        defaultBranch: repo.defaultBranch || '',
+      });
+      setShowAdd(false);
+      setPickedRepo('');
+      await reload();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRemove = async (id) => {
+    setBusy(true);
+    try { await api.removeBoardRepo(board.id, id); await reload(); onChanged(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="bg-dark-800 border border-dark-700 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-dark-100">
+          <KanbanSquare size={14} className="text-blue-400" />
+          {board.name}
+        </div>
+        <button
+          onClick={() => setShowAdd(s => !s)}
+          className="flex items-center gap-1 px-2.5 py-1 text-xs bg-purple-600/80 hover:bg-purple-500 text-white rounded transition-colors"
+        >
+          <Plus size={12} /> Add Repo
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="mb-3 flex items-center gap-2">
+          <select
+            value={pickedRepo}
+            onChange={e => setPickedRepo(e.target.value)}
+            className="flex-1 bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
+          >
+            <option value="">Select a repo from configured connections...</option>
+            {available.map(r => (
+              <option key={`${r.provider}/${r.fullName}`} value={r.fullName}>
+                [{r.provider}] {r.fullName}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={onAdd}
+            disabled={!pickedRepo || busy}
+            className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-500 text-white rounded disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+      )}
+
+      {repos.length === 0 ? (
+        <p className="text-dark-500 text-sm">No repos linked to this board.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {repos.map(r => {
+            const [owner, repo] = (r.full_name || '').split('/');
+            return (
+              <li key={r.id} className="flex items-center justify-between bg-dark-700/50 border border-dark-600 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2 text-sm text-dark-100 min-w-0">
+                  <GitBranch size={14} className="text-green-400 shrink-0" />
+                  <span className="truncate">{r.full_name}</span>
+                  <span className="text-xs text-dark-500">[{r.provider}]</span>
+                  {r.html_url && (
+                    <a href={r.html_url} target="_blank" rel="noopener noreferrer" className="text-dark-400 hover:text-dark-100 ml-1">
+                      <ExternalLink size={12} />
+                    </a>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {r.provider === 'github' && owner && repo && (
+                    <button
+                      onClick={() => onShowActivity({ owner, repo })}
+                      className="p-1 rounded hover:bg-dark-600 text-dark-400 hover:text-dark-100 transition-colors"
+                      title="View activity"
+                    >
+                      <GitCommit size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => onRemove(r.id)}
+                    disabled={busy}
+                    className="p-1 rounded hover:bg-red-600/20 text-dark-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                    title="Remove"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ── Storages ─────────────────────────────────────────────────────────────── */
+function StoragesTab({ project, onChanged }) {
+  const boards = project.boards || [];
+  if (boards.length === 0) {
+    return <p className="text-dark-500 text-sm">Link at least one board first to attach cloud storage.</p>;
+  }
+  return (
+    <div className="space-y-6 max-w-4xl">
+      {boards.map(b => (
+        <BoardStoragesPanel key={b.id} board={b} onChanged={onChanged} />
+      ))}
+    </div>
+  );
+}
+
+function BoardStoragesPanel({ board, onChanged }) {
+  const [storages, setStorages] = useState([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState({ provider: 'onedrive', displayName: '', path: '' });
+
+  const reload = useCallback(async () => {
+    const list = await api.getBoardStorages(board.id).catch(() => []);
+    setStorages(list);
+  }, [board.id]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const onAdd = async () => {
+    if (!draft.displayName.trim()) return;
+    setBusy(true);
+    try {
+      await api.addBoardStorage(board.id, draft);
+      setShowAdd(false);
+      setDraft({ provider: 'onedrive', displayName: '', path: '' });
+      await reload();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRemove = async (id) => {
+    setBusy(true);
+    try { await api.removeBoardStorage(board.id, id); await reload(); onChanged(); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="bg-dark-800 border border-dark-700 rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-dark-100">
+          <KanbanSquare size={14} className="text-blue-400" />
+          {board.name}
+        </div>
+        <button
+          onClick={() => setShowAdd(s => !s)}
+          className="flex items-center gap-1 px-2.5 py-1 text-xs bg-amber-600/80 hover:bg-amber-500 text-white rounded transition-colors"
+        >
+          <Plus size={12} /> Add Storage
+        </button>
+      </div>
+
+      {showAdd && (
+        <div className="mb-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <select
+            value={draft.provider}
+            onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}
+            className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
+          >
+            <option value="onedrive">OneDrive</option>
+            <option value="google_drive">Google Drive</option>
+          </select>
+          <input
+            type="text"
+            placeholder="Display name"
+            value={draft.displayName}
+            onChange={e => setDraft(d => ({ ...d, displayName: e.target.value }))}
+            className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
+          />
+          <input
+            type="text"
+            placeholder="Path / folder ID (optional)"
+            value={draft.path}
+            onChange={e => setDraft(d => ({ ...d, path: e.target.value }))}
+            className="bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
+          />
+          <button
+            onClick={onAdd}
+            disabled={busy || !draft.displayName.trim()}
+            className="sm:col-span-3 px-3 py-1.5 text-sm bg-amber-600 hover:bg-amber-500 text-white rounded disabled:opacity-50"
+          >
+            Add
+          </button>
+        </div>
+      )}
+
+      {storages.length === 0 ? (
+        <p className="text-dark-500 text-sm">No storage linked to this board.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {storages.map(s => (
+            <li key={s.id} className="flex items-center justify-between bg-dark-700/50 border border-dark-600 rounded-lg px-3 py-2">
+              <div className="flex items-center gap-2 text-sm text-dark-100 min-w-0">
+                <Cloud size={14} className="text-amber-400 shrink-0" />
+                <span className="truncate">{s.display_name}</span>
+                <span className="text-xs text-dark-500">[{s.provider}]</span>
+                {s.path && <span className="text-xs text-dark-400 truncate">— {s.path}</span>}
+              </div>
+              <button
+                onClick={() => onRemove(s.id)}
+                disabled={busy}
+                className="p-1 rounded hover:bg-red-600/20 text-dark-400 hover:text-red-400 transition-colors disabled:opacity-50"
+                title="Remove"
+              >
+                <Trash2 size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/* ── Context (description + rules editing) ────────────────────────────────── */
+function ContextTab({ project, onSaved }) {
+  const [name, setName] = useState(project.name || '');
+  const [description, setDescription] = useState(project.description || '');
+  const [rules, setRules] = useState(project.rules || '');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setName(project.name || '');
+    setDescription(project.description || '');
+    setRules(project.rules || '');
+  }, [project]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaved(false);
+    try {
+      await api.updateProject(project.id, { name, description, rules });
+      setSaved(true);
+      onSaved?.();
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-4 max-w-3xl">
       <div>
+        <label className="block text-xs text-dark-400 mb-1">Name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 focus:outline-none focus:border-cyan-500/50"
+        />
+      </div>
+      <div>
         <label className="block text-xs text-dark-400 mb-1">Description</label>
         <textarea
-          value={ctxDescription}
-          onChange={e => setCtxDescription(e.target.value)}
-          placeholder="Describe this project: tech stack, architecture, key patterns..."
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          placeholder="Tech stack, architecture, key patterns..."
           rows={3}
           className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
         />
@@ -348,78 +569,34 @@ function ContextTab({
       <div>
         <label className="block text-xs text-dark-400 mb-1">Rules &amp; Instructions</label>
         <textarea
-          value={ctxRules}
-          onChange={e => setCtxRules(e.target.value)}
+          value={rules}
+          onChange={e => setRules(e.target.value)}
           placeholder="Define rules agents must follow when working on this project..."
           rows={4}
           className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 resize-y focus:outline-none focus:border-cyan-500/50"
         />
       </div>
-      <div>
-        <label className="block text-xs text-dark-400 mb-1">
-          <span className="flex items-center gap-1">
-            <GithubIcon className="w-3 h-3" />
-            GitHub URL
-            {githubInfo?.htmlUrl && (
-              <span className="text-green-400 ml-1">(auto-detected)</span>
-            )}
-          </span>
-        </label>
-        {githubInfo?.htmlUrl ? (
-          <div className="flex items-center gap-2 text-sm text-dark-300">
-            <a
-              href={githubInfo.htmlUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-purple-400 hover:text-purple-300 underline"
-            >
-              {githubInfo.fullName}
-            </a>
-          </div>
-        ) : (
-          <input
-            type="url"
-            value={ctxGithubUrl}
-            onChange={e => setCtxGithubUrl(e.target.value)}
-            placeholder="https://github.com/owner/repo"
-            className="w-full bg-dark-800 border border-dark-600 rounded-lg px-3 py-2 text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-cyan-500/50"
-          />
-        )}
-      </div>
       <div className="flex items-center gap-3 pt-2">
         <button
-          onClick={onSave}
-          disabled={ctxSaving}
+          onClick={handleSave}
+          disabled={saving}
           className="flex items-center gap-2 px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm rounded-lg transition-colors"
         >
-          {ctxSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-          {ctxSaving ? 'Saving...' : 'Save Context'}
+          {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+          {saving ? 'Saving...' : 'Save'}
         </button>
-        {ctxSaved && (
-          <span className="text-xs text-green-400 flex items-center gap-1">
-            <CheckCircle size={12} /> Saved
-          </span>
-        )}
-        {projectContext?.updatedAt && (
-          <span className="text-xs text-dark-500 ml-auto">
-            Last updated: {new Date(projectContext.updatedAt).toLocaleString()}
-          </span>
-        )}
+        {saved && <span className="text-xs text-green-400">Saved</span>}
       </div>
     </div>
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Tab: Statistics
-   ═══════════════════════════════════════════════════════════════════════════ */
-function StatisticsTab({ projectName }) {
-  return <ProjectStats projectName={projectName} onClose={() => {}} embedded />;
+/* ── Statistics ───────────────────────────────────────────────────────────── */
+function StatisticsTab({ project }) {
+  return <ProjectStats projectName={project.name} onClose={() => {}} embedded />;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   Shared sub-components
-   ═══════════════════════════════════════════════════════════════════════════ */
+/* ── Shared subcomponents ─────────────────────────────────────────────────── */
 function SummaryCard({ icon, label, value, color }) {
   return (
     <div className="bg-dark-800 border border-dark-700 rounded-lg px-4 py-3">
@@ -440,38 +617,5 @@ function Section({ title, icon, children }) {
       </h3>
       {children}
     </div>
-  );
-}
-
-function StatusDot({ status }) {
-  const cls = status === 'busy' ? 'bg-yellow-400 animate-pulse' :
-              status === 'idle' ? 'bg-green-400' :
-              status === 'error' ? 'bg-red-400' :
-              'bg-dark-500';
-  return <span className={`w-2 h-2 rounded-full ${cls}`} />;
-}
-
-function TaskGroup({ label, tasks, icon, defaultCollapsed = false }) {
-  return (
-    <details open={!defaultCollapsed}>
-      <summary className="flex items-center gap-2 cursor-pointer select-none text-sm text-dark-300 hover:text-dark-100 transition-colors mb-2">
-        {icon}
-        <span className="font-medium">{label}</span>
-        <span className="text-xs text-dark-500">({tasks.length})</span>
-      </summary>
-      <div className="space-y-1.5 ml-5">
-        {tasks.map(t => (
-          <div key={t.id || t.text} className="flex items-center gap-3 p-2 bg-dark-800/60 border border-dark-700/50 rounded-lg">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm text-dark-100 truncate">{t.text}</p>
-              <p className="text-xs text-dark-500">
-                {t.agentName || 'Unassigned'}
-                {t.type && <span className="ml-2 capitalize">&middot; {t.type}</span>}
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </details>
   );
 }

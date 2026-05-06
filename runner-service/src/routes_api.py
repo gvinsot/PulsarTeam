@@ -19,7 +19,7 @@ from models import (
     chunk_text, messages_to_prompt,
 )
 from security import extract_api_key, verify_api_key
-from agent_user import get_agent_project_dir, ensure_agent_project
+from agent_user import get_agent_project_dir, ensure_agent_project, ensure_agent_user
 from code_executor import execute_python, execute_shell
 from command_security import validate_command, sanitize_env
 from backends import BACKEND
@@ -122,7 +122,16 @@ async def ensure_project(
         raise HTTPException(status_code=400, detail="X-Agent-Id header required")
 
     try:
-        project_dir = await ensure_agent_project(x_agent_id, request.project, request.git_url)
+        creds = None
+        if request.git_credentials and request.git_credentials.token:
+            creds = {
+                "provider": request.git_credentials.provider or "github",
+                "token": request.git_credentials.token,
+                "username": request.git_credentials.username or "",
+            }
+        project_dir = await ensure_agent_project(
+            x_agent_id, request.project, request.git_url, git_credentials=creds,
+        )
         return {"status": "success", "project_dir": project_dir}
     except Exception as e:
         logger.error(f"[Project] ensure failed for agent {x_agent_id[:12]}: {e}")
@@ -156,8 +165,12 @@ async def exec_shell(
 
     timeout = min(request.timeout, 120)
 
+    # Ensure the agent's HOME exists so credential helpers, ~/.gitconfig and
+    # ~/.git-credentials installed by /projects/ensure are picked up.
+    agent_user = await ensure_agent_user(x_agent_id, owner_id=x_owner_id) if x_agent_id else None
+
     # Security: use sanitized environment to prevent secret leakage
-    safe_env = sanitize_env(os.environ)
+    safe_env = sanitize_env(os.environ, agent_user=agent_user)
 
     try:
         proc = await asyncio.create_subprocess_exec(
