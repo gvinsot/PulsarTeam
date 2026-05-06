@@ -356,12 +356,14 @@ export default function App() {
 
     if (path === '/auth/google/callback') {
       setGoogleLoading(true);
-      const redirectUri = `${window.location.origin}/auth/google/callback`;
+      const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}/auth/google/callback`;
+      sessionStorage.removeItem('oauth_redirect_uri');
       window.history.replaceState({}, '', '/');
       apiCall = api.googleCallback(code, redirectUri);
     } else if (path === '/auth/microsoft/callback') {
       setGoogleLoading(true);
-      const redirectUri = `${window.location.origin}/auth/microsoft/callback`;
+      const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}/auth/microsoft/callback`;
+      sessionStorage.removeItem('oauth_redirect_uri');
       window.history.replaceState({}, '', '/');
       apiCall = api.microsoftCallback(code, redirectUri);
     }

@@ -547,6 +547,9 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
     try {
       const redirectUri = `${window.location.origin}/auth/google/callback`;
       const data = await api.googleAuthUrl(redirectUri);
+      if (data.redirect_uri) {
+        sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
+      }
       window.location.href = data.url;
     } catch {
       setOauthBusy(false);
@@ -558,6 +561,9 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
     try {
       const redirectUri = `${window.location.origin}/auth/microsoft/callback`;
       const data = await api.microsoftAuthUrl(redirectUri);
+      if (data.redirect_uri) {
+        sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
+      }
       window.location.href = data.url;
     } catch {
       setOauthBusy(false);

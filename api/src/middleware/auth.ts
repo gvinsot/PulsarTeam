@@ -192,13 +192,17 @@ function isGoogleConfigured() {
   return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 }
 
+function resolveGoogleRedirectUri(frontendUri?: string): string {
+  return process.env.GOOGLE_REDIRECT_URI || frontendUri || '';
+}
+
 // Returns the Google OAuth consent URL for the frontend to redirect to
 router.get('/google/url', (req, res) => {
   if (!isGoogleConfigured()) {
     return res.status(501).json({ error: 'Google OAuth not configured' });
   }
 
-  const redirectUri = req.query.redirect_uri as string;
+  const redirectUri = resolveGoogleRedirectUri(req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
@@ -212,7 +216,7 @@ router.get('/google/url', (req, res) => {
     prompt: 'select_account',
   });
 
-  res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
+  res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}`, redirect_uri: redirectUri });
 });
 
 // Returns whether Google OAuth is available
@@ -227,8 +231,13 @@ router.post('/google/callback', async (req, res) => {
   }
 
   const { code, redirect_uri } = req.body;
-  if (!code || !redirect_uri) {
-    return res.status(400).json({ error: 'code and redirect_uri required' });
+  if (!code) {
+    return res.status(400).json({ error: 'code required' });
+  }
+
+  const canonicalRedirectUri = resolveGoogleRedirectUri(redirect_uri);
+  if (!canonicalRedirectUri) {
+    return res.status(400).json({ error: 'redirect_uri required' });
   }
 
   try {
@@ -240,7 +249,7 @@ router.post('/google/callback', async (req, res) => {
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
         client_secret: process.env.GOOGLE_CLIENT_SECRET,
-        redirect_uri,
+        redirect_uri: canonicalRedirectUri,
         grant_type: 'authorization_code',
       }),
     });
@@ -314,12 +323,16 @@ router.get('/microsoft/status', (_req, res) => {
   res.json({ enabled: isMicrosoftConfigured(), clientId: process.env.MICROSOFT_CLIENT_ID || null });
 });
 
+function resolveMicrosoftRedirectUri(frontendUri?: string): string {
+  return process.env.MICROSOFT_REDIRECT_URI || frontendUri || '';
+}
+
 router.get('/microsoft/url', (req, res) => {
   if (!isMicrosoftConfigured()) {
     return res.status(501).json({ error: 'Microsoft OAuth not configured' });
   }
 
-  const redirectUri = req.query.redirect_uri as string;
+  const redirectUri = resolveMicrosoftRedirectUri(req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
@@ -334,7 +347,7 @@ router.get('/microsoft/url', (req, res) => {
     prompt: 'select_account',
   });
 
-  res.json({ url: `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}` });
+  res.json({ url: `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}`, redirect_uri: redirectUri });
 });
 
 router.post('/microsoft/callback', async (req, res) => {
@@ -343,8 +356,13 @@ router.post('/microsoft/callback', async (req, res) => {
   }
 
   const { code, redirect_uri } = req.body;
-  if (!code || !redirect_uri) {
-    return res.status(400).json({ error: 'code and redirect_uri required' });
+  if (!code) {
+    return res.status(400).json({ error: 'code required' });
+  }
+
+  const canonicalRedirectUri = resolveMicrosoftRedirectUri(redirect_uri);
+  if (!canonicalRedirectUri) {
+    return res.status(400).json({ error: 'redirect_uri required' });
   }
 
   try {
@@ -356,7 +374,7 @@ router.post('/microsoft/callback', async (req, res) => {
         client_id: process.env.MICROSOFT_CLIENT_ID as string,
         client_secret: process.env.MICROSOFT_CLIENT_SECRET as string,
         code,
-        redirect_uri,
+        redirect_uri: canonicalRedirectUri,
         grant_type: 'authorization_code',
         scope: 'openid email profile User.Read',
       }),
