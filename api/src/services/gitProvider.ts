@@ -13,6 +13,7 @@
 
 import { getPool } from './database.js';
 import { randomUUID } from 'crypto';
+import { readSecret } from '../secrets.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,7 +69,7 @@ export async function getGitConnections(): Promise<GitConnection[]> {
 }
 
 function _envFallbackConnections(): GitConnection[] {
-  const token = process.env.GITHUB_TOKEN;
+  const token = readSecret('GITHUB_TOKEN');
   const user = process.env.GITHUB_USER;
   if (!token || !user) return [];
 

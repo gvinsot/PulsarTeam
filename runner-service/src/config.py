@@ -8,6 +8,7 @@ hermes, opencode, sandbox).
 
 import os
 import logging
+from secrets import read as read_secret
 
 # --- Runner selection ---------------------------------------------------------
 
@@ -44,7 +45,7 @@ logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 
 # --- Shared constants ---------------------------------------------------------
 
-API_KEY = os.getenv("API_KEY", "change-me-in-production")
+API_KEY = read_secret("API_KEY", default="change-me-in-production")
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "/projects")
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 TIMEOUT = int(os.getenv("TIMEOUT", "600"))

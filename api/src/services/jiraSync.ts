@@ -18,6 +18,7 @@
 import { getWorkflow, getSettings, getAllBoardWorkflows, getWorkflowForBoard } from './configManager.js';
 import { saveTaskToDb } from './database.js';
 import { executeAction, ActionType, AgentMode } from './workflow/index.js';
+import { readSecret } from '../secrets.js';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ function getConfig() {
     return null;
   }
 
-  const apiKey = (process.env.JIRA_API_KEY || '').trim();
+  const apiKey = readSecret('JIRA_API_KEY').trim();
   const userEmail = (process.env.JIRA_USER_EMAIL || '').trim();
   if (!apiKey || !userEmail) {
     console.error('[Jira] JIRA_API_KEY and JIRA_USER_EMAIL are required');
@@ -700,7 +701,7 @@ export async function fullSync(agentManager) {
 
 // ── Webhook: real-time notifications from Jira ──────────────────────────────
 
-const WEBHOOK_SECRET = (process.env.JIRA_WEBHOOK_SECRET || process.env.JIRA_API_KEY || '').trim();
+const WEBHOOK_SECRET = (readSecret('JIRA_WEBHOOK_SECRET') || readSecret('JIRA_API_KEY') || '').trim();
 
 /**
  * Verify webhook request authenticity.

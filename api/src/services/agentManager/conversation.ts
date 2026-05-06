@@ -1,5 +1,6 @@
 // ─── Conversation: history management, context switching, voice, coder reset ─
 import { saveAgent, clearTaskExecutionFlags } from '../database.js';
+import { readSecret } from '../../secrets.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
@@ -63,7 +64,7 @@ export const conversationMethods = {
     const llmConfig = this.resolveLlmConfig(agent);
     if (llmConfig.provider !== 'claude-paid') return;
     const endpoint = process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000';
-    const apiKey = llmConfig.apiKey || process.env.CODER_API_KEY || '';
+    const apiKey = llmConfig.apiKey || readSecret('CODER_API_KEY');
     fetch(`${endpoint}/reset`, {
       method: 'POST',
       headers: {

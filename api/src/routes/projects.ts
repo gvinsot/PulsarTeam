@@ -1,5 +1,6 @@
 import express from 'express';
 import { listRepos, invalidateCache, createProjectFromBoilerplate } from '../services/gitProvider.js';
+import { readSecret } from '../secrets.js';
 
 // In-memory cache for GitHub activity data (TTL 1h)
 const ACTIVITY_CACHE_TTL = 60 * 60 * 1000;
@@ -59,7 +60,7 @@ export function projectRoutes() {
 
   // Get GitHub activity (commits + tags) for a repo
   router.get('/github-activity/:owner/:repo', async (req, res) => {
-    const token = process.env.GITHUB_TOKEN;
+    const token = readSecret('GITHUB_TOKEN');
     if (!token) {
       return res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
     }
@@ -127,14 +128,14 @@ export function projectRoutes() {
   // ── Repo Explorer endpoints ────────────────────────────────────────────
 
   const ghHeaders = () => ({
-    Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+    Authorization: `Bearer ${readSecret('GITHUB_TOKEN')}`,
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   });
 
   // List branches for a repo
   router.get('/github-branches/:owner/:repo', async (req, res) => {
-    const token = process.env.GITHUB_TOKEN;
+    const token = readSecret('GITHUB_TOKEN');
     if (!token) return res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
 
     const { owner, repo } = req.params;
@@ -163,7 +164,7 @@ export function projectRoutes() {
 
   // Get file tree for a given ref (branch/tag/sha)
   router.get('/github-tree/:owner/:repo/:ref', async (req, res) => {
-    const token = process.env.GITHUB_TOKEN;
+    const token = readSecret('GITHUB_TOKEN');
     if (!token) return res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
 
     const { owner, repo, ref } = req.params;
@@ -198,7 +199,7 @@ export function projectRoutes() {
 
   // Get file content for a given path and ref
   router.get('/github-file/:owner/:repo/:ref/*', async (req, res) => {
-    const token = process.env.GITHUB_TOKEN;
+    const token = readSecret('GITHUB_TOKEN');
     if (!token) return res.status(400).json({ error: 'GITHUB_TOKEN not configured' });
 
     const { owner, repo, ref } = req.params;

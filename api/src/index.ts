@@ -23,6 +23,7 @@ import { mcpServerRoutes } from './routes/mcpServers.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
+import { readSecret } from './secrets.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected } from './services/database.js';
 import { onedriveRoutes, onedriveOAuthRedirectRouter } from './routes/onedrive.js';
@@ -84,7 +85,7 @@ const skillManager = new SkillManager();
 const executionManager = new ExecutionManager({
   claudecodeOptions: {
     baseUrl: process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
-    apiKey: process.env.CODER_API_KEY || ''
+    apiKey: readSecret('CODER_API_KEY')
   }
 });
 const mcpManager = new MCPManager();

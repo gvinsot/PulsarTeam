@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { claudeRateLimiter } from './rateLimiter.js';
+import { readSecret } from '../secrets.js';
 
 // Helper: returns { temperature } object if temperature is set, or empty object to omit it
 function tempParam(options: { temperature?: number | null }): { temperature?: number } {
@@ -1053,7 +1054,7 @@ export function createProvider(config: any): any {
       return new VLLMProvider(
         process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
         config.model || 'claude-sonnet-4-20250514',
-        process.env.CODER_API_KEY || '',
+        readSecret('CODER_API_KEY'),
         config.agentId || null,
         config.ownerId || null,
         config.permissions || null

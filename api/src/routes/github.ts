@@ -5,6 +5,7 @@ import {
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
 import { sendOAuthResult } from './oauthHelper.js';
+import { readSecret } from '../secrets.js';
 
 /**
  * GitHub OAuth2 routes — unified token store.
@@ -38,7 +39,7 @@ function resolveScope(agentId, boardId, username): { scopeType: ScopeType; scope
 
 function getConfig() {
   const clientId = process.env.GITHUB_OAUTH_CLIENT_ID;
-  const clientSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
+  const clientSecret = readSecret('GITHUB_OAUTH_CLIENT_SECRET');
   const redirectUri = process.env.GITHUB_OAUTH_REDIRECT_URI;
   if (!clientId || !clientSecret || !redirectUri) return null;
   return { clientId, clientSecret, redirectUri };

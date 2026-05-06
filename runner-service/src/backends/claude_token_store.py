@@ -17,6 +17,7 @@ from config import (
     OAUTH_CLIENT_ID, OAUTH_TOKEN_URL, OAUTH_SCOPES,
     logger,
 )
+from secrets import read as read_secret
 from .crypto import encrypt_text, decrypt_text, is_envelope
 
 
@@ -132,7 +133,7 @@ def _restore_credentials_file(oauth_data: dict):
 
 
 def load_saved_token() -> Optional[str]:
-    token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+    token = read_secret("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if token:
         return token
     _migrate_if_plaintext(TOKEN_JSON_FILE)
@@ -611,9 +612,9 @@ def get_subprocess_kwargs(agent_user: dict = None) -> dict:
 
 
 def auth_method() -> str:
-    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_saved_token():
+    if read_secret("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or load_saved_token():
         return "oauth"
-    if os.environ.get("ANTHROPIC_API_KEY"):
+    if read_secret("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
         return "api_key"
     return "none"
 

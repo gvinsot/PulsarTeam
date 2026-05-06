@@ -8,6 +8,7 @@
 // over /exec-shell, /projects/ensure, /reset, ...
 
 import { ExecutionProvider } from './executionProvider.js';
+import { readSecret } from '../../secrets.js';
 
 interface AgentEntry {
   project: string | null;
@@ -35,7 +36,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   constructor(options: RunnerOptions = {}) {
     super();
     this.baseUrl = options.baseUrl || '';
-    this.apiKey = options.apiKey || process.env.CODER_API_KEY || '';
+    this.apiKey = options.apiKey || readSecret('CODER_API_KEY');
     this._agents = new Map();
     this._fileTreeCache = new Map();
     this.ownerIds = new Map();

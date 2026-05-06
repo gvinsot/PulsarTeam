@@ -7,18 +7,9 @@ echo "=== Runner Service Entrypoint (backend=${RUNNER_TYPE:-claude-code}) ==="
 # defaults to 0600 / dirs to 0700 — protects tokens/credentials at rest.
 umask 0077
 
-# ─── Load Docker Swarm secrets into env vars ───────────────────────────────
-# Each file in /run/secrets/ is exported as an env var matching its filename.
-# Existing env vars are preserved (env wins) for backwards compatibility.
-if [ -d /run/secrets ]; then
-    for secret_file in /run/secrets/*; do
-        [ -f "$secret_file" ] || continue
-        var_name="$(basename "$secret_file")"
-        if [ -z "${!var_name:-}" ]; then
-            export "$var_name"="$(cat "$secret_file")"
-        fi
-    done
-fi
+# Secrets are NOT loaded into env vars — application code reads them directly
+# from /run/secrets/<NAME> via the secrets helper module. This keeps them out
+# of /proc/<pid>/environ and out of `docker inspect` output.
 
 # ─── Filesystem prep (server runs as root, agents get dedicated UIDs at runtime) ─
 PUID=${PUID:-1000}
@@ -55,13 +46,15 @@ if [ "${RUNNER_TYPE:-claude-code}" = "claude-code" ]; then
     fi
 
     # Configure Claude Code MCP servers
-    if [ -n "$SWARM_API_BASE_URL" ] && [ -n "$JWT_SECRET" ]; then
+    JWT_SECRET_FILE=/run/secrets/JWT_SECRET
+    if [ -n "$SWARM_API_BASE_URL" ] && [ -r "$JWT_SECRET_FILE" ]; then
         echo "Configuring Claude Code MCP servers..."
 
-        SERVICE_TOKEN=$(JWT_SECRET="$JWT_SECRET" python3 -c "
+        SERVICE_TOKEN=$(JWT_SECRET_FILE="$JWT_SECRET_FILE" python3 -c "
 import os, json, hmac, hashlib, base64, time
 
-secret = os.environ['JWT_SECRET'].encode()
+with open(os.environ['JWT_SECRET_FILE']) as f:
+    secret = f.read().rstrip('\n').encode()
 
 def b64url(data):
     if isinstance(data, (dict, list)):

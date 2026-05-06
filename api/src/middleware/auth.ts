@@ -7,14 +7,15 @@ import {
   getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
 } from '../services/database.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
+import { readSecret } from '../secrets.js';
 
 const router = express.Router();
 
-// Helper to get JWT secret at runtime
+// Helper to get JWT secret at runtime — read from /run/secrets/JWT_SECRET (or env fallback in dev)
 const getJwtSecret = () => {
-  const secret = process.env.JWT_SECRET;
+  const secret = readSecret('JWT_SECRET');
   if (!secret) {
-    throw new Error('JWT_SECRET environment variable is not set');
+    throw new Error('JWT_SECRET is not set (expected at /run/secrets/JWT_SECRET or as env var in dev)');
   }
   return secret;
 };
@@ -54,9 +55,9 @@ export async function ensureAdminSeeded() {
     if (count > 0) return; // users already exist
 
     const adminUsername = process.env.ADMIN_USERNAME || 'admin';
-    const adminPassword = process.env.ADMIN_PASSWORD || 'swarm2026';
+    const adminPassword = readSecret('ADMIN_PASSWORD', 'swarm2026');
 
-    if (!process.env.ADMIN_PASSWORD) {
+    if (!readSecret('ADMIN_PASSWORD')) {
       if (process.env.NODE_ENV === 'production') {
         console.error('');
         console.error('================================================================');
@@ -190,7 +191,7 @@ router.post('/impersonate/:userId', authenticateToken, async (req, res) => {
 // ── Google OAuth ──────────────────────────────────────────────────────────────
 
 function isGoogleConfigured() {
-  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  return !!(process.env.GOOGLE_CLIENT_ID && readSecret('GOOGLE_CLIENT_SECRET'));
 }
 
 function resolveGoogleRedirectUri(frontendUri?: string): string {
@@ -249,7 +250,7 @@ router.post('/google/callback', async (req, res) => {
       body: JSON.stringify({
         code,
         client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: process.env.GOOGLE_CLIENT_SECRET,
+        client_secret: readSecret('GOOGLE_CLIENT_SECRET'),
         redirect_uri: canonicalRedirectUri,
         grant_type: 'authorization_code',
       }),
@@ -318,7 +319,7 @@ router.post('/google/callback', async (req, res) => {
 // ── Microsoft / Live.com OAuth ────────────────────────────────────────────────
 
 function isMicrosoftConfigured() {
-  return !!(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET);
+  return !!(process.env.MICROSOFT_CLIENT_ID && readSecret('MICROSOFT_CLIENT_SECRET'));
 }
 
 router.get('/microsoft/status', (_req, res) => {
@@ -374,7 +375,7 @@ router.post('/microsoft/callback', async (req, res) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: process.env.MICROSOFT_CLIENT_ID as string,
-        client_secret: process.env.MICROSOFT_CLIENT_SECRET as string,
+        client_secret: readSecret('MICROSOFT_CLIENT_SECRET'),
         code,
         redirect_uri: canonicalRedirectUri,
         grant_type: 'authorization_code',

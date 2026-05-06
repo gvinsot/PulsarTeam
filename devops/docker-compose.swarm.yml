@@ -6,15 +6,24 @@ services:
       dockerfile: api/Dockerfile
       target: production
     environment:
-      # Non-secret config only — secrets are loaded from /run/secrets/<NAME> by entrypoint.sh
+      # Vars matching *_SECRET / *_KEY / *_TOKEN / *_PASSWORD are auto-converted
+      # to Docker secrets by the deployment system (mounted at /run/secrets/<NAME>).
+      # App code reads them via api/src/secrets.ts (file first, env fallback).
       - NODE_ENV=production
       - PORT=${PORT}
+      - JWT_SECRET=${JWT_SECRET}
       - ADMIN_USERNAME=${ADMIN_USERNAME}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      - DATABASE_URL=${DATABASE_URL}
       - GIT_USER_NAME=${GIT_USER_NAME}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL}
       - GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
+      - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
       - GITHUB_OAUTH_REDIRECT_URI=${GITHUB_OAUTH_REDIRECT_URI}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
@@ -29,52 +38,29 @@ services:
       - HERMES_SERVICE_URL=http://hermes-service:8000
       - OPENCODE_SERVICE_URL=http://opencode-service:8000
       - SSH_KEYS_HOST_PATH=${SSH_KEYS_HOST_PATH}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_USER=${GITHUB_USER}
       - MCP_ENDPOINT=http://swarm-manager:8000/ai/mcp
       - MCP_ACTIONS_ENDPOINT=http://swarm-manager:8000/ai/actions/mcp
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID}
+      - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET}
       - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI}
       - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID}
       - GMAIL_CLIENT_ID=${GMAIL_CLIENT_ID:-}
+      - GMAIL_CLIENT_SECRET=${GMAIL_CLIENT_SECRET:-}
       - GMAIL_REDIRECT_URI=${GMAIL_REDIRECT_URI:-}
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
+      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
       - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI:-}
       - JIRA_BOARD_URL=${JIRA_BOARD_URL:-}
       - JIRA_ORG_ID=${JIRA_ORG_ID:-}
+      - JIRA_API_KEY=${JIRA_API_KEY:-}
       - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
       - JIRA_WEBHOOK_URL=${JIRA_WEBHOOK_URL:-}
+      - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
+      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
-    secrets:
-      - source: jwt_secret
-        target: JWT_SECRET
-      - source: admin_password
-        target: ADMIN_PASSWORD
-      - source: anthropic_api_key
-        target: ANTHROPIC_API_KEY
-      - source: openai_api_key
-        target: OPENAI_API_KEY
-      - source: mistral_api_key
-        target: MISTRAL_API_KEY
-      - source: database_url
-        target: DATABASE_URL
-      - source: github_oauth_client_secret
-        target: GITHUB_OAUTH_CLIENT_SECRET
-      - source: onedrive_client_secret
-        target: ONEDRIVE_CLIENT_SECRET
-      - source: gmail_client_secret
-        target: GMAIL_CLIENT_SECRET
-      - source: slack_client_secret
-        target: SLACK_CLIENT_SECRET
-      - source: jira_api_key
-        target: JIRA_API_KEY
-      - source: jira_webhook_secret
-        target: JIRA_WEBHOOK_SECRET
-      - source: github_token
-        target: GITHUB_TOKEN
-      - source: coder_api_key
-        target: CODER_API_KEY
-      - source: encryption_key
-        target: ENCRYPTION_KEY
     volumes:
       - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
     cap_drop:
@@ -211,10 +197,11 @@ services:
         aliases:
           - claudecode-service
     environment:
-      # Non-secret config only — secrets are loaded from /run/secrets/<NAME> by entrypoint.sh
       - RUNNER_TYPE=claude-code
       - TZ=Europe/Paris
       - LOG_LEVEL=info
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
@@ -222,23 +209,15 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
+      - JWT_SECRET=${JWT_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-http://swarm-manager:8000/ai/mcp}
       - PYTHONUNBUFFERED=1
       - PYTHONFAULTHANDLER=1
-    secrets:
-      - source: jwt_secret
-        target: JWT_SECRET
-      - source: anthropic_api_key
-        target: ANTHROPIC_API_KEY
-      - source: claude_code_oauth_token
-        target: CLAUDE_CODE_OAUTH_TOKEN
-      - source: coder_api_key
-        target: API_KEY
-      - source: encryption_key
-        target: ENCRYPTION_KEY
     volumes:
       - claudecode-auth-data:/app/data
       - claudecode-android-cache:/opt/android-sdk
@@ -308,12 +287,10 @@ services:
       - LOG_LEVEL=info
       - PORT=8000
       - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
-    secrets:
-      - source: coder_api_key
-        target: API_KEY
     volumes:
       - sandbox-data:/app/data
     cap_drop:
@@ -358,16 +335,12 @@ services:
       - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
       - PORT=8000
       - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
-    secrets:
-      - source: coder_api_key
-        target: API_KEY
-      - source: anthropic_api_key
-        target: ANTHROPIC_API_KEY
-      - source: encryption_key
-        target: ENCRYPTION_KEY
     volumes:
       - openclaw-data:/app/data
     cap_drop:
@@ -426,14 +399,11 @@ services:
       - LOG_LEVEL=info
       - PORT=8000
       - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
-    secrets:
-      - source: coder_api_key
-        target: API_KEY
-      - source: encryption_key
-        target: ENCRYPTION_KEY
     volumes:
       - opencode-data:/app/data
     cap_drop:
@@ -494,19 +464,14 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
+      - API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
+      - JWT_SECRET=${JWT_SECRET}
       - PYTHONUNBUFFERED=1
-    secrets:
-      - source: jwt_secret
-        target: JWT_SECRET
-      - source: coder_api_key
-        target: API_KEY
-      - source: anthropic_api_key
-        target: ANTHROPIC_API_KEY
-      - source: encryption_key
-        target: ENCRYPTION_KEY
     volumes:
       - hermes-data:/app/data
     cap_drop:
@@ -654,50 +619,11 @@ volumes:
   hermes-data:
     driver: local
 
-# ─── Docker Swarm secrets ───────────────────────────────────────────────────
-# All secrets are declared external — they must be created on the swarm
-# manager BEFORE deploying the stack. Example:
-#   printf '%s' "$JWT_SECRET" | docker secret create jwt_secret -
-#   openssl rand -base64 32 | docker secret create encryption_key -
-#
-# To rotate a secret:
-#   docker secret create jwt_secret_v2 -    # create new version
-#   # update the swarm.yml to reference jwt_secret_v2
-#   docker stack deploy -c devops/docker-compose.swarm.yml pulsarteam
-#   docker secret rm jwt_secret             # remove old version
-secrets:
-  jwt_secret:
-    external: true
-  admin_password:
-    external: true
-  anthropic_api_key:
-    external: true
-  openai_api_key:
-    external: true
-  mistral_api_key:
-    external: true
-  database_url:
-    external: true
-  github_oauth_client_secret:
-    external: true
-  onedrive_client_secret:
-    external: true
-  gmail_client_secret:
-    external: true
-  slack_client_secret:
-    external: true
-  jira_api_key:
-    external: true
-  jira_webhook_secret:
-    external: true
-  github_token:
-    external: true
-  coder_api_key:
-    external: true
-  claude_code_oauth_token:
-    external: true
-  encryption_key:
-    external: true
+# Note: Docker secrets are NOT declared here.
+# The deployment system inspects the `environment:` blocks and, for every var
+# matching `*_SECRET`, `*_KEY`, `*_TOKEN`, or `*_PASSWORD`, creates a Docker
+# secret and mounts it at /run/secrets/<NAME>. App code reads it directly via
+# api/src/secrets.ts (Node) or runner-service/src/secrets.py (Python).
 
 networks:
   proxy:

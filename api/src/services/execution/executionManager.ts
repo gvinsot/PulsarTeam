@@ -8,6 +8,7 @@
 
 import { RunnerExecutionProvider } from './runnerExecutionProvider.js';
 import { ExecutionProvider } from './executionProvider.js';
+import { readSecret } from '../../secrets.js';
 
 // Canonical provider types. 'coder' is accepted as a deprecated alias for
 // 'claudecode' (existing agents in the DB may still have runner='coder').
@@ -63,7 +64,7 @@ export class ExecutionManager {
   _agentProviders: Map<string, ProviderType>;
 
   constructor(options: ExecutionManagerOptions = {}) {
-    const sharedKey = process.env.CODER_API_KEY || '';
+    const sharedKey = readSecret('CODER_API_KEY');
     const make = (type: ProviderType, opts?: RunnerOpts) => new RunnerExecutionProvider({
       // Backward-compat: fall back to legacy CODER_SERVICE_URL for the claudecode runner.
       baseUrl: opts?.baseUrl

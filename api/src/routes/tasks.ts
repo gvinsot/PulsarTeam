@@ -4,6 +4,7 @@ import { getPool, getBoardById, getBoardShare, getBoardsByUser, rowToTask } from
 import { listStarredRepos } from '../services/githubProjects.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus } from '../services/database.js';
+import { readSecret } from '../secrets.js';
 
 async function getUserBoardIds(userId: string): Promise<string[]> {
   try {
@@ -818,7 +819,7 @@ async function resolveOwnerRepo(task, mgr) {
 // ── GET /tasks/:id/commits/:hash/diff — fetch commit diff from GitHub ───────
 router.get('/:id/commits/:hash/diff', async (req, res) => {
   try {
-    const token = process.env.GITHUB_TOKEN;
+    const token = readSecret('GITHUB_TOKEN');
     if (!token) return res.status(501).json({ error: 'GITHUB_TOKEN not configured' });
 
     const mgr = req.app.get('agentManager');

@@ -5,6 +5,7 @@ import {
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
 import { sendOAuthResult } from './oauthHelper.js';
+import { readSecret } from '../secrets.js';
 
 /**
  * OneDrive OAuth2 routes — unified token store.
@@ -38,7 +39,7 @@ function resolveScope(agentId, boardId, username): { scopeType: ScopeType; scope
 
 function getConfig() {
   const clientId = process.env.ONEDRIVE_CLIENT_ID;
-  const clientSecret = process.env.ONEDRIVE_CLIENT_SECRET;
+  const clientSecret = readSecret('ONEDRIVE_CLIENT_SECRET');
   const redirectUri = process.env.ONEDRIVE_REDIRECT_URI;
   const tenantId = process.env.ONEDRIVE_TENANT_ID || 'common';
   if (!clientId || !clientSecret || !redirectUri) return null;

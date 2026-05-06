@@ -21,6 +21,8 @@ import base64
 import logging
 from typing import Optional
 
+from secrets import read as read_secret
+
 logger = logging.getLogger("runner_service.crypto")
 
 _ENVELOPE_VERSION = 1
@@ -41,7 +43,7 @@ def _load_key() -> Optional[bytes]:
     if _cached_key is not None:
         return _cached_key
 
-    raw = os.environ.get("ENCRYPTION_KEY", "").strip()
+    raw = read_secret("ENCRYPTION_KEY", default="").strip()
     if not raw:
         if not _warned_no_key:
             logger.warning(

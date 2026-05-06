@@ -1,20 +1,9 @@
 #!/bin/sh
 set -e
 
-# ─── Load Docker Swarm secrets into env vars ───────────────────────────────
-# Each file in /run/secrets/ is exported as an env var matching its filename.
-# Existing env vars are preserved (env wins) for backwards compatibility.
-if [ -d /run/secrets ]; then
-    for secret_file in /run/secrets/*; do
-        [ -f "$secret_file" ] || continue
-        var_name="$(basename "$secret_file")"
-        eval "current=\${$var_name:-}"
-        if [ -z "$current" ]; then
-            export "$var_name"="$(cat "$secret_file")"
-        fi
-        unset current
-    done
-fi
+# Secrets are NOT loaded into env vars — application code reads them directly
+# from /run/secrets/<NAME> via api/src/secrets.ts. This keeps them out of
+# /proc/<pid>/environ and out of `docker inspect` output.
 
 # Create RUN_AS_USER with matching UID/GID from the host
 if [ -n "$RUN_AS_USER" ]; then
