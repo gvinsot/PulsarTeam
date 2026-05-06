@@ -3,44 +3,49 @@ set -e
 
 echo "=== Runner Service Entrypoint (backend=${RUNNER_TYPE:-claude-code}) ==="
 
-# ─── Create runtime user from host UID/GID ─────────────────────────────────
+# Restrictive umask so any file created by this script (or its children)
+# defaults to 0600 / dirs to 0700 — protects tokens/credentials at rest.
+umask 0077
+
+# ─── Load Docker Swarm secrets into env vars ───────────────────────────────
+# Each file in /run/secrets/ is exported as an env var matching its filename.
+# Existing env vars are preserved (env wins) for backwards compatibility.
+if [ -d /run/secrets ]; then
+    for secret_file in /run/secrets/*; do
+        [ -f "$secret_file" ] || continue
+        var_name="$(basename "$secret_file")"
+        if [ -z "${!var_name:-}" ]; then
+            export "$var_name"="$(cat "$secret_file")"
+        fi
+    done
+fi
+
+# ─── Filesystem prep (server runs as root, agents get dedicated UIDs at runtime) ─
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
-echo "Setting up user runner ($PUID:$PGID)..."
-
-getent group "$PGID" >/dev/null 2>&1 || groupadd -g "$PGID" runner
-getent passwd "$PUID" >/dev/null 2>&1 || useradd -u "$PUID" -g "$PGID" -m -d /home/runner -s /bin/bash runner
-
-RUNNER_USER=$(getent passwd "$PUID" | cut -d: -f1)
-RUNNER_HOME=$(getent passwd "$PUID" | cut -d: -f6)
-
+# DATA_DIR holds per-agent HOMEs (chowned by the server to per-agent UIDs).
 mkdir -p /app/data
-chown -R "$PUID:$PGID" /app /opt/venv /app/data
-chown -R "$PUID:$PGID" "$RUNNER_HOME"
+chmod 0700 /app/data
 
-# Copy SSH keys if mounted at /root/.ssh
-if [ -d /root/.ssh ]; then
-    mkdir -p "$RUNNER_HOME/.ssh"
-    cp -a /root/.ssh/* "$RUNNER_HOME/.ssh/" 2>/dev/null || true
-    chown -R "$PUID:$PGID" "$RUNNER_HOME/.ssh"
-    chmod 700 "$RUNNER_HOME/.ssh"
-    chmod 600 "$RUNNER_HOME/.ssh/"* 2>/dev/null || true
-fi
+# Reference HOME for the root server process — agent_user.ensure_agent_user
+# copies $HOME/.claude/settings.json and $HOME/.claude.json into each agent
+# HOME, so we set up the templates here under /root.
+REF_HOME=/root
 
-# Trust all git repos in /projects (mounted from host, different uid)
-gosu "$RUNNER_USER" git config --global --add safe.directory '*'
+# Trust all git repos in /projects (mounted from host with various uids).
+git config --global --add safe.directory '*'
 
 # ─── Backend-specific setup (Claude Code only) ─────────────────────────────
 if [ "${RUNNER_TYPE:-claude-code}" = "claude-code" ]; then
-    echo "Claude Code version: $(gosu "$RUNNER_USER" claude --version 2>&1 || echo 'NOT FOUND')"
+    echo "Claude Code version: $(claude --version 2>&1 || echo 'NOT FOUND')"
 
     if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
         echo "Auth: OAuth token (subscription plan)"
-        CLAUDE_JSON="$RUNNER_HOME/.claude.json"
+        CLAUDE_JSON="$REF_HOME/.claude.json"
         if [ ! -f "$CLAUDE_JSON" ]; then
             echo '{"hasCompletedOnboarding": true}' > "$CLAUDE_JSON"
-            chown "$PUID:$PGID" "$CLAUDE_JSON"
+            chmod 0600 "$CLAUDE_JSON"
             echo "Created $CLAUDE_JSON (onboarding bypass)"
         fi
     elif [ -n "$ANTHROPIC_API_KEY" ]; then
@@ -74,8 +79,9 @@ print(f'{signing_input}.{b64url(sig)}', end='')
 
         if [ -n "$SERVICE_TOKEN" ]; then
             MCP_SWARM_URL="${MCP_ENDPOINT:-http://swarm-manager:8000/ai/mcp}"
-            CLAUDE_SETTINGS_DIR="$RUNNER_HOME/.claude"
+            CLAUDE_SETTINGS_DIR="$REF_HOME/.claude"
             mkdir -p "$CLAUDE_SETTINGS_DIR"
+            chmod 0700 "$CLAUDE_SETTINGS_DIR"
 
             cat > "$CLAUDE_SETTINGS_DIR/settings.json" << SETTINGS_EOF
 {
@@ -101,7 +107,7 @@ print(f'{signing_input}.{b64url(sig)}', end='')
   }
 }
 SETTINGS_EOF
-            chown -R "$PUID:$PGID" "$CLAUDE_SETTINGS_DIR"
+            chmod 0600 "$CLAUDE_SETTINGS_DIR/settings.json"
             echo "Claude Code MCP servers configured"
         fi
     fi
@@ -109,9 +115,20 @@ fi
 
 echo "Configuration:"
 echo "  Backend: ${RUNNER_TYPE:-claude-code}"
-echo "  User: $RUNNER_USER ($PUID:$PGID)"
+echo "  Server runs as: root (cap_drop=ALL + minimal cap_add — see compose)"
+echo "  Per-agent CLI subprocesses run under deterministic UIDs (20000+) from agent_user.py"
 echo "  Model: ${RUNNER_MODEL:-${CLAUDE_MODEL:-claude-sonnet-4-20250514}}"
 echo "  Projects dir: ${PROJECTS_DIR:-/projects}"
 
+# The server stays root so it can:
+#   - chown per-agent HOME directories to dedicated UIDs (CAP_CHOWN)
+#   - spawn CLI subprocesses under those UIDs via subprocess.Popen(user=...)
+#     (CAP_SETUID/CAP_SETGID)
+#   - read/write across agent HOMEs to manage credentials (CAP_DAC_OVERRIDE)
+#
+# `no-new-privileges:true` (set in the compose) is compatible with this
+# because we are NOT trying to elevate privileges via exec — we are dropping
+# privileges per-subprocess via setresuid. The container itself has cap_drop
+# ALL plus a small allowlist, so "root" inside has no real escape paths.
 echo "Starting FastAPI server on port ${PORT:-8000}..."
-exec gosu "$RUNNER_USER" python server.py
+exec python server.py

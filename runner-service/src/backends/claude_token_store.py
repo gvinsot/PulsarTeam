@@ -5,6 +5,7 @@ Claude Code backend — Token persistence (global, per-agent, per-owner).
 import os
 import re
 import json
+import stat
 import time
 import asyncio
 import subprocess
@@ -16,6 +17,88 @@ from config import (
     OAUTH_CLIENT_ID, OAUTH_TOKEN_URL, OAUTH_SCOPES,
     logger,
 )
+from .crypto import encrypt_text, decrypt_text, is_envelope
+
+
+# --- Filesystem helpers -------------------------------------------------------
+
+_FILE_MODE = 0o600
+_DIR_MODE = 0o700
+
+
+def _secure_makedirs(path: str):
+    os.makedirs(path, mode=_DIR_MODE, exist_ok=True)
+    try:
+        os.chmod(path, _DIR_MODE)
+    except OSError:
+        pass
+
+
+def _atomic_write_secret(path: str, content: str, encrypt: bool = True):
+    """Write `content` to `path` atomically with mode 0600.
+
+    If `encrypt` is True (default) and ENCRYPTION_KEY is set, the content is
+    AES-GCM-encrypted before being written. Set `encrypt=False` for files that
+    are consumed by third-party tools (e.g. ~/.claude/.credentials.json read
+    directly by the Claude Code CLI), where the on-disk format is fixed.
+    """
+    _secure_makedirs(os.path.dirname(path))
+    payload = encrypt_text(content) if encrypt else content
+    tmp = f"{path}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _FILE_MODE)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(payload)
+    except Exception:
+        try: os.remove(tmp)
+        except OSError: pass
+        raise
+    os.replace(tmp, path)
+    try:
+        os.chmod(path, _FILE_MODE)
+    except OSError:
+        pass
+
+
+def _read_secret(path: str) -> Optional[str]:
+    """Read `path`, transparently decrypting if it's an AES-GCM envelope.
+    Returns the plaintext content, or None if the file doesn't exist."""
+    try:
+        with open(path) as f:
+            raw = f.read()
+    except (OSError, FileNotFoundError):
+        return None
+    return decrypt_text(raw)
+
+
+def _read_secret_json(path: str) -> Optional[dict]:
+    raw = _read_secret(path)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
+def _migrate_if_plaintext(path: str):
+    """If the file at `path` is legacy plaintext, rewrite it under the encryption envelope.
+    No-op if the file is missing, already encrypted, or encryption is disabled."""
+    try:
+        with open(path) as f:
+            raw = f.read()
+    except (OSError, FileNotFoundError):
+        return
+    if not raw.strip() or is_envelope(raw):
+        return
+    from .crypto import is_enabled
+    if not is_enabled():
+        return
+    try:
+        _atomic_write_secret(path, raw)
+        logger.info(f"[Crypto] Migrated plaintext credentials to encrypted envelope: {path}")
+    except Exception as e:
+        logger.warning(f"[Crypto] Failed to migrate {path}: {e}")
 
 
 # --- Rate limiting ------------------------------------------------------------
@@ -39,17 +122,10 @@ def set_token_cooldown_until(value: float):
 
 def _restore_credentials_file(oauth_data: dict):
     try:
-        creds_dir = os.path.dirname(CREDENTIALS_FILE)
-        os.makedirs(creds_dir, exist_ok=True)
-        creds = {}
-        try:
-            with open(CREDENTIALS_FILE) as f:
-                creds = json.load(f)
-        except (OSError, FileNotFoundError, json.JSONDecodeError):
-            pass
+        creds = _read_secret_json(CREDENTIALS_FILE) or {}
         creds["claudeAiOauth"] = oauth_data
-        with open(CREDENTIALS_FILE, "w") as f:
-            json.dump(creds, f, indent=2)
+        # NOT encrypted: this file is consumed directly by the Claude Code CLI.
+        _atomic_write_secret(CREDENTIALS_FILE, json.dumps(creds, indent=2), encrypt=False)
         logger.info("Restored credentials.json from persistent OAuth data")
     except Exception as e:
         logger.warning(f"Failed to restore credentials.json: {e}")
@@ -59,58 +135,42 @@ def load_saved_token() -> Optional[str]:
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if token:
         return token
-    try:
-        with open(TOKEN_JSON_FILE) as f:
-            oauth_data = json.load(f)
+    _migrate_if_plaintext(TOKEN_JSON_FILE)
+    oauth_data = _read_secret_json(TOKEN_JSON_FILE)
+    if oauth_data:
         token = oauth_data.get("accessToken")
         if token:
             _restore_credentials_file(oauth_data)
             return token
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        pass
-    try:
-        with open(TOKEN_FILE) as f:
-            token = f.read().strip()
-        if token:
-            return token
-    except (OSError, FileNotFoundError):
-        pass
-    try:
-        with open(CREDENTIALS_FILE) as f:
-            creds = json.load(f)
+    _migrate_if_plaintext(TOKEN_FILE)
+    raw = _read_secret(TOKEN_FILE)
+    if raw and raw.strip():
+        return raw.strip()
+    _migrate_if_plaintext(CREDENTIALS_FILE)
+    creds = _read_secret_json(CREDENTIALS_FILE)
+    if creds:
         token = creds.get("claudeAiOauth", {}).get("accessToken")
         if token:
             return token
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        pass
     return None
 
 
 def save_token(token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(TOKEN_FILE, "w") as f:
-        f.write(token)
+    _secure_makedirs(DATA_DIR)
+    _atomic_write_secret(TOKEN_FILE, token)
     oauth_data = {
         "accessToken": token,
         "refreshToken": refresh_token or "",
         "expiresAt": int((time.time() + expires_in) * 1000),
         "scopes": OAUTH_SCOPES.split(),
     }
-    with open(TOKEN_JSON_FILE, "w") as f:
-        json.dump(oauth_data, f, indent=2)
+    _atomic_write_secret(TOKEN_JSON_FILE, json.dumps(oauth_data, indent=2))
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
-    creds_dir = os.path.dirname(CREDENTIALS_FILE)
-    os.makedirs(creds_dir, exist_ok=True)
-    creds = {}
-    try:
-        with open(CREDENTIALS_FILE) as f:
-            creds = json.load(f)
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        pass
+    creds = _read_secret_json(CREDENTIALS_FILE) or {}
     creds["claudeAiOauth"] = oauth_data
-    with open(CREDENTIALS_FILE, "w") as f:
-        json.dump(creds, f, indent=2)
+    # NOT encrypted: this file is consumed directly by the Claude Code CLI.
+    _atomic_write_secret(CREDENTIALS_FILE, json.dumps(creds, indent=2), encrypt=False)
     logger.info("OAuth token saved (token file + token.json + credentials.json)")
 
 
@@ -125,23 +185,18 @@ def invalidate_global_token():
 
 
 def is_token_expired(margin_seconds: int = 300) -> bool:
-    try:
-        with open(TOKEN_JSON_FILE) as f:
-            oauth_data = json.load(f)
-        expires_at_ms = oauth_data.get("expiresAt", 0)
-        if not expires_at_ms:
-            return False
-        return time.time() >= (expires_at_ms / 1000) - margin_seconds
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
+    oauth_data = _read_secret_json(TOKEN_JSON_FILE)
+    if not oauth_data:
         return True
+    expires_at_ms = oauth_data.get("expiresAt", 0)
+    if not expires_at_ms:
+        return False
+    return time.time() >= (expires_at_ms / 1000) - margin_seconds
 
 
 def get_saved_refresh_token() -> Optional[str]:
-    try:
-        with open(TOKEN_JSON_FILE) as f:
-            return json.load(f).get("refreshToken") or None
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        return None
+    oauth_data = _read_secret_json(TOKEN_JSON_FILE)
+    return (oauth_data or {}).get("refreshToken") or None
 
 
 # =============================================================================
@@ -160,25 +215,21 @@ def load_owner_token(owner_id: str) -> Optional[str]:
     if not owner_id:
         return None
     token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
-    try:
-        with open(token_json) as f:
-            data = json.load(f)
-        return data.get("accessToken") or None
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        return None
+    _migrate_if_plaintext(token_json)
+    data = _read_secret_json(token_json)
+    return (data or {}).get("accessToken") or None
 
 
 def save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
     owner_dir = _owner_token_dir(owner_id)
-    os.makedirs(owner_dir, exist_ok=True)
+    _secure_makedirs(owner_dir)
     oauth_data = {
         "accessToken": token,
         "refreshToken": refresh_token or "",
         "expiresAt": int((time.time() + expires_in) * 1000),
         "scopes": OAUTH_SCOPES.split(),
     }
-    with open(os.path.join(owner_dir, "oauth_token.json"), "w") as f:
-        json.dump(oauth_data, f, indent=2)
+    _atomic_write_secret(os.path.join(owner_dir, "oauth_token.json"), json.dumps(oauth_data, indent=2))
     logger.info(f"[Owner Auth] Saved OAuth token for owner {owner_id}")
 
 
@@ -197,26 +248,21 @@ def is_owner_token_expired(owner_id: str, margin_seconds: int = 300) -> bool:
     if not owner_id:
         return False
     token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
-    try:
-        with open(token_json) as f:
-            data = json.load(f)
-        expires_at_ms = data.get("expiresAt", 0)
-        if not expires_at_ms:
-            return False
-        return time.time() >= (expires_at_ms / 1000) - margin_seconds
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
+    data = _read_secret_json(token_json)
+    if not data:
         return False
+    expires_at_ms = data.get("expiresAt", 0)
+    if not expires_at_ms:
+        return False
+    return time.time() >= (expires_at_ms / 1000) - margin_seconds
 
 
 def get_owner_refresh_token(owner_id: str) -> Optional[str]:
     if not owner_id:
         return None
     token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
-    try:
-        with open(token_json) as f:
-            return json.load(f).get("refreshToken") or None
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        return None
+    data = _read_secret_json(token_json)
+    return (data or {}).get("refreshToken") or None
 
 
 # =============================================================================
@@ -233,23 +279,19 @@ def load_agent_token(agent_user: dict) -> Optional[str]:
             return token
     home = agent_user["home"]
     agent_token_json = os.path.join(home, "oauth_token.json")
-    try:
-        with open(agent_token_json) as f:
-            data = json.load(f)
+    _migrate_if_plaintext(agent_token_json)
+    data = _read_secret_json(agent_token_json)
+    if data:
         token = data.get("accessToken")
         if token:
             return token
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        pass
+    # `.credentials.json` is consumed by the Claude Code CLI directly — leave it plaintext.
     agent_creds = os.path.join(home, ".claude", ".credentials.json")
-    try:
-        with open(agent_creds) as f:
-            creds = json.load(f)
+    creds = _read_secret_json(agent_creds)
+    if creds:
         token = creds.get("claudeAiOauth", {}).get("accessToken")
         if token:
             return token
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        pass
     return None
 
 
@@ -259,26 +301,19 @@ def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] 
         save_owner_token(owner_id, token, refresh_token=refresh_token, expires_in=expires_in)
         return
     home = agent_user["home"]
-    os.makedirs(home, exist_ok=True)
+    _secure_makedirs(home)
     oauth_data = {
         "accessToken": token,
         "refreshToken": refresh_token or "",
         "expiresAt": int((time.time() + expires_in) * 1000),
         "scopes": OAUTH_SCOPES.split(),
     }
-    with open(os.path.join(home, "oauth_token.json"), "w") as f:
-        json.dump(oauth_data, f, indent=2)
+    _atomic_write_secret(os.path.join(home, "oauth_token.json"), json.dumps(oauth_data, indent=2))
     agent_creds_file = os.path.join(home, ".claude", ".credentials.json")
-    os.makedirs(os.path.dirname(agent_creds_file), exist_ok=True)
-    creds = {}
-    try:
-        with open(agent_creds_file) as f:
-            creds = json.load(f)
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        pass
+    creds = _read_secret_json(agent_creds_file) or {}
     creds["claudeAiOauth"] = oauth_data
-    with open(agent_creds_file, "w") as f:
-        json.dump(creds, f, indent=2)
+    # NOT encrypted: this file is consumed directly by the Claude Code CLI.
+    _atomic_write_secret(agent_creds_file, json.dumps(creds, indent=2), encrypt=False)
     logger.info(f"[Agent Auth] Saved OAuth token for agent {agent_user['username']}")
 
 
@@ -312,26 +347,21 @@ def is_agent_token_expired(agent_user: dict, margin_seconds: int = 300) -> bool:
     if owner_id:
         return is_owner_token_expired(owner_id, margin_seconds)
     agent_token_json = os.path.join(agent_user["home"], "oauth_token.json")
-    try:
-        with open(agent_token_json) as f:
-            data = json.load(f)
-        expires_at_ms = data.get("expiresAt", 0)
-        if not expires_at_ms:
-            return False
-        return time.time() >= (expires_at_ms / 1000) - margin_seconds
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
+    data = _read_secret_json(agent_token_json)
+    if not data:
         return False
+    expires_at_ms = data.get("expiresAt", 0)
+    if not expires_at_ms:
+        return False
+    return time.time() >= (expires_at_ms / 1000) - margin_seconds
 
 
 def get_agent_refresh_token(agent_user: dict) -> Optional[str]:
     if not agent_user:
         return None
     agent_token_json = os.path.join(agent_user["home"], "oauth_token.json")
-    try:
-        with open(agent_token_json) as f:
-            return json.load(f).get("refreshToken") or None
-    except (OSError, FileNotFoundError, json.JSONDecodeError):
-        return None
+    data = _read_secret_json(agent_token_json)
+    return (data or {}).get("refreshToken") or None
 
 
 def resolve_token(agent_user: dict) -> Optional[str]:
@@ -563,7 +593,21 @@ def get_agent_env(agent_user: dict = None) -> dict:
 
 
 def get_subprocess_kwargs(agent_user: dict = None) -> dict:
-    return {}
+    """Return Popen kwargs that drop the spawned CLI to the agent's dedicated UID/GID.
+
+    Requires the parent process to have ambient CAP_SETUID/CAP_SETGID — granted
+    by the entrypoint via setpriv. If the agent record doesn't carry a dedicated
+    UID (e.g. legacy code path) we return an empty dict and the subprocess runs
+    as the parent's UID.
+    """
+    if not agent_user:
+        return {}
+    uid = agent_user.get("uid")
+    gid = agent_user.get("gid")
+    parent_uid = os.getuid()
+    if uid is None or uid == parent_uid:
+        return {}
+    return {"user": uid, "group": gid if gid is not None else uid}
 
 
 def auth_method() -> str:

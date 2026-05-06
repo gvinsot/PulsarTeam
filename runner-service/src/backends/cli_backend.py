@@ -19,6 +19,7 @@ from config import (
 )
 from agent_user import get_agent_project_dir, ensure_agent_user
 from .base import RunnerBackend
+from .claude_token_store import get_subprocess_kwargs
 
 
 class CliBackend(RunnerBackend):
@@ -218,6 +219,7 @@ class CliBackend(RunnerBackend):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=self._agent_env(agent_user),
+                **get_subprocess_kwargs(agent_user),
             )
             stdin_input = prompt.encode("utf-8") if self.pass_prompt_via_stdin else None
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
@@ -260,6 +262,7 @@ class CliBackend(RunnerBackend):
             cwd=cwd,
             env=self._agent_env(agent_user),
             limit=10 * 1024 * 1024,
+            **get_subprocess_kwargs(agent_user),
         )
         if self.pass_prompt_via_stdin:
             try:

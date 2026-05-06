@@ -6,21 +6,15 @@ services:
       dockerfile: api/Dockerfile
       target: production
     environment:
+      # Non-secret config only — secrets are loaded from /run/secrets/<NAME> by entrypoint.sh
       - NODE_ENV=production
       - PORT=${PORT}
-      - JWT_SECRET=${JWT_SECRET}
       - ADMIN_USERNAME=${ADMIN_USERNAME}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS}
-      - DATABASE_URL=${DATABASE_URL}
       - GIT_USER_NAME=${GIT_USER_NAME}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL}
       - GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
-      - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
       - GITHUB_OAUTH_REDIRECT_URI=${GITHUB_OAUTH_REDIRECT_URI}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
@@ -35,31 +29,65 @@ services:
       - HERMES_SERVICE_URL=http://hermes-service:8000
       - OPENCODE_SERVICE_URL=http://opencode-service:8000
       - SSH_KEYS_HOST_PATH=${SSH_KEYS_HOST_PATH}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
       - GITHUB_USER=${GITHUB_USER}
       - MCP_ENDPOINT=http://swarm-manager:8000/ai/mcp
       - MCP_ACTIONS_ENDPOINT=http://swarm-manager:8000/ai/actions/mcp
       - ONEDRIVE_CLIENT_ID=${ONEDRIVE_CLIENT_ID}
-      - ONEDRIVE_CLIENT_SECRET=${ONEDRIVE_CLIENT_SECRET}
       - ONEDRIVE_REDIRECT_URI=${ONEDRIVE_REDIRECT_URI}
       - ONEDRIVE_TENANT_ID=${ONEDRIVE_TENANT_ID}
       - GMAIL_CLIENT_ID=${GMAIL_CLIENT_ID:-}
-      - GMAIL_CLIENT_SECRET=${GMAIL_CLIENT_SECRET:-}
       - GMAIL_REDIRECT_URI=${GMAIL_REDIRECT_URI:-}
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
-      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
       - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI:-}
       - JIRA_BOARD_URL=${JIRA_BOARD_URL:-}
       - JIRA_ORG_ID=${JIRA_ORG_ID:-}
-      - JIRA_API_KEY=${JIRA_API_KEY:-}
       - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
       - JIRA_WEBHOOK_URL=${JIRA_WEBHOOK_URL:-}
-      - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
-      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
+    secrets:
+      - source: jwt_secret
+        target: JWT_SECRET
+      - source: admin_password
+        target: ADMIN_PASSWORD
+      - source: anthropic_api_key
+        target: ANTHROPIC_API_KEY
+      - source: openai_api_key
+        target: OPENAI_API_KEY
+      - source: mistral_api_key
+        target: MISTRAL_API_KEY
+      - source: database_url
+        target: DATABASE_URL
+      - source: github_oauth_client_secret
+        target: GITHUB_OAUTH_CLIENT_SECRET
+      - source: onedrive_client_secret
+        target: ONEDRIVE_CLIENT_SECRET
+      - source: gmail_client_secret
+        target: GMAIL_CLIENT_SECRET
+      - source: slack_client_secret
+        target: SLACK_CLIENT_SECRET
+      - source: jira_api_key
+        target: JIRA_API_KEY
+      - source: jira_webhook_secret
+        target: JIRA_WEBHOOK_SECRET
+      - source: github_token
+        target: GITHUB_TOKEN
+      - source: coder_api_key
+        target: CODER_API_KEY
+      - source: encryption_key
+        target: ENCRYPTION_KEY
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ${SSH_KEYS_HOST_PATH:-/tmp/empty-ssh}:/root/.ssh:ro
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=256M,mode=1777
     networks:
       proxy:
         aliases:
@@ -84,10 +112,23 @@ services:
       labels:
         - "traefik.enable=true"
         - "traefik.http.services.pulsarteam-api.loadbalancer.server.port=3001"
+        # ─── Shared security headers middleware ─────────────────────────────
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.stsSeconds=63072000"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.stsIncludeSubdomains=true"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.stsPreload=true"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.forceSTSHeader=true"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.frameDeny=true"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.contentTypeNosniff=true"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.browserXssFilter=true"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.Permissions-Policy=accelerometer=(),camera=(),geolocation=(),gyroscope=(),magnetometer=(),microphone=(),payment=(),usb=()"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.Cross-Origin-Opener-Policy=same-origin"
+        - "traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none"
+        # ─── API routers ─────────────────────────────────────────────────────
         - "traefik.http.routers.pulsarteam-api.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"
         - "traefik.http.routers.pulsarteam-api.entrypoints=websecure"
         - "traefik.http.routers.pulsarteam-api.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.pulsarteam-api.middlewares=realtime-global@file"
+        - "traefik.http.routers.pulsarteam-api.middlewares=realtime-global@file,pulsarteam-sec-headers"
         - "traefik.http.routers.pulsarteam-api.service=pulsarteam-api"
         - "traefik.http.routers.pulsarteam-api.priority=100"
         - "traefik.http.routers.pulsarteam-api-http.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"
@@ -97,6 +138,7 @@ services:
         - "traefik.http.routers.pulsarteam-oauth-cb.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && Path(`/gmail-callback.html`)"
         - "traefik.http.routers.pulsarteam-oauth-cb.entrypoints=websecure"
         - "traefik.http.routers.pulsarteam-oauth-cb.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.pulsarteam-oauth-cb.middlewares=pulsarteam-sec-headers"
         - "traefik.http.routers.pulsarteam-oauth-cb.service=pulsarteam-api"
         - "traefik.http.routers.pulsarteam-oauth-cb.priority=200"
         - "traefik.http.routers.pulsarteam-oauth-cb-http.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && Path(`/gmail-callback.html`)"
@@ -109,6 +151,20 @@ services:
     build:
       context: ..
       dockerfile: frontend/Dockerfile
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64M,mode=1777
+      - /var/cache/nginx:size=64M,mode=0755
+      - /var/run:size=8M,mode=0755
     networks:
       - proxy
     deploy:
@@ -128,7 +184,7 @@ services:
         - "traefik.http.routers.pulsarteam-frontend.rule=Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)"
         - "traefik.http.routers.pulsarteam-frontend.entrypoints=websecure"
         - "traefik.http.routers.pulsarteam-frontend.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.pulsarteam-frontend.middlewares=global@file"
+        - "traefik.http.routers.pulsarteam-frontend.middlewares=global@file,pulsarteam-sec-headers@docker"
         - "traefik.http.routers.pulsarteam-frontend.service=pulsarteam-frontend"
         - "traefik.http.routers.pulsarteam-frontend.priority=1"
         - "traefik.http.routers.pulsarteam-oauth-frontend.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && PathPrefix(`/auth/`)"
@@ -155,37 +211,54 @@ services:
         aliases:
           - claudecode-service
     environment:
+      # Non-secret config only — secrets are loaded from /run/secrets/<NAME> by entrypoint.sh
       - RUNNER_TYPE=claude-code
       - TZ=Europe/Paris
       - LOG_LEVEL=info
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-6}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - VERBOSE=${CODER_VERBOSE:-false}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-http://swarm-manager:8000/ai/mcp}
       - PYTHONUNBUFFERED=1
       - PYTHONFAULTHANDLER=1
+    secrets:
+      - source: jwt_secret
+        target: JWT_SECRET
+      - source: anthropic_api_key
+        target: ANTHROPIC_API_KEY
+      - source: claude_code_oauth_token
+        target: CLAUDE_CODE_OAUTH_TOKEN
+      - source: coder_api_key
+        target: API_KEY
+      - source: encryption_key
+        target: ENCRYPTION_KEY
     volumes:
-      - /home/gildas/.ssh:/root/.ssh:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - claudecode-auth-data:/app/data
       - claudecode-android-cache:/opt/android-sdk
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.hostname == server-b
+          - node.labels.gpu == none
       resources:
         limits:
           cpus: '4'
@@ -235,14 +308,26 @@ services:
       - LOG_LEVEL=info
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
+    secrets:
+      - source: coder_api_key
+        target: API_KEY
     volumes:
-      - /home/gildas/.ssh:/root/.ssh:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - sandbox-data:/app/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
     deploy:
       replicas: 1
       placement:
@@ -273,19 +358,35 @@ services:
       - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
+    secrets:
+      - source: coder_api_key
+        target: API_KEY
+      - source: anthropic_api_key
+        target: ANTHROPIC_API_KEY
+      - source: encryption_key
+        target: ENCRYPTION_KEY
     volumes:
-      - /home/gildas/.ssh:/root/.ssh:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - openclaw-data:/app/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.hostname == server-b
+          - node.labels.gpu == none
       resources:
         limits:
           cpus: '4'
@@ -325,19 +426,33 @@ services:
       - LOG_LEVEL=info
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
+    secrets:
+      - source: coder_api_key
+        target: API_KEY
+      - source: encryption_key
+        target: ENCRYPTION_KEY
     volumes:
-      - /home/gildas/.ssh:/root/.ssh:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - opencode-data:/app/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.hostname == server-b
+          - node.labels.gpu == none
       resources:
         limits:
           cpus: '4'
@@ -379,21 +494,38 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:-change-me-in-production}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET}
       - PYTHONUNBUFFERED=1
+    secrets:
+      - source: jwt_secret
+        target: JWT_SECRET
+      - source: coder_api_key
+        target: API_KEY
+      - source: anthropic_api_key
+        target: ANTHROPIC_API_KEY
+      - source: encryption_key
+        target: ENCRYPTION_KEY
     volumes:
-      - /home/gildas/.ssh:/root/.ssh:ro
-      - /var/run/docker.sock:/var/run/docker.sock
       - hermes-data:/app/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
     deploy:
       replicas: 1
       placement:
         constraints:
-          - node.hostname == server-b
+          - node.labels.gpu == none
       resources:
         limits:
           cpus: '4'
@@ -420,6 +552,17 @@ services:
 
   flaresolverr:
     image: 21hsmw/flaresolverr:nodriver
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
     networks:
       proxy:
       backend:
@@ -452,6 +595,17 @@ services:
       context: ..
       dockerfile: mcp-browser/Dockerfile
     image: registry.methodinfo.fr/mcp-browser:latest
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=256M,mode=1777
     networks:
       proxy:
         aliases:
@@ -499,6 +653,51 @@ volumes:
     driver: local
   hermes-data:
     driver: local
+
+# ─── Docker Swarm secrets ───────────────────────────────────────────────────
+# All secrets are declared external — they must be created on the swarm
+# manager BEFORE deploying the stack. Example:
+#   printf '%s' "$JWT_SECRET" | docker secret create jwt_secret -
+#   openssl rand -base64 32 | docker secret create encryption_key -
+#
+# To rotate a secret:
+#   docker secret create jwt_secret_v2 -    # create new version
+#   # update the swarm.yml to reference jwt_secret_v2
+#   docker stack deploy -c devops/docker-compose.swarm.yml pulsarteam
+#   docker secret rm jwt_secret             # remove old version
+secrets:
+  jwt_secret:
+    external: true
+  admin_password:
+    external: true
+  anthropic_api_key:
+    external: true
+  openai_api_key:
+    external: true
+  mistral_api_key:
+    external: true
+  database_url:
+    external: true
+  github_oauth_client_secret:
+    external: true
+  onedrive_client_secret:
+    external: true
+  gmail_client_secret:
+    external: true
+  slack_client_secret:
+    external: true
+  jira_api_key:
+    external: true
+  jira_webhook_secret:
+    external: true
+  github_token:
+    external: true
+  coder_api_key:
+    external: true
+  claude_code_oauth_token:
+    external: true
+  encryption_key:
+    external: true
 
 networks:
   proxy:
