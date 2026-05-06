@@ -480,7 +480,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                   ) : (
                     <span className="text-xs text-dark-500 italic">None</span>
                   )}
-                  {boardRepos.length > 0 && (
+                  {(boardRepos.length > 0 || task.repoId) ? (
                     <button
                       onClick={() => setEditingRepo(true)}
                       className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
@@ -488,6 +488,8 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                     >
                       <Edit3 className="w-3 h-3" />
                     </button>
+                  ) : (
+                    <span className="text-[10px] text-dark-500 italic" title="Link a repo to this board first">no repo on board</span>
                   )}
                 </div>
               )}

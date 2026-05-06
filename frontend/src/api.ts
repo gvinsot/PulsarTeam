@@ -566,6 +566,10 @@ export const api = {
   getAvailableRepos: () =>
     fetch(`${API_BASE}/projects/available-repos`, { headers: getHeaders() }).then(handleResponse),
 
+  // Available repos via the board's GitHub plugin OAuth token (for BoardReposPanel)
+  getBoardAvailableRepos: (boardId) =>
+    fetch(`${API_BASE}/projects/boards/${boardId}/available-repos`, { headers: getHeaders() }).then(handleResponse),
+
   // Code Index — auto-index project by name
   indexProject: (projectName) =>
     fetch(`${API_BASE}/code-index/index-project`, {

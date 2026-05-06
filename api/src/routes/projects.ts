@@ -5,7 +5,7 @@ import {
   getBoardsForProject, setBoardProject,
   getReposForBoard, getReposForProject, createBoardRepo, deleteBoardRepo,
   getStoragesForBoard, getStoragesForProject, createBoardStorage, deleteBoardStorage,
-  getBoardById,
+  getBoardById, getOAuthToken,
 } from '../services/database.js';
 import { listRepos } from '../services/gitProvider.js';
 import { readSecret } from '../secrets.js';
@@ -229,7 +229,8 @@ export function projectRoutes() {
   });
 
   // ── Helper: list available repos from configured git connections ─────────
-  // Used by the UI to populate a picker when attaching a repo to a board.
+  // (Global) Used by agent pickers (Add Agent, Broadcast) — feeds the legacy
+  // `agent.project` string from any repo exposed by the configured connections.
   router.get('/available-repos', async (req, res) => {
     try {
       const repos = await listRepos();
@@ -243,6 +244,62 @@ export function projectRoutes() {
     } catch (err: any) {
       console.error('Failed to list available repos:', err.message);
       res.json([]);
+    }
+  });
+
+  // (Board-scoped) Repos accessible via the board's GitHub plugin OAuth token.
+  // This is what the BoardReposPanel uses to populate the "Add Repo" picker.
+  router.get('/boards/:boardId/available-repos', async (req, res) => {
+    try {
+      const board = await getBoardById(req.params.boardId);
+      if (!board) return res.status(404).json({ error: 'Board not found' });
+
+      const tok = getOAuthToken('github', 'board', req.params.boardId);
+      if (!tok || !tok.accessToken) {
+        return res.status(400).json({
+          error: 'No GitHub plugin connected on this board',
+          code: 'GITHUB_NOT_CONNECTED',
+        });
+      }
+
+      // Fetch repos accessible to the connected GitHub user/installation.
+      // Pulls up to 3 pages of 100 (= 300 repos) — sufficient for most setups.
+      const headers = {
+        Authorization: `Bearer ${tok.accessToken}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'PulsarTeam',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+
+      const out: any[] = [];
+      for (let page = 1; page <= 3; page++) {
+        const ghRes = await fetch(
+          `https://api.github.com/user/repos?per_page=100&page=${page}&affiliation=owner,collaborator,organization_member&sort=updated`,
+          { headers }
+        );
+        if (!ghRes.ok) {
+          const body = await ghRes.text();
+          console.error(`[GitHub] /user/repos failed (${ghRes.status}):`, body.slice(0, 200));
+          return res.status(502).json({ error: `GitHub API ${ghRes.status}` });
+        }
+        const data = await ghRes.json();
+        if (!Array.isArray(data) || data.length === 0) break;
+        for (const r of data) {
+          out.push({
+            provider: 'github',
+            fullName: r.full_name,
+            htmlUrl: r.html_url,
+            defaultBranch: r.default_branch,
+            description: r.description || '',
+          });
+        }
+        if (data.length < 100) break;
+      }
+
+      res.json(out);
+    } catch (err: any) {
+      console.error('Failed to list board repos:', err.message);
+      res.status(500).json({ error: 'Failed to list repos' });
     }
   });
 

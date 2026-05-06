@@ -269,6 +269,8 @@ function BoardReposPanel({ board, onChanged, onShowActivity }) {
   const [showAdd, setShowAdd] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pickedRepo, setPickedRepo] = useState('');
+  const [pickerError, setPickerError] = useState(null);
+  const [loadingAvailable, setLoadingAvailable] = useState(false);
 
   const reload = useCallback(async () => {
     const list = await api.getBoardRepos(board.id).catch(() => []);
@@ -276,9 +278,28 @@ function BoardReposPanel({ board, onChanged, onShowActivity }) {
   }, [board.id]);
 
   useEffect(() => { reload(); }, [reload]);
-  useEffect(() => {
-    api.getAvailableRepos().then(setAvailable).catch(() => setAvailable([]));
-  }, []);
+
+  // Load available repos lazily when the user opens the picker, so we don't
+  // hammer the GitHub API for every board on the page.
+  const loadAvailable = useCallback(async () => {
+    setLoadingAvailable(true);
+    setPickerError(null);
+    try {
+      const list = await api.getBoardAvailableRepos(board.id);
+      setAvailable(list);
+    } catch (err) {
+      setAvailable([]);
+      setPickerError(err.message || 'Failed to load repos');
+    } finally {
+      setLoadingAvailable(false);
+    }
+  }, [board.id]);
+
+  const onToggleAdd = () => {
+    const next = !showAdd;
+    setShowAdd(next);
+    if (next && available.length === 0 && !loadingAvailable) loadAvailable();
+  };
 
   const onAdd = async () => {
     if (!pickedRepo) return;
@@ -315,7 +336,7 @@ function BoardReposPanel({ board, onChanged, onShowActivity }) {
           {board.name}
         </div>
         <button
-          onClick={() => setShowAdd(s => !s)}
+          onClick={onToggleAdd}
           className="flex items-center gap-1 px-2.5 py-1 text-xs bg-purple-600/80 hover:bg-purple-500 text-white rounded transition-colors"
         >
           <Plus size={12} /> Add Repo
@@ -323,26 +344,44 @@ function BoardReposPanel({ board, onChanged, onShowActivity }) {
       </div>
 
       {showAdd && (
-        <div className="mb-3 flex items-center gap-2">
-          <select
-            value={pickedRepo}
-            onChange={e => setPickedRepo(e.target.value)}
-            className="flex-1 bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
-          >
-            <option value="">Select a repo from configured connections...</option>
-            {available.map(r => (
-              <option key={`${r.provider}/${r.fullName}`} value={r.fullName}>
-                [{r.provider}] {r.fullName}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={onAdd}
-            disabled={!pickedRepo || busy}
-            className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-500 text-white rounded disabled:opacity-50"
-          >
-            Add
-          </button>
+        <div className="mb-3 space-y-2">
+          {loadingAvailable ? (
+            <p className="text-xs text-dark-400 px-2 py-1.5">Loading repos via the board's GitHub plugin...</p>
+          ) : pickerError ? (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2 text-xs text-amber-300 space-y-1">
+              <p><strong>GitHub not connected on this board.</strong></p>
+              <p className="text-amber-300/80">{pickerError}</p>
+              <p>Open the board's <em>Plugins</em> panel (in the Tasks view) to connect the GitHub plugin, then come back here.</p>
+              <button
+                onClick={loadAvailable}
+                className="mt-1 text-amber-200 underline hover:text-amber-100"
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <select
+                value={pickedRepo}
+                onChange={e => setPickedRepo(e.target.value)}
+                className="flex-1 bg-dark-700 border border-dark-600 rounded px-2 py-1.5 text-sm text-dark-100"
+              >
+                <option value="">Select a repo accessible via the board's GitHub plugin...</option>
+                {available.map(r => (
+                  <option key={`${r.provider}/${r.fullName}`} value={r.fullName}>
+                    [{r.provider}] {r.fullName}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={onAdd}
+                disabled={!pickedRepo || busy}
+                className="px-3 py-1.5 text-sm bg-purple-600 hover:bg-purple-500 text-white rounded disabled:opacity-50"
+              >
+                Add
+              </button>
+            </div>
+          )}
         </div>
       )}
 
