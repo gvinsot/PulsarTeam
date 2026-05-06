@@ -452,12 +452,33 @@ router.patch('/:id/clear-stopped', async (req, res) => {
     clearTaskSignal(req.params.id, 'stopped');
     await updateTaskExecutionStatus(req.params.id, null);
 
+    // Reset circuit breaker so the task loop doesn't skip this task
+    mgr._taskResumeFailures?.delete(req.params.id);
+
     // Update in-memory task
     const memTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === req.params.id);
     if (memTask) {
       memTask.executionStatus = null;
     }
     task.executionStatus = null;
+
+    // If task is in 'error' status, restore it to the previous active status
+    // so the task loop picks it up for re-execution
+    if (task.status === 'error') {
+      const restoreStatus = task.errorFromStatus || 'pending';
+      await mgr.setTaskStatus(task.agentId, task.id, restoreStatus, { by: 'user' });
+      // setTaskStatus clears startedAt — set it so the task loop picks it up
+      const updatedTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === req.params.id);
+      if (updatedTask) {
+        updatedTask.startedAt = new Date().toISOString();
+      }
+    } else {
+      // For non-error tasks, just re-stamp startedAt so the task loop resumes
+      if (memTask) {
+        memTask.startedAt = new Date().toISOString();
+      }
+      task.startedAt = new Date().toISOString();
+    }
 
     mgr._emit('task:updated', { agentId: task.agentId, task: { ...task, agentId: task.agentId } });
     res.json({ ok: true });
