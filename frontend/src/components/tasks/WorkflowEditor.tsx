@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
-  Trash2, X, ChevronDown, Plus, Settings, ArrowRight, Zap, User,
-  FolderKanban, Save, Check, Layers, Code, Loader2,
+  Trash2, X, Plus, Settings, ArrowRight, Zap, User,
+  FolderKanban, Save, Check, Layers, Code, Loader2, GripVertical,
 } from 'lucide-react';
 import { api } from '../../api';
 import {
@@ -69,6 +69,9 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
   const [showJson, setShowJson] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState(null);
+  const [dragColIdx, setDragColIdx] = useState<number | null>(null);
+  const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const colRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const jiraEnabled = jiraStatus?.enabled || false;
 
@@ -117,14 +120,49 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
   const addCol = () => {
     setCols(prev => [...prev, { id: 'new_step', label: 'New Step', color: '#6b7280' }]);
   };
-  const moveCol = (idx, dir) => {
-    const target = idx + dir;
-    if (target < 0 || target >= cols.length) return;
+  // ── Column drag-and-drop helpers ──
+  const handleColDragStart = (e: React.DragEvent, idx: number) => {
+    setDragColIdx(idx);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(idx));
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = '0.4';
+    }
+  };
+  const handleColDragEnd = (e: React.DragEvent) => {
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = '1';
+    }
+    setDragColIdx(null);
+    setDropTargetIdx(null);
+  };
+  const handleColDragOver = (e: React.DragEvent, idx: number) => {
+    if (dragColIdx === null) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const midX = rect.left + rect.width / 2;
+    const insertIdx = e.clientX < midX ? idx : idx + 1;
+    if (insertIdx !== dropTargetIdx) setDropTargetIdx(insertIdx);
+  };
+  const handleColDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (dragColIdx === null || dropTargetIdx === null) return;
+    let targetIdx = dropTargetIdx;
+    if (targetIdx === dragColIdx || targetIdx === dragColIdx + 1) {
+      setDragColIdx(null);
+      setDropTargetIdx(null);
+      return;
+    }
     setCols(prev => {
       const arr = [...prev];
-      [arr[idx], arr[target]] = [arr[target], arr[idx]];
+      const [moved] = arr.splice(dragColIdx, 1);
+      const insertAt = targetIdx > dragColIdx ? targetIdx - 1 : targetIdx;
+      arr.splice(insertAt, 0, moved);
       return arr;
     });
+    setDragColIdx(null);
+    setDropTargetIdx(null);
   };
 
   // ── Transition helpers ──
@@ -199,31 +237,40 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
 
         <div className="flex-1 overflow-auto px-5 py-4">
           {/* ── Columns as horizontal cards with transitions below each ── */}
-          <div className="flex gap-3 pb-2">
+          <div className="flex gap-3 pb-2"
+            onDragOver={e => { if (dragColIdx !== null) e.preventDefault(); }}
+            onDrop={handleColDrop}
+          >
             {cols.map((col, idx) => {
               const colTransitions = transitions
                 .map((t, ti) => ({ ...t, _idx: ti }))
                 .filter(t => t.from === col.id);
 
               return (
-                <div key={idx} className="flex flex-col min-w-[240px] flex-1">
+                <div key={col.id + '-' + idx} className="flex flex-col min-w-[240px] flex-1 relative"
+                  ref={el => { colRefs.current[idx] = el; }}
+                  onDragOver={e => handleColDragOver(e, idx)}
+                >
+                  {dropTargetIdx === idx && dragColIdx !== null && dragColIdx !== idx && dragColIdx !== idx - 1 && (
+                    <div className="absolute left-[-8px] top-0 bottom-0 w-[3px] bg-indigo-500 rounded-full z-10" />
+                  )}
+                  {dropTargetIdx === idx + 1 && dragColIdx !== null && dragColIdx !== idx && dragColIdx !== idx + 1 && idx === cols.length - 1 && (
+                    <div className="absolute right-[-8px] top-0 bottom-0 w-[3px] bg-indigo-500 rounded-full z-10" />
+                  )}
                   {/* Column header card */}
-                  <div className="bg-dark-800 rounded-lg px-3 py-2.5 space-y-2">
+                  <div className="bg-dark-800 rounded-lg px-3 py-2.5 space-y-2"
+                    draggable
+                    onDragStart={e => handleColDragStart(e, idx)}
+                    onDragEnd={handleColDragEnd}
+                  >
                     <div className="flex items-center gap-2">
+                      <GripVertical className="w-3 h-3 text-dark-500 cursor-grab flex-shrink-0" />
                       <select value={col.color} onChange={e => updateCol(idx, { color: e.target.value })}
                         className="w-6 h-5 bg-dark-700 border-0 rounded cursor-pointer text-[10px]" style={{ color: col.color }}>
                         {AVAILABLE_COLORS.map(c => <option key={c.hex} value={c.hex} style={{ color: c.hex }}>{c.label}</option>)}
                       </select>
                       <input value={col.label} onChange={e => updateCol(idx, { label: e.target.value })}
                         className="flex-1 bg-transparent text-sm font-medium text-dark-200 outline-none min-w-0" placeholder="Column name" />
-                      <button onClick={() => moveCol(idx, -1)} disabled={idx === 0}
-                        className={`p-0.5 ${idx === 0 ? 'text-dark-700 cursor-not-allowed' : 'text-dark-500 hover:text-dark-200'}`} title="Move left">
-                        <ChevronDown className="w-3 h-3 rotate-90" />
-                      </button>
-                      <button onClick={() => moveCol(idx, 1)} disabled={idx === cols.length - 1}
-                        className={`p-0.5 ${idx === cols.length - 1 ? 'text-dark-700 cursor-not-allowed' : 'text-dark-500 hover:text-dark-200'}`} title="Move right">
-                        <ChevronDown className="w-3 h-3 -rotate-90" />
-                      </button>
                       <button onClick={() => removeCol(idx)} className="p-0.5 text-dark-500 hover:text-red-400" title="Remove column">
                         <Trash2 className="w-3 h-3" />
                       </button>
