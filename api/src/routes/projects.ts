@@ -253,8 +253,8 @@ export function projectRoutes() {
       const tok = getOAuthToken('onedrive', 'board', req.params.boardId);
       if (!tok || !tok.accessToken) {
         return res.status(400).json({
-          error: 'No OneDrive plugin connected on this board',
-          code: 'ONEDRIVE_NOT_CONNECTED',
+          error: 'No drive connected',
+          code: 'DRIVE_NOT_CONNECTED',
         });
       }
 

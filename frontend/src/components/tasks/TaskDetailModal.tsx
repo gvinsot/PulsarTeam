@@ -570,7 +570,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                     <span className="text-xs text-dark-500 italic">None</span>
                   )}
                   {storageLoadError ? (
-                    <span className="text-[10px] text-amber-400 italic" title={storageLoadError}>onedrive plugin off</span>
+                    <span className="text-[10px] text-dark-500 italic">No drive connected</span>
                   ) : (
                     <button
                       onClick={() => setEditingStorage(true)}

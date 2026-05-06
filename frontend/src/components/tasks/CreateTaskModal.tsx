@@ -11,7 +11,7 @@ const RECURRENCE_PERIODS = [
   { value: 'custom', label: 'Custom interval', minutes: null },
 ];
 
-export default function CreateTaskModal({ agents, onClose, onCreated, statusOptions, defaultStatus, boardId, projectName }) {
+export default function CreateTaskModal({ agents, onClose, onCreated, statusOptions, defaultStatus, boardId, projectName, defaultRepoFullName = null, defaultStoragePath = null }) {
   // Allow all columns as creation statuses (don't exclude the last one —
   // custom columns added after "Done" would be wrongly hidden by slice(0, -1))
   const CREATE_STATUSES = statusOptions;
@@ -31,7 +31,9 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
   // Repos accessible via the board's GitHub plugin — task targets one of them
   const [availableRepos, setAvailableRepos] = useState([]);
   const [repoLoadError, setRepoLoadError] = useState(null);
-  const [repoFullName, setRepoFullName] = useState('');
+  // Pre-fill with the last repo used on this board (passed from TasksBoard).
+  const [repoFullName, setRepoFullName] = useState(defaultRepoFullName || '');
+  const userTouchedRepo = useRef(false);
   useEffect(() => {
     if (!boardId) { setAvailableRepos([]); return; }
     setRepoLoadError(null);
@@ -39,15 +41,22 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
       .then(setAvailableRepos)
       .catch(err => { setAvailableRepos([]); setRepoLoadError(err.message || 'Failed to load repos'); });
   }, [boardId]);
-  // Default to the only repo when there's exactly one
+  // If the user hasn't touched the picker, fall back to either the explicit
+  // default or, when only one repo is available, that single repo.
   useEffect(() => {
-    if (!repoFullName && availableRepos.length === 1) setRepoFullName(availableRepos[0].fullName);
-  }, [availableRepos, repoFullName]);
+    if (userTouchedRepo.current) return;
+    if (defaultRepoFullName && availableRepos.some(r => r.fullName === defaultRepoFullName)) {
+      setRepoFullName(defaultRepoFullName);
+    } else if (!repoFullName && availableRepos.length === 1) {
+      setRepoFullName(availableRepos[0].fullName);
+    }
+  }, [availableRepos, defaultRepoFullName, repoFullName]);
 
   // Storages accessible via the board's OneDrive plugin
   const [availableStorages, setAvailableStorages] = useState([]);
   const [storageLoadError, setStorageLoadError] = useState(null);
-  const [storagePath, setStoragePath] = useState('');
+  const [storagePath, setStoragePath] = useState(defaultStoragePath || '');
+  const userTouchedStorage = useRef(false);
   useEffect(() => {
     if (!boardId) { setAvailableStorages([]); return; }
     setStorageLoadError(null);
@@ -55,6 +64,16 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
       .then(setAvailableStorages)
       .catch(err => { setAvailableStorages([]); setStorageLoadError(err.message || 'Failed to load storages'); });
   }, [boardId]);
+  // Once the OneDrive root list arrives, settle on the default if it's still listed,
+  // otherwise on the only available folder (besides the root).
+  useEffect(() => {
+    if (userTouchedStorage.current) return;
+    if (defaultStoragePath && availableStorages.some(s => s.path === defaultStoragePath)) {
+      setStoragePath(defaultStoragePath);
+    } else if (!storagePath && availableStorages.length === 1) {
+      setStoragePath(availableStorages[0].path);
+    }
+  }, [availableStorages, defaultStoragePath, storagePath]);
 
   // Auto-pick the first enabled agent as container (tasks are no longer agent-specific)
   const defaultAgentId = (agents || []).find(a => a.enabled !== false)?.id || '';
@@ -156,7 +175,7 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
             ) : availableRepos.length > 0 ? (
               <select
                 value={repoFullName}
-                onChange={e => setRepoFullName(e.target.value)}
+                onChange={e => { userTouchedRepo.current = true; setRepoFullName(e.target.value); }}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
               >
                 <option value="">No specific repo</option>
@@ -177,13 +196,13 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
               <Cloud className="inline w-3 h-3 mr-1" />Storage
             </label>
             {storageLoadError ? (
-              <p className="text-xs text-amber-300 italic px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-                {storageLoadError} — connect the OneDrive plugin on this board to enable the storage picker.
+              <p className="text-xs text-dark-500 italic px-3 py-2 bg-dark-800/40 border border-dark-700 rounded-lg">
+                No drive connected
               </p>
             ) : availableStorages.length > 0 ? (
               <select
                 value={storagePath}
-                onChange={e => setStoragePath(e.target.value)}
+                onChange={e => { userTouchedStorage.current = true; setStoragePath(e.target.value); }}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
               >
                 <option value="">No specific folder</option>

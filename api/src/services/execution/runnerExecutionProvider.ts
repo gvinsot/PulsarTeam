@@ -68,7 +68,13 @@ export class RunnerExecutionProvider extends ExecutionProvider {
 
   // ── ExecutionProvider interface ───────────────────────────────────────
 
-  async ensureProject(agentId: string, project: string | null = null, gitUrl: string | null = null): Promise<void> {
+  async ensureProject(
+    agentId: string,
+    project: string | null = null,
+    gitUrl: string | null = null,
+    gitCredentials: GitCredentials | null = null,
+  ): Promise<void> {
+    if (gitCredentials !== null) this.setGitCredentials(agentId, gitCredentials);
     console.log(`🤖 [Runner] ensureProject(agent=${agentId.slice(0, 8)}, project=${project || 'none'}, gitUrl=${gitUrl ? 'yes' : 'no'})`);
 
     if (!project || !gitUrl) {
@@ -77,10 +83,19 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     }
 
     try {
+      const creds = (this.gitCredentials.get(agentId) || null) as (GitCredentials & { login?: string | null }) | null;
+      const body: any = { project, git_url: gitUrl };
+      if (creds && creds.token) {
+        body.git_credentials = {
+          provider: creds.provider || 'github',
+          token: creds.token,
+          username: creds.username || creds.login || null,
+        };
+      }
       const res = await fetch(`${this.baseUrl}/projects/ensure`, {
         method: 'POST',
         headers: this._headers(agentId),
-        body: JSON.stringify({ project, git_url: gitUrl }),
+        body: JSON.stringify(body),
       });
       const data: any = await res.json();
       if (data.status === 'error') {
@@ -96,7 +111,13 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     }
   }
 
-  async switchProject(agentId: string, newProject: string, gitUrl: string | null = null): Promise<void> {
+  async switchProject(
+    agentId: string,
+    newProject: string,
+    gitUrl: string | null = null,
+    gitCredentials: GitCredentials | null = null,
+  ): Promise<void> {
+    if (gitCredentials !== null) this.setGitCredentials(agentId, gitCredentials);
     this._fileTreeCache.delete(agentId);
     await this.ensureProject(agentId, newProject, gitUrl);
     await this.resetSession(agentId);

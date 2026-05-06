@@ -13,6 +13,7 @@ import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
 import { saveTaskToDb } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
+import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -382,7 +383,8 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       if (agentManager.executionManager) {
         const gitUrl = task.repoHtmlUrl || buildRepoCloneUrl(taskRepo);
         if (gitUrl) {
-          await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl);
+          const gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
+          await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl, gitCreds);
         } else {
           console.warn(`[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`);
         }

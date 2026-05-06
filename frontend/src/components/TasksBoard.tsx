@@ -289,6 +289,22 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     return fromTask || activeBoard?.project_name || null;
   }, [allTasks, activeBoard]);
 
+  // Last repo used on this board — pre-fills the repo picker on new tasks.
+  const lastRepoFullName = useMemo(() => {
+    const candidate = allTasks
+      .filter(t => !t.deletedAt && t.repoFullName && t.createdAt)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    return candidate?.repoFullName || null;
+  }, [allTasks]);
+
+  // Last storage used on this board — pre-fills the storage picker on new tasks.
+  const lastStoragePath = useMemo(() => {
+    const candidate = allTasks
+      .filter(t => !t.deletedAt && t.storagePath && t.createdAt)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    return candidate?.storagePath || null;
+  }, [allTasks]);
+
   // Filtered tasks
   const filteredTasks = useMemo(() => {
     const q = search.toLowerCase();
@@ -826,6 +842,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         <CreateTaskModal
           agents={agents}
           projectName={activeProjectName}
+          defaultRepoFullName={lastRepoFullName}
+          defaultStoragePath={lastStoragePath}
           statusOptions={statusOptions}
           defaultStatus={createDefaultStatus}
           boardId={activeBoardId}
