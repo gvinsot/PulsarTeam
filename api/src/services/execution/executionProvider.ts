@@ -29,6 +29,15 @@ export class ExecutionProvider {
   // ── Lifecycle ─────────────────────────────────────────────────────────
 
   /**
+   * Associate (or clear) per-agent git credentials. Forwarded to the runner
+   * by providers that support authenticated HTTPS git operations.
+   * No-op by default.
+   */
+  setGitCredentials(agentId: string, creds: GitCredentials | null): void {
+    // no-op
+  }
+
+  /**
    * Ensure the execution environment is ready for the given agent.
    * Idempotent — safe to call multiple times.
    *
