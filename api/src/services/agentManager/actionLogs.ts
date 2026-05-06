@@ -71,11 +71,16 @@ export const actionLogsMethods = {
 
     const rawMessages = executor.conversationHistory.slice(startMsgIdx);
 
-    const executionMessages = rawMessages.map((m: any) => ({
-      role: m.role,
-      content: m.content || '',
-      timestamp: m.timestamp,
-    }));
+    const executionMessages = rawMessages.map((m: any) => {
+      const entry: any = {
+        role: m.role,
+        content: m.content || '',
+        timestamp: m.timestamp,
+      };
+      if (m.type) entry.type = m.type;
+      if (m.toolResults) entry.toolResults = m.toolResults;
+      return entry;
+    });
 
     if (!task.history) task.history = [];
     task.history.push({
