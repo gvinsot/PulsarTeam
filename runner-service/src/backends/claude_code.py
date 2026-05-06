@@ -509,6 +509,18 @@ class ClaudeCodeBackend(RunnerBackend):
                         }
                         return
                     logger.warning(f"[Auth] Proactive token refresh failed for {who}, continuing with existing token...")
+            # Final guard: if we still have no token after bootstrap, fail fast.
+            # Without this, claude CLI exits silently with rc=0 and no output.
+            if not resolve_token(agent_user):
+                who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
+                logger.error(f"[Auth] No token available for {who} — cannot spawn Claude CLI")
+                login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
+                yield {
+                    "type": "error",
+                    "content": f"No authentication token available. Please authenticate: {login_url}",
+                    "login_url": login_url,
+                }
+                return
         else:
             if is_token_expired() and time.time() >= cooldown:
                 refreshed = await refresh_oauth_token()
@@ -523,6 +535,16 @@ class ClaudeCodeBackend(RunnerBackend):
                         }
                         return
                     logger.warning("[Auth] Proactive global token refresh failed, continuing with existing token...")
+            # Final guard for the global / no-agent path as well.
+            if not load_saved_token() and auth_method() == "none":
+                logger.error("[Auth] No global token available — cannot spawn Claude CLI")
+                login_url = await get_login_url()
+                yield {
+                    "type": "error",
+                    "content": f"No authentication token available. Please authenticate: {login_url}",
+                    "login_url": login_url,
+                }
+                return
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
         pending_session: dict = {"key": None, "id": None, "is_new": False}
