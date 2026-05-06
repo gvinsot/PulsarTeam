@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Lock, User, AlertCircle, ChevronRight, Bot, LayoutDashboard, FolderKanban, DollarSign, Zap, Shield, Globe, ArrowRight, Play, X, ChevronDown, Mail, Phone, Building2, MessageSquare, Github, Headphones, Send } from 'lucide-react';
+import { Lock, User, AlertCircle, ChevronRight, Bot, LayoutDashboard, FolderKanban, DollarSign, Zap, Shield, Globe, ArrowRight, Play, X, ChevronDown, Mail, Phone, Building2, MessageSquare, Headphones, Send } from 'lucide-react';
 import { api } from '../api';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -636,11 +636,11 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
                 accent
               />
               <CtaOptionCard
-                icon={Github}
-                title={t('cta.selfDeploy.title')}
-                desc={t('cta.selfDeploy.desc')}
-                href="https://github.com/gvinsot/PulsarTeam"
-                ctaLabel={t('cta.viewOnGithub')}
+                icon={Building2}
+                title={t('cta.enterprise.title')}
+                desc={t('cta.enterprise.desc')}
+                onClick={() => setContactModal({ open: true, type: 'contact' })}
+                ctaLabel={t('cta.contactUs')}
               />
               <CtaOptionCard
                 icon={Headphones}
@@ -760,11 +760,11 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
                   accent
                 />
                 <CtaOptionCard
-                  icon={Github}
-                  title={t('cta.selfDeploy.title')}
-                  desc={t('cta.selfDeploy.descShort')}
-                  href="https://github.com/gvinsot/PulsarTeam"
-                  ctaLabel={t('cta.viewOnGithub')}
+                  icon={Building2}
+                  title={t('cta.enterprise.title')}
+                  desc={t('cta.enterprise.descShort')}
+                  onClick={() => setContactModal({ open: true, type: 'contact' })}
+                  ctaLabel={t('cta.contactUs')}
                 />
                 <CtaOptionCard
                   icon={Headphones}

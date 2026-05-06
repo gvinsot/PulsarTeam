@@ -25,14 +25,14 @@ const translations = {
     en: 'Full setup and onboarding for your team.',
     fr: 'Installation complète et accompagnement de votre équipe.',
   },
-  'cta.selfDeploy.title': { en: 'Self-Deploy', fr: 'Auto-déploiement' },
-  'cta.selfDeploy.desc': {
-    en: 'Deploy PulsarTeam yourself from our open-source repository. No support included.',
-    fr: 'Déployez PulsarTeam vous-même depuis notre dépôt open-source. Sans support inclus.',
+  'cta.enterprise.title': { en: 'Enterprise', fr: 'Entreprise' },
+  'cta.enterprise.desc': {
+    en: 'Dedicated instance, custom integrations, SLA and priority support for your organization.',
+    fr: 'Instance dédiée, intégrations sur mesure, SLA et support prioritaire pour votre organisation.',
   },
-  'cta.selfDeploy.descShort': {
-    en: 'Deploy from our open-source repo.',
-    fr: 'Déployez depuis notre dépôt open-source.',
+  'cta.enterprise.descShort': {
+    en: 'Dedicated instance with SLA and priority support.',
+    fr: 'Instance dédiée avec SLA et support prioritaire.',
   },
   'cta.support.title': { en: 'Request Support', fr: 'Demander du support' },
   'cta.support.desc': {
@@ -43,7 +43,7 @@ const translations = {
     en: 'Get expert help for your instance.',
     fr: 'Obtenez l\'aide d\'experts pour votre instance.',
   },
-  'cta.viewOnGithub': { en: 'View on GitHub', fr: 'Voir sur GitHub' },
+  'cta.contactUs': { en: 'Contact us', fr: 'Nous contacter' },
   'cta.getStarted': { en: 'Get started', fr: 'Commencer' },
 
   // Features section
