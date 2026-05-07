@@ -343,6 +343,13 @@ async def ensure_agent_project(
         return project_dir
 
     os.makedirs(projects_base, exist_ok=True)
+    # Hand `projects/` to the agent UID so chdir into <project> succeeds after
+    # the CLI subprocess drops privileges (libuv chdirs *after* preexec_fn).
+    try:
+        os.chown(projects_base, agent_uid, agent_gid)
+        os.chmod(projects_base, 0o700)
+    except OSError as e:
+        logger.warning(f"[Project] chown {projects_base} -> uid={agent_uid} failed: {e}")
 
     if os.path.exists(project_dir):
         shutil.rmtree(project_dir, ignore_errors=True)
