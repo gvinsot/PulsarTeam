@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, ListX, Eraser, Search } from 'lucide-react';
+import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
-import { api, deleteTask as deleteTaskById } from '../api';
+import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 import OneDriveConnect from './OneDriveConnect';
 import PluginEditor from './PluginEditor';
@@ -257,27 +257,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
       await Promise.all(agents.map(a => api.clearActionLogs(a.id)));
       if (onRefresh) onRefresh();
     } catch (err) { console.error('Failed to clear action logs:', err); }
-  }, [agents, onRefresh]);
-
-  const handleClearAllTasks = useCallback(async () => {
-    if (!agents.length) return;
-    try {
-      await Promise.all(agents.map(a => api.clearTasks(a.id)));
-      if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to clear tasks:', err); }
-  }, [agents, onRefresh]);
-
-  const handleClearAllActiveTasks = useCallback(async () => {
-    if (!agents.length) return;
-    try {
-      // Clear all non-done, non-error, non-backlog tasks for every agent
-      for (const a of agents) {
-        const allTasks = await api.getAllTasks({ agent_id: a.id });
-        const activeTasks = allTasks.filter(t => !['done', 'error', 'backlog'].includes(t.status));
-        await Promise.all(activeTasks.map(t => deleteTaskById(t.id)));
-      }
-      if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to clear active tasks:', err); }
   }, [agents, onRefresh]);
 
   const handleStopAll = useCallback(() => {
@@ -715,46 +694,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
                     onConfirm={handleClearAllActionLogs}
                     disabled={agents.length === 0}
                     icon={ScrollText}
-                    label="Clear"
-                    confirmLabel="Confirm?"
-                    className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
-                    confirmClassName="flex items-center gap-1.5 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors text-sm font-medium flex-shrink-0 animate-pulse"
-                  />
-                </div>
-
-                {/* Clear In-Progress Workflows */}
-                <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <ListX className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Clear Active Workflows</span>
-                    </div>
-                    <p className="text-xs text-dark-500">Remove active workflows for every agent</p>
-                  </div>
-                  <ConfirmButton
-                    onConfirm={handleClearAllActiveTasks}
-                    disabled={agents.length === 0}
-                    icon={ListX}
-                    label="Clear"
-                    confirmLabel="Confirm?"
-                    className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
-                    confirmClassName="flex items-center gap-1.5 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors text-sm font-medium flex-shrink-0 animate-pulse"
-                  />
-                </div>
-
-                {/* Clear All Workflows */}
-                <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <Eraser className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Clear All Workflows</span>
-                    </div>
-                    <p className="text-xs text-dark-500">Delete all workflows for every agent</p>
-                  </div>
-                  <ConfirmButton
-                    onConfirm={handleClearAllTasks}
-                    disabled={agents.length === 0}
-                    icon={Eraser}
                     label="Clear"
                     confirmLabel="Confirm?"
                     className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
