@@ -826,6 +826,12 @@ async function resolveOwnerRepo(task, mgr) {
 // ── GET /tasks/:id/commits/:hash/diff — fetch commit diff from GitHub ───────
 router.get('/:id/commits/:hash/diff', async (req, res) => {
   try {
+    // Validate the commit hash before using it in a URL — prevents path/header injection
+    // and accidental call to a different GitHub endpoint.
+    if (!/^[0-9a-f]{7,40}$/i.test(req.params.hash || '')) {
+      return res.status(400).json({ error: 'Invalid commit hash' });
+    }
+
     const mgr = req.app.get('agentManager');
     const task = mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -845,9 +851,13 @@ router.get('/:id/commits/:hash/diff', async (req, res) => {
     if (!ownerRepo) {
       return res.status(400).json({ error: 'Cannot determine GitHub repository for this task' });
     }
+    // Defense-in-depth: also validate owner/repo segments derived from task data.
+    if (!/^[A-Za-z0-9_.\-]+$/.test(ownerRepo.owner) || !/^[A-Za-z0-9_.\-]+$/.test(ownerRepo.repo)) {
+      return res.status(400).json({ error: 'Invalid GitHub repository identifier' });
+    }
 
     const resp = await fetch(
-      `https://api.github.com/repos/${ownerRepo.owner}/${ownerRepo.repo}/commits/${req.params.hash}`,
+      `https://api.github.com/repos/${encodeURIComponent(ownerRepo.owner)}/${encodeURIComponent(ownerRepo.repo)}/commits/${encodeURIComponent(req.params.hash)}`,
       { headers: { Authorization: `Bearer ${tok.accessToken}`, Accept: 'application/vnd.github.v3+json', 'User-Agent': 'PulsarTeam' } }
     );
     if (!resp.ok) {

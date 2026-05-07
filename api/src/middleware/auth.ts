@@ -194,8 +194,32 @@ function isGoogleConfigured() {
   return !!(process.env.GOOGLE_CLIENT_ID && readSecret('GOOGLE_CLIENT_SECRET'));
 }
 
+// Allow-list of permitted redirect_uri origins. Built from CORS_ORIGINS so the OAuth
+// flow only accepts redirect targets that are also valid app frontends. Prevents an
+// attacker from supplying ?redirect_uri=https://evil.com to steal authorization codes.
+function getAllowedOriginList(): string[] {
+  const env = process.env.CORS_ORIGINS;
+  if (env) return env.split(',').map(s => s.trim()).filter(Boolean);
+  return ['http://localhost:5173', 'http://localhost:3000'];
+}
+
+function isAllowedRedirectUri(uri: string): boolean {
+  if (!uri) return false;
+  try {
+    const parsed = new URL(uri);
+    const origin = `${parsed.protocol}//${parsed.host}`;
+    return getAllowedOriginList().includes(origin);
+  } catch {
+    return false;
+  }
+}
+
 function resolveGoogleRedirectUri(frontendUri?: string): string {
-  return process.env.GOOGLE_REDIRECT_URI || frontendUri || '';
+  // Trust the env var unconditionally (deployment config). Otherwise require the
+  // caller-supplied URI to belong to an allow-listed origin to prevent open redirect.
+  if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
+  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
+  return '';
 }
 
 // Returns the Google OAuth consent URL for the frontend to redirect to
@@ -327,7 +351,9 @@ router.get('/microsoft/status', (_req, res) => {
 });
 
 function resolveMicrosoftRedirectUri(frontendUri?: string): string {
-  return process.env.MICROSOFT_REDIRECT_URI || frontendUri || '';
+  if (process.env.MICROSOFT_REDIRECT_URI) return process.env.MICROSOFT_REDIRECT_URI;
+  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
+  return '';
 }
 
 router.get('/microsoft/url', (req, res) => {

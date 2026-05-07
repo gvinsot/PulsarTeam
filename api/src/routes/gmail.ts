@@ -225,7 +225,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 </div>
 <script nonce="${nonce}">
 if (window.opener) {
-  window.opener.postMessage({ type: 'gmail-oauth-callback', success: ${success}, email: ${JSON.stringify(email || null)}, error: ${JSON.stringify(error || null)} }, '*');
+  window.opener.postMessage({ type: 'gmail-oauth-callback', success: ${success}, email: ${JSON.stringify(email || null)}, error: ${JSON.stringify(error || null)} }, window.location.origin);
   ${success ? 'setTimeout(function() { window.close(); }, 1500);' : ''}
 }
 </script></body></html>`;

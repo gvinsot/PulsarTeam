@@ -59,9 +59,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   var payload = ${postMessagePayload};
 
   // Notify opener — wrap in try/catch in case opener is gone or COOP blocks access.
+  // Restrict targetOrigin to our own origin so the OAuth result never leaks to a malicious opener.
   try {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage(payload, '*');
+      window.opener.postMessage(payload, window.location.origin);
     }
   } catch (e) {
     // Ignore — opener may be cross-origin under COOP.

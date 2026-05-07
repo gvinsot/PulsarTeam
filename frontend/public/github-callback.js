@@ -49,7 +49,8 @@ if (error) {
   var posted = false;
   try {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: 'github-oauth-callback', code: code, state: state }, '*');
+      // Restrict targetOrigin to our own origin to prevent leaking the OAuth code to a malicious opener.
+      window.opener.postMessage({ type: 'github-oauth-callback', code: code, state: state }, window.location.origin);
       posted = true;
     }
   } catch (e) {

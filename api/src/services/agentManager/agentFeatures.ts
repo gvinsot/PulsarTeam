@@ -1,15 +1,85 @@
 // ─── Agent Features: RAG Documents, Skills, MCP Servers ─────────────────────
 import { v4 as uuidv4 } from 'uuid';
+import dns from 'dns/promises';
+import net from 'net';
 import { saveAgent } from '../database.js';
 
+// SSRF guard — reject private/loopback/link-local addresses (incl. AWS metadata 169.254.169.254).
+function isPrivateIPv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(n => Number.isNaN(n) || n < 0 || n > 255)) return true;
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  if (a >= 224) return true; // multicast / reserved
+  return false;
+}
+function isPrivateIPv6(ip: string): boolean {
+  const lower = ip.toLowerCase();
+  if (lower === '::1' || lower === '::') return true;
+  if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // unique local
+  if (lower.startsWith('fe80')) return true; // link-local
+  if (lower.startsWith('::ffff:')) {
+    // IPv4-mapped — extract and validate as IPv4
+    const v4 = lower.slice(7);
+    return isPrivateIPv4(v4);
+  }
+  return false;
+}
+async function assertPublicUrl(url: string): Promise<void> {
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error('Invalid URL'); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only http(s) URLs are allowed');
+  }
+  const host = parsed.hostname;
+  if (!host) throw new Error('URL missing host');
+
+  // If literal IP, validate directly. Otherwise resolve all A/AAAA records and reject if any is private.
+  if (net.isIP(host)) {
+    const isPrivate = net.isIP(host) === 4 ? isPrivateIPv4(host) : isPrivateIPv6(host);
+    if (isPrivate) throw new Error('URL resolves to a private address');
+    return;
+  }
+  const records = await dns.lookup(host, { all: true });
+  for (const r of records) {
+    const isPrivate = r.family === 4 ? isPrivateIPv4(r.address) : isPrivateIPv6(r.address);
+    if (isPrivate) throw new Error('URL resolves to a private address');
+  }
+}
+
 async function fetchUrlContent(url: string): Promise<string> {
+  await assertPublicUrl(url);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
+      redirect: 'manual', // prevent cross-host redirect bypassing the SSRF guard
       headers: { 'User-Agent': 'PulsarTeam/1.0', 'Accept': 'text/plain, text/html, text/markdown, application/json, */*' },
     });
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      if (loc) {
+        // Re-validate the redirect target against the SSRF guard, then follow it (single hop).
+        const next = new URL(loc, url).toString();
+        await assertPublicUrl(next);
+        const r2 = await fetch(next, {
+          signal: controller.signal,
+          redirect: 'manual',
+          headers: { 'User-Agent': 'PulsarTeam/1.0', 'Accept': 'text/plain, text/html, text/markdown, application/json, */*' },
+        });
+        if (!r2.ok) throw new Error(`HTTP ${r2.status} ${r2.statusText}`);
+        const text = await r2.text();
+        const maxChars = 200_000;
+        return text.length > maxChars ? text.slice(0, maxChars) + '\n\n[... truncated at 200k chars]' : text;
+      }
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     const text = await res.text();
     const maxChars = 200_000;

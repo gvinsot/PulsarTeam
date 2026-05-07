@@ -502,6 +502,18 @@ export function agentRoutes(agentManager) {
   router.post('/:id/tasks/:taskId/transfer', requireAgentAccess, async (req, res) => {
     const { targetAgentId } = req.body;
     if (!targetAgentId) return res.status(400).json({ error: 'targetAgentId required' });
+    // Verify the requesting user also has access to the target agent — otherwise a user
+    // could push tasks into agents on boards they don't own.
+    if (req.user.role !== 'admin') {
+      const target = agentManager.agents.get(targetAgentId);
+      if (!target) return res.status(404).json({ error: 'Target agent not found' });
+      if (target.boardId) {
+        const userBoardIds = await getUserBoardIds(req.user.userId);
+        if (!userBoardIds.has(target.boardId)) {
+          return res.status(403).json({ error: 'Access denied to target agent' });
+        }
+      }
+    }
     await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const task = agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });

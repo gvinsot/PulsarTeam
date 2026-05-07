@@ -1,5 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
+import { requireRole } from '../middleware/auth.js';
 import {
   getAllProjects, getProjectById, getProjectByName, createProject, updateProject, deleteProject,
   getBoardsForProject, setBoardProject,
@@ -79,7 +80,8 @@ export function projectRoutes() {
     }
   }));
 
-  router.post('/', async (req: any, res) => {
+  // Mutations require advanced/admin — basic users may not create/modify projects globally.
+  router.post('/', requireRole('admin', 'advanced'), async (req: any, res) => {
     try {
       const body = projectBodySchema.parse(req.body);
       const existing = await getProjectByName(body.name);
@@ -92,8 +94,16 @@ export function projectRoutes() {
     }
   });
 
-  router.put('/:id', uuidOnly(async (req: any, res: any) => {
+  router.put('/:id', requireRole('admin', 'advanced'), uuidOnly(async (req: any, res: any) => {
     try {
+      // Non-admins may only modify projects they created.
+      if (req.user?.role !== 'admin') {
+        const existing = await getProjectById(req.params.id);
+        if (!existing) return res.status(404).json({ error: 'Project not found' });
+        if (existing.owner_id && existing.owner_id !== req.user.userId) {
+          return res.status(403).json({ error: 'You can only modify projects you created' });
+        }
+      }
       const body = projectUpdateSchema.parse(req.body);
       const updated = await updateProject(req.params.id, body);
       if (!updated) return res.status(404).json({ error: 'Project not found' });
@@ -104,8 +114,16 @@ export function projectRoutes() {
     }
   }));
 
-  router.delete('/:id', uuidOnly(async (req: any, res: any) => {
+  router.delete('/:id', requireRole('admin', 'advanced'), uuidOnly(async (req: any, res: any) => {
     try {
+      // Non-admins may only delete projects they created.
+      if (req.user?.role !== 'admin') {
+        const existing = await getProjectById(req.params.id);
+        if (!existing) return res.status(404).json({ error: 'Project not found' });
+        if (existing.owner_id && existing.owner_id !== req.user.userId) {
+          return res.status(403).json({ error: 'You can only delete projects you created' });
+        }
+      }
       const ok = await deleteProject(req.params.id);
       if (!ok) return res.status(404).json({ error: 'Project not found' });
       res.json({ success: true });

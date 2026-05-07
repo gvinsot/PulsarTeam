@@ -48,7 +48,7 @@ if (error) {
   var posted = false;
   try {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage({ type: 'slack-oauth-callback', code: code, state: state }, '*');
+      window.opener.postMessage({ type: 'slack-oauth-callback', code: code, state: state }, window.location.origin);
       posted = true;
     }
   } catch (e) {

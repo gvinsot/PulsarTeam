@@ -1,5 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
+import { requireRole } from '../middleware/auth.js';
 
 // Schema for creating an MCP server
 const createMcpServerSchema = z.object({
@@ -38,8 +39,8 @@ export function mcpServerRoutes(mcpManager) {
     res.json(sanitize(server));
   });
 
-  // Create MCP server
-  router.post('/', async (req, res) => {
+  // Create MCP server (admin only — global setting affecting all agents)
+  router.post('/', requireRole('admin'), async (req, res) => {
     try {
       const parsed = createMcpServerSchema.parse(req.body);
       const server = await mcpManager.create(parsed);
@@ -52,8 +53,8 @@ export function mcpServerRoutes(mcpManager) {
     }
   });
 
-  // Update MCP server
-  router.put('/:id', async (req, res) => {
+  // Update MCP server (admin only)
+  router.put('/:id', requireRole('admin'), async (req, res) => {
     try {
       const parsed = updateMcpServerSchema.parse(req.body);
       const server = await mcpManager.update(req.params.id, parsed);
@@ -67,8 +68,8 @@ export function mcpServerRoutes(mcpManager) {
     }
   });
 
-  // Delete MCP server
-  router.delete('/:id', async (req, res) => {
+  // Delete MCP server (admin only)
+  router.delete('/:id', requireRole('admin'), async (req, res) => {
     try {
       const success = await mcpManager.delete(req.params.id);
       if (!success) return res.status(404).json({ error: 'MCP server not found' });
@@ -78,8 +79,8 @@ export function mcpServerRoutes(mcpManager) {
     }
   });
 
-  // Force reconnect & refresh tools
-  router.post('/:id/connect', async (req, res) => {
+  // Force reconnect & refresh tools (admin only)
+  router.post('/:id/connect', requireRole('admin'), async (req, res) => {
     try {
       const server = await mcpManager.connect(req.params.id);
       res.json(sanitize(server));

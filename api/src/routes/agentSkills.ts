@@ -1,6 +1,7 @@
 import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
+import { requireRole } from '../middleware/auth.js';
 import {
   getAllAgentSkills,
   searchAgentSkills,
@@ -57,8 +58,8 @@ export function agentSkillRoutes() {
     }
   });
 
-  // Create a new agent skill
-  router.post('/', async (req, res) => {
+  // Create a new agent skill (admin/advanced — skills get injected into agent prompts globally)
+  router.post('/', requireRole('admin', 'advanced'), async (req, res) => {
     try {
       const parsed = agentSkillSchema.parse(req.body);
       const now = new Date().toISOString();
@@ -86,8 +87,8 @@ export function agentSkillRoutes() {
     }
   });
 
-  // Update an agent skill
-  router.put('/:id', async (req, res) => {
+  // Update an agent skill (admin/advanced)
+  router.put('/:id', requireRole('admin', 'advanced'), async (req, res) => {
     try {
       const existing = await getAgentSkillById(req.params.id);
       if (!existing) return res.status(404).json({ error: 'Agent skill not found' });
@@ -111,8 +112,8 @@ export function agentSkillRoutes() {
     }
   });
 
-  // Delete an agent skill
-  router.delete('/:id', async (req, res) => {
+  // Delete an agent skill (admin/advanced)
+  router.delete('/:id', requireRole('admin', 'advanced'), async (req, res) => {
     try {
       const existing = await getAgentSkillById(req.params.id);
       if (!existing) return res.status(404).json({ error: 'Agent skill not found' });
