@@ -16,8 +16,12 @@ PUID=${PUID:-1000}
 PGID=${PGID:-1000}
 
 # DATA_DIR holds per-agent HOMEs (chowned by the server to per-agent UIDs).
+# Mode 0711 (traverse-only): per-agent UIDs need x to reach their own HOME,
+# but cannot list /app/data contents. Each per-agent HOME stays 0700.
 mkdir -p /app/data
-chmod 0700 /app/data
+chmod 0711 /app/data
+mkdir -p /app/data/agents
+chmod 0711 /app/data/agents
 
 # Reference HOME for the root server process — agent_user.ensure_agent_user
 # copies $HOME/.claude/settings.json and $HOME/.claude.json into each agent

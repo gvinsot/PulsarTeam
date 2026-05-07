@@ -25,9 +25,21 @@ from .crypto import encrypt_text, decrypt_text, is_envelope
 
 _FILE_MODE = 0o600
 _DIR_MODE = 0o700
+# Shared parent dirs that per-agent UIDs must be able to traverse (but not
+# list) to reach their own HOME. Keys are absolute paths.
+_TRAVERSE_DIRS = frozenset({"/app/data", "/app/data/agents"})
 
 
 def _secure_makedirs(path: str):
+    # Per-agent UIDs need traverse (x) on shared parent dirs to reach their
+    # own HOME; otherwise the spawned CLI dies with EACCES on every fs op.
+    if path in _TRAVERSE_DIRS:
+        os.makedirs(path, mode=0o711, exist_ok=True)
+        try:
+            os.chmod(path, 0o711)
+        except OSError:
+            pass
+        return
     os.makedirs(path, mode=_DIR_MODE, exist_ok=True)
     try:
         os.chmod(path, _DIR_MODE)
