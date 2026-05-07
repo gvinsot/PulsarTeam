@@ -329,17 +329,25 @@ async def ensure_agent_project(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(proc.communicate(), timeout=30)
+            try:
+                await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                raise RuntimeError("git fetch --all timed out after 30s")
             proc = await asyncio.create_subprocess_exec(
                 "git", "reset", "--hard", "origin/HEAD",
                 cwd=project_dir,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(proc.communicate(), timeout=15)
+            try:
+                await asyncio.wait_for(proc.communicate(), timeout=15)
+            except asyncio.TimeoutError:
+                proc.kill()
+                raise RuntimeError("git reset --hard origin/HEAD timed out after 15s")
             logger.info(f"[Project] Updated {project} for agent {agent_id[:12]}")
         except Exception as e:
-            logger.warning(f"[Project] Failed to update {project} for agent {agent_id[:12]}: {e}")
+            logger.warning(f"[Project] Failed to update {project} for agent {agent_id[:12]}: {type(e).__name__}: {e}")
         return project_dir
 
     os.makedirs(projects_base, exist_ok=True)
@@ -371,13 +379,17 @@ async def ensure_agent_project(
         stderr=asyncio.subprocess.PIPE,
         env=env,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise RuntimeError(f"git clone {git_url} timed out after 120s")
     if proc.returncode != 0:
         err_msg = stderr.decode("utf-8", errors="replace").strip()
         # Never echo the token back to the API/log.
         if git_credentials and git_credentials.get("token"):
             err_msg = err_msg.replace(git_credentials["token"], "***")
-        raise RuntimeError(f"git clone failed: {err_msg}")
+        raise RuntimeError(f"git clone failed (exit={proc.returncode}): {err_msg or '<no stderr>'}")
 
     # Reset the remote URL so the embedded token (if any) doesn't end up in
     # `.git/config`. The credential helper installed above takes over.

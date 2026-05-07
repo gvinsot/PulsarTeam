@@ -134,8 +134,20 @@ async def ensure_project(
         )
         return {"status": "success", "project_dir": project_dir}
     except Exception as e:
-        logger.error(f"[Project] ensure failed for agent {x_agent_id[:12]}: {e}")
-        return {"status": "error", "error": str(e)}
+        # Some exceptions (asyncio.TimeoutError, plain RuntimeError(""), ...)
+        # have an empty str(), which produces an unhelpful blank error in the
+        # logs and in the API response. Always include the exception class
+        # name and log a full traceback so the failure can be diagnosed.
+        err_type = type(e).__name__
+        err_msg = str(e).strip() or err_type
+        if err_type not in err_msg:
+            err_msg = f"{err_type}: {err_msg}"
+        logger.error(
+            f"[Project] ensure failed for agent {x_agent_id[:12]} "
+            f"(project={request.project!r}): {err_msg}",
+            exc_info=True,
+        )
+        return {"status": "error", "error": err_msg}
 
 
 @router.post("/exec-shell")
