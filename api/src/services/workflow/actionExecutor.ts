@@ -176,7 +176,8 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     ownerId,
     (agentId: any) => agentManager._getAgentTasks(agentId),
     task.id,
-    task.boardId || null
+    task.boardId || null,
+    task.repoFullName || task.project || null
   ) as any;
 
   if (!agent) {
@@ -317,13 +318,15 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     return { executed: false, skipped: true, reason: 'lock-held' };
   }
 
-  // Find agent for this role (scoped to the task's board)
+  // Find agent for this role (scoped to the task's board, preferring agents
+  // already on the task's repo so we don't have to project-switch every run).
   const agent = findAgentByRole(
     agentManager.agents,
     role,
     ownerId,
     (agentId: any) => agentManager._getAgentTasks(agentId),
-    task.boardId || null
+    task.boardId || null,
+    task.repoFullName || task.project || null
   ) as any;
 
   if (!agent) {
@@ -370,8 +373,12 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       .then(() => _emitTaskUpdated(agentManager, task.agentId, taskPayload));
   }
 
-  // Auto-switch agent to the task's repo if needed (taskRepo = "owner/repo")
-  const taskRepo = task.repoFullName || null;
+  // Auto-switch agent to the task's repo if needed.
+  // Tasks carry two related fields: `repoFullName` ("owner/repo", set on
+  // creation/by GitHub sync) and `project` (set/edited via the task UI). We
+  // honor whichever is present so the agent ends up working on the same repo
+  // the task is about \u2014 not whatever it happened to be on last.
+  const taskRepo = task.repoFullName || task.project || null;
   if (taskRepo && taskRepo !== agent.project) {
     console.log(`[ActionExecutor] Switching "${agent.name}" from "${agent.project || '(none)'}" to repo "${taskRepo}"`);
     try {

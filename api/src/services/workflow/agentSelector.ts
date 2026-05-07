@@ -84,7 +84,7 @@ export function isAgentBusy(agentId: string) {
  * @param {string|null} boardId    - only consider agents attached to this board
  * @returns {Object|null}          - the selected agent, or null
  */
-export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: string | null = null, getAgentTasks: (agentId: any) => any[] = () => [], boardId: string | null = null) {
+export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: string | null = null, getAgentTasks: (agentId: any) => any[] = () => [], boardId: string | null = null, taskProject: string | null = null) {
   const allAgents = Array.from(agents.values()) as any[];
 
   // Step 1: match role + owner filter + board filter
@@ -101,8 +101,22 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
     return null;
   }
 
+  // Step 1b: prefer agents whose project matches the task's project so we
+  // don't ship a bug about repo X to an agent that lives in repo Y. We only
+  // narrow down when at least one matching agent exists — otherwise we keep
+  // the wider candidate pool so the task isn't blocked.
+  let projectMatching = matching;
+  if (taskProject) {
+    const sameProject = matching.filter((a: any) => a.project === taskProject);
+    if (sameProject.length > 0) {
+      projectMatching = sameProject;
+    } else {
+      console.warn(`[AgentSelector] No role="${role}" agent on project="${taskProject}" — falling back to any project`);
+    }
+  }
+
   // Step 2: filter to idle/error + not busy in another transition
-  const eligible = matching.filter((a: any) => {
+  const eligible = projectMatching.filter((a: any) => {
     if (a.status !== 'idle' && a.status !== 'error') {
       console.log(`[AgentSelector] Skipping "${a.name}" — status: ${a.status}`);
       return false;
@@ -147,7 +161,7 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
  * Find the best agent for a role-based assignment (for assign_agent actions).
  * Same logic as findAgentByRole but does NOT filter on idle status (for pure assignment).
  */
-export function findAgentForAssignment(agents: Map<any, any>, role: string, ownerId: string | null = null, getAgentTasks: (agentId: any) => any[] = () => [], excludeTaskId: string | null = null, boardId: string | null = null) {
+export function findAgentForAssignment(agents: Map<any, any>, role: string, ownerId: string | null = null, getAgentTasks: (agentId: any) => any[] = () => [], excludeTaskId: string | null = null, boardId: string | null = null, taskProject: string | null = null) {
   const allAgents = Array.from(agents.values()) as any[];
   const candidates = allAgents.filter(
     (a: any) =>
@@ -159,10 +173,22 @@ export function findAgentForAssignment(agents: Map<any, any>, role: string, owne
 
   if (candidates.length === 0) return null;
 
+  // Prefer agents working on the same project as the task. Fall back to the
+  // full candidate set if no project-matching agent exists.
+  let pool = candidates;
+  if (taskProject) {
+    const sameProject = candidates.filter((a: any) => a.project === taskProject);
+    if (sameProject.length > 0) {
+      pool = sameProject;
+    } else {
+      console.warn(`[AgentSelector] assign: no role="${role}" agent on project="${taskProject}" — falling back to any project`);
+    }
+  }
+
   let best = null;
   let minTasks = Infinity;
 
-  for (const c of candidates) {
+  for (const c of pool) {
     let count = 0;
     for (const [agentId] of agents) {
       for (const t of getAgentTasks(agentId)) {
