@@ -69,6 +69,27 @@ def _spawn_diagnostic(proc_cwd: str, agent_user: Optional[dict]) -> str:
     return " ".join(parts)
 
 
+def _cwd_path_diagnostic(proc_cwd: str) -> str:
+    """Walk every component of `proc_cwd` and report mode/owner so we can see
+    which intermediate dir is blocking the dropped UID from chdir-ing in."""
+    parts: list[str] = []
+    components: list[str] = []
+    p = os.path.abspath(proc_cwd)
+    while True:
+        components.insert(0, p)
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    for c in components:
+        try:
+            st = os.stat(c)
+            parts.append(f"{c}=mode={oct(st.st_mode & 0o777)},uid={st.st_uid},gid={st.st_gid}")
+        except OSError as e:
+            parts.append(f"{c}=stat_err={e.errno}")
+    return " | ".join(parts)
+
+
 class ClaudeCodeBackend(RunnerBackend):
     name = "claude-code"
     supports_agent = True
@@ -360,15 +381,27 @@ class ClaudeCodeBackend(RunnerBackend):
             logger.info(f"Executing Claude Code{agent_label} (prompt={len(prompt)}B): {prompt[:100]}...")
             logger.debug(f"Command: {' '.join(cmd)} (cwd={proc_cwd})")
             logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, agent_user)}")
-            p = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=proc_cwd,
-                env=get_agent_env(agent_user),
-                **get_subprocess_kwargs(agent_user),
-            )
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=proc_cwd,
+                    env=get_agent_env(agent_user),
+                    **get_subprocess_kwargs(agent_user),
+                )
+            except PermissionError as spawn_err:
+                logger.error(
+                    f"[Spawn] PermissionError spawning claude (cwd={proc_cwd}, "
+                    f"target_uid={agent_user.get('uid') if agent_user else os.getuid()}): {spawn_err}\n"
+                    f"  path components: {_cwd_path_diagnostic(proc_cwd)}"
+                )
+                raise RuntimeError(
+                    f"Permission denied spawning claude CLI (cwd={proc_cwd}). "
+                    f"The dedicated agent UID likely can't traverse cwd or its parents — "
+                    f"see runner-service logs for the per-component mode/owner dump."
+                ) from spawn_err
             so, se = await asyncio.wait_for(
                 p.communicate(input=prompt.encode("utf-8")),
                 timeout=TIMEOUT,
@@ -616,16 +649,34 @@ class ClaudeCodeBackend(RunnerBackend):
             pending_session["is_new"] = is_new
             logger.info(f"Streaming Claude Code{agent_label} (prompt={len(prompt)}B): {prompt[:100]}...")
             logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, agent_user)}")
-            p = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=proc_cwd,
-                env=get_agent_env(agent_user),
-                limit=10 * 1024 * 1024,
-                **get_subprocess_kwargs(agent_user),
-            )
+            try:
+                p = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=proc_cwd,
+                    env=get_agent_env(agent_user),
+                    limit=10 * 1024 * 1024,
+                    **get_subprocess_kwargs(agent_user),
+                )
+            except PermissionError as spawn_err:
+                # Most likely: the dropped agent UID can't traverse some
+                # ancestor of `proc_cwd` (chmod 0700/0750 on a shared parent),
+                # or the claude binary is not executable for that UID. Dump
+                # every path component so the failing dir is obvious in the
+                # logs, then re-raise as a clean stream error instead of
+                # crashing the ASGI response.
+                logger.error(
+                    f"[Spawn] PermissionError spawning claude (cwd={proc_cwd}, "
+                    f"target_uid={agent_user.get('uid') if agent_user else os.getuid()}): {spawn_err}\n"
+                    f"  path components: {_cwd_path_diagnostic(proc_cwd)}"
+                )
+                raise RuntimeError(
+                    f"Permission denied spawning claude CLI (cwd={proc_cwd}). "
+                    f"The dedicated agent UID likely can't traverse cwd or its parents — "
+                    f"see runner-service logs for the per-component mode/owner dump."
+                ) from spawn_err
             try:
                 p.stdin.write(prompt.encode("utf-8"))
                 await p.stdin.drain()
@@ -662,6 +713,12 @@ class ClaudeCodeBackend(RunnerBackend):
                     raise
             else:
                 raise
+        except RuntimeError as spawn_err:
+            # Spawn-time failure (typically PermissionError translated above).
+            # Surface as a stream error event so the client gets a clean
+            # message instead of an ASGI 500 / broken SSE response.
+            yield {"type": "error", "content": str(spawn_err)}
+            return
 
         has_content = False
         last_event_types: list[str] = []
