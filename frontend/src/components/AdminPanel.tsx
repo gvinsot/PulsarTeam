@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   X, Users, Plus, Trash2, Edit3, Shield, ShieldCheck, ShieldAlert,
   UserCheck, Eye, Save, AlertCircle, Crown, Settings, ToggleLeft, ToggleRight,
-  Cpu, Bell, RotateCcw, GitBranch, Check, Loader2, LayoutGrid, GripVertical, Bot, ListTodo
+  Cpu, Bell, RotateCcw, LayoutGrid, GripVertical, Bot, ListTodo
 } from 'lucide-react';
 import { api } from '../api';
 import LlmConfigModal from './LlmConfigModal';
