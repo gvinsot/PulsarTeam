@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { requireRole } from '../middleware/auth.js';
-import { getPool, getBoardById, getBoardShare, getBoardsByUser, rowToTask, getOAuthToken } from '../services/database.js';
+import { requireRole, checkBoardAccess } from '../middleware/auth.js';
+import { getPool, getBoardById, getBoardsByUser, rowToTask, getOAuthToken } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus } from '../services/database.js';
 
@@ -24,15 +24,10 @@ async function requireTaskAccess(mgr, task, user) {
   if (!agent) return true; // agent deleted — allow access
   // Agent owner always has access
   if (!agent.ownerId || agent.ownerId === user.userId) return true;
-  // Also allow if the user has access to the task's board
+  // Also allow if the user has edit access on the task's board
   if (task.boardId) {
-    const board = await getBoardById(task.boardId);
-    if (board) {
-      if (board.is_default) return true;
-      if (board.user_id === user.userId) return true;
-      const share = await getBoardShare(task.boardId, user.userId);
-      if (share && (share.permission === 'edit' || share.permission === 'admin')) return true;
-    }
+    const access = await checkBoardAccess(task.boardId, user.userId, user.role, 'edit');
+    if (access.ok) return true;
   }
   return false;
 }
@@ -55,16 +50,11 @@ async function auditLog(action, taskId, userId, username, details = null) {
 /** Validate destination board access (exists + user has write permission) */
 async function validateBoardAccess(boardId, userId, userRole) {
   if (!boardId) return { ok: true, board: null };
-  const board = await getBoardById(boardId);
-  if (!board) return { ok: false, error: 'Destination board not found', status: 404 };
-  if (board.user_id === userId || board.is_default || userRole === 'admin') {
-    return { ok: true, board };
+  const access = await checkBoardAccess(boardId, userId, userRole, 'edit');
+  if (!access.ok) {
+    return { ok: false, error: access.error || 'No write access to destination board', status: access.status || 403 };
   }
-  const share = await getBoardShare(boardId, userId);
-  if (share && (share.permission === 'edit' || share.permission === 'admin')) {
-    return { ok: true, board };
-  }
-  return { ok: false, error: 'No write access to destination board', status: 403 };
+  return { ok: true, board: access.board };
 }
 
 /** Validate that a column exists in a board; fallback to first column */

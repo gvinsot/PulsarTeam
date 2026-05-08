@@ -1,9 +1,10 @@
 import express from 'express';
 import {
-  getBoardsByUser, getBoardById, createBoard, updateBoard, deleteBoard,
-  getBoardShares, getBoardShare, createBoardShare, updateBoardShare, deleteBoardShare,
+  getBoardsByUser, createBoard, updateBoard, deleteBoard,
+  getBoardShares, createBoardShare, updateBoardShare, deleteBoardShare,
   logBoardAudit, getBoardAuditLogs, getAllUsers, getAllBoards,
 } from '../services/database.js';
+import { checkBoardAccess } from '../middleware/auth.js';
 
 const DEFAULT_BOARD_WORKFLOW = {
   columns: [
@@ -26,41 +27,6 @@ const DEFAULT_BOARD_WORKFLOW = {
 };
 
 const VALID_PERMISSIONS = ['read', 'edit', 'admin'];
-
-// ── Permission helper ─────────────────────────────────────────────────────
-
-/** Check if user has at least the required permission on a board.
- *  Returns { ok, permission, isOwner } or { ok: false, status, error }. */
-async function checkBoardAccess(boardId, userId, userRole, requiredPermission = 'read') {
-  const board = await getBoardById(boardId);
-  if (!board) return { ok: false, status: 404, error: 'Board not found' };
-
-  // Default board is accessible to all authenticated users (read-only for non-admins)
-  if (board.is_default) {
-    return { ok: true, board, permission: userRole === 'admin' ? 'admin' : 'read', isOwner: false };
-  }
-
-  // Owner has full access
-  if (board.user_id === userId) {
-    return { ok: true, board, permission: 'admin', isOwner: true };
-  }
-
-  // Admin users have full access
-  if (userRole === 'admin') {
-    return { ok: true, board, permission: 'admin', isOwner: false };
-  }
-
-  // Check sharing
-  const share = await getBoardShare(boardId, userId);
-  if (!share) return { ok: false, status: 403, error: 'Access denied' };
-
-  const levels = { read: 0, edit: 1, admin: 2 };
-  if ((levels[share.permission] || 0) < (levels[requiredPermission] || 0)) {
-    return { ok: false, status: 403, error: `Requires ${requiredPermission} permission` };
-  }
-
-  return { ok: true, board, permission: share.permission, isOwner: false };
-}
 
 export function boardRoutes(agentManager) {
   const router = express.Router();

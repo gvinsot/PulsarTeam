@@ -1,12 +1,12 @@
 import express from 'express';
 import { z } from 'zod';
-import { requireRole } from '../middleware/auth.js';
+import { requireRole, checkBoardAccess, checkProjectAccess } from '../middleware/auth.js';
 import {
-  getAllProjects, getProjectById, getProjectByName, createProject, updateProject, deleteProject,
+  getAllProjects, getProjectByName, createProject, updateProject, deleteProject,
   getBoardsForProject, setBoardProject,
   getReposForBoard, getReposForProject, getAccessibleBoardRepos,
   getStoragesForBoard, getStoragesForProject,
-  getBoardById, getOAuthToken,
+  getOAuthToken,
 } from '../services/database.js';
 
 // ── In-memory caches for GitHub explorer endpoints ─────────────────────────
@@ -69,8 +69,9 @@ export function projectRoutes() {
 
   router.get('/:id', uuidOnly(async (req: any, res: any) => {
     try {
-      const project = await getProjectById(req.params.id);
-      if (!project) return res.status(404).json({ error: 'Project not found' });
+      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role || 'basic', 'read');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+      const project = access.project;
       const boards = await getBoardsForProject(project.id);
       const repos = await getReposForProject(project.id);
       const storages = await getStoragesForProject(project.id);
@@ -96,14 +97,8 @@ export function projectRoutes() {
 
   router.put('/:id', requireRole('admin', 'advanced'), uuidOnly(async (req: any, res: any) => {
     try {
-      // Non-admins may only modify projects they created.
-      if (req.user?.role !== 'admin') {
-        const existing = await getProjectById(req.params.id);
-        if (!existing) return res.status(404).json({ error: 'Project not found' });
-        if (existing.owner_id && existing.owner_id !== req.user.userId) {
-          return res.status(403).json({ error: 'You can only modify projects you created' });
-        }
-      }
+      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
       const body = projectUpdateSchema.parse(req.body);
       const updated = await updateProject(req.params.id, body);
       if (!updated) return res.status(404).json({ error: 'Project not found' });
@@ -116,14 +111,8 @@ export function projectRoutes() {
 
   router.delete('/:id', requireRole('admin', 'advanced'), uuidOnly(async (req: any, res: any) => {
     try {
-      // Non-admins may only delete projects they created.
-      if (req.user?.role !== 'admin') {
-        const existing = await getProjectById(req.params.id);
-        if (!existing) return res.status(404).json({ error: 'Project not found' });
-        if (existing.owner_id && existing.owner_id !== req.user.userId) {
-          return res.status(403).json({ error: 'You can only delete projects you created' });
-        }
-      }
+      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'admin');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
       const ok = await deleteProject(req.params.id);
       if (!ok) return res.status(404).json({ error: 'Project not found' });
       res.json({ success: true });
@@ -136,6 +125,8 @@ export function projectRoutes() {
 
   router.get('/:id/boards', uuidOnly(async (req: any, res: any) => {
     try {
+      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'read');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
       const boards = await getBoardsForProject(req.params.id);
       res.json(boards);
     } catch (err: any) {
@@ -145,10 +136,11 @@ export function projectRoutes() {
 
   router.post('/:id/boards/:boardId', uuidOnly(async (req: any, res: any) => {
     try {
-      const project = await getProjectById(req.params.id);
-      if (!project) return res.status(404).json({ error: 'Project not found' });
-      const board = await getBoardById(req.params.boardId);
-      if (!board) return res.status(404).json({ error: 'Board not found' });
+      // Linking requires edit on both the project AND admin on the board.
+      const projectAccess = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
+      if (!projectAccess.ok) return res.status(projectAccess.status || 403).json({ error: projectAccess.error });
+      const boardAccess = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'admin');
+      if (!boardAccess.ok) return res.status(boardAccess.status || 403).json({ error: boardAccess.error });
       await setBoardProject(req.params.boardId, req.params.id);
       res.json({ success: true });
     } catch (err: any) {
@@ -158,6 +150,10 @@ export function projectRoutes() {
 
   router.delete('/:id/boards/:boardId', uuidOnly(async (req: any, res: any) => {
     try {
+      const projectAccess = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
+      if (!projectAccess.ok) return res.status(projectAccess.status || 403).json({ error: projectAccess.error });
+      const boardAccess = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'admin');
+      if (!boardAccess.ok) return res.status(boardAccess.status || 403).json({ error: boardAccess.error });
       await setBoardProject(req.params.boardId, null);
       res.json({ success: true });
     } catch (err: any) {
@@ -168,16 +164,20 @@ export function projectRoutes() {
   // ── Board storages (mounted under /projects for cohesion) ───────────────
   // Repos used on a board are derived from tasks (see /boards/:id/repos below).
 
-  router.get('/boards/:boardId/repos', async (req, res) => {
+  router.get('/boards/:boardId/repos', async (req: any, res) => {
     try {
+      const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
       res.json(await getReposForBoard(req.params.boardId));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.get('/boards/:boardId/storages', async (req, res) => {
+  router.get('/boards/:boardId/storages', async (req: any, res) => {
     try {
+      const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
       res.json(await getStoragesForBoard(req.params.boardId));
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -204,10 +204,10 @@ export function projectRoutes() {
 
   // (Board-scoped) Repos accessible via the board's GitHub plugin OAuth token.
   // This is what the BoardReposPanel uses to populate the "Add Repo" picker.
-  router.get('/boards/:boardId/available-repos', async (req, res) => {
+  router.get('/boards/:boardId/available-repos', async (req: any, res) => {
     try {
-      const board = await getBoardById(req.params.boardId);
-      if (!board) return res.status(404).json({ error: 'Board not found' });
+      const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
 
       const tok = getOAuthToken('github', 'board', req.params.boardId);
       if (!tok || !tok.accessToken) {
@@ -262,10 +262,10 @@ export function projectRoutes() {
   // Returns the top-level folders of the connected user's OneDrive — used to
   // populate the storage picker on tasks. Google Drive is not currently wired
   // into the per-board OAuth store and is therefore omitted.
-  router.get('/boards/:boardId/available-storages', async (req, res) => {
+  router.get('/boards/:boardId/available-storages', async (req: any, res) => {
     try {
-      const board = await getBoardById(req.params.boardId);
-      if (!board) return res.status(404).json({ error: 'Board not found' });
+      const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
 
       const tok = getOAuthToken('onedrive', 'board', req.params.boardId);
       if (!tok || !tok.accessToken) {
@@ -313,10 +313,17 @@ export function projectRoutes() {
   // All endpoints authenticate via the board's GitHub plugin OAuth token,
   // passed as a `?boardId=` query parameter.
 
-  function resolveBoardGitHubAuth(req: any, res: any): { ok: true; headers: Record<string, string> } | { ok: false } {
+  async function resolveBoardGitHubAuth(req: any, res: any): Promise<{ ok: true; headers: Record<string, string> } | { ok: false }> {
     const boardId = (req.query?.boardId as string | undefined) || '';
     if (!boardId) {
       res.status(400).json({ error: 'boardId query parameter required' });
+      return { ok: false };
+    }
+    // IDOR protection: verify the caller can access this board before using
+    // the board's OAuth credentials to fetch GitHub data on its behalf.
+    const access = await checkBoardAccess(boardId, req.user?.userId, req.user?.role, 'read');
+    if (!access.ok) {
+      res.status(access.status || 403).json({ error: access.error });
       return { ok: false };
     }
     const tok = getOAuthToken('github', 'board', boardId);
@@ -336,7 +343,7 @@ export function projectRoutes() {
   }
 
   router.get('/github-activity/:owner/:repo', async (req, res) => {
-    const auth = resolveBoardGitHubAuth(req, res);
+    const auth = await resolveBoardGitHubAuth(req, res);
     if (!auth.ok) return;
 
     const { owner, repo } = req.params;
@@ -387,7 +394,7 @@ export function projectRoutes() {
   });
 
   router.get('/github-branches/:owner/:repo', async (req, res) => {
-    const auth = resolveBoardGitHubAuth(req, res);
+    const auth = await resolveBoardGitHubAuth(req, res);
     if (!auth.ok) return;
 
     const { owner, repo } = req.params;
@@ -410,7 +417,7 @@ export function projectRoutes() {
   });
 
   router.get('/github-tree/:owner/:repo/:ref', async (req, res) => {
-    const auth = resolveBoardGitHubAuth(req, res);
+    const auth = await resolveBoardGitHubAuth(req, res);
     if (!auth.ok) return;
 
     const { owner, repo, ref } = req.params;
@@ -439,7 +446,7 @@ export function projectRoutes() {
   });
 
   router.get('/github-file/:owner/:repo/:ref/*', async (req, res) => {
-    const auth = resolveBoardGitHubAuth(req, res);
+    const auth = await resolveBoardGitHubAuth(req, res);
     if (!auth.ok) return;
 
     const { owner, repo, ref } = req.params;
