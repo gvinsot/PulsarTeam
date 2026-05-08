@@ -1,4 +1,5 @@
 import { getPool } from './connection.js';
+import { encryptIfPlain, tryDecrypt } from '../../lib/crypto.js';
 
 /**
  * Unified OAuth token store.
@@ -52,8 +53,8 @@ export async function storeOAuthToken(record: OAuthTokenRecord): Promise<void> {
         record.provider,
         record.scopeType,
         record.scopeId,
-        record.accessToken,
-        record.refreshToken || null,
+        encryptIfPlain(record.accessToken),
+        encryptIfPlain(record.refreshToken || null),
         record.expiresAt ? new Date(record.expiresAt).toISOString() : null,
         record.meta ? JSON.stringify(record.meta) : null,
       ]
@@ -197,8 +198,8 @@ export async function loadOAuthTokens(): Promise<void> {
         provider: row.provider,
         scopeType: row.scope_type,
         scopeId: row.scope_id,
-        accessToken: row.access_token,
-        refreshToken: row.refresh_token,
+        accessToken: tryDecrypt(row.access_token),
+        refreshToken: tryDecrypt(row.refresh_token),
         expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
         meta: row.meta || {},
       };

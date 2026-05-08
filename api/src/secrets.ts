@@ -100,6 +100,15 @@ export function validateProductionSecrets(): void {
     );
   }
 
+  const encKey = readSecret('ENCRYPTION_KEY');
+  if (isWeakSecret(encKey, 32)) {
+    warnings.push(
+      'ENCRYPTION_KEY is missing, too short (<32 chars), or a known default. ' +
+      'Required to encrypt OAuth tokens, LLM API keys, and MCP credentials at rest. ' +
+      'Generate one with `openssl rand -hex 32` and configure it as a Docker secret.'
+    );
+  }
+
   if (errors.length === 0 && warnings.length === 0) return;
 
   const banner = '='.repeat(72);

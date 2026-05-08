@@ -1,4 +1,7 @@
 import { getPool } from './connection.js';
+import { encryptFields, decryptFields } from '../../lib/crypto.js';
+
+const SECRET_FIELDS = ['apiKey'] as const;
 
 export async function getAllMcpServers() {
   const pool = getPool();
@@ -6,7 +9,7 @@ export async function getAllMcpServers() {
 
   try {
     const result = await pool.query('SELECT data FROM mcp_servers ORDER BY created_at');
-    return result.rows.map(row => row.data);
+    return result.rows.map(row => decryptFields(row.data, SECRET_FIELDS));
   } catch (err) {
     console.error('Failed to load MCP servers:', err.message);
     return [];
@@ -18,11 +21,12 @@ export async function saveMcpServer(server) {
   if (!pool) return;
 
   try {
+    const encrypted = encryptFields(server, SECRET_FIELDS);
     await pool.query(
       `INSERT INTO mcp_servers (id, data, updated_at)
        VALUES ($1, $2, NOW())
        ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = NOW()`,
-      [server.id, JSON.stringify(server)]
+      [server.id, JSON.stringify(encrypted)]
     );
   } catch (err) {
     console.error('Failed to save MCP server:', err.message);

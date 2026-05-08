@@ -4,6 +4,7 @@ import { ensureDefaultBoard } from './boards.js';
 import { loadSettingsCache } from './settings.js';
 import { refreshTokenSummaryCache } from './tokenUsage.js';
 import { loadOAuthTokens } from './oauthTokens.js';
+import { migrateEncryptCredentials } from './encryptMigration.js';
 
 const { Pool } = pg;
 
@@ -348,6 +349,10 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       // ── Finalize ──────────────────────────────────────────────────────────
       setPool(pool);
       setDatabaseConnected(true);
+
+      // Encrypt any legacy plaintext credentials at rest before populating caches.
+      // Idempotent: rows already encrypted (`enc:v1:` prefix) are skipped.
+      await migrateEncryptCredentials();
 
       // Populate caches
       await loadSettingsCache();
