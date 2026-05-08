@@ -317,7 +317,6 @@ export default function Dashboard({
           <Suspense fallback={null}>
             <BroadcastPanel
               agents={sortedAgents}
-              projects={projects}
               skills={skills}
               mcpServers={mcpServers}
               socket={socket}

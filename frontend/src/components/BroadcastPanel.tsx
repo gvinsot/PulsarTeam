@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Globe, Send, Loader2, FolderOpen, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, Search } from 'lucide-react';
+import { X, Globe, Send, Loader2, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, ScrollText, Plug, RefreshCw, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
@@ -67,13 +67,12 @@ const statusLabels = {
   disconnected: 'Deconnecte',
 };
 
-export default function BroadcastPanel({ agents, projects = [], skills = [], mcpServers = [], socket, onClose, onRefresh, user }) {
+export default function BroadcastPanel({ agents, skills = [], mcpServers = [], socket, onClose, onRefresh, user }) {
   const isAdmin = user?.role === 'admin';
   const [tab, setTab] = useState('broadcast');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const [responses, setResponses] = useState([]);
-  const [changingProject, setChangingProject] = useState(false);
 
   // Plugin sub-tab: 'list' or 'mcp-explorer'
   const [pluginSubTab, setPluginSubTab] = useState('list');
@@ -129,12 +128,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
     socket.emit(WsEvents.REQ_BROADCAST, { message: msg });
   };
 
-  const handleProjectChange = async (project) => {
-    setChangingProject(true);
-    try { await api.updateAllProjects(project); }
-    catch (err) { console.error('Failed to update projects:', err); }
-    finally { setChangingProject(false); }
-  };
 
   // ── Plugin handlers ─────────────────────────────────────────────────
 
@@ -264,7 +257,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
     agents.filter(a => a.status === 'busy').forEach(a => socket.emit(WsEvents.REQ_STOP, { agentId: a.id }));
   }, [agents, socket]);
 
-  const currentProject = agents.length > 0 ? agents[0].project : null;
   const busyCount = agents.filter(a => a.status === 'busy').length;
 
   // ── Render ──────────────────────────────────────────────────────────
@@ -322,28 +314,6 @@ export default function BroadcastPanel({ agents, projects = [], skills = [], mcp
           {/* ── BROADCAST TAB ──────────────────────────────────── */}
           {tab === 'broadcast' && (
             <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
-              {/* Project selector */}
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <FolderOpen className="w-3.5 h-3.5 text-dark-400" />
-                <span className="text-xs text-dark-400">Assign all agents to :</span>
-                <div className="relative">
-                  <select
-                    value={currentProject || ''}
-                    onChange={(e) => handleProjectChange(e.target.value || null)}
-                    disabled={changingProject || agents.length === 0}
-                    className="appearance-none bg-dark-800 border border-dark-600 rounded-lg px-3 py-1.5 pr-7 text-sm text-dark-200 focus:outline-none focus:border-indigo-500 disabled:opacity-50 cursor-pointer"
-                  >
-                    <option value="">No repository</option>
-                    {projects.map(p => (
-                      <option key={p.name} value={p.name} title={p.description || p.htmlUrl || p.name}>
-                        {p.fullName || p.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-dark-400 pointer-events-none" />
-                </div>
-              </div>
-
               {/* Responses (scrollable, takes available space) */}
               <div ref={responsesRef} className="flex-1 overflow-auto min-h-0 space-y-2">
                 {responses.length > 0 && (
