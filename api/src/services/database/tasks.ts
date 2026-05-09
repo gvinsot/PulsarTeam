@@ -539,22 +539,23 @@ export async function countActiveTasksForAgent(agentId, excludeTaskId = null) {
 }
 
 /**
- * Get recurring tasks that are done and ready for reset.
+ * Get all recurring tasks (any status). The reset scheduler decides whether
+ * each task is due based on its own `recurrence.lastResetAt` (or fallbacks),
+ * independently of the workflow status — so a task stuck in `error` or in a
+ * mid-workflow column still gets re-armed on its next interval.
  */
-export async function getRecurringDoneTasks() {
+export async function getRecurringTasks() {
   const pool = getPool();
   if (!pool) return [];
   try {
     const result = await pool.query(
       `${TASK_SELECT}
        WHERE t.recurrence IS NOT NULL
-         AND t.status = 'done'
-         AND t.completed_at IS NOT NULL
          AND t.deleted_at IS NULL`
     );
     return result.rows.map(rowToTask);
   } catch (err) {
-    console.error('Failed to get recurring done tasks:', err.message);
+    console.error('Failed to get recurring tasks:', err.message);
     return [];
   }
 }

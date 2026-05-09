@@ -1,6 +1,6 @@
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getActiveTasksByAgent, getActiveTaskForExecutor, getRecurringDoneTasks, hasActiveTask, updateTaskFields } from '../database.js';
+import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getActiveTasksByAgent, getActiveTaskForExecutor, getRecurringTasks, hasActiveTask, updateTaskFields } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
 import { isActiveStatus, getWorkflowManagedStatuses } from '../workflow/index.js';
 
@@ -39,6 +39,40 @@ export function purgeStaleTaskSignals(activeTaskIds: Set<string>): void {
   }
 }
 
+/**
+ * Coerce an arbitrary input into a positive integer day count, or null if the
+ * caller wants no retention (the default — keep the full history).
+ * Caps at 3650 days (~10 years) to keep JSONB rows bounded even if the field
+ * is mis-set via a direct API call.
+ */
+function normalizeRetention(value: any): number | null {
+  if (value === null || value === undefined || value === '' || value === 0 || value === false) return null;
+  const n = typeof value === 'number' ? value : parseInt(value, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.min(3650, Math.floor(n));
+}
+
+/**
+ * Drop history entries with `at` older than `cutoffMs`. Mutates the array
+ * in place and returns the number of dropped entries.
+ */
+function pruneByDate<T extends { at?: string; date?: string }>(
+  arr: T[] | undefined,
+  cutoffMs: number,
+): number {
+  if (!Array.isArray(arr) || arr.length === 0) return 0;
+  let dropped = 0;
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const stamp = arr[i]?.at || arr[i]?.date;
+    const t = stamp ? Date.parse(stamp) : NaN;
+    if (Number.isFinite(t) && t < cutoffMs) {
+      arr.splice(i, 1);
+      dropped++;
+    }
+  }
+  return dropped;
+}
+
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
@@ -71,6 +105,13 @@ export const tasksMethods = {
         period: recurrence.period || 'daily',
         intervalMinutes: recurrence.intervalMinutes || 1440,
         originalStatus: status,
+        // Optional retention: drop history/commits older than N days at each
+        // reset. null/0/undefined means "keep everything" (legacy behavior).
+        historyRetentionDays: normalizeRetention(recurrence.historyRetentionDays),
+        // Reference timestamp for the next reset. Set on creation so the first
+        // cycle is measured from "now" regardless of how long the task takes
+        // to reach `done` (or whether it ever does).
+        lastResetAt: now,
       };
     }
     this._addTaskToStore(agentId, newTask);
@@ -245,11 +286,21 @@ export const tasksMethods = {
     const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
     if (!task) return null;
     if (recurrence && recurrence.enabled) {
+      const prev = task.recurrence || {};
       task.recurrence = {
         enabled: true,
         period: recurrence.period || 'daily',
         intervalMinutes: recurrence.intervalMinutes || 1440,
-        originalStatus: recurrence.originalStatus || task.recurrence?.originalStatus || 'backlog',
+        originalStatus: recurrence.originalStatus || prev.originalStatus || 'backlog',
+        historyRetentionDays: normalizeRetention(
+          recurrence.historyRetentionDays !== undefined
+            ? recurrence.historyRetentionDays
+            : prev.historyRetentionDays
+        ),
+        // Preserve the existing reference timestamp so toggling recurrence
+        // on/off mid-cycle doesn't postpone the next reset; default to now
+        // if this is the first time recurrence is enabled.
+        lastResetAt: prev.lastResetAt || new Date().toISOString(),
       };
     } else {
       task.recurrence = null;
@@ -549,22 +600,84 @@ export const tasksMethods = {
 
   async _processRecurringTasks(this: any): Promise<void> {
     const now = Date.now();
-    const recurringTasks = await getRecurringDoneTasks();
-    for (const task of recurringTasks) {
-      const completedAt = new Date((task as any).completedAt).getTime();
-      const intervalMs = ((task as any).recurrence.intervalMinutes || 1440) * 60 * 1000;
-      if (now - completedAt >= intervalMs) {
-        const resetStatus = (task as any).recurrence.originalStatus || 'backlog';
-        console.log(`🔁 [Recurrence] Resetting task "${(task as any).text.slice(0, 60)}" → ${resetStatus} (interval: ${(task as any).recurrence.intervalMinutes}min)`);
-        (task as any).status = resetStatus;
-        (task as any).completedAt = null;
-        (task as any).startedAt = null;
-        if (!(task as any).history) (task as any).history = [];
-        (task as any).history.push({ from: 'done', status: resetStatus, at: new Date().toISOString(), by: 'recurrence' });
-        await saveTaskToDb(task);
-        const agent = this.agents.get((task as any).agentId);
-        if (agent) this._emit('agent:updated', this._sanitize(agent));
+    const nowIso = new Date(now).toISOString();
+    const recurringTasks = await getRecurringTasks();
+    for (const t of recurringTasks) {
+      const task: any = t;
+      const rec = task.recurrence || {};
+      const intervalMs = (rec.intervalMinutes || 1440) * 60 * 1000;
+
+      // Reference timestamp: prefer the explicit lastResetAt (set on creation
+      // and at every reset). Fall back to completedAt → startedAt → createdAt
+      // so legacy tasks without lastResetAt still trigger correctly.
+      const refIso = rec.lastResetAt || task.completedAt || task.startedAt || task.createdAt;
+      const refMs = refIso ? Date.parse(refIso) : NaN;
+      if (!Number.isFinite(refMs)) continue;
+      if (now - refMs < intervalMs) continue;
+
+      const resetStatus = rec.originalStatus || 'backlog';
+      const prevStatus = task.status;
+
+      // Purge old log entries before appending the reset event, so the new
+      // event isn't itself eligible for purge on the next cycle.
+      let prunedHistory = 0;
+      let prunedCommits = 0;
+      const retentionDays = normalizeRetention(rec.historyRetentionDays);
+      if (retentionDays) {
+        const cutoffMs = now - retentionDays * 24 * 60 * 60 * 1000;
+        prunedHistory = pruneByDate(task.history, cutoffMs);
+        prunedCommits = pruneByDate(task.commits, cutoffMs);
       }
+
+      console.log(
+        `🔁 [Recurrence] Resetting task "${(task.text || '').slice(0, 60)}" `
+        + `${prevStatus} → ${resetStatus} (interval: ${rec.intervalMinutes}min`
+        + (retentionDays ? `, retention: ${retentionDays}d, pruned: ${prunedHistory}h/${prunedCommits}c` : '')
+        + `)`
+      );
+
+      task.status = resetStatus;
+      task.completedAt = null;
+      task.startedAt = null;
+      task.executionStatus = null;
+      task.completedActionIdx = null;
+      task.actionRunning = false;
+      task.actionRunningAgentId = null;
+      task.actionRunningMode = null;
+      task.error = null;
+      task.errorFromStatus = null;
+      if (!task.history) task.history = [];
+      task.history.push({ from: prevStatus, status: resetStatus, at: nowIso, by: 'recurrence' });
+      task.recurrence = { ...rec, lastResetAt: nowIso };
+
+      // Drop ephemeral execution signals from the previous cycle so the
+      // freshly-reset task isn't blocked by stale "stopped"/"watching" flags.
+      clearTaskSignals(task.id);
+
+      // Mirror the reset onto the in-memory copy used by the task loop, so
+      // it doesn't keep seeing the pre-reset status (e.g. a stale `done`
+      // would prevent the freshly-armed task from being picked up).
+      const memTask = this._getAgentTasks(task.agentId).find((mt: any) => mt.id === task.id);
+      if (memTask) {
+        memTask.status = task.status;
+        memTask.completedAt = task.completedAt;
+        memTask.startedAt = task.startedAt;
+        memTask.executionStatus = task.executionStatus;
+        memTask.completedActionIdx = task.completedActionIdx;
+        memTask.actionRunning = task.actionRunning;
+        memTask.actionRunningAgentId = task.actionRunningAgentId;
+        memTask.actionRunningMode = task.actionRunningMode;
+        memTask.error = task.error;
+        memTask.errorFromStatus = task.errorFromStatus;
+        memTask.history = task.history;
+        memTask.commits = task.commits;
+        memTask.recurrence = task.recurrence;
+      }
+
+      await saveTaskToDb(task);
+      const agent = this.agents.get(task.agentId);
+      if (agent) this._emit('agent:updated', this._sanitize(agent));
+      this._emit('task:updated', { agentId: task.agentId, task: { ...task } });
     }
   },
 

@@ -25,6 +25,9 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
   const [recurring, setRecurring] = useState(false);
   const [recurrencePeriod, setRecurrencePeriod] = useState('daily');
   const [customInterval, setCustomInterval] = useState(60);
+  // 0 = keep everything (no purge). Otherwise drops history/commits older
+  // than N days at each reset.
+  const [historyRetentionDays, setHistoryRetentionDays] = useState(0);
   const [saving, setSaving] = useState(false);
   const textareaRef = useRef(null);
 
@@ -100,6 +103,7 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
         intervalMinutes: recurrencePeriod === 'custom'
           ? customInterval
           : RECURRENCE_PERIODS.find(p => p.value === recurrencePeriod)?.minutes || 1440,
+        historyRetentionDays: historyRetentionDays > 0 ? historyRetentionDays : null,
       } : undefined;
       const storageProvider = storagePath
         ? (availableStorages.find(s => s.path === storagePath)?.provider || 'onedrive')
@@ -300,6 +304,22 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
                     />
                   </div>
                 )}
+              </div>
+            )}
+            {recurring && (
+              <div className="mt-3">
+                <label className="block text-xs text-dark-400 mb-1">
+                  Purge history after (days)
+                  <span className="text-[10px] text-dark-500 ml-1">— 0 = keep everything</span>
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={historyRetentionDays}
+                  onChange={e => setHistoryRetentionDays(Math.max(0, Math.min(3650, parseInt(e.target.value) || 0)))}
+                  className="w-32 px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                />
               </div>
             )}
           </div>

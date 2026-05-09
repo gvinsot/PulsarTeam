@@ -42,7 +42,7 @@ mock.module('../database.js', {
     getTasksByAgent: async () => [],
     getActiveTasksByAgent: async () => [],
     getActiveTaskForExecutor: async () => null,
-    getRecurringDoneTasks: async () => [],
+    getRecurringTasks: async () => [],
     hasActiveTask: async () => false,
     updateTaskFields: noop,
     clearTaskExecutionFlags: noop,

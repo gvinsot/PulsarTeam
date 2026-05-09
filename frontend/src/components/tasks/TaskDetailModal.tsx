@@ -423,15 +423,25 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                   <Repeat className="w-3.5 h-3.5" />
                   Recurring
                 </div>
-                <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
-                  {task.recurrence.period === 'custom'
-                    ? `Every ${task.recurrence.intervalMinutes} min`
-                    : task.recurrence.period === 'hourly' ? 'Every hour'
-                    : task.recurrence.period === 'daily' ? 'Every day'
-                    : task.recurrence.period === 'weekly' ? 'Every week'
-                    : task.recurrence.period === 'monthly' ? 'Every month'
-                    : task.recurrence.period}
-                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
+                    {task.recurrence.period === 'custom'
+                      ? `Every ${task.recurrence.intervalMinutes} min`
+                      : task.recurrence.period === 'hourly' ? 'Every hour'
+                      : task.recurrence.period === 'daily' ? 'Every day'
+                      : task.recurrence.period === 'weekly' ? 'Every week'
+                      : task.recurrence.period === 'monthly' ? 'Every month'
+                      : task.recurrence.period}
+                  </span>
+                  {task.recurrence.historyRetentionDays > 0 && (
+                    <span
+                      className="text-[10px] px-2 py-0.5 rounded-full font-medium ring-1 bg-dark-700/40 text-dark-300 ring-dark-600"
+                      title="History/commits older than this are dropped at each reset"
+                    >
+                      Purge {task.recurrence.historyRetentionDays}d
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 
