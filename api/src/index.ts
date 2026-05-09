@@ -24,6 +24,7 @@ import { realtimeRoutes } from './routes/realtime.js';
 import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { readSecret, validateProductionSecrets } from './secrets.js';
+import { buildCorsOptions, getCorsOrigins, isOriginAllowed, logRejectedOrigin, validateCorsConfig } from './middleware/corsConfig.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected } from './services/database.js';
 import { onedriveRoutes, onedriveOAuthRedirectRouter } from './routes/onedrive.js';
@@ -56,9 +57,7 @@ import { setAgentManager } from './services/userProvisioning.js';
 const app = express();
 const httpServer = createServer(app);
 
-const corsOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',')
-  : ['http://localhost:5173', 'http://localhost:3000'];
+const corsOrigins = getCorsOrigins();
 
 const contentSecurityPolicy = [
   "default-src 'self'",
@@ -73,11 +72,7 @@ const contentSecurityPolicy = [
 ].join('; ');
 
 const io = new Server(httpServer, {
-  cors: {
-    origin: corsOrigins,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    credentials: true
-  }
+  cors: buildCorsOptions(corsOrigins)
 });
 
 const skillManager = new SkillManager();
@@ -94,10 +89,7 @@ setAgentManager(agentManager);
 app.set('io', io);
 app.set('agentManager', agentManager);
 
-app.use(cors({
-  origin: corsOrigins,
-  credentials: true
-}));
+app.use(cors(buildCorsOptions(corsOrigins)));
 
 // Security headers — defense-in-depth when accessed without a reverse proxy
 app.use((req, res, next) => {
@@ -253,8 +245,8 @@ app.get('/api/health/details', authenticateToken, (req, res) => {
 io.use((socket, next) => {
   // Validate Origin header to prevent cross-site WebSocket hijacking
   const origin = socket.handshake.headers.origin;
-  if (origin && !corsOrigins.includes(origin)) {
-    console.warn(`WebSocket connection rejected: origin "${origin}" not in allowed list`);
+  if (origin && !isOriginAllowed(origin, corsOrigins)) {
+    logRejectedOrigin(origin, 'ws');
     return next(new Error('Origin not allowed'));
   }
 
@@ -278,6 +270,7 @@ const PORT = process.env.PORT || 3001;
 
 async function start() {
   validateProductionSecrets();
+  validateCorsConfig();
   await initDatabase();
   await ensureAdminSeeded();
   await ensureApiKeysTable();
