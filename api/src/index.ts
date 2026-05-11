@@ -39,6 +39,8 @@ import { settingsRoutes } from './routes/settings.js';
 import { createSwarmApiMcpHandler, createSwarmApiMcpSseHandlers } from './services/swarmApiMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
+import { authenticateCoderApiKey } from './middleware/coderApiKeyAuth.js';
+import { internalClaudeTokenRoutes } from './routes/internalClaudeTokens.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
 import { jiraRoutes } from './routes/jira.js';
 import { createJiraMcpHandler } from './services/jiraMcp.js';
@@ -157,6 +159,9 @@ app.use('/api/s3', authenticateToken, s3Routes());
 app.use('/api/github', authenticateToken, githubRoutes());
 app.use('/api/boards', authenticateToken, boardRoutes(agentManager));
 app.use('/api/tasks', authenticateToken, taskRoutes);
+
+// Internal: runners read/write Claude OAuth tokens via shared CODER_API_KEY.
+app.use('/api/internal/claude-tokens', authenticateCoderApiKey, internalClaudeTokenRoutes());
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
 const onedriveMcpHandler = createOneDriveMcpHandler();

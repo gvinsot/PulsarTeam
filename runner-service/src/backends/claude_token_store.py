@@ -213,58 +213,111 @@ def get_saved_refresh_token() -> Optional[str]:
 
 
 # =============================================================================
-# Per-owner token storage
+# Per-owner token storage (DB-backed via team-api)
 # =============================================================================
+#
+# Tokens are stored centrally in the api's `oauth_tokens` table (encrypted at
+# rest by api/src/lib/crypto.ts). The runner talks to the api over HTTP using
+# the shared CODER_API_KEY. This lets prod and QA stacks share the same token
+# pool when they point at the same database.
 
-def _sanitize_owner_id(owner_id: str) -> str:
-    return re.sub(r'[^a-zA-Z0-9_-]', '', owner_id)[:48] or "default"
+import httpx
+
+_API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
+_API_KEY = read_secret("CODER_API_KEY", default="") or os.getenv("API_KEY", "")
+_OWNER_TOKEN_PATH = "/api/internal/claude-tokens"
+_HTTP_TIMEOUT = 5.0
+
+# Short-lived cache so repeated calls within one exec don't all hit the api.
+_owner_token_cache: dict = {}
+_OWNER_TOKEN_CACHE_TTL = 30  # seconds
 
 
-def _owner_token_dir(owner_id: str) -> str:
-    return os.path.join(USERS_DIR, _sanitize_owner_id(owner_id))
+def _owner_headers() -> dict:
+    return {"X-Api-Key": _API_KEY, "Content-Type": "application/json"}
+
+
+def _fetch_owner_record(owner_id: str) -> Optional[dict]:
+    """Fetch `{accessToken, refreshToken, expiresAt}` from the api or None on 404.
+
+    Uses a 30s in-process cache to avoid round-trips during a single exec.
+    Network/server errors return None so callers fall back to the login flow.
+    """
+    cached = _owner_token_cache.get(owner_id)
+    if cached and time.time() - cached["fetched_at"] < _OWNER_TOKEN_CACHE_TTL:
+        return cached["record"]
+    url = f"{_API_BASE}{_OWNER_TOKEN_PATH}/{owner_id}"
+    try:
+        r = httpx.get(url, headers=_owner_headers(), timeout=_HTTP_TIMEOUT)
+    except httpx.HTTPError as e:
+        logger.warning(f"[Owner Auth] api unreachable for owner {owner_id}: {e}")
+        return None
+    if r.status_code == 404:
+        record = None
+    elif r.status_code >= 400:
+        logger.warning(f"[Owner Auth] api {r.status_code} fetching token for {owner_id}: {r.text[:200]}")
+        return None
+    else:
+        try:
+            record = r.json()
+        except ValueError:
+            logger.warning(f"[Owner Auth] api returned non-JSON for owner {owner_id}")
+            return None
+    _owner_token_cache[owner_id] = {"fetched_at": time.time(), "record": record}
+    return record
+
+
+def _invalidate_owner_cache(owner_id: str):
+    _owner_token_cache.pop(owner_id, None)
 
 
 def load_owner_token(owner_id: str) -> Optional[str]:
     if not owner_id:
         return None
-    token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
-    _migrate_if_plaintext(token_json)
-    data = _read_secret_json(token_json)
-    return (data or {}).get("accessToken") or None
+    record = _fetch_owner_record(owner_id)
+    return (record or {}).get("accessToken") or None
 
 
 def save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
-    owner_dir = _owner_token_dir(owner_id)
-    _secure_makedirs(owner_dir)
-    oauth_data = {
+    if not owner_id:
+        return
+    payload = {
         "accessToken": token,
-        "refreshToken": refresh_token or "",
-        "expiresAt": int((time.time() + expires_in) * 1000),
-        "scopes": OAUTH_SCOPES.split(),
+        "refreshToken": refresh_token or None,
+        "expiresIn": expires_in,
     }
-    _atomic_write_secret(os.path.join(owner_dir, "oauth_token.json"), json.dumps(oauth_data, indent=2))
+    url = f"{_API_BASE}{_OWNER_TOKEN_PATH}/{owner_id}"
+    try:
+        r = httpx.post(url, json=payload, headers=_owner_headers(), timeout=_HTTP_TIMEOUT)
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        logger.error(f"[Owner Auth] Failed to persist token for owner {owner_id}: {e}")
+        return
+    _invalidate_owner_cache(owner_id)
     logger.info(f"[Owner Auth] Saved OAuth token for owner {owner_id}")
 
 
 def invalidate_owner_token(owner_id: str):
     if not owner_id:
         return
-    token_file = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
+    url = f"{_API_BASE}{_OWNER_TOKEN_PATH}/{owner_id}"
     try:
-        os.remove(token_file)
-        logger.info(f"[Owner Auth] Cleared invalid token for owner {owner_id}")
-    except OSError:
-        pass
+        r = httpx.delete(url, headers=_owner_headers(), timeout=_HTTP_TIMEOUT)
+        if r.status_code >= 400 and r.status_code != 404:
+            logger.warning(f"[Owner Auth] api {r.status_code} deleting token for {owner_id}")
+    except httpx.HTTPError as e:
+        logger.warning(f"[Owner Auth] api unreachable while deleting token for {owner_id}: {e}")
+    _invalidate_owner_cache(owner_id)
+    logger.info(f"[Owner Auth] Cleared invalid token for owner {owner_id}")
 
 
 def is_owner_token_expired(owner_id: str, margin_seconds: int = 300) -> bool:
     if not owner_id:
         return False
-    token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
-    data = _read_secret_json(token_json)
-    if not data:
+    record = _fetch_owner_record(owner_id)
+    if not record:
         return False
-    expires_at_ms = data.get("expiresAt", 0)
+    expires_at_ms = record.get("expiresAt") or 0
     if not expires_at_ms:
         return False
     return time.time() >= (expires_at_ms / 1000) - margin_seconds
@@ -273,9 +326,8 @@ def is_owner_token_expired(owner_id: str, margin_seconds: int = 300) -> bool:
 def get_owner_refresh_token(owner_id: str) -> Optional[str]:
     if not owner_id:
         return None
-    token_json = os.path.join(_owner_token_dir(owner_id), "oauth_token.json")
-    data = _read_secret_json(token_json)
-    return (data or {}).get("refreshToken") or None
+    record = _fetch_owner_record(owner_id)
+    return (record or {}).get("refreshToken") or None
 
 
 # =============================================================================

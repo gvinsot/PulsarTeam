@@ -13,7 +13,7 @@ import { encryptIfPlain, tryDecrypt } from '../../lib/crypto.js';
  * In-memory cache for fast lookups (populated from DB on startup).
  */
 
-export type OAuthProvider = 'gmail' | 'onedrive' | 'slack' | 'github' | 'jira' | 's3';
+export type OAuthProvider = 'gmail' | 'onedrive' | 'slack' | 'github' | 'jira' | 's3' | 'claude_code';
 export type ScopeType = 'agent' | 'board' | 'user';
 
 export interface OAuthTokenRecord {
