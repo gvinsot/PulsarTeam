@@ -237,10 +237,12 @@ export function createSwarmApiMcpServer(agentManager) {
       // Resolve board_id: pick the board with the most tasks for the project,
       // fall back to single board or default board
       let resolvedBoardId = board_id || null;
+      let resolvedBoard: any = null;
       if (!resolvedBoardId) {
         const boards = await getAllBoards();
         if (boards.length === 1) {
           resolvedBoardId = boards[0].id;
+          resolvedBoard = boards[0];
         } else if (boards.length > 1) {
           // Find the board with the most tasks for this project
           const taskProject = project || agent.project;
@@ -248,6 +250,7 @@ export function createSwarmApiMcpServer(agentManager) {
             const bestBoardId = await getBoardWithMostTasksForProject(taskProject);
             if (bestBoardId) {
               resolvedBoardId = bestBoardId;
+              resolvedBoard = boards.find(b => b.id === bestBoardId) || null;
               console.log(`📋 [SwarmMCP] Auto-resolved board for project "${taskProject}": ${resolvedBoardId}`);
             }
           }
@@ -255,6 +258,7 @@ export function createSwarmApiMcpServer(agentManager) {
           if (!resolvedBoardId) {
             const defaultBoard = boards.find(b => b.is_default);
             resolvedBoardId = defaultBoard ? defaultBoard.id : boards[0].id;
+            resolvedBoard = defaultBoard || boards[0];
             console.log(`📋 [SwarmMCP] No project-specific board found, using fallback: ${resolvedBoardId}`);
           }
         }
@@ -266,6 +270,25 @@ export function createSwarmApiMcpServer(agentManager) {
             content: [{
               type: 'text',
               text: JSON.stringify({ error: `Board not found: ${resolvedBoardId}` }),
+            }],
+            isError: true,
+          };
+        }
+        resolvedBoard = board;
+      }
+
+      // Validate status against the resolved board's workflow columns. The
+      // task is rejected (rather than silently accepted) when the caller
+      // passes a column that does not exist on the target board.
+      if (status && resolvedBoard?.workflow?.columns?.length) {
+        const columns = resolvedBoard.workflow.columns;
+        const match = columns.find((c: any) => c.id?.toLowerCase() === status.toLowerCase());
+        if (!match) {
+          const validIds = columns.map((c: any) => c.id).join(', ');
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({ error: `Invalid status "${status}" for board "${resolvedBoard.name || resolvedBoardId}". Valid columns: ${validIds}` }),
             }],
             isError: true,
           };
@@ -350,6 +373,28 @@ export function createSwarmApiMcpServer(agentManager) {
           }],
           isError: true,
         };
+      }
+
+      // Validate status against the task's board workflow when provided. We
+      // intentionally fail loudly here — silently accepting an unknown
+      // status used to leave tasks stranded in a column the board could not
+      // render or transition out of.
+      if (status !== undefined && task.boardId) {
+        const board = await getBoardById(task.boardId);
+        const columns = board?.workflow?.columns;
+        if (columns?.length) {
+          const match = columns.find((c: any) => c.id?.toLowerCase() === status.toLowerCase());
+          if (!match) {
+            const validIds = columns.map((c: any) => c.id).join(', ');
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: `Invalid status "${status}" for board "${board?.name || task.boardId}". Valid columns: ${validIds}` }),
+              }],
+              isError: true,
+            };
+          }
+        }
       }
 
       // Validate repo format (empty string = clear, valid format = set,

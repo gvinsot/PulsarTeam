@@ -15,12 +15,19 @@ const noop = async () => {};
 // The swarm MCP imports both ../database.js (re-exporter) and
 // ../database/boardRepos.js. Mock both so the module can load without a
 // real Postgres connection.
+const BOARD_WORKFLOW = {
+  columns: [
+    { id: 'backlog', label: 'Backlog' },
+    { id: 'in_progress', label: 'In Progress' },
+    { id: 'done', label: 'Done' },
+  ],
+};
 mock.module('../database.js', {
   namedExports: {
     getAllBoards: async () => [
-      { id: 'board-1', name: 'Default', is_default: true, workflow: { columns: [{ id: 'backlog', label: 'Backlog' }] } },
+      { id: 'board-1', name: 'Default', is_default: true, workflow: BOARD_WORKFLOW },
     ],
-    getBoardById: async (id: string) => (id === 'board-1' ? { id: 'board-1', name: 'Default' } : null),
+    getBoardById: async (id: string) => (id === 'board-1' ? { id: 'board-1', name: 'Default', workflow: BOARD_WORKFLOW } : null),
     getBoardWithMostTasksForProject: async () => null,
   },
 });
@@ -294,6 +301,60 @@ test('update_task returns 404-style error when task is missing', async () => {
   assert.equal(result.isError, true);
   const body = parseResult(result);
   assert.match(body.error, /Task not found/);
+});
+
+test('add_task rejects unknown status not in the board workflow', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'add_task');
+
+  const result = await handler({
+    agent_id: 'agent-1',
+    task: 'New task',
+    status: 'not_a_column',
+  });
+
+  assert.equal(result.isError, true);
+  const body = parseResult(result);
+  assert.match(body.error, /Invalid status "not_a_column"/);
+  // No task should have been created
+  assert.equal(am._calls.addTask.length, 0);
+});
+
+test('add_task rejects unknown board_id', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'add_task');
+
+  const result = await handler({
+    agent_id: 'agent-1',
+    task: 'New task',
+    board_id: 'does-not-exist',
+  });
+
+  assert.equal(result.isError, true);
+  const body = parseResult(result);
+  assert.match(body.error, /Board not found/);
+  assert.equal(am._calls.addTask.length, 0);
+});
+
+test('update_task rejects unknown status not in the board workflow', async () => {
+  const am = makeFakeAgentManager();
+  am.addTask('agent-1', 'Existing', { type: 'mcp' }, 'backlog', { boardId: 'board-1' });
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'update_task');
+
+  const result = await handler({
+    agent_id: 'agent-1',
+    task_id: 'task-1',
+    status: 'not_a_real_column',
+  });
+
+  assert.equal(result.isError, true);
+  const body = parseResult(result);
+  assert.match(body.error, /Invalid status "not_a_real_column"/);
+  // setTaskStatus should not have been called
+  assert.equal(am._calls.setTaskStatus.length, 0);
 });
 
 test('list_boards exposes repos in use on each board', async () => {

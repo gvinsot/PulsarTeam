@@ -470,18 +470,30 @@ export const toolsMethods = {
         }
 
         // Normalize status to match actual column IDs (case-insensitive).
-        // Agents often pass "Resolution" instead of "resolution".
+        // Agents often pass "Resolution" instead of "resolution". If the
+        // board has a known workflow and the requested status does not
+        // match any column, reject the update rather than letting the task
+        // drift into an unknown column.
         let newStatus = rawStatus;
         if (task.boardId) {
           try {
             const wf = await getWorkflowForBoard(task.boardId);
-            if (wf?.columns) {
-              const match = wf.columns.find((c: any) => c.id.toLowerCase() === rawStatus.toLowerCase());
+            if (wf?.columns?.length) {
+              const match = wf.columns.find((c: any) => c.id.toLowerCase() === (rawStatus || '').toLowerCase());
               if (match) {
                 if (match.id !== rawStatus) {
                   console.log(`[UpdateTask] Normalizing status "${rawStatus}" → "${match.id}"`);
                 }
                 newStatus = match.id;
+              } else {
+                const validIds = wf.columns.map((c: any) => c.id).join(', ');
+                results.push({
+                  tool: 'update_task',
+                  args: call.args,
+                  success: false,
+                  error: `Invalid status "${rawStatus}" for this task's board. Valid columns: ${validIds}.`,
+                });
+                continue;
               }
             }
           } catch (_) { /* best-effort, use raw */ }
@@ -621,6 +633,41 @@ export const toolsMethods = {
         const statusFilter = (call.args[0] || '').trim() || null;
         const boardFilter = (call.args[1] || '').trim() || null;
         try {
+          // Validate that the requested board exists before querying. Without
+          // this, an unknown boardId silently returns an empty list which
+          // makes agent debugging painful.
+          let resolvedBoard: any = null;
+          if (boardFilter) {
+            resolvedBoard = await getBoardById(boardFilter);
+            if (!resolvedBoard) {
+              results.push({
+                tool: 'list_tasks',
+                args: call.args,
+                success: false,
+                error: `Board not found: ${boardFilter}. Use @list_boards to discover valid board IDs.`,
+              });
+              continue;
+            }
+            // When both board and status are provided, verify the status
+            // exists in that board's workflow. (When only a status is
+            // provided we accept it — the agent may be filtering tasks
+            // across multiple boards.)
+            if (statusFilter && resolvedBoard.workflow?.columns?.length) {
+              const match = resolvedBoard.workflow.columns.find(
+                (c: any) => c.id?.toLowerCase() === statusFilter.toLowerCase()
+              );
+              if (!match) {
+                const validIds = resolvedBoard.workflow.columns.map((c: any) => c.id).join(', ');
+                results.push({
+                  tool: 'list_tasks',
+                  args: call.args,
+                  success: false,
+                  error: `Invalid status "${statusFilter}" for board "${resolvedBoard.name || boardFilter}". Valid columns: ${validIds}.`,
+                });
+                continue;
+              }
+            }
+          }
           const tasks = await getTasksByStatusAndBoard(statusFilter, boardFilter);
           if (tasks.length === 0) {
             const filterDesc = [statusFilter ? `status="${statusFilter}"` : null, boardFilter ? `board="${boardFilter}"` : null].filter(Boolean).join(', ');
