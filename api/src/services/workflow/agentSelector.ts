@@ -101,22 +101,13 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
     return null;
   }
 
-  // Step 1b: prefer agents whose project matches the task's project so we
-  // don't ship a bug about repo X to an agent that lives in repo Y. We only
-  // narrow down when at least one matching agent exists — otherwise we keep
-  // the wider candidate pool so the task isn't blocked.
-  let projectMatching = matching;
-  if (taskProject) {
-    const sameProject = matching.filter((a: any) => a.project === taskProject);
-    if (sameProject.length > 0) {
-      projectMatching = sameProject;
-    } else {
-      console.warn(`[AgentSelector] No role="${role}" agent on project="${taskProject}" — falling back to any project`);
-    }
-  }
-
-  // Step 2: filter to idle/error + not busy in another transition
-  const eligible = projectMatching.filter((a: any) => {
+  // Step 2: filter to idle/error + not busy in another transition.
+  // We narrow to *eligible* agents BEFORE applying the project preference so
+  // that an idle agent on a different repo can be picked (and later repo-
+  // switched by the caller) when every same-project agent is busy. Doing the
+  // project filter first would discard those idle candidates and leave the
+  // task blocked waiting on a busy same-project agent.
+  const eligibleAll = matching.filter((a: any) => {
     if (a.status !== 'idle' && a.status !== 'error') {
       console.log(`[AgentSelector] Skipping "${a.name}" — status: ${a.status}`);
       return false;
@@ -128,10 +119,27 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
     return true;
   });
 
-  if (eligible.length === 0) {
+  if (eligibleAll.length === 0) {
     console.log(`[AgentSelector] No idle agent for role="${role}"`);
     return null;
   }
+
+  // Step 3: prefer eligible agents already on the task's project so we don't
+  // ship a bug about repo X to an agent that lives in repo Y if a same-project
+  // candidate is available. If none of the idle agents are on the task's
+  // project, fall back to the wider eligible pool — the caller's repo-switch
+  // logic (executeRunAgent / _resumeActiveTask) will move the picked agent to
+  // the task's repo before running.
+  let eligible = eligibleAll;
+  if (taskProject) {
+    const sameProject = eligibleAll.filter((a: any) => a.project === taskProject);
+    if (sameProject.length > 0) {
+      eligible = sameProject;
+    } else {
+      console.warn(`[AgentSelector] No idle role="${role}" agent on project="${taskProject}" — will reuse an idle agent from another repo (it will be switched)`);
+    }
+  }
+
   if (eligible.length === 1) return eligible[0];
 
   // Step 3: load-balance — pick the agent with the fewest assigned tasks
