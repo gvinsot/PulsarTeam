@@ -224,7 +224,14 @@ def get_saved_refresh_token() -> Optional[str]:
 import httpx
 
 _API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
-_API_KEY = read_secret("CODER_API_KEY", default="") or os.getenv("API_KEY", "")
+# The deployer mounts the runner's shared API key at /run/secrets/API_KEY
+# (named after the runner's env var, not after $CODER_API_KEY in compose).
+# Keep CODER_API_KEY as a fallback for environments that mount it under that name.
+_API_KEY = (
+    read_secret("API_KEY", default="")
+    or read_secret("CODER_API_KEY", default="")
+    or os.getenv("API_KEY", "")
+)
 _OWNER_TOKEN_PATH = "/api/internal/claude-tokens"
 _HTTP_TIMEOUT = 3.0
 _PERSIST_MAX_ATTEMPTS = 3
