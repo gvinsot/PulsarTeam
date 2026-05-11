@@ -75,6 +75,9 @@ services:
       proxy:
         aliases:
           - api
+      backend:
+        aliases:
+          - team-api
       postgresqlcluster_internal:
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
@@ -190,7 +193,7 @@ services:
       dockerfile: runner-service/Dockerfile
     image: registry.methodinfo.fr/claudecode-service:latest
     networks:
-      proxy:
+      backend:
         aliases:
           - claudecode-service
     environment:
@@ -275,7 +278,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
     networks:
-      proxy:
+      backend:
         aliases:
           - sandbox-service
     environment:
@@ -322,7 +325,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
     networks:
-      proxy:
+      backend:
         aliases:
           - openclaw-service
     environment:
@@ -387,7 +390,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
     networks:
-      proxy:
+      backend:
         aliases:
           - opencode-service
     environment:
@@ -450,7 +453,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
     networks:
-      proxy:
+      backend:
         aliases:
           - hermes-service
     environment:
@@ -526,7 +529,6 @@ services:
     tmpfs:
       - /tmp:size=128M,mode=1777
     networks:
-      proxy:
       backend:
         aliases:
           - flaresolverr
@@ -569,9 +571,6 @@ services:
     tmpfs:
       - /tmp:size=256M,mode=1777
     networks:
-      proxy:
-        aliases:
-          - mcp-browser
       backend:
         aliases:
           - mcp-browser
