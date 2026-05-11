@@ -64,6 +64,9 @@ function isProduction(): boolean {
 function isWeakSecret(value: string, minLength: number): boolean {
   if (!value) return true;
   if (value.length < minLength) return true;
+  // Catches deploy tools that store an unsubstituted `${VAR:?...}` template
+  // as the secret value instead of failing the deployment.
+  if (/^\$\{[^}]+\}$/.test(value)) return true;
   return KNOWN_DEFAULT_VALUES.has(value.toLowerCase());
 }
 
@@ -72,12 +75,12 @@ function isWeakSecret(value: string, minLength: number): boolean {
  * at startup. In dev (NODE_ENV !== 'production') we only warn, so contributors can
  * run `docker-compose up` without configuring every secret.
  *
- * Required production secrets:
+ * Required production secrets (fatal if missing/weak/unsubstituted):
  *   - JWT_SECRET (>=32 chars, not a known placeholder)
+ *   - CODER_API_KEY (>=16 chars — runner ↔ team-api authentication)
  *   - ADMIN_PASSWORD is checked separately in ensureAdminSeeded() (only when seeding)
  *
  * Recommended (warn if weak in prod, ignore in dev):
- *   - CODER_API_KEY
  *   - ENCRYPTION_KEY
  */
 export function validateProductionSecrets(): void {
@@ -94,9 +97,10 @@ export function validateProductionSecrets(): void {
 
   const coderKey = readSecret('CODER_API_KEY');
   if (isWeakSecret(coderKey, 16)) {
-    warnings.push(
-      'CODER_API_KEY is missing, too short (<16 chars), or a known default. ' +
-      'Runner services accept this key for /exec endpoints — set a strong random value.'
+    errors.push(
+      'CODER_API_KEY is missing, too short (<16 chars), or set to a known default placeholder. ' +
+      'Generate a random value (e.g. `openssl rand -hex 32`) and set it as a Docker secret. ' +
+      'Runner services authenticate API calls with this key — without it, every /v1/chat/completions request fails with 403.'
     );
   }
 
