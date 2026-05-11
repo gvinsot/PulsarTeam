@@ -1045,7 +1045,8 @@ class ClaudeCodeBackend(RunnerBackend):
             return {"status": "error", "message": f"Token response missing access_token: {json.dumps(result)}"}
         refresh_token = result.get("refresh_token")
         expires_in = result.get("expires_in", 28800)
-        save_agent_token(agent_user, access_token, refresh_token=refresh_token, expires_in=expires_in)
+        if not save_agent_token(agent_user, access_token, refresh_token=refresh_token, expires_in=expires_in):
+            return {"status": "error", "message": "Token exchange succeeded but persistence failed (team-api unreachable)."}
         pop_agent_oauth_flow(agent_id)
         return {"status": "authenticated", "agent_id": agent_id, "message": "Agent now has its own OAuth token."}
 
@@ -1053,7 +1054,8 @@ class ClaudeCodeBackend(RunnerBackend):
         agent_user = await ensure_agent_user(agent_id)
         if not agent_user:
             raise RuntimeError("Failed to resolve agent user")
-        save_agent_token(agent_user, token)
+        if not save_agent_token(agent_user, token):
+            raise RuntimeError("Failed to persist agent token (team-api unreachable)")
 
     # ── Per-owner auth ────────────────────────────────────────────────────
 
@@ -1092,9 +1094,11 @@ class ClaudeCodeBackend(RunnerBackend):
             return {"status": "error", "message": f"Token response missing access_token: {json.dumps(result)}"}
         refresh_token = result.get("refresh_token")
         expires_in = result.get("expires_in", 28800)
-        save_owner_token(owner_id, access_token, refresh_token=refresh_token, expires_in=expires_in)
+        if not save_owner_token(owner_id, access_token, refresh_token=refresh_token, expires_in=expires_in):
+            return {"status": "error", "message": "Token exchange succeeded but persistence failed (team-api unreachable)."}
         pop_owner_oauth_flow(owner_id)
         return {"status": "authenticated", "owner_id": owner_id, "message": "Owner now has an OAuth token shared by all their agents."}
 
     async def owner_set_token(self, owner_id: str, token: str) -> None:
-        save_owner_token(owner_id, token)
+        if not save_owner_token(owner_id, token):
+            raise RuntimeError("Failed to persist owner token (team-api unreachable)")

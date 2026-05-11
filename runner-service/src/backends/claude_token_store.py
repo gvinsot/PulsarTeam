@@ -226,7 +226,9 @@ import httpx
 _API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
 _API_KEY = read_secret("CODER_API_KEY", default="") or os.getenv("API_KEY", "")
 _OWNER_TOKEN_PATH = "/api/internal/claude-tokens"
-_HTTP_TIMEOUT = 5.0
+_HTTP_TIMEOUT = 3.0
+_PERSIST_MAX_ATTEMPTS = 3
+_PERSIST_BACKOFF = (0.5, 1.0)  # delays AFTER attempts 1 and 2
 
 # Short-lived cache so repeated calls within one exec don't all hit the api.
 _owner_token_cache: dict = {}
@@ -278,23 +280,51 @@ def load_owner_token(owner_id: str) -> Optional[str]:
     return (record or {}).get("accessToken") or None
 
 
-def save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
+def save_owner_token(owner_id: str, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800) -> bool:
+    """Persist owner OAuth token via team-api. Returns True on success.
+
+    Retries on transient failures (network errors, 5xx, 404 during a rolling
+    team-api update, 408/429 rate-limit). Does NOT retry on 400/401/403 — those
+    indicate a definitive client-side issue (bad key, malformed payload).
+    """
     if not owner_id:
-        return
+        return False
     payload = {
         "accessToken": token,
         "refreshToken": refresh_token or None,
         "expiresIn": expires_in,
     }
     url = f"{_API_BASE}{_OWNER_TOKEN_PATH}/{owner_id}"
-    try:
-        r = httpx.post(url, json=payload, headers=_owner_headers(), timeout=_HTTP_TIMEOUT)
-        r.raise_for_status()
-    except httpx.HTTPError as e:
-        logger.error(f"[Owner Auth] Failed to persist token for owner {owner_id}: {e}")
-        return
-    _invalidate_owner_cache(owner_id)
-    logger.info(f"[Owner Auth] Saved OAuth token for owner {owner_id}")
+    last_err = ""
+    for attempt in range(_PERSIST_MAX_ATTEMPTS):
+        try:
+            r = httpx.post(url, json=payload, headers=_owner_headers(), timeout=_HTTP_TIMEOUT)
+        except httpx.HTTPError as e:
+            last_err = f"network: {e}"
+        else:
+            if r.status_code < 300:
+                _invalidate_owner_cache(owner_id)
+                logger.info(f"[Owner Auth] Saved OAuth token for owner {owner_id}")
+                return True
+            if r.status_code in (400, 401, 403):
+                logger.error(
+                    f"[Owner Auth] api {r.status_code} persisting token for {owner_id} "
+                    f"(not retrying — fix CODER_API_KEY / payload): {r.text[:200]}"
+                )
+                return False
+            last_err = f"http {r.status_code}: {r.text[:200]}"
+        if attempt < _PERSIST_MAX_ATTEMPTS - 1:
+            delay = _PERSIST_BACKOFF[attempt]
+            logger.warning(
+                f"[Owner Auth] Persist attempt {attempt+1}/{_PERSIST_MAX_ATTEMPTS} failed for "
+                f"{owner_id} ({last_err}); retrying in {delay}s"
+            )
+            time.sleep(delay)
+    logger.error(
+        f"[Owner Auth] Failed to persist token for owner {owner_id} after "
+        f"{_PERSIST_MAX_ATTEMPTS} attempts: {last_err}"
+    )
+    return False
 
 
 def invalidate_owner_token(owner_id: str):
@@ -360,11 +390,12 @@ def load_agent_token(agent_user: dict) -> Optional[str]:
     return None
 
 
-def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800):
+def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] = None, expires_in: int = 28800) -> bool:
+    """Persist agent token. Forwards to owner DB store when owner_id is set,
+    otherwise writes to per-agent files. Returns True on success."""
     owner_id = agent_user.get("owner_id")
     if owner_id:
-        save_owner_token(owner_id, token, refresh_token=refresh_token, expires_in=expires_in)
-        return
+        return save_owner_token(owner_id, token, refresh_token=refresh_token, expires_in=expires_in)
     home = agent_user["home"]
     _secure_makedirs(home)
     oauth_data = {
@@ -380,6 +411,7 @@ def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] 
     # NOT encrypted: this file is consumed directly by the Claude Code CLI.
     _atomic_write_secret(agent_creds_file, json.dumps(creds, indent=2), encrypt=False)
     logger.info(f"[Agent Auth] Saved OAuth token for agent {agent_user['username']}")
+    return True
 
 
 def invalidate_agent_token(agent_user: dict):
@@ -590,7 +622,9 @@ async def refresh_owner_token(owner_id: str) -> bool:
         return False
     new_refresh = result.get("refresh_token", refresh_token)
     expires_in = result.get("expires_in", 28800)
-    save_owner_token(owner_id, access_token, refresh_token=new_refresh, expires_in=expires_in)
+    if not save_owner_token(owner_id, access_token, refresh_token=new_refresh, expires_in=expires_in):
+        logger.error(f"[Owner Auth] Refreshed token for owner {owner_id} could not be persisted — caller will treat as failed refresh")
+        return False
     logger.info(f"[Owner Auth] Token refreshed for owner {owner_id}")
     return True
 
@@ -623,7 +657,9 @@ async def refresh_agent_token(agent_user: dict) -> bool:
         return False
     new_refresh = result.get("refresh_token", refresh_token)
     expires_in = result.get("expires_in", 28800)
-    save_agent_token(agent_user, access_token, refresh_token=new_refresh, expires_in=expires_in)
+    if not save_agent_token(agent_user, access_token, refresh_token=new_refresh, expires_in=expires_in):
+        logger.error(f"[Agent Auth] Refreshed token for {agent_user['username']} could not be persisted — caller will treat as failed refresh")
+        return False
     logger.info(f"[Agent Auth] Token refreshed for {agent_user['username']}")
     return True
 

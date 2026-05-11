@@ -280,8 +280,14 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
                 return {"status": "error", "message": "Token exchange returned no access token."}
             refresh_token = result.get("refresh_token")
             expires_in = result.get("expires_in", 28800)
-            save_owner_token(owner_id, access_token, refresh_token=refresh_token, expires_in=expires_in)
+            persisted = save_owner_token(owner_id, access_token, refresh_token=refresh_token, expires_in=expires_in)
             _owner_oauth_flows.pop(owner_id, None)
+            if not persisted:
+                logger.error(f"[Owner Auth] OAuth exchange succeeded but token persistence failed for owner {owner_id}")
+                return {
+                    "status": "error",
+                    "message": "Authentication succeeded with Claude but the token could not be saved (team-api unreachable or rejecting). Check runner logs and retry.",
+                }
             email = result.get("account", {}).get("email", "")
             logger.info(f"[Owner Auth] In-chat OAuth exchange successful for owner {owner_id}: {email}")
             return {"status": "authenticated", "email": email}
@@ -320,9 +326,16 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
             refresh_token = result.get("refresh_token")
             expires_in = result.get("expires_in", 28800)
             agent_user = await ensure_agent_user(agent_id, owner_id=owner_id)
+            persisted = False
             if agent_user:
-                save_agent_token(agent_user, access_token, refresh_token=refresh_token, expires_in=expires_in)
+                persisted = save_agent_token(agent_user, access_token, refresh_token=refresh_token, expires_in=expires_in)
             _agent_oauth_flows.pop(agent_id, None)
+            if not persisted:
+                logger.error(f"[Agent Auth] OAuth exchange succeeded but token persistence failed for agent {agent_id[:12]}")
+                return {
+                    "status": "error",
+                    "message": "Authentication succeeded with Claude but the token could not be saved (team-api unreachable or rejecting). Check runner logs and retry.",
+                }
             email = result.get("account", {}).get("email", "")
             logger.info(f"[Agent Auth] In-chat OAuth exchange successful for agent {agent_id[:12]}: {email}")
             return {"status": "authenticated", "email": email}
