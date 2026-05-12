@@ -173,6 +173,26 @@ class ClaudeCodeBackend(RunnerBackend):
             return None
         return self._permissions.get(agent_id)
 
+    def _resolve_effective_user(
+        self, agent_id: Optional[str], agent_user: Optional[dict],
+    ) -> Optional[dict]:
+        """Honor the linuxUser.runAsRoot toggle from the agent's permissions.
+
+        When the toggle is on, return None so the spawn inherits the server's
+        root UID (no preexec_fn drop, no per-agent HOME isolation). When off
+        (default), return the resolved agent_user unchanged.
+        """
+        perms = self._get_permissions(agent_id) or {}
+        run_as_root = bool((perms.get("linuxUser") or {}).get("runAsRoot", False))
+        if run_as_root:
+            if agent_user:
+                logger.info(
+                    f"[Agent {agent_id[:12] if agent_id else 'unknown'}] "
+                    "linuxUser.runAsRoot=true — spawning claude as root (UID drop disabled)"
+                )
+            return None
+        return agent_user
+
     # ── Sessions ──────────────────────────────────────────────────────────
 
     def reset_agent_sessions(self, agent_id: str, task_id: Optional[str] = None) -> int:
@@ -237,9 +257,24 @@ class ClaudeCodeBackend(RunnerBackend):
         agent_id: Optional[str] = None,
         task_id: Optional[str] = None,
         permissions: Optional[dict] = None,
+        agent_user: Optional[dict] = None,
     ) -> tuple[list[str], str, Optional[str], bool, Optional[str]]:
         exec_perms = (permissions or {}).get("execution", {})
         skip_permissions = exec_perms.get("dangerousSkipPermissions", True)
+        # The Claude CLI hard-refuses --dangerously-skip-permissions when it
+        # would run with euid=0. If agent_user is missing or resolved to the
+        # parent UID (which is root in this container), the preexec_fn that
+        # drops privileges won't fire — drop the flag so the CLI starts at
+        # all. The CLI will prompt-for-permission instead of skipping, which
+        # is the safe fallback.
+        spawn_uid = (agent_user or {}).get("uid")
+        if skip_permissions and (spawn_uid is None or spawn_uid == 0 or spawn_uid == os.getuid()):
+            skip_permissions = False
+            logger.warning(
+                "[Spawn] Dropping --dangerously-skip-permissions: subprocess would run as root "
+                "(claude CLI refuses this combination). Check agent_user provisioning — "
+                f"agent_id={agent_id[:12] if agent_id else None} spawn_uid={spawn_uid} parent_uid={os.getuid()}"
+            )
 
         cmd = [
             "claude",
@@ -367,6 +402,11 @@ class ClaudeCodeBackend(RunnerBackend):
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
 
+        # linuxUser.runAsRoot=true: skip the per-agent UID drop and let claude
+        # run as the server's root UID. Off by default — when off, we keep the
+        # dedicated agent UID resolved by ensure_agent_user.
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
+
         pending_session: dict = {"key": None, "id": None, "is_new": False}
 
         async def _run_sync_proc(aid: Optional[str]):
@@ -374,13 +414,14 @@ class ClaudeCodeBackend(RunnerBackend):
                 output_format="json", system_prompt=system_prompt,
                 agent_id=aid, task_id=task_id,
                 permissions=self._get_permissions(aid),
+                agent_user=effective_user,
             )
             pending_session["key"] = skey
             pending_session["id"] = sid
             pending_session["is_new"] = is_new
             logger.info(f"Executing Claude Code{agent_label} (prompt={len(prompt)}B): {prompt[:100]}...")
             logger.debug(f"Command: {' '.join(cmd)} (cwd={proc_cwd})")
-            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, agent_user)}")
+            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
             try:
                 p = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -388,13 +429,13 @@ class ClaudeCodeBackend(RunnerBackend):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=proc_cwd,
-                    env=get_agent_env(agent_user),
-                    **get_subprocess_kwargs(agent_user),
+                    env=get_agent_env(effective_user),
+                    **get_subprocess_kwargs(effective_user),
                 )
             except PermissionError as spawn_err:
                 logger.error(
                     f"[Spawn] PermissionError spawning claude (cwd={proc_cwd}, "
-                    f"target_uid={agent_user.get('uid') if agent_user else os.getuid()}): {spawn_err}\n"
+                    f"target_uid={effective_user.get('uid') if effective_user else os.getuid()}): {spawn_err}\n"
                     f"  path components: {_cwd_path_diagnostic(proc_cwd)}"
                 )
                 raise RuntimeError(
@@ -636,6 +677,7 @@ class ClaudeCodeBackend(RunnerBackend):
                 return
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
         pending_session: dict = {"key": None, "id": None, "is_new": False}
 
         async def _start_stream_proc(aid: Optional[str]):
@@ -643,12 +685,13 @@ class ClaudeCodeBackend(RunnerBackend):
                 output_format="stream-json", system_prompt=system_prompt,
                 agent_id=aid, task_id=task_id,
                 permissions=self._get_permissions(aid),
+                agent_user=effective_user,
             )
             pending_session["key"] = skey
             pending_session["id"] = sid
             pending_session["is_new"] = is_new
             logger.info(f"Streaming Claude Code{agent_label} (prompt={len(prompt)}B): {prompt[:100]}...")
-            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, agent_user)}")
+            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
             try:
                 p = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -656,9 +699,9 @@ class ClaudeCodeBackend(RunnerBackend):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=proc_cwd,
-                    env=get_agent_env(agent_user),
+                    env=get_agent_env(effective_user),
                     limit=10 * 1024 * 1024,
-                    **get_subprocess_kwargs(agent_user),
+                    **get_subprocess_kwargs(effective_user),
                 )
             except PermissionError as spawn_err:
                 # Most likely: the dropped agent UID can't traverse some
@@ -669,7 +712,7 @@ class ClaudeCodeBackend(RunnerBackend):
                 # crashing the ASGI response.
                 logger.error(
                     f"[Spawn] PermissionError spawning claude (cwd={proc_cwd}, "
-                    f"target_uid={agent_user.get('uid') if agent_user else os.getuid()}): {spawn_err}\n"
+                    f"target_uid={effective_user.get('uid') if effective_user else os.getuid()}): {spawn_err}\n"
                     f"  path components: {_cwd_path_diagnostic(proc_cwd)}"
                 )
                 raise RuntimeError(

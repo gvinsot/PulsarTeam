@@ -122,25 +122,42 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
                 shutil.copy2(coder_gitconfig, os.path.join(home_dir, ".gitconfig"))
             # Hand ownership to the agent's UID and lock down the HOME so other
             # agents (or anything else running in this container) cannot peek.
+            # Per-inode try/except + lchown (don't follow symlinks): a transient
+            # socket or broken symlink left by a previous CLI run must not abort
+            # the whole setup and force a fallback to the parent (root) UID,
+            # otherwise the next spawn runs claude as root and the CLI refuses
+            # --dangerously-skip-permissions.
             try:
-                for root, dirs, files in os.walk(home_dir):
-                    os.chown(root, agent_uid, agent_gid)
-                    os.chmod(root, 0o700)
-                    for name in files:
-                        path = os.path.join(root, name)
-                        os.chown(path, agent_uid, agent_gid)
-                        try:
-                            os.chmod(path, 0o600)
-                        except OSError:
-                            pass
+                os.lchown(home_dir, agent_uid, agent_gid)
+                os.chmod(home_dir, 0o700)
             except PermissionError as e:
                 logger.warning(
-                    f"[Agent User] chown to uid={agent_uid} failed for {home_dir}: {e}. "
+                    f"[Agent User] chown {home_dir} -> uid={agent_uid} failed: {e}. "
                     "The server is missing CAP_CHOWN — falling back to parent UID. "
                     "Per-agent filesystem isolation is DEGRADED."
                 )
                 agent_uid = os.getuid()
                 agent_gid = os.getgid()
+            else:
+                for walk_root, dirs, files in os.walk(home_dir):
+                    for name in dirs:
+                        dpath = os.path.join(walk_root, name)
+                        try:
+                            os.lchown(dpath, agent_uid, agent_gid)
+                            os.chmod(dpath, 0o700)
+                        except OSError as ce:
+                            logger.debug(f"[Agent User] skip chown {dpath}: {ce}")
+                    for name in files:
+                        fpath = os.path.join(walk_root, name)
+                        try:
+                            os.lchown(fpath, agent_uid, agent_gid)
+                        except OSError as ce:
+                            logger.debug(f"[Agent User] skip chown {fpath}: {ce}")
+                            continue
+                        try:
+                            os.chmod(fpath, 0o600)
+                        except OSError:
+                            pass
             user_info = {"username": username, "uid": agent_uid, "gid": agent_gid, "home": home_dir, "owner_id": owner_id}
             _agent_users[agent_id] = user_info
             logger.info(f"[Agent User] Created isolated home for agent {agent_id[:12]} at {home_dir} (uid={agent_uid}, owner={owner_id})")
