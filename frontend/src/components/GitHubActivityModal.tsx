@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText } from 'lucide-react';
+import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText, RefreshCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
@@ -20,6 +20,15 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = ''; };
   }, []);
+
+  const loadActivity = useCallback((opts = {}) => {
+    setLoading(true);
+    setError(null);
+    return api.getGitHubActivity(owner, repo, boardId, opts)
+      .then(result => setData(result))
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
+  }, [owner, repo, boardId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,6 +72,16 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             <span className="text-xs text-dark-400">Activity</span>
           </div>
           <div className="flex items-center gap-2">
+            {tab !== 'explorer' && (
+              <button
+                onClick={() => loadActivity({ refresh: true })}
+                disabled={loading}
+                className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Refresh activity"
+              >
+                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+              </button>
+            )}
             <a
               href={`https://github.com/${owner}/${repo}`}
               target="_blank"

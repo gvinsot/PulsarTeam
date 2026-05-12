@@ -11,7 +11,7 @@ import { validateBody } from '../lib/validate.js';
 import { createProjectSchema, updateProjectSchema } from '../schemas/projects.js';
 
 // ── In-memory caches for GitHub explorer endpoints ─────────────────────────
-const ACTIVITY_CACHE_TTL = 60 * 60 * 1000;
+const ACTIVITY_CACHE_TTL = 60 * 1000;
 const BRANCHES_CACHE_TTL = 15 * 60 * 1000;
 const TREE_CACHE_TTL = 5 * 60 * 1000;
 const FILE_CACHE_TTL = 5 * 60 * 1000;
@@ -336,7 +336,8 @@ export function projectRoutes() {
     const { owner, repo } = req.params;
     const cacheKey = `${req.query.boardId}:${owner}/${repo}`;
     const cached = _activityCache.get(cacheKey);
-    if (cached && Date.now() - cached.time < ACTIVITY_CACHE_TTL) return res.json(cached.data);
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    if (!forceRefresh && cached && Date.now() - cached.time < ACTIVITY_CACHE_TTL) return res.json(cached.data);
 
     try {
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();

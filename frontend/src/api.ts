@@ -573,10 +573,13 @@ export const api = {
     }).then(handleResponse),
 
   // GitHub explorer — all endpoints authenticate via the board's GitHub plugin OAuth.
-  getGitHubActivity: (owner, repo, boardId) =>
-    fetch(`${API_BASE}/projects/github-activity/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`, {
+  getGitHubActivity: (owner, repo, boardId, opts = {}) => {
+    const params = new URLSearchParams({ boardId });
+    if (opts.refresh) params.set('refresh', '1');
+    return fetch(`${API_BASE}/projects/github-activity/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?${params}`, {
       headers: getHeaders()
-    }).then(handleResponse),
+    }).then(handleResponse);
+  },
 
   getGitHubBranches: (owner, repo, boardId) =>
     fetch(`${API_BASE}/projects/github-branches/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`, {
