@@ -1,9 +1,65 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { getGmailAccessTokenForAgent } from '../routes/gmail.js';
 
 const GMAIL_BASE = 'https://www.googleapis.com/gmail/v1';
+
+// Gmail's API limit is 25 MB total per message (incl. encoding overhead).
+// Keep per-attachment limit slightly below that to leave headroom for the body
+// and base64 overhead (~33%).
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Minimal extension → MIME type map for common attachment types.
+ * Falls back to application/octet-stream when unknown.
+ */
+const MIME_BY_EXT: Record<string, string> = {
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'application/json',
+  '.xml': 'application/xml',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.tiff': 'image/tiff',
+  '.zip': 'application/zip',
+  '.gz': 'application/gzip',
+  '.tar': 'application/x-tar',
+  '.7z': 'application/x-7z-compressed',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.odt': 'application/vnd.oasis.opendocument.text',
+  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.odp': 'application/vnd.oasis.opendocument.presentation',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ics': 'text/calendar',
+};
+
+function guessMimeType(filename: string): string {
+  const ext = path.extname(filename).toLowerCase();
+  return MIME_BY_EXT[ext] || 'application/octet-stream';
+}
 
 /**
  * Helper to call Gmail API with auto-refreshing tokens.
@@ -132,14 +188,84 @@ function formatMessage(msg) {
 }
 
 /**
- * Attachment shape accepted by buildRawEmail.
- * `content` must be base64-encoded (standard base64, not base64url).
+ * Attachment shape accepted by buildRawEmail (after resolution).
+ * `content` is base64-encoded (standard base64, not base64url).
  */
 type EmailAttachment = {
   filename: string;
   mimeType?: string;
   content: string;
 };
+
+/**
+ * Attachment shape accepted by the MCP tools (before resolution).
+ * Either `path` (file on disk, read by the MCP) or `content` (pre-encoded
+ * base64) must be provided.
+ */
+type AttachmentInput = {
+  path?: string;
+  filename?: string;
+  mimeType?: string;
+  content?: string;
+};
+
+/**
+ * Resolve a user-provided attachment input into the form expected by
+ * buildRawEmail: read from disk when `path` is supplied, infer filename and
+ * MIME type from the path when not explicitly provided, and validate size.
+ */
+async function resolveAttachment(att: AttachmentInput): Promise<EmailAttachment> {
+  if (!att || (typeof att !== 'object')) {
+    throw new Error('Each attachment must be an object.');
+  }
+
+  const hasPath = typeof att.path === 'string' && att.path.length > 0;
+  const hasContent = typeof att.content === 'string' && att.content.length > 0;
+
+  if (hasPath && hasContent) {
+    throw new Error('Provide either "path" or "content" for an attachment, not both.');
+  }
+  if (!hasPath && !hasContent) {
+    throw new Error('Each attachment must specify "path" (file on disk) or "content" (base64).');
+  }
+
+  if (hasPath) {
+    const absPath = path.resolve(att.path!);
+    let stat;
+    try {
+      stat = await fs.stat(absPath);
+    } catch (err: any) {
+      throw new Error(`Cannot read attachment "${att.path}": ${err.message}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Attachment path "${att.path}" is not a regular file.`);
+    }
+    if (stat.size > MAX_ATTACHMENT_BYTES) {
+      throw new Error(
+        `Attachment "${att.path}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, ` +
+        `which exceeds the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB limit.`
+      );
+    }
+    const buf = await fs.readFile(absPath);
+    const filename = att.filename || path.basename(absPath);
+    const mimeType = att.mimeType || guessMimeType(filename);
+    return {
+      filename,
+      mimeType,
+      content: buf.toString('base64'),
+    };
+  }
+
+  // hasContent: legacy path — caller already supplied base64.
+  if (!att.filename) {
+    throw new Error('Attachment supplied via "content" must also include "filename".');
+  }
+  return {
+    filename: att.filename,
+    mimeType: att.mimeType || guessMimeType(att.filename),
+    content: att.content!,
+  };
+}
 
 /**
  * Encode a header value with RFC 2047 if it contains non-ASCII characters.
@@ -252,17 +378,26 @@ function buildRawEmail({
 
 /**
  * Zod schema for the `attachments` tool parameter.
+ *
+ * Each attachment is specified EITHER by:
+ *   - `path`: absolute or relative path to a file on the server's disk
+ *     (the MCP reads and base64-encodes it itself), OR
+ *   - `content`: pre-encoded base64 string (legacy form; requires `filename`).
+ *
+ * When `path` is provided, `filename` defaults to the file's basename and
+ * `mimeType` is auto-detected from the extension.
  */
 const attachmentsSchema = z
   .array(
     z.object({
-      filename: z.string().describe('Filename of the attachment, including extension (e.g. "report.pdf")'),
-      mimeType: z.string().optional().describe('MIME type (e.g. "application/pdf", "image/png"). Defaults to "application/octet-stream".'),
-      content: z.string().describe('File content encoded as base64 (standard base64, not base64url). Whitespace is allowed and will be stripped.'),
+      path: z.string().optional().describe('Path to the file on the server filesystem. The MCP reads the file and base64-encodes it. Recommended way to attach files.'),
+      filename: z.string().optional().describe('Display filename for the attachment, including extension. Defaults to the basename of "path" when not provided.'),
+      mimeType: z.string().optional().describe('MIME type (e.g. "application/pdf"). Auto-detected from the extension when not provided.'),
+      content: z.string().optional().describe('Optional base64-encoded content (alternative to "path"). Requires "filename".'),
     })
   )
   .optional()
-  .describe('Optional list of file attachments. Each attachment must include filename and base64-encoded content.');
+  .describe('Optional list of file attachments. Specify each via "path" (preferred — file is read from disk) or pre-encoded "content".');
 
 /**
  * Create the Gmail MCP server with all tools registered.
@@ -441,7 +576,7 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
   // ── Tool: send_email ─────────────────────────────────────────────────
   server.tool(
     'send_email',
-    'Send a new email via Gmail. Supports optional file attachments (base64-encoded).',
+    'Send a new email via Gmail. Optional file attachments can be passed by disk path ("path") or as pre-encoded base64 ("content").',
     {
       to: z.string().describe('Recipient email address(es), comma-separated'),
       subject: z.string().describe('Email subject'),
@@ -451,15 +586,19 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
       attachments: attachmentsSchema,
     },
     async ({ to, subject, body, cc, bcc, attachments }) => {
-      const raw = buildRawEmail({ to, cc, bcc, subject, body, attachments });
+      const resolved = attachments
+        ? await Promise.all(attachments.map(resolveAttachment))
+        : undefined;
+
+      const raw = buildRawEmail({ to, cc, bcc, subject, body, attachments: resolved });
 
       const result = await gmailFetch('/users/me/messages/send', agentId, boardId, {
         method: 'POST',
         body: JSON.stringify({ raw }),
       });
 
-      const attachInfo = attachments && attachments.length > 0
-        ? `\nAttachments: ${attachments.map(a => a.filename).join(', ')}`
+      const attachInfo = resolved && resolved.length > 0
+        ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
         : '';
 
       return {
@@ -474,7 +613,7 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
   // ── Tool: reply_to_email ─────────────────────────────────────────────
   server.tool(
     'reply_to_email',
-    'Reply to an existing email. Maintains the conversation thread. Supports optional file attachments (base64-encoded).',
+    'Reply to an existing email. Maintains the conversation thread. Optional file attachments can be passed by disk path ("path") or as pre-encoded base64 ("content").',
     {
       messageId: z.string().describe('The Gmail message ID to reply to'),
       body: z.string().describe('Reply body (plain text)'),
@@ -482,6 +621,9 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
       attachments: attachmentsSchema,
     },
     async ({ messageId, body, replyAll, attachments }) => {
+      const resolved = attachments
+        ? await Promise.all(attachments.map(resolveAttachment))
+        : undefined;
       // Get the original message to extract headers
       const original = await gmailFetch(`/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References`, agentId, boardId);
       const headers = original.payload?.headers || [];
@@ -509,7 +651,7 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
         body,
         inReplyTo: originalMessageId,
         references: references ? `${references} ${originalMessageId}` : originalMessageId,
-        attachments,
+        attachments: resolved,
       });
 
       const result = await gmailFetch('/users/me/messages/send', agentId, boardId, {
@@ -520,8 +662,8 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
         }),
       });
 
-      const attachInfo = attachments && attachments.length > 0
-        ? `\nAttachments: ${attachments.map(a => a.filename).join(', ')}`
+      const attachInfo = resolved && resolved.length > 0
+        ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
         : '';
 
       return {
@@ -536,7 +678,7 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
   // ── Tool: create_draft ───────────────────────────────────────────────
   server.tool(
     'create_draft',
-    'Create a draft email in Gmail (without sending it). Supports optional file attachments (base64-encoded).',
+    'Create a draft email in Gmail (without sending it). Optional file attachments can be passed by disk path ("path") or as pre-encoded base64 ("content").',
     {
       to: z.string().describe('Recipient email address(es), comma-separated'),
       subject: z.string().describe('Email subject'),
@@ -546,7 +688,11 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
       attachments: attachmentsSchema,
     },
     async ({ to, subject, body, cc, bcc, attachments }) => {
-      const raw = buildRawEmail({ to, cc, bcc, subject, body, attachments });
+      const resolved = attachments
+        ? await Promise.all(attachments.map(resolveAttachment))
+        : undefined;
+
+      const raw = buildRawEmail({ to, cc, bcc, subject, body, attachments: resolved });
 
       const result = await gmailFetch('/users/me/drafts', agentId, boardId, {
         method: 'POST',
@@ -555,8 +701,8 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
         }),
       });
 
-      const attachInfo = attachments && attachments.length > 0
-        ? `\nAttachments: ${attachments.map(a => a.filename).join(', ')}`
+      const attachInfo = resolved && resolved.length > 0
+        ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
         : '';
 
       return {
