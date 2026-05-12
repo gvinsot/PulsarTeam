@@ -279,7 +279,7 @@ docker-compose.yml:
       - CODER_API_KEY=xxx
   coder-service:
     environment:
-      - API_KEY=xxx        # même valeur que CODER_API_KEY
+      - CODER_API_KEY=xxx  # même variable et même valeur des deux côtés
 ```
 
 Cette clé est envoyée dans le header `X-Api-Key` par le `CoderExecutionProvider` :

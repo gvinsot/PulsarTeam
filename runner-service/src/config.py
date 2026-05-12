@@ -45,7 +45,7 @@ logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 
 # --- Shared constants ---------------------------------------------------------
 
-API_KEY = read_secret("API_KEY", default="")
+API_KEY = read_secret("CODER_API_KEY", default="")
 
 # Known placeholder values shipped in docker-compose.yml / .env.example for local
 # dev. Their presence in production means the operator forgot to override the
@@ -77,7 +77,7 @@ if _is_weak(API_KEY, 16):
     if _IS_PRODUCTION:
         logger.error("=" * 72)
         logger.error(
-            "FATAL: API_KEY (CODER_API_KEY) is missing, too short (<16 chars), "
+            "FATAL: CODER_API_KEY is missing, too short (<16 chars), "
             "or set to a known default placeholder."
         )
         logger.error(
@@ -87,7 +87,7 @@ if _is_weak(API_KEY, 16):
         logger.error("=" * 72)
         raise SystemExit(1)
     logger.warning(
-        "API_KEY (CODER_API_KEY) is weak or unset — runner accepts requests "
+        "CODER_API_KEY is weak or unset — runner accepts requests "
         "with the placeholder. OK for local dev only."
     )
     if not API_KEY:

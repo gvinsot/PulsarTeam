@@ -209,7 +209,8 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
@@ -287,7 +288,8 @@ services:
       - LOG_LEVEL=info
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
@@ -335,7 +337,8 @@ services:
       - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PUID=${CODER_PUID:-1000}
@@ -399,7 +402,8 @@ services:
       - LOG_LEVEL=info
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
@@ -464,7 +468,8 @@ services:
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
-      - API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PUID=${CODER_PUID:-1000}
