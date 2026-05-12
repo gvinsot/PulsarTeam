@@ -279,12 +279,17 @@ async def exec_shell(
             output += f"\n[stderr] {stderr}"
         if proc.returncode != 0:
             output += f"\n[exit code: {proc.returncode}]"
+        # Clamp the caller-requested output cap to a 32 MiB server-side
+        # ceiling. This covers a 20 MB attachment after base64 inflation
+        # (~33%) while still bounding worst-case memory use.
+        max_out = max(1, min(request.max_output, 32 * 1024 * 1024))
+        if proc.returncode != 0:
             return ExecutionResponse(
                 status="error",
-                output=output[:10000],
+                output=output[:max_out],
                 error=f"Command failed with exit code {proc.returncode}",
             )
-        return ExecutionResponse(status="success", output=output[:10000])
+        return ExecutionResponse(status="success", output=output[:max_out])
     except asyncio.TimeoutError:
         return ExecutionResponse(status="error", output="", error=f"Command timed out after {timeout}s")
     except Exception as e:

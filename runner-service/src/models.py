@@ -45,6 +45,11 @@ class ShellExecRequest(BaseModel):
     command: str
     cwd: Optional[str] = None
     timeout: int = 60
+    # Maximum number of output characters returned to the caller. The default
+    # keeps log-style commands cheap; callers that legitimately need large
+    # payloads (e.g. base64-encoded attachments up to ~20 MB) can raise it up
+    # to the server-side hard cap enforced in routes_api.exec_shell.
+    max_output: int = 10000
 
 
 class EnsureProjectRequest(BaseModel):

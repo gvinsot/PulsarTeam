@@ -15,7 +15,7 @@ type RunnerExecBridge = {
   exec: (
     agentId: string,
     command: string,
-    options?: { cwd?: string; timeout?: number },
+    options?: { cwd?: string; timeout?: number; maxOutput?: number },
   ) => Promise<{ stdout: string; stderr: string }>;
 };
 
@@ -270,16 +270,30 @@ async function readAttachmentViaRunner(
     );
   }
 
+  // A 20 MB binary attachment expands to ~27 MB once base64-encoded; request
+  // the server-side hard cap (32 MiB) so the runner does not silently truncate
+  // the output. The previous default of 10 000 chars caused attachments to be
+  // cut to ~7.3 KB after decoding.
   const res = await bridge.exec(
     agentId,
     `base64 -w0 ${shQuote(filePath)}`,
-    { timeout: 120000 },
+    { timeout: 120000, maxOutput: 32 * 1024 * 1024 },
   );
   const b64 = (res.stdout || '').replace(/\s+/g, '');
   if (!b64) {
     throw new Error(`Empty content reading "${filePath}" via runner: ${res.stderr || 'no output'}`);
   }
-  return Buffer.from(b64, 'base64');
+  const buf = Buffer.from(b64, 'base64');
+  // Defence-in-depth: if the runner output were ever truncated again, the
+  // decoded size would no longer match the size we probed via stat. Surface
+  // that as a hard error rather than silently sending a corrupted attachment.
+  if (buf.length !== size) {
+    throw new Error(
+      `Attachment "${filePath}" was truncated during transfer ` +
+      `(expected ${size} bytes, got ${buf.length}).`,
+    );
+  }
+  return buf;
 }
 
 /**

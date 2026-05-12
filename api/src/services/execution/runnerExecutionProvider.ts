@@ -281,9 +281,13 @@ export class RunnerExecutionProvider extends ExecutionProvider {
 
   // ── Command execution ─────────────────────────────────────────────────
 
-  async exec(agentId: string, command: string, options: { cwd?: string; timeout?: number } = {}): Promise<{ stdout: string; stderr: string }> {
+  async exec(
+    agentId: string,
+    command: string,
+    options: { cwd?: string; timeout?: number; maxOutput?: number } = {},
+  ): Promise<{ stdout: string; stderr: string }> {
     const timeout = Math.min(Math.ceil((options.timeout || 300000) / 1000), 120);
-    const { stdout, stderr } = await this._execShell(agentId, command, timeout);
+    const { stdout, stderr } = await this._execShell(agentId, command, timeout, options.maxOutput);
     return { stdout, stderr };
   }
 
@@ -321,11 +325,20 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   /**
    * Execute a shell command on the runner-service via /exec-shell.
    */
-  async _execShell(agentId: string, command: string, timeoutSecs: number = 60): Promise<{ stdout: string; stderr: string }> {
+  async _execShell(
+    agentId: string,
+    command: string,
+    timeoutSecs: number = 60,
+    maxOutput?: number,
+  ): Promise<{ stdout: string; stderr: string }> {
+    const body: Record<string, unknown> = { command, timeout: timeoutSecs };
+    if (typeof maxOutput === 'number' && Number.isFinite(maxOutput) && maxOutput > 0) {
+      body.max_output = Math.floor(maxOutput);
+    }
     const res = await fetch(`${this.baseUrl}/exec-shell`, {
       method: 'POST',
       headers: this._headers(agentId),
-      body: JSON.stringify({ command, timeout: timeoutSecs }),
+      body: JSON.stringify(body),
     });
     const data: any = await res.json();
     if (data.status !== 'success') {
