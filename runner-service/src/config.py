@@ -46,6 +46,7 @@ logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 # --- Shared constants ---------------------------------------------------------
 
 API_KEY = read_secret("API_KEY", default="")
+CODER_API_KEY = read_secret("CODER_API_KEY", default="")
 
 # Known placeholder values shipped in docker-compose.yml / .env.example for local
 # dev. Their presence in production means the operator forgot to override the
@@ -73,7 +74,15 @@ def _is_weak(value: str, min_length: int) -> bool:
     return value.lower() in _KNOWN_DEFAULT_VALUES
 
 
-if _is_weak(API_KEY, 16):
+EFFECTIVE_API_KEY = API_KEY or CODER_API_KEY
+VALID_API_KEYS = tuple(dict.fromkeys(v for v in (API_KEY, CODER_API_KEY) if v))
+
+if API_KEY and CODER_API_KEY and API_KEY != CODER_API_KEY:
+    logger.warning(
+        "API_KEY and CODER_API_KEY differ; accepting both values for backward compatibility."
+    )
+
+if _is_weak(EFFECTIVE_API_KEY, 16):
     if _IS_PRODUCTION:
         logger.error("=" * 72)
         logger.error(
@@ -90,9 +99,10 @@ if _is_weak(API_KEY, 16):
         "API_KEY (CODER_API_KEY) is weak or unset — runner accepts requests "
         "with the placeholder. OK for local dev only."
     )
-    if not API_KEY:
+    if not EFFECTIVE_API_KEY:
         # Provide *some* value so dev clients hitting the placeholder still work.
         API_KEY = "change-me-in-production"
+        VALID_API_KEYS = (API_KEY,)
 
 
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "/projects")
