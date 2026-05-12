@@ -132,24 +132,137 @@ function formatMessage(msg) {
 }
 
 /**
- * Build an RFC 2822 email message for sending via Gmail API.
+ * Attachment shape accepted by buildRawEmail.
+ * `content` must be base64-encoded (standard base64, not base64url).
  */
-function buildRawEmail({ to, cc, bcc, subject, body, inReplyTo, references }: { to: any; cc?: any; bcc?: any; subject: any; body: any; inReplyTo?: any; references?: any }) {
-  const lines = [];
-  lines.push(`To: ${to}`);
-  if (cc) lines.push(`Cc: ${cc}`);
-  if (bcc) lines.push(`Bcc: ${bcc}`);
-  lines.push(`Subject: ${subject}`);
-  lines.push('Content-Type: text/plain; charset=utf-8');
-  if (inReplyTo) {
-    lines.push(`In-Reply-To: ${inReplyTo}`);
-    lines.push(`References: ${references || inReplyTo}`);
-  }
-  lines.push('');
-  lines.push(body);
+type EmailAttachment = {
+  filename: string;
+  mimeType?: string;
+  content: string;
+};
 
-  return encodeBase64Url(lines.join('\r\n'));
+/**
+ * Encode a header value with RFC 2047 if it contains non-ASCII characters.
+ * Needed for filenames in attachments and subject lines with unicode.
+ */
+function encodeHeaderIfNeeded(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  if (/^[\x00-\x7F]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, 'utf-8').toString('base64')}?=`;
 }
+
+/**
+ * Split a base64 string into 76-character lines (MIME requirement).
+ */
+function chunkBase64(b64: string): string {
+  return b64.replace(/(.{76})/g, '$1\r\n').replace(/\r\n$/, '');
+}
+
+/**
+ * Build an RFC 2822 email message for sending via Gmail API.
+ * When attachments are provided, builds a multipart/mixed message;
+ * otherwise builds a plain text/plain message (backwards compatible).
+ */
+function buildRawEmail({
+  to,
+  cc,
+  bcc,
+  subject,
+  body,
+  inReplyTo,
+  references,
+  attachments,
+}: {
+  to: any;
+  cc?: any;
+  bcc?: any;
+  subject: any;
+  body: any;
+  inReplyTo?: any;
+  references?: any;
+  attachments?: EmailAttachment[];
+}) {
+  const headers: string[] = [];
+  headers.push(`To: ${to}`);
+  if (cc) headers.push(`Cc: ${cc}`);
+  if (bcc) headers.push(`Bcc: ${bcc}`);
+  headers.push(`Subject: ${encodeHeaderIfNeeded(String(subject))}`);
+  headers.push('MIME-Version: 1.0');
+  if (inReplyTo) {
+    headers.push(`In-Reply-To: ${inReplyTo}`);
+    headers.push(`References: ${references || inReplyTo}`);
+  }
+
+  const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+
+  if (!hasAttachments) {
+    headers.push('Content-Type: text/plain; charset=utf-8');
+    headers.push('');
+    headers.push(body);
+    return encodeBase64Url(headers.join('\r\n'));
+  }
+
+  // Multipart message with attachments.
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  headers.push('');
+  headers.push('This is a multi-part message in MIME format.');
+
+  const parts: string[] = [];
+
+  // Body part
+  parts.push(
+    [
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=utf-8',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      body,
+    ].join('\r\n')
+  );
+
+  // Attachment parts
+  for (const att of attachments!) {
+    if (!att || !att.filename || typeof att.content !== 'string') {
+      throw new Error('Each attachment must have a filename and base64-encoded content.');
+    }
+    const mime = att.mimeType || 'application/octet-stream';
+    const encodedFilename = encodeHeaderIfNeeded(att.filename);
+    // Normalize content: strip whitespace/newlines, validate, then chunk.
+    const cleanB64 = att.content.replace(/\s+/g, '');
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleanB64)) {
+      throw new Error(`Attachment "${att.filename}" content is not valid base64.`);
+    }
+    parts.push(
+      [
+        `--${boundary}`,
+        `Content-Type: ${mime}; name="${encodedFilename}"`,
+        `Content-Disposition: attachment; filename="${encodedFilename}"`,
+        'Content-Transfer-Encoding: base64',
+        '',
+        chunkBase64(cleanB64),
+      ].join('\r\n')
+    );
+  }
+
+  parts.push(`--${boundary}--`);
+
+  return encodeBase64Url(headers.join('\r\n') + '\r\n' + parts.join('\r\n') + '\r\n');
+}
+
+/**
+ * Zod schema for the `attachments` tool parameter.
+ */
+const attachmentsSchema = z
+  .array(
+    z.object({
+      filename: z.string().describe('Filename of the attachment, including extension (e.g. "report.pdf")'),
+      mimeType: z.string().optional().describe('MIME type (e.g. "application/pdf", "image/png"). Defaults to "application/octet-stream".'),
+      content: z.string().describe('File content encoded as base64 (standard base64, not base64url). Whitespace is allowed and will be stripped.'),
+    })
+  )
+  .optional()
+  .describe('Optional list of file attachments. Each attachment must include filename and base64-encoded content.');
 
 /**
  * Create the Gmail MCP server with all tools registered.
@@ -328,26 +441,31 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
   // ── Tool: send_email ─────────────────────────────────────────────────
   server.tool(
     'send_email',
-    'Send a new email via Gmail.',
+    'Send a new email via Gmail. Supports optional file attachments (base64-encoded).',
     {
       to: z.string().describe('Recipient email address(es), comma-separated'),
       subject: z.string().describe('Email subject'),
       body: z.string().describe('Email body (plain text)'),
       cc: z.string().optional().describe('CC recipient(s), comma-separated'),
       bcc: z.string().optional().describe('BCC recipient(s), comma-separated'),
+      attachments: attachmentsSchema,
     },
-    async ({ to, subject, body, cc, bcc }) => {
-      const raw = buildRawEmail({ to, cc, bcc, subject, body });
+    async ({ to, subject, body, cc, bcc, attachments }) => {
+      const raw = buildRawEmail({ to, cc, bcc, subject, body, attachments });
 
       const result = await gmailFetch('/users/me/messages/send', agentId, boardId, {
         method: 'POST',
         body: JSON.stringify({ raw }),
       });
 
+      const attachInfo = attachments && attachments.length > 0
+        ? `\nAttachments: ${attachments.map(a => a.filename).join(', ')}`
+        : '';
+
       return {
         content: [{
           type: 'text',
-          text: `Email sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${to}\nSubject: ${subject}`
+          text: `Email sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${to}\nSubject: ${subject}${attachInfo}`
         }],
       };
     }
@@ -356,13 +474,14 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
   // ── Tool: reply_to_email ─────────────────────────────────────────────
   server.tool(
     'reply_to_email',
-    'Reply to an existing email. Maintains the conversation thread.',
+    'Reply to an existing email. Maintains the conversation thread. Supports optional file attachments (base64-encoded).',
     {
       messageId: z.string().describe('The Gmail message ID to reply to'),
       body: z.string().describe('Reply body (plain text)'),
       replyAll: z.boolean().optional().default(false).describe('If true, reply to all recipients (default: false)'),
+      attachments: attachmentsSchema,
     },
-    async ({ messageId, body, replyAll }) => {
+    async ({ messageId, body, replyAll, attachments }) => {
       // Get the original message to extract headers
       const original = await gmailFetch(`/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References`, agentId, boardId);
       const headers = original.payload?.headers || [];
@@ -390,6 +509,7 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
         body,
         inReplyTo: originalMessageId,
         references: references ? `${references} ${originalMessageId}` : originalMessageId,
+        attachments,
       });
 
       const result = await gmailFetch('/users/me/messages/send', agentId, boardId, {
@@ -400,10 +520,14 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
         }),
       });
 
+      const attachInfo = attachments && attachments.length > 0
+        ? `\nAttachments: ${attachments.map(a => a.filename).join(', ')}`
+        : '';
+
       return {
         content: [{
           type: 'text',
-          text: `Reply sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${replyTo}\nSubject: ${replySubject}`
+          text: `Reply sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${replyTo}\nSubject: ${replySubject}${attachInfo}`
         }],
       };
     }
@@ -412,16 +536,17 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
   // ── Tool: create_draft ───────────────────────────────────────────────
   server.tool(
     'create_draft',
-    'Create a draft email in Gmail (without sending it).',
+    'Create a draft email in Gmail (without sending it). Supports optional file attachments (base64-encoded).',
     {
       to: z.string().describe('Recipient email address(es), comma-separated'),
       subject: z.string().describe('Email subject'),
       body: z.string().describe('Email body (plain text)'),
       cc: z.string().optional().describe('CC recipient(s), comma-separated'),
       bcc: z.string().optional().describe('BCC recipient(s), comma-separated'),
+      attachments: attachmentsSchema,
     },
-    async ({ to, subject, body, cc, bcc }) => {
-      const raw = buildRawEmail({ to, cc, bcc, subject, body });
+    async ({ to, subject, body, cc, bcc, attachments }) => {
+      const raw = buildRawEmail({ to, cc, bcc, subject, body, attachments });
 
       const result = await gmailFetch('/users/me/drafts', agentId, boardId, {
         method: 'POST',
@@ -430,10 +555,14 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
         }),
       });
 
+      const attachInfo = attachments && attachments.length > 0
+        ? `\nAttachments: ${attachments.map(a => a.filename).join(', ')}`
+        : '';
+
       return {
         content: [{
           type: 'text',
-          text: `Draft created successfully!\nDraft ID: ${result.id}\nMessage ID: ${result.message?.id}\nTo: ${to}\nSubject: ${subject}`
+          text: `Draft created successfully!\nDraft ID: ${result.id}\nMessage ID: ${result.message?.id}\nTo: ${to}\nSubject: ${subject}${attachInfo}`
         }],
       };
     }
@@ -516,6 +645,36 @@ export function createGmailMcpServer(agentId = null, boardId = null) {
 
       return {
         content: [{ type: 'text', text: `Email ${messageId} moved to trash.` }],
+      };
+    }
+  );
+
+  // ── Tool: download_attachment ────────────────────────────────────────
+  server.tool(
+    'download_attachment',
+    'Download an attachment from an email. Returns the attachment content as base64. Use list/read_email first to find the attachmentId.',
+    {
+      messageId: z.string().describe('The Gmail message ID containing the attachment'),
+      attachmentId: z.string().describe('The attachment ID (returned by read_email)'),
+      filename: z.string().optional().describe('Original filename (for display only)'),
+    },
+    async ({ messageId, attachmentId, filename }) => {
+      const data = await gmailFetch(
+        `/users/me/messages/${messageId}/attachments/${attachmentId}`,
+        agentId,
+        boardId
+      );
+
+      // Gmail returns base64url-encoded data; convert to standard base64.
+      const b64url = data.data || '';
+      const standardB64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+      const size = data.size || 0;
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Attachment downloaded${filename ? ` (${filename})` : ''}.\nSize: ${(size / 1024).toFixed(1)} KB\n\nBase64 content:\n${standardB64}`
+        }],
       };
     }
   );

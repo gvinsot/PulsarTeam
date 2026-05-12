@@ -27,9 +27,18 @@ export default function App() {
   const [googleLoading, setGoogleLoading] = useState(false);
 
   const showToast = useCallback((message, type = 'error', duration = 5000) => {
-    const id = Date.now();
-    setToasts(prev => [...prev, { id, message, type }]);
-    if (duration > 0) {
+    const id = Date.now() + Math.random();
+    let added = false;
+    setToasts(prev => {
+      // Dedupe: if a toast with the same message+type is already displayed,
+      // do not stack another one on top.
+      if (prev.some(t => t.message === message && t.type === type)) {
+        return prev;
+      }
+      added = true;
+      return [...prev, { id, message, type }];
+    });
+    if (added && duration > 0) {
       setTimeout(() => {
         setToasts(prev => prev.filter(t => t.id !== id));
       }, duration);

@@ -251,6 +251,20 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
         statusChanged = true;
       }
     } else if (column !== undefined && column !== task.status) {
+      // Validate the requested column exists in the task's current board
+      // workflow. Without this, callers could push tasks into arbitrary
+      // unknown columns, breaking board rendering and transitions.
+      const currentBoardId = task.boardId || null;
+      if (currentBoardId) {
+        const currentBoard = await getBoardById(currentBoardId);
+        const cols = currentBoard?.workflow?.columns;
+        if (cols?.length && !cols.some((c: any) => c.id === column)) {
+          const validIds = cols.map((c: any) => c.id).join(', ');
+          return res.status(400).json({
+            error: `Invalid column "${column}" for board "${currentBoard?.name || currentBoardId}". Valid columns: ${validIds}`,
+          });
+        }
+      }
       statusChanged = true;
       task.status = column;
     }
