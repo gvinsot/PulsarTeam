@@ -516,6 +516,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   } finally {
     releaseLock(lockKey);
     clearAgentBusy(agent.id);
+    let cleanupMutated = false;
     // Clear actionRunning flag (in-memory only — the chain's next action or
     // cleanup will persist the final state to DB, avoiding a race where this
     // fire-and-forget save could overwrite the chain's change_status save).
@@ -523,12 +524,25 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       actualTask.actionRunning = false;
       delete actualTask.actionRunningAgentId;
       delete actualTask.actionRunningMode;
+      cleanupMutated = true;
     }
     // Non-execute modes (decide, refine, title, set_type) should not leave the
     // agent as the permanent assignee — clear it so the task loop won't send
     // the task to the wrong agent if the next workflow action is delayed.
     if (mode !== AgentMode.EXECUTE && actualTask && actualTask.assignee === agent.id) {
       actualTask.assignee = null;
+      cleanupMutated = true;
+    }
+    // Notify the UI that the action is no longer running. Without this, the
+    // frontend keeps the task card in "spinner / undraggable" state until a
+    // page refresh, because no later event in the chain may emit a fresh
+    // task:updated payload (e.g. when the chain has no change_status action
+    // after run_agent). We deliberately do NOT save here — the chain's next
+    // action or its final save persists the cleared flags. The emit alone is
+    // enough for the realtime UI, since the frontend merges by timestamp and
+    // any subsequent emit (change_status, agent:updated → loadTasks) wins.
+    if (cleanupMutated && actualTask) {
+      _emitTaskUpdated(agentManager, task.agentId, { ...actualTask, agentId: task.agentId });
     }
   }
 }
