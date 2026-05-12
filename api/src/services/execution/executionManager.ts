@@ -12,12 +12,12 @@ import { readSecret } from '../../secrets.js';
 
 // Canonical provider types. 'coder' is accepted as a deprecated alias for
 // 'claudecode' (existing agents in the DB may still have runner='coder').
-type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode';
+type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode' | 'codex';
 type ProviderTypeInput = ProviderType | 'coder';
 
 function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null): ProviderType {
   if (t === 'coder') return 'claudecode';
-  if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode') return t;
+  if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode' || t === 'codex') return t;
   return 'sandbox';
 }
 
@@ -32,6 +32,7 @@ interface ExecutionManagerOptions {
   openclawOptions?: RunnerOpts;
   hermesOptions?: RunnerOpts;
   opencodeOptions?: RunnerOpts;
+  codexOptions?: RunnerOpts;
 }
 
 interface BindAgentMeta {
@@ -46,6 +47,7 @@ const DEFAULT_URLS: Record<ProviderType, string> = {
   openclaw: 'http://openclaw-service:8000',
   hermes: 'http://hermes-service:8000',
   opencode: 'http://opencode-service:8000',
+  codex: 'http://codex-service:8000',
 };
 
 const URL_ENV_VARS: Record<ProviderType, string> = {
@@ -54,6 +56,7 @@ const URL_ENV_VARS: Record<ProviderType, string> = {
   openclaw: 'OPENCLAW_SERVICE_URL',
   hermes: 'HERMES_SERVICE_URL',
   opencode: 'OPENCODE_SERVICE_URL',
+  codex: 'CODEX_SERVICE_URL',
 };
 
 export class ExecutionManager {
@@ -62,6 +65,7 @@ export class ExecutionManager {
   openclaw: RunnerExecutionProvider;
   hermes: RunnerExecutionProvider;
   opencode: RunnerExecutionProvider;
+  codex: RunnerExecutionProvider;
   _resolveProvider: (agentId: string) => ProviderTypeInput;
   _agentProviders: Map<string, ProviderType>;
 
@@ -81,6 +85,7 @@ export class ExecutionManager {
     this.openclaw = make('openclaw', options.openclawOptions);
     this.hermes = make('hermes', options.hermesOptions);
     this.opencode = make('opencode', options.opencodeOptions);
+    this.codex = make('codex', options.codexOptions);
 
     this._resolveProvider = options.resolveProvider || (() => 'sandbox');
     this._agentProviders = new Map();
@@ -109,6 +114,7 @@ export class ExecutionManager {
       case 'openclaw': return this.openclaw;
       case 'hermes': return this.hermes;
       case 'opencode': return this.opencode;
+      case 'codex': return this.codex;
       default: return this.sandbox;
     }
   }
@@ -181,6 +187,7 @@ export class ExecutionManager {
       this.openclaw.destroyAll(),
       this.hermes.destroyAll(),
       this.opencode.destroyAll(),
+      this.codex.destroyAll(),
     ]);
     this._agentProviders.clear();
   }

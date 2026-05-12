@@ -46,6 +46,7 @@ services:
       - OPENCLAW_SERVICE_URL=http://openclaw-service:8000
       - HERMES_SERVICE_URL=http://hermes-service:8000
       - OPENCODE_SERVICE_URL=http://opencode-service:8000
+      - CODEX_SERVICE_URL=http://codex-service:8000
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - MCP_ACTIONS_ENDPOINT=${MCP_ACTIONS_ENDPOINT:-}
@@ -303,6 +304,64 @@ services:
       start_period: 120s
     restart: unless-stopped
 
+  codex-service:
+    build:
+      context: .
+      dockerfile: runner-service/Dockerfile
+    environment:
+      - RUNNER_TYPE=codex
+      - TZ=${TZ:-Europe/Paris}
+      - LOG_LEVEL=info
+      # Use the operator's ChatGPT plan: run `docker exec -it <container> codex login`
+      # once to seed /root/.codex/auth.json. Per-agent HOME isolation gives every
+      # agent its own copy. Falls back to OPENAI_API_KEY when no OAuth token.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - RUNNER_MODEL=${CODEX_MODEL:-gpt-5-codex}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - CODER_API_KEY=${CODER_API_KEY:-change-me-in-production}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://api:3001
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - MCP_ENDPOINT=${MCP_ENDPOINT:-}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - codex-data:/app/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+    networks:
+      - sandbox-net
+    depends_on:
+      - api
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
   hermes-service:
     build:
       context: .
@@ -510,6 +569,7 @@ volumes:
   sandbox-data:
   openclaw-data:
   opencode-data:
+  codex-data:
   hermes-data:
   mock-data:
 

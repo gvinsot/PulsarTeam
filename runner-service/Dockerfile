@@ -51,6 +51,15 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN npm install -g opencode-ai \
     || echo "WARN: opencode-ai install failed — backend will be unavailable"
 
+# OpenAI Codex CLI (https://github.com/openai/codex)
+# Lets the runner act as a "codex" backend that taps into the operator's
+# ChatGPT plan via `codex login` (OAuth) — exactly like claude-code does
+# with a Claude Pro/Max plan.
+RUN npm install -g @openai/codex \
+    || (echo "WARN: @openai/codex install failed — installing stub" \
+        && printf '#!/bin/sh\necho "codex-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/codex \
+        && chmod +x /usr/local/bin/codex)
+
 # OpenClaw CLI (https://openclaw.ai)
 RUN npm install -g openclaw \
     || (echo "WARN: openclaw npm install failed — installing stub" \
@@ -103,6 +112,7 @@ RUN echo "=== Python ===" && python --version && \
     echo "=== Node.js ===" && node --version && \
     echo "=== Claude Code ===" && claude --version && \
     echo "=== OpenCode ===" && (opencode --version 2>&1 || echo "not installed") && \
+    echo "=== Codex ===" && (codex --version 2>&1 || echo "not installed") && \
     echo "=== OpenClaw ===" && openclaw --version && \
     echo "=== Hermes ===" && hermes --version && \
     echo "=== Git ===" && git --version && \

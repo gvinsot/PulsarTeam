@@ -200,6 +200,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             <option value="openclaw">OpenClaw Agent</option>
             <option value="hermes">Hermes Agent</option>
             <option value="opencode">OpenCode Agent</option>
+            <option value="codex">OpenAI Codex Agent</option>
           </select>
           <p className="text-[11px] text-dark-500 mt-1">Choose the container runtime for this agent. "Auto" selects based on the LLM configuration.</p>
         </div>
