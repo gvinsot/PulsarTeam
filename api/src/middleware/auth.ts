@@ -240,12 +240,16 @@ function isAllowedRedirectUri(uri: string): boolean {
 }
 
 function resolveGoogleRedirectUri(frontendUri?: string): string {
-  // Trust the configured redirect URI unconditionally (deployment config,
-  // GOOGLE_REDIRECT_URI). Otherwise require the caller-supplied URI to belong
-  // to an allow-listed origin to prevent an open-redirect / code-stealing
-  // attack.
-  const cfg = getGoogleOAuthConfig();
-  if (cfg?.redirectUri) return cfg.redirectUri;
+  // Login uses a DIFFERENT redirect URI than the Gmail/Drive plugins: login
+  // lands on a frontend route (/auth/google/callback) handled by App.tsx,
+  // while the plugins land on the backend dispatcher (GOOGLE_REDIRECT_URI =
+  // /api/google/oauth-redirect). Sending login to the plugin URL would make
+  // the user's auth code be exchanged by the plugin handler instead of the
+  // login handler — symptom: after a Drive connect the window navigates to
+  // the portal because the login flow swallowed the code.
+  //
+  // We trust the caller-supplied URI only if its origin is on the CORS
+  // allow-list (prevents an open-redirect / code-stealing attack).
   if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
   return '';
 }
@@ -384,8 +388,11 @@ router.get('/microsoft/status', (_req, res) => {
   res.json({ enabled: !!cfg, clientId: cfg?.clientId || null });
 });
 
-function resolveMicrosoftRedirectUri(cfgRedirectUri: string, frontendUri?: string): string {
-  if (cfgRedirectUri) return cfgRedirectUri;
+function resolveMicrosoftRedirectUri(frontendUri?: string): string {
+  // Same rationale as resolveGoogleRedirectUri: login uses a different
+  // redirect URI than the OneDrive/Outlook plugins. The frontend supplies
+  // the login URI (/auth/microsoft/callback handled by App.tsx); we accept
+  // it only when its origin is on the CORS allow-list.
   if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
   return '';
 }
@@ -396,7 +403,7 @@ router.get('/microsoft/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
     return res.status(501).json({ error: 'Microsoft OAuth not configured' });
   }
 
-  const redirectUri = resolveMicrosoftRedirectUri(cfg.redirectUri, req.query.redirect_uri as string);
+  const redirectUri = resolveMicrosoftRedirectUri(req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
@@ -421,7 +428,7 @@ router.post('/microsoft/callback', validateBody(oauthCallbackSchema), async (req
 
   const { code, redirect_uri } = req.body;
 
-  const canonicalRedirectUri = resolveMicrosoftRedirectUri(cfg.redirectUri, redirect_uri);
+  const canonicalRedirectUri = resolveMicrosoftRedirectUri(redirect_uri);
   if (!canonicalRedirectUri) {
     return res.status(400).json({ error: 'redirect_uri required' });
   }
