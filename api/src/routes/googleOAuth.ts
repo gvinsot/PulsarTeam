@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { storeOAuthToken } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
 import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
+import { sendOAuthResult } from './oauthHelper.js';
 
 /**
  * Unified Google OAuth callback handler.
@@ -88,42 +89,56 @@ async function fetchUserEmail(service: GoogleService, accessToken: string): Prom
   return null;
 }
 
-function sendOAuthResult(
+// Per-service message types — listeners in GmailConnect.tsx / GoogleDriveConnect.tsx
+// filter on these so a Gmail popup never notifies the Drive widget and vice-versa.
+const MESSAGE_TYPE_BY_SERVICE: Record<GoogleService, string> = {
+  gmail: 'gmail-oauth-callback',
+  gdrive: 'gdrive-oauth-callback',
+};
+
+const PROVIDER_LABEL_BY_SERVICE: Record<GoogleService, string> = {
+  gmail: 'Gmail',
+  gdrive: 'Google Drive',
+};
+
+function googleOAuthResult(
   res: express.Response,
   service: GoogleService | null,
   success: boolean,
   error?: string | null,
   email?: string | null,
 ) {
-  const nonce = crypto.randomBytes(16).toString('base64');
-  res.setHeader(
-    'Content-Security-Policy',
-    `default-src 'self'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'`,
-  );
-  res.send(oauthResultPage(service, success, error, email, nonce));
+  const providerLabel = service ? PROVIDER_LABEL_BY_SERVICE[service] : 'Google';
+  // No service → no listener can claim the message, but we still try the gmail
+  // type so legacy callers see _something_. Errors at this stage are rare.
+  const messageType = service ? MESSAGE_TYPE_BY_SERVICE[service] : 'gmail-oauth-callback';
+  const extra: Record<string, any> = {};
+  if (email) extra.email = email;
+  if (service) extra.service = service;
+  sendOAuthResult(res, providerLabel, messageType, success, error, extra);
 }
 
 export async function handleGoogleOAuthCallback(req: express.Request, res: express.Response) {
   const err = req.query.error as string | undefined;
   if (err) {
     const desc = (req.query.error_description as string | undefined) || err;
-    return sendOAuthResult(res, null, false, String(desc));
+    return googleOAuthResult(res, null, false, String(desc));
   }
 
   const code = req.query.code as string | undefined;
   const state = req.query.state as string | undefined;
   if (!code || !state) {
-    return sendOAuthResult(res, null, false, 'Missing code or state parameter');
+    return googleOAuthResult(res, null, false, 'Missing code or state parameter');
   }
 
   const stateData = consumeGoogleOAuthState(state);
   if (!stateData) {
-    return sendOAuthResult(res, null, false, 'Invalid or expired state. Please try again.');
+    return googleOAuthResult(res, null, false, 'Invalid or expired state. Please try again.');
   }
 
   const config = getGoogleOAuthConfig();
   if (!config) {
-    return sendOAuthResult(res, stateData.service, false, 'Google OAuth not configured on server');
+    return googleOAuthResult(res, stateData.service, false, 'Google OAuth not configured on server');
   }
 
   try {
@@ -146,7 +161,7 @@ export async function handleGoogleOAuthCallback(req: express.Request, res: expre
     const data = await response.json();
     if (!response.ok) {
       console.error(`[${stateData.service}] Token exchange failed:`, data);
-      return sendOAuthResult(
+      return googleOAuthResult(
         res,
         stateData.service,
         false,
@@ -168,10 +183,10 @@ export async function handleGoogleOAuthCallback(req: express.Request, res: expre
     });
 
     console.log(`✅ [${stateData.service}] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`);
-    return sendOAuthResult(res, stateData.service, true, null, email);
+    return googleOAuthResult(res, stateData.service, true, null, email);
   } catch (e) {
     console.error(`[${stateData.service}] OAuth redirect error:`, e);
-    return sendOAuthResult(res, stateData.service, false, 'Internal error during token exchange');
+    return googleOAuthResult(res, stateData.service, false, 'Internal error during token exchange');
   }
 }
 
@@ -179,35 +194,4 @@ export function googleOAuthRedirectRouter() {
   const router = express.Router();
   router.get('/oauth-redirect', handleGoogleOAuthCallback);
   return router;
-}
-
-function oauthResultPage(
-  service: GoogleService | null,
-  success: boolean,
-  error?: string | null,
-  email?: string | null,
-  nonce?: string,
-): string {
-  const statusClass = success ? 'success' : 'error';
-  const message = success ? 'Connected! This window will close...' : `Error: ${error || 'Unknown error'}`;
-  const messageType = service === 'gdrive' ? 'gdrive-oauth-callback' : 'gmail-oauth-callback';
-  const title = service === 'gdrive' ? 'Google Drive' : service === 'gmail' ? 'Gmail' : 'Google';
-
-  return `<!DOCTYPE html>
-<html><head><title>${title} - ${success ? 'Connected' : 'Error'}</title>
-<style>
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f14; color: #a0a0b0; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-.container { text-align: center; padding: 2rem; }
-.success { color: #34d399; }
-.error { color: #f87171; }
-</style></head><body>
-<div class="container">
-  <p class="${statusClass}">${message}</p>
-</div>
-<script nonce="${nonce}">
-if (window.opener) {
-  window.opener.postMessage({ type: ${JSON.stringify(messageType)}, success: ${success}, email: ${JSON.stringify(email || null)}, error: ${JSON.stringify(error || null)} }, window.location.origin);
-  ${success ? 'setTimeout(function() { window.close(); }, 1500);' : ''}
-}
-</script></body></html>`;
 }
