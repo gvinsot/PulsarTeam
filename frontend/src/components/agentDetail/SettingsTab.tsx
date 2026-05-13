@@ -54,6 +54,16 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
     });
   }, [currentProject]);
 
+  // Auto-select a runner based on the LLM config provider.
+  // Mirrors the "Auto" option in the runner dropdown.
+  const resolveAutoRunner = (llmConfigId) => {
+    const sel = llmConfigs.find(c => c.id === llmConfigId);
+    const provider = (sel?.provider || '').toLowerCase();
+    if (provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid') return 'claudecode';
+    if (provider === 'openai') return 'codex';
+    return 'sandbox';
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -62,7 +72,8 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
       payload.costPerOutputToken = payload.costPerOutputToken !== '' ? parseFloat(payload.costPerOutputToken) || null : null;
       payload.llmConfigId = payload.llmConfigId || null;
       payload.boardId = payload.boardId || null;
-      payload.runner = payload.runner || null;
+      // "Auto" resolves to a concrete runner so the backend (which rejects null/empty) accepts it.
+      payload.runner = payload.runner || resolveAutoRunner(payload.llmConfigId);
       await api.updateAgent(agent.id, payload);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
