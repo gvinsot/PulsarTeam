@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { storeOAuthToken } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
-import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
+import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
 
 /**
  * Unified Google OAuth callback handler.
@@ -127,11 +127,13 @@ export async function handleGoogleOAuthCallback(req: express.Request, res: expre
   }
 
   try {
+    // Must match the redirect_uri sent in the auth URL — derive the same way.
+    const redirectUri = `${req.protocol}://${req.get('host')}${GOOGLE_PLUGIN_REDIRECT_PATH}`;
     const body = new URLSearchParams({
       client_id: config.clientId,
       client_secret: config.clientSecret,
       code,
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     });
 

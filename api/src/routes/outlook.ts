@@ -3,7 +3,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
-import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
+import { getMicrosoftOAuthConfig, MICROSOFT_PLUGIN_REDIRECT_PATH } from '../services/microsoftOAuthConfig.js';
 import { generateMicrosoftOAuthState, consumeMicrosoftOAuthState } from './microsoftOAuth.js';
 
 /**
@@ -125,10 +125,11 @@ export function outlookRoutes() {
 
     const state = generateMicrosoftOAuthState('outlook', req.user?.username || 'default', agentId, boardId);
 
+    const redirectUri = `${req.protocol}://${req.get('host')}${MICROSOFT_PLUGIN_REDIRECT_PATH}`;
     const params = new URLSearchParams({
       client_id: config.clientId,
       response_type: 'code',
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri,
       scope: scopes.join(' '),
       response_mode: 'query',
       state,
@@ -151,11 +152,12 @@ export function outlookRoutes() {
     if (stateData.service !== 'outlook') return res.status(400).json({ error: 'State service mismatch' });
 
     try {
+      const redirectUri = `${req.protocol}://${req.get('host')}${MICROSOFT_PLUGIN_REDIRECT_PATH}`;
       const body = new URLSearchParams({
         client_id: config.clientId,
         client_secret: config.clientSecret,
         code,
-        redirect_uri: config.redirectUri,
+        redirect_uri: redirectUri,
         grant_type: 'authorization_code',
       });
 

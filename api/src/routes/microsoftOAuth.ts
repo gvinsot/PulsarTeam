@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { storeOAuthToken } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
-import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
+import { getMicrosoftOAuthConfig, MICROSOFT_PLUGIN_REDIRECT_PATH } from '../services/microsoftOAuthConfig.js';
 import { sendOAuthResult } from './oauthHelper.js';
 
 /**
@@ -120,11 +120,13 @@ export async function handleMicrosoftOAuthCallback(req: express.Request, res: ex
   }
 
   try {
+    // Must match the redirect_uri sent in the auth URL — derive the same way.
+    const redirectUri = `${req.protocol}://${req.get('host')}${MICROSOFT_PLUGIN_REDIRECT_PATH}`;
     const body = new URLSearchParams({
       client_id: config.clientId,
       client_secret: config.clientSecret,
       code,
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri,
       grant_type: 'authorization_code',
     });
 

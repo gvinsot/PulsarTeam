@@ -67,6 +67,13 @@ import { setAgentManager } from './services/userProvisioning.js';
 const app = express();
 const httpServer = createServer(app);
 
+// Trust the first proxy hop (Traefik in swarm, nginx in dev) so req.protocol
+// and req.get('host') reflect the public URL the user sees rather than the
+// internal container hostname. Required for OAuth: we derive the popup
+// redirect_uri from the request, which must match the URI Google/Microsoft
+// see in the auth URL — both come from the same browser through the proxy.
+app.set('trust proxy', 1);
+
 const corsOrigins = getCorsOrigins();
 
 const contentSecurityPolicy = [

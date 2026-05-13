@@ -51,15 +51,16 @@ services:
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - MCP_ACTIONS_ENDPOINT=${MCP_ACTIONS_ENDPOINT:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # Google OAuth — one client serves login + Gmail + Drive plugins. The
+      # redirect_uri is derived from each request (req.protocol + host + a
+      # fixed path), so no URI env var is needed.
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-}
       # Microsoft OAuth — one Azure App registration serves login + every
-      # Microsoft Graph plugin (OneDrive, Outlook, …); the service is encoded
-      # in the OAuth state parameter.
+      # Microsoft Graph plugin (OneDrive, Outlook, …). Same auto-derived URI
+      # scheme as Google.
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
-      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
       - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}

@@ -3,7 +3,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
-import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
+import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
 import { generateGoogleOAuthState, consumeGoogleOAuthState } from './googleOAuth.js';
 
 /**
@@ -121,10 +121,11 @@ export function gmailRoutes() {
 
     const state = generateGoogleOAuthState('gmail', req.user?.username || 'default', agentId, boardId);
 
+    const redirectUri = `${req.protocol}://${req.get('host')}${GOOGLE_PLUGIN_REDIRECT_PATH}`;
     const params = new URLSearchParams({
       client_id: config.clientId,
       response_type: 'code',
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri,
       scope: scopes.join(' '),
       access_type: 'offline',
       prompt: 'consent',
@@ -150,11 +151,15 @@ export function gmailRoutes() {
     if (stateData.service !== 'gmail') return res.status(400).json({ error: 'State service mismatch' });
 
     try {
+      // Match the redirect_uri used in the auth URL exactly — Google rejects
+      // mismatches. Both calls come from the same browser through the same
+      // proxy so req.protocol + host resolves consistently.
+      const redirectUri = `${req.protocol}://${req.get('host')}${GOOGLE_PLUGIN_REDIRECT_PATH}`;
       const body = new URLSearchParams({
         client_id: config.clientId,
         client_secret: config.clientSecret,
         code,
-        redirect_uri: config.redirectUri,
+        redirect_uri: redirectUri,
         grant_type: 'authorization_code',
       });
 

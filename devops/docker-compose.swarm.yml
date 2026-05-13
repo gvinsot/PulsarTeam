@@ -25,13 +25,15 @@ services:
       - GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
       - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
       - GITHUB_OAUTH_REDIRECT_URI=${GITHUB_OAUTH_REDIRECT_URI}
+      # Google + Microsoft OAuth — the redirect_uri is auto-derived from each
+      # request (host + fixed path), so no *_REDIRECT_URI env var is needed.
+      # Register the public URIs in the OAuth client console (Google Cloud /
+      # Azure App registration); see .env.example.
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
-      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
       - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
-      - MICROSOFT_REDIRECT_URI=${MICROSOFT_REDIRECT_URI:-}
       - CLAUDECODE_SERVICE_URL=http://claudecode-service:8000
       - SANDBOX_SERVICE_URL=http://sandbox-service:8000
       - OPENCLAW_SERVICE_URL=http://openclaw-service:8000

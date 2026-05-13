@@ -3,7 +3,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
-import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
+import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
 import { generateGoogleOAuthState } from './googleOAuth.js';
 
 /**
@@ -119,10 +119,11 @@ export function gdriveRoutes() {
 
     const state = generateGoogleOAuthState('gdrive', req.user?.username || 'default', agentId, boardId);
 
+    const redirectUri = `${req.protocol}://${req.get('host')}${GOOGLE_PLUGIN_REDIRECT_PATH}`;
     const params = new URLSearchParams({
       client_id: config.clientId,
       response_type: 'code',
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri,
       scope: scopes.join(' '),
       access_type: 'offline',
       prompt: 'consent',
