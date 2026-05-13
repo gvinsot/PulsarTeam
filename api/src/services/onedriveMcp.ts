@@ -20,6 +20,21 @@ function encodePath(path) {
  */
 async function graphFetch(path: string, agentId: string | null = null, boardId: string | null = null, options: Record<string, any> = {}) {
   const token = await getAccessTokenForAgent(agentId, boardId);
+
+  // ── DEBUG (temporaire) ──────────────────────────────────────────────
+  console.log('[OneDrive DEBUG] token prefix:', token?.slice(0, 12), '… length:', token?.length);
+  if (token?.startsWith('eyJ')) {
+    try {
+      const claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+      console.log('[OneDrive DEBUG] aud=', claims.aud, '| scp=', claims.scp, '| tid=', claims.tid, '| upn=', claims.upn || claims.preferred_username, '| exp=', new Date(claims.exp * 1000).toISOString());
+    } catch (e) {
+      console.log('[OneDrive DEBUG] could not decode JWT:', (e as Error).message);
+    }
+  } else {
+    console.log('[OneDrive DEBUG] token is NOT a JWT — likely leaked ciphertext or wrong shape');
+  }
+  // ────────────────────────────────────────────────────────────────────
+
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
 
   const res = await fetch(url, {
