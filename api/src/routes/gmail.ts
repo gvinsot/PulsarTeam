@@ -105,7 +105,7 @@ export function gmailRoutes() {
   router.get('/auth-url', (req, res) => {
     const config = getGoogleOAuthConfig();
     if (!config) {
-      return res.status(500).json({ error: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.' });
+      return res.status(500).json({ error: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.' });
     }
 
     const agentId = (req.query.agentId as string | undefined) || null;

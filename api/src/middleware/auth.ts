@@ -240,16 +240,11 @@ function isAllowedRedirectUri(uri: string): boolean {
 }
 
 function resolveGoogleRedirectUri(frontendUri?: string): string {
-  // Login uses a DIFFERENT redirect URI than the Gmail/Drive plugins: login
-  // lands on a frontend route (/auth/google/callback) handled by App.tsx,
-  // while the plugins land on the backend dispatcher (GOOGLE_REDIRECT_URI =
-  // /api/google/oauth-redirect). Sending login to the plugin URL would make
-  // the user's auth code be exchanged by the plugin handler instead of the
-  // login handler — symptom: after a Drive connect the window navigates to
-  // the portal because the login flow swallowed the code.
-  //
-  // We trust the caller-supplied URI only if its origin is on the CORS
-  // allow-list (prevents an open-redirect / code-stealing attack).
+  // Login lands on /auth/google/callback (frontend route), plugins land on
+  // /api/google/oauth-redirect (backend dispatcher) — they share the same
+  // OAuth client but never collide. The login URI is supplied by the
+  // frontend; we accept it only when its origin is on the CORS allow-list
+  // (prevents an open-redirect / code-stealing attack).
   if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
   return '';
 }

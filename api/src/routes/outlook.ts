@@ -107,7 +107,7 @@ export function outlookRoutes() {
   router.get('/auth-url', (req, res) => {
     const config = getConfig();
     if (!config) {
-      return res.status(500).json({ error: 'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and MICROSOFT_REDIRECT_URI.' });
+      return res.status(500).json({ error: 'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.' });
     }
 
     const agentId = (req.query.agentId as string | undefined) || null;

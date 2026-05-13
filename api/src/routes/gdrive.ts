@@ -106,7 +106,7 @@ export function gdriveRoutes() {
   router.get('/auth-url', (req, res) => {
     const config = getGoogleOAuthConfig();
     if (!config) {
-      return res.status(500).json({ error: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI — the same OAuth client is reused for Gmail and Drive.' });
+      return res.status(500).json({ error: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET — the same OAuth client is reused for Gmail, Drive, and Google login.' });
     }
 
     const agentId = (req.query.agentId as string | undefined) || null;
