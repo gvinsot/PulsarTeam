@@ -28,6 +28,7 @@ interface StateEntry {
   username: string;
   agentId: string | null;
   boardId: string | null;
+  consumerFlow: boolean;
   expiresAt: number;
 }
 
@@ -39,13 +40,14 @@ export function generateMicrosoftOAuthState(
   username: string,
   agentId: string | null = null,
   boardId: string | null = null,
+  consumerFlow: boolean = false,
 ): string {
   const now = Date.now();
   for (const [k, v] of stateStore) {
     if (v.expiresAt < now) stateStore.delete(k);
   }
   const state = crypto.randomBytes(32).toString('hex');
-  stateStore.set(state, { service, username, agentId, boardId, expiresAt: now + STATE_TTL_MS });
+  stateStore.set(state, { service, username, agentId, boardId, consumerFlow, expiresAt: now + STATE_TTL_MS });
   return state;
 }
 
@@ -59,6 +61,7 @@ export function consumeMicrosoftOAuthState(state: string): Omit<StateEntry, 'exp
     username: entry.username,
     agentId: entry.agentId,
     boardId: entry.boardId,
+    consumerFlow: entry.consumerFlow,
   };
 }
 
@@ -130,7 +133,11 @@ export async function handleMicrosoftOAuthCallback(req: express.Request, res: ex
       grant_type: 'authorization_code',
     });
 
-    const response = await fetch(`https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`, {
+    // Le token exchange DOIT se faire sur le même endpoint que l'auth: si la
+    // popup d'autorisation a utilisé /consumers/, l'échange de code aussi —
+    // sinon Microsoft renvoie AADSTS70000121 ("grant from personal account").
+    const tokenEndpointTenant = stateData.consumerFlow ? 'consumers' : config.tenantId;
+    const response = await fetch(`https://login.microsoftonline.com/${tokenEndpointTenant}/oauth2/v2.0/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -159,7 +166,7 @@ export async function handleMicrosoftOAuthCallback(req: express.Request, res: ex
       accessToken: data.access_token,
       refreshToken: data.refresh_token,
       expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-      meta: { email },
+      meta: { email, consumerFlow: stateData.consumerFlow || undefined },
     });
 
     console.log(`✅ [${providerLabel}] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`);

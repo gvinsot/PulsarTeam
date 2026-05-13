@@ -53,7 +53,11 @@ async function refreshOnedriveToken(record: OAuthTokenRecord): Promise<string> {
     grant_type: 'refresh_token',
   });
 
-  const response = await fetch(`https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`, {
+  // Si le token vient du flow consumer (cf. /auth-url?consumer=1), le refresh
+  // doit aussi taper /consumers/ — sinon AADSTS70000121 quand MICROSOFT_TENANT_ID
+  // pointe vers un tenant Entra ID spécifique.
+  const refreshTenant = record.meta?.consumerFlow ? 'consumers' : config.tenantId;
+  const response = await fetch(`https://login.microsoftonline.com/${refreshTenant}/oauth2/v2.0/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
@@ -120,7 +124,7 @@ export function onedriveRoutes() {
     // pas dans le directory consumer — les inclure produit un token "amputé" qui échoue
     // sur /me/drive pour les comptes perso (accessDenied).
     const scopes = ['Files.Read', 'Files.ReadWrite', 'User.Read', 'offline_access'];
-    const state = generateMicrosoftOAuthState('onedrive', req.user?.username || 'default', agentId, boardId);
+    const state = generateMicrosoftOAuthState('onedrive', req.user?.username || 'default', agentId, boardId, consumerFlow);
 
     // Exception pour gvinsot@hotmail.com: cette adresse existe aussi comme guest B2B
     // dans le tenant Entra ID, donc le endpoint `common` route vers le tenant work
