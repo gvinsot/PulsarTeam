@@ -21,7 +21,7 @@ import BoardPluginsTab from './tasks/BoardPluginsTab';
 
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
-export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, onBoardChange }) {
+export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, onBoardChange, projectFilter = '' }) {
   const [repoFilter, setRepoFilter] = useState(() => localStorage.getItem('tasks_repoFilter') || '');
   const [agentFilter, setAgentFilter] = useState(() => localStorage.getItem('tasks_agentFilter') || '');
   const [search, setSearch] = useState(() => localStorage.getItem('tasks_search') || '');
@@ -96,7 +96,27 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   useEffect(() => { localStorage.setItem('tasks_search', search); }, [search]);
   useEffect(() => { localStorage.setItem('tasks_sortBy', sortBy); }, [sortBy]);
 
-  // Active board data
+  // When a global project filter is set, only show boards attached to that project
+  const visibleBoards = useMemo(() => {
+    if (!projectFilter) return boards;
+    return (boards || []).filter(b => b.project_id === projectFilter);
+  }, [boards, projectFilter]);
+
+  // If the currently active board is hidden by the project filter, jump to the
+  // first visible board (or clear if none).
+  useEffect(() => {
+    if (!boardsLoaded) return;
+    if (visibleBoards.length === 0) {
+      if (activeBoardId !== null) setActiveBoardId(null);
+      return;
+    }
+    if (!visibleBoards.some(b => b.id === activeBoardId)) {
+      setActiveBoardId(visibleBoards[0].id);
+    }
+  }, [visibleBoards, activeBoardId, boardsLoaded]);
+
+  // Active board data — resolved against the full boards list so we keep state
+  // even if a board is temporarily hidden by the filter.
   const activeBoard = useMemo(() => boards.find(b => b.id === activeBoardId) || null, [boards, activeBoardId]);
 
   // Permission checks for shared boards
@@ -643,9 +663,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Board Tabs */}
-      {boards.length > 0 && (
+      {visibleBoards.length > 0 && (
         <BoardTabs
-          boards={boards}
+          boards={visibleBoards}
           activeBoardId={activeBoardId}
           onSelect={(id) => { setActiveBoardId(id); setAgentFilter(''); }}
           onCreate={handleCreateBoard}
@@ -653,6 +673,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           onDelete={handleDeleteBoard}
           onShare={setShareBoard}
         />
+      )}
+      {projectFilter && visibleBoards.length === 0 && boardsLoaded && (
+        <div className="px-4 py-8 text-center text-sm text-dark-400">
+          No boards attached to the selected project. Attach a board from the Projects view to see its tasks here.
+        </div>
       )}
 
       {/* Toolbar */}

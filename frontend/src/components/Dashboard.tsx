@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
   Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu, DollarSign, Eye, ChevronDown,
-  Sun, Moon
+  Sun, Moon, FolderGit2
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
@@ -52,6 +52,13 @@ export default function Dashboard({
     if (val) localStorage.setItem('activeBoardId', val);
     else localStorage.removeItem('activeBoardId');
   }, []);
+  const [dbProjects, setDbProjects] = useState([]);
+  const [projectFilter, setProjectFilterRaw] = useState(() => localStorage.getItem('activeProjectId') || '');
+  const setProjectFilter = useCallback((val) => {
+    setProjectFilterRaw(val);
+    if (val) localStorage.setItem('activeProjectId', val);
+    else localStorage.removeItem('activeProjectId');
+  }, []);
   const mobileMenuRef = useRef(null);
   const userMenuRef = useRef(null);
   const { theme, toggleTheme } = useTheme();
@@ -60,7 +67,21 @@ export default function Dashboard({
 
   useEffect(() => {
     api.getBoards().then(setBoards).catch(() => {});
+    api.getProjects().then(setDbProjects).catch(() => setDbProjects([]));
   }, []);
+
+  // Build lookup: boardId → project_id (from boards loaded above)
+  const boardProjectMap = useMemo(() => {
+    const m = new Map();
+    (boards || []).forEach(b => { if (b?.id) m.set(b.id, b.project_id || null); });
+    return m;
+  }, [boards]);
+
+  // Clear stale project filter if the project no longer exists
+  useEffect(() => {
+    if (!projectFilter || dbProjects.length === 0) return;
+    if (!dbProjects.some(p => p.id === projectFilter)) setProjectFilter('');
+  }, [dbProjects, projectFilter, setProjectFilter]);
 
   // Lazy-load data based on active view
   useEffect(() => {
@@ -126,9 +147,15 @@ export default function Dashboard({
     return 0;
   });
 
+  // Apply the global project filter first (a project groups one or more boards)
+  const projectScopedAgents = useMemo(() => {
+    if (!projectFilter) return sortedAgents;
+    return sortedAgents.filter(a => a.boardId && boardProjectMap.get(a.boardId) === projectFilter);
+  }, [sortedAgents, projectFilter, boardProjectMap]);
+
   const filteredAgents = boardFilter
-    ? sortedAgents.filter(a => a.boardId === boardFilter)
-    : sortedAgents;
+    ? projectScopedAgents.filter(a => a.boardId === boardFilter)
+    : projectScopedAgents;
 
   const selectedAgentData = sortedAgents.find(a => a.id === selectedAgent);
 
@@ -139,12 +166,12 @@ export default function Dashboard({
   };
 
   const stats = {
-    total: sortedAgents.length,
-    busy: sortedAgents.filter(a => a.status === 'busy' || thinkingMap[a.id]).length,
-    idle: sortedAgents.filter(a => a.status === 'idle' && !thinkingMap[a.id]).length,
-    errors: sortedAgents.filter(a => a.status === 'error').length,
-    totalTokensIn: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensIn || 0), 0),
-    totalTokensOut: sortedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensOut || 0), 0),
+    total: projectScopedAgents.length,
+    busy: projectScopedAgents.filter(a => a.status === 'busy' || thinkingMap[a.id]).length,
+    idle: projectScopedAgents.filter(a => a.status === 'idle' && !thinkingMap[a.id]).length,
+    errors: projectScopedAgents.filter(a => a.status === 'error').length,
+    totalTokensIn: projectScopedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensIn || 0), 0),
+    totalTokensOut: projectScopedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensOut || 0), 0),
   };
 
   return (
@@ -176,7 +203,7 @@ export default function Dashboard({
                 <Zap className="w-5 h-5 text-white hidden sm:block" />
               </button>
               {mobileMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-48 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
+                <div className="absolute left-0 top-full mt-2 w-56 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
                   {[
                     { key: 'agents', label: 'Agents', icon: Users },
                     { key: 'tasks', label: 'Workflows', icon: KanbanSquare },
@@ -196,12 +223,27 @@ export default function Dashboard({
                       {label}
                     </button>
                   ))}
+                  {dbProjects.length > 0 && (
+                    <div className="border-t border-dark-700 mt-1 pt-2 px-3 pb-2">
+                      <label className="block text-[10px] uppercase tracking-wider text-dark-500 mb-1">Project filter</label>
+                      <select
+                        value={projectFilter}
+                        onChange={(e) => setProjectFilter(e.target.value)}
+                        className="w-full h-8 px-2 text-sm bg-dark-900 border border-dark-700 rounded text-dark-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="">All projects</option>
+                        {dbProjects.map(p => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
             <div>
               <h1 className="text-lg font-bold text-dark-100" title={`v${import.meta.env.VITE_APP_VERSION || 'dev'}`}>Pulsar Team</h1>
-              <p className="text-xs text-dark-400 -mt-0.5">{sortedAgents.length} agents active</p>
+              <p className="text-xs text-dark-400 -mt-0.5">{projectScopedAgents.length} agents active</p>
             </div>
             <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden ml-2">
               <button
@@ -245,6 +287,23 @@ export default function Dashboard({
                 <span className="hidden md:inline">Budget</span>
               </button>
             </div>
+            {dbProjects.length > 0 && (
+              <div className="hidden sm:flex items-center gap-1.5 ml-2 pl-2 border-l border-dark-700">
+                <FolderGit2 className="w-4 h-4 text-purple-400" />
+                <select
+                  value={projectFilter}
+                  onChange={(e) => setProjectFilter(e.target.value)}
+                  className="h-9 px-2 pr-7 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer"
+                  style={{ backgroundImage: 'none' }}
+                  title="Filter content by project"
+                >
+                  <option value="">All projects</option>
+                  {dbProjects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -310,7 +369,7 @@ export default function Dashboard({
 
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {/* Stats bar — hidden in Workflows view */}
-        {activeView !== 'tasks' && <SwarmOverview stats={stats} agents={sortedAgents} />}
+        {activeView !== 'tasks' && <SwarmOverview stats={stats} agents={projectScopedAgents} />}
 
         {/* Broadcast Panel */}
         {showBroadcast && (
@@ -332,7 +391,14 @@ export default function Dashboard({
           {activeView === 'tasks' && (
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                <TasksBoard agents={sortedAgents} onRefresh={onRefresh} user={user} onNavigateToAgent={handleNavigateToAgent} onBoardChange={setBoardFilter} />
+                <TasksBoard
+                  agents={projectScopedAgents}
+                  onRefresh={onRefresh}
+                  user={user}
+                  onNavigateToAgent={handleNavigateToAgent}
+                  onBoardChange={setBoardFilter}
+                  projectFilter={projectFilter}
+                />
               </div>
             </Suspense>
           )}
@@ -340,8 +406,9 @@ export default function Dashboard({
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-auto p-4 sm:p-6">
                 <ProjectsView
-                  agents={sortedAgents}
+                  agents={projectScopedAgents}
                   onRefresh={onRefresh}
+                  projectFilter={projectFilter}
                 />
               </div>
             </Suspense>
@@ -349,7 +416,7 @@ export default function Dashboard({
           {activeView === 'budget' && (
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-auto">
-                <BudgetDashboard agents={sortedAgents} />
+                <BudgetDashboard agents={projectScopedAgents} />
               </div>
             </Suspense>
           )}

@@ -155,7 +155,7 @@ function roundRect(ctx, x, y, w, h, r) {
 
 // ────────────────────────────────────────────────────────────────────────────
 
-export default function ProjectsView({ agents = [], onRefresh }) {
+export default function ProjectsView({ agents = [], onRefresh, projectFilter = '' }) {
   const [projects, setProjects] = useState([]);
   const [projectStats, setProjectStats] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -240,6 +240,9 @@ export default function ProjectsView({ agents = [], onRefresh }) {
 
   const filteredProjects = useMemo(() => {
     let result = enrichedProjects;
+    if (projectFilter) {
+      result = result.filter(p => p.id === projectFilter);
+    }
     if (search) {
       const q = search.toLowerCase();
       result = result.filter(p => p.name.toLowerCase().includes(q));
@@ -248,7 +251,7 @@ export default function ProjectsView({ agents = [], onRefresh }) {
     else if (sortBy === 'tasks') result = [...result].sort((a, b) => b.stats.total - a.stats.total);
     else if (sortBy === 'completion') result = [...result].sort((a, b) => b.stats.completion - a.stats.completion);
     return result;
-  }, [enrichedProjects, search, sortBy]);
+  }, [enrichedProjects, search, sortBy, projectFilter]);
 
   return (
     <div className="space-y-4">
