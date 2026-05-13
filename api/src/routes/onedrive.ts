@@ -114,7 +114,11 @@ export function onedriveRoutes() {
     const agentId = (req.query.agentId as string | undefined) || null;
     const boardId = (req.query.boardId as string | undefined) || null;
 
-    const scopes = ['Files.Read', 'Files.Read.All', 'Files.ReadWrite', 'Files.ReadWrite.All', 'Sites.Read.All', 'User.Read', 'offline_access'];
+    // Scopes compatibles à la fois comptes pro (work/school) et perso (hotmail/outlook.com/live).
+    // Les variantes `.All` (Files.Read.All, Files.ReadWrite.All, Sites.Read.All) n'existent
+    // pas dans le directory consumer — les inclure produit un token "amputé" qui échoue
+    // sur /me/drive pour les comptes perso (accessDenied).
+    const scopes = ['Files.Read', 'Files.ReadWrite', 'User.Read', 'offline_access'];
     const state = generateMicrosoftOAuthState('onedrive', req.user?.username || 'default', agentId, boardId);
 
     const redirectUri = `${req.protocol}://${req.get('host')}${MICROSOFT_PLUGIN_REDIRECT_PATH}`;
