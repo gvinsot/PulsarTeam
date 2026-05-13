@@ -41,6 +41,9 @@ mock.module('../database.js', {
     getUserByMicrosoftId: async () => null,
     createMicrosoftUser: async () => ({}),
     linkMicrosoftId: async () => {},
+    getUserByGitHubId: async () => null,
+    createGitHubUser: async () => ({}),
+    linkGitHubId: async () => {},
   },
 });
 
