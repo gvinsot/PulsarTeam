@@ -4,7 +4,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
-import { readSecret } from '../secrets.js';
+import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
 
 /**
  * Gmail OAuth2 routes.
@@ -47,11 +47,7 @@ function resolveScope(agentId, boardId, username): { scopeType: ScopeType; scope
 }
 
 function getConfig() {
-  const clientId = process.env.GMAIL_CLIENT_ID;
-  const clientSecret = readSecret('GMAIL_CLIENT_SECRET');
-  const redirectUri = process.env.GMAIL_REDIRECT_URI;
-  if (!clientId || !clientSecret || !redirectUri) return null;
-  return { clientId, clientSecret, redirectUri };
+  return getGoogleOAuthConfig('gmail');
 }
 
 export function hasGmailTokensForAgent(agentId) {

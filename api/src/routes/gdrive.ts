@@ -4,7 +4,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
-import { readSecret } from '../secrets.js';
+import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
 
 /**
  * Google Drive OAuth2 routes.
@@ -18,10 +18,17 @@ import { readSecret } from '../secrets.js';
  * Resolution order when an agent calls a Google Drive MCP tool:
  *   agent tokens → board tokens → user tokens → error
  *
- * Credentials are configured via:
- *   GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REDIRECT_URI
- * They may point to the same Google Cloud OAuth client as Gmail or a different
- * one — the only requirement is that the Drive API scopes are enabled.
+ * Credentials are resolved by getGoogleOAuthConfig('gdrive') with this
+ * fallback order:
+ *   1. GDRIVE_CLIENT_ID / GDRIVE_CLIENT_SECRET / GDRIVE_REDIRECT_URI
+ *   2. GMAIL_CLIENT_ID  / GMAIL_CLIENT_SECRET  (redirect URI is auto-derived
+ *      from GMAIL_REDIRECT_URI by swapping `/api/gmail/oauth-redirect` →
+ *      `/api/gdrive/oauth-redirect`)
+ *   3. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+ *
+ * The same Google Cloud OAuth client can be reused as long as the Drive API
+ * scopes are enabled and the derived redirect URI is registered in the
+ * Cloud Console.
  */
 
 const stateStore = new Map();
@@ -52,11 +59,7 @@ function resolveScope(agentId, boardId, username): { scopeType: ScopeType; scope
 }
 
 function getConfig() {
-  const clientId = process.env.GDRIVE_CLIENT_ID;
-  const clientSecret = readSecret('GDRIVE_CLIENT_SECRET');
-  const redirectUri = process.env.GDRIVE_REDIRECT_URI;
-  if (!clientId || !clientSecret || !redirectUri) return null;
-  return { clientId, clientSecret, redirectUri };
+  return getGoogleOAuthConfig('gdrive');
 }
 
 export function hasGdriveTokensForAgent(agentId) {
@@ -251,7 +254,7 @@ export function gdriveRoutes() {
   router.get('/auth-url', (req, res) => {
     const config = getConfig();
     if (!config) {
-      return res.status(500).json({ error: 'Google Drive not configured. Set GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, and GDRIVE_REDIRECT_URI.' });
+      return res.status(500).json({ error: 'Google Drive not configured. Set GDRIVE_CLIENT_ID/GDRIVE_CLIENT_SECRET/GDRIVE_REDIRECT_URI, or reuse the GMAIL_* (or shared GOOGLE_*) credentials — the Drive redirect URI is auto-derived from GMAIL_REDIRECT_URI when not set explicitly.' });
     }
 
     const agentId = req.query.agentId || null;

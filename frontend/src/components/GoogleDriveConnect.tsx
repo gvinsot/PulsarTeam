@@ -113,7 +113,7 @@ export default function GoogleDriveConnect({ agentId, boardId, onStatusChange })
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">not configured</span>
         </div>
         <p className="text-xs text-dark-500">
-          Set <code className="text-dark-400">GDRIVE_CLIENT_ID</code>, <code className="text-dark-400">GDRIVE_CLIENT_SECRET</code>, and <code className="text-dark-400">GDRIVE_REDIRECT_URI</code> environment variables to enable.
+          Set <code className="text-dark-400">GDRIVE_CLIENT_ID</code>, <code className="text-dark-400">GDRIVE_CLIENT_SECRET</code>, and <code className="text-dark-400">GDRIVE_REDIRECT_URI</code> — or reuse the existing <code className="text-dark-400">GMAIL_*</code> (or shared <code className="text-dark-400">GOOGLE_*</code>) credentials. The Drive redirect URI is auto-derived from <code className="text-dark-400">GMAIL_REDIRECT_URI</code> if not set, but you must still register it in the Google Cloud Console and enable the Drive API scopes.
         </p>
       </div>
     );
