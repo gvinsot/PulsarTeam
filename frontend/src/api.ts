@@ -424,10 +424,11 @@ export const api = {
     return fetch(`${API_BASE}/onedrive/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },
 
-  getOnedriveAuthUrl: (agentId?, boardId?) => {
+  getOnedriveAuthUrl: (agentId?, boardId?, opts?: { consumer?: boolean }) => {
     const params = new URLSearchParams();
     if (agentId) params.set('agentId', agentId);
     if (boardId) params.set('boardId', boardId);
+    if (opts?.consumer) params.set('consumer', '1');
     const qs = params.toString();
     return fetch(`${API_BASE}/onedrive/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },

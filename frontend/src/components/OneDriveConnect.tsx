@@ -66,11 +66,11 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
     return () => window.removeEventListener('message', handleMessage);
   }, [fetchStatus]);
 
-  const handleConnect = async () => {
+  const handleConnect = async (opts?: { consumer?: boolean }) => {
     setError(null);
     setConnecting(true);
     try {
-      const { authUrl } = await api.getOnedriveAuthUrl(agentId || undefined, boardId || undefined);
+      const { authUrl } = await api.getOnedriveAuthUrl(agentId || undefined, boardId || undefined, opts);
 
       // Open OAuth popup
       const width = 600;
@@ -173,18 +173,28 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
             Disconnect
           </button>
         ) : (
-          <button
-            onClick={handleConnect}
-            disabled={connecting}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
-          >
-            {connecting ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <ExternalLink className="w-3.5 h-3.5" />
-            )}
-            {connecting ? 'Connecting...' : 'Connect with Microsoft'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleConnect()}
+              disabled={connecting}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
+            >
+              {connecting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <ExternalLink className="w-3.5 h-3.5" />
+              )}
+              {connecting ? 'Connecting...' : 'Connect with Microsoft'}
+            </button>
+            <button
+              onClick={() => handleConnect({ consumer: true })}
+              disabled={connecting}
+              title="Force personal Microsoft account (consumers endpoint)"
+              className="text-[11px] text-dark-400 hover:text-blue-400 underline underline-offset-2 disabled:opacity-40"
+            >
+              personal
+            </button>
+          </div>
         )}
       </div>
 

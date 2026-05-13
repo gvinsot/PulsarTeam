@@ -113,6 +113,7 @@ export function onedriveRoutes() {
 
     const agentId = (req.query.agentId as string | undefined) || null;
     const boardId = (req.query.boardId as string | undefined) || null;
+    const consumerFlow = req.query.consumer === '1' || req.query.consumer === 'true';
 
     // Scopes compatibles à la fois comptes pro (work/school) et perso (hotmail/outlook.com/live).
     // Les variantes `.All` (Files.Read.All, Files.ReadWrite.All, Sites.Read.All) n'existent
@@ -120,6 +121,12 @@ export function onedriveRoutes() {
     // sur /me/drive pour les comptes perso (accessDenied).
     const scopes = ['Files.Read', 'Files.ReadWrite', 'User.Read', 'offline_access'];
     const state = generateMicrosoftOAuthState('onedrive', req.user?.username || 'default', agentId, boardId);
+
+    // Exception pour gvinsot@hotmail.com: cette adresse existe aussi comme guest B2B
+    // dans le tenant Entra ID, donc le endpoint `common` route vers le tenant work
+    // (où l'utilisateur n'a pas de OneDrive) au lieu du tenant consumer. On force le
+    // endpoint `consumers` + login_hint pour épingler l'identité personnelle.
+    const tenantId = consumerFlow ? 'consumers' : config.tenantId;
 
     const redirectUri = `${req.protocol}://${req.get('host')}${MICROSOFT_PLUGIN_REDIRECT_PATH}`;
     const params = new URLSearchParams({
@@ -130,8 +137,12 @@ export function onedriveRoutes() {
       response_mode: 'query',
       state,
     });
+    if (consumerFlow) {
+      params.set('login_hint', 'gvinsot@hotmail.com');
+      params.set('prompt', 'select_account');
+    }
 
-    res.json({ authUrl: `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/authorize?${params}` });
+    res.json({ authUrl: `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}` });
   });
 
   // Legacy POST callback — used by clients posting the code from a popup back
