@@ -123,7 +123,18 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
   }
 
   if (!status.configured) {
-    return null;
+    return (
+      <div className="p-3 bg-dark-800/30 rounded-lg border border-dark-700/30">
+        <div className="flex items-center gap-2 mb-1.5">
+          <CloudOff className="w-4 h-4 text-dark-500" />
+          <span className="text-sm font-medium text-dark-300">OneDrive</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">not configured</span>
+        </div>
+        <p className="text-xs text-dark-500">
+          Set <code className="text-dark-400">ONEDRIVE_CLIENT_ID</code>, <code className="text-dark-400">ONEDRIVE_CLIENT_SECRET</code>, and <code className="text-dark-400">ONEDRIVE_REDIRECT_URI</code> environment variables to enable the OAuth flow.
+        </p>
+      </div>
+    );
   }
 
   return (
