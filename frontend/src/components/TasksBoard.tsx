@@ -159,6 +159,14 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // (whose SELECT may run on a pool connection in parallel with in-flight
   // UPDATEs) cannot overwrite a more recent task:updated received via socket.
   const [dbTasks, setDbTasks] = useState([]);
+  // Tracks tasks with an in-flight optimistic mutation. Protects them from
+  // being clobbered by a stale GET /tasks SELECT that ran before the PUT
+  // committed. We use this instead of stamping client-clock timestamps on
+  // the optimistic copy: client/server clock skew would make server-emitted
+  // task:updated events look "older" than the optimistic copy and get
+  // rejected, leaving the UI stuck (e.g. no actionRunning spinner) until
+  // a manual page refresh.
+  const inFlightTaskIds = useRef(new Set());
   const loadTasks = useCallback(async () => {
     if (!activeBoardId) return; // Wait until a board is selected
     try {
@@ -170,6 +178,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         const merged = tasks.map(serverTask => {
           const local = prevById.get(serverTask.id);
           if (!local) return serverTask;
+          // Protect tasks with an in-flight optimistic mutation: the GET
+          // may have raced ahead of the PUT's COMMIT and would otherwise
+          // revert the optimistic change.
+          if (inFlightTaskIds.current.has(serverTask.id)) return local;
           // Prefer local if it has a strictly newer updatedAt — that means a
           // task:updated event arrived after the server's SELECT snapshot.
           const localTs = local.updatedAt ? Date.parse(local.updatedAt) : 0;
@@ -453,11 +465,20 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
 
       // Moving to a different column
       const prevStatus = task.status;
+      // Optimistic: change status only. Don't stamp updatedAt with the
+      // client clock — server-emitted task:updated events use server time
+      // and would be rejected by the timestamp merge if the client clock
+      // is ahead, leaving the UI stuck (no actionRunning spinner, etc.).
+      inFlightTaskIds.current.add(taskId);
       setDbTasks(prev => prev.map(t =>
-        t.id === taskId ? { ...t, status: col.dropStatus, updatedAt: new Date().toISOString() } : t
+        t.id === taskId ? { ...t, status: col.dropStatus } : t
       ));
       try {
-        await updateTaskById(taskId, { column: col.dropStatus });
+        const updated = await updateTaskById(taskId, { column: col.dropStatus });
+        // Apply server's authoritative response so updatedAt is server-sourced.
+        if (updated?.id) {
+          setDbTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updated } : t));
+        }
         // After status change, reorder within the target column at the drop position
         if (dropIdx !== undefined) {
           await reorderColumnTasks(col.id, taskId, dropIdx);
@@ -468,6 +489,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         setDbTasks(prev => prev.map(t =>
           t.id === taskId ? { ...t, status: prevStatus } : t
         ));
+      } finally {
+        // Hold the in-flight guard briefly to cover the window where
+        // task:updated events from workflow processing are still arriving.
+        setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
       }
     } catch (err) {
       console.error('[TasksBoard] Drop status change failed:', err.message);
@@ -497,12 +522,17 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       if (isAlreadyInColumn) return;
 
       const prevStatus = task.status;
+      // See handleDrop: don't stamp updatedAt with the client clock.
+      inFlightTaskIds.current.add(taskId);
       setDbTasks(prev => prev.map(t =>
-        t.id === taskId ? { ...t, status: col.dropStatus, updatedAt: new Date().toISOString() } : t
+        t.id === taskId ? { ...t, status: col.dropStatus } : t
       ));
 
       try {
-        await updateTaskById(taskId, { column: col.dropStatus });
+        const updated = await updateTaskById(taskId, { column: col.dropStatus });
+        if (updated?.id) {
+          setDbTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updated } : t));
+        }
         // Touch drop appends to end of target column
         await reorderColumnTasks(col.id, taskId, (tasksByColumn[col.id] || []).length);
         refreshAll();
@@ -511,6 +541,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         setDbTasks(prev => prev.map(t =>
           t.id === taskId ? { ...t, status: prevStatus } : t
         ));
+      } finally {
+        setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
       }
     } catch (err) {
       console.error('[TasksBoard] Touch drop failed:', err.message);
@@ -522,10 +554,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     if (isReadOnly || !tasks.length) return;
     const targetCol = columns.find(c => c.id === targetColId);
     if (!targetCol) return;
-    // Optimistic update
+    // Optimistic update — see handleDrop for why we don't stamp client-clock updatedAt.
     const taskIds = tasks.map(t => t.id);
+    taskIds.forEach(id => inFlightTaskIds.current.add(id));
     setDbTasks(prev => prev.map(t =>
-      taskIds.includes(t.id) ? { ...t, status: targetCol.dropStatus, updatedAt: new Date().toISOString() } : t
+      taskIds.includes(t.id) ? { ...t, status: targetCol.dropStatus } : t
     ));
     try {
       await Promise.all(tasks.map(t => updateTaskById(t.id, { column: targetCol.dropStatus })));
@@ -533,6 +566,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     } catch (err) {
       console.error('[TasksBoard] Batch move failed:', err.message);
       refreshAll();
+    } finally {
+      setTimeout(() => taskIds.forEach(id => inFlightTaskIds.current.delete(id)), 2000);
     }
   }, [columns, refreshAll, isReadOnly]);
 
