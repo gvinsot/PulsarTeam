@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../api';
 import OneDriveConnect from '../OneDriveConnect';
+import OutlookConnect from '../OutlookConnect';
 import GmailConnect from '../GmailConnect';
 import GoogleDriveConnect from '../GoogleDriveConnect';
 import SlackConnect from '../SlackConnect';
@@ -62,6 +63,7 @@ export default function BoardPluginsTab({ board, onClose }) {
   };
 
   const ONEDRIVE_MCP_ID = 'mcp-onedrive';
+  const OUTLOOK_MCP_ID = 'mcp-outlook';
   const GMAIL_MCP_ID = 'mcp-gmail';
   const GDRIVE_MCP_ID = 'mcp-gdrive';
   const SLACK_MCP_ID = 'mcp-slack';
@@ -296,6 +298,11 @@ export default function BoardPluginsTab({ board, onClose }) {
             {hasMcp(GMAIL_MCP_ID) && (
               <div className="mt-3">
                 <GmailConnect boardId={board.id} onStatusChange={() => loadData()} />
+              </div>
+            )}
+            {hasMcp(OUTLOOK_MCP_ID) && (
+              <div className="mt-3">
+                <OutlookConnect boardId={board.id} onStatusChange={() => loadData()} />
               </div>
             )}
             {hasMcp(GDRIVE_MCP_ID) && (

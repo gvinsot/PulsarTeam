@@ -471,6 +471,34 @@ export const api = {
       body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
     }).then(handleResponse),
 
+  // Outlook OAuth (supports agentId or boardId) — shares Microsoft OAuth client with OneDrive
+  getOutlookStatus: (agentId?, boardId?) => {
+    const params = new URLSearchParams();
+    if (agentId) params.set('agentId', agentId);
+    if (boardId) params.set('boardId', boardId);
+    const qs = params.toString();
+    return fetch(`${API_BASE}/outlook/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
+  },
+
+  getOutlookAuthUrl: (agentId?, boardId?) => {
+    const params = new URLSearchParams();
+    if (agentId) params.set('agentId', agentId);
+    if (boardId) params.set('boardId', boardId);
+    const qs = params.toString();
+    return fetch(`${API_BASE}/outlook/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
+  },
+
+  outlookCallback: (code, state) =>
+    fetch(`${API_BASE}/outlook/callback`, {
+      method: 'POST', headers: getHeaders(), body: JSON.stringify({ code, state })
+    }).then(handleResponse),
+
+  disconnectOutlook: (agentId?, boardId?) =>
+    fetch(`${API_BASE}/outlook/disconnect`, {
+      method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
+    }).then(handleResponse),
+
   // Google Drive OAuth (supports agentId or boardId)
   getGdriveStatus: (agentId?, boardId?) => {
     const params = new URLSearchParams();

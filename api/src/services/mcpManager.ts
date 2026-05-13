@@ -27,6 +27,7 @@ export function resolveInternalMcpConfig(serverUrl: string, {
     '__internal__gandi_dns': `http://localhost:${port}/api/gandi-dns/mcp`,
     '__internal__swarm_api': `http://localhost:${port}/api/swarm-api/mcp`,
     '__internal__gmail': `http://localhost:${port}/api/gmail/mcp`,
+    '__internal__outlook': `http://localhost:${port}/api/outlook/mcp`,
     '__internal__gdrive': `http://localhost:${port}/api/gdrive/mcp`,
     '__internal__slack': `http://localhost:${port}/api/slack/mcp`,
     '__internal__jira': `http://localhost:${port}/api/jira/mcp`,
@@ -484,7 +485,7 @@ export class MCPManager {
 
     // For internal OAuth-based MCPs (OneDrive, Gmail): always use per-agent connection
     // to pass agentId context so the MCP handler can resolve agent-specific OAuth tokens
-    if (agentId && (server.url === '__internal__onedrive' || server.url === '__internal__gmail' || server.url === '__internal__gdrive' || server.url === '__internal__slack' || server.url === '__internal__jira' || server.url === '__internal__wordpress' || server.url === '__internal__github')) {
+    if (agentId && (server.url === '__internal__onedrive' || server.url === '__internal__gmail' || server.url === '__internal__outlook' || server.url === '__internal__gdrive' || server.url === '__internal__slack' || server.url === '__internal__jira' || server.url === '__internal__wordpress' || server.url === '__internal__github')) {
       return this._callToolWithAgentContext(server, toolName, args, agentId, boardId);
     }
 

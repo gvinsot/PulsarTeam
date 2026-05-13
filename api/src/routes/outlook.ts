@@ -4,22 +4,21 @@ import {
 } from '../services/database.js';
 import type { OAuthTokenRecord, ScopeType } from '../services/database.js';
 import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
-import {
-  generateMicrosoftOAuthState,
-  consumeMicrosoftOAuthState,
-  microsoftOAuthRedirectRouter,
-} from './microsoftOAuth.js';
+import { generateMicrosoftOAuthState, consumeMicrosoftOAuthState } from './microsoftOAuth.js';
 
 /**
- * OneDrive OAuth2 routes — unified token store.
- * Resolution: agent → board → user → error
+ * Outlook OAuth2 routes — unified token store.
  *
- * The OAuth client credentials, redirect URI, and callback dispatcher are
- * shared across all Microsoft plugins (OneDrive, Outlook, …) via
- * services/microsoftOAuthConfig.ts and routes/microsoftOAuth.ts.
+ * Reuses the Microsoft OAuth client (MICROSOFT_CLIENT_ID/SECRET/REDIRECT_URI)
+ * and the shared dispatcher in routes/microsoftOAuth.ts. Tokens are stored in
+ * the unified oauth_tokens table under provider='outlook' and scoped by:
+ *   - agent:<agentId>  (per-agent)
+ *   - board:<boardId>  (per-board, shared by all agents on that board)
+ *   - user:<username>  (per-user fallback)
+ *
+ * Resolution order when an agent calls an Outlook MCP tool:
+ *   agent tokens → board tokens → user tokens → error
  */
-
-export { microsoftOAuthRedirectRouter as onedriveOAuthRedirectRouter };
 
 function resolveScope(agentId, boardId, username): { scopeType: ScopeType; scopeId: string } {
   if (agentId) return { scopeType: 'agent', scopeId: agentId };
@@ -31,19 +30,19 @@ function getConfig() {
   return getMicrosoftOAuthConfig();
 }
 
-export function hasOnedriveTokensForAgent(agentId) {
+export function hasOutlookTokensForAgent(agentId) {
   if (!agentId) return false;
-  return hasOAuthToken('onedrive', 'agent', agentId);
+  return hasOAuthToken('outlook', 'agent', agentId);
 }
 
-export function hasOnedriveTokensForBoard(boardId) {
+export function hasOutlookTokensForBoard(boardId) {
   if (!boardId) return false;
-  return hasOAuthToken('onedrive', 'board', boardId);
+  return hasOAuthToken('outlook', 'board', boardId);
 }
 
-async function refreshOnedriveToken(record: OAuthTokenRecord): Promise<string> {
+async function refreshOutlookToken(record: OAuthTokenRecord): Promise<string> {
   const config = getConfig();
-  if (!config) throw new Error('OneDrive not configured');
+  if (!config) throw new Error('Outlook not configured');
   if (!record.refreshToken) throw new Error('No refresh token available');
 
   const body = new URLSearchParams({
@@ -61,12 +60,12 @@ async function refreshOnedriveToken(record: OAuthTokenRecord): Promise<string> {
 
   const data = await response.json();
   if (!response.ok) {
-    await deleteOAuthToken('onedrive', record.scopeType, record.scopeId);
+    await deleteOAuthToken('outlook', record.scopeType, record.scopeId);
     throw new Error(data.error_description || 'Token refresh failed');
   }
 
   await storeOAuthToken({
-    provider: 'onedrive',
+    provider: 'outlook',
     scopeType: record.scopeType,
     scopeId: record.scopeId,
     accessToken: data.access_token,
@@ -75,15 +74,15 @@ async function refreshOnedriveToken(record: OAuthTokenRecord): Promise<string> {
     meta: record.meta,
   });
 
-  console.log(`🔄 [OneDrive] Token refreshed for ${record.scopeType}:${record.scopeId}`);
+  console.log(`🔄 [Outlook] Token refreshed for ${record.scopeType}:${record.scopeId}`);
   return data.access_token;
 }
 
-export async function getAccessTokenForAgent(agentId, boardId = null) {
-  return resolveAccessToken('onedrive', agentId, boardId, refreshOnedriveToken);
+export async function getOutlookAccessTokenForAgent(agentId, boardId = null) {
+  return resolveAccessToken('outlook', agentId, boardId, refreshOutlookToken);
 }
 
-export function onedriveRoutes() {
+export function outlookRoutes() {
   const router = express.Router();
 
   router.get('/status', (req, res) => {
@@ -93,13 +92,13 @@ export function onedriveRoutes() {
     const username = req.user?.username;
 
     const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
-    const token = getOAuthToken('onedrive', scopeType, scopeId);
+    const token = getOAuthToken('outlook', scopeType, scopeId);
     const connected = !!(token && (!token.expiresAt || token.expiresAt > Date.now()));
 
     res.json({
       configured: !!config,
       connected,
-      username: connected ? username : null,
+      email: connected ? token?.meta?.email || null : null,
       agentId: agentId || null,
       boardId: boardId || null,
     });
@@ -114,8 +113,17 @@ export function onedriveRoutes() {
     const agentId = (req.query.agentId as string | undefined) || null;
     const boardId = (req.query.boardId as string | undefined) || null;
 
-    const scopes = ['Files.Read', 'Files.Read.All', 'Files.ReadWrite', 'Files.ReadWrite.All', 'Sites.Read.All', 'User.Read', 'offline_access'];
-    const state = generateMicrosoftOAuthState('onedrive', req.user?.username || 'default', agentId, boardId);
+    // Microsoft Graph Mail scopes. offline_access is required for refresh tokens.
+    const scopes = [
+      'Mail.Read',
+      'Mail.ReadWrite',
+      'Mail.Send',
+      'MailboxSettings.Read',
+      'User.Read',
+      'offline_access',
+    ];
+
+    const state = generateMicrosoftOAuthState('outlook', req.user?.username || 'default', agentId, boardId);
 
     const params = new URLSearchParams({
       client_id: config.clientId,
@@ -129,12 +137,10 @@ export function onedriveRoutes() {
     res.json({ authUrl: `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/authorize?${params}` });
   });
 
-  // Legacy POST callback — used by clients posting the code from a popup back
-  // to the API. Kept for backward compat; the preferred flow is the redirect
-  // handler in microsoftOAuth.ts.
+  // Legacy POST callback — kept symmetric with onedrive/gmail flows.
   router.post('/callback', async (req, res) => {
     const config = getConfig();
-    if (!config) return res.status(500).json({ error: 'OneDrive not configured' });
+    if (!config) return res.status(500).json({ error: 'Outlook not configured' });
 
     const { code, state } = req.body;
     if (!code) return res.status(400).json({ error: 'Authorization code is required' });
@@ -142,7 +148,7 @@ export function onedriveRoutes() {
 
     const stateData = consumeMicrosoftOAuthState(state);
     if (!stateData) return res.status(400).json({ error: 'Invalid or expired state' });
-    if (stateData.service !== 'onedrive') return res.status(400).json({ error: 'State service mismatch' });
+    if (stateData.service !== 'outlook') return res.status(400).json({ error: 'State service mismatch' });
 
     try {
       const body = new URLSearchParams({
@@ -161,26 +167,39 @@ export function onedriveRoutes() {
 
       const data = await response.json();
       if (!response.ok) {
-        console.error('[OneDrive] Token exchange failed:', data);
+        console.error('[Outlook] Token exchange failed:', data);
         return res.status(400).json({ error: 'Token exchange failed' });
+      }
+
+      let email: string | null = null;
+      try {
+        const profileRes = await fetch('https://graph.microsoft.com/v1.0/me', {
+          headers: { Authorization: `Bearer ${data.access_token}` },
+        });
+        if (profileRes.ok) {
+          const profile = await profileRes.json();
+          email = profile.mail || profile.userPrincipalName || null;
+        }
+      } catch (err) {
+        console.warn('[Outlook] Could not fetch profile email:', (err as Error).message);
       }
 
       const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
 
       await storeOAuthToken({
-        provider: 'onedrive',
+        provider: 'outlook',
         scopeType,
         scopeId,
         accessToken: data.access_token,
         refreshToken: data.refresh_token,
         expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-        meta: {},
+        meta: { email },
       });
 
-      console.log(`✅ [OneDrive] OAuth tokens stored for ${scopeType}:${scopeId}`);
-      res.json({ success: true, expiresIn: data.expires_in, agentId: stateData.agentId, boardId: stateData.boardId });
+      console.log(`✅ [Outlook] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'})`);
+      res.json({ success: true, expiresIn: data.expires_in, agentId: stateData.agentId, boardId: stateData.boardId, email });
     } catch (err) {
-      console.error('[OneDrive] Token exchange error:', err);
+      console.error('[Outlook] Token exchange error:', err);
       res.status(500).json({ error: 'Token exchange failed' });
     }
   });
@@ -190,8 +209,8 @@ export function onedriveRoutes() {
     const boardId = req.body?.boardId || null;
     const username = req.user?.username || 'default';
     const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
-    await deleteOAuthToken('onedrive', scopeType, scopeId);
-    console.log(`🔌 [OneDrive] Disconnected ${scopeType}:${scopeId}`);
+    await deleteOAuthToken('outlook', scopeType, scopeId);
+    console.log(`🔌 [Outlook] Disconnected ${scopeType}:${scopeId}`);
     res.json({ success: true });
   });
 

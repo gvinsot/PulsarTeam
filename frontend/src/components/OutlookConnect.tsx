@@ -1,34 +1,35 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Cloud, CloudOff, ExternalLink, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import { Mail, MailX, ExternalLink, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { api } from '../api';
 
 /**
- * OneDrive OAuth connection widget.
- * Handles the full OAuth flow: get auth URL → open popup → capture code+state → exchange tokens.
+ * Outlook OAuth connection widget.
+ * Reuses the shared Microsoft OAuth client (MICROSOFT_*) — same Azure App
+ * registration as OneDrive. The originating plugin is encoded in the OAuth
+ * state so a single redirect URI dispatches tokens to the right provider.
  *
  * Props:
- *   agentId       — (optional) when provided, authenticates OneDrive for this specific agent
+ *   agentId       — (optional) when provided, authenticates Outlook for this specific agent
+ *   boardId       — (optional) when provided, authenticates Outlook at the board level
  *   onStatusChange — (optional) callback when connection status changes
  */
-export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
-  const [status, setStatus] = useState({ configured: false, connected: false });
+export default function OutlookConnect({ agentId, boardId, onStatusChange }) {
+  const [status, setStatus] = useState({ configured: false, connected: false, email: null });
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState(null);
 
-  // Use a ref for the callback to avoid re-triggering the effect when the
-  // parent passes a new inline function reference on every render.
   const onStatusChangeRef = useRef(onStatusChange);
   useEffect(() => { onStatusChangeRef.current = onStatusChange; }, [onStatusChange]);
 
   const fetchStatus = useCallback(async () => {
     try {
-      const data = await api.getOnedriveStatus(agentId || undefined, boardId || undefined);
+      const data = await api.getOutlookStatus(agentId || undefined, boardId || undefined);
       setStatus(data);
       onStatusChangeRef.current?.(data);
     } catch (err) {
-      console.error('OneDrive status check failed:', err);
+      console.error('Outlook status check failed:', err);
     } finally {
       setLoading(false);
     }
@@ -38,15 +39,11 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
     fetchStatus();
   }, [fetchStatus]);
 
-  // Listen for OAuth callback messages from the popup window
   useEffect(() => {
     const handleMessage = async (event) => {
       if (event.data?.type !== 'microsoft-oauth-callback') return;
-      // The unified Microsoft OAuth dispatcher includes a `service` field so
-      // each widget (OneDrive, Outlook, ...) only reacts to its own callback.
-      // Tolerate legacy payloads with no service tag — they predate Outlook
-      // and should behave as before (treat as OneDrive).
-      if (event.data.service && event.data.service !== 'onedrive') return;
+      // Only act when the dispatcher tells us this callback is for Outlook.
+      if (event.data.service !== 'outlook') return;
       setConnecting(true);
       setError(null);
       try {
@@ -70,9 +67,8 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
     setError(null);
     setConnecting(true);
     try {
-      const { authUrl } = await api.getOnedriveAuthUrl(agentId || undefined, boardId || undefined);
+      const { authUrl } = await api.getOutlookAuthUrl(agentId || undefined, boardId || undefined);
 
-      // Open OAuth popup
       const width = 600;
       const height = 700;
       const left = window.screenX + (window.innerWidth - width) / 2;
@@ -80,7 +76,7 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
 
       const popup = window.open(
         authUrl,
-        'microsoft-oauth',
+        'outlook-oauth',
         `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no`
       );
 
@@ -90,15 +86,12 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
         return;
       }
 
-      // Poll only for popup closure detection
-      // The callback page (microsoft-callback.html) handles sending the code via postMessage
       const pollInterval = setInterval(() => {
         if (popup.closed) {
           clearInterval(pollInterval);
           setConnecting(false);
         }
       }, 500);
-
     } catch (err) {
       setError(err.message);
       setConnecting(false);
@@ -108,7 +101,7 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
   const handleDisconnect = async () => {
     setDisconnecting(true);
     try {
-      await api.disconnectOnedrive(agentId || undefined, boardId || undefined);
+      await api.disconnectOutlook(agentId || undefined, boardId || undefined);
       await fetchStatus();
     } catch (err) {
       setError(err.message);
@@ -121,7 +114,7 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
     return (
       <div className="flex items-center gap-2 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30">
         <Loader2 className="w-4 h-4 text-dark-400 animate-spin" />
-        <span className="text-xs text-dark-400">Checking OneDrive status...</span>
+        <span className="text-xs text-dark-400">Checking Outlook status...</span>
       </div>
     );
   }
@@ -130,12 +123,12 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
     return (
       <div className="p-3 bg-dark-800/30 rounded-lg border border-dark-700/30">
         <div className="flex items-center gap-2 mb-1.5">
-          <CloudOff className="w-4 h-4 text-dark-500" />
-          <span className="text-sm font-medium text-dark-300">OneDrive</span>
+          <MailX className="w-4 h-4 text-dark-500" />
+          <span className="text-sm font-medium text-dark-300">Outlook</span>
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">not configured</span>
         </div>
         <p className="text-xs text-dark-500">
-          Set <code className="text-dark-400">MICROSOFT_CLIENT_ID</code>, <code className="text-dark-400">MICROSOFT_CLIENT_SECRET</code>, and <code className="text-dark-400">MICROSOFT_REDIRECT_URI</code> environment variables to enable the OAuth flow.
+          Set <code className="text-dark-400">MICROSOFT_CLIENT_ID</code>, <code className="text-dark-400">MICROSOFT_CLIENT_SECRET</code>, and <code className="text-dark-400">MICROSOFT_REDIRECT_URI</code> (one OAuth client serves OneDrive and Outlook — the legacy <code className="text-dark-400">ONEDRIVE_*</code> env vars still work).
         </p>
       </div>
     );
@@ -149,12 +142,12 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
     }`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Cloud className={`w-4 h-4 ${status.connected ? 'text-emerald-400' : 'text-dark-400'}`} />
-          <span className="text-sm font-medium text-dark-200">OneDrive</span>
+          <Mail className={`w-4 h-4 ${status.connected ? 'text-emerald-400' : 'text-dark-400'}`} />
+          <span className="text-sm font-medium text-dark-200">Outlook</span>
           {status.connected ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
               <CheckCircle className="w-2.5 h-2.5" />
-              Connected
+              {status.email || 'Connected'}
             </span>
           ) : (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">
@@ -169,7 +162,7 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
             disabled={disconnecting}
             className="flex items-center gap-1 px-2.5 py-1 text-xs text-dark-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-40"
           >
-            {disconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <CloudOff className="w-3 h-3" />}
+            {disconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <MailX className="w-3 h-3" />}
             Disconnect
           </button>
         ) : (
@@ -198,8 +191,8 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
       {!status.connected && (
         <p className="mt-2 text-[11px] text-dark-500">
           {agentId
-            ? 'Click "Connect with Microsoft" to authorize this agent to access OneDrive files.'
-            : 'Click "Connect with Microsoft" to authorize OneDrive access. A popup will open for Microsoft login.'
+            ? 'Click "Connect with Microsoft" to authorize this agent to access Outlook mail.'
+            : 'Click "Connect with Microsoft" to authorize Outlook access. A popup will open for Microsoft login.'
           }
         </p>
       )}

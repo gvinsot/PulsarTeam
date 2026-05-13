@@ -27,8 +27,11 @@ import { readSecret, validateProductionSecrets } from './secrets.js';
 import { buildCorsOptions, getCorsOrigins, isOriginAllowed, logRejectedOrigin, validateCorsConfig } from './middleware/corsConfig.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected } from './services/database.js';
-import { onedriveRoutes, onedriveOAuthRedirectRouter } from './routes/onedrive.js';
+import { onedriveRoutes } from './routes/onedrive.js';
+import { microsoftOAuthRedirectRouter } from './routes/microsoftOAuth.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
+import { outlookRoutes } from './routes/outlook.js';
+import { createOutlookMcpHandler } from './services/outlookMcp.js';
 import { gmailRoutes } from './routes/gmail.js';
 import { createGmailMcpHandler } from './services/gmailMcp.js';
 import { gdriveRoutes } from './routes/gdrive.js';
@@ -146,11 +149,11 @@ app.get('/api/gmail/oauth-redirect', handleGoogleOAuthCallback);   // backward c
 app.get('/api/gdrive/oauth-redirect', handleGoogleOAuthCallback);  // backward compat
 app.use('/api/github', githubOAuthRedirectRouter());
 app.use('/api/slack', slackOAuthRedirectRouter());
-// Microsoft Graph OAuth shares one client across all Microsoft plugins (OneDrive
-// today; Outlook/Teams/SharePoint in the future). The originating plugin is
-// encoded in `state` so a single redirect URI handles all of them.
-app.use('/api/microsoft', onedriveOAuthRedirectRouter());
-app.use('/api/onedrive', onedriveOAuthRedirectRouter()); // legacy alias
+// Microsoft Graph OAuth shares one client across all Microsoft plugins
+// (OneDrive, Outlook; Teams/SharePoint in the future). The originating plugin
+// is encoded in `state` so a single redirect URI handles all of them.
+app.use('/api/microsoft', microsoftOAuthRedirectRouter());
+app.use('/api/onedrive', microsoftOAuthRedirectRouter()); // legacy alias
 // Legacy callback paths — Traefik routes these to the API to bypass global@file middleware
 app.get('/gmail-callback.html', handleGoogleOAuthCallback);
 app.get('/gdrive-callback.html', handleGoogleOAuthCallback);
@@ -166,6 +169,7 @@ app.use('/api/skills', authenticateToken, pluginRoutes(skillManager, mcpManager)
 app.use('/api/agent-skills', authenticateToken, agentSkillRoutes());
 app.use('/api/mcp-servers', authenticateToken, mcpServerRoutes(mcpManager));
 app.use('/api/onedrive', authenticateToken, onedriveRoutes());
+app.use('/api/outlook', authenticateToken, outlookRoutes());
 app.use('/api/gmail', authenticateToken, gmailRoutes());
 app.use('/api/gdrive', authenticateToken, gdriveRoutes());
 app.use('/api/slack', authenticateToken, slackRoutes());
@@ -189,13 +193,18 @@ app.use('/api/internal/claude-tokens', authenticateCoderApiKey, internalClaudeTo
 const onedriveMcpHandler = createOneDriveMcpHandler();
 app.all('/api/onedrive/mcp', authenticateToken, (req, res) => onedriveMcpHandler(req, res));
 
-// Pass the executionManager as the runner bridge so the Gmail MCP can read
-// agent-side attachment paths (which live in the runner container, not in
-// the API container's filesystem).
+// Pass the executionManager as the runner bridge so the Gmail and Outlook
+// MCPs can read agent-side attachment paths (which live in the runner
+// container, not in the API container's filesystem).
 const gmailMcpHandler = createGmailMcpHandler({
   exec: (agentId, command, options) => executionManager.exec(agentId, command, options),
 });
 app.all('/api/gmail/mcp', authenticateToken, (req, res) => gmailMcpHandler(req, res));
+
+const outlookMcpHandler = createOutlookMcpHandler({
+  exec: (agentId, command, options) => executionManager.exec(agentId, command, options),
+});
+app.all('/api/outlook/mcp', authenticateToken, (req, res) => outlookMcpHandler(req, res));
 
 const gdriveMcpHandler = createGdriveMcpHandler();
 app.all('/api/gdrive/mcp', authenticateToken, (req, res) => gdriveMcpHandler(req, res));

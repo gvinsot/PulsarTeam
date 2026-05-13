@@ -80,6 +80,16 @@ export const BUILTIN_MCP_SERVERS = [
     enabled: true,
   },
   {
+    id: 'mcp-outlook',
+    name: 'Outlook',
+    url: '__internal__outlook',
+    description: 'Microsoft Outlook — read, search, send, reply, draft emails, manage folders/flags and attachments via Microsoft Graph (per-agent OAuth, shared Microsoft credentials)',
+    icon: '📨',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
+  },
+  {
     id: 'mcp-slack',
     name: 'Slack',
     url: '__internal__slack',

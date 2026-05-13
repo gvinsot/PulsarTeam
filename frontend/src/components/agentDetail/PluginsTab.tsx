@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../api';
 import OneDriveConnect from '../OneDriveConnect';
+import OutlookConnect from '../OutlookConnect';
 import GmailConnect from '../GmailConnect';
 import GoogleDriveConnect from '../GoogleDriveConnect';
 import SlackConnect from '../SlackConnect';
@@ -67,6 +68,12 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
   const hasGmailMcp = assignedPlugins.some(plugin =>
     (plugin.mcps || []).some(m => m.id === GMAIL_MCP_ID) ||
     (plugin.mcpServerIds || []).includes(GMAIL_MCP_ID)
+  );
+
+  const OUTLOOK_MCP_ID = 'mcp-outlook';
+  const hasOutlookMcp = assignedPlugins.some(plugin =>
+    (plugin.mcps || []).some(m => m.id === OUTLOOK_MCP_ID) ||
+    (plugin.mcpServerIds || []).includes(OUTLOOK_MCP_ID)
   );
 
   const GDRIVE_MCP_ID = 'mcp-gdrive';
@@ -284,6 +291,11 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
         {hasGmailMcp && (
           <div className="mt-3">
             <GmailConnect agentId={agent.id} onStatusChange={() => onRefresh?.()} />
+          </div>
+        )}
+        {hasOutlookMcp && (
+          <div className="mt-3">
+            <OutlookConnect agentId={agent.id} onStatusChange={() => onRefresh?.()} />
           </div>
         )}
         {hasGdriveMcp && (
