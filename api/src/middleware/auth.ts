@@ -11,6 +11,7 @@ import {
 } from '../services/database.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
 import { readSecret } from '../secrets.js';
+import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
 import { validateBody, validateParams, validateQuery } from '../lib/validate.js';
 import {
   loginSchema,
@@ -359,34 +360,41 @@ router.post('/google/callback', validateBody(oauthCallbackSchema), async (req, r
 });
 
 // ── Microsoft / Live.com OAuth ────────────────────────────────────────────────
+// Reuses the shared Microsoft OAuth config (getMicrosoftOAuthConfig), which
+// accepts both MICROSOFT_* (preferred) and legacy ONEDRIVE_* env vars so a
+// deployment configured for the OneDrive plugin automatically lights up
+// Microsoft login as well.
 
-function isMicrosoftConfigured() {
-  return !!(process.env.MICROSOFT_CLIENT_ID && readSecret('MICROSOFT_CLIENT_SECRET'));
+function getMicrosoftLoginConfig() {
+  // For login we only need OIDC scopes — Graph scopes (Files.*, Mail.*) live
+  // on the per-plugin OAuth tokens, not on the login JWT.
+  return getMicrosoftOAuthConfig();
 }
 
 router.get('/microsoft/status', (_req, res) => {
-  res.json({ enabled: isMicrosoftConfigured(), clientId: process.env.MICROSOFT_CLIENT_ID || null });
+  const cfg = getMicrosoftLoginConfig();
+  res.json({ enabled: !!cfg, clientId: cfg?.clientId || null });
 });
 
-function resolveMicrosoftRedirectUri(frontendUri?: string): string {
-  if (process.env.MICROSOFT_REDIRECT_URI) return process.env.MICROSOFT_REDIRECT_URI;
+function resolveMicrosoftRedirectUri(cfgRedirectUri: string, frontendUri?: string): string {
+  if (cfgRedirectUri) return cfgRedirectUri;
   if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
   return '';
 }
 
 router.get('/microsoft/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
-  if (!isMicrosoftConfigured()) {
+  const cfg = getMicrosoftLoginConfig();
+  if (!cfg) {
     return res.status(501).json({ error: 'Microsoft OAuth not configured' });
   }
 
-  const redirectUri = resolveMicrosoftRedirectUri(req.query.redirect_uri as string);
+  const redirectUri = resolveMicrosoftRedirectUri(cfg.redirectUri, req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
 
-  const tenantId = process.env.MICROSOFT_TENANT_ID || 'common';
   const params = new URLSearchParams({
-    client_id: process.env.MICROSOFT_CLIENT_ID as string,
+    client_id: cfg.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'openid email profile User.Read',
@@ -394,29 +402,29 @@ router.get('/microsoft/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
     prompt: 'select_account',
   });
 
-  res.json({ url: `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}`, redirect_uri: redirectUri });
+  res.json({ url: `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/authorize?${params}`, redirect_uri: redirectUri });
 });
 
 router.post('/microsoft/callback', validateBody(oauthCallbackSchema), async (req, res) => {
-  if (!isMicrosoftConfigured()) {
+  const cfg = getMicrosoftLoginConfig();
+  if (!cfg) {
     return res.status(501).json({ error: 'Microsoft OAuth not configured' });
   }
 
   const { code, redirect_uri } = req.body;
 
-  const canonicalRedirectUri = resolveMicrosoftRedirectUri(redirect_uri);
+  const canonicalRedirectUri = resolveMicrosoftRedirectUri(cfg.redirectUri, redirect_uri);
   if (!canonicalRedirectUri) {
     return res.status(400).json({ error: 'redirect_uri required' });
   }
 
   try {
-    const tenantId = process.env.MICROSOFT_TENANT_ID || 'common';
-    const tokenRes = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+    const tokenRes = await fetch(`https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: process.env.MICROSOFT_CLIENT_ID as string,
-        client_secret: readSecret('MICROSOFT_CLIENT_SECRET'),
+        client_id: cfg.clientId,
+        client_secret: cfg.clientSecret,
         code,
         redirect_uri: canonicalRedirectUri,
         grant_type: 'authorization_code',
