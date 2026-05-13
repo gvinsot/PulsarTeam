@@ -5,7 +5,7 @@ export async function getAllUsers() {
   if (!pool) return [];
   try {
     const result = await pool.query(
-      'SELECT id, username, role, display_name, google_id, avatar_url, last_seen, created_at, updated_at FROM users ORDER BY created_at'
+      'SELECT id, username, role, display_name, google_id, microsoft_id, github_id, avatar_url, last_seen, created_at, updated_at FROM users ORDER BY created_at'
     );
     return result.rows;
   } catch (err) {
@@ -185,6 +185,52 @@ export async function linkMicrosoftId(userId, microsoftId, avatarUrl) {
     return result.rows[0] || null;
   } catch (err) {
     console.error('Failed to link microsoft_id:', err.message);
+    return null;
+  }
+}
+
+export async function getUserByGitHubId(githubId) {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE github_id = $1', [githubId]);
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to get user by github_id:', err.message);
+    return null;
+  }
+}
+
+export async function createGitHubUser(githubId, email, displayName, avatarUrl, role = 'advanced') {
+  const pool = getPool();
+  if (!pool) throw new Error('Database not connected');
+  try {
+    const result = await pool.query(
+      `INSERT INTO users (username, password, role, display_name, github_id, avatar_url)
+       VALUES ($1, NULL, $2, $3, $4, $5)
+       RETURNING id, username, role, display_name, github_id, avatar_url, created_at, updated_at`,
+      [email, role, displayName || email, githubId, avatarUrl || null]
+    );
+    return result.rows[0];
+  } catch (err) {
+    if (err.code === '23505') throw new Error('Username already exists');
+    throw err;
+  }
+}
+
+export async function linkGitHubId(userId, githubId, avatarUrl) {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query(
+      `UPDATE users SET github_id = $2, avatar_url = COALESCE($3, avatar_url), updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, username, role, display_name, github_id, avatar_url`,
+      [userId, githubId, avatarUrl]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Failed to link github_id:', err.message);
     return null;
   }
 }

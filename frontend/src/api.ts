@@ -58,6 +58,20 @@ export const api = {
       body: JSON.stringify({ code, redirect_uri: redirectUri })
     }).then(handleResponse),
 
+  // GitHub OAuth (login)
+  githubAuthStatus: () =>
+    fetch(`${API_BASE}/auth/github/status`).then(handleResponse),
+
+  githubAuthUrl: (redirectUri) =>
+    fetch(`${API_BASE}/auth/github/url?redirect_uri=${encodeURIComponent(redirectUri)}`).then(handleResponse),
+
+  githubAuthCallback: (code, redirectUri) =>
+    fetch(`${API_BASE}/auth/github/callback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, redirect_uri: redirectUri })
+    }).then(handleResponse),
+
   // Agents
   getAgents: () =>
     fetch(`${API_BASE}/agents`, { headers: getHeaders() }).then(handleResponse),

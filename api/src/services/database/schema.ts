@@ -132,6 +132,8 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT').catch(() => {});
       // Microsoft OAuth columns
       await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS microsoft_id TEXT UNIQUE').catch(() => {});
+      // GitHub OAuth columns
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS github_id TEXT UNIQUE').catch(() => {});
       // Connection tracking
       await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ').catch(() => {});
       // Allow null password for OAuth-only users

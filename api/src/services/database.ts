@@ -30,6 +30,7 @@ export {
   getAllUsers, getUserById, getUserByUsername, createUser, updateUser, deleteUser,
   getUserByGoogleId, createGoogleUser, linkGoogleId,
   getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
+  getUserByGitHubId, createGitHubUser, linkGitHubId,
   countUsers, updateLastSeen,
 } from './database/users.js';
 export { getAllLlmConfigs, getLlmConfig, saveLlmConfig, deleteLlmConfig } from './database/llmConfigs.js';

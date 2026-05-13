@@ -124,12 +124,13 @@ function ScreenshotCarousel() {
 
 /* ── Login form (slide-out panel) ── */
 
-function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, oauthLoading }: {
+function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, onGitHubLogin, oauthLoading }: {
   open: boolean;
   onClose: () => void;
   onLogin: (u: string, p: string) => Promise<void>;
   onGoogleLogin?: (() => void) | null;
   onMicrosoftLogin?: (() => void) | null;
+  onGitHubLogin?: (() => void) | null;
   oauthLoading?: boolean;
 }) {
   const { t } = useLanguage();
@@ -222,7 +223,7 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
               ) : t('login.submit')}
             </button>
 
-            {(onGoogleLogin || onMicrosoftLogin) && (
+            {(onGoogleLogin || onMicrosoftLogin || onGitHubLogin) && (
               <>
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-dark-600" /></div>
@@ -276,6 +277,29 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
                           <rect x="13" y="13" width="10" height="10" fill="#FFB900"/>
                         </svg>
                         {t('login.microsoft')}
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {onGitHubLogin && (
+                  <button
+                    type="button"
+                    onClick={onGitHubLogin}
+                    disabled={oauthLoading}
+                    className="w-full py-3 px-4 bg-dark-800 border border-dark-600 text-dark-100 font-medium rounded-xl hover:bg-dark-700 hover:border-dark-500 focus:outline-none focus:ring-2 focus:ring-dark-400 focus:ring-offset-2 focus:ring-offset-dark-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center gap-3"
+                  >
+                    {oauthLoading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <div className="w-4 h-4 border-2 border-dark-300 border-t-transparent rounded-full animate-spin" />
+                        {t('login.oauthRedirecting')}
+                      </span>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2.18c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.72-1.53-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.8 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.13v3.16c0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/>
+                        </svg>
+                        {t('login.github')}
                       </>
                     )}
                   </button>
@@ -535,11 +559,13 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
   const [loginOpen, setLoginOpen] = useState(false);
   const [googleEnabled, setGoogleEnabled] = useState(false);
   const [microsoftEnabled, setMicrosoftEnabled] = useState(false);
+  const [githubEnabled, setGithubEnabled] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [contactModal, setContactModal] = useState<{ open: boolean; type: 'contact' | 'support' }>({ open: false, type: 'contact' });
   useEffect(() => {
     api.googleStatus().then(data => setGoogleEnabled(!!data.enabled)).catch(() => {});
     api.microsoftStatus().then(data => setMicrosoftEnabled(!!data.enabled)).catch(() => {});
+    api.githubAuthStatus().then(data => setGithubEnabled(!!data.enabled)).catch(() => {});
   }, []);
 
   const handleGoogleLogin = async () => {
@@ -561,6 +587,20 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
     try {
       const redirectUri = `${window.location.origin}/auth/microsoft/callback`;
       const data = await api.microsoftAuthUrl(redirectUri);
+      if (data.redirect_uri) {
+        sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
+      }
+      window.location.href = data.url;
+    } catch {
+      setOauthBusy(false);
+    }
+  };
+
+  const handleGitHubLogin = async () => {
+    setOauthBusy(true);
+    try {
+      const redirectUri = `${window.location.origin}/auth/github/callback`;
+      const data = await api.githubAuthUrl(redirectUri);
       if (data.redirect_uri) {
         sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
       }
@@ -813,6 +853,7 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
         onLogin={onLogin}
         onGoogleLogin={googleEnabled ? handleGoogleLogin : null}
         onMicrosoftLogin={microsoftEnabled ? handleMicrosoftLogin : null}
+        onGitHubLogin={githubEnabled ? handleGitHubLogin : null}
         oauthLoading={oauthBusy || googleLoading}
       />
 

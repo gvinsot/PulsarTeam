@@ -6,6 +6,7 @@ import {
   getUserByUsername, getUserById, createUser, countUsers,
   getUserByGoogleId, createGoogleUser, linkGoogleId,
   getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
+  getUserByGitHubId, createGitHubUser, linkGitHubId,
   getBoardById, getBoardShare, getProjectById,
 } from '../services/database.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
@@ -487,6 +488,158 @@ router.post('/microsoft/callback', validateBody(oauthCallbackSchema), async (req
     });
   } catch (err) {
     console.error('Microsoft OAuth error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── GitHub OAuth (login) ──────────────────────────────────────────────────────
+// Reuses the same GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET that the
+// GitHub MCP plugin already requires. The redirect URI is a frontend route
+// (/auth/github/callback) — distinct from the plugin's /api/github/oauth-redirect
+// — so a single GitHub OAuth App can serve both flows by registering both
+// callback URLs in its settings.
+
+function isGitHubConfigured() {
+  return !!(process.env.GITHUB_OAUTH_CLIENT_ID && readSecret('GITHUB_OAUTH_CLIENT_SECRET'));
+}
+
+router.get('/github/status', (_req, res) => {
+  res.json({ enabled: isGitHubConfigured(), clientId: process.env.GITHUB_OAUTH_CLIENT_ID || null });
+});
+
+function resolveGitHubRedirectUri(frontendUri?: string): string {
+  // No env-var override here — the plugin's GITHUB_OAUTH_REDIRECT_URI points to
+  // a different (backend) callback, so we always trust the frontend-supplied
+  // URI as long as its origin is on the allow-list.
+  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
+  return '';
+}
+
+router.get('/github/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
+  if (!isGitHubConfigured()) {
+    return res.status(501).json({ error: 'GitHub OAuth not configured' });
+  }
+
+  const redirectUri = resolveGitHubRedirectUri(req.query.redirect_uri as string);
+  if (!redirectUri) {
+    return res.status(400).json({ error: 'redirect_uri query parameter required' });
+  }
+
+  const params = new URLSearchParams({
+    client_id: process.env.GITHUB_OAUTH_CLIENT_ID as string,
+    redirect_uri: redirectUri,
+    scope: 'read:user user:email',
+    allow_signup: 'true',
+  });
+
+  res.json({ url: `https://github.com/login/oauth/authorize?${params}`, redirect_uri: redirectUri });
+});
+
+router.post('/github/callback', validateBody(oauthCallbackSchema), async (req, res) => {
+  if (!isGitHubConfigured()) {
+    return res.status(501).json({ error: 'GitHub OAuth not configured' });
+  }
+
+  const { code, redirect_uri } = req.body;
+
+  const canonicalRedirectUri = resolveGitHubRedirectUri(redirect_uri);
+  if (!canonicalRedirectUri) {
+    return res.status(400).json({ error: 'redirect_uri required' });
+  }
+
+  try {
+    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        client_id: process.env.GITHUB_OAUTH_CLIENT_ID,
+        client_secret: readSecret('GITHUB_OAUTH_CLIENT_SECRET'),
+        code,
+        redirect_uri: canonicalRedirectUri,
+      }),
+    });
+
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || tokenData.error || !tokenData.access_token) {
+      console.error('GitHub token exchange failed:', tokenData);
+      return res.status(401).json({ error: 'GitHub authentication failed' });
+    }
+
+    const accessToken = tokenData.access_token;
+    const ghHeaders = {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'PulsarTeam',
+    };
+
+    const userInfoRes = await fetch('https://api.github.com/user', { headers: ghHeaders });
+    const profile = await userInfoRes.json();
+    if (!userInfoRes.ok || !profile.id) {
+      console.error('GitHub userinfo failed:', profile);
+      return res.status(401).json({ error: 'Failed to fetch GitHub profile' });
+    }
+
+    // GitHub may not expose the user's email on the profile (private setting).
+    // Fall back to /user/emails to find the primary verified address.
+    let email: string | null = profile.email || null;
+    if (!email) {
+      try {
+        const emailsRes = await fetch('https://api.github.com/user/emails', { headers: ghHeaders });
+        if (emailsRes.ok) {
+          const emails = await emailsRes.json();
+          if (Array.isArray(emails)) {
+            const primary = emails.find((e: any) => e.primary && e.verified) || emails.find((e: any) => e.verified);
+            if (primary?.email) email = primary.email;
+          }
+        }
+      } catch (err: any) {
+        console.warn('GitHub /user/emails fetch failed:', err.message);
+      }
+    }
+
+    // Last resort: use the github username as the local username so the
+    // account can still be created if the user has no verified email.
+    const username = email || (profile.login ? `${profile.login}@users.noreply.github.com` : null);
+    if (!username) {
+      return res.status(401).json({ error: 'Could not determine a username for this GitHub account' });
+    }
+
+    const githubId = String(profile.id);
+    const displayName = profile.name || profile.login || username;
+    const avatarUrl = profile.avatar_url || null;
+
+    let user = await getUserByGitHubId(githubId);
+
+    if (!user) {
+      // Link to an existing local user with the same email/username if any.
+      const existingUser = await getUserByUsername(username);
+      if (existingUser) {
+        await linkGitHubId(existingUser.id, githubId, avatarUrl);
+        user = await getUserById(existingUser.id);
+      } else {
+        const userCount = await countUsers();
+        const role = userCount === 0 ? 'admin' : 'advanced';
+        user = await createGitHubUser(githubId, username, displayName, avatarUrl, role);
+        provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+      }
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, username: user.username, role: user.role },
+      getJwtSecret(),
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      token,
+      username: user.username,
+      role: user.role,
+      userId: user.id,
+      displayName: user.display_name,
+      avatarUrl: user.avatar_url || avatarUrl,
+    });
+  } catch (err) {
+    console.error('GitHub OAuth error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

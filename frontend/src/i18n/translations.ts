@@ -170,6 +170,7 @@ const translations = {
   'login.or': { en: 'or', fr: 'ou' },
   'login.google': { en: 'Sign in with Google', fr: 'Se connecter avec Google' },
   'login.microsoft': { en: 'Sign in with Microsoft', fr: 'Se connecter avec Microsoft' },
+  'login.github': { en: 'Sign in with GitHub', fr: 'Se connecter avec GitHub' },
   'login.oauthRedirecting': { en: 'Redirecting...', fr: 'Redirection...' },
   'login.secure': { en: 'Secure multi-agent management interface', fr: 'Interface sécurisée de gestion multi-agents' },
 

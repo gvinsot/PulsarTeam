@@ -389,6 +389,12 @@ export default function App() {
       sessionStorage.removeItem('oauth_redirect_uri');
       window.history.replaceState({}, '', '/');
       apiCall = api.microsoftCallback(code, redirectUri);
+    } else if (path === '/auth/github/callback') {
+      setGoogleLoading(true);
+      const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}/auth/github/callback`;
+      sessionStorage.removeItem('oauth_redirect_uri');
+      window.history.replaceState({}, '', '/');
+      apiCall = api.githubAuthCallback(code, redirectUri);
     }
 
     if (apiCall) {
