@@ -1,162 +1,62 @@
-import './database/connection.js';
+// Barrel re-export — all imports from './database.js' continue to work unchanged.
+// The actual implementations live in ./database/*.js for better modularity.
 
-// Re-export user functions and types
+export { getPool, isDatabaseConnected } from './database/connection.js';
+export { initDatabase } from './database/schema.js';
+export { getAllAgents, saveAgent, deleteAgentFromDb, setAgentOwner, getAgentsByOwner, setAgentBoard, getAgentsByBoard } from './database/agents.js';
+export { getAllSkills, saveSkill, deleteSkillFromDb } from './database/skills.js';
+export { getAllAgentSkills, searchAgentSkills, getAgentSkillById, saveAgentSkill, deleteAgentSkillFromDb } from './database/agentSkills.js';
+export { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database/mcpServers.js';
 export {
-  getUserByEmail,
-  getUserByUsername,
-  createUser,
-  verifyPassword,
-  getUserByGoogleId,
-  createGoogleUser,
-  linkGoogleId,
-  getUserByGitHubId,
-  createGitHubUser,
-  linkGitHubId,
-  getUserByGitHubId as getUserByGithubId,
-  getUserByMicrosoftId,
-  createMicrosoftUser,
-  linkMicrosoftId,
-  getAllUsers,
-  getUserById,
-  updateUserRole,
-  updateUserPermissions,
-  deleteUser,
-  updateUserPassword,
-  type UserRole,
-  type User,
-  type Permission,
-  type User as UserModel,
-  type Permission as PermissionModel,
-} from './database/users.js';
-
-// Re-export agent functions and types
-export {
-  getAgents,
-  getAgentById,
-  createAgent,
-  updateAgent,
-  deleteAgent,
-  type Agent,
-} from './database/agents.js';
-
-// Re-export task functions and types
-export {
-  getTasks,
-  getTaskById,
-  getTasksByAgentId,
-  createTask,
-  updateTask,
-  deleteTask,
-  reorderTasks,
-  attachCommitToTask,
-  getCommitsByTask,
-  getTasksByCommit,
-  setTaskParent,
-  getTaskChildren,
-  getTaskParent,
-  type Task,
-  type Commit,
-} from './database/tasks.js';
-
-// Re-export project functions and types
-export {
-  getProjects,
-  getProjectById,
-  createProject,
-  updateProject,
-  deleteProject,
-  assignAgentToProject,
-  unassignAgentFromProject,
-  type Project,
+  getAllProjects, getProjectById, getProjectByName, createProject, updateProject, deleteProject,
+  getBoardsForProject, setBoardProject,
 } from './database/projects.js';
-
-// Re-export board functions and types
+export type { Project } from './database/projects.js';
 export {
-  getBoards,
-  getBoardById,
-  createBoard,
-  updateBoard,
-  deleteBoard,
-  type Board,
-} from './database/boards.js';
-
-// Re-export board sharing functions and types
-export {
-  getBoardSharing,
-  upsertBoardSharing,
-  deleteBoardSharing,
-  type BoardSharing,
-} from './database/boardSharing.js';
-
-// Re-export board repo / storage / plugin functions
-export {
-  getBoardRepos,
-  upsertBoardRepo,
-  deleteBoardRepo,
-  type BoardRepo,
+  getReposForBoard, getReposForProject, getAccessibleBoardRepos,
 } from './database/boardRepos.js';
-
+export type { DerivedRepo } from './database/boardRepos.js';
 export {
-  getBoardStorages,
-  upsertBoardStorage,
-  deleteBoardStorage,
-  type BoardStorage,
+  getStoragesForBoard, getStoragesForProject,
 } from './database/boardStorages.js';
-
+export type { DerivedStorage } from './database/boardStorages.js';
+export { getSetting, getSettingAsync, setSetting, loadSettingsCache } from './database/settings.js';
 export {
-  getBoardMcpServers,
-  upsertBoardMcpServer,
-  deleteBoardMcpServer,
-  type BoardMcpServer,
-} from './database/mcpServers.js';
-
-// Re-export skill functions and types
-export {
-  getSkills,
-  type Skill,
-} from './database/skills.js';
-
-export {
-  getAgentSkills,
-  upsertAgentSkill,
-  deleteAgentSkill,
-  type AgentSkill,
-} from './database/agentSkills.js';
-
-// Re-export LLM config functions and types
-export {
-  getLlmConfigs,
-  getLlmConfigById,
-  createLlmConfig,
-  updateLlmConfig,
-  deleteLlmConfig,
-  type LlmConfig,
-} from './database/llmConfigs.js';
-
-// Re-export OAuth token functions and types
-export {
-  getOauthToken,
-  upsertOauthToken,
-  deleteOauthToken,
-  getOauthTokensForUser,
-  type OauthToken,
-} from './database/oauthTokens.js';
-
-// Re-export settings functions
-export {
-  getSetting,
-  setSetting,
-  deleteSetting,
-} from './database/settings.js';
-
-// Re-export token usage functions and types
-export {
-  recordTokenUsage,
-  getTokenUsageForUser,
-  getTokenUsageForAgent,
-  getTokenUsageBetween,
-  type TokenUsageRecord,
+  recordTokenUsage, getTokenUsageSummary, getTokenUsageSummaryAsync,
+  getTokenUsageByAgent, getTokenUsageTimeline, getDailyTokenUsage,
+  refreshTokenSummaryCache,
 } from './database/tokenUsage.js';
-
-// Re-export encrypt migration helpers
-export { runEncryptMigration } from './database/encryptMigration.js';
+export {
+  getAllUsers, getUserById, getUserByUsername, createUser, updateUser, deleteUser,
+  getUserByGoogleId, createGoogleUser, linkGoogleId,
+  getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
+  getUserByGitHubId, createGitHubUser, linkGitHubId,
+  countUsers, updateLastSeen,
+} from './database/users.js';
+export { getAllLlmConfigs, getLlmConfig, saveLlmConfig, deleteLlmConfig } from './database/llmConfigs.js';
+export {
+  getAllBoards, getBoardsByUser, getBoardById, createBoard, updateBoard, deleteBoard,
+  getDefaultBoard, ensureDefaultBoard,
+} from './database/boards.js';
+export {
+  getBoardShares, getBoardShare, createBoardShare, updateBoardShare, deleteBoardShare,
+  getSharedBoardsForUser, logBoardAudit, getBoardAuditLogs,
+} from './database/boardSharing.js';
+export {
+  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken,
+  deleteOAuthTokensByScope, getOAuthTokensByScope, resolveAccessToken,
+  loadOAuthTokens, getOAuthTokenCache,
+} from './database/oauthTokens.js';
+export type { OAuthProvider, ScopeType, OAuthTokenRecord } from './database/oauthTokens.js';
+export {
+  rowToTask,
+  getTasksByAgent, getAllTasks, getTaskById, saveTaskToDb,
+  deleteTaskFromDb, hardDeleteTaskFromDb, restoreTaskFromDb,
+  getDeletedTasks, getDeletedTaskById, deleteTasksByAgent,
+  getTasksForResume, clearTaskExecutionFlags, updateTaskExecutionStatus,
+  clearActionRunningForAgent, clearAllStaleActionRunning,
+  getActiveTasksByAgent, getTasksByBoard, getBoardWithMostTasksForProject,
+  getTasksByAssignee, getActiveTaskForExecutor, hasActiveTask,
+  countActiveTasksForAgent, getRecurringTasks, getTaskByJiraKey,
+  updateTaskFields, getTasksByStatusAndBoard,
+} from './database/tasks.js';
