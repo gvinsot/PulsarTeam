@@ -34,11 +34,7 @@ class HermesBackend(CliBackend):
         exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
         if exec_perms.get("dangerousSkipPermissions", True):
             cmd.append("--yolo")
-        # Session resume keyed by (agent_id, task_id)
-        if agent_id:
-            session_key = f"{agent_id}:{task_id}" if task_id else agent_id
-            session_id = self._sessions.get(session_key)
-            if session_id:
-                cmd += ["--resume", session_id]
+        # Runner is stateless — conversation history is replayed inside `prompt`
+        # by the caller. The hermes CLI's --resume is not used.
         cmd += ["-q", prompt]
         return cmd

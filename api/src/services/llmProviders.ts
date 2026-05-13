@@ -881,7 +881,12 @@ export class VLLMProvider {
 
     const requestOpts: any = {};
     if (options.signal) requestOpts.signal = options.signal;
-    if (options.taskId) requestOpts.headers = { ...requestOpts.headers, 'X-Task-Id': options.taskId };
+    const perRequestHeaders: Record<string, string> = {};
+    if (options.taskId) perRequestHeaders['X-Task-Id'] = options.taskId;
+    if (options.runnerSessionId) perRequestHeaders['X-Runner-Session-Id'] = options.runnerSessionId;
+    if (Object.keys(perRequestHeaders).length) {
+      requestOpts.headers = { ...requestOpts.headers, ...perRequestHeaders };
+    }
 
     const stream = await this.client.chat.completions.create(params, requestOpts);
     let vllmFinishReason: string | null = null;
@@ -914,11 +919,19 @@ export class VLLMProvider {
         if (chunk.usage.cost_usd != null) {
           usage.costUsd = chunk.usage.cost_usd;
         }
-        yield {
+        // Runner-service returns the CLI session UUID it ended up using
+        // (may differ from the hint we sent if --resume failed and the
+        // runner had to mint a fresh session).
+        const runnerSessionId = (chunk.usage as any).runner_session_id;
+        const doneEvent: any = {
           type: 'done',
           finishReason: vllmFinishReason || 'stop',
           usage
         };
+        if (typeof runnerSessionId === 'string' && runnerSessionId) {
+          doneEvent.runnerSessionId = runnerSessionId;
+        }
+        yield doneEvent;
       }
     }
   }

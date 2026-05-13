@@ -38,8 +38,6 @@ class CliBackend(RunnerBackend):
 
     def __init__(self):
         self._permissions: dict[str, dict] = {}
-        # Per-agent session IDs for backends that support session resume
-        self._sessions: dict[str, str] = {}
 
     # ── Hooks subclasses override ─────────────────────────────────────────
 
@@ -181,26 +179,6 @@ class CliBackend(RunnerBackend):
             "model": RUNNER_MODEL,
         }
 
-    # ── Sessions ──────────────────────────────────────────────────────────
-
-    def reset_agent_sessions(self, agent_id: str, task_id: Optional[str] = None) -> int:
-        removed = 0
-        if not agent_id:
-            return removed
-        if task_id:
-            key = f"{agent_id}:{task_id}"
-            if key in self._sessions:
-                self._sessions.pop(key)
-                removed += 1
-        if agent_id in self._sessions:
-            self._sessions.pop(agent_id)
-            removed += 1
-        if not task_id:
-            for k in [k for k in self._sessions if k.startswith(f"{agent_id}:")]:
-                self._sessions.pop(k)
-                removed += 1
-        return removed
-
     # ── Common helpers ────────────────────────────────────────────────────
 
     def _agent_env(self, agent_user: Optional[dict]) -> dict:
@@ -222,6 +200,8 @@ class CliBackend(RunnerBackend):
         agent_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        messages: Optional[list] = None,
     ) -> dict:
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         cwd = self._resolve_cwd(agent_id)
@@ -267,6 +247,8 @@ class CliBackend(RunnerBackend):
         agent_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        messages: Optional[list] = None,
     ) -> AsyncIterator[dict]:
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         cwd = self._resolve_cwd(agent_id)

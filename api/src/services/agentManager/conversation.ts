@@ -1,6 +1,5 @@
-// ─── Conversation: history management, context switching, voice, coder reset ─
+// ─── Conversation: history management, context switching, voice ───────────────
 import { saveAgent, clearTaskExecutionFlags } from '../database.js';
-import { readSecret } from '../../secrets.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
@@ -11,6 +10,11 @@ export const conversationMethods = {
     agent.conversationHistory = [];
     agent.currentThinking = '';
     delete agent._compactionArmed;
+    // Invalidate every runner session: the DB history is now empty so any
+    // --resume on the runner side would replay a stale JSONL. The next call
+    // mints a fresh session UUID and the runner records it in
+    // agent.runnerSessions for us.
+    agent.runnerSessions = {};
     // Stop all active reminder loops for tasks involving this agent
     for (const [ownerId] of this.agents) {
       for (const task of this._getAgentTasks(ownerId)) {
@@ -30,10 +34,6 @@ export const conversationMethods = {
     }
     // Persist the cleared execution flags to DB
     clearTaskExecutionFlags(agentId);
-    // Reset runner CLI session so the next message starts a fresh session
-    // (otherwise the runner-service would --resume the cached session id and
-    // re-inject the conversation we just cleared on the API side).
-    await this._resetCoderSession(agentId, agent);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
@@ -47,41 +47,13 @@ export const conversationMethods = {
     agent.conversationHistory = agent.conversationHistory.slice(0, idx + 1);
     agent.conversationHistory = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
     delete agent._compactionArmed;
+    // History diverged from whatever the runner's JSONL holds — force a
+    // fresh CLI session on next call so the model sees the truncated
+    // history instead of the original one.
+    agent.runnerSessions = {};
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
     return agent.conversationHistory;
-  },
-
-  // ─── Session Reset ─────────────────────────────────────────────────
-  async _resetCoderSession(this: any, agentId: string, agent: any): Promise<void> {
-    if (this.executionManager) {
-      const provider = this.executionManager._providerFor(agentId);
-      if (provider?.resetSession) {
-        try {
-          await provider.resetSession(agentId);
-        } catch (err: any) {
-          console.warn(`⚠️  [Session] Failed to reset runner session: ${err.message}`);
-        }
-        return;
-      }
-    }
-    const llmConfig = this.resolveLlmConfig(agent);
-    if (llmConfig.provider !== 'claude-paid') return;
-    const endpoint = process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000';
-    const apiKey = llmConfig.apiKey || readSecret('CODER_API_KEY');
-    try {
-      const res = await fetch(`${endpoint}/reset`, {
-        method: 'POST',
-        headers: {
-          'X-Api-Key': apiKey,
-          'X-Agent-Id': agentId,
-        },
-      });
-      if (res.ok) console.log(`🔄 [Session] Reset claudecode-service session for "${agent.name}"`);
-      else console.warn(`⚠️  [Session] Failed to reset claudecode-service session: ${res.status}`);
-    } catch (err: any) {
-      console.warn(`⚠️  [Session] Failed to reset claudecode-service session: ${err.message}`);
-    }
   },
 
   // ─── Project Context Switching ──────────────────────────────────────
@@ -92,6 +64,7 @@ export const conversationMethods = {
       agent.projectContexts[oldProject] = {
         conversationHistory: [...agent.conversationHistory],
         _compactionArmed: agent._compactionArmed,
+        runnerSessions: { ...(agent.runnerSessions || {}) },
         savedAt: new Date().toISOString()
       };
       console.log(`💾 [Context Switch] Saved context for "${agent.name}" on project "${oldProject}" (${agent.conversationHistory.length} messages)`);
@@ -101,11 +74,13 @@ export const conversationMethods = {
       const saved = agent.projectContexts[newProject];
       agent.conversationHistory = [...saved.conversationHistory];
       agent._compactionArmed = saved._compactionArmed;
+      agent.runnerSessions = { ...(saved.runnerSessions || {}) };
       delete agent.projectContexts[newProject];
       console.log(`📂 [Context Switch] Restored context for "${agent.name}" on project "${newProject}" (${agent.conversationHistory.length} messages)`);
     } else {
       agent.conversationHistory = [];
       agent.currentThinking = '';
+      agent.runnerSessions = {};
       delete agent._compactionArmed;
       console.log(`🆕 [Context Switch] Clean slate for "${agent.name}" on project "${newProject || '(none)'}"`);
     }

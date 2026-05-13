@@ -104,12 +104,14 @@ def chunk_text(text: str, size: int = 700):
 
 
 def messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optional[str]]:
-    """Convert OpenAI chat messages to a single prompt + optional system prompt.
+    """Flatten an OpenAI chat history into a single full-replay prompt.
 
-    Most CLI runners are stateless across invocations (or maintain a session
-    via --resume). When the conversation contains tool-result continuations,
-    we condense the history to avoid the model re-reading the original user
-    request and restarting its reasoning from scratch.
+    This is the prompt used when the runner can't resume a prior CLI
+    session (no session_id, or --resume failed) and must replay the
+    whole conversation as fresh context. The caller's DB is the source
+    of truth for the conversation — every turn passes the complete
+    history here, so the model sees the same context regardless of
+    which runner instance handles the request.
     """
     system_parts = []
     conversation_parts = []
@@ -130,13 +132,6 @@ def messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optional
     if len(conversation_parts) == 1 and conversation_parts[0][0] == "user":
         return conversation_parts[0][1], system_prompt
 
-    last_role, last_content = conversation_parts[-1]
-    is_tool_continuation = (last_role == "user" and
-                            last_content.lstrip().startswith("[TOOL RESULTS"))
-
-    if is_tool_continuation:
-        return last_content, system_prompt
-
     parts = []
     for role, content in conversation_parts:
         prefix = "User" if role == "user" else "Assistant"
@@ -147,3 +142,16 @@ def messages_to_prompt(messages: list[OpenAIChatMessage]) -> tuple[str, Optional
         prompt = "Continue."
 
     return prompt, system_prompt
+
+
+def last_user_message(messages: list[OpenAIChatMessage]) -> Optional[str]:
+    """Return the most recent user turn, or None if there isn't one.
+
+    Used by backends that own a live CLI session (--resume): the prior
+    turns are already in the session's JSONL on disk, so only the new
+    user message needs to be fed in.
+    """
+    for msg in reversed(messages):
+        if msg.role == "user":
+            return msg.content
+    return None

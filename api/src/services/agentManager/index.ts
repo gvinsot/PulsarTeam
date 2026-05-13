@@ -62,7 +62,6 @@ export interface AgentManager {
   // ── conversation.ts ──
   clearHistory(agentId: string): Promise<boolean>;
   truncateHistory(agentId: string, afterIndex: number): any[] | null;
-  _resetCoderSession(agentId: string, agent: any): Promise<void>;
   _switchProjectContext(agent: any, oldProject: string | null, newProject: string | null): void;
   buildVoiceInstructions(agentId: string): string;
 
@@ -205,6 +204,7 @@ export class AgentManager {
         agent.isVoice = agent.isVoice || false;
         agent.voice = agent.voice || 'alloy';
         agent.projectContexts = agent.projectContexts || {};
+        agent.runnerSessions = agent.runnerSessions || {};
         let needsSave = false;
         if (agent.projectChangedAt === undefined) {
           agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;

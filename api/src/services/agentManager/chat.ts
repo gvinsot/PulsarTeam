@@ -712,6 +712,15 @@ export const chatMethods = {
     // Estimate context size (tokens in the messages array sent to the LLM)
     const estimatedContextTokens = this._estimateTokens(messages);
 
+    // CLI session ID (Claude Code's --resume UUID) is persisted on the agent,
+    // keyed by task so the same agent can have parallel sessions across tasks.
+    // The runner uses it as a fast-path hint; on miss (different runner, JSONL
+    // never created here) it mints a fresh UUID and replays history, then
+    // returns the new UUID on the `done` event for us to persist.
+    const sessionKey = activeTaskId || '_default';
+    if (!agent.runnerSessions || typeof agent.runnerSessions !== 'object') agent.runnerSessions = {};
+    const initialRunnerSessionId: string | undefined = agent.runnerSessions[sessionKey];
+
     for await (const chunk of provider.chatStream(messages, {
       temperature: llmConfig.temperature,
       maxTokens: safeMaxTokens,
@@ -719,6 +728,7 @@ export const chatMethods = {
       isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
       signal: abortController.signal,
       taskId: activeTaskId || undefined,
+      runnerSessionId: initialRunnerSessionId,
     })) {
       if (abortController.signal.aborted) {
         throw new Error('Agent stopped by user');
@@ -751,6 +761,10 @@ export const chatMethods = {
         } else {
           console.warn(`⚠️ [Token] "${agent.name}": done event with no usage data`);
         }
+        if (chunk.runnerSessionId && chunk.runnerSessionId !== initialRunnerSessionId) {
+          agent.runnerSessions[sessionKey] = chunk.runnerSessionId;
+          console.log(`🔑 [Session] "${agent.name}" task=${sessionKey} → runner session ${chunk.runnerSessionId.slice(0, 12)}`);
+        }
         if (chunk.finishReason) {
           finishReason = chunk.finishReason;
         }
@@ -777,7 +791,9 @@ export const chatMethods = {
         maxTokens: contMaxTokens,
         contextLength: llmConfig.contextLength || 0,
         isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
-        signal: abortController.signal
+        signal: abortController.signal,
+        taskId: activeTaskId || undefined,
+        runnerSessionId: agent.runnerSessions?.[sessionKey],
       })) {
         if (abortController.signal.aborted) {
           throw new Error('Agent stopped by user');
@@ -805,6 +821,9 @@ export const chatMethods = {
               this._recordUsage(agent, inTok, outTok, contContextTokens);
             }
             console.log(`📊 [Token] "${agent.name}" (cont): in=${inTok} out=${outTok} ctx=${contContextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
+          }
+          if (chunk.runnerSessionId && chunk.runnerSessionId !== agent.runnerSessions[sessionKey]) {
+            agent.runnerSessions[sessionKey] = chunk.runnerSessionId;
           }
           if (chunk.finishReason) {
             finishReason = chunk.finishReason;

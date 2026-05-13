@@ -5,7 +5,7 @@
 //
 // All backend-specific logic (CLI flags, stream parsing, OAuth, etc.) is
 // handled by the runner-service itself; this provider is a thin HTTP shim
-// over /exec-shell, /projects/ensure, /reset, ...
+// over /exec-shell, /projects/ensure, ...
 
 import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
@@ -169,24 +169,9 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     const entry = this._agents.get(agentId);
     if (entry) entry.lastEnsuredAt = 0;
     await this.ensureProject(agentId, newProject, gitUrl);
-    await this.resetSession(agentId);
-  }
-
-  /**
-   * Reset the runner CLI session for an agent.
-   * Forces a new session on the next invocation so it picks up the current project cwd.
-   */
-  async resetSession(agentId: string): Promise<void> {
-    try {
-      const res = await fetch(`${this.baseUrl}/reset`, {
-        method: 'POST',
-        headers: this._headers(agentId),
-      });
-      const data: any = await res.json();
-      console.log(`🔄 [Runner] Session reset for agent ${agentId.slice(0, 8)}: ${data.message || 'ok'}`);
-    } catch (err: any) {
-      console.warn(`⚠️  [Runner] Failed to reset session for ${agentId.slice(0, 8)}: ${err.message}`);
-    }
+    // The runner is stateless — there's no per-agent session cache to reset.
+    // The CLI session UUID is owned by the API (agent.runnerSessions) and is
+    // cleared by _switchProjectContext when the project actually changes.
   }
 
   async destroySandbox(agentId: string): Promise<void> {

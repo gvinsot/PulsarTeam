@@ -353,17 +353,13 @@ async def reset_agent(
     x_agent_id: Optional[str] = Header(None),
     x_task_id: Optional[str] = Header(None),
 ):
-    """Reset agent session — starts a fresh runner session on next invocation."""
+    """No-op: session state is now caller-managed (passed in via
+    X-Runner-Session-Id). The runner holds no per-agent session cache to
+    reset. Kept as a 200-OK stub so older clients don't 404.
+    """
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
-
-    if not x_agent_id:
-        return {"status": "success", "message": "No session to reset"}
-
-    removed = BACKEND.reset_agent_sessions(x_agent_id, x_task_id)
-    if removed:
-        return {"status": "success", "message": f"Reset {removed} session(s) for agent {x_agent_id[:12]}"}
-    return {"status": "success", "message": "No session to reset"}
+    return {"status": "success", "message": "runner is stateless — drop X-Runner-Session-Id on the caller side to start fresh"}
 
 
 # =============================================================================
@@ -399,6 +395,7 @@ async def openai_chat_completions(
     x_owner_id: Optional[str] = Header(None),
     x_task_id: Optional[str] = Header(None),
     x_agent_permissions: Optional[str] = Header(None),
+    x_runner_session_id: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -416,6 +413,7 @@ async def openai_chat_completions(
         system_prompt = request.system_prompt
 
     model = request.model or RUNNER_MODEL
+    session_id_hint = (x_runner_session_id or "").strip() or None
 
     async def stream_openai_response():
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
@@ -428,9 +426,21 @@ async def openai_chat_completions(
         input_tokens = 0
         output_tokens_val = 0
         cost_usd = 0
+        # Default to the hint so a no-op (resume succeeded) still reports back
+        # the same UUID. Overwritten if the backend emits a session_id_used
+        # event with a fresh UUID after falling back to a new session.
+        runner_session_id_used = session_id_hint
         try:
-            async for event in BACKEND.stream_events(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
+            async for event in BACKEND.stream_events(
+                prompt, system_prompt,
+                agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id,
+                session_id=session_id_hint, messages=request.messages,
+            ):
                 event_type = event.get("type", "")
+
+                if event_type == "session_id_used":
+                    runner_session_id_used = event.get("session_id") or runner_session_id_used
+                    continue
 
                 if event_type == "thinking":
                     content = event["content"]
@@ -471,6 +481,7 @@ async def openai_chat_completions(
                 "completion_tokens": output_tokens_val,
                 "total_tokens": total_tokens or (input_tokens + output_tokens_val),
                 "cost_usd": cost_usd,
+                "runner_session_id": runner_session_id_used,
             },
         }
         yield f"data: {json.dumps(finish_chunk)}\n\n"
@@ -479,7 +490,11 @@ async def openai_chat_completions(
     if request.stream:
         return StreamingResponse(stream_openai_response(), media_type="text/event-stream")
 
-    result = await BACKEND.run_sync(prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id)
+    result = await BACKEND.run_sync(
+        prompt, system_prompt,
+        agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id,
+        session_id=session_id_hint, messages=request.messages,
+    )
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {
@@ -493,6 +508,7 @@ async def openai_chat_completions(
             "completion_tokens": result.get("output_tokens", 0),
             "total_tokens": result.get("total_tokens", 0) or (result.get("input_tokens", 0) + result.get("output_tokens", 0)),
             "cost_usd": result.get("cost_usd", 0),
+            "runner_session_id": result.get("session_id") or session_id_hint,
         },
     }
 

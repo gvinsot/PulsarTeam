@@ -102,7 +102,6 @@ class MockBackend(RunnerBackend):
     supports_token_set = False
 
     def __init__(self):
-        self._sessions: dict[str, str] = {}
         self._permissions: dict[str, dict] = {}
 
     async def startup(self) -> None:
@@ -124,22 +123,6 @@ class MockBackend(RunnerBackend):
     def set_agent_permissions(self, agent_id: str, permissions: dict) -> None:
         if agent_id and permissions:
             self._permissions[agent_id] = permissions
-
-    def reset_agent_sessions(self, agent_id: str, task_id: Optional[str] = None) -> int:
-        if not agent_id:
-            return 0
-        removed = 0
-        if task_id:
-            key = f"{agent_id}:{task_id}"
-            if self._sessions.pop(key, None) is not None:
-                removed += 1
-        if self._sessions.pop(agent_id, None) is not None:
-            removed += 1
-        if not task_id:
-            for k in [k for k in self._sessions if k.startswith(f"{agent_id}:")]:
-                self._sessions.pop(k, None)
-                removed += 1
-        return removed
 
     def _maybe_simulate_failure(self, prompt: str) -> Optional[dict]:
         if MOCK_FAIL_ON and MOCK_FAIL_ON.lower() in prompt.lower():
@@ -167,6 +150,8 @@ class MockBackend(RunnerBackend):
         agent_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        messages: Optional[list] = None,
     ) -> dict:
         logger.info(f"[mock] run_sync: {prompt[:80]!r}")
         start = time.monotonic()
@@ -186,9 +171,6 @@ class MockBackend(RunnerBackend):
         total_tokens = input_tokens + output_tokens
         duration_ms = int((time.monotonic() - start) * 1000)
 
-        if agent_id:
-            self._sessions[agent_id] = f"mock-session-{agent_id[:8]}"
-
         return {
             "status": "success",
             "output": output,
@@ -206,6 +188,8 @@ class MockBackend(RunnerBackend):
         agent_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        messages: Optional[list] = None,
     ) -> AsyncIterator[dict]:
         logger.info(f"[mock] stream_events: {prompt[:80]!r}")
         start = time.monotonic()
@@ -240,9 +224,6 @@ class MockBackend(RunnerBackend):
         output_tokens = _estimate_tokens(output)
         total_tokens = input_tokens + output_tokens
         duration_ms = int((time.monotonic() - start) * 1000)
-
-        if agent_id:
-            self._sessions[agent_id] = f"mock-session-{agent_id[:8]}"
 
         yield {
             "type": "result",

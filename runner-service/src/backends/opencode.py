@@ -35,15 +35,7 @@ class OpenCodeBackend(CliBackend):
         exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
         if exec_perms.get("dangerousSkipPermissions", True):
             cmd.append("--dangerously-skip-permissions")
-        # Session resume keyed by (agent_id, task_id)
-        if agent_id:
-            session_key = f"{agent_id}:{task_id}" if task_id else agent_id
-            session_id = self._sessions.get(session_key)
-            if session_id:
-                cmd += ["--session", session_id]
-            # opencode auto-creates a new session when --session is omitted;
-            # we don't get the new ID back synchronously here. Improvement:
-            # parse the JSON output to capture session.id and store it.
-        # Positional message arg (must come last)
+        # Runner is stateless — conversation history is replayed inside `prompt`
+        # by the caller. The opencode CLI's --session is not used.
         cmd.append(prompt)
         return cmd

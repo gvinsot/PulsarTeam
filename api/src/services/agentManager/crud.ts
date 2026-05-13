@@ -27,6 +27,7 @@ export const crudMethods = {
       skills: config.skills || [],
       mcpServers: config.mcpServers || [],
       conversationHistory: [],
+      runnerSessions: {},
       actionLogs: [],
       currentThinking: '',
       metrics: {
@@ -86,8 +87,8 @@ export const crudMethods = {
     const llmChanged = llmFields.some(f => updates[f] !== undefined && updates[f] !== agent[f]);
 
     if (llmChanged) {
-      await this._resetCoderSession(id, agent);
       agent.conversationHistory = [];
+      agent.runnerSessions = {};
       agent.currentThinking = '';
       delete agent._compactionArmed;
       console.log(`🔄 [LLM Change] Reset session and history for "${agent.name}" — LLM config changed`);

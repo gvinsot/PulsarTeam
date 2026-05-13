@@ -51,13 +51,20 @@ class RunnerBackend:
     def set_agent_permissions(self, agent_id: str, permissions: dict) -> None:
         """Store permissions for an agent (sent via X-Agent-Permissions header)."""
 
-    # ── Sessions (per-agent, per-task) ────────────────────────────────────
-
-    def reset_agent_sessions(self, agent_id: str, task_id: Optional[str] = None) -> int:
-        """Forget any cached session for an agent. Returns count cleared."""
-        return 0
-
     # ── Agent execution ───────────────────────────────────────────────────
+    #
+    # Conversation state lives in the caller's DB. Each call passes:
+    #   - `prompt`:     last user message (used as-is when --resume succeeds)
+    #   - `messages`:   full conversation history (replayed when no session
+    #                   exists locally — runner is otherwise stateless)
+    #   - `session_id`: the CLI session UUID the caller wants us to resume.
+    #                   When None, or when --resume fails, the backend mints
+    #                   a fresh session and replays `messages`.
+    #
+    # Backends return the session UUID actually used so the caller can
+    # persist it for the next turn (via the `session_id` key on the result
+    # dict for run_sync, or a {"type": "session_id_used", ...} event for
+    # stream_events).
 
     async def run_sync(
         self,
@@ -66,6 +73,8 @@ class RunnerBackend:
         agent_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        messages: Optional[list] = None,
     ) -> dict:
         """Run an agent turn synchronously and return a result dict.
 
@@ -74,6 +83,7 @@ class RunnerBackend:
           output: str (the assistant's final reply)
           error: str | None
           login_url: str | None
+          session_id: str | None (the session UUID actually used)
           cost_usd / duration_ms / total_tokens / input_tokens / output_tokens
         """
         raise NotImplementedError(f"{self.name} backend does not support run_sync")
@@ -85,11 +95,15 @@ class RunnerBackend:
         agent_id: Optional[str] = None,
         owner_id: Optional[str] = None,
         task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        messages: Optional[list] = None,
     ) -> AsyncIterator[dict]:
         """Async generator yielding event dicts.
 
-        Event types: "text", "thinking", "status", "result", "error".
-        The final event is typically "result" carrying token/cost metadata.
+        Event types: "text", "thinking", "status", "result", "error",
+        "session_id_used". The "session_id_used" event carries the UUID
+        the backend ran with so the route handler can return it to the
+        caller for persistence.
         """
         raise NotImplementedError(f"{self.name} backend does not support stream_events")
         yield  # pragma: no cover — make this an async generator
