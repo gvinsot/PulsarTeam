@@ -12,6 +12,7 @@ import {
 import { provisionNewUser } from '../services/userProvisioning.js';
 import { readSecret } from '../secrets.js';
 import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
+import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
 import { validateBody, validateParams, validateQuery } from '../lib/validate.js';
 import {
   loginSchema,
@@ -211,9 +212,12 @@ router.post('/impersonate/:userId', authenticateToken, validateParams(impersonat
 });
 
 // ── Google OAuth ──────────────────────────────────────────────────────────────
+// Shares getGoogleOAuthConfig() with the Gmail and Drive plugins, so a single
+// set of env vars (GOOGLE_* preferred, GMAIL_* / GDRIVE_* honored as legacy
+// fallbacks) lights up login + both plugins.
 
 function isGoogleConfigured() {
-  return !!(process.env.GOOGLE_CLIENT_ID && readSecret('GOOGLE_CLIENT_SECRET'));
+  return getGoogleOAuthConfig() !== null;
 }
 
 // Allow-list of permitted redirect_uri origins. Built from CORS_ORIGINS so the OAuth
@@ -237,16 +241,20 @@ function isAllowedRedirectUri(uri: string): boolean {
 }
 
 function resolveGoogleRedirectUri(frontendUri?: string): string {
-  // Trust the env var unconditionally (deployment config). Otherwise require the
-  // caller-supplied URI to belong to an allow-listed origin to prevent open redirect.
-  if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
+  // Trust the configured redirect URI unconditionally (deployment config —
+  // pulled from GOOGLE_REDIRECT_URI or its legacy GMAIL_*/GDRIVE_* aliases).
+  // Otherwise require the caller-supplied URI to belong to an allow-listed
+  // origin to prevent an open-redirect / code-stealing attack.
+  const cfg = getGoogleOAuthConfig();
+  if (cfg?.redirectUri) return cfg.redirectUri;
   if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
   return '';
 }
 
 // Returns the Google OAuth consent URL for the frontend to redirect to
 router.get('/google/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
-  if (!isGoogleConfigured()) {
+  const cfg = getGoogleOAuthConfig();
+  if (!cfg) {
     return res.status(501).json({ error: 'Google OAuth not configured' });
   }
 
@@ -256,7 +264,7 @@ router.get('/google/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
   }
 
   const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID as string,
+    client_id: cfg.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'openid email profile',
@@ -269,12 +277,14 @@ router.get('/google/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
 
 // Returns whether Google OAuth is available
 router.get('/google/status', (_req, res) => {
-  res.json({ enabled: isGoogleConfigured(), clientId: process.env.GOOGLE_CLIENT_ID || null });
+  const cfg = getGoogleOAuthConfig();
+  res.json({ enabled: !!cfg, clientId: cfg?.clientId || null });
 });
 
 // Exchanges the Google authorization code for user info and returns a JWT
 router.post('/google/callback', validateBody(oauthCallbackSchema), async (req, res) => {
-  if (!isGoogleConfigured()) {
+  const cfg = getGoogleOAuthConfig();
+  if (!cfg) {
     return res.status(501).json({ error: 'Google OAuth not configured' });
   }
 
@@ -292,8 +302,8 @@ router.post('/google/callback', validateBody(oauthCallbackSchema), async (req, r
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         code,
-        client_id: process.env.GOOGLE_CLIENT_ID,
-        client_secret: readSecret('GOOGLE_CLIENT_SECRET'),
+        client_id: cfg.clientId,
+        client_secret: cfg.clientSecret,
         redirect_uri: canonicalRedirectUri,
         grant_type: 'authorization_code',
       }),
