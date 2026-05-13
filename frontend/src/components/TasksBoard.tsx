@@ -325,16 +325,34 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     return candidate?.storagePath || null;
   }, [allTasks]);
 
-  // Filtered tasks
+  // Filtered tasks. The text search is purely client-side and matches every
+  // field a user can see on a task card — title, details, the assigned
+  // agent's name, repo and storage path — so any visible text is searchable.
+  const agentNameById = useMemo(() => {
+    const m = new Map();
+    for (const a of agents) m.set(a.id, a.name || '');
+    return m;
+  }, [agents]);
   const filteredTasks = useMemo(() => {
-    const q = search.toLowerCase();
+    const q = search.trim().toLowerCase();
     return allTasks.filter(t => {
       if (agentFilter && t.agentId !== agentFilter) return false;
       if (repoFilter && t.repoFullName !== repoFilter) return false;
-      if (q && !t.text.toLowerCase().includes(q)) return false;
+      if (q) {
+        const agentName = agentNameById.get(t.agentId) || '';
+        const haystack = [
+          t.text,
+          t.details,
+          t.repoFullName,
+          t.storagePath,
+          t.project,
+          agentName,
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
       return true;
     });
-  }, [allTasks, agentFilter, repoFilter, search]);
+  }, [allTasks, agentFilter, repoFilter, search, agentNameById]);
 
   // Group by column — error is an internal state, not a workflow column.
   // Use errorFromStatus to keep error tasks visible in their originating column.
@@ -690,6 +708,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Search tasks..."
+            title="Search across title, details, agent name, repo and storage path of visible tasks"
             className="pl-8 pr-7 py-1.5 w-48 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200
               placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
           />
