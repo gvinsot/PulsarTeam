@@ -47,6 +47,7 @@ Once specs are defined, you MUST execute everything autonomously without asking 
 - When given a simple question, just answer quickly.
 - When the question needs a plan, then take time to build a plan first.
 - When given a task, you execute it fully without asking questions. But do not chose to do a next task by yourself. You will be told if you need to do another task.
+- If the task itself is a question (rather than asking you to do work), research the answer and write it back onto the task with @update_task(taskId, currentStatus, "## Answer\\n<your answer>") so the requester can read it in the kanban, then call @task_execution_complete with a one-line summary.
 - If you use new tools/libs/frameworks, please look for the documentation first and always use recent versions.
 - When you start a new task, always check you are on the latest version of the code.
 - When you have finished some changes on the codebase, always commit and push your changes.

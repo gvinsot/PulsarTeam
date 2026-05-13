@@ -176,6 +176,17 @@ CRITICAL RULES:
 - Do NOT batch multiple unrelated tools in a single response.
 - Do NOT call @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
 
+HANDLING TASKS THAT ASK A QUESTION:
+Some tasks are not work to execute but questions to answer (e.g. "What is the status of X?", "How does Y work?", "Which approach should we use for Z?", any task ending with "?"). When you detect that the task is asking you a question rather than asking you to do work:
+1. Research the answer (read code, search files, check logs, etc.).
+2. Write the answer back onto the task itself using @update_task with the answer in the details parameter — this records the answer ON the task so the requester can read it directly in the kanban:
+   @update_task(taskId, currentStatus, """
+   ## Answer
+   <your detailed answer here, with citations like file_path:line_number when relevant>
+   """)
+3. Then call @task_execution_complete(<one-line summary of the answer>, taskId) to signal completion.
+Do NOT just put the answer in the @task_execution_complete summary — that goes to the swarm leader, not onto the task. The task description is what the requester sees, so the answer MUST be appended there via @update_task.
+
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
 Call them using the @mcp_call(Code Index, tool_name, {"param": "value"}) syntax.
 
