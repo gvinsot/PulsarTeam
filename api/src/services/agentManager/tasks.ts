@@ -334,13 +334,23 @@ export const tasksMethods = {
   },
 
   async _findTaskForCommitLink(this: any, agentId: string): Promise<{ task: any; ownerAgentId: string } | null> {
-    // Priority 1: Task actively running via this agent (set by processTransition)
-    // This is the most reliable indicator — it means a workflow action is in progress.
-    for (const [creatorId, creatorAgent] of this.agents) {
+    // Window for the "recently active" fallback (used when status has transitioned
+    // away from active — e.g. error from a rate-limit, or done seconds ago).
+    // Commits made by an agent within this window after the task left the
+    // "active" set still belong to that task in 99% of cases.
+    const RECENT_ACTIVE_MS = 15 * 60 * 1000;
+    const now = Date.now();
+
+    // Priority 1: Task actively running via this agent.
+    // We INTENTIONALLY do not require _isActiveTaskStatus here — if
+    // actionRunningAgentId is still pointing at this agent, the action is in
+    // flight and the link is valid even if the status briefly transitioned
+    // (e.g. to "error" via a rate-limit handler or to "done" via @update_task).
+    for (const [creatorId] of this.agents) {
       const creatorTasks = this._getAgentTasks(creatorId);
       for (const task of creatorTasks) {
-        if (task.actionRunningAgentId === agentId && this._isActiveTaskStatus(task.status)) {
-          console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${task.text?.slice(0, 50)}" (owner=${creatorId.slice(0, 8)})`);
+        if (task.actionRunningAgentId === agentId) {
+          console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${task.text?.slice(0, 50)}" (status=${task.status}, owner=${creatorId.slice(0, 8)})`);
           return { task, ownerAgentId: creatorId };
         }
       }
@@ -349,7 +359,7 @@ export const tasksMethods = {
     // Priority 2: Active task explicitly assigned to this agent (from any agent's list)
     // Prefer the most recently started task when multiple are assigned.
     let bestAssigned: { task: any; ownerAgentId: string } | null = null;
-    for (const [creatorId, creatorAgent] of this.agents) {
+    for (const [creatorId] of this.agents) {
       const creatorTasks = this._getAgentTasks(creatorId);
       for (const task of creatorTasks) {
         if (task.assignee !== agentId || !this._isActiveTaskStatus(task.status)) continue;
@@ -373,22 +383,56 @@ export const tasksMethods = {
       }
     }
 
-    // Priority 4 (DB fallback): find active task or recently completed task from DB
+    // Priority 4: Recently active in-memory task (any status).
+    // Catches the case where a task transitioned to error/done between the
+    // commit being made and the run_command handler processing the result.
+    // We scan ALL in-memory tasks (the agent may have been the assignee or the
+    // executor for someone else's task) and pick the most-recently-started one
+    // within RECENT_ACTIVE_MS.
+    let bestRecent: { task: any; ownerAgentId: string; ts: number } | null = null;
+    for (const [creatorId] of this.agents) {
+      const creatorTasks = this._getAgentTasks(creatorId);
+      for (const task of creatorTasks) {
+        if (task.assignee !== agentId) continue;
+        const ref = task.completedAt || task.startedAt;
+        if (!ref) continue;
+        const ts = new Date(ref).getTime();
+        if (now - ts > RECENT_ACTIVE_MS) continue;
+        if (!bestRecent || ts > bestRecent.ts) {
+          bestRecent = { task, ownerAgentId: creatorId, ts };
+        }
+      }
+    }
+    if (bestRecent) {
+      console.log(`🔗 [Commit] Found recently-active task: "${bestRecent.task.text?.slice(0, 50)}" (status=${bestRecent.task.status}, age=${Math.round((now - bestRecent.ts) / 1000)}s)`);
+      return { task: bestRecent.task, ownerAgentId: bestRecent.ownerAgentId };
+    }
+
+    // Priority 5 (DB fallback): find active task from DB
     const activeTask = await getActiveTaskForExecutor(agentId);
     if (activeTask) {
       console.log(`🔗 [Commit] Found task via DB executor lookup: "${(activeTask as any).text?.slice(0, 50)}"`);
       return { task: activeTask, ownerAgentId: (activeTask as any).agentId };
     }
+
+    // Priority 6 (DB fallback): recently completed/errored task. Include
+    // 'error' so commits made just before/during a rate-limit failure still
+    // attach to the originating task instead of creating a stray "Commit
+    // without task".
     const allTasks = await getTasksByAgent(agentId);
-    const doneTasks = allTasks.filter((t: any) => t.status === 'done' && t.completedAt);
-    if (doneTasks.length > 0) {
-      doneTasks.sort((a: any, b: any) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
-      console.log(`🔗 [Commit] No active task — falling back to recently done task "${doneTasks[0].text?.slice(0, 50)}"`);
-      return { task: doneTasks[0], ownerAgentId: doneTasks[0].agentId };
+    const recentlyFinished = allTasks
+      .filter((t: any) => (t.status === 'done' || t.status === 'error') && (t.completedAt || t.startedAt))
+      .map((t: any) => ({ task: t, ts: new Date(t.completedAt || t.startedAt).getTime() }))
+      .filter((x: any) => now - x.ts <= RECENT_ACTIVE_MS);
+    if (recentlyFinished.length > 0) {
+      recentlyFinished.sort((a: any, b: any) => b.ts - a.ts);
+      const top = recentlyFinished[0].task;
+      console.log(`🔗 [Commit] No active task — falling back to recently finished task "${top.text?.slice(0, 50)}" (status=${top.status})`);
+      return { task: top, ownerAgentId: top.agentId };
     }
     // Log diagnostic info when no task found at all
     const agentObj = this.agents.get(agentId);
-    console.warn(`⚠️ [Commit] _findTaskForCommitLink: no task found for agent "${agentObj?.name || agentId.slice(0, 8)}". Checked: actionRunningAgentId, assignee, own tasks, DB executor, DB done tasks.`);
+    console.warn(`⚠️ [Commit] _findTaskForCommitLink: no task found for agent "${agentObj?.name || agentId.slice(0, 8)}". Checked: actionRunningAgentId, assignee, own tasks, recent in-mem, DB executor, DB recent finished.`);
     return null;
   },
 

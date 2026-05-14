@@ -348,46 +348,53 @@ export const toolsMethods = {
           const existingCommits = inProgressTask.commits || [];
           if (linkedCommitCount === 0 && existingCommits.length === 0 && this.executionManager?.hasEnvironment(agentId)) {
             try {
-              // Get the task start time to scope the git log query
+              // Use %aI (ISO author date) so we can filter by task time window in code
+              // and avoid relying solely on git's --since (which is fuzzy on edge cases).
               const taskStartedAt = inProgressTask.startedAt;
               const sinceArg = taskStartedAt ? ` --since="${new Date(new Date(taskStartedAt).getTime() - 5 * 60000).toISOString()}"` : '';
-              const logCmd = `git log --format="%H %s"${sinceArg} -20`;
+              const logCmd = `git log --format="%H %aI %s"${sinceArg} -20`;
               const logResult = await this.executionManager.exec(agentId, logCmd, { timeout: 10000 });
               const logOutput = ((logResult.stdout || '') + (logResult.stderr || '')).trim();
               if (logOutput) {
                 const agentNameLower = (agent.name || '').toLowerCase();
+                const startedAtMs = taskStartedAt ? new Date(taskStartedAt).getTime() : 0;
+                type Entry = { hash: string; date: string; msg: string; ts: number };
+                const entries: Entry[] = [];
                 for (const line of logOutput.split('\n')) {
-                  const m = line.match(/^([a-f0-9]{40})\s+(.*)/);
-                  if (m) {
-                    const commitMsg = m[2];
-                    // Only link commits that contain the agent's name (convention: "message (by AgentName)")
-                    if (agentNameLower && commitMsg.toLowerCase().includes(agentNameLower)) {
-                      const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, m[1], commitMsg);
-                      if (linked) {
-                        linkedCommitCount++;
-                        console.log(`🔗 [TaskComplete] Auto-detected commit ${m[1].slice(0, 7)} for task ${inProgressTask.id}: "${commitMsg.slice(0, 60)}"`);
-                      }
+                  const m = line.match(/^([a-f0-9]{40})\s+(\S+)\s+(.*)/);
+                  if (!m) continue;
+                  const ts = new Date(m[2]).getTime() || 0;
+                  entries.push({ hash: m[1], date: m[2], msg: m[3], ts });
+                }
+
+                // Pass 1: name-based match (existing convention, highest confidence)
+                for (const e of entries) {
+                  if (agentNameLower && e.msg.toLowerCase().includes(agentNameLower)) {
+                    const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
+                    if (linked) {
+                      linkedCommitCount++;
+                      console.log(`🔗 [TaskComplete] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`);
                     }
                   }
                 }
-                if (linkedCommitCount === 0) {
-                  // Fallback: if no commits matched by agent name, try HEAD commit
-                  // but ONLY if the commit message contains the agent name (to avoid
-                  // linking another agent's commit in shared-repo multi-agent setups)
-                  const firstLine = logOutput.split('\n')[0];
-                  const headMatch = firstLine?.match(/^([a-f0-9]{40})\s+(.*)/);
-                  if (headMatch && taskStartedAt && agentNameLower && headMatch[2].toLowerCase().includes(agentNameLower)) {
-                    try {
-                      const dateResult = await this.executionManager.exec(agentId, `git log --format="%aI" -1`, { timeout: 5000 });
-                      const commitDate = ((dateResult.stdout || '') + (dateResult.stderr || '')).trim();
-                      if (commitDate && new Date(commitDate) >= new Date(taskStartedAt)) {
-                        const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, headMatch[1], headMatch[2]);
-                        if (linked) {
-                          linkedCommitCount++;
-                          console.log(`🔗 [TaskComplete] Auto-linked HEAD commit ${headMatch[1].slice(0, 7)} to task ${inProgressTask.id} (within task timeframe)`);
-                        }
-                      }
-                    } catch { /* ignore date check failure */ }
+
+                // Pass 2: date-only fallback. If the agent didn't include its
+                // name in the commit message, link every commit authored at-or-
+                // after task.startedAt that does NOT mention a different agent
+                // (to avoid stealing commits in shared-repo multi-agent setups).
+                if (linkedCommitCount === 0 && startedAtMs > 0) {
+                  const otherAgentNames = [...this.agents.values()]
+                    .filter((a: any) => a.id !== agentId && a.name)
+                    .map((a: any) => (a.name as string).toLowerCase());
+                  for (const e of entries) {
+                    if (e.ts < startedAtMs) continue;
+                    const msgLower = e.msg.toLowerCase();
+                    if (otherAgentNames.some(n => msgLower.includes(n))) continue;
+                    const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
+                    if (linked) {
+                      linkedCommitCount++;
+                      console.log(`🔗 [TaskComplete] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`);
+                    }
                   }
                 }
               }
