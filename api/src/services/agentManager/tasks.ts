@@ -859,7 +859,7 @@ export const tasksMethods = {
               this._emit('agent:thinking', { agentId: executorId, thinking: immediateExecutor.currentThinking || '' });
             }
           );
-          this._saveExecutionLog(creatorAgentId, taskId, executorId, retryStartIdx, retryStartedAt, true);
+          // _saveExecutionLog moved to caller — captures full conversation including retries
         } catch (retryErr: any) {
           console.error(`🔄 [Execution] Immediate retry failed: ${retryErr.message}`);
         }
@@ -951,7 +951,7 @@ export const tasksMethods = {
           }
         );
 
-        this._saveExecutionLog(creatorAgentId, taskId, executorId, reminderStartIdx, reminderStartedAt, true);
+        // _saveExecutionLog moved to caller — captures full conversation including reminders
       } catch (reminderErr: any) {
         console.error(`🔔 [Execution] Reminder failed: ${reminderErr.message}`);
       }
@@ -1046,14 +1046,19 @@ export const tasksMethods = {
 
       const result = await this.sendMessage(executorId, messageToSend, streamCallback);
 
-      this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, true);
+      // _saveExecutionLog moved after _waitForExecutionComplete — captures full conversation
 
-      await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text);
+      const waitResult = await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text);
+
+      // Save execution log AFTER wait completes — captures the full conversation
+      // including retries, reminders, tool calls, and task_execution_complete
+      this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, waitResult !== "error" && waitResult !== "timeout");
     } catch (err: any) {
       const isUserStop = err.message === 'Agent stopped by user';
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
       this._emit('agent:stream:error', { agentId: executorId, error: err.message });
 
+      // Save execution log for the error case — captures whatever conversation happened before the error
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, false);
 
       const errorTimestamp = new Date().toISOString();
