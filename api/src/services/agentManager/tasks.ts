@@ -1025,9 +1025,16 @@ export const tasksMethods = {
 
     return 'unknown';
     } finally {
-      // Always clear the watching flag so the task loop can resume if needed
+      // Always clear the watching flag so the task loop can resume if needed.
       clearTaskSignal(taskId, 'watching');
-      updateTaskExecutionStatus(taskId, null);
+      // Don't clobber an executionStatus that was set to 'stopped' by stopAgent
+      // (or by the catch in _resumeActiveTask) — leaving it as 'stopped' is
+      // what keeps the next task-loop tick from picking the task up again.
+      // Only clear to NULL when the task is in some other transient state.
+      const finalMemTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
+      if (finalMemTask?.executionStatus !== 'stopped') {
+        updateTaskExecutionStatus(taskId, null);
+      }
     }
   },
 

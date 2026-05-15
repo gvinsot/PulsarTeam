@@ -20,6 +20,7 @@
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
 import { saveTaskToDb } from '../database.js';
 import { executeAction } from './actionExecutor.js';
+import { getTaskSignal } from '../agentManager/tasks.js';
 import {
   isValidTransition,
   evaluateAllConditions,
@@ -64,6 +65,14 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
 
   if (task.isManual) {
     console.log(`[WorkflowEngine] Skipping — task is manual (no automatic agent processing)`);
+    return;
+  }
+
+  // Respect a user Stop — without this, on_enter / condition transitions on
+  // the current column would re-launch the agent within seconds of the user
+  // pressing Stop.
+  if (task.executionStatus === 'stopped' || getTaskSignal(task.id, 'stopped')) {
+    console.log(`[WorkflowEngine] Skipping — task was stopped by user (executionStatus=${task.executionStatus})`);
     return;
   }
 
@@ -221,6 +230,10 @@ export async function recheckPendingTransitions(agentManager) {
     for (const task of agentTasks) {
       if (task.status === 'error') continue;
       if (task.isManual) continue;
+      // Don't re-fire on_enter retries or condition transitions for tasks
+      // the user has stopped; otherwise the periodic recheck would relaunch
+      // the agent on the very next tick after a Stop click.
+      if (task.executionStatus === 'stopped' || getTaskSignal(task.id, 'stopped')) continue;
 
       const transitions = boardTransMap.get(task.boardId)
         || (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);

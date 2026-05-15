@@ -289,6 +289,25 @@ export const statusMethods = {
           t.actionRunning = false;
           delete t.actionRunningAgentId;
           delete t.actionRunningMode;
+          // Mark the task as stopped in DB + memory so the task-loop SQL
+          // filter (started_at IS NOT NULL AND execution_status NOT IN
+          // (watching, stopped)) excludes it. Without this an
+          // executor-only stop leaves execution_status=NULL and
+          // started_at intact, so the next 5-second tick of
+          // _processNextPendingTasks resumes the task immediately.
+          if (this._isActiveTaskStatus(t.status)) {
+            t._executionStopped = true;
+            t.executionStatus = 'stopped';
+            t.startedAt = null;
+            if (!t.history) t.history = [];
+            t.history.push({
+              status: t.status,
+              at: stopTimestamp,
+              by: 'user',
+              type: 'stopped',
+            });
+            saveTaskToDb({ ...t, agentId: creatorId });
+          }
           // Signal any pending _waitForExecutionComplete loop so it unblocks
           // the workflow lock instead of waiting out the 10-min reminder cycle.
           setTaskSignal(t.id, 'stopped', true);
