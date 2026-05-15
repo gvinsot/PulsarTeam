@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Trash2, X, Plus, Settings, ArrowRight, Zap, User,
-  FolderKanban, Save, Check, Layers, Code, Loader2, GripVertical,
+  FolderKanban, Save, Check, Layers, Code, Loader2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { api } from '../../api';
 import {
@@ -69,9 +69,6 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
   const [showJson, setShowJson] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState(null);
-  const [dragColIdx, setDragColIdx] = useState<number | null>(null);
-  const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
-  const colRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const jiraEnabled = jiraStatus?.enabled || false;
 
@@ -120,52 +117,15 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
   const addCol = () => {
     setCols(prev => [...prev, { id: 'new_step', label: 'New Step', color: '#6b7280' }]);
   };
-  // ── Column drag-and-drop helpers ──
-  const handleColDragStart = (e: React.DragEvent, idx: number) => {
-    setDragColIdx(idx);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', String(idx));
-    const wrapper = colRefs.current[idx];
-    if (wrapper) {
-      wrapper.style.opacity = '0.4';
-      e.dataTransfer.setDragImage(wrapper, wrapper.offsetWidth / 2, 20);
-    }
-  };
-  const handleColDragEnd = () => {
-    if (dragColIdx !== null) {
-      const wrapper = colRefs.current[dragColIdx];
-      if (wrapper) wrapper.style.opacity = '1';
-    }
-    setDragColIdx(null);
-    setDropTargetIdx(null);
-  };
-  const handleColDragOver = (e: React.DragEvent, idx: number) => {
-    if (dragColIdx === null) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const midX = rect.left + rect.width / 2;
-    const insertIdx = e.clientX < midX ? idx : idx + 1;
-    if (insertIdx !== dropTargetIdx) setDropTargetIdx(insertIdx);
-  };
-  const handleColDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (dragColIdx === null || dropTargetIdx === null) return;
-    let targetIdx = dropTargetIdx;
-    if (targetIdx === dragColIdx || targetIdx === dragColIdx + 1) {
-      setDragColIdx(null);
-      setDropTargetIdx(null);
-      return;
-    }
+  // ── Column reorder helper ──
+  const moveCol = (idx: number, direction: -1 | 1) => {
     setCols(prev => {
+      const targetIdx = idx + direction;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
       const arr = [...prev];
-      const [moved] = arr.splice(dragColIdx, 1);
-      const insertAt = targetIdx > dragColIdx ? targetIdx - 1 : targetIdx;
-      arr.splice(insertAt, 0, moved);
+      [arr[idx], arr[targetIdx]] = [arr[targetIdx], arr[idx]];
       return arr;
     });
-    setDragColIdx(null);
-    setDropTargetIdx(null);
   };
 
   // ── Transition helpers ──
@@ -240,33 +200,27 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
 
         <div className="flex-1 overflow-auto px-5 py-4">
           {/* ── Columns as horizontal cards with transitions below each ── */}
-          <div className="flex gap-3 pb-2"
-            onDragOver={e => { if (dragColIdx !== null) e.preventDefault(); }}
-            onDrop={handleColDrop}
-          >
+          <div className="flex gap-3 pb-2">
             {cols.map((col, idx) => {
               const colTransitions = transitions
                 .map((t, ti) => ({ ...t, _idx: ti }))
                 .filter(t => t.from === col.id);
 
               return (
-                <div key={col.id + '-' + idx} className="flex flex-col min-w-[240px] flex-1 relative"
-                  ref={el => { colRefs.current[idx] = el; }}
-                  draggable
-                  onDragStart={e => handleColDragStart(e, idx)}
-                  onDragEnd={handleColDragEnd}
-                  onDragOver={e => handleColDragOver(e, idx)}
-                >
-                  {dropTargetIdx === idx && dragColIdx !== null && dragColIdx !== idx && dragColIdx !== idx - 1 && (
-                    <div className="absolute left-[-8px] top-0 bottom-0 w-[3px] bg-indigo-500 rounded-full z-10" />
-                  )}
-                  {dropTargetIdx === idx + 1 && dragColIdx !== null && dragColIdx !== idx && dragColIdx !== idx + 1 && idx === cols.length - 1 && (
-                    <div className="absolute right-[-8px] top-0 bottom-0 w-[3px] bg-indigo-500 rounded-full z-10" />
-                  )}
+                <div key={col.id + '-' + idx} className="flex flex-col min-w-[240px] flex-1 relative">
                   {/* Column header card */}
-                  <div className="bg-dark-800 rounded-lg px-3 py-2.5 space-y-2 cursor-grab">
-                    <div className="flex items-center gap-2">
-                      <GripVertical className="w-3 h-3 text-dark-500 cursor-grab flex-shrink-0" />
+                  <div className="bg-dark-800 rounded-lg px-3 py-2.5 space-y-2">
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => moveCol(idx, -1)} disabled={idx === 0}
+                        className="p-0.5 text-dark-400 hover:text-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-dark-400 flex-shrink-0"
+                        title="Move column left">
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => moveCol(idx, 1)} disabled={idx === cols.length - 1}
+                        className="p-0.5 text-dark-400 hover:text-indigo-400 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-dark-400 flex-shrink-0"
+                        title="Move column right">
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
                       <select value={col.color} onChange={e => updateCol(idx, { color: e.target.value })}
                         className="w-6 h-5 bg-dark-700 border-0 rounded cursor-pointer text-[10px]" style={{ color: col.color }}>
                         {AVAILABLE_COLORS.map(c => <option key={c.hex} value={c.hex} style={{ color: c.hex }}>{c.label}</option>)}
