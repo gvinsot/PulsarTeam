@@ -1,12 +1,26 @@
-import { useState, useEffect } from 'react';
-import { Trash2, X, Loader2, RotateCcw, Archive } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { Trash2, X, Loader2, RotateCcw, Archive, ChevronLeft, ChevronRight } from 'lucide-react';
 import { getDeletedTasks, restoreTask as restoreTaskApi, hardDeleteTask as hardDeleteTaskApi } from '../../api';
+
+const PAGE_SIZE = 20;
 
 export default function DeletedTasksPanel({ onClose, onRestored }) {
   const [deletedTasks, setDeletedTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
+  const [page, setPage] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(deletedTasks.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedTasks = useMemo(
+    () => deletedTasks.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [deletedTasks, currentPage]
+  );
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -79,7 +93,7 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
             </div>
           ) : (
             <div className="space-y-2">
-              {deletedTasks.map(task => (
+              {pagedTasks.map(task => (
                 <div key={task.id}
                   className="flex items-center justify-between px-4 py-3 bg-dark-800 border border-dark-700 rounded-lg hover:border-dark-600 transition-colors">
                   <div className="flex-1 min-w-0 mr-4">
@@ -150,6 +164,39 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
             </div>
           )}
         </div>
+
+        {/* Pagination footer */}
+        {!loading && deletedTasks.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between px-6 py-3 border-t border-dark-700">
+            <span className="text-xs text-dark-500">
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}–
+              {Math.min(currentPage * PAGE_SIZE, deletedTasks.length)} of {deletedTasks.length}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700
+                  transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                title="Previous page"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-xs text-dark-400 px-2">
+                Page {currentPage} / {totalPages}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700
+                  transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                title="Next page"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
