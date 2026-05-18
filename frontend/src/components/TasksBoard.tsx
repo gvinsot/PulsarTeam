@@ -965,6 +965,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           onClose={() => setSelectedTask(null)}
           onRefresh={refreshAll}
           onDelete={handleDelete}
+          onStop={handleStopAction}
+          onResume={handleResumeTask}
+          onClearStopped={handleClearStopped}
           onNavigateToAgent={onNavigateToAgent}
           boards={boards}
           activeBoardId={activeBoardId}

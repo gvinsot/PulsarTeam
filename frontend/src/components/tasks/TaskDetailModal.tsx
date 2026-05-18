@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   Trash2, X, AlertTriangle, Edit3, Save, Check, Tag, Calendar,
   ChevronDown, Zap, User, GitCommit, GitBranch, Cloud, Repeat, FolderKanban, Loader2, Layers,
-  ArrowRight, Hand, Pause, XCircle, MessageSquare,
+  ArrowRight, Hand, Pause, XCircle, MessageSquare, Square, Play,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
@@ -11,7 +11,7 @@ import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
 import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, timeAgo, formatDate } from './taskConstants';
 
-export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
+export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete, onStop, onResume, onClearStopped, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(task.text);
   const [editTitle, setEditTitle] = useState(task.title || '');
@@ -177,7 +177,24 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
   const currentBoard = boards?.find(b => b.id === (task.boardId || activeBoardId));
 
   const isError = task.status === 'error';
+  const isStopped = task.executionStatus === 'stopped';
   const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
+
+  const handleStop = async () => {
+    if (!onStop) return;
+    await onStop(task);
+  };
+
+  const handleResume = () => {
+    if (!onResume) return;
+    onResume(task);
+  };
+
+  const handleClearStopped = async () => {
+    if (!onClearStopped) return;
+    await onClearStopped(task);
+    onRefresh?.();
+  };
   const currentStatus = (statusOptions || []).find(s => s.value === task.status) || (statusOptions || [])[0] || { value: task.status, label: task.status, dot: 'bg-dark-500', text: 'text-dark-300' };
   const lastStatusId = (statusOptions || [])[(statusOptions || []).length - 1]?.value;
 
@@ -232,12 +249,50 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
             </div>
             <span className="text-xs text-dark-500 font-mono">{task.id?.slice(0, 8)}</span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {task.actionRunning && onStop && (
+              <button
+                onClick={handleStop}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  text-red-300 bg-red-500/15 hover:bg-red-500/25 border border-red-500/40
+                  hover:border-red-500/60 transition-colors"
+                title="Stop the agent working on this task"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                Stop
+              </button>
+            )}
+            {!task.actionRunning && task.assignee && onResume && (
+              <button
+                onClick={handleResume}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  text-emerald-300 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40
+                  hover:border-emerald-500/60 transition-colors"
+                title={isStopped ? 'Resume this stopped task' : isError ? 'Re-run this task' : 'Start this task now'}
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                {isStopped ? 'Resume' : isError ? 'Retry' : 'Start'}
+              </button>
+            )}
+            {!task.actionRunning && !task.assignee && isStopped && onClearStopped && (
+              <button
+                onClick={handleClearStopped}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  text-yellow-300 bg-yellow-500/15 hover:bg-yellow-500/25 border border-yellow-500/40
+                  hover:border-yellow-500/60 transition-colors"
+                title="Clear the stopped state so this task can be picked up again"
+              >
+                <Play className="w-3.5 h-3.5" />
+                Clear stopped
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Scrollable body */}
