@@ -20,7 +20,6 @@
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
 import { saveTaskToDb } from '../database.js';
 import { executeAction } from './actionExecutor.js';
-import { getTaskSignal } from '../agentManager/tasks.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import {
   isValidTransition,
@@ -71,9 +70,12 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
 
   // Respect a user Stop — without this, on_enter / condition transitions on
   // the current column would re-launch the agent within seconds of the user
-  // pressing Stop.
-  if (task.executionStatus === 'stopped' || getTaskSignal(task.id, 'stopped')) {
-    console.log(`[WorkflowEngine] Skipping — task was stopped by user (executionStatus=${task.executionStatus})`);
+  // pressing Stop. Only the durable executionStatus blocks here; the in-memory
+  // 'stopped' signal is set by route handlers on any status change (to wake
+  // the reminder loop / execution wait) and would otherwise block the new
+  // column's workflow from starting.
+  if (task.executionStatus === 'stopped') {
+    console.log(`[WorkflowEngine] Skipping — task was stopped by user (executionStatus=stopped)`);
     return;
   }
 
@@ -238,8 +240,10 @@ export async function recheckPendingTransitions(agentManager) {
       if (task.isManual) continue;
       // Don't re-fire on_enter retries or condition transitions for tasks
       // the user has stopped; otherwise the periodic recheck would relaunch
-      // the agent on the very next tick after a Stop click.
-      if (task.executionStatus === 'stopped' || getTaskSignal(task.id, 'stopped')) continue;
+      // the agent on the very next tick after a Stop click. Only the durable
+      // executionStatus blocks here — see processColumnEntry for the same
+      // reasoning around the in-memory 'stopped' signal.
+      if (task.executionStatus === 'stopped') continue;
       // Environment isolation: ignore tasks tagged for another deployment.
       const taskEnv = task.environment || 'prod';
       if (taskEnv !== ownEnv) continue;
