@@ -834,96 +834,21 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
               </div>
             )}
 
-            {/* Transition history */}
-            {(task.history?.length > 0) ? (
-              <div className="space-y-0">
-                <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold mb-1.5">History</div>
-                <div className="relative pl-4 border-l border-dark-700 space-y-1.5">
-                  {task.history.map((h, i) => (
-                    <div key={i} className="relative">
-                      <button
-                        className="w-full flex items-start gap-2 text-left rounded-md px-1 py-0.5 -ml-1 hover:bg-dark-800/60 transition-colors cursor-pointer group"
-                        onClick={() => setHistoryDetail(h)}
-                      >
-                        <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900 group-hover:bg-indigo-500 group-hover:ring-indigo-500/30 transition-colors" />
-                        <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
-                          <div className="flex items-center gap-1.5 text-xs min-w-0">
-                            {h.type === 'execution' ? (
-                              <>
-                                <MessageSquare className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
-                                <span className={`font-medium ${h.success ? 'text-blue-300' : 'text-red-300'}`}>
-                                  {h.mode === 'refine' ? 'Refine' : h.mode === 'decide' ? 'Decide' : h.mode === 'title' ? 'Title' : h.mode === 'set_type' ? 'Set Type' : 'Execution'} {h.success ? '✓' : '✗'}
-                                </span>
-                                <span className="text-dark-500 truncate">by {h.by}</span>
-                                {h.messages?.length > 0 && (
-                                  <span className="text-[10px] text-dark-500">— {h.messages.length} msg{h.messages.length > 1 ? 's' : ''}</span>
-                                )}
-                              </>
-                            ) : h.type === 'edit' ? (
-                              <>
-                                <Edit3 className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
-                                <span className="text-dark-200 font-medium">edited {h.field || (h.fields ? h.fields.map(f => f.field).join(', ') : 'task')}</span>
-                                {h.by && (
-                                  <span className="text-dark-500 truncate">by {h.by}</span>
-                                )}
-                              </>
-                            ) : h.type === 'reassign' ? (
-                              <>
-                                <User className="w-2.5 h-2.5 text-indigo-400 flex-shrink-0" />
-                                <span className="text-dark-200 font-medium">reassigned</span>
-                                {h.by && (
-                                  <span className="text-dark-500 truncate">by {h.by}</span>
-                                )}
-                              </>
-                            ) : h.type === 'error' ? (
-                              <>
-                                <XCircle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
-                                <span className="text-red-300 font-medium">error</span>
-                                {h.from && (
-                                  <span className="text-dark-500 truncate">in {h.from}</span>
-                                )}
-                                {h.by && (
-                                  <span className="text-dark-500 truncate">by {h.by}</span>
-                                )}
-                                {h.error && (
-                                  <span className="text-red-400/70 truncate" title={h.error}>{h.error.slice(0, 80)}</span>
-                                )}
-                              </>
-                            ) : h.type === 'stopped' ? (
-                              <>
-                                <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
-                                <span className="text-yellow-300 font-medium">stopped</span>
-                                {h.by && (
-                                  <span className="text-dark-500 truncate">by {h.by}</span>
-                                )}
-                              </>
-                            ) : (
-                              <>
-                                {h.from && (
-                                  <>
-                                    <span className="text-dark-500">{h.from}</span>
-                                    <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
-                                  </>
-                                )}
-                                <span className="text-dark-200 font-medium">{h.status}</span>
-                                {h.by && (
-                                  <span className="text-dark-500 truncate">by {h.by}</span>
-                                )}
-                              </>
-                            )}
-                          </div>
-                          <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(h.at)}>
-                            {timeAgo(h.at)}
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <>
-                {task.createdAt && (
+            {/* Transition history (with commits interleaved chronologically) */}
+            {(() => {
+              const historyItems = (task.history || []).map((h, i) => ({
+                kind: 'history', at: h.at, h, key: `h-${i}`,
+              }));
+              const commitItems = (task.commits || []).map((c, i) => ({
+                kind: 'commit', at: c.date, c, key: `c-${c.hash || i}`,
+              }));
+              const timeline = [...historyItems, ...commitItems].sort((a, b) => {
+                const ta = a.at ? new Date(a.at).getTime() : 0;
+                const tb = b.at ? new Date(b.at).getTime() : 0;
+                return ta - tb;
+              });
+              if (timeline.length === 0) {
+                return task.createdAt ? (
                   <div className="flex items-center justify-between py-1">
                     <div className="flex items-center gap-2 text-xs text-dark-400">
                       <Calendar className="w-3.5 h-3.5" />
@@ -933,58 +858,142 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                       {timeAgo(task.createdAt)}
                     </span>
                   </div>
-                )}
-              </>
-            )}
-
-            {/* Associated commits */}
-            {task.commits?.length > 0 && (
-              <div className="space-y-0">
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold">Commits ({task.commits.length})</div>
-                  <button
-                    onClick={() => { setClickedCommitHash(null); setShowAllCommits(true); }}
-                    className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
-                  >
-                    View all diffs
-                  </button>
-                </div>
-                <div className="space-y-1">
-                  {task.commits.map((c, i) => (
-                    <div key={i} className="flex items-center justify-between py-1.5 px-2 rounded-lg bg-dark-800/50 border border-dark-700/50 group hover:border-indigo-500/30 transition-colors">
+                ) : null;
+              }
+              return (
+                <div className="space-y-0">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold">History</div>
+                    {task.commits?.length > 0 && (
                       <button
-                        onClick={() => { setClickedCommitHash(c.hash); setShowAllCommits(true); }}
-                        className="flex items-center gap-2 min-w-0 text-left cursor-pointer"
-                        title="View commit diff"
+                        onClick={() => { setClickedCommitHash(null); setShowAllCommits(true); }}
+                        className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
                       >
-                        <GitCommit className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-                        <code className="text-xs text-amber-300 font-mono hover:text-amber-200 transition-colors">{c.hash?.slice(0, 7)}</code>
-                        {c.message && (
-                          <span className="text-xs text-dark-300 truncate">{c.message}</span>
-                        )}
+                        View all diffs ({task.commits.length})
                       </button>
-                      <div className="flex items-center gap-2">
-                        {c.date && (
-                          <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(c.date)}>
-                            {timeAgo(c.date)}
-                          </span>
-                        )}
+                    )}
+                  </div>
+                  <div className="relative pl-4 border-l border-dark-700 space-y-1.5">
+                    {timeline.map((item) => item.kind === 'commit' ? (
+                      <div key={item.key} className="relative group">
+                        <div className="w-full flex items-start gap-2 rounded-md px-1 py-0.5 -ml-1 hover:bg-dark-800/60 transition-colors">
+                          <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-dark-900 group-hover:ring-amber-500/30 transition-colors" />
+                          <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
+                            <button
+                              onClick={() => { setClickedCommitHash(item.c.hash); setShowAllCommits(true); }}
+                              className="flex items-center gap-1.5 text-xs min-w-0 text-left cursor-pointer"
+                              title="View commit diff"
+                            >
+                              <GitCommit className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
+                              <code className="text-amber-300 font-mono hover:text-amber-200 transition-colors flex-shrink-0">{item.c.hash?.slice(0, 7)}</code>
+                              {item.c.message && (
+                                <span className="text-dark-300 truncate">{item.c.message}</span>
+                              )}
+                            </button>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              <button
+                                onClick={async () => {
+                                  await api.removeTaskCommit(task.agentId, task.id, item.c.hash);
+                                  onRefresh();
+                                }}
+                                className="p-0.5 rounded text-dark-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                                title="Remove commit link"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                              {item.c.date && (
+                                <span className="text-[10px] text-dark-500" title={formatDate(item.c.date)}>
+                                  {timeAgo(item.c.date)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div key={item.key} className="relative">
                         <button
-                          onClick={async () => {
-                            await api.removeTaskCommit(task.agentId, task.id, c.hash);
-                            onRefresh();
-                          }}
-                          className="p-0.5 rounded text-dark-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                          title="Remove commit link"
+                          className="w-full flex items-start gap-2 text-left rounded-md px-1 py-0.5 -ml-1 hover:bg-dark-800/60 transition-colors cursor-pointer group"
+                          onClick={() => setHistoryDetail(item.h)}
                         >
-                          <X className="w-3 h-3" />
+                          <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900 group-hover:bg-indigo-500 group-hover:ring-indigo-500/30 transition-colors" />
+                          <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
+                            <div className="flex items-center gap-1.5 text-xs min-w-0">
+                              {item.h.type === 'execution' ? (
+                                <>
+                                  <MessageSquare className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
+                                  <span className={`font-medium ${item.h.success ? 'text-blue-300' : 'text-red-300'}`}>
+                                    {item.h.mode === 'refine' ? 'Refine' : item.h.mode === 'decide' ? 'Decide' : item.h.mode === 'title' ? 'Title' : item.h.mode === 'set_type' ? 'Set Type' : 'Execution'} {item.h.success ? '✓' : '✗'}
+                                  </span>
+                                  <span className="text-dark-500 truncate">by {item.h.by}</span>
+                                  {item.h.messages?.length > 0 && (
+                                    <span className="text-[10px] text-dark-500">— {item.h.messages.length} msg{item.h.messages.length > 1 ? 's' : ''}</span>
+                                  )}
+                                </>
+                              ) : item.h.type === 'edit' ? (
+                                <>
+                                  <Edit3 className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
+                                  <span className="text-dark-200 font-medium">edited {item.h.field || (item.h.fields ? item.h.fields.map(f => f.field).join(', ') : 'task')}</span>
+                                  {item.h.by && (
+                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
+                                  )}
+                                </>
+                              ) : item.h.type === 'reassign' ? (
+                                <>
+                                  <User className="w-2.5 h-2.5 text-indigo-400 flex-shrink-0" />
+                                  <span className="text-dark-200 font-medium">reassigned</span>
+                                  {item.h.by && (
+                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
+                                  )}
+                                </>
+                              ) : item.h.type === 'error' ? (
+                                <>
+                                  <XCircle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
+                                  <span className="text-red-300 font-medium">error</span>
+                                  {item.h.from && (
+                                    <span className="text-dark-500 truncate">in {item.h.from}</span>
+                                  )}
+                                  {item.h.by && (
+                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
+                                  )}
+                                  {item.h.error && (
+                                    <span className="text-red-400/70 truncate" title={item.h.error}>{item.h.error.slice(0, 80)}</span>
+                                  )}
+                                </>
+                              ) : item.h.type === 'stopped' ? (
+                                <>
+                                  <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
+                                  <span className="text-yellow-300 font-medium">stopped</span>
+                                  {item.h.by && (
+                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {item.h.from && (
+                                    <>
+                                      <span className="text-dark-500">{item.h.from}</span>
+                                      <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
+                                    </>
+                                  )}
+                                  <span className="text-dark-200 font-medium">{item.h.status}</span>
+                                  {item.h.by && (
+                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(item.h.at)}>
+                              {timeAgo(item.h.at)}
+                            </span>
+                          </div>
                         </button>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         </div>
 
