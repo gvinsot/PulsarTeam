@@ -4,7 +4,6 @@ import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
-import OneDriveConnect from './OneDriveConnect';
 import PluginEditor from './PluginEditor';
 
 const categoryColors = {
@@ -428,9 +427,6 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                     </button>
                     )}
                   </div>
-
-                  {/* OneDrive OAuth connection */}
-                  <OneDriveConnect onStatusChange={() => onRefresh?.()} />
 
                   {/* Create plugin form */}
                   {showCreate && (
