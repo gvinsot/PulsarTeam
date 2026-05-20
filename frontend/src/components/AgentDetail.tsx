@@ -56,6 +56,46 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
   const [currentProject, setCurrentProject] = useState(agent?.project || '');
   const [projectSaving, setProjectSaving] = useState(false);
 
+  // Repo list sourced from the agent's board GitHub plugin OAuth — same list
+  // as CreateTaskModal uses, so the chat picker isn't artificially restricted
+  // to repos already referenced by an existing task on the board.
+  const [boardRepos, setBoardRepos] = useState([]);
+  useEffect(() => {
+    if (!agent?.boardId) { setBoardRepos([]); return; }
+    let cancelled = false;
+    api.getBoardAvailableRepos(agent.boardId)
+      .then(repos => { if (!cancelled) setBoardRepos(Array.isArray(repos) ? repos : []); })
+      .catch(() => { if (!cancelled) setBoardRepos([]); });
+    return () => { cancelled = true; };
+  }, [agent?.boardId]);
+
+  // Merge the board's available repos with the global projects list as a
+  // fallback. Always include the currently-selected project so the dropdown
+  // can render it even when the board OAuth isn't connected.
+  const repoOptions = (() => {
+    const map = new Map();
+    for (const r of boardRepos) {
+      const key = r.fullName || r.name;
+      if (!key) continue;
+      map.set(key, {
+        name: key,
+        fullName: r.fullName || key,
+        description: r.description || '',
+        htmlUrl: r.htmlUrl || '',
+      });
+    }
+    if (boardRepos.length === 0) {
+      for (const p of (projects || [])) {
+        if (!p?.name) continue;
+        if (!map.has(p.name)) map.set(p.name, p);
+      }
+    }
+    if (currentProject && !map.has(currentProject)) {
+      map.set(currentProject, { name: currentProject, fullName: currentProject });
+    }
+    return Array.from(map.values());
+  })();
+
   useEffect(() => {
     setCurrentProject(agent?.project || '');
   }, [agent?.id, agent?.project]);
@@ -193,7 +233,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
                 title="Working project"
               >
                 <option value="">No repository</option>
-                {projects?.map(p => (
+                {repoOptions.map(p => (
                   <option key={p.name} value={p.name} title={p.description || p.htmlUrl || p.name}>
                     {p.fullName || p.name}
                   </option>
@@ -239,7 +279,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
               title="Working project"
             >
               <option value="">No repository</option>
-              {projects?.map(p => (
+              {repoOptions.map(p => (
                 <option key={p.name} value={p.name} title={p.description || p.htmlUrl || p.name}>
                   {p.fullName || p.name}
                 </option>
