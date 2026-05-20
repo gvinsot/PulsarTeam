@@ -8,7 +8,27 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [data, setData] = useState(null);
-  const [tab, setTab] = useState('commits');
+  const [tab, setTab] = useState('activity');
+
+  // Build a sha → tags lookup so each commit can render its tags inline
+  const tagsBySha = useMemo(() => {
+    const map = new Map();
+    if (!data?.tags) return map;
+    for (const t of data.tags) {
+      if (!t.sha) continue;
+      const list = map.get(t.sha) || [];
+      list.push(t);
+      map.set(t.sha, list);
+    }
+    return map;
+  }, [data]);
+
+  // Tags whose commit is not in the visible (30-day) commit list — shown as a separate group below
+  const orphanTags = useMemo(() => {
+    if (!data?.tags || !data?.commits) return [];
+    const commitShas = new Set(data.commits.map(c => c.sha));
+    return data.tags.filter(t => !commitShas.has(t.sha));
+  }, [data]);
 
   useEffect(() => {
     const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -103,28 +123,21 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
         {/* Tabs */}
         <div className="flex border-b border-dark-700 shrink-0">
           <button
-            onClick={() => setTab('commits')}
+            onClick={() => setTab('activity')}
             className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
-              tab === 'commits'
+              tab === 'activity'
                 ? 'text-dark-100 border-b-2 border-purple-500'
                 : 'text-dark-400 hover:text-dark-100'
             }`}
           >
             <GitCommit size={14} />
-            Commits
-            {data && <span className="text-xs text-dark-500 ml-1">({data.commits.length})</span>}
-          </button>
-          <button
-            onClick={() => setTab('tags')}
-            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
-              tab === 'tags'
-                ? 'text-dark-100 border-b-2 border-purple-500'
-                : 'text-dark-400 hover:text-dark-100'
-            }`}
-          >
-            <Tag size={14} />
-            Tags / Releases
-            {data && <span className="text-xs text-dark-500 ml-1">({data.tags.length})</span>}
+            Commits &amp; Tags
+            {data && (
+              <span className="text-xs text-dark-500 ml-1">
+                ({data.commits.length}
+                {data.tags.length > 0 ? ` · ${data.tags.length} tag${data.tags.length > 1 ? 's' : ''}` : ''})
+              </span>
+            )}
           </button>
           <button
             onClick={() => setTab('explorer')}
@@ -155,65 +168,104 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             </div>
           )}
 
-          {data && !loading && tab === 'commits' && (
+          {data && !loading && tab === 'activity' && (
             <div className="space-y-1">
-              {data.commits.length === 0 ? (
+              {data.commits.length === 0 && data.tags.length === 0 ? (
                 <p className="text-dark-500 text-sm text-center py-8">No commits in the last 30 days</p>
               ) : (
-                data.commits.map(c => (
-                  <a
-                    key={c.sha}
-                    href={c.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-start gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors group"
-                  >
-                    {c.authorAvatar ? (
-                      <img src={c.authorAvatar} alt="" className="w-6 h-6 rounded-full mt-0.5 shrink-0" />
-                    ) : (
-                      <div className="w-6 h-6 rounded-full bg-dark-700 flex items-center justify-center mt-0.5 shrink-0">
-                        <GitCommit size={12} className="text-dark-400" />
+                <>
+                  {data.commits.map(c => {
+                    const commitTags = tagsBySha.get(c.sha) || [];
+                    return (
+                      <div
+                        key={c.sha}
+                        className="flex items-start gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors group"
+                      >
+                        {c.authorAvatar ? (
+                          <img src={c.authorAvatar} alt="" className="w-6 h-6 rounded-full mt-0.5 shrink-0" />
+                        ) : (
+                          <div className="w-6 h-6 rounded-full bg-dark-700 flex items-center justify-center mt-0.5 shrink-0">
+                            <GitCommit size={12} className="text-dark-400" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-start gap-2 flex-wrap">
+                            <a
+                              href={c.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-sm text-dark-100 truncate hover:text-purple-300 min-w-0 flex-1"
+                              title={c.message}
+                            >
+                              {c.message}
+                            </a>
+                            {commitTags.map(t => (
+                              <a
+                                key={t.name}
+                                href={t.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-green-500/10 border border-green-500/30 text-xs text-green-300 hover:bg-green-500/20 hover:text-green-200 transition-colors shrink-0"
+                                title={`Tag / release: ${t.name}`}
+                              >
+                                <Tag size={10} />
+                                {t.name}
+                              </a>
+                            ))}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <a
+                              href={c.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-purple-400 font-mono hover:text-purple-300"
+                            >
+                              {c.shortSha}
+                            </a>
+                            <span className="text-xs text-dark-500">{c.author}</span>
+                            <span className="text-xs text-dark-600 flex items-center gap-0.5">
+                              <Clock size={10} />
+                              {formatDate(c.date)}
+                            </span>
+                          </div>
+                        </div>
+                        <a
+                          href={c.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-dark-600 hover:text-dark-300 mt-1 shrink-0"
+                          title="Open commit on GitHub"
+                        >
+                          <ExternalLink size={12} />
+                        </a>
                       </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-dark-100 truncate group-hover:text-purple-300">{c.message}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <code className="text-xs text-purple-400 font-mono">{c.shortSha}</code>
-                        <span className="text-xs text-dark-500">{c.author}</span>
-                        <span className="text-xs text-dark-600 flex items-center gap-0.5">
-                          <Clock size={10} />
-                          {formatDate(c.date)}
-                        </span>
-                      </div>
-                    </div>
-                    <ExternalLink size={12} className="text-dark-600 group-hover:text-dark-400 mt-1 shrink-0" />
-                  </a>
-                ))
-              )}
-            </div>
-          )}
+                    );
+                  })}
 
-          {data && !loading && tab === 'tags' && (
-            <div className="space-y-1">
-              {data.tags.length === 0 ? (
-                <p className="text-dark-500 text-sm text-center py-8">No tags found</p>
-              ) : (
-                data.tags.map(t => (
-                  <a
-                    key={t.name}
-                    href={t.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors group"
-                  >
-                    <Tag size={14} className="text-green-400 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-dark-100 font-medium group-hover:text-green-300">{t.name}</p>
-                      <code className="text-xs text-dark-500 font-mono">{t.shortSha}</code>
+                  {orphanTags.length > 0 && (
+                    <div className="pt-3 mt-3 border-t border-dark-700">
+                      <p className="text-xs text-dark-500 px-1 mb-1.5">
+                        Older tags (commit outside the 30-day window)
+                      </p>
+                      {orphanTags.map(t => (
+                        <a
+                          key={t.name}
+                          href={t.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors group"
+                        >
+                          <Tag size={14} className="text-green-400 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm text-dark-100 font-medium group-hover:text-green-300">{t.name}</p>
+                            <code className="text-xs text-dark-500 font-mono">{t.shortSha}</code>
+                          </div>
+                          <ExternalLink size={12} className="text-dark-600 group-hover:text-dark-400 shrink-0" />
+                        </a>
+                      ))}
                     </div>
-                    <ExternalLink size={12} className="text-dark-600 group-hover:text-dark-400 shrink-0" />
-                  </a>
-                ))
+                  )}
+                </>
               )}
             </div>
           )}
