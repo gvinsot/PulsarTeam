@@ -156,6 +156,12 @@ export const api = {
   getHistory: (id) =>
     fetch(`${API_BASE}/agents/${id}/history`, { headers: getHeaders() }).then(handleResponse),
 
+  reloadHistory: (id) =>
+    fetch(`${API_BASE}/agents/${id}/history/reload`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   clearHistory: (id) =>
     fetch(`${API_BASE}/agents/${id}/history`, {
       method: 'DELETE',

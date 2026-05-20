@@ -3,7 +3,7 @@
 
 export { getPool, isDatabaseConnected } from './database/connection.js';
 export { initDatabase } from './database/schema.js';
-export { getAllAgents, saveAgent, deleteAgentFromDb, setAgentOwner, getAgentsByOwner, setAgentBoard, getAgentsByBoard } from './database/agents.js';
+export { getAllAgents, getAgentById, saveAgent, deleteAgentFromDb, setAgentOwner, getAgentsByOwner, setAgentBoard, getAgentsByBoard } from './database/agents.js';
 export { getAllSkills, saveSkill, deleteSkillFromDb } from './database/skills.js';
 export { getAllAgentSkills, searchAgentSkills, getAgentSkillById, saveAgentSkill, deleteAgentSkillFromDb } from './database/agentSkills.js';
 export { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database/mcpServers.js';

@@ -2,7 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import { globalTaskStore } from '../services/globalTaskStore.js';
 import { getWorkflowForBoard } from '../services/configManager.js';
-import { getAllBoards, getBoardsByUser, saveTaskToDb } from '../services/database.js';
+import { getAllBoards, getBoardsByUser, saveTaskToDb, getAgentById } from '../services/database.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { checkBoardAccess } from '../middleware/auth.js';
@@ -269,6 +269,24 @@ export function agentRoutes(agentManager) {
   // Get conversation history
   router.get('/:id/history', requireAgentAccess, (req, res) => {
     const agent = agentManager.agents.get(req.params.id);
+    res.json(agent.conversationHistory);
+  });
+
+  // Reload conversation history from the database. Useful in multi-replica
+  // deployments where another replica may have advanced the conversation
+  // beyond what this replica has in memory.
+  router.post('/:id/history/reload', requireAgentAccess, async (req, res) => {
+    const agent = agentManager.agents.get(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const fresh = await getAgentById(req.params.id);
+    if (!fresh) return res.status(404).json({ error: 'Agent not found in database' });
+    agent.conversationHistory = Array.isArray(fresh.conversationHistory) ? fresh.conversationHistory : [];
+    // History diverged from whatever the runner's JSONL holds — force a fresh
+    // CLI session on next call so the model sees the reloaded history.
+    agent.runnerSessions = {};
+    agent.currentThinking = '';
+    delete agent._compactionArmed;
+    agentManager._emit?.('agent:updated', agentManager._sanitize ? agentManager._sanitize(agent) : agent);
     res.json(agent.conversationHistory);
   });
 

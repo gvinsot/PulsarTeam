@@ -191,6 +191,16 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
     onRefresh();
   };
 
+  const handleReloadHistory = async () => {
+    try {
+      const fresh = await api.reloadHistory(agent.id);
+      setHistory(Array.isArray(fresh) ? fresh : []);
+      onRefresh?.();
+    } catch (err) {
+      console.error('Failed to reload conversation from DB:', err);
+    }
+  };
+
   const handleTruncateHistory = async (afterIndex) => {
     if (!confirm('Restart from this message? Everything after it will be deleted.')) return;
     const newHistory = await api.truncateHistory(agent.id, afterIndex);
@@ -340,6 +350,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
               onSend={handleSend}
               onStop={() => socket?.emit(WsEvents.REQ_STOP, { agentId: agent.id })}
               onClear={handleClearHistory}
+              onReload={handleReloadHistory}
               onTruncate={handleTruncateHistory}
               chatEndRef={chatEndRef}
               agentName={agent.name}

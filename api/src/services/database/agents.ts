@@ -27,6 +27,26 @@ export async function getAllAgents() {
   }
 }
 
+export async function getAgentById(id) {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query(
+      'SELECT data, owner_id, board_id FROM agents WHERE id = $1',
+      [id]
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    const { todoList, ...agent } = row.data;
+    if (row.board_id && !agent.boardId) agent.boardId = row.board_id;
+    if (row.owner_id && !agent.ownerId) agent.ownerId = row.owner_id;
+    return agent;
+  } catch (err) {
+    console.error('Failed to load agent:', err.message);
+    return null;
+  }
+}
+
 export async function saveAgent(agent) {
   const pool = getPool();
   if (!pool) return;

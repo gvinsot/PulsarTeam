@@ -1,12 +1,23 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
-  MessageSquare, Send, RotateCcw, StopCircle, ArrowDownToLine, ImagePlus, X,
+  MessageSquare, Send, RotateCcw, StopCircle, ArrowDownToLine, ImagePlus, X, RefreshCw,
 } from 'lucide-react';
 import ChatMessage from './ChatMessage';
 import { RichAssistantContent } from './ChatMessage';
 
-export default function ChatTab({ history, thinking, streamBuffer, message, setMessage, sending, isBusy, onSend, onStop, onClear, onTruncate, chatEndRef, agentName, autoScroll, onToggleAutoScroll, supportsImages, pendingImages, onAddImages, onRemoveImage }) {
+export default function ChatTab({ history, thinking, streamBuffer, message, setMessage, sending, isBusy, onSend, onStop, onClear, onReload, onTruncate, chatEndRef, agentName, autoScroll, onToggleAutoScroll, supportsImages, pendingImages, onAddImages, onRemoveImage }) {
   const fileInputRef = useRef(null);
+  const [reloading, setReloading] = useState(false);
+
+  const handleReload = async () => {
+    if (!onReload || reloading) return;
+    setReloading(true);
+    try {
+      await onReload();
+    } finally {
+      setReloading(false);
+    }
+  };
 
   // When streamBuffer is active, the last assistant message in history may be
   // a duplicate (agent:updated can arrive before the buffer is cleared).
@@ -133,6 +144,16 @@ export default function ChatTab({ history, thinking, streamBuffer, message, setM
           >
             <RotateCcw className="w-4 h-4" />
           </button>
+          {onReload && (
+            <button
+              onClick={handleReload}
+              disabled={reloading}
+              className="p-2 text-dark-500 hover:text-indigo-400 hover:bg-dark-700 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40"
+              title="Reload conversation from database"
+            >
+              <RefreshCw className={`w-4 h-4 ${reloading ? 'animate-spin' : ''}`} />
+            </button>
+          )}
           <button
             onClick={onToggleAutoScroll}
             className={`p-2 rounded-lg transition-colors flex-shrink-0 ${autoScroll ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20' : 'text-dark-500 hover:text-dark-300 hover:bg-dark-700'}`}
