@@ -1,7 +1,7 @@
 import express from 'express';
 import {
   storeOAuthToken,
-  getOAuthToken,
+  fetchOAuthTokenWithDbFallback,
   deleteOAuthToken,
 } from '../services/database/oauthTokens.js';
 
@@ -9,11 +9,13 @@ const router = express.Router();
 const PROVIDER = 'claude_code';
 const SCOPE_TYPE = 'user';
 
-router.get('/:ownerId', (req, res) => {
+router.get('/:ownerId', async (req, res) => {
   const { ownerId } = req.params;
   if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
 
-  const record = getOAuthToken(PROVIDER, SCOPE_TYPE, ownerId);
+  // DB fallback so a sibling deployment that wrote the token a moment ago
+  // (or that this replica started before) is still resolvable.
+  const record = await fetchOAuthTokenWithDbFallback(PROVIDER, SCOPE_TYPE, ownerId);
   if (!record) return res.status(404).json({ error: 'Token not found' });
 
   res.json({

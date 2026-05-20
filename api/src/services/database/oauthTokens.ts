@@ -1,3 +1,4 @@
+import pg from 'pg';
 import { getPool } from './connection.js';
 import { encryptIfPlain, tryDecrypt } from '../../lib/crypto.js';
 
@@ -10,7 +11,16 @@ import { encryptIfPlain, tryDecrypt } from '../../lib/crypto.js';
  *   - scope_type: 'agent' | 'board' | 'user'
  *   - scope_id:   agentId | boardId | userId
  *
- * In-memory cache for fast lookups (populated from DB on startup).
+ * The table has no `environment` column on purpose: when two deployments share
+ * the same database (e.g. prod + qa), they share the OAuth token pool — tasks
+ * are env-scoped but credentials follow the user/board/agent across envs.
+ *
+ * In-memory cache for fast lookups (populated from DB on startup). Cross-replica
+ * sync is handled via PostgreSQL LISTEN/NOTIFY on the `oauth_token_change`
+ * channel: every write fires NOTIFY, every replica refreshes the affected key.
+ * As a defence in depth, callers in the hot path (resolveAccessToken,
+ * fetchOAuthTokenWithDbFallback) read through to the DB on cache miss so a
+ * notification dropped or a replica started before a write still resolves.
  */
 
 export type OAuthProvider = 'gmail' | 'gdrive' | 'onedrive' | 'outlook' | 'slack' | 'github' | 'jira' | 's3' | 'wordpress' | 'claude_code';
@@ -31,6 +41,66 @@ const tokenCache = new Map<string, OAuthTokenRecord>();
 
 function cacheKey(provider: string, scopeType: string, scopeId: string): string {
   return `${provider}:${scopeType}:${scopeId}`;
+}
+
+const NOTIFY_CHANNEL = 'oauth_token_change';
+
+/** Fire a NOTIFY so every API replica sharing this DB refreshes its cache. */
+async function notifyTokenChange(provider: string, scopeType: string, scopeId: string, op: 'upsert' | 'delete'): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  try {
+    await pool.query(`SELECT pg_notify($1, $2)`, [
+      NOTIFY_CHANNEL,
+      JSON.stringify({ provider, scopeType, scopeId, op }),
+    ]);
+  } catch (err) {
+    console.error('[OAuthStore] pg_notify failed:', (err as Error).message);
+  }
+}
+
+/** Read one record straight from the DB (used as a fallback when the cache is cold/stale). */
+async function loadOAuthTokenFromDb(provider: OAuthProvider, scopeType: ScopeType, scopeId: string): Promise<OAuthTokenRecord | null> {
+  const pool = getPool();
+  if (!pool) return null;
+  try {
+    const result = await pool.query(
+      'SELECT provider, scope_type, scope_id, access_token, refresh_token, expires_at, meta FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 AND scope_id = $3',
+      [provider, scopeType, scopeId]
+    );
+    if (result.rows.length === 0) return null;
+    const row = result.rows[0];
+    const record: OAuthTokenRecord = {
+      provider: row.provider,
+      scopeType: row.scope_type,
+      scopeId: row.scope_id,
+      accessToken: tryDecrypt(row.access_token),
+      refreshToken: tryDecrypt(row.refresh_token),
+      expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+      meta: row.meta || {},
+    };
+    tokenCache.set(cacheKey(provider, scopeType, scopeId), record);
+    return record;
+  } catch (err) {
+    console.error('[OAuthStore] loadOAuthTokenFromDb failed:', (err as Error).message);
+    return null;
+  }
+}
+
+/**
+ * Cache-first lookup that falls back to the DB on miss. Use this in any hot
+ * path where stale cache would break the feature (e.g. token resolution for an
+ * outbound API call, the runner fetching its claude_code token). Lightweight
+ * boolean status checks can keep using the synchronous getOAuthToken.
+ */
+export async function fetchOAuthTokenWithDbFallback(
+  provider: OAuthProvider,
+  scopeType: ScopeType,
+  scopeId: string
+): Promise<OAuthTokenRecord | null> {
+  const cached = getOAuthToken(provider, scopeType, scopeId);
+  if (cached) return cached;
+  return await loadOAuthTokenFromDb(provider, scopeType, scopeId);
 }
 
 /** Store (upsert) an OAuth token. */
@@ -59,6 +129,7 @@ export async function storeOAuthToken(record: OAuthTokenRecord): Promise<void> {
         record.meta ? JSON.stringify(record.meta) : null,
       ]
     );
+    await notifyTokenChange(record.provider, record.scopeType, record.scopeId, 'upsert');
   } catch (err) {
     console.error(`[OAuthStore] Failed to persist token (${key}):`, (err as Error).message);
   }
@@ -92,6 +163,7 @@ export async function deleteOAuthToken(provider: OAuthProvider, scopeType: Scope
       'DELETE FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 AND scope_id = $3',
       [provider, scopeType, scopeId]
     );
+    await notifyTokenChange(provider, scopeType, scopeId, 'delete');
   } catch (err) {
     console.error(`[OAuthStore] Failed to delete token (${key}):`, (err as Error).message);
   }
@@ -99,9 +171,11 @@ export async function deleteOAuthToken(provider: OAuthProvider, scopeType: Scope
 
 /** Delete all tokens for a given scope (e.g., when deleting an agent or board). */
 export async function deleteOAuthTokensByScope(scopeType: ScopeType, scopeId: string): Promise<void> {
-  for (const [key] of tokenCache) {
+  const affectedProviders: string[] = [];
+  for (const [key, record] of tokenCache) {
     if (key.includes(`:${scopeType}:${scopeId}`)) {
       tokenCache.delete(key);
+      affectedProviders.push(record.provider);
     }
   }
 
@@ -113,6 +187,9 @@ export async function deleteOAuthTokensByScope(scopeType: ScopeType, scopeId: st
       'DELETE FROM oauth_tokens WHERE scope_type = $1 AND scope_id = $2',
       [scopeType, scopeId]
     );
+    for (const provider of affectedProviders) {
+      await notifyTokenChange(provider, scopeType, scopeId, 'delete');
+    }
   } catch (err) {
     console.error(`[OAuthStore] Failed to delete tokens for ${scopeType}:${scopeId}:`, (err as Error).message);
   }
@@ -151,15 +228,43 @@ export async function resolveAccessToken(
     let token: OAuthTokenRecord | null = null;
 
     if (scope.id === '__any__') {
-      // Scan for any user-scoped token for this provider
+      // Scan for any user-scoped token for this provider. Falls through to a
+      // DB query when the cache has none — covers the cross-replica case where
+      // env A persisted a user-scoped token but env B hasn't seen the NOTIFY yet.
       for (const [key, record] of tokenCache) {
         if (key.startsWith(`${provider}:user:`)) {
           token = record;
           break;
         }
       }
+      if (!token) {
+        const pool = getPool();
+        if (pool) {
+          try {
+            const result = await pool.query(
+              'SELECT provider, scope_type, scope_id, access_token, refresh_token, expires_at, meta FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 LIMIT 1',
+              [provider, 'user']
+            );
+            if (result.rows.length > 0) {
+              const row = result.rows[0];
+              token = {
+                provider: row.provider,
+                scopeType: row.scope_type,
+                scopeId: row.scope_id,
+                accessToken: tryDecrypt(row.access_token),
+                refreshToken: tryDecrypt(row.refresh_token),
+                expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+                meta: row.meta || {},
+              };
+              tokenCache.set(cacheKey(token.provider, token.scopeType, token.scopeId), token);
+            }
+          } catch (err) {
+            console.error('[OAuthStore] resolveAccessToken user-scope DB fallback failed:', (err as Error).message);
+          }
+        }
+      }
     } else {
-      token = getOAuthToken(provider, scope.type, scope.id);
+      token = await fetchOAuthTokenWithDbFallback(provider, scope.type, scope.id);
     }
 
     if (!token) continue;
@@ -213,6 +318,72 @@ export async function loadOAuthTokens(): Promise<void> {
   } catch (err) {
     console.error('[OAuthStore] Failed to load tokens:', (err as Error).message);
   }
+
+  // Subscribe to oauth_token_change so sibling replicas (e.g. prod + qa sharing
+  // the same DB) keep their in-memory caches in sync after each write.
+  await startOAuthTokenListener();
+}
+
+let _listenerClient: pg.PoolClient | null = null;
+let _listenerReconnectTimer: NodeJS.Timeout | null = null;
+
+async function startOAuthTokenListener(): Promise<void> {
+  const pool = getPool();
+  if (!pool) return;
+  if (_listenerClient) return; // already listening
+
+  try {
+    const client = await pool.connect();
+    _listenerClient = client;
+
+    client.on('notification', (msg: pg.Notification) => {
+      if (msg.channel !== NOTIFY_CHANNEL || !msg.payload) return;
+      let payload: { provider: string; scopeType: string; scopeId: string; op: 'upsert' | 'delete' };
+      try {
+        payload = JSON.parse(msg.payload);
+      } catch {
+        return;
+      }
+      const key = cacheKey(payload.provider, payload.scopeType, payload.scopeId);
+      if (payload.op === 'delete') {
+        if (tokenCache.delete(key)) {
+          console.log(`[OAuthStore] cache evict via NOTIFY: ${key}`);
+        }
+        return;
+      }
+      // upsert: reload the affected key from DB (best effort)
+      loadOAuthTokenFromDb(payload.provider as OAuthProvider, payload.scopeType as ScopeType, payload.scopeId)
+        .then((rec) => {
+          if (rec) console.log(`[OAuthStore] cache refresh via NOTIFY: ${key}`);
+        })
+        .catch(() => { /* already logged inside */ });
+    });
+
+    client.on('error', (err: Error) => {
+      console.error('[OAuthStore] LISTEN client error:', err.message);
+      // Drop the dead handle; schedule reconnect.
+      try { client.release(true); } catch { /* ignore */ }
+      _listenerClient = null;
+      scheduleListenerReconnect();
+    });
+
+    await client.query(`LISTEN ${NOTIFY_CHANNEL}`);
+    console.log(`[OAuthStore] LISTEN ${NOTIFY_CHANNEL} active (cross-replica cache sync)`);
+  } catch (err) {
+    console.error('[OAuthStore] Failed to start LISTEN:', (err as Error).message);
+    _listenerClient = null;
+    scheduleListenerReconnect();
+  }
+}
+
+function scheduleListenerReconnect(): void {
+  if (_listenerReconnectTimer) return;
+  _listenerReconnectTimer = setTimeout(() => {
+    _listenerReconnectTimer = null;
+    startOAuthTokenListener().catch(() => { /* logged inside */ });
+  }, 5000);
+  // Don't keep the process alive just for this reconnect timer.
+  _listenerReconnectTimer.unref?.();
 }
 
 /** Get the raw cache (for debugging/status endpoints). */
