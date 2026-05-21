@@ -298,13 +298,12 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         </button>
         <button
           onClick={async () => {
-            if (!confirm('Reload agent context? This will stop the agent and clear conversation history so it restarts with fresh plugin/MCP configuration.')) return;
-            await api.stopAgent(agent.id).catch(() => {});
-            await api.clearHistory(agent.id);
+            if (!confirm('Reload agent context? This stops the agent and invalidates every cache (conversation, runner sessions, MCP connections, LLM config, file tree) so the next message picks up your latest configuration.')) return;
+            await api.reloadContext(agent.id);
             onRefresh();
           }}
           className="px-4 py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 rounded-lg text-sm font-medium transition-colors"
-          title="Reload context (clear history to apply plugin changes)"
+          title="Reload context — invalidate all caches (conversation, model info, MCP, file tree) to apply config changes"
         >
           <RotateCw className="w-4 h-4" />
         </button>

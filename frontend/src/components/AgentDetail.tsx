@@ -5,6 +5,12 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
+
+// How long the client waits for the server's ack before assuming the
+// REQ_CHAT message was lost (socket reconnecting, server crash, etc.).
+// Long enough to absorb a slow round-trip; short enough that the user
+// gets feedback while their attention is still on the chat.
+const CHAT_ACK_TIMEOUT_MS = 8000;
 import VoiceChatTab from './VoiceChatTab';
 import ChatTab from './agentDetail/ChatTab';
 import PluginsTab from './agentDetail/PluginsTab';
@@ -25,7 +31,7 @@ const TABS = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab, userRole, currentUser }) {
+export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab, userRole, currentUser, showToast }) {
   const [activeTab, setActiveTab] = useState('chat');
 
   // Notify parent of active tab changes
@@ -153,22 +159,65 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
     setMessage('');
     setPendingImages([]);
 
-    // Use socket for streaming
     if (socket) {
-      // Generate a unique message ID to allow server-side deduplication
+      // Each REQ_CHAT carries a unique messageId so the server can dedup
+      // legitimate retries (e.g. ack timeout below). The ack callback tells
+      // us whether the server actually accepted the message — without it
+      // (and with the old volatile.emit) silently-dropped messages would
+      // vanish from the UI after the next agent:updated re-sync.
       const messageId = `${agent.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const payload = { agentId: agent.id, message: msg, messageId };
+      const payload: any = { agentId: agent.id, message: msg, messageId };
       if (imagesToSend) payload.images = imagesToSend;
-      // Use volatile.emit to prevent socket.io from buffering/replaying this event on reconnect
-      (socket.volatile || socket).emit(WsEvents.REQ_CHAT, payload);
-      // Optimistically add user message to history
-      const histEntry = { role: 'user', content: msg, timestamp: new Date().toISOString() };
+
+      // Optimistically add the user message to history. If the ack reports
+      // an error we roll it back so the user sees something is wrong.
+      const histEntry: any = { role: 'user', content: msg, timestamp: new Date().toISOString(), _pendingMessageId: messageId };
       if (imagePreviewsForHistory) histEntry.images = imagePreviewsForHistory;
       setHistory(prev => [...prev, histEntry]);
+
+      const rollbackOptimistic = (reason: string) => {
+        // Drop the optimistic entry by its tag (so concurrent sends don't
+        // accidentally remove the wrong one). Restore the input so the user
+        // can retry without retyping.
+        setHistory(prev => prev.filter((m: any) => m._pendingMessageId !== messageId));
+        setMessage(prev => prev || msg);
+        if (imagesToSend) setPendingImages(prev => prev.length ? prev : pendingImages);
+        sendingRef.current = false;
+        setSending(false);
+        if (showToast) showToast(reason, 'error', 6000);
+      };
+
+      let ackHandled = false;
+      const ackTimer = setTimeout(() => {
+        if (ackHandled) return;
+        ackHandled = true;
+        rollbackOptimistic('Message non délivré (timeout réseau). Vérifie ta connexion et réessaie.');
+      }, CHAT_ACK_TIMEOUT_MS);
+
+      socket.emit(WsEvents.REQ_CHAT, payload, (ackResp: any) => {
+        if (ackHandled) return;
+        ackHandled = true;
+        clearTimeout(ackTimer);
+
+        const status = ackResp?.status;
+        if (status === 'accepted' || status === 'duplicate') {
+          // Strip the pending tag — the message is now real history.
+          setHistory(prev => prev.map((m: any) =>
+            m._pendingMessageId === messageId ? { ...m, _pendingMessageId: undefined } : m
+          ));
+          // sending/sendingRef are released when status flips off 'busy'
+          return;
+        }
+
+        // Anything else (forbidden / rate_limit / busy / invalid / network)
+        // means the server never queued the message — undo the optimism.
+        const human = ackResp?.message || 'Le serveur a rejeté le message.';
+        rollbackOptimistic(human);
+      });
     } else {
       try {
         const result = await api.chatAgent(agent.id, msg);
-        const histEntry = { role: 'user', content: msg, timestamp: new Date().toISOString() };
+        const histEntry: any = { role: 'user', content: msg, timestamp: new Date().toISOString() };
         if (imagePreviewsForHistory) histEntry.images = imagePreviewsForHistory;
         setHistory(prev => [
           ...prev,
@@ -177,8 +226,8 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
         ]);
       } catch (err) {
         console.error(err);
+        if (showToast) showToast('Échec d\'envoi du message.', 'error', 6000);
       }
-      // Only release guard immediately for REST API path (no streaming)
       sendingRef.current = false;
       setSending(false);
     }

@@ -39,6 +39,68 @@ export const conversationMethods = {
     return true;
   },
 
+  /** Invalidate every per-agent cache so the next chat starts from a clean
+   * slate that picks up any pending config change (plugins, MCP servers,
+   * LLM config, instructions, project files). What gets cleared:
+   *
+   *  - In-flight stream + abort controller   (via stopAgent)
+   *  - Conversation history + thinking buffer + compaction state +
+   *    runner session UUIDs + per-task execution flags  (via clearHistory)
+   *  - Stream resume cache (so a stale buffer doesn't get replayed)
+   *  - Chat lock (so a stuck in-flight flag doesn't block the next send)
+   *  - Retry/compaction-retry counters
+   *  - LLM configs cache (reload from DB so model/endpoint edits land)
+   *  - Per-agent MCP client connections (reconnect with current auth)
+   *  - Project file tree (re-read so file additions/deletions show up)
+   *
+   * Returns true on success, false if the agent doesn't exist.
+   */
+  async reloadContext(this: any, agentId: string): Promise<boolean> {
+    const agent = this.agents.get(agentId);
+    if (!agent) return false;
+
+    // 1. Abort any in-flight stream so we don't fight it.
+    try { this.stopAgent(agentId); } catch { /* ignore */ }
+
+    // 2. Drop the stream resume cache for this agent.
+    if (this._activeStreams) this._activeStreams.delete(agentId);
+
+    // 3. Drop the chat lock (if stopAgent didn't already).
+    if (this._chatLocks) this._chatLocks.delete(agentId);
+
+    // 4. Reset transient retry flags so the next call starts fresh.
+    delete agent._streamRetryCount;
+    delete agent._compactionRetried;
+
+    // 5. Wipe conversation state (history, runner sessions, task flags…).
+    await this.clearHistory(agentId);
+
+    // 6. Force-refresh LLM configs from DB (global 60s cache).
+    try { await this.refreshLlmConfigs(); } catch (err: any) {
+      console.warn(`⚠️  [ReloadContext] refreshLlmConfigs failed: ${err.message}`);
+    }
+
+    // 7. Drop per-agent MCP client connections so the next tool call
+    //    reconnects with the current auth / server config.
+    if (this.mcpManager?.disconnectAgent) {
+      try { await this.mcpManager.disconnectAgent(agentId); } catch (err: any) {
+        console.warn(`⚠️  [ReloadContext] mcp.disconnectAgent failed: ${err.message}`);
+      }
+    }
+
+    // 8. Refresh the project file tree so any new/deleted files are visible
+    //    in the next system prompt. Skip if the agent has no project bound.
+    if (agent.project && this.executionManager?.refreshFileTree) {
+      try { await this.executionManager.refreshFileTree(agentId); } catch (err: any) {
+        console.warn(`⚠️  [ReloadContext] refreshFileTree failed: ${err.message}`);
+      }
+    }
+
+    this.addActionLog(agentId, 'info', 'Context reloaded — caches invalidated');
+    this._emit('agent:updated', this._sanitize(agent));
+    return true;
+  },
+
   truncateHistory(this: any, agentId: string, afterIndex: any): any {
     const agent = this.agents.get(agentId);
     if (!agent) return null;

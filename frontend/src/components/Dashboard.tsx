@@ -526,6 +526,7 @@ export default function Dashboard({
                 requestedTab={requestedTab}
                 userRole={user?.role}
                 currentUser={user}
+                showToast={showToast}
               />
             </div>
           )}

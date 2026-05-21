@@ -304,6 +304,17 @@ export function agentRoutes(agentManager) {
     res.json({ success: true });
   });
 
+  // Reload context — stronger than clearHistory: stops the agent and
+  // invalidates every per-agent cache (stream buffer, chat lock, retry
+  // counters, runner sessions, MCP connections, file tree) plus the global
+  // LLM config cache, so any pending config change is picked up on the
+  // next message.
+  router.post('/:id/reload-context', requireAgentEditAccess, async (req, res) => {
+    const success = await agentManager.reloadContext(req.params.id);
+    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    res.json({ success: true });
+  });
+
   // Truncate conversation history after a specific message index
   router.delete('/:id/history/after/:index', requireAgentEditAccess, (req, res) => {
     const result = agentManager.truncateHistory(req.params.id, req.params.index);

@@ -14,6 +14,7 @@ export const WsEvents = {
   STREAM_CHUNK: 'agent:stream:chunk',
   STREAM_END: 'agent:stream:end',
   STREAM_ERROR: 'agent:stream:error',
+  STREAM_RESUME: 'agent:stream:resume',
 
   // Agent activity
   AGENT_THINKING: 'agent:thinking',
@@ -51,6 +52,7 @@ export const WsEvents = {
   REQ_VOICE_DELEGATE: 'voice:delegate',
   REQ_VOICE_ASK: 'voice:ask',
   REQ_VOICE_MANAGEMENT: 'voice:management',
+  REQ_STREAM_STATE: 'agent:stream:state:request',
 
   ERROR: 'error',
   HANDOFF_COMPLETE: 'agent:handoff:complete',

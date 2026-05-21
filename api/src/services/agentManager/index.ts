@@ -35,6 +35,12 @@ export interface AgentManager {
   getSwarmStatus(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any;
   setStatus(id: string, status: string, detail?: string | null): void;
   stopAgent(id: string): boolean;
+  beginStream(agentId: string, opts?: { userMessage?: string | null; userMessageId?: string | null }): void;
+  appendStreamChunk(agentId: string, chunk: string): void;
+  endStream(agentId: string, extra?: Record<string, any>): void;
+  errorStream(agentId: string, error: string): void;
+  getActiveStream(agentId: string): ActiveStream | null;
+  getActiveStreamsForUser(userId: string, role: string | null, userBoardIds: Set<string>): ActiveStream[];
 
   // ── taskStats.ts ──
   _collectTasks(projectFilter?: string | null): any[];
@@ -61,6 +67,7 @@ export interface AgentManager {
 
   // ── conversation.ts ──
   clearHistory(agentId: string): Promise<boolean>;
+  reloadContext(agentId: string): Promise<boolean>;
   truncateHistory(agentId: string, afterIndex: number): any[] | null;
   _switchProjectContext(agent: any, oldProject: string | null, newProject: string | null): void;
   buildVoiceInstructions(agentId: string): string;
@@ -134,11 +141,28 @@ export interface AgentManager {
   _compactHistory(agent: any, keepRecent?: number): Promise<void>;
 }
 
+/** Active stream snapshot kept in memory so that reconnecting / late-joining
+ * sockets can resume rendering the chunks that already flew by. The buffer is
+ * capped to avoid unbounded growth on long-running streams. */
+export interface ActiveStream {
+  agentId: string;
+  startedAt: number;
+  project: string | null;
+  boardId: string | null;
+  buffer: string;
+  /** The user message that triggered this stream — used by the frontend to
+   * verify the optimistic message it rendered is actually the one being
+   * processed. */
+  userMessage: string | null;
+  userMessageId: string | null;
+}
+
 export class AgentManager {
   agents: Map<string, any>;
   abortControllers: Map<string, AbortController>;
   _taskQueues: Map<string, Promise<any>>;
   _chatLocks: Map<string, string>;
+  _activeStreams: Map<string, ActiveStream>;
   io: any;
   wsEmitter: WsEmitter;
   skillManager: any;
@@ -170,6 +194,7 @@ export class AgentManager {
     this.abortControllers = new Map();
     this._taskQueues = new Map();
     this._chatLocks = new Map();
+    this._activeStreams = new Map();
     this.io = io;
     this.skillManager = skillManager;
     this.executionManager = executionManager;
@@ -398,6 +423,70 @@ export class AgentManager {
 
   _flushAgentUpdate(agentId: string) {
     this.wsEmitter.flush(agentId);
+  }
+
+  // ─── Stream cache: lets reconnecting / late-joining sockets resume ──────
+  /** Begin a streaming response for an agent. Tracks an in-memory buffer of
+   * chunks so that any socket that joins (or reconnects) while the stream is
+   * in flight can resume from where it is via REQ_STREAM_STATE / STREAM_RESUME.
+   * Always emits STREAM_START to the agent's board room. */
+  beginStream(agentId: string, opts: { userMessage?: string | null; userMessageId?: string | null } = {}) {
+    const agent = this.agents.get(agentId);
+    const stream: ActiveStream = {
+      agentId,
+      startedAt: Date.now(),
+      project: agent?.project || null,
+      boardId: agent?.boardId || null,
+      buffer: '',
+      userMessage: opts.userMessage ?? null,
+      userMessageId: opts.userMessageId ?? null,
+    };
+    this._activeStreams.set(agentId, stream);
+    this.wsEmitter.streamStart(agentId, { startedAt: stream.startedAt, userMessageId: stream.userMessageId });
+  }
+
+  /** Append a chunk to the active stream buffer and broadcast it. Safe to
+   * call even if no stream was registered (still emits, just doesn't cache). */
+  appendStreamChunk(agentId: string, chunk: string) {
+    const stream = this._activeStreams.get(agentId);
+    if (stream) {
+      stream.buffer += chunk;
+      // Cap buffer at ~200KB to bound memory. Reconnecting clients then see
+      // the tail of the response — better than losing the full state.
+      const MAX_BUFFER = 200_000;
+      if (stream.buffer.length > MAX_BUFFER) {
+        stream.buffer = '…' + stream.buffer.slice(-(MAX_BUFFER - 1));
+      }
+    }
+    this.wsEmitter.streamChunk(agentId, chunk);
+  }
+
+  /** Mark the stream as ended, drop the cache, and emit STREAM_END. */
+  endStream(agentId: string, extra?: Record<string, any>) {
+    this._activeStreams.delete(agentId);
+    this.wsEmitter.streamEnd(agentId, extra);
+  }
+
+  /** Mark the stream as errored, drop the cache, and emit STREAM_ERROR. */
+  errorStream(agentId: string, error: string) {
+    this._activeStreams.delete(agentId);
+    this.wsEmitter.streamError(agentId, error);
+  }
+
+  /** Return the live snapshot (with accumulated buffer) for an agent, or null. */
+  getActiveStream(agentId: string): ActiveStream | null {
+    return this._activeStreams.get(agentId) || null;
+  }
+
+  /** Return active stream snapshots for the agents accessible to a user. */
+  getActiveStreamsForUser(userId: string, role: string | null, userBoardIds: Set<string>): ActiveStream[] {
+    const accessible = this._agentsForUser(userId, role || undefined, userBoardIds);
+    const accessibleIds = new Set(accessible.map((a: any) => a.id));
+    const out: ActiveStream[] = [];
+    for (const [id, stream] of this._activeStreams) {
+      if (accessibleIds.has(id)) out.push(stream);
+    }
+    return out;
   }
 
   // ─── Task store helpers (replace agent.todoList) ─────────────────────

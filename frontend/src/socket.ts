@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { WsEvents } from './socketEvents';
 
 let socket = null;
 
@@ -22,6 +23,10 @@ export function connectSocket(token) {
 
   socket.on('connect', () => {
     console.log('🔌 WebSocket connected');
+    // Ask the server which agents are currently streaming so the UI can
+    // pick up an in-flight response instead of looking frozen until the
+    // user refreshes. Fires on initial connect AND on every reconnect.
+    socket.emit(WsEvents.REQ_STREAM_STATE);
   });
 
   socket.on('connect_error', (err) => {

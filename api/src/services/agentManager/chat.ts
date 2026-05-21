@@ -130,6 +130,20 @@ export const chatMethods = {
     }
     agent.conversationHistory.push(historyEntry);
 
+    // Persist the user message immediately. Without this, a crash, restart,
+    // or any unhandled error before the LLM stream completes (which can take
+    // minutes) would lose the message — the user sees their message disappear
+    // on the next agent:updated refresh because it never made it to the DB.
+    // Only persist for actual user input or delegation tasks; intermediate
+    // tool-result/nudge/ask-result messages aren't worth a synchronous write.
+    if (isTopLevel || messageMeta?.type === 'delegation-task') {
+      try {
+        await saveAgent(agent);
+      } catch (persistErr: any) {
+        console.warn(`⚠️  [Chat] Early persist of user message failed for "${agent.name}": ${persistErr.message}`);
+      }
+    }
+
     let fullResponse = '';
     let toolsExecuted = false;
 

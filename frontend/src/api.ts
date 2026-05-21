@@ -168,6 +168,12 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  reloadContext: (id) =>
+    fetch(`${API_BASE}/agents/${id}/reload-context`, {
+      method: 'POST',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   truncateHistory: (id, afterIndex) =>
     fetch(`${API_BASE}/agents/${id}/history/after/${afterIndex}`, {
       method: 'DELETE',

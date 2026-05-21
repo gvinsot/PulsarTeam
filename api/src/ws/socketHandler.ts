@@ -70,26 +70,38 @@ export function setupSocketHandlers(io, agentManager) {
     }
 
     // ── Chat with streaming ───────────────────────────────────────────
-    socket.on(WsEvents.REQ_CHAT, async (data) => {
-      const { agentId, message, messageId, images } = data;
-      if (!agentId || !message) return;
+    // The client passes an ack callback as the last argument. We ALWAYS call
+    // it exactly once, so the client knows whether its message was accepted,
+    // rejected (and why), or failed mid-flight. Previously rejected messages
+    // were silently dropped, which is the root cause of "my message just
+    // disappeared" bugs.
+    socket.on(WsEvents.REQ_CHAT, async (data, ack) => {
+      const safeAck = typeof ack === 'function' ? ack : () => {};
+      const { agentId, message, messageId, images } = data || {};
+
+      if (!agentId || !message) {
+        safeAck({ status: 'error', code: 'invalid', message: 'agentId and message are required' });
+        return;
+      }
 
       if (!canAccessAgent(agentId)) {
-        socket.emit(WsEvents.ERROR, { message: 'Access denied: you do not have access to this agent\'s board.' });
+        safeAck({ status: 'error', code: 'forbidden', message: 'Access denied: you do not have access to this agent\'s board.' });
         return;
       }
       if (!checkSocketRate()) {
-        socket.emit(WsEvents.ERROR, { message: 'Rate limit exceeded. Please wait before sending more messages.' });
+        safeAck({ status: 'error', code: 'rate_limit', message: 'Rate limit exceeded. Please wait before sending more messages.' });
         return;
       }
 
       if (_trackMessageId(messageId)) {
-        console.warn(`⚠️ Duplicate messageId ${messageId} rejected (replay)`);
+        // Duplicate (auto-retry from client after disconnect) — tell the
+        // client it's already being processed so it stops worrying.
+        safeAck({ status: 'duplicate', code: 'duplicate', message: 'Duplicate request ignored (already received).' });
         return;
       }
 
       if (chatInFlight.has(agentId)) {
-        console.warn(`⚠️ Duplicate chat request ignored for agent ${agentId} (already in-flight)`);
+        safeAck({ status: 'error', code: 'busy', message: 'This agent is already processing a message. Wait for it to finish or stop it.' });
         return;
       }
       chatInFlight.add(agentId);
@@ -97,29 +109,61 @@ export function setupSocketHandlers(io, agentManager) {
       const agentData = agentManager.agents.get(agentId);
       const project = agentData?.project || null;
 
-      try {
-        socket.emit(WsEvents.STREAM_START, { agentId, project });
+      // Acknowledge acceptance BEFORE streaming so the client can mark its
+      // optimistic UI as "delivered" immediately. Failures after this point
+      // are surfaced via STREAM_ERROR.
+      safeAck({ status: 'accepted', messageId, agentId, project });
 
-        let sanitizedImages = null;
+      try {
+        let sanitizedImages: any = null;
         if (Array.isArray(images) && images.length > 0) {
-          sanitizedImages = images.slice(0, 5).filter(img =>
+          sanitizedImages = images.slice(0, 5).filter((img: any) =>
             img && typeof img.data === 'string' && typeof img.mediaType === 'string' &&
             img.data.length < 10 * 1024 * 1024 &&
             /^image\/(png|jpeg|gif|webp)$/.test(img.mediaType)
-          ).map(img => ({ data: img.data, mediaType: img.mediaType }));
+          ).map((img: any) => ({ data: img.data, mediaType: img.mediaType }));
           if (sanitizedImages.length === 0) sanitizedImages = null;
         }
 
-        await agentManager.sendMessage(agentId, message, (chunk) => {
-          socket.emit(WsEvents.STREAM_CHUNK, { agentId, project, chunk });
+        // Stream events flow through agentManager so they are board-scoped
+        // (every session that has access to this agent sees them) AND cached
+        // (a socket that reconnects mid-stream can resume via STREAM_RESUME).
+        agentManager.beginStream(agentId, { userMessage: message, userMessageId: messageId });
+
+        await agentManager.sendMessage(agentId, message, (chunk: string) => {
+          agentManager.appendStreamChunk(agentId, chunk);
           ws.thinking(agentId);
         }, 0, null, sanitizedImages);
 
-        socket.emit(WsEvents.STREAM_END, { agentId, project });
-      } catch (err) {
-        socket.emit(WsEvents.STREAM_ERROR, { agentId, project, error: err.message });
+        agentManager.endStream(agentId);
+      } catch (err: any) {
+        agentManager.errorStream(agentId, err.message);
       } finally {
         chatInFlight.delete(agentId);
+      }
+    });
+
+    // ── Resume protocol: a client just (re)connected and wants to know
+    //    which agents are currently streaming, so it can pick up the live
+    //    response without losing the chunks that flew by while it was
+    //    disconnected. Always sends a single STREAM_RESUME event with the
+    //    full active-stream list — the client uses that list both to seed
+    //    its buffers AND to evict stale ones (the case where the server
+    //    crashed mid-stream and never sent STREAM_END).
+    socket.on(WsEvents.REQ_STREAM_STATE, () => {
+      try {
+        const active = agentManager.getActiveStreamsForUser(userId, userRole || null, userBoardIds);
+        socket.emit(WsEvents.STREAM_RESUME, {
+          streams: active.map((s: any) => ({
+            agentId: s.agentId,
+            project: s.project,
+            buffer: s.buffer,
+            startedAt: s.startedAt,
+            userMessageId: s.userMessageId,
+          })),
+        });
+      } catch (err: any) {
+        console.warn(`⚠️ REQ_STREAM_STATE failed for user ${userId}: ${err.message}`);
       }
     });
 

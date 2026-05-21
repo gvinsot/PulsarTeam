@@ -23,6 +23,10 @@ export default function App() {
   const [thinkingMap, setThinkingMap] = useState({});
   const [streamBuffers, setStreamBuffers] = useState({});
   const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
+  // Agents currently streaming on the server (from STREAM_START/STREAM_RESUME).
+  // Used as the source of truth for whether to keep a streamBuffer alive,
+  // so we don't race against agent.status updates arriving out of order.
+  const activeStreamAgents = useRef(new Set());
   const lastAgentJson = useRef(new Map());    // Dedup: last JSON per agentId
   const [toasts, setToasts] = useState([]);
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -148,22 +152,19 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [loadData, user]);
 
-  // Safety: clear stale thinking/stream state for agents that are no longer busy.
-  // Handles edge cases where socket events (STREAM_END) were lost due to reconnection.
+  // Safety: clear stale thinking state for agents that are no longer busy.
+  // Handles edge cases where socket events (STREAM_END) were lost due to
+  // reconnection.
+  //
+  // IMPORTANT: streamBuffers is NOT cleared based on agent.status here.
+  // STREAM_START arrives BEFORE the agent:status='busy' event in many flows,
+  // and any stale `agent:updated` (with status='idle') that fires between
+  // them would prematurely wipe the buffer — that's the bug that caused
+  // "I need to refresh to see the stream". streamBuffers is now owned
+  // exclusively by the STREAM_* handlers below.
   useEffect(() => {
     const busyIds = new Set(agents.filter(a => a.status === 'busy').map(a => a.id));
     setThinkingMap(prev => {
-      let changed = false;
-      const copy = { ...prev };
-      for (const agentId of Object.keys(copy)) {
-        if (!busyIds.has(agentId)) {
-          delete copy[agentId];
-          changed = true;
-        }
-      }
-      return changed ? copy : prev;
-    });
-    setStreamBuffers(prev => {
       let changed = false;
       const copy = { ...prev };
       for (const agentId of Object.keys(copy)) {
@@ -183,7 +184,8 @@ export default function App() {
   const SOCKET_EVENTS = [
     WsEvents.AGENTS_LIST, WsEvents.AGENT_CREATED, WsEvents.AGENT_UPDATED, WsEvents.AGENT_DELETED,
     WsEvents.AGENT_STATUS, WsEvents.AGENT_THINKING, WsEvents.STREAM_START, WsEvents.STREAM_CHUNK,
-    WsEvents.STREAM_END, WsEvents.STREAM_ERROR, WsEvents.AGENT_ERROR_REPORT, WsEvents.AGENT_HANDOFF
+    WsEvents.STREAM_END, WsEvents.STREAM_ERROR, WsEvents.STREAM_RESUME,
+    WsEvents.AGENT_ERROR_REPORT, WsEvents.AGENT_HANDOFF
   ];
 
   const initSocket = useCallback((token) => {
@@ -254,17 +256,42 @@ export default function App() {
     });
 
     sock.on(WsEvents.STREAM_START, ({ agentId }) => {
+      activeStreamAgents.current.add(agentId);
       setStreamBuffers(prev => ({ ...prev, [agentId]: '' }));
     });
 
     sock.on(WsEvents.STREAM_CHUNK, ({ agentId, chunk }) => {
+      activeStreamAgents.current.add(agentId);
       setStreamBuffers(prev => ({
         ...prev,
         [agentId]: (prev[agentId] || '') + chunk
       }));
     });
 
+    // STREAM_RESUME is the server's response to REQ_STREAM_STATE on
+    // (re)connect. It carries the FULL list of active streams (possibly
+    // empty). We seed buffers for the active ones AND evict any local
+    // buffers whose agent isn't streaming anymore — that covers the case
+    // where the server crashed before sending STREAM_END.
+    sock.on(WsEvents.STREAM_RESUME, ({ streams }) => {
+      const list = Array.isArray(streams) ? streams : [];
+      const activeIds = new Set(list.map((s: any) => s.agentId));
+      activeStreamAgents.current = activeIds;
+      setStreamBuffers(prev => {
+        const next: Record<string, string> = {};
+        for (const s of list) next[s.agentId] = s.buffer || '';
+        // Drop any local buffer for an agent that's no longer active server-side.
+        for (const id of Object.keys(prev)) {
+          if (!activeIds.has(id) && !(id in next)) {
+            // intentionally omit — buffer gets evicted
+          }
+        }
+        return next;
+      });
+    });
+
     sock.on(WsEvents.STREAM_END, ({ agentId }) => {
+      activeStreamAgents.current.delete(agentId);
       setThinkingMap(prev => {
         const copy = { ...prev };
         delete copy[agentId];
@@ -289,6 +316,7 @@ export default function App() {
 
     sock.on(WsEvents.STREAM_ERROR, ({ agentId, error }) => {
       console.error(`Stream error for ${agentId}:`, error);
+      activeStreamAgents.current.delete(agentId);
       const errorLower = (error || '').toLowerCase();
       const isModelError = [
         'context length', 'context_length', 'num_ctx', 'context window',
@@ -312,6 +340,9 @@ export default function App() {
         return copy;
       });
     });
+
+    // REQ_STREAM_STATE on (re)connect is wired in socket.ts so it runs once
+    // per socket instance — see connectSocket().
 
     sock.on(WsEvents.AGENT_ERROR_REPORT, ({ agentName, description, isSystemError }) => {
       const prefix = isSystemError ? '⚙️' : '🚨';
