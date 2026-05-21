@@ -18,16 +18,29 @@ import { join } from 'path';
 const SECRETS_DIR = '/run/secrets';
 const cache = new Map<string, string>();
 
+// Docker Swarm mounts each secret at /run/secrets/<full-secret-name>. Our stacks
+// are named `<env>-pulsarteam` (e.g. `qa-pulsarteam`, `prod-pulsarteam`) or just
+// `pulsarteam` when no env is pinned, so secrets show up as
+// `/run/secrets/qa-pulsarteam_JWT_SECRET` etc. We try the bare name first (dev /
+// `target:` alias) and fall back to the stack-prefixed name.
+function stackPrefix(): string {
+  const env = process.env.APP_ENVIRONMENT?.trim();
+  return env ? `${env}-pulsarteam_` : 'pulsarteam_';
+}
+
 export function readSecret(name: string, fallback: string = ''): string {
   const cached = cache.get(name);
   if (cached !== undefined) return cached;
-  try {
-    const value = readFileSync(join(SECRETS_DIR, name), 'utf-8').replace(/\n+$/, '');
-    cache.set(name, value);
-    return value;
-  } catch {
-    return process.env[name] ?? fallback;
+  for (const candidate of [name, stackPrefix() + name]) {
+    try {
+      const value = readFileSync(join(SECRETS_DIR, candidate), 'utf-8').replace(/\n+$/, '');
+      cache.set(name, value);
+      return value;
+    } catch {
+      // try next candidate
+    }
   }
+  return process.env[name] ?? fallback;
 }
 
 /** Returns undefined when the secret is unset (instead of empty string). */
