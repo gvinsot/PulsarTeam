@@ -11,13 +11,13 @@ services:
       # App code reads them via api/src/secrets.ts (file first, env fallback).
       - NODE_ENV=production
       - PORT=${PORT}
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
+      # - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - ADMIN_USERNAME=${ADMIN_USERNAME}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in the deployment environment}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in the deployment environment}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      # - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS}
       # DATABASE_CONNECTION_STRING is provisioned as a Docker secret by the
       # deployment script (pulled from .env at deploy time) and mounted at
@@ -30,15 +30,15 @@ services:
       - GIT_USER_NAME=${GIT_USER_NAME}
       - GIT_USER_EMAIL=${GIT_USER_EMAIL}
       - GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID}
-      - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
+      # - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET}
       # Google + Microsoft OAuth — the redirect_uri is auto-derived from each
       # request (host + fixed path), so no *_REDIRECT_URI env var is needed.
       # Register the public URIs in the OAuth client console (Google Cloud /
       # Azure App registration); see .env.example.
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
-      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      # - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
-      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      # - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
       - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-common}
       - CLAUDECODE_SERVICE_URL=http://claudecode-service:8000
       - SANDBOX_SERVICE_URL=http://sandbox-service:8000
@@ -48,16 +48,16 @@ services:
       - MCP_ENDPOINT=http://swarm-manager:8000/ai/mcp
       - MCP_ACTIONS_ENDPOINT=http://swarm-manager:8000/ai/actions/mcp
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
-      - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
+      # - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
       - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI:-}
       - JIRA_BOARD_URL=${JIRA_BOARD_URL:-}
       - JIRA_ORG_ID=${JIRA_ORG_ID:-}
-      - JIRA_API_KEY=${JIRA_API_KEY:-}
+      # - JIRA_API_KEY=${JIRA_API_KEY:-}
       - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
       - JIRA_WEBHOOK_URL=${JIRA_WEBHOOK_URL:-}
-      - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
+      # - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
       - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
     cap_drop:
       - ALL
