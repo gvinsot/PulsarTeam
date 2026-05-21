@@ -27,7 +27,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-swarm2026}
-      - DATABASE_URL=postgresql://swarm_prod_app:${POSTGRES_PASSWORD:-pulsarteam}@postgres:5432/swarm_prod
+      - DATABASE_CONNECTION_STRING=postgresql://swarm_prod_app:${POSTGRES_PASSWORD:-pulsarteam}@postgres:5432/swarm_prod
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}

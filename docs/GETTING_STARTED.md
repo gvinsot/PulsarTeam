@@ -67,7 +67,7 @@ ADMIN_PASSWORD=swarm2026
 ### Database
 
 ```env
-DATABASE_URL=postgresql://swarm_prod_app:your-secure-password@pg-primary:5432/swarm_prod
+DATABASE_CONNECTION_STRING=postgresql://swarm_prod_app:your-secure-password@pg-primary:5432/swarm_prod
 ```
 
 ### CORS
@@ -253,7 +253,7 @@ docker compose logs api --tail 100 2>&1 | grep -i error
 
 ### Database connection issues
 
-- Verify `DATABASE_URL` in `.env` is correct
+- Verify `DATABASE_CONNECTION_STRING` in `.env` is correct
 - Ensure the API container is on the `postgresqlcluster_internal` network: `docker network inspect postgresqlcluster_internal`
 - Check that the database user has the required privileges
 

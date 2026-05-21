@@ -5,14 +5,15 @@ import { loadSettingsCache } from './settings.js';
 import { refreshTokenSummaryCache } from './tokenUsage.js';
 import { loadOAuthTokens } from './oauthTokens.js';
 import { migrateEncryptCredentials } from './encryptMigration.js';
+import { readSecretOptional } from '../../secrets.js';
 
 const { Pool } = pg;
 
 export async function initDatabase(retries = 5, delayMs = 3000) {
-  const connectionString = process.env.DATABASE_URL;
+  const connectionString = readSecretOptional('DATABASE_CONNECTION_STRING');
 
   if (!connectionString) {
-    console.log('⚠️  DATABASE_URL not set, agents will not be persisted');
+    console.log('⚠️  DATABASE_CONNECTION_STRING not set, agents will not be persisted');
     return false;
   }
 
