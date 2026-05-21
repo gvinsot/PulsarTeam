@@ -152,11 +152,14 @@ export const chatMethods = {
       const streamResult = await this._streamAndContinue(agent, id, messages, llmConfig, streamCallback, abortController, delegationDepth, activeTaskId);
       fullResponse = streamResult.fullResponse;
 
-      agent.conversationHistory.push({
+      const assistantEntry: any = {
         role: 'assistant',
         content: fullResponse,
-        timestamp: new Date().toISOString()
-      });
+        timestamp: new Date().toISOString(),
+      };
+      if (streamResult.durationMs > 0) assistantEntry.durationMs = streamResult.durationMs;
+      if (streamResult.outputTokens > 0) assistantEntry.outputTokens = streamResult.outputTokens;
+      agent.conversationHistory.push(assistantEntry);
 
       // Prune old messages: keep max 30 messages, but always preserve messages
       // from the current active task (to avoid losing context mid-execution).
@@ -704,7 +707,7 @@ export const chatMethods = {
     return { managesContext, isTaskExecution, activeTaskId: activeTask?.id || null };
   },
 
-  async _streamAndContinue(this: any, agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId: string | null = null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }> {
+  async _streamAndContinue(this: any, agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId: string | null = null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null; outputTokens: number; durationMs: number }> {
     const provider = createProvider({
       provider: llmConfig.provider,
       model: llmConfig.model,
@@ -718,6 +721,8 @@ export const chatMethods = {
     let fullResponse = '';
     let thinkingBuffer = '';
     let finishReason: string | null = null;
+    let totalOutputTokens = 0;
+    const responseStartedAt = Date.now();
 
     const safeMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
 
@@ -765,6 +770,7 @@ export const chatMethods = {
           const cost = chunk.usage.costUsd ?? null;
           agent.metrics.totalTokensIn += inTok;
           agent.metrics.totalTokensOut += outTok;
+          totalOutputTokens += outTok;
           if (cost != null && cost > 0) {
             // Use actual cost reported by provider (e.g. Claude Paid Plan via coder-service)
             this._recordUsageDirect(agent, inTok, outTok, cost, estimatedContextTokens);
@@ -829,6 +835,7 @@ export const chatMethods = {
             const cost = chunk.usage.costUsd ?? null;
             agent.metrics.totalTokensIn += inTok;
             agent.metrics.totalTokensOut += outTok;
+            totalOutputTokens += outTok;
             if (cost != null && cost > 0) {
               this._recordUsageDirect(agent, inTok, outTok, cost, contContextTokens);
             } else {
@@ -852,7 +859,7 @@ export const chatMethods = {
       console.log(`⚠️  [Continuation] "${agent.name}": still truncated after ${MAX_CONTINUATIONS} continuations`);
     }
 
-    return { fullResponse, thinkingBuffer, finishReason };
+    return { fullResponse, thinkingBuffer, finishReason, outputTokens: totalOutputTokens, durationMs: Date.now() - responseStartedAt };
   },
 
   async _processPostResponseActions(this: any, agent: any, id: string, responseForParsing: string, fullResponse: string, streamCallback: any, delegationDepth: number, messageMeta: any): Promise<{ earlyReturn?: any }> {

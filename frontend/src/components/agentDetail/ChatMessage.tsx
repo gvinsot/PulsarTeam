@@ -98,6 +98,16 @@ function DelegationCallBlock({ agent, task }) {
   );
 }
 
+function formatDuration(ms) {
+  if (ms == null || ms < 0) return '';
+  if (ms < 1000) return `${ms} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSec = Math.round(seconds - minutes * 60);
+  return `${minutes}m ${remSec}s`;
+}
+
 // Convert raw URLs to markdown links so ReactMarkdown renders them clickable
 function linkifyRawUrls(text) {
   if (typeof text !== 'string') return text;
@@ -232,9 +242,37 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
           }
         </div>
         {message.timestamp && (
-          <p className="text-[10px] text-dark-500 mt-2 flex items-center gap-1">
-            <Clock className="w-2.5 h-2.5" />
-            {new Date(message.timestamp).toLocaleTimeString()}
+          <p className="text-[10px] text-dark-500 mt-2 flex items-center gap-2 flex-wrap">
+            <span className="flex items-center gap-1">
+              <Clock className="w-2.5 h-2.5" />
+              {new Date(message.timestamp).toLocaleTimeString()}
+            </span>
+            {!isUser && (message.durationMs != null || message.outputTokens != null) && (
+              <>
+                <span className="text-dark-600">·</span>
+                {message.durationMs != null && (
+                  <span title="Response duration">
+                    {formatDuration(message.durationMs)}
+                  </span>
+                )}
+                {message.outputTokens != null && (
+                  <>
+                    <span className="text-dark-600">·</span>
+                    <span title="Output tokens">
+                      {message.outputTokens.toLocaleString()} tok
+                    </span>
+                  </>
+                )}
+                {message.durationMs != null && message.outputTokens != null && message.durationMs > 0 && (
+                  <>
+                    <span className="text-dark-600">·</span>
+                    <span title="Tokens per second">
+                      {(message.outputTokens / (message.durationMs / 1000)).toFixed(1)} tok/s
+                    </span>
+                  </>
+                )}
+              </>
+            )}
           </p>
         )}
       </div>
