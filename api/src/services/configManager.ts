@@ -9,6 +9,8 @@ const DEFAULTS = {
   taskReminderIntervalMinutes: '10',
   taskReminderMaxCount: '12',
   taskReminderCooldownMinutes: '2',
+  // LLM config id used to simplify the repo call-graph analysis. Empty = no LLM step.
+  codeGraphLlmConfigId: '',
 };
 
 // ── Data directory configuration ────────────────────────────────────────────

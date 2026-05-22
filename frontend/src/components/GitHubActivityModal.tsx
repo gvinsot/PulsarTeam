@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText, RefreshCw } from 'lucide-react';
+import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText, RefreshCw, Network } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
+import CallGraphTab from './CallGraphTab';
 
 export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
   const [loading, setLoading] = useState(true);
@@ -81,7 +82,11 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
     >
       <div
         className="bg-dark-900 border border-dark-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
-        style={{ width: '800px', maxWidth: '92vw', maxHeight: '85vh' }}
+        style={{
+          width: tab === 'callgraph' ? '1200px' : '800px',
+          maxWidth: '95vw',
+          maxHeight: '90vh',
+        }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -92,7 +97,7 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             <span className="text-xs text-dark-400">Activity</span>
           </div>
           <div className="flex items-center gap-2">
-            {tab !== 'explorer' && (
+            {tab === 'activity' && (
               <button
                 onClick={() => loadActivity({ refresh: true })}
                 disabled={loading}
@@ -150,18 +155,30 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             <FolderOpen size={14} />
             Explorer
           </button>
+          <button
+            onClick={() => setTab('callgraph')}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium transition-colors ${
+              tab === 'callgraph'
+                ? 'text-dark-100 border-b-2 border-purple-500'
+                : 'text-dark-400 hover:text-dark-100'
+            }`}
+            title="UI ↔ backend call graph (on-demand analysis)"
+          >
+            <Network size={14} />
+            Call Graph
+          </button>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4" style={{ minHeight: 0 }}>
-          {tab !== 'explorer' && loading && (
+          {tab === 'activity' && loading && (
             <div className="flex items-center justify-center py-12">
               <Loader2 size={24} className="animate-spin text-purple-400" />
               <span className="ml-2 text-dark-400">Loading activity...</span>
             </div>
           )}
 
-          {tab !== 'explorer' && error && (
+          {tab === 'activity' && error && (
             <div className="flex items-center gap-2 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
               <AlertCircle size={16} className="text-red-400" />
               <span className="text-sm text-red-400">{error}</span>
@@ -274,7 +291,13 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             <RepoExplorer owner={owner} repo={repo} boardId={boardId} />
           )}
 
-          {tab !== 'explorer' && data?.fetchedAt && (
+          {tab === 'callgraph' && (
+            <div className="h-full min-h-[500px]" style={{ height: '70vh' }}>
+              <CallGraphTab owner={owner} repo={repo} boardId={boardId} />
+            </div>
+          )}
+
+          {tab === 'activity' && data?.fetchedAt && (
             <p className="text-xs text-dark-600 text-right mt-3">
               Fetched {formatDate(data.fetchedAt)}
             </p>

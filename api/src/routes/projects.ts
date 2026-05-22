@@ -9,16 +9,20 @@ import {
 } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { createProjectSchema, updateProjectSchema } from '../schemas/projects.js';
+import { analyzeRepoCallGraph } from '../services/codeGraphAnalyzer.js';
+import { getSettings } from '../services/configManager.js';
 
 // ── In-memory caches for GitHub explorer endpoints ─────────────────────────
 const ACTIVITY_CACHE_TTL = 60 * 1000;
 const BRANCHES_CACHE_TTL = 15 * 60 * 1000;
 const TREE_CACHE_TTL = 5 * 60 * 1000;
 const FILE_CACHE_TTL = 5 * 60 * 1000;
+const CODE_GRAPH_CACHE_TTL = 10 * 60 * 1000;
 const _activityCache = new Map<string, { data: any; time: number }>();
 const _branchesCache = new Map<string, { data: any; time: number }>();
 const _treeCache = new Map<string, { data: any; time: number }>();
 const _fileCache = new Map<string, { data: any; time: number }>();
+const _codeGraphCache = new Map<string, { data: any; time: number }>();
 
 // Guard for routes whose `:id` must be a UUID — falls through to the next
 // matching route when the path segment is a literal (e.g. `available-repos`).
@@ -481,6 +485,90 @@ export function projectRoutes() {
       console.error(`Failed to fetch file ${filePath} for ${owner}/${repo}@${ref}:`, err.message);
       if (cached) return res.json(cached.data);
       res.status(500).json({ error: 'Failed to fetch file content' });
+    }
+  });
+
+  // ── Code call-graph analysis ──────────────────────────────────────────────
+  // On-demand: scans the repo tree, parses UI / service source files, and
+  // returns a graph of UI features → backend services (or the reverse).
+  // Optional LLM simplification when admin has configured `codeGraphLlmConfigId`.
+
+  router.post('/code-graph/:owner/:repo', async (req, res) => {
+    const auth = await resolveBoardGitHubAuth(req, res);
+    if (!auth.ok) return;
+
+    const { owner, repo } = req.params;
+    const direction = (req.body?.direction === 'service-to-ui') ? 'service-to-ui' : 'ui-to-service';
+    const refresh = req.body?.refresh === true || req.body?.refresh === '1';
+    const ref = (req.body?.ref || 'main').toString();
+
+    const cacheKey = `cg:${req.query.boardId}:${owner}/${repo}:${ref}:${direction}`;
+    const cached = _codeGraphCache.get(cacheKey);
+    if (!refresh && cached && Date.now() - cached.time < CODE_GRAPH_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    try {
+      // 1) Fetch the recursive tree.
+      const treeRes = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`,
+        { headers: auth.headers },
+      );
+      if (!treeRes.ok) {
+        const text = await treeRes.text();
+        console.error(`[CodeGraph] tree fetch ${treeRes.status}: ${text.slice(0, 200)}`);
+        return res.status(502).json({ error: `GitHub tree fetch failed (${treeRes.status})` });
+      }
+      const treeData = await treeRes.json();
+      const treeFiles = (treeData.tree || []).map((it: any) => ({
+        path: it.path, type: it.type, size: it.size || 0,
+      }));
+
+      // 2) File fetcher closure — uses GitHub contents API and caches results.
+      const fetchFile = async (filePath: string): Promise<string | null> => {
+        const fileKey = `cg-file:${owner}/${repo}:${ref}:${filePath}`;
+        const c = _fileCache.get(fileKey);
+        if (c && Date.now() - c.time < FILE_CACHE_TTL) return c.data;
+        const ghRes = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURI(filePath)}?ref=${encodeURIComponent(ref)}`,
+          { headers: auth.headers },
+        );
+        if (!ghRes.ok) return null;
+        const data = await ghRes.json();
+        if (data.encoding === 'base64' && data.content) {
+          try {
+            const content = Buffer.from(data.content, 'base64').toString('utf-8');
+            _fileCache.set(fileKey, { data: content, time: Date.now() });
+            return content;
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      };
+
+      // 3) Resolve the LLM config (admin setting) if any.
+      let llmConfigId: string | null = null;
+      try {
+        const settings = await getSettings();
+        llmConfigId = (settings.codeGraphLlmConfigId || '').toString() || null;
+      } catch { /* ignore */ }
+
+      // 4) Run the analyzer.
+      const graph = await analyzeRepoCallGraph({
+        owner, repo, ref, direction,
+        treeFiles,
+        truncated: !!treeData.truncated,
+        fetchFile,
+        llmConfigId,
+      });
+
+      const result = { ...graph, fetchedAt: new Date().toISOString(), ref };
+      _codeGraphCache.set(cacheKey, { data: result, time: Date.now() });
+      res.json(result);
+    } catch (err: any) {
+      console.error(`[CodeGraph] analysis failed for ${owner}/${repo}:`, err.message);
+      res.status(500).json({ error: `Code graph analysis failed: ${err.message}` });
     }
   });
 

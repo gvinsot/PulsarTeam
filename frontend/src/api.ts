@@ -696,6 +696,14 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  // Code call-graph analysis (UI → services or services → UI), on-demand.
+  analyzeCodeGraph: (owner, repo, boardId, { direction = 'ui-to-service', ref = 'main', refresh = false } = {}) =>
+    fetch(`${API_BASE}/projects/code-graph/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ direction, ref, refresh }),
+    }).then(handleResponse),
+
   // API Key (MCP)
   getApiKeyInfo: () =>
     fetch(`${API_BASE}/settings/api-key`, { headers: getHeaders() }).then(handleResponse),
