@@ -68,6 +68,14 @@ const statusLabels = {
 
 export default function BroadcastPanel({ agents, skills = [], mcpServers = [], socket, onClose, onRefresh, user }) {
   const isAdmin = user?.role === 'admin';
+  const currentUserId = user?.userId || user?.id || null;
+  // Plugin is editable by its owner, or by an admin for built-ins.
+  const canManagePlugin = (p) => {
+    if (!p) return false;
+    if (isAdmin) return true;
+    if (p.builtin && !p.ownerId) return false;
+    return !!p.ownerId && p.ownerId === currentUserId;
+  };
   const [tab, setTab] = useState('broadcast');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -78,9 +86,9 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
 
   // Plugin state
   const [editingPlugin, setEditingPlugin] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [] });
+  const [editForm, setEditForm] = useState({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [], shared: false, ownerId: null, builtin: false });
   const [showCreate, setShowCreate] = useState(false);
-  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [] });
+  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [], shared: false });
 
   // MCP Explorer state
   const [expandedMcpExplorer, setExpandedMcpExplorer] = useState(new Set());
@@ -139,24 +147,38 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
       icon: plugin.icon || '🔧',
       instructions: plugin.instructions || '',
       userConfig: plugin.userConfig || {},
-      mcps: Array.isArray(plugin.mcps) ? [...plugin.mcps] : []
+      mcps: Array.isArray(plugin.mcps) ? [...plugin.mcps] : [],
+      shared: !!plugin.shared,
+      ownerId: plugin.ownerId || null,
+      builtin: !!plugin.builtin,
     });
     setShowCreate(false);
   };
 
   const cancelEdit = () => {
     setEditingPlugin(null);
-    setEditForm({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [] });
+    setEditForm({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [], shared: false, ownerId: null, builtin: false });
   };
 
   const saveEdit = async () => {
     if (!editingPlugin) return;
-    // Non-admins can only change the User-specific configuration; everything else
-    // is read-only in the UI and rejected by the API.
-    const payload = isAdmin
-      ? editForm
-      : { userConfig: editForm.userConfig || {} };
-    if (isAdmin && (!editForm.name.trim() || !editForm.instructions.trim())) return;
+    const target = skills.find(s => s.id === editingPlugin);
+    const isMine = canManagePlugin(target);
+    // Owner/admin gets the full payload; non-owners on shared plugins can
+    // only push userConfig + per-mcp credentials (the API enforces this too).
+    const payload = isMine
+      ? {
+          name: editForm.name,
+          description: editForm.description,
+          category: editForm.category,
+          icon: editForm.icon,
+          instructions: editForm.instructions,
+          userConfig: editForm.userConfig || {},
+          mcps: editForm.mcps,
+          shared: !!editForm.shared,
+        }
+      : { userConfig: editForm.userConfig || {}, mcps: editForm.mcps };
+    if (isMine && (!editForm.name.trim() || !editForm.instructions.trim())) return;
     try {
       await api.updatePlugin(editingPlugin, payload);
       setEditingPlugin(null);
@@ -176,7 +198,7 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
     if (!newPlugin.name.trim() || !newPlugin.instructions.trim()) return;
     try {
       await api.createPlugin(newPlugin);
-      setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [] });
+      setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [], shared: false });
       setShowCreate(false);
       if (onRefresh) onRefresh();
     } catch (err) { console.error('Failed to create plugin:', err); }
@@ -417,15 +439,13 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                       Plugins
                       <span className="text-dark-400 font-normal">({skills.length})</span>
                     </h4>
-                    {isAdmin && (
                     <button
                       onClick={() => { setShowCreate(!showCreate); setEditingPlugin(null); }}
                       className="flex items-center gap-1 px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      New Plugin
+                      Nouveau plugin
                     </button>
-                    )}
                   </div>
 
                   {/* Create plugin form */}
@@ -444,7 +464,10 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
 
                   {/* Plugins list (scrollable) */}
                   <div className="flex-1 overflow-auto min-h-0 space-y-1.5">
-                    {skills.map(plugin => (
+                    {skills.map(plugin => {
+                      const mine = canManagePlugin(plugin);
+                      const isOwner = !!plugin.ownerId && plugin.ownerId === currentUserId;
+                      return (
                       <div
                         key={plugin.id}
                         className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors group cursor-pointer ${
@@ -456,7 +479,7 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                       >
                         <span className="text-base flex-shrink-0">{plugin.icon}</span>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
                               {plugin.category}
@@ -464,6 +487,14 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                             {plugin.builtin && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">builtin</span>
                             )}
+                            {isOwner && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">mine</span>
+                            )}
+                            {plugin.shared ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">partagé</span>
+                            ) : isOwner ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600">privé</span>
+                            ) : null}
                             {(plugin.mcps || []).length > 0 && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30 flex items-center gap-0.5">
                                 <Plug className="w-2.5 h-2.5" />
@@ -473,15 +504,16 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                           </div>
                           <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
                         </div>
-                        {isAdmin && (
+                        {mine && (
                           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                            <button onClick={(e) => { e.stopPropagation(); handleDelete(plugin.id); }} className="p-1.5 text-dark-400 hover:text-red-400 rounded-md hover:bg-dark-700 transition-colors" title="Delete plugin">
+                            <button onClick={(e) => { e.stopPropagation(); handleDelete(plugin.id); }} className="p-1.5 text-dark-400 hover:text-red-400 rounded-md hover:bg-dark-700 transition-colors" title="Supprimer le plugin">
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         )}
                       </div>
-                    ))}
+                      );
+                    })}
                     {skills.length === 0 && (
                       <p className="text-center text-dark-500 text-xs py-8">No plugins created yet</p>
                     )}
@@ -675,13 +707,16 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
         </div>
         </div>
         {/* ── Right panel: Plugin editor ── */}
-        {editingPlugin && (
+        {editingPlugin && (() => {
+          const target = skills.find(s => s.id === editingPlugin);
+          const mine = canManagePlugin(target);
+          return (
           <div className="hidden sm:flex flex-col w-[400px] border-l border-dark-700 bg-dark-850 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-dark-700 flex-shrink-0">
               <div className="flex items-center gap-2">
                 <Pencil className="w-3.5 h-3.5 text-indigo-400" />
                 <span className="text-sm font-semibold text-dark-100">
-                  {isAdmin ? 'Edit Plugin' : 'Plugin configuration'}
+                  {mine ? 'Configurer le plugin' : 'Activer le plugin'}
                 </span>
               </div>
               <button onClick={cancelEdit} className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
@@ -696,11 +731,12 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                 onCancel={cancelEdit}
                 saving={false}
                 submitLabel="Sauvegarder"
-                readOnly={!isAdmin}
+                readOnly={!mine}
               />
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );

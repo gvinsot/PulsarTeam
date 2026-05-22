@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff, Zap, CheckCircle, XCircle, Loader } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff, Zap, CheckCircle, XCircle, Loader, Globe, Lock } from 'lucide-react';
 import { api } from '../api';
 
 function createEmptyMcp() {
@@ -134,6 +134,29 @@ export default function PluginEditor({ value, onChange, onSubmit, onCancel, savi
           disabled={readOnly}
         />
       </div>
+
+      {!readOnly && (
+        <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-dark-800/40 border border-dark-700/50">
+          <button
+            type="button"
+            onClick={() => update({ shared: !value.shared })}
+            className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors ${
+              value.shared
+                ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                : 'bg-dark-700/50 text-dark-300 border-dark-600 hover:border-dark-500'
+            }`}
+            title={value.shared ? 'Partagé avec tous les utilisateurs' : 'Visible uniquement par vous'}
+          >
+            {value.shared ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+            {value.shared ? 'Partagé' : 'Privé'}
+          </button>
+          <span className="text-[11px] text-dark-500">
+            {value.shared
+              ? 'Tous les utilisateurs voient ce plugin et peuvent l’activer sur leurs agents.'
+              : 'Visible uniquement par vous. Activez le partage pour le rendre disponible aux autres utilisateurs.'}
+          </span>
+        </div>
+      )}
 
       <div>
         <label className="block text-xs text-dark-400 mb-1.5">User-specific configuration</label>

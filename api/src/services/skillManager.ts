@@ -26,6 +26,8 @@ interface Skill {
   mcps: McpEntry[];
   mcpServerIds: string[];
   builtin?: boolean;
+  ownerId?: string | null;
+  shared?: boolean;
   createdAt?: string;
   updatedAt?: string;
   [key: string]: any;
@@ -77,11 +79,23 @@ function normalizeSkill(skill: any, mcpResolver: ((id: string) => any) | null): 
     mcps = [];
   }
 
+  // Built-in plugins are system-owned (ownerId=null) and globally shared by default.
+  // User-created plugins keep whatever ownerId/shared was set on them.
+  const isBuiltin = skill.builtin === true;
+  const ownerId = skill.ownerId === undefined
+    ? (isBuiltin ? null : null)
+    : skill.ownerId;
+  const shared = skill.shared === undefined
+    ? !!isBuiltin
+    : !!skill.shared;
+
   return {
     ...skill,
     userConfig: skill.userConfig || {},
     mcps,
     mcpServerIds: mcps.map((m) => m.id),
+    ownerId,
+    shared,
   };
 }
 
@@ -163,18 +177,35 @@ export class SkillManager {
     }
   }
 
-  getAll(): Skill[] {
+  /**
+   * Return every plugin visible to the given user.
+   * - Built-in plugins (ownerId=null, shared=true) are visible to everyone.
+   * - Plugins with shared=true are visible to everyone.
+   * - Plugins owned by `userId` are visible to that user.
+   * - Admins see everything.
+   * If userId is omitted, returns the full unfiltered list (used by background
+   * services like the runner injecting prompts for the agent).
+   */
+  getAll(userId?: string | null, isAdmin: boolean = false): Skill[] {
     const resolver = this._mcpResolver;
-    const skills = Array.from(this.skills.values()).map(s => normalizeSkill(s, resolver));
-    const seen = new Set(skills.map((skill) => skill.id));
+    const all = Array.from(this.skills.values()).map(s => normalizeSkill(s, resolver));
+    const seen = new Set(all.map((skill) => skill.id));
 
     for (const builtin of BUILTIN_SKILLS) {
       if (!seen.has((builtin as any).id)) {
-        skills.push(normalizeSkill(builtin, resolver));
+        all.push(normalizeSkill(builtin, resolver));
       }
     }
 
-    return skills;
+    if (!userId || isAdmin) {
+      return all;
+    }
+
+    return all.filter((p) => {
+      if (p.shared) return true;
+      if (!p.ownerId) return true; // legacy / system-owned → visible
+      return p.ownerId === userId;
+    });
   }
 
   getById(id: string): Skill | null {
@@ -182,7 +213,30 @@ export class SkillManager {
     return skill ? normalizeSkill(skill, this._mcpResolver) : null;
   }
 
-  async create(config: any): Promise<Skill> {
+  /**
+   * True if `userId` is allowed to see this plugin.
+   */
+  canView(plugin: Skill, userId: string | null, isAdmin: boolean): boolean {
+    if (!plugin) return false;
+    if (isAdmin) return true;
+    if (plugin.shared) return true;
+    if (!plugin.ownerId) return true; // built-ins
+    return plugin.ownerId === userId;
+  }
+
+  /**
+   * True if `userId` is allowed to edit/share/delete this plugin.
+   * Built-ins (ownerId=null + builtin=true) are admin-only.
+   * User-created plugins are restricted to their owner (or admin).
+   */
+  canManage(plugin: Skill, userId: string | null, isAdmin: boolean): boolean {
+    if (!plugin) return false;
+    if (isAdmin) return true;
+    if (plugin.builtin && !plugin.ownerId) return false;
+    return !!plugin.ownerId && plugin.ownerId === userId;
+  }
+
+  async create(config: any, ownerId: string | null = null): Promise<Skill> {
     const id = uuidv4();
     const skill = normalizeSkill({
       id,
@@ -194,6 +248,8 @@ export class SkillManager {
       userConfig: config.userConfig || {},
       mcps: Array.isArray(config.mcps) ? config.mcps : [],
       builtin: false,
+      ownerId,
+      shared: !!config.shared,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }, this._mcpResolver);
@@ -203,12 +259,25 @@ export class SkillManager {
     return skill;
   }
 
+  async setShared(id: string, shared: boolean): Promise<Skill | null> {
+    const current = this.skills.get(id);
+    if (!current) return null;
+    const updated = normalizeSkill({
+      ...current,
+      shared: !!shared,
+      updatedAt: new Date().toISOString(),
+    }, this._mcpResolver);
+    this.skills.set(id, updated);
+    await saveSkill(updated);
+    return updated;
+  }
+
   async update(id: string, updates: any): Promise<Skill | null> {
     const current = this.skills.get(id);
     if (!current) return null;
 
     const skill: any = { ...current };
-    const allowed = ['name', 'description', 'category', 'icon', 'instructions', 'userConfig', 'mcps'];
+    const allowed = ['name', 'description', 'category', 'icon', 'instructions', 'userConfig', 'mcps', 'shared'];
     for (const key of allowed) {
       if (updates[key] !== undefined) {
         skill[key] = updates[key];

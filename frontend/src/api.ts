@@ -363,6 +363,13 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  setPluginShared: (id, shared) =>
+    fetch(`${API_BASE}/plugins/${id}/share`, {
+      method: 'PATCH',
+      headers: getHeaders(),
+      body: JSON.stringify({ shared })
+    }).then(handleResponse),
+
   // Plugin MCP server associations
   addPluginMcp: (pluginId, mcpId) =>
     fetch(`${API_BASE}/plugins/${pluginId}/mcps/${mcpId}`, {
