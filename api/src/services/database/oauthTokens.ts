@@ -23,7 +23,7 @@ import { encryptIfPlain, tryDecrypt } from '../../lib/crypto.js';
  * notification dropped or a replica started before a write still resolves.
  */
 
-export type OAuthProvider = 'gmail' | 'gdrive' | 'onedrive' | 'outlook' | 'slack' | 'github' | 'jira' | 's3' | 'wordpress' | 'claude_code';
+export type OAuthProvider = 'gmail' | 'gdrive' | 'onedrive' | 'outlook' | 'slack' | 'github' | 'jira' | 's3' | 'wordpress' | 'claude_code' | 'codex';
 export type ScopeType = 'agent' | 'board' | 'user';
 
 export interface OAuthTokenRecord {
