@@ -188,7 +188,7 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query(`
         CREATE TABLE IF NOT EXISTS tasks (
           id UUID PRIMARY KEY,
-          agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
           text TEXT NOT NULL DEFAULT '',
           title TEXT,
           status TEXT NOT NULL DEFAULT 'backlog',
@@ -238,6 +238,11 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       // until a save self-heals it, and we want the failure visible in the logs.
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS environment TEXT')
         .catch((e: any) => console.error('[initDatabase] ADD COLUMN environment failed:', e.message));
+      // Allow unassigned tasks: a task may exist on a board without being owned by
+      // any agent (e.g. created via MCP without an agent_name). The assignee column
+      // continues to track who actually picks the work up.
+      await pool.query('ALTER TABLE tasks ALTER COLUMN agent_id DROP NOT NULL')
+        .catch((e: any) => console.error('[initDatabase] DROP NOT NULL agent_id failed:', e.message));
       console.log('✅ Tasks table ready');
 
       // ── Task Audit Logs table ─────────────────────────────────────────────

@@ -227,9 +227,10 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
 @mcp_call(Swarm API, list_boards, {})
   — List all task boards with their workflow columns. Use this to discover board IDs before adding tasks.
 
-@mcp_call(Swarm API, add_task, {"agent_name": "Developer", "task": "Implement password reset in src/auth/"})
-  — Add a task to an agent's queue. The agent will pick it up and execute it autonomously.
-  Optional: project, status (workflow column), board_id.
+@mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "agent_name": "Developer", "task": "Implement password reset in src/auth/"})
+  — Add a task to a board. board_id is REQUIRED — use list_boards first.
+  agent_id/agent_name are OPTIONAL: omit both to create an unassigned task that lives on the board until someone picks it up.
+  Optional: project, status (workflow column), repo_full_name, storage_path.
 
 @mcp_call(Swarm API, search_tasks, {"query": "password reset", "only_completed": true, "limit": 20})
   — Search the task history with optional free-text query and filters.
@@ -244,17 +245,19 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
 1. First, check available agents:
    @mcp_call(Swarm API, list_agents, {"status": "idle"})
 
-2. Then assign tasks to the right agents:
-   @mcp_call(Swarm API, add_task, {"agent_name": "Developer", "task": "Read src/auth/ and implement password reset", "project": "MyApp"})
-   @mcp_call(Swarm API, add_task, {"agent_name": "QA Engineer", "task": "Write unit tests for the user service", "project": "MyApp"})
+2. Then assign tasks to the right agents (always pass board_id):
+   @mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "agent_name": "Developer", "task": "Read src/auth/ and implement password reset", "project": "MyApp"})
+   @mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "agent_name": "QA Engineer", "task": "Write unit tests for the user service", "project": "MyApp"})
+   // or create an unassigned task that any agent can later pick up:
+   @mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "Investigate flaky test in src/checkout/", "project": "MyApp"})
 
 3. Monitor progress:
    @mcp_call(Swarm API, get_agent_status, {"agent_name": "Developer"})
 
 ## IMPORTANT
 - Tasks are executed asynchronously — agents pick them up from their queue and work autonomously.
-- Use list_boards to discover board IDs if you need to target a specific board.
-- If multiple boards exist, you must provide board_id when adding tasks.
+- board_id is ALWAYS required on add_task. Call list_boards first to discover IDs.
+- agent_id/agent_name are OPTIONAL on add_task — omit both to create an unassigned task on the board.
 - Check agent status to monitor task progress and verify completion.`
   },
   {

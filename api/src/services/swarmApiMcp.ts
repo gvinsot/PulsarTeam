@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
-import { getAllBoards, getBoardById, getBoardWithMostTasksForProject, searchTasks } from './database.js';
+import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { getReposForBoard } from './database/boardRepos.js';
 
 // Format of "owner/repo" — same regex used by the REST endpoint.
@@ -183,14 +183,14 @@ export function createSwarmApiMcpServer(agentManager) {
   // ── add_task ───────────────────────────────────────────────────────────
   server.tool(
     'add_task',
-    'Add a new task to an agent, optionally on a specific board, and optionally bound to a specific repository or storage path. If there is only one board it is used automatically; otherwise provide board_id (use list_boards to find IDs).',
+    'Add a new task to a board. The board is mandatory — use list_boards to discover board IDs. Agent assignment is optional: if no agent is given, the task is created as unassigned on the board and can be picked up later. A repository or storage path can also be bound to the task.',
     {
-      agent_id: z.string().optional().describe('Agent UUID'),
-      agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
+      agent_id: z.string().optional().describe('Agent UUID. Optional — omit to create an unassigned task that lives on the board.'),
+      agent_name: z.string().optional().describe('Agent name (alternative to agent_id). Optional — omit to create an unassigned task.'),
       task: z.string().describe('The task description'),
       project: z.string().optional().describe('Optional project to assign the task to'),
       status: z.string().optional().describe('Initial task status (any workflow column ID, defaults to "backlog")'),
-      board_id: z.string().optional().describe('Board UUID to place the task on. If omitted and only one board exists, it is used automatically. Use list_boards to discover board IDs.'),
+      board_id: z.string().describe('REQUIRED. Board UUID to place the task on. Use list_boards to discover board IDs.'),
       repo_full_name: z.string().optional().describe('Repository the agent should work on for this task, in "owner/repo" format (e.g. "myorg/myapp"). When set, this scopes the task to that repo regardless of the agent default project.'),
       repo_provider: z.string().optional().describe('Repository provider \u2014 defaults to "github" when repo_full_name is set.'),
       storage_path: z.string().optional().describe('Storage location (e.g. OneDrive folder path) the task should target.'),
@@ -212,7 +212,7 @@ export function createSwarmApiMcpServer(agentManager) {
       }
       const storagePath = normalizeStoragePath(storage_path);
 
-      console.log(`\u{1F4E5} [SwarmMCP] add_task called \u2014 agent_id: ${agent_id || '(none)'}, agent_name: ${agent_name || '(none)'}, project: ${project || '(none)'}, status: ${status || '(default)'}, board_id: ${board_id || '(auto)'}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}, task: ${task.slice(0, 100)}`);
+      console.log(`\u{1F4E5} [SwarmMCP] add_task called \u2014 agent_id: ${agent_id || '(none)'}, agent_name: ${agent_name || '(none)'}, project: ${project || '(none)'}, status: ${status || '(default)'}, board_id: ${board_id}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}, task: ${task.slice(0, 100)}`);
       let agent: any = null;
 
       if (agent_id) {
@@ -223,58 +223,39 @@ export function createSwarmApiMcpServer(agentManager) {
         );
       }
 
-      if (!agent) {
-        console.warn(`\u26A0\uFE0F [SwarmMCP] add_task \u2014 Agent not found: agent_id="${agent_id || ''}", agent_name="${agent_name || ''}"`);
+      if ((agent_id || agent_name) && !agent) {
+        console.warn(`\u26A0\uFE0F [SwarmMCP] add_task \u2014 Agent identifier provided but not found: agent_id="${agent_id || ''}", agent_name="${agent_name || ''}"`);
         return {
           content: [{
             type: 'text',
-            text: JSON.stringify({ error: 'Agent not found' }),
+            text: JSON.stringify({ error: `Agent not found (agent_id="${agent_id || ''}", agent_name="${agent_name || ''}"). Omit both to create an unassigned task on the board.` }),
           }],
           isError: true,
         };
       }
 
-      // Resolve board_id: pick the board with the most tasks for the project,
-      // fall back to single board or default board
-      let resolvedBoardId = board_id || null;
-      let resolvedBoard: any = null;
-      if (!resolvedBoardId) {
-        const boards = await getAllBoards();
-        if (boards.length === 1) {
-          resolvedBoardId = boards[0].id;
-          resolvedBoard = boards[0];
-        } else if (boards.length > 1) {
-          // Find the board with the most tasks for this project
-          const taskProject = project || agent.project;
-          if (taskProject) {
-            const bestBoardId = await getBoardWithMostTasksForProject(taskProject);
-            if (bestBoardId) {
-              resolvedBoardId = bestBoardId;
-              resolvedBoard = boards.find(b => b.id === bestBoardId) || null;
-              console.log(`📋 [SwarmMCP] Auto-resolved board for project "${taskProject}": ${resolvedBoardId}`);
-            }
-          }
-          // Fallback: use the default board if no project match found
-          if (!resolvedBoardId) {
-            const defaultBoard = boards.find(b => b.is_default);
-            resolvedBoardId = defaultBoard ? defaultBoard.id : boards[0].id;
-            resolvedBoard = defaultBoard || boards[0];
-            console.log(`📋 [SwarmMCP] No project-specific board found, using fallback: ${resolvedBoardId}`);
-          }
-        }
-      } else {
-        // Validate board exists
-        const board = await getBoardById(resolvedBoardId);
-        if (!board) {
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ error: `Board not found: ${resolvedBoardId}` }),
-            }],
-            isError: true,
-          };
-        }
-        resolvedBoard = board;
+      // board_id is now mandatory — validate it exists. We no longer auto-pick
+      // the "best" board for the project: the caller must choose explicitly so
+      // unassigned-task placement is unambiguous.
+      if (!board_id) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ error: 'board_id is required. Use list_boards to discover available board IDs.' }),
+          }],
+          isError: true,
+        };
+      }
+      const resolvedBoardId: string = board_id;
+      const resolvedBoard: any = await getBoardById(resolvedBoardId);
+      if (!resolvedBoard) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ error: `Board not found: ${resolvedBoardId}. Use list_boards to discover valid IDs.` }),
+          }],
+          isError: true,
+        };
       }
 
       // Validate status against the resolved board's workflow columns. The
@@ -295,14 +276,24 @@ export function createSwarmApiMcpServer(agentManager) {
         }
       }
 
-      const newTask = agentManager.addTask(agent.id, task, { type: 'mcp' }, status, {
+      const newTask = agentManager.addTask(agent?.id || null, task, { type: 'mcp' }, status, {
         boardId: resolvedBoardId,
         repoFullName,
         repoProvider: repoFullName ? (repo_provider || 'github') : null,
         storagePath,
         storageProvider: storagePath ? (storage_provider || 'onedrive') : null,
       });
-      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created for agent "${agent.name}" (${agent.id}) \u2014 task: ${newTask?.id}, project: ${project || '(none)'}, status: ${status || '(default)'}, board: ${resolvedBoardId || '(none)'}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
+      if (!newTask) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ error: 'Failed to create task. Verify board_id and (if provided) agent identifier.' }),
+          }],
+          isError: true,
+        };
+      }
+      const agentLabel = agent ? `agent "${agent.name}" (${agent.id})` : 'unassigned';
+      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created for ${agentLabel} \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${status || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
 
       return {
         content: [{
@@ -310,7 +301,7 @@ export function createSwarmApiMcpServer(agentManager) {
           text: JSON.stringify({
             success: true,
             task: newTask,
-            agent: { id: agent.id, name: agent.name },
+            agent: agent ? { id: agent.id, name: agent.name } : null,
             board_id: resolvedBoardId,
           }, null, 2),
         }],

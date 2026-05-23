@@ -122,6 +122,7 @@ test('add_task forwards repo_full_name and storage_path to agentManager.addTask'
   const handler = getToolHandler(server, 'add_task');
   const result = await handler({
     agent_id: 'agent-1',
+    board_id: 'board-1',
     task: 'Implement login flow',
     repo_full_name: 'acme/widgets',
     storage_path: '/onedrive/projects/widgets',
@@ -150,6 +151,7 @@ test('add_task rejects malformed repo_full_name with a clear error', async () =>
 
   const result = await handler({
     agent_id: 'agent-1',
+    board_id: 'board-1',
     task: 'Bad repo',
     repo_full_name: 'not-a-valid-repo-name',
   });
@@ -168,6 +170,7 @@ test('add_task accepts a custom repo_provider override', async () => {
 
   await handler({
     agent_id: 'agent-1',
+    board_id: 'board-1',
     task: 'Work on gitlab repo',
     repo_full_name: 'acme/widgets',
     repo_provider: 'gitlab',
@@ -181,11 +184,59 @@ test('add_task without repo / storage leaves both null (no auto-binding)', async
   const server = createSwarmApiMcpServer(am as any);
   const handler = getToolHandler(server, 'add_task');
 
-  const result = await handler({ agent_id: 'agent-1', task: 'Plain task' });
+  const result = await handler({ agent_id: 'agent-1', board_id: 'board-1', task: 'Plain task' });
   const body = parseResult(result);
 
   assert.equal(body.task.repoFullName, null);
   assert.equal(body.task.storagePath, null);
+});
+
+test('add_task rejects calls without board_id', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'add_task');
+
+  // Zod marks board_id as required at the schema layer, so calling the handler
+  // directly with a missing board_id still produces a runtime error from our
+  // own check (in case a transport bypasses the schema validation).
+  const result = await handler({ agent_id: 'agent-1', task: 'No board' });
+
+  assert.equal(result.isError, true);
+  const body = parseResult(result);
+  assert.match(body.error, /board_id is required/);
+  assert.equal(am._calls.addTask.length, 0);
+});
+
+test('add_task creates an unassigned task when no agent is provided', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'add_task');
+
+  const result = await handler({ board_id: 'board-1', task: 'Pick this up later' });
+  const body = parseResult(result);
+
+  assert.equal(body.success, true);
+  assert.equal(body.agent, null, 'agent should be null for unassigned tasks');
+  assert.equal(body.board_id, 'board-1');
+  assert.equal(am._calls.addTask.length, 1);
+  assert.equal(am._calls.addTask[0].agentId, null, 'addTask should be called with agentId=null');
+});
+
+test('add_task rejects calls with an unknown agent identifier', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'add_task');
+
+  const result = await handler({
+    board_id: 'board-1',
+    agent_name: 'NonexistentAgent',
+    task: 'Should fail',
+  });
+
+  assert.equal(result.isError, true);
+  const body = parseResult(result);
+  assert.match(body.error, /Agent not found/);
+  assert.equal(am._calls.addTask.length, 0);
 });
 
 test('update_task changes the task status', async () => {
@@ -317,6 +368,7 @@ test('add_task rejects unknown status not in the board workflow', async () => {
 
   const result = await handler({
     agent_id: 'agent-1',
+    board_id: 'board-1',
     task: 'New task',
     status: 'not_a_column',
   });

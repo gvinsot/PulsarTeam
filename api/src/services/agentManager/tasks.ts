@@ -77,9 +77,12 @@ function pruneByDate<T extends { at?: string; date?: string }>(
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
-  addTask(this: any, agentId: string, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): any {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
+  addTask(this: any, agentId: string | null, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): any {
+    // agentId === null → unassigned task: lives on a board, waits to be picked up.
+    // Requires a boardId to make sense (the board IS its home in that case).
+    const agent = agentId ? this.agents.get(agentId) : null;
+    if (agentId && !agent) return null;
+    if (!agentId && !boardId) return null;
     const defaultStatus = 'backlog';
     const status = initialStatus || defaultStatus;
     const now = new Date().toISOString();
@@ -120,9 +123,9 @@ export const tasksMethods = {
         lastResetAt: now,
       };
     }
-    this._addTaskToStore(agentId, newTask);
+    if (agentId) this._addTaskToStore(agentId, newTask);
     const savePromise = saveTaskToDb({ ...newTask, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
     // Emit task:updated after the DB write has committed so the frontend
     // can add the new task to its list in real-time (the handler must support
     // inserting tasks it hasn't seen before, not just patching existing ones).
@@ -130,7 +133,8 @@ export const tasksMethods = {
     Promise.resolve(savePromise)
       .catch(() => {})
       .then(() => this._emit('task:updated', { agentId, task: taskPayload }));
-    if (!skipAutoRefine && !newTask.isManual) this._checkAutoRefine({ ...newTask, agentId });
+    // Skip auto-refine for unassigned tasks — there's no agent to refine for yet.
+    if (agentId && !skipAutoRefine && !newTask.isManual) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },
 
