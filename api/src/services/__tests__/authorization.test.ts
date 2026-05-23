@@ -30,6 +30,7 @@ mock.module('../database.js', {
     getBoardShare: async (boardId: string, userId: string) =>
       boardShares.find(s => s.board_id === boardId && s.user_id === userId) || null,
     getProjectById: async (id: string) => projects[id] || null,
+    isDatabaseConnected: () => true,
     // Other exports stubbed as no-ops so importing auth.ts doesn't blow up
     getUserByUsername: async () => null,
     getUserById: async () => null,
