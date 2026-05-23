@@ -10,10 +10,27 @@ import { readSecretOptional } from '../../secrets.js';
 const { Pool } = pg;
 
 export async function initDatabase(retries = 5, delayMs = 3000) {
-  const connectionString = readSecretOptional('DATABASE_CONNECTION_STRING');
+  // Renamed from DATABASE_URL → DATABASE_CONNECTION_STRING in 37e9d8c so the
+  // value can be provisioned as a Docker secret. Keep DATABASE_URL as a
+  // legacy fallback so deployments that haven't been re-templated yet still
+  // boot with a working DB connection — otherwise the API silently starts
+  // in degraded mode and every login returns "Invalid credentials".
+  let connectionString = readSecretOptional('DATABASE_CONNECTION_STRING');
+  if (!connectionString) {
+    const legacy = readSecretOptional('DATABASE_URL');
+    if (legacy) {
+      console.warn('⚠️  DATABASE_CONNECTION_STRING not set — falling back to legacy DATABASE_URL. Rename it to DATABASE_CONNECTION_STRING in your env/secrets.');
+      connectionString = legacy;
+    }
+  }
 
   if (!connectionString) {
-    console.log('⚠️  DATABASE_CONNECTION_STRING not set, agents will not be persisted');
+    const msg = 'DATABASE_CONNECTION_STRING is not set — agents will not be persisted and authentication will fail (no users table to query).';
+    if (process.env.NODE_ENV === 'production') {
+      console.error('❌ ' + msg);
+    } else {
+      console.warn('⚠️  ' + msg);
+    }
     return false;
   }
 
