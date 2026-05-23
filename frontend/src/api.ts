@@ -168,6 +168,22 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
+  getCodexAuthStatus: (ownerId) =>
+    fetch(`${API_BASE}/codex-auth/${ownerId}/status`, { headers: getHeaders() }).then(handleResponse),
+
+  uploadCodexAuth: (ownerId, authJson) =>
+    fetch(`${API_BASE}/codex-auth/${ownerId}`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ authJson })
+    }).then(handleResponse),
+
+  deleteCodexAuth: (ownerId) =>
+    fetch(`${API_BASE}/codex-auth/${ownerId}`, {
+      method: 'DELETE',
+      headers: getHeaders()
+    }).then(handleResponse),
+
   reloadContext: (id) =>
     fetch(`${API_BASE}/agents/${id}/reload-context`, {
       method: 'POST',

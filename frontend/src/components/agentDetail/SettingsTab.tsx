@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Save, Trash2, RotateCw } from 'lucide-react';
 import { api } from '../../api';
+import CodexAuthSection from './CodexAuthSection';
 
 export default function SettingsTab({ agent, projects, currentProject, onRefresh, userRole, currentUser }) {
   const [form, setForm] = useState({
@@ -276,6 +277,13 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           </div>
         </div>
       </div>
+
+      {(form.runner === 'codex' || resolveAutoRunner(form.llmConfigId) === 'codex') && (
+        <CodexAuthSection
+          ownerId={agent.ownerId || currentUser?.id || currentUser?.userId}
+          currentUser={currentUser}
+        />
+      )}
 
       {/* Actions */}
       <div className="flex gap-2">

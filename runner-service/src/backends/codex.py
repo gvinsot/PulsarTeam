@@ -33,10 +33,17 @@ JSON event shape emitted by `codex exec --json`:
 
 import os
 import json
-from typing import Optional
+from typing import Optional, AsyncIterator
 
 from config import RUNNER_MODEL, logger
 from .cli_backend import CliBackend
+from .codex_token_store import (
+    hydrate_agent_auth,
+    push_agent_auth_if_changed,
+    read_local_auth,
+    auth_file_path,
+)
+from agent_user import ensure_agent_user
 
 
 # Codex CLI honors $CODEX_HOME for its auth/state location. When set, the
@@ -57,18 +64,62 @@ class CodexBackend(CliBackend):
 
     async def startup(self) -> None:
         await super().startup()
-        # Surface which auth mode the CLI will pick up so the operator can
-        # see immediately whether they need to run `codex login`.
         auth_json = os.path.expanduser("~/.codex/auth.json")
         if os.path.isfile(auth_json):
             logger.info("  Auth: ChatGPT plan (OAuth) — ~/.codex/auth.json present")
         elif os.getenv("OPENAI_API_KEY"):
             logger.info("  Auth: OPENAI_API_KEY (API credits)")
         else:
-            logger.warning(
-                "  No auth configured for codex. Run `codex login` inside this "
-                "container OR set OPENAI_API_KEY."
+            logger.info(
+                "  No auth configured for codex yet. Upload an auth.json via the UI "
+                "(Login ChatGPT) OR set OPENAI_API_KEY. Falls back at exec time."
             )
+
+    # ── Per-exec hydration + push-back ────────────────────────────────────
+
+    async def run_sync(self, prompt, system_prompt=None, agent_id=None,
+                       owner_id=None, task_id=None, session_id=None, messages=None):
+        baseline_mtime = await self._hydrate_for_exec(agent_id, owner_id)
+        try:
+            return await super().run_sync(
+                prompt, system_prompt=system_prompt, agent_id=agent_id,
+                owner_id=owner_id, task_id=task_id, session_id=session_id,
+                messages=messages,
+            )
+        finally:
+            await self._push_back_if_changed(agent_id, owner_id, baseline_mtime)
+
+    async def stream_events(self, prompt, system_prompt=None, agent_id=None,
+                            owner_id=None, task_id=None, session_id=None,
+                            messages=None) -> AsyncIterator[dict]:
+        baseline_mtime = await self._hydrate_for_exec(agent_id, owner_id)
+        try:
+            async for event in super().stream_events(
+                prompt, system_prompt=system_prompt, agent_id=agent_id,
+                owner_id=owner_id, task_id=task_id, session_id=session_id,
+                messages=messages,
+            ):
+                yield event
+        finally:
+            await self._push_back_if_changed(agent_id, owner_id, baseline_mtime)
+
+    async def _hydrate_for_exec(self, agent_id: Optional[str], owner_id: Optional[str]) -> Optional[float]:
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        if owner_id:
+            await hydrate_agent_auth(agent_user, owner_id)
+        _, mtime = read_local_auth(agent_user)
+        return mtime
+
+    async def _push_back_if_changed(self, agent_id: Optional[str],
+                                    owner_id: Optional[str],
+                                    baseline_mtime: Optional[float]) -> None:
+        if not owner_id:
+            return
+        try:
+            agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+            await push_agent_auth_if_changed(agent_user, owner_id, baseline_mtime)
+        except Exception as e:
+            logger.warning(f"[Codex Auth] push-back failed for owner {owner_id}: {e}")
 
     # ── Command builder ───────────────────────────────────────────────────
 
