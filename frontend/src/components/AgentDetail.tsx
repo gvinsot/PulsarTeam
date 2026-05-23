@@ -12,6 +12,7 @@ import { WsEvents } from '../socketEvents';
 // gets feedback while their attention is still on the chat.
 const CHAT_ACK_TIMEOUT_MS = 8000;
 import VoiceChatTab from './VoiceChatTab';
+import ExternalVoiceChatTab from './ExternalVoiceChatTab';
 import ChatTab from './agentDetail/ChatTab';
 import PluginsTab from './agentDetail/PluginsTab';
 import ContextTab from './agentDetail/ContextTab';
@@ -386,7 +387,9 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       <div className="flex-1 overflow-auto">
         {activeTab === 'chat' && (
           agent.isVoice ? (
-            <VoiceChatTab agent={agent} />
+            agent.voiceMode === 'external'
+              ? <ExternalVoiceChatTab agent={agent} />
+              : <VoiceChatTab agent={agent} />
           ) : (
             <ChatTab
               history={history}

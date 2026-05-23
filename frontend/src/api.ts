@@ -609,6 +609,12 @@ export const api = {
       body: JSON.stringify({ agentId })
     }).then(handleResponse),
 
+  // External voice (STT + LLM + TTS pipeline) — returns WSS URLs for the browser
+  getExternalVoiceConfig: (agentId) =>
+    fetch(`${API_BASE}/external-voice/config/${encodeURIComponent(agentId)}`, {
+      headers: getHeaders(),
+    }).then(handleResponse),
+
   // Templates
   getTemplates: () =>
     fetch(`${API_BASE}/templates`, { headers: getHeaders() }).then(handleResponse),

@@ -21,6 +21,8 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     isLeader: false,
     isVoice: false,
     voice: 'alloy',
+    voiceMode: 'realtime', // 'realtime' (OpenAI) or 'external' (STT/LLM/TTS)
+    ttsVoiceId: '',
   });
   const [creating, setCreating] = useState(false);
 
@@ -50,6 +52,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
       isLeader: template.isLeader || template.isVoice || false,
       isVoice: template.isVoice || false,
       voice: template.isVoice ? 'alloy' : prev.voice,
+      voiceMode: template.voiceMode || (template.isVoice ? 'realtime' : prev.voiceMode),
     }));
     setSelectedTemplate(template);
     setStep('custom');
@@ -301,10 +304,10 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                         updateField('isVoice', isVoice);
                         if (isVoice) {
                           updateField('isLeader', true);
-                          // Auto-select an LLM config with gpt-realtime model
-                          const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
-                          if (realtimeConfig) {
-                            updateField('llmConfigId', realtimeConfig.id);
+                          if (form.voiceMode === 'realtime') {
+                            // Auto-select an LLM config with gpt-realtime model
+                            const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
+                            if (realtimeConfig) updateField('llmConfigId', realtimeConfig.id);
                           }
                         }
                       }}
@@ -315,11 +318,41 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                       <span className="text-sm text-dark-200 group-hover:text-dark-100">Voice Agent</span>
                     </div>
                   </label>
-                  <p className="text-[11px] text-dark-500 mt-1 ml-7">Speech-to-speech agent using OpenAI Realtime API (forces Leader mode)</p>
+                  <p className="text-[11px] text-dark-500 mt-1 ml-7">Forces Leader mode. Pick the voice pipeline below.</p>
                 </div>
                 )}
 
                 {form.isVoice && (
+                  <div className="col-span-2">
+                    <label className="block text-xs text-dark-400 mb-1.5">Voice Pipeline</label>
+                    <select
+                      value={form.voiceMode}
+                      onChange={(e) => {
+                        const mode = e.target.value;
+                        updateField('voiceMode', mode);
+                        if (mode === 'realtime') {
+                          const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
+                          if (realtimeConfig) updateField('llmConfigId', realtimeConfig.id);
+                        } else {
+                          // External mode uses a regular text LLM — clear realtime auto-pick
+                          const sel = llmConfigs.find(c => c.id === form.llmConfigId);
+                          if (sel?.model?.includes('gpt-realtime')) updateField('llmConfigId', '');
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="realtime">OpenAI Realtime (speech-to-speech)</option>
+                      <option value="external">External STT + LLM + TTS (HighSpeedToText-style)</option>
+                    </select>
+                    <p className="text-[11px] text-dark-500 mt-1">
+                      {form.voiceMode === 'external'
+                        ? 'Browser streams mic to the STT service, then a regular text LLM, then the TTS service plays the reply. STT/TTS service URLs are configured in Admin Settings.'
+                        : 'Speech-to-speech via the OpenAI Realtime API.'}
+                    </p>
+                  </div>
+                )}
+
+                {form.isVoice && form.voiceMode === 'realtime' && (
                   <div className="col-span-2">
                     <label className="block text-xs text-dark-400 mb-1.5">Voice</label>
                     <select
@@ -339,6 +372,20 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                   </div>
                 )}
 
+                {form.isVoice && form.voiceMode === 'external' && (
+                  <div className="col-span-2">
+                    <label className="block text-xs text-dark-400 mb-1.5">TTS Voice ID (optional)</label>
+                    <input
+                      type="text"
+                      value={form.ttsVoiceId}
+                      onChange={(e) => updateField('ttsVoiceId', e.target.value)}
+                      className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                      placeholder="Leave empty to use the global default"
+                    />
+                    <p className="text-[11px] text-dark-500 mt-1">Voice ID sent to the TTS service. Falls back to the global default in Admin Settings.</p>
+                  </div>
+                )}
+
                 <div className="col-span-2 border-t border-dark-700 pt-4">
                   <h4 className="text-xs font-medium text-dark-300 mb-3 flex items-center gap-2">
                     <Cpu className="w-3.5 h-3.5" /> LLM Configuration
@@ -353,7 +400,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                     className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                   >
                     <option value="">-- Select an LLM config --</option>
-                    {(form.isVoice
+                    {(form.isVoice && form.voiceMode === 'realtime'
                       ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
                       : llmConfigs
                     ).map(c => (
@@ -362,7 +409,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                       </option>
                     ))}
                   </select>
-                  {form.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
+                  {form.isVoice && form.voiceMode === 'realtime' && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
                     <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
                   )}
                   {form.llmConfigId && (() => {

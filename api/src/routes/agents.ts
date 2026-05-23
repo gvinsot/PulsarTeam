@@ -35,6 +35,9 @@ const createAgentSchema = z.object({
   isVoice: z.boolean().optional(),
   isReasoning: z.boolean().optional(),
   voice: z.string().max(100).optional(),
+  // 'realtime' = OpenAI Realtime API (default), 'external' = browser → STT → LLM → TTS pipeline
+  voiceMode: z.enum(['realtime', 'external']).optional(),
+  ttsVoiceId: z.string().max(200).optional(),
   template: z.string().max(200).nullable().optional(),
   color: z.string().max(50).optional(),
   icon: z.string().max(50).optional(),

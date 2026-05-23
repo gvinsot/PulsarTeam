@@ -596,6 +596,152 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                 </select>
               </div>
 
+              {/* External Voice Services (STT + TTS) */}
+              <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
+                    <Cpu className="w-4 h-4 text-emerald-400" />
+                    External Voice Services (STT + TTS)
+                  </h4>
+                  <p className="text-xs text-dark-400 mt-1">
+                    Used by "External Voice" agents: the browser streams the
+                    microphone to the STT WebSocket, the transcript is sent to
+                    the agent's LLM, then the response is read back through the
+                    TTS WebSocket. Compatible with HighSpeedToText
+                    (<a className="underline" href="https://speech-ui.methodinfo.fr/" target="_blank" rel="noreferrer">speech-ui.methodinfo.fr</a>).
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">STT WebSocket URL</label>
+                    <input
+                      type="text"
+                      value={settings.sttServiceUrl || ''}
+                      onChange={e => setSettings(s => ({ ...s, sttServiceUrl: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      placeholder="wss://speech.methodinfo.fr/v1/ws/transcribe"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">STT API Key</label>
+                    <input
+                      type="password"
+                      value={settings.sttApiKey || ''}
+                      onChange={e => setSettings(s => ({ ...s, sttApiKey: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      placeholder="sk_..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">TTS WebSocket URL</label>
+                    <input
+                      type="text"
+                      value={settings.ttsServiceUrl || ''}
+                      onChange={e => setSettings(s => ({ ...s, ttsServiceUrl: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      placeholder="wss://speech.methodinfo.fr/v1/ws/synthesize"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">TTS API Key</label>
+                    <input
+                      type="password"
+                      value={settings.ttsApiKey || ''}
+                      onChange={e => setSettings(s => ({ ...s, ttsApiKey: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      placeholder="sk_..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">Default TTS Voice ID</label>
+                    <input
+                      type="text"
+                      value={settings.ttsVoiceId || ''}
+                      onChange={e => setSettings(s => ({ ...s, ttsVoiceId: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
+                      placeholder="(leave empty for service default)"
+                    />
+                    <p className="text-[11px] text-dark-500 mt-1">Per-agent voice IDs can override this default.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* External Voice Services (STT/TTS) */}
+              <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-4">
+                <div>
+                  <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
+                    <Bot className="w-4 h-4 text-emerald-400" />
+                    External Voice Services (STT / TTS)
+                  </h4>
+                  <p className="text-xs text-dark-400 mt-1">
+                    Used by voice agents whose <code className="px-1 rounded bg-dark-900/60">voiceMode</code> is <code className="px-1 rounded bg-dark-900/60">external</code>.
+                    The browser opens these WebSockets directly — no audio passes through this backend. Compatible with{' '}
+                    <a href="https://speech-ui.methodinfo.fr/get-started" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">
+                      HighSpeedToText
+                    </a>.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">Speech-to-Text WebSocket URL</label>
+                    <input
+                      type="text"
+                      placeholder="wss://speech.methodinfo.fr/v1/ws/transcribe"
+                      value={settings.sttServiceUrl || ''}
+                      onChange={e => setSettings(s => ({ ...s, sttServiceUrl: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-dark-500 mt-1">Expects PCM16 mono @ 16 kHz over WS.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">STT API Key</label>
+                    <input
+                      type="password"
+                      placeholder="sk_..."
+                      value={settings.sttApiKey || ''}
+                      onChange={e => setSettings(s => ({ ...s, sttApiKey: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-dark-500 mt-1">Injected as <code>?api_key=…</code> when the browser opens the WS.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">Text-to-Speech WebSocket URL</label>
+                    <input
+                      type="text"
+                      placeholder="wss://speech.methodinfo.fr/v1/ws/synthesize"
+                      value={settings.ttsServiceUrl || ''}
+                      onChange={e => setSettings(s => ({ ...s, ttsServiceUrl: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-dark-500 mt-1">Streams back PCM16 mono @ 22 050 Hz.</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-dark-400 mb-1">TTS API Key</label>
+                    <input
+                      type="password"
+                      placeholder="sk_..."
+                      value={settings.ttsApiKey || ''}
+                      onChange={e => setSettings(s => ({ ...s, ttsApiKey: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs text-dark-400 mb-1">Default TTS voice ID</label>
+                    <input
+                      type="text"
+                      placeholder="voice-uuid (optional — per-agent ttsVoiceId overrides)"
+                      value={settings.ttsVoiceId || ''}
+                      onChange={e => setSettings(s => ({ ...s, ttsVoiceId: e.target.value }))}
+                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    />
+                    <p className="text-[10px] text-dark-500 mt-1">
+                      Used in <code>session.start</code> as <code>voice_id</code> (zero-shot mode).
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* Reset Agent Instructions */}
               <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-4">
                 <div>

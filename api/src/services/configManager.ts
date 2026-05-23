@@ -11,6 +11,14 @@ const DEFAULTS = {
   taskReminderCooldownMinutes: '2',
   // LLM config id used to simplify the repo call-graph analysis. Empty = no LLM step.
   codeGraphLlmConfigId: '',
+  // External voice agent — Speech-to-Text service (HighSpeedToText style)
+  sttServiceUrl: '',
+  sttApiKey: '',
+  // External voice agent — Text-to-Speech service (HighSpeedToText style)
+  ttsServiceUrl: '',
+  ttsApiKey: '',
+  // Default TTS voice / mode for external voice agents
+  ttsVoiceId: '',
 };
 
 // ── Data directory configuration ────────────────────────────────────────────
