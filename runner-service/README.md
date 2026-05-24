@@ -60,6 +60,7 @@ runner-service/
         ├── base.py           RunnerBackend abstract base
         ├── cli_backend.py    common CLI runner base
         ├── claude_code.py    Claude Code backend (with OAuth)
+        ├── claude_interactive.py  PTY-driven TUI mode (no `-p`)
         ├── claude_oauth.py
         ├── claude_token_store.py
         ├── openclaw.py
@@ -68,6 +69,30 @@ runner-service/
         ├── sandbox.py
         └── mock.py             canned-response LLM (testing)
 ```
+
+## Claude Code: interactive vs headless mode
+
+Anthropic announced that Claude Code's headless mode (`claude -p` /
+`--print`) is moving to API-rate pricing while the interactive TUI keeps
+subscription pricing. The runner now defaults to **interactive mode**:
+the CLI is spawned without `-p`, driven through a PTY, and the assistant's
+reply is captured by waiting for an idle window.
+
+Set `CLAUDE_USE_PRINT_MODE=true` to opt back into the old `-p` path
+(useful for shells with no PTY support or for diagnostic comparisons).
+
+Interactive mode has to answer any Y/N or numbered-choice prompts the TUI
+emits. The driver responds with safe defaults (`y` / first option). For
+non-trivial prompts you can wire up an external LLM that will be asked
+to choose; configure via:
+
+- `CLAUDE_FALLBACK_LLM_URL` — base URL of an OpenAI-compatible endpoint
+- `CLAUDE_FALLBACK_LLM_KEY` — bearer token (also readable from
+  `/run/secrets/CLAUDE_FALLBACK_LLM_KEY`)
+- `CLAUDE_FALLBACK_LLM_MODEL` — model name (default `gpt-4o-mini`)
+- `CLAUDE_INTERACTIVE_IDLE_SECS` — silence window for "reply finished"
+  detection (default `4.0`)
+- `CLAUDE_INTERACTIVE_TIMEOUT` — per-turn hard cap (default = `TIMEOUT`)
 
 ## Mock backend
 

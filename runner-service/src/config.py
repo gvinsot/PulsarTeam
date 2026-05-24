@@ -133,6 +133,32 @@ OAUTH_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_s
 
 USERS_DIR = os.path.join(DATA_DIR, "users")
 
+# --- Interactive (no -p) mode ------------------------------------------------
+#
+# Anthropic has announced that Claude Code headless mode (`-p` / `--print`) is
+# moving to API-rate pricing, while the interactive TUI mode keeps subscription
+# pricing. Default to the interactive driver and let operators opt back into
+# print-mode via env var if they need it (CI shells, integration tests, etc.).
+#
+# CLAUDE_USE_PRINT_MODE=true  → spawn with `-p` (legacy/expensive path)
+# CLAUDE_USE_PRINT_MODE=false → drive the CLI via a PTY (default)
+CLAUDE_USE_PRINT_MODE = os.getenv("CLAUDE_USE_PRINT_MODE", "false").lower() in ("true", "1", "yes")
+
+# Silence window (seconds) used to detect "the CLI is done answering" when
+# driving the TUI through a PTY. Set higher for slow models / long replies.
+CLAUDE_INTERACTIVE_IDLE_SECS = float(os.getenv("CLAUDE_INTERACTIVE_IDLE_SECS", "4.0"))
+
+# Hard cap on how long a single interactive turn may run end-to-end.
+CLAUDE_INTERACTIVE_TIMEOUT = int(os.getenv("CLAUDE_INTERACTIVE_TIMEOUT", str(TIMEOUT)))
+
+# When the TUI shows an interactive prompt we don't have a hardcoded answer
+# for, consult a configured OpenAI-compatible LLM. All three vars are required
+# for the fallback to activate; if any is missing we default to "1" (= the
+# first / safest option) for selection prompts and "y" for Y/N prompts.
+CLAUDE_FALLBACK_LLM_URL = os.getenv("CLAUDE_FALLBACK_LLM_URL", "").strip()
+CLAUDE_FALLBACK_LLM_KEY = read_secret("CLAUDE_FALLBACK_LLM_KEY", default=os.getenv("CLAUDE_FALLBACK_LLM_KEY", "")).strip()
+CLAUDE_FALLBACK_LLM_MODEL = os.getenv("CLAUDE_FALLBACK_LLM_MODEL", "gpt-4o-mini").strip()
+
 # Backwards-compat aliases (so we don't have to update every file at once)
 CLAUDE_MODEL = RUNNER_MODEL
 CLAUDE_MAX_TURNS = RUNNER_MAX_TURNS

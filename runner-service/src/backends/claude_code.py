@@ -18,6 +18,7 @@ from config import (
     CLAUDE_MODEL, CLAUDE_MAX_TURNS, CLI_CWD, TIMEOUT,
     PROJECTS_DIR, ALLOWED_TOOLS, SYSTEM_PROMPT, VERBOSE,
     OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI,
+    CLAUDE_USE_PRINT_MODE,
     logger,
 )
 from agent_user import ensure_agent_user, get_agent_project_dir
@@ -41,6 +42,7 @@ from .claude_oauth import (
     get_owner_oauth_flow, pop_owner_oauth_flow,
     token_http_request,
 )
+from .claude_interactive import run_interactive
 
 
 MAX_AUTH_RETRIES = 2
@@ -115,6 +117,8 @@ class ClaudeCodeBackend(RunnerBackend):
         logger.info(f"  Max turns: {CLAUDE_MAX_TURNS}")
         logger.info(f"  Timeout: {TIMEOUT}s")
         logger.info(f"  Projects dir: {PROJECTS_DIR}")
+        mode_label = "headless (-p)" if CLAUDE_USE_PRINT_MODE else "interactive (PTY, subscription pricing)"
+        logger.info(f"  CLI mode: {mode_label}")
 
         try:
             result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
@@ -341,14 +345,23 @@ class ClaudeCodeBackend(RunnerBackend):
                 f"agent_id={agent_id[:12] if agent_id else None} spawn_uid={spawn_uid} parent_uid={os.getuid()}"
             )
 
+        # `-p` / `--print` (headless mode) is moving to API pricing per Anthropic's
+        # announcement; the interactive TUI keeps subscription pricing. We default
+        # to the interactive driver (see claude_interactive.py) and only emit `-p`
+        # when CLAUDE_USE_PRINT_MODE=true is explicitly set. The output-format /
+        # max-turns / include-partial-messages flags are headless-only — drop them
+        # too when running interactively.
         cmd = [
             "claude",
-            "-p",
-            "--output-format", output_format,
-            "--max-turns", str(CLAUDE_MAX_TURNS),
             "--model", CLAUDE_MODEL,
             "--effort", "high",
         ]
+        if CLAUDE_USE_PRINT_MODE:
+            cmd.insert(1, "-p")
+            cmd.extend([
+                "--output-format", output_format,
+                "--max-turns", str(CLAUDE_MAX_TURNS),
+            ])
         if skip_permissions:
             cmd.append("--dangerously-skip-permissions")
 
@@ -372,8 +385,8 @@ class ClaudeCodeBackend(RunnerBackend):
         # text response shows up as a single chunk at the end). With
         # --include-partial-messages it also emits Anthropic-style
         # content_block_delta events as tokens arrive, which the loop below
-        # forwards as `text` chunks.
-        if output_format == "stream-json":
+        # forwards as `text` chunks. Headless-only.
+        if CLAUDE_USE_PRINT_MODE and output_format == "stream-json":
             cmd.append("--include-partial-messages")
 
         if ALLOWED_TOOLS:
@@ -506,9 +519,50 @@ class ClaudeCodeBackend(RunnerBackend):
                 agent_user=effective_user,
                 session_id=sid, is_resume=resume,
             )
-            logger.info(f"Executing Claude Code{agent_label} (prompt={len(p_prompt)}B, resume={resume}): {p_prompt[:100]}...")
+            logger.info(f"Executing Claude Code{agent_label} (prompt={len(p_prompt)}B, resume={resume}, print_mode={CLAUDE_USE_PRINT_MODE}): {p_prompt[:100]}...")
             logger.debug(f"Command: {' '.join(cmd)} (cwd={proc_cwd})")
             logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
+
+            if not CLAUDE_USE_PRINT_MODE:
+                # Interactive TUI driven through a PTY. The driver handles
+                # banner detection, prompt delivery, interactive Y/N prompts
+                # (auto-answered or routed to a fallback LLM), and clean
+                # shutdown. It returns a result dict compatible with the
+                # synthesised (proc, stdout, stderr) tuple this closure
+                # historically produced.
+                _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
+                preexec_fn = _subp_kwargs.get("preexec_fn")
+                try:
+                    interactive_result = await asyncio.wait_for(
+                        run_interactive(
+                            cmd=cmd, cwd=proc_cwd,
+                            env=get_agent_env(effective_user),
+                            prompt=p_prompt, preexec_fn=preexec_fn,
+                        ),
+                        timeout=TIMEOUT,
+                    )
+                except PermissionError as spawn_err:
+                    logger.error(f"[Spawn] PermissionError driving claude (cwd={proc_cwd}): {spawn_err}")
+                    raise RuntimeError(f"Permission denied spawning claude CLI (cwd={proc_cwd}).") from spawn_err
+
+                class _FakeProc:
+                    pass
+                fp = _FakeProc()
+                fp.returncode = interactive_result.get("returncode") or 0
+                # Wrap the textual reply into the same JSON envelope the print
+                # mode would have produced so the parser below works
+                # untouched.
+                payload = {
+                    "result": interactive_result.get("output", ""),
+                    "cost_usd": 0,
+                    "duration_ms": 0,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                    "total_tokens": 0,
+                }
+                so_b = json.dumps(payload).encode("utf-8")
+                se_b = (interactive_result.get("stderr") or "").encode("utf-8")
+                return fp, so_b, se_b
+
             try:
                 p = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -810,6 +864,62 @@ class ClaudeCodeBackend(RunnerBackend):
         current_session_id = session_id or str(uuid.uuid4())
         is_resume = bool(session_id)
         used_prompt = self._extract_resume_prompt(messages, prompt) if is_resume else replay_prompt
+
+        # Interactive (no `-p`) path: drive the TUI through a PTY and surface
+        # the assistant's reply as a single text event followed by a result
+        # event. Token-level streaming isn't available without `-p`, but the
+        # cost trade-off (subscription vs API pricing) is the whole point of
+        # this mode.
+        if not CLAUDE_USE_PRINT_MODE:
+            cmd, proc_cwd = self._build_cmd(
+                output_format="text", system_prompt=system_prompt,
+                agent_id=agent_id, task_id=task_id,
+                permissions=self._get_permissions(agent_id),
+                agent_user=effective_user,
+                session_id=current_session_id, is_resume=is_resume,
+            )
+            logger.info(f"Streaming Claude Code (interactive){agent_label} (prompt={len(used_prompt)}B, resume={is_resume}): {used_prompt[:100]}...")
+            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
+            _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
+            preexec_fn = _subp_kwargs.get("preexec_fn")
+            try:
+                result = await asyncio.wait_for(
+                    run_interactive(
+                        cmd=cmd, cwd=proc_cwd,
+                        env=get_agent_env(effective_user),
+                        prompt=used_prompt, preexec_fn=preexec_fn,
+                    ),
+                    timeout=TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                yield {"type": "error", "content": f"Claude CLI timed out after {TIMEOUT}s"}
+                return
+            except RuntimeError as e:
+                yield {"type": "error", "content": str(e)}
+                return
+
+            output = (result.get("output") or "").strip()
+            stderr_text = (result.get("stderr") or "").strip()
+            rc = result.get("returncode")
+
+            if output:
+                yield {"type": "text", "content": output}
+                yield {
+                    "type": "result",
+                    "content": output,
+                    "cost_usd": 0,
+                    "duration_ms": 0,
+                    "total_tokens": 0,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                }
+                yield {"type": "session_id_used", "session_id": current_session_id}
+                return
+
+            # No output: surface stderr / non-zero rc rather than going silent.
+            err_msg = stderr_text or f"Claude CLI returned no output (rc={rc})."
+            yield {"type": "error", "content": err_msg}
+            return
 
         async def _start_stream_proc(sid: str, resume: bool, p_prompt: str):
             cmd, proc_cwd = self._build_cmd(
