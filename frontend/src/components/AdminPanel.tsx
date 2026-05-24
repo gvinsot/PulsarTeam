@@ -596,6 +596,35 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                 </select>
               </div>
 
+              {/* Claude Paid Plan — Fallback LLM */}
+              <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
+                    <Cpu className="w-4 h-4 text-orange-400" />
+                    Claude Paid Plan — Interactive Fallback LLM
+                  </h4>
+                  <p className="text-xs text-dark-400 mt-1">
+                    The Claude CLI is driven through a PTY (no <code>-p</code>) to keep
+                    subscription pricing. When the TUI shows a Y/N or list prompt
+                    we don't have a hardcoded answer for, this LLM is consulted to
+                    choose the safest option. Leave unset to fall back to safe
+                    defaults ("y" / first option).
+                  </p>
+                </div>
+                <select
+                  value={settings.claudeFallbackLlmConfigId || ''}
+                  onChange={e => setSettings(s => ({ ...s, claudeFallbackLlmConfigId: e.target.value }))}
+                  className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">— None (use safe defaults) —</option>
+                  {llmConfigs.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.provider}/{c.model})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* External Voice Services (STT + TTS) */}
               <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
                 <div>

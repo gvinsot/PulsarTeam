@@ -51,6 +51,7 @@ from config import (
     CLAUDE_FALLBACK_LLM_MODEL,
     logger,
 )
+from backends.fallback_llm_resolver import resolve_fallback_llm
 
 
 # ─── ANSI stripping ────────────────────────────────────────────────────────
@@ -112,10 +113,15 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
     and return a single-token decision. Returns None when no LLM is
     configured or the call fails — caller picks a safe default.
 
+    The LLM config is resolved at call time from (in order):
+      1. env vars CLAUDE_FALLBACK_LLM_URL/KEY/MODEL (operator override)
+      2. the admin-selected entry exposed via /api/internal/runner-llm/claude-fallback
+
     kind: "yn" → expect 'y' or 'n'.
           "choice" → expect a digit '1'..'9'.
     """
-    if not CLAUDE_FALLBACK_LLM_URL or not CLAUDE_FALLBACK_LLM_KEY:
+    cfg = resolve_fallback_llm()
+    if not cfg:
         return None
 
     if kind == "yn":
@@ -138,7 +144,7 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
         )
 
     body = {
-        "model": CLAUDE_FALLBACK_LLM_MODEL,
+        "model": cfg["model"],
         "messages": [
             {"role": "system", "content": instructions},
             {"role": "user", "content": f"Prompt:\n{question.strip()}\n\nYour reply (single character):"},
@@ -147,7 +153,7 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
         "max_tokens": 4,
     }
 
-    url = CLAUDE_FALLBACK_LLM_URL.rstrip("/")
+    url = cfg["endpoint"].rstrip("/")
     if not url.endswith("/chat/completions"):
         url = url + "/chat/completions"
 
@@ -156,7 +162,7 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
             r = await client.post(
                 url,
                 headers={
-                    "Authorization": f"Bearer {CLAUDE_FALLBACK_LLM_KEY}",
+                    "Authorization": f"Bearer {cfg['apiKey']}",
                     "Content-Type": "application/json",
                 },
                 json=body,

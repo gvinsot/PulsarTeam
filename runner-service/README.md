@@ -84,7 +84,18 @@ Set `CLAUDE_USE_PRINT_MODE=true` to opt back into the old `-p` path
 Interactive mode has to answer any Y/N or numbered-choice prompts the TUI
 emits. The driver responds with safe defaults (`y` / first option). For
 non-trivial prompts you can wire up an external LLM that will be asked
-to choose; configure via:
+to choose.
+
+**Recommended:** select the LLM from the **team-api Admin Settings**
+("Claude Paid Plan — Interactive Fallback LLM" card). The runner fetches
+the resolved endpoint/api-key/model from
+`GET /api/internal/runner-llm/claude-fallback` (authenticated with the
+shared `CODER_API_KEY`) and caches it for 60s. This avoids touching
+env vars on every deployment and keeps the API key encrypted at rest in
+the `llm_configs` table.
+
+For local dev or operator overrides, the following env vars still work
+and take priority over the admin setting:
 
 - `CLAUDE_FALLBACK_LLM_URL` — base URL of an OpenAI-compatible endpoint
 - `CLAUDE_FALLBACK_LLM_KEY` — bearer token (also readable from

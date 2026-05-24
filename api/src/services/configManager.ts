@@ -11,6 +11,10 @@ const DEFAULTS = {
   taskReminderCooldownMinutes: '2',
   // LLM config id used to simplify the repo call-graph analysis. Empty = no LLM step.
   codeGraphLlmConfigId: '',
+  // LLM config id consulted by the Claude paid-plan interactive runner when an
+  // unknown Y/N or list prompt appears in the TUI. Empty = use safe defaults
+  // ("y" for Y/N, "1" for list).
+  claudeFallbackLlmConfigId: '',
   // External voice agent — Speech-to-Text service (HighSpeedToText style)
   sttServiceUrl: '',
   sttApiKey: '',

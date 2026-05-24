@@ -50,6 +50,7 @@ import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { authenticateCoderApiKey } from './middleware/coderApiKeyAuth.js';
 import { internalClaudeTokenRoutes } from './routes/internalClaudeTokens.js';
 import { internalCodexTokenRoutes } from './routes/internalCodexTokens.js';
+import { internalRunnerLlmRoutes } from './routes/internalRunnerLlm.js';
 import { codexAuthRoutes } from './routes/codexAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
 import { jiraRoutes } from './routes/jira.js';
@@ -210,6 +211,7 @@ app.use('/api/tasks', authenticateToken, taskRoutes);
 // Internal: runners read/write Claude OAuth tokens via shared CODER_API_KEY.
 app.use('/api/internal/claude-tokens', authenticateCoderApiKey, internalClaudeTokenRoutes());
 app.use('/api/internal/codex-tokens', authenticateCoderApiKey, internalCodexTokenRoutes());
+app.use('/api/internal/runner-llm', authenticateCoderApiKey, internalRunnerLlmRoutes());
 app.use('/api/codex-auth', authenticateToken, codexAuthRoutes());
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
