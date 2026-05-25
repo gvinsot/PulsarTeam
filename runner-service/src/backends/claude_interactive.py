@@ -98,6 +98,14 @@ _YN_RE = re.compile(r"\[\s*y\s*/\s*n\s*\]\s*$", re.IGNORECASE | re.MULTILINE)
 # (e.g. ` 1.5`) is harmless.
 _NUMBERED_RE = re.compile(r"^\s*[❯>]?\s*\d+[\.\)]\s*\S", re.MULTILINE)
 _TRUST_RE = re.compile(r"do you trust this folder", re.IGNORECASE)
+# Arrow-key selector: a caret + a selector-y keyword nearby. Catches non-
+# numbered onboarding menus like the post-theme-picker "Select login method"
+# screen where each option is just preceded by `❯` (highlighted) or space
+# (not highlighted). Pressing Enter (no char) accepts the default.
+_ARROW_HINT_RE = re.compile(
+    r"(select login method|select an option|use arrow|press enter to (confirm|continue|select))",
+    re.IGNORECASE,
+)
 
 
 def _looks_like_yn_prompt(tail: str) -> bool:
@@ -112,6 +120,15 @@ def _looks_like_numbered_choice(tail: str) -> bool:
     if len(matches) < 2:
         return False
     return bool(re.search(r"(select|choose|press \d|enter your choice|use arrow)", tail, re.IGNORECASE))
+
+
+def _looks_like_arrow_selector(tail: str) -> bool:
+    # Caret present and the screen text mentions a selector. The caret alone
+    # is too weak (it shows up in normal chat output too); pairing it with a
+    # phrase like "select login method" keeps false positives down.
+    if "❯" not in tail:
+        return False
+    return bool(_ARROW_HINT_RE.search(tail))
 
 
 # ─── Fallback LLM ──────────────────────────────────────────────────────────
