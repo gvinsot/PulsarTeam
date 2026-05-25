@@ -88,7 +88,15 @@ def _strip_ansi(text: str) -> str:
 # real risk — keep these tight.
 
 _YN_RE = re.compile(r"\[\s*y\s*/\s*n\s*\]\s*$", re.IGNORECASE | re.MULTILINE)
-_NUMBERED_RE = re.compile(r"^\s*[❯>]?\s*\d+[\.\)]\s+\S", re.MULTILINE)
+# `\s*` (not `\s+`) after the punctuation: Claude Code's TUI uses ANSI absolute
+# cursor positioning (e.g. `\x1B[12G`) instead of literal spaces to lay out the
+# option labels, so after _strip_ansi the buffer is compacted to `1.Auto`,
+# `❯2.Darkmode`, etc. with no space between `.` and the label. Requiring a
+# space here was making the theme-picker / onboarding screens invisible to
+# `_looks_like_numbered_choice`, which left the driver waiting until hard
+# timeout. The matched text is only counted, not extracted, so over-matching
+# (e.g. ` 1.5`) is harmless.
+_NUMBERED_RE = re.compile(r"^\s*[❯>]?\s*\d+[\.\)]\s*\S", re.MULTILINE)
 _TRUST_RE = re.compile(r"do you trust this folder", re.IGNORECASE)
 
 
