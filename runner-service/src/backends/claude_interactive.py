@@ -142,8 +142,10 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
       1. env vars CLAUDE_FALLBACK_LLM_URL/KEY/MODEL (operator override)
       2. the admin-selected entry exposed via /api/internal/runner-llm/claude-fallback
 
-    kind: "yn" → expect 'y' or 'n'.
-          "choice" → expect a digit '1'..'9'.
+    kind: "yn"     → expect 'y' or 'n'.
+          "choice" → expect a digit '1'..'9' (numbered list, type the digit).
+          "arrow"  → expect a digit '1'..'9' (arrow-key menu, 1 = first
+                      option; caller turns this into N-1 down arrows + Enter).
     """
     cfg = resolve_fallback_llm()
     if not cfg:
@@ -157,6 +159,17 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
             "obviously safe and consistent with completing the user's task; "
             "prefer 'n' for irreversible destructive operations the user did "
             "not explicitly request (rm -rf, force push, etc.)."
+        )
+    elif kind == "arrow":
+        instructions = (
+            "You are answering an arrow-key selector that appeared in a "
+            "coding assistant terminal. The options are listed in order; the "
+            "currently-highlighted option is preceded by `❯`. Reply with "
+            "exactly ONE digit (1-9) corresponding to the OPTION INDEX "
+            "(1 = first option) that lets the assistant proceed with the "
+            "user's task. For onboarding / login screens, prefer the "
+            "subscription / default option; never pick options labeled "
+            "'Cancel', 'Quit', 'Skip permissions', or 'Untrusted'."
         )
     else:
         instructions = (
@@ -335,14 +348,31 @@ def _drive_pty_blocking(
             detection_offset = len(raw_buf)
             return answer
         if _looks_like_arrow_selector(tail):
-            # Arrow-key menu (e.g. "Select login method"). The TUI pre-
-            # highlights the safest default with `❯`, so a bare Enter
-            # accepts it without us having to navigate.
-            logger.info(f"[Interactive] Arrow-selector → Enter (prompt_sent={prompt_sent})")
-            _ship_keystroke("")
+            # Arrow-key menu (e.g. "Select login method"). Consult the
+            # fallback LLM with kind="arrow" to pick an option index 1-9.
+            # When no LLM is configured, default to 1 (the first / pre-
+            # highlighted option, which for onboarding screens is the
+            # subscription/Claude default).
+            raw = fallback_resolver(tail, "arrow") if fallback_resolver else None
+            try:
+                target = int(raw) if raw else 1
+            except (TypeError, ValueError):
+                target = 1
+            target = max(1, min(9, target))
+            logger.info(f"[Interactive] Arrow-selector → option #{target} (prompt_sent={prompt_sent})")
+            # Navigate from the top assuming the highlight starts at option 1.
+            # That holds for the screens we know about (login method, etc.);
+            # if a future screen starts elsewhere we'll land one off, which
+            # the LLM can recover from on the next round.
+            try:
+                for _ in range(target - 1):
+                    os.write(master_fd, b"\x1b[B")  # CSI B = Down arrow
+            except OSError:
+                pass
+            _ship_keystroke("")  # Bare Enter to confirm
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
-            return ""
+            return str(target)
         return None
 
     try:
