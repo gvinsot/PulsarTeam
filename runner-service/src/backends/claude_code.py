@@ -208,6 +208,11 @@ class ClaudeCodeBackend(RunnerBackend):
         """Translate the agent's permissions object into the native Claude Code
         deny rules in `~/.claude/settings.json` so the CLI enforces them.
 
+        Also seeds onboarding defaults (`theme`) so the Claude Code TUI doesn't
+        show its first-run theme picker. That screen contains none of the
+        `_INPUT_READY_HINTS` the PTY driver waits for, so without this seed
+        the user prompt would never be sent and every turn would hard-timeout.
+
         Mapping (only `False`/restrictive values produce deny rules; defaults
         keep the toggle's ON state, i.e. no extra restriction):
           - execution.shellAccess=False        → deny Bash
@@ -220,7 +225,7 @@ class ClaudeCodeBackend(RunnerBackend):
         Skipped when there's no per-agent HOME (e.g. runAsRoot=true) — the CLI
         will then read the server's global settings unchanged.
         """
-        if not agent_user or not permissions:
+        if not agent_user:
             return
         home = agent_user.get("home")
         if not home:
@@ -232,52 +237,58 @@ class ClaudeCodeBackend(RunnerBackend):
         except (OSError, json.JSONDecodeError):
             settings = {}
 
+        # Onboarding seed: skip the first-run theme picker.
+        if not settings.get("theme"):
+            settings["theme"] = "dark"
+
         deny: list[str] = []
         allow: list[str] = []
 
-        fs = (permissions.get("filesystem") or {})
-        if fs.get("readAccess", True) is False:
-            deny.extend(["Read", "Glob", "Grep"])
-        if fs.get("writeAccess", True) is False:
-            deny.extend(["Write", "Edit", "NotebookEdit"])
-        for raw_path in (fs.get("restrictedPaths") or []):
-            path = (raw_path or "").rstrip("/")
-            if not path:
-                continue
-            for tool in ("Read", "Edit", "Write", "Glob", "Grep"):
-                deny.append(f"{tool}({path})")
-                deny.append(f"{tool}({path}/**)")
+        if permissions:
+            fs = (permissions.get("filesystem") or {})
+            if fs.get("readAccess", True) is False:
+                deny.extend(["Read", "Glob", "Grep"])
+            if fs.get("writeAccess", True) is False:
+                deny.extend(["Write", "Edit", "NotebookEdit"])
+            for raw_path in (fs.get("restrictedPaths") or []):
+                path = (raw_path or "").rstrip("/")
+                if not path:
+                    continue
+                for tool in ("Read", "Edit", "Write", "Glob", "Grep"):
+                    deny.append(f"{tool}({path})")
+                    deny.append(f"{tool}({path}/**)")
 
-        execn = (permissions.get("execution") or {})
-        if execn.get("shellAccess", True) is False:
-            deny.append("Bash")
+            execn = (permissions.get("execution") or {})
+            if execn.get("shellAccess", True) is False:
+                deny.append("Bash")
 
-        net = (permissions.get("network") or {})
-        if net.get("internetAccess", True) is False:
-            deny.extend(["WebFetch", "WebSearch"])
-            # Block the common shell-level network ops as well so the CLI can't
-            # bypass WebFetch via Bash. Only effective when shellAccess is True
-            # (otherwise Bash is already fully denied above).
-            for cmd in ("curl", "wget", "git", "npm", "pnpm", "yarn", "pip",
-                        "apt", "apt-get", "ssh", "scp", "rsync"):
-                deny.append(f"Bash({cmd}:*)")
-        else:
-            domains = net.get("allowedDomains") or []
-            if domains:
-                for d in domains:
-                    d = (d or "").strip()
-                    if d:
-                        allow.append(f"WebFetch(domain:{d})")
-                # Catch-all deny for any other domain — allow rules win.
-                deny.append("WebFetch")
+            net = (permissions.get("network") or {})
+            if net.get("internetAccess", True) is False:
+                deny.extend(["WebFetch", "WebSearch"])
+                # Block the common shell-level network ops as well so the CLI can't
+                # bypass WebFetch via Bash. Only effective when shellAccess is True
+                # (otherwise Bash is already fully denied above).
+                for cmd in ("curl", "wget", "git", "npm", "pnpm", "yarn", "pip",
+                            "apt", "apt-get", "ssh", "scp", "rsync"):
+                    deny.append(f"Bash({cmd}:*)")
+            else:
+                domains = net.get("allowedDomains") or []
+                if domains:
+                    for d in domains:
+                        d = (d or "").strip()
+                        if d:
+                            allow.append(f"WebFetch(domain:{d})")
+                    # Catch-all deny for any other domain — allow rules win.
+                    deny.append("WebFetch")
 
-        perms_block = settings.setdefault("permissions", {})
-        if deny:
-            existing = perms_block.get("deny") or []
-            perms_block["deny"] = list(dict.fromkeys(existing + deny))
-        if allow:
-            existing = perms_block.get("allow") or []
-            perms_block["allow"] = list(dict.fromkeys(existing + allow))
+        if deny or allow:
+            perms_block = settings.setdefault("permissions", {})
+            if deny:
+                existing = perms_block.get("deny") or []
+                perms_block["deny"] = list(dict.fromkeys(existing + deny))
+            if allow:
+                existing = perms_block.get("allow") or []
+                perms_block["allow"] = list(dict.fromkeys(existing + allow))
 
         try:
             os.makedirs(os.path.dirname(settings_path), exist_ok=True)

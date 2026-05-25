@@ -253,12 +253,50 @@ def _drive_pty_blocking(
     prompt_sent = False
     raw_buf = bytearray()
     visible_buf = ""  # ANSI-stripped, used for prompt detection
+    # Cooldown so we don't re-ship the same auto-answer while the TUI repaints
+    # after our keystroke. Bumped a bit higher than _drive_pty_blocking's
+    # select() tick (0.2s) so we don't fire twice on the same screen.
+    last_auto_answer_at = 0.0
+    AUTO_ANSWER_COOLDOWN_S = 1.0
 
     def _ship_keystroke(ch: str) -> None:
         try:
             os.write(master_fd, (ch + "\r").encode())
         except OSError:
             pass
+
+    def _maybe_auto_answer(visible: str) -> Optional[str]:
+        """Detect a known interactive prompt on the tail of `visible` and
+        ship an auto-answer (consulting the fallback LLM when available).
+
+        Called on every chunk — including BEFORE the user's prompt has been
+        sent — so first-run onboarding screens (theme picker, trust folder,
+        …) don't deadlock the driver waiting for an input-ready hint that
+        will never appear. A 1 s cooldown prevents us from firing twice on
+        the same screen while the TUI repaints.
+        """
+        nonlocal last_auto_answer_at
+        if time.monotonic() - last_auto_answer_at < AUTO_ANSWER_COOLDOWN_S:
+            return None
+        tail = visible[-1024:]
+        if _looks_like_yn_prompt(tail):
+            answer = (fallback_resolver(tail, "yn") if fallback_resolver else None) or "y"
+            logger.info(f"[Interactive] Y/N prompt → '{answer}' (prompt_sent={prompt_sent})")
+            _ship_keystroke(answer)
+            last_auto_answer_at = time.monotonic()
+            return answer
+        if _TRUST_RE.search(tail):
+            logger.info(f"[Interactive] Trust-folder prompt → 'y' (prompt_sent={prompt_sent})")
+            _ship_keystroke("y")
+            last_auto_answer_at = time.monotonic()
+            return "y"
+        if _looks_like_numbered_choice(tail):
+            answer = (fallback_resolver(tail, "choice") if fallback_resolver else None) or "1"
+            logger.info(f"[Interactive] Numbered-choice → '{answer}' (prompt_sent={prompt_sent})")
+            _ship_keystroke(answer)
+            last_auto_answer_at = time.monotonic()
+            return answer
+        return None
 
     try:
         while True:
@@ -307,24 +345,12 @@ def _drive_pty_blocking(
                         last_data_at = time.monotonic()
                         continue
 
-                    # Auto-answer interactive prompts on the trailing window
-                    if prompt_sent:
-                        tail = visible_buf[-1024:]
-                        if _looks_like_yn_prompt(tail):
-                            answer = (fallback_resolver(tail, "yn") if fallback_resolver else None) or "y"
-                            logger.info(f"[Interactive] Y/N prompt detected → answering '{answer}'")
-                            _ship_keystroke(answer)
-                            # Reset detection by zeroing the tail; the next CLI output will overwrite.
-                            visible_buf += f"\n[auto-answer:{answer}]\n"
-                        elif _looks_like_numbered_choice(tail):
-                            answer = (fallback_resolver(tail, "choice") if fallback_resolver else None) or "1"
-                            logger.info(f"[Interactive] Numbered-choice prompt detected → answering '{answer}'")
-                            _ship_keystroke(answer)
-                            visible_buf += f"\n[auto-answer:{answer}]\n"
-                        elif _TRUST_RE.search(tail):
-                            logger.info("[Interactive] 'Trust folder' prompt detected → answering 'y'")
-                            _ship_keystroke("y")
-                            visible_buf += "\n[auto-answer:y]\n"
+                    # Auto-answer interactive prompts — runs both before and
+                    # after the user prompt is delivered. Before delivery it
+                    # unblocks first-run onboarding (theme picker, trust
+                    # folder); after delivery it answers mid-turn Y/N and
+                    # numbered-choice prompts.
+                    _maybe_auto_answer(visible_buf)
 
             # If the child exited, we're done.
             if proc.poll() is not None:
