@@ -283,6 +283,13 @@ def _drive_pty_blocking(
     # select() tick (0.2s) so we don't fire twice on the same screen.
     last_auto_answer_at = 0.0
     AUTO_ANSWER_COOLDOWN_S = 1.0
+    # Offset into raw_buf at which to start the next detection. After each
+    # auto-answer we bump this to len(raw_buf) so we don't re-detect prompts
+    # belonging to screens we've already dismissed (e.g. the theme picker
+    # lines are still in raw_buf when the login-method screen renders, and
+    # without this offset our numbered-choice regex would keep matching the
+    # old options).
+    detection_offset = 0
 
     def _ship_keystroke(ch: str) -> None:
         try:
@@ -290,37 +297,52 @@ def _drive_pty_blocking(
         except OSError:
             pass
 
-    def _maybe_auto_answer(visible: str) -> Optional[str]:
-        """Detect a known interactive prompt on the tail of `visible` and
-        ship an auto-answer (consulting the fallback LLM when available).
+    def _maybe_auto_answer() -> Optional[str]:
+        """Detect a known interactive prompt on the NEW content since the last
+        auto-answer and ship a reply (consulting the fallback LLM when
+        available).
 
         Called on every chunk — including BEFORE the user's prompt has been
-        sent — so first-run onboarding screens (theme picker, trust folder,
-        …) don't deadlock the driver waiting for an input-ready hint that
-        will never appear. A 1 s cooldown prevents us from firing twice on
-        the same screen while the TUI repaints.
+        sent — so first-run onboarding screens (theme picker, login-method,
+        trust folder, …) don't deadlock the driver waiting for an input-ready
+        hint that will never appear. A 1 s cooldown prevents firing twice on
+        the same screen; the `detection_offset` window prevents misfiring on
+        stale content from a previous screen.
         """
-        nonlocal last_auto_answer_at
+        nonlocal last_auto_answer_at, detection_offset
         if time.monotonic() - last_auto_answer_at < AUTO_ANSWER_COOLDOWN_S:
             return None
-        tail = visible[-1024:]
+        fresh = _strip_ansi(bytes(raw_buf[detection_offset:]).decode("utf-8", "replace"))
+        tail = fresh[-1024:]
         if _looks_like_yn_prompt(tail):
             answer = (fallback_resolver(tail, "yn") if fallback_resolver else None) or "y"
             logger.info(f"[Interactive] Y/N prompt → '{answer}' (prompt_sent={prompt_sent})")
             _ship_keystroke(answer)
             last_auto_answer_at = time.monotonic()
+            detection_offset = len(raw_buf)
             return answer
         if _TRUST_RE.search(tail):
             logger.info(f"[Interactive] Trust-folder prompt → 'y' (prompt_sent={prompt_sent})")
             _ship_keystroke("y")
             last_auto_answer_at = time.monotonic()
+            detection_offset = len(raw_buf)
             return "y"
         if _looks_like_numbered_choice(tail):
             answer = (fallback_resolver(tail, "choice") if fallback_resolver else None) or "1"
             logger.info(f"[Interactive] Numbered-choice → '{answer}' (prompt_sent={prompt_sent})")
             _ship_keystroke(answer)
             last_auto_answer_at = time.monotonic()
+            detection_offset = len(raw_buf)
             return answer
+        if _looks_like_arrow_selector(tail):
+            # Arrow-key menu (e.g. "Select login method"). The TUI pre-
+            # highlights the safest default with `❯`, so a bare Enter
+            # accepts it without us having to navigate.
+            logger.info(f"[Interactive] Arrow-selector → Enter (prompt_sent={prompt_sent})")
+            _ship_keystroke("")
+            last_auto_answer_at = time.monotonic()
+            detection_offset = len(raw_buf)
+            return ""
         return None
 
     try:
@@ -372,10 +394,12 @@ def _drive_pty_blocking(
 
                     # Auto-answer interactive prompts — runs both before and
                     # after the user prompt is delivered. Before delivery it
-                    # unblocks first-run onboarding (theme picker, trust
-                    # folder); after delivery it answers mid-turn Y/N and
-                    # numbered-choice prompts.
-                    _maybe_auto_answer(visible_buf)
+                    # unblocks first-run onboarding (theme picker, login-
+                    # method, trust folder); after delivery it answers mid-
+                    # turn Y/N and numbered-choice prompts. The helper reads
+                    # raw_buf[detection_offset:] directly so stale prompts
+                    # from already-dismissed screens don't fire again.
+                    _maybe_auto_answer()
 
             # If the child exited, we're done.
             if proc.poll() is not None:
