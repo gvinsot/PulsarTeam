@@ -464,22 +464,17 @@ export const chatMethods = {
       }
     }
 
+    // Task list intentionally omitted from the system prompt: the full
+    // task texts + their attached commit history can push the prompt past
+    // 100 KB / 30 k tokens, which slows down every turn (Anthropic API has
+    // to ingest that input on every message). Agents that need the task
+    // list call the Swarm API MCP tools (`get_agent_tasks`, `list_tasks`,
+    // etc.) on demand instead.
     const activeTasks = this._getAgentTasks(id).filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
-    const doneTasks = this._getAgentTasks(id).filter((t: any) => t.status === 'done');
-    if (activeTasks.length > 0 || doneTasks.length > 0) {
-      systemContent += '\n\n--- Current Task List ---\n';
-      for (const task of activeTasks) {
-        const mark = this._isActiveTaskStatus(task.status) ? '~' : '!';
-        systemContent += `- [${mark}] (${task.id.slice(0, 8)}) ${task.text}\n`;
-        if (task.commits && task.commits.length > 0) {
-          for (const c of task.commits) {
-            systemContent += `    commit ${c.hash.slice(0, 8)}: ${c.message || '(no message)'}\n`;
-          }
-        }
-      }
-      if (doneTasks.length > 0) {
-        systemContent += `(${doneTasks.length} completed task${doneTasks.length > 1 ? 's' : ''} omitted)\n`;
-      }
+    if (activeTasks.length > 0) {
+      systemContent += `\n\n--- Current Task List ---\n`;
+      systemContent += `You have ${activeTasks.length} active task${activeTasks.length > 1 ? 's' : ''}. `;
+      systemContent += `Use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see details.\n`;
     }
 
     if (agent.project) {
