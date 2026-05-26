@@ -487,6 +487,13 @@ def _drive_pty_blocking(
     last_pushed = ""
     last_push_at = 0.0
     stream_raw_offset = 0
+    # One-shot screens that we should answer exactly once per session,
+    # regardless of detection_offset. Without this, if the TUI renders two
+    # such screens in the SAME PTY chunk (e.g. trust folder + bypass-perms
+    # warning), the first match bumps detection_offset past the second's
+    # text and we never see it again. Tracking by name means we can dispense
+    # with the offset bump for these and just consult the whole buffer.
+    resolved_screens: set[str] = set()
     STREAM_THROTTLE_S = 0.15  # avoid hammering on every single byte arrival
     # Whitespace-stripped, lowercased prefix of the user prompt — used to
     # recognize and skip the TUI's prompt echo in the raw stream fallback.
@@ -630,8 +637,17 @@ def _drive_pty_blocking(
         nonlocal last_auto_answer_at, detection_offset, stream_raw_offset
         if time.monotonic() - last_auto_answer_at < AUTO_ANSWER_COOLDOWN_S:
             return None
+
+        # `fresh` window = content since the LAST detected/repeat-able prompt
+        # (used for Y/N + numbered choice, which can legitimately reappear).
+        # `full_tail` window = the whole buffer (used for one-shot onboarding
+        # screens like trust, bypass, arrow-selector — we track which ones
+        # we've already answered via `resolved_screens` so we can't deadlock
+        # if two of them arrive in the same PTY chunk).
         fresh = _strip_ansi(bytes(raw_buf[detection_offset:]).decode("utf-8", "replace"))
         tail = fresh[-1024:]
+        full_tail = _strip_ansi(raw_buf.decode("utf-8", "replace"))[-2048:]
+
         if _looks_like_yn_prompt(tail):
             answer = (fallback_resolver(tail, "yn") if fallback_resolver else None) or "y"
             logger.info(f"[Interactive] Y/N prompt → '{answer}' (prompt_sent={prompt_sent})")
@@ -640,21 +656,18 @@ def _drive_pty_blocking(
             detection_offset = len(raw_buf)
             stream_raw_offset = len(raw_buf)
             return answer
-        if _TRUST_RE.search(tail):
+        if "trust" not in resolved_screens and _TRUST_RE.search(full_tail):
             # Send a bare Enter (no "1" prefix): option 1 ("Yes, I trust
             # this folder") is already highlighted by default with `❯`, so
             # Enter alone confirms. Sending "1\r" risked the trailing `\r`
-            # spilling into the NEXT screen (the bypass-permissions warning
-            # that appears right after with `--dangerously-skip-permissions`),
-            # where it would confirm the highlighted default "1. No, exit"
-            # and silently kill the CLI.
+            # spilling into the NEXT screen.
             logger.info(f"[Interactive] Trust-folder prompt → Enter (prompt_sent={prompt_sent})")
             _ship_keystroke("")
+            resolved_screens.add("trust")
             last_auto_answer_at = time.monotonic()
-            detection_offset = len(raw_buf)
             stream_raw_offset = len(raw_buf)
             return "1"
-        if _BYPASS_PERMS_RE.search(tail):
+        if "bypass" not in resolved_screens and _BYPASS_PERMS_RE.search(full_tail):
             # `--dangerously-skip-permissions` warning. Option 1 is "No, exit"
             # (the highlighted default) and option 2 is "Yes, I accept". We
             # MUST navigate to option 2 then press Enter — the TUI ignores
@@ -662,8 +675,7 @@ def _drive_pty_blocking(
             # currently-highlighted "No, exit" (the CLI then exits rc=1).
             # The pause is critical: without it the `\r` reaches the TUI
             # before it has processed the Down event, so the selection
-            # stays on option 1 and the CLI exits. We jitter the pause
-            # length so the keystroke stream looks less mechanical.
+            # stays on option 1 and the CLI exits.
             logger.info(f"[Interactive] Bypass-permissions warning → option 2 (Down+Enter) (prompt_sent={prompt_sent})")
             try:
                 os.write(master_fd, b"\x1b[B")  # CSI B = Down arrow
@@ -671,8 +683,8 @@ def _drive_pty_blocking(
             except OSError:
                 pass
             _ship_keystroke("")  # Bare Enter to confirm
+            resolved_screens.add("bypass")
             last_auto_answer_at = time.monotonic()
-            detection_offset = len(raw_buf)
             stream_raw_offset = len(raw_buf)
             return "2"
         if _looks_like_numbered_choice(tail):
@@ -683,13 +695,13 @@ def _drive_pty_blocking(
             detection_offset = len(raw_buf)
             stream_raw_offset = len(raw_buf)
             return answer
-        if _looks_like_arrow_selector(tail):
+        if "arrow" not in resolved_screens and _looks_like_arrow_selector(full_tail):
             # Arrow-key menu (e.g. "Select login method"). Consult the
             # fallback LLM with kind="arrow" to pick an option index 1-9.
             # When no LLM is configured, default to 1 (the first / pre-
             # highlighted option, which for onboarding screens is the
             # subscription/Claude default).
-            raw = fallback_resolver(tail, "arrow") if fallback_resolver else None
+            raw = fallback_resolver(full_tail, "arrow") if fallback_resolver else None
             try:
                 target = int(raw) if raw else 1
             except (TypeError, ValueError):
@@ -712,8 +724,8 @@ def _drive_pty_blocking(
                 pass
             _human_pause(0.07)
             _ship_keystroke("")  # Bare Enter to confirm
+            resolved_screens.add("arrow")
             last_auto_answer_at = time.monotonic()
-            detection_offset = len(raw_buf)
             stream_raw_offset = len(raw_buf)
             return str(target)
 
@@ -821,12 +833,21 @@ def _drive_pty_blocking(
                 )
                 break
 
+            # Silence-time auto-answer reprobe: if the CLI rendered two
+            # screens in the SAME PTY chunk (e.g. trust folder + bypass
+            # warning at startup), the first one matched + consumed our
+            # offset-bumped window, and the second one was never re-tested
+            # — because `_maybe_auto_answer` only runs on new chunks. Run
+            # it again on silence so the second screen gets handled.
+            stuck_silence = time.monotonic() - last_data_at
+            if stuck_silence > 1.5:
+                _maybe_auto_answer()
+
             # Diagnostic: every ~10s of silence (before the idle window kicks
             # in), dump a short tail of the visible buffer so we can see
             # what's on screen when the CLI looks stuck. Helps distinguish
             # "Claude is generating tokens" from "we missed an interactive
             # screen and the CLI is waiting for input we'll never send".
-            stuck_silence = time.monotonic() - last_data_at
             if stuck_silence > 10.0 and stuck_silence < 11.0:
                 tail_dbg = _strip_ansi(raw_buf[-512:].decode("utf-8", "replace"))
                 logger.info(
