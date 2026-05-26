@@ -84,7 +84,9 @@ _ANSI_RE = re.compile(
     r"""
     \x1B \[ [0-?]* [ -/]* [@-~]      # CSI ... final
   | \x1B \] [^\x07]* (?: \x07 | \x1B \\ )   # OSC ... BEL or ST
-  | \x1B [@-Z\\-_]                  # ESC + single char
+  | \x1B [^\x1B\[\]]                # ESC + any single char (DECSC `7`,
+                                    # DECRC `8`, charset selects `(B`, etc.)
+                                    # — excludes [ and ] which open CSI/OSC.
     """,
     re.VERBOSE,
 )
@@ -460,6 +462,13 @@ def _drive_pty_blocking(
     last_push_at = 0.0
     stream_raw_offset = 0
     STREAM_THROTTLE_S = 0.15  # avoid hammering on every single byte arrival
+    # Whitespace-stripped, lowercased prefix of the user prompt — used to
+    # recognize and skip the TUI's prompt echo in the raw stream fallback.
+    # We take up to 40 chars; anything longer than that is enough to be
+    # unique versus normal assistant content.
+    _prompt_echo_needle = (
+        re.sub(r"\s+", "", prompt.strip()[:40]).lower() if prompt.strip() else ""
+    )
     # Hide raw-stream chrome that's pure TUI bookkeeping. We strip line by
     # line so we don't accidentally remove user content that happens to
     # contain the same words.
@@ -538,6 +547,13 @@ def _drive_pty_blocking(
                 if not line.strip():
                     continue
                 if _CHROME_LINE_RE.search(line):
+                    continue
+                # Skip the TUI echoing back the user's prompt. The TUI lays
+                # out the prompt with absolute cursor moves so by the time
+                # _strip_ansi runs the spaces are gone — compare both
+                # sides on a whitespace-stripped basis.
+                if (_prompt_echo_needle and
+                        _prompt_echo_needle in re.sub(r"\s+", "", line).lower()):
                     continue
                 if line.startswith("● "):
                     line = line[2:]
