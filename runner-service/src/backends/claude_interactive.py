@@ -470,12 +470,15 @@ def _drive_pty_blocking(
             detection_offset = len(raw_buf)
             return answer
         if _TRUST_RE.search(tail):
-            # Send "1" (not "y"): in 2.1.x the trust prompt is a numbered
-            # menu where option 1 is "Yes, I trust this folder". "1\r"
-            # works for both the 1.x Y/N form and the 2.x numbered form
-            # (`1` is also a valid Y/N answer in the older prompt).
-            logger.info(f"[Interactive] Trust-folder prompt → '1' (prompt_sent={prompt_sent})")
-            _ship_keystroke("1")
+            # Send a bare Enter (no "1" prefix): option 1 ("Yes, I trust
+            # this folder") is already highlighted by default with `❯`, so
+            # Enter alone confirms. Sending "1\r" risked the trailing `\r`
+            # spilling into the NEXT screen (the bypass-permissions warning
+            # that appears right after with `--dangerously-skip-permissions`),
+            # where it would confirm the highlighted default "1. No, exit"
+            # and silently kill the CLI.
+            logger.info(f"[Interactive] Trust-folder prompt → Enter (prompt_sent={prompt_sent})")
+            _ship_keystroke("")
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
             return "1"
@@ -598,6 +601,11 @@ def _drive_pty_blocking(
 
             # If the child exited, we're done.
             if proc.poll() is not None:
+                logger.info(
+                    f"[Interactive] Child exited (rc={proc.returncode}, "
+                    f"prompt_sent={prompt_sent}, raw_len={len(raw_buf)}) — "
+                    f"exiting loop after {time.monotonic() - (deadline - total_timeout):.1f}s"
+                )
                 break
 
             # Idle-based "response complete" detection — only after the prompt
@@ -644,6 +652,13 @@ def _drive_pty_blocking(
         output_text = _extract_assistant_reply(visible, prompt)
 
     status = "success" if proc.returncode in (0, None) and output_text else "error"
+    logger.info(
+        f"[Interactive] Returning status={status} rc={proc.returncode} "
+        f"output_len={len(output_text)} raw_len={len(visible)} "
+        f"stderr_len={len(stderr_out)}"
+    )
+    if status == "error" and stderr_out:
+        logger.warning(f"[Interactive] stderr (first 500): {stderr_out[:500]}")
     return {
         "status": status,
         "output": output_text,
