@@ -594,8 +594,14 @@ def _drive_pty_blocking(
         hint that will never appear. A 1 s cooldown prevents firing twice on
         the same screen; the `detection_offset` window prevents misfiring on
         stale content from a previous screen.
+
+        Side effect: every time we auto-answer a screen, we also bump
+        `stream_raw_offset` so that the dismissed screen's text (e.g. the
+        bypass-permissions warning) is not pushed as part of a subsequent
+        `thinking` delta. Without this the user would see the warning's
+        full text leak into their chat's thinking block.
         """
-        nonlocal last_auto_answer_at, detection_offset
+        nonlocal last_auto_answer_at, detection_offset, stream_raw_offset
         if time.monotonic() - last_auto_answer_at < AUTO_ANSWER_COOLDOWN_S:
             return None
         fresh = _strip_ansi(bytes(raw_buf[detection_offset:]).decode("utf-8", "replace"))
@@ -606,6 +612,7 @@ def _drive_pty_blocking(
             _ship_keystroke(answer)
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
+            stream_raw_offset = len(raw_buf)
             return answer
         if _TRUST_RE.search(tail):
             # Send a bare Enter (no "1" prefix): option 1 ("Yes, I trust
@@ -619,6 +626,7 @@ def _drive_pty_blocking(
             _ship_keystroke("")
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
+            stream_raw_offset = len(raw_buf)
             return "1"
         if _BYPASS_PERMS_RE.search(tail):
             # `--dangerously-skip-permissions` warning. Option 1 is "No, exit"
@@ -639,6 +647,7 @@ def _drive_pty_blocking(
             _ship_keystroke("")  # Bare Enter to confirm
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
+            stream_raw_offset = len(raw_buf)
             return "2"
         if _looks_like_numbered_choice(tail):
             answer = (fallback_resolver(tail, "choice") if fallback_resolver else None) or "1"
@@ -646,6 +655,7 @@ def _drive_pty_blocking(
             _ship_keystroke(answer)
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
+            stream_raw_offset = len(raw_buf)
             return answer
         if _looks_like_arrow_selector(tail):
             # Arrow-key menu (e.g. "Select login method"). Consult the
@@ -678,6 +688,7 @@ def _drive_pty_blocking(
             _ship_keystroke("")  # Bare Enter to confirm
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
+            stream_raw_offset = len(raw_buf)
             return str(target)
         return None
 
@@ -726,6 +737,11 @@ def _drive_pty_blocking(
                             logger.warning(f"[Interactive] Failed to send prompt: {e}")
                         prompt_sent = True
                         last_data_at = time.monotonic()
+                        # Anchor the raw streaming window to NOW so the
+                        # welcome banner / "What's new" tips that flashed
+                        # right before the input box appeared don't leak
+                        # into the user-visible thinking stream.
+                        stream_raw_offset = len(raw_buf)
                         continue
 
                     # Auto-answer interactive prompts — runs both before and
