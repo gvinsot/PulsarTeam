@@ -919,6 +919,12 @@ class ClaudeCodeBackend(RunnerBackend):
             def _push_event(ev: dict) -> None:
                 loop.call_soon_threadsafe(event_queue.put_nowait, ev)
 
+            # Immediate placeholder so the UI gets a `thinking` block right
+            # away — without this, agents with a large system prompt (e.g.
+            # full-CLAUDE config) sit silent for 5-15 s before the first
+            # real delta lands, which looks like a freeze.
+            yield {"type": "thinking", "content": "Claude réfléchit…\n"}
+
             runner_task = asyncio.create_task(asyncio.wait_for(
                 run_interactive(
                     cmd=cmd, cwd=proc_cwd,
@@ -928,6 +934,23 @@ class ClaudeCodeBackend(RunnerBackend):
                 ),
                 timeout=TIMEOUT,
             ))
+
+            # Periodic heartbeat: every few seconds, if no real delta has
+            # arrived, push a status dot so the UI sees ongoing activity.
+            # Cancelled as soon as the first real `thinking` chunk lands
+            # or the runner finishes.
+            HEARTBEAT_INTERVAL_S = 5.0
+            heartbeat_active = True
+
+            async def _heartbeat_loop():
+                while heartbeat_active:
+                    await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+                    if not heartbeat_active:
+                        return
+                    event_queue.put_nowait({"type": "thinking", "content": "."})
+
+            heartbeat_task = asyncio.create_task(_heartbeat_loop())
+            first_real_delta_seen = False
 
             try:
                 while True:
@@ -939,6 +962,13 @@ class ClaudeCodeBackend(RunnerBackend):
                     )
                     if get_task in done:
                         ev = get_task.result()
+                        # The heartbeat task itself emits "." chunks; treat
+                        # anything longer as a real delta and stop the dots.
+                        if (not first_real_delta_seen and
+                                ev.get("type") == "thinking" and
+                                ev.get("content", "") not in (".", "Claude réfléchit…\n")):
+                            first_real_delta_seen = True
+                            heartbeat_active = False
                         yield ev
                         # If the runner also finished on the same tick, fall
                         # through and drain the rest below; otherwise loop.
@@ -964,6 +994,9 @@ class ClaudeCodeBackend(RunnerBackend):
             except RuntimeError as e:
                 yield {"type": "error", "content": str(e)}
                 return
+            finally:
+                heartbeat_active = False
+                heartbeat_task.cancel()
 
             output = (result.get("output") or "").strip()
             stderr_text = (result.get("stderr") or "").strip()
