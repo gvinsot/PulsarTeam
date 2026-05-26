@@ -424,11 +424,11 @@ export default function Dashboard({
           {activeView === 'agents' && (
             <div className={`flex-1 p-4 sm:p-6 overflow-auto ${selectedAgentData ? 'hidden lg:block lg:w-1/2 xl:w-3/5' : ''}`}>
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-dark-200">
-                  Agents
-                  <span className="ml-2 text-sm font-normal text-dark-400">({filteredAgents.length}{boardFilter ? `/${sortedAgents.length}` : ''})</span>
-                </h2>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-semibold text-dark-200">
+                    Agents
+                    <span className="ml-2 text-sm font-normal text-dark-400">({filteredAgents.length}{boardFilter ? `/${sortedAgents.length}` : ''})</span>
+                  </h2>
                   {boards.length > 1 && (
                     <select
                       value={boardFilter}
@@ -442,6 +442,8 @@ export default function Dashboard({
                       ))}
                     </select>
                   )}
+                </div>
+                <div className="flex items-center gap-2">
                   <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden">
                     <button
                       onClick={() => setViewMode('grid')}
