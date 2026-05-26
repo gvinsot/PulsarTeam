@@ -36,6 +36,7 @@ import re
 import pty
 import errno
 import fcntl
+import random
 import struct
 import select
 import signal
@@ -88,6 +89,18 @@ _ANSI_RE = re.compile(
     re.VERBOSE,
 )
 _CR_RE = re.compile(r"\r(?!\n)")
+
+
+def _human_pause(base: float, jitter: float = 0.5) -> None:
+    """Sleep `base * U(1-jitter, 1+jitter)` seconds.
+
+    Used between simulated keystrokes (arrow + Enter) so we look less like a
+    bot to the TUI's input event loop AND to give Ink time to render the new
+    selection between two writes. Calls `time.sleep` (called from a thread
+    executor, so the asyncio loop isn't blocked)."""
+    import time as _time
+    factor = 1.0 + random.uniform(-jitter, jitter)
+    _time.sleep(max(0.0, base * factor))
 
 
 def _strip_ansi(text: str) -> str:
@@ -421,13 +434,14 @@ def _drive_pty_blocking(
             # MUST navigate to option 2 then press Enter — the TUI ignores
             # the `2` keystroke for selection and a bare Enter confirms the
             # currently-highlighted "No, exit" (the CLI then exits rc=1).
-            # The 100 ms sleep is critical: without it the `\r` reaches the
-            # TUI before it has processed the Down event, so the selection
-            # stays on option 1 and the CLI exits.
+            # The pause is critical: without it the `\r` reaches the TUI
+            # before it has processed the Down event, so the selection
+            # stays on option 1 and the CLI exits. We jitter the pause
+            # length so the keystroke stream looks less mechanical.
             logger.info(f"[Interactive] Bypass-permissions warning → option 2 (Down+Enter) (prompt_sent={prompt_sent})")
             try:
                 os.write(master_fd, b"\x1b[B")  # CSI B = Down arrow
-                time.sleep(0.1)
+                _human_pause(0.12)
             except OSError:
                 pass
             _ship_keystroke("")  # Bare Enter to confirm
@@ -457,17 +471,18 @@ def _drive_pty_blocking(
             # Navigate from the top assuming the highlight starts at option 1.
             # That holds for the screens we know about (login method, etc.);
             # if a future screen starts elsewhere we'll land one off, which
-            # the LLM can recover from on the next round. A short sleep
+            # the LLM can recover from on the next round. A short pause
             # between keystrokes is required: the TUI processes input on its
             # render tick, and back-to-back writes get coalesced before it
-            # has updated the selection.
+            # has updated the selection. Pauses jitter so the input doesn't
+            # look mechanical.
             try:
                 for _ in range(target - 1):
                     os.write(master_fd, b"\x1b[B")  # CSI B = Down arrow
-                    time.sleep(0.05)
+                    _human_pause(0.07)
             except OSError:
                 pass
-            time.sleep(0.05)
+            _human_pause(0.07)
             _ship_keystroke("")  # Bare Enter to confirm
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)

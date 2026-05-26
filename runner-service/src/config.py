@@ -145,8 +145,11 @@ USERS_DIR = os.path.join(DATA_DIR, "users")
 CLAUDE_USE_PRINT_MODE = os.getenv("CLAUDE_USE_PRINT_MODE", "false").lower() in ("true", "1", "yes")
 
 # Silence window (seconds) used to detect "the CLI is done answering" when
-# driving the TUI through a PTY. Set higher for slow models / long replies.
-CLAUDE_INTERACTIVE_IDLE_SECS = float(os.getenv("CLAUDE_INTERACTIVE_IDLE_SECS", "4.0"))
+# driving the TUI through a PTY. The previous default of 4 s was too tight
+# for Claude Opus on high effort — the TUI can pause mid-turn between tool
+# uses for several seconds without producing visible output, and the driver
+# would prematurely send `/exit`. Bumped to 15 s; operator-tunable.
+CLAUDE_INTERACTIVE_IDLE_SECS = float(os.getenv("CLAUDE_INTERACTIVE_IDLE_SECS", "15.0"))
 
 # Hard cap on how long a single interactive turn may run end-to-end.
 CLAUDE_INTERACTIVE_TIMEOUT = int(os.getenv("CLAUDE_INTERACTIVE_TIMEOUT", str(TIMEOUT)))
