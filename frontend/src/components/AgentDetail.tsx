@@ -392,6 +392,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
               : <VoiceChatTab agent={agent} />
           ) : (
             <ChatTab
+              agent={agent}
               history={history}
               thinking={thinking}
               streamBuffer={streamBuffer}

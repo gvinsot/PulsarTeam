@@ -65,5 +65,32 @@ export function externalVoiceRoutes(agentManager) {
     });
   });
 
+  // Returns the global STT/TTS service availability and WS URLs so that the
+  // regular text chat (any agent) can offer mic-input (STT) and spoken reply
+  // (TTS). Unlike /config/:agentId, this route does not require the agent to
+  // be a voice agent — it just exposes whatever the operator configured.
+  // The per-agent ttsVoiceId is used when an agentId is provided.
+  router.get('/services', async (req, res) => {
+    const settings = await getSettings();
+    const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
+    const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
+
+    let voiceId = settings.ttsVoiceId || '';
+    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : null;
+    if (agentId) {
+      const agent = agentManager.agents.get(agentId);
+      if (agent && agent.ttsVoiceId) voiceId = agent.ttsVoiceId;
+    }
+
+    res.json({
+      stt: sttUrl
+        ? { available: true, wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 }
+        : { available: false },
+      tts: ttsUrl
+        ? { available: true, wsUrl: ttsUrl, sampleRate: 22050, encoding: 'pcm16', channels: 1, voiceId }
+        : { available: false },
+    });
+  });
+
   return router;
 }

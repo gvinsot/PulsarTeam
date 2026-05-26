@@ -48,6 +48,7 @@ export const crudMethods = {
       voice: config.voice || 'alloy',
       voiceMode: config.voiceMode || (config.isVoice ? 'realtime' : null),
       ttsVoiceId: config.ttsVoiceId || null,
+      ttsEnabled: config.ttsEnabled || false,
       template: config.template || null,
       costPerInputToken: config.costPerInputToken ?? null,
       costPerOutputToken: config.costPerOutputToken ?? null,
@@ -81,7 +82,7 @@ export const crudMethods = {
     const allowed = [
       'name', 'role', 'description', 'instructions', 'temperature',
       'maxTokens', 'contextLength', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
-      'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'enabled',
+      'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'ttsEnabled', 'enabled',
       'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId', 'boardId', 'credentials', 'runner', 'toolHooks'
     ];
 

@@ -38,6 +38,9 @@ const createAgentSchema = z.object({
   // 'realtime' = OpenAI Realtime API (default), 'external' = browser → STT → LLM → TTS pipeline
   voiceMode: z.enum(['realtime', 'external']).optional(),
   ttsVoiceId: z.string().max(200).optional(),
+  // When true, assistant replies in the regular text chat are spoken aloud
+  // using the global TTS service (if configured in Admin Settings).
+  ttsEnabled: z.boolean().optional(),
   template: z.string().max(200).nullable().optional(),
   color: z.string().max(50).optional(),
   icon: z.string().max(50).optional(),

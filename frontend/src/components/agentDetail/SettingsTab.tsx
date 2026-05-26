@@ -17,17 +17,22 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
     costPerOutputToken: agent.costPerOutputToken ?? '',
     boardId: agent.boardId || '',
     runner: agent.runner || '',
+    ttsEnabled: agent.ttsEnabled || false,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [llmConfigs, setLlmConfigs] = useState([]);
   const [boards, setBoards] = useState([]);
+  const [ttsAvailable, setTtsAvailable] = useState(false);
 
   useEffect(() => {
     api.getLlmConfigs().then(setLlmConfigs).catch(() => {});
     api.getBoards().then(setBoards).catch(() => {});
-  }, []);
+    api.getExternalVoiceServices(agent.id)
+      .then((data) => setTtsAvailable(!!data?.tts?.available))
+      .catch(() => setTtsAvailable(false));
+  }, [agent.id]);
 
   // Reset form when switching agents
   useEffect(() => {
@@ -44,6 +49,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
       costPerOutputToken: agent.costPerOutputToken ?? '',
       boardId: agent.boardId || '',
       runner: agent.runner || '',
+      ttsEnabled: agent.ttsEnabled || false,
     });
     setSaved(false);
   }, [agent.id]);
@@ -242,6 +248,40 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         </select>
         <p className="text-[11px] text-dark-500 mt-1">Agents are visible to all users who have access to the selected board. An agent without a board is visible to everyone.</p>
       </div>
+
+      {/* TTS toggle — only shown when the global TTS service is configured.
+          When enabled, the agent's text-chat replies are spoken aloud. */}
+      {!agent.isVoice && (
+        <div className="flex items-center justify-between px-3 py-2.5 bg-dark-800/50 rounded-lg border border-dark-700/50">
+          <div>
+            <span className="text-sm text-dark-200">Text-to-Speech (TTS)</span>
+            <p className="text-[11px] text-dark-500 mt-0.5">
+              {ttsAvailable
+                ? 'Speak the assistant replies aloud using the configured TTS service.'
+                : 'TTS service is not configured. Set it in Admin Settings → External Voice Services.'}
+            </p>
+          </div>
+          <button
+            disabled={!ttsAvailable}
+            onClick={async () => {
+              if (!ttsAvailable) return;
+              const newVal = !form.ttsEnabled;
+              updateField('ttsEnabled', newVal);
+              try {
+                await api.updateAgent(agent.id, { ttsEnabled: newVal });
+                onRefresh();
+              } catch (err) {
+                console.error(err);
+                updateField('ttsEnabled', !newVal);
+              }
+            }}
+            className={`relative w-10 h-5 rounded-full transition-colors ${form.ttsEnabled ? 'bg-indigo-500' : 'bg-dark-600'} ${!ttsAvailable ? 'opacity-40 cursor-not-allowed' : ''}`}
+            title={ttsAvailable ? 'Toggle TTS' : 'TTS service not configured'}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.ttsEnabled ? 'translate-x-5' : ''}`} />
+          </button>
+        </div>
+      )}
 
       {/* Metrics */}
       <div className="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50">

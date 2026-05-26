@@ -615,6 +615,13 @@ export const api = {
       headers: getHeaders(),
     }).then(handleResponse),
 
+  // Global STT/TTS availability + WS URLs for the regular text chat.
+  // agentId is optional and is only used to resolve a per-agent ttsVoiceId.
+  getExternalVoiceServices: (agentId) =>
+    fetch(`${API_BASE}/external-voice/services${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`, {
+      headers: getHeaders(),
+    }).then(handleResponse),
+
   // Templates
   getTemplates: () =>
     fetch(`${API_BASE}/templates`, { headers: getHeaders() }).then(handleResponse),

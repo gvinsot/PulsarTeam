@@ -1,13 +1,179 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import {
   MessageSquare, Send, RotateCcw, StopCircle, ArrowDownToLine, ImagePlus, X, RefreshCw,
+  Mic, MicOff, Volume2, VolumeX, Loader2,
 } from 'lucide-react';
 import ChatMessage from './ChatMessage';
 import { RichAssistantContent } from './ChatMessage';
+import { api } from '../../api';
+import { SttSession, TtsPlayer } from '../../lib/externalVoiceClient';
 
-export default function ChatTab({ history, thinking, streamBuffer, message, setMessage, sending, isBusy, onSend, onStop, onClear, onReload, onTruncate, chatEndRef, agentName, autoScroll, onToggleAutoScroll, supportsImages, pendingImages, onAddImages, onRemoveImage }) {
+export default function ChatTab({
+  history, thinking, streamBuffer, message, setMessage, sending, isBusy, onSend, onStop,
+  onClear, onReload, onTruncate, chatEndRef, agentName, autoScroll, onToggleAutoScroll,
+  supportsImages, pendingImages, onAddImages, onRemoveImage,
+  agent,
+}) {
   const fileInputRef = useRef(null);
   const [reloading, setReloading] = useState(false);
+
+  // ── STT / TTS state ──────────────────────────────────────────────────
+  // Voice services are global (Admin Settings). We probe availability once
+  // per agent and only render the mic/speaker affordances when the operator
+  // actually configured the services.
+  const [voiceServices, setVoiceServices] = useState<any>(null);
+  const [sttState, setSttState] = useState<'idle' | 'listening' | 'finalizing'>('idle');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [partial, setPartial] = useState('');
+  const [ttsSpeaking, setTtsSpeaking] = useState(false);
+  // Speaker can be muted ad-hoc by the user even when the agent has TTS on.
+  const [speakerMuted, setSpeakerMuted] = useState(false);
+
+  const sttRef = useRef<SttSession | null>(null);
+  const ttsRef = useRef<TtsPlayer | null>(null);
+  // Track which assistant message we've already spoken so a UI re-render
+  // doesn't cause us to speak the same reply twice.
+  const lastSpokenRef = useRef<string | null>(null);
+  // Capture the assistant history length at the moment the user submits, so
+  // we only speak replies that arrive AFTER the current turn — not stale
+  // ones already in history when the chat tab opens.
+  const turnBaselineRef = useRef<number>(-1);
+
+  const ttsEnabled = !!agent?.ttsEnabled && !!voiceServices?.tts?.available;
+  const sttAvailable = !!voiceServices?.stt?.available;
+
+  useEffect(() => {
+    if (!agent?.id) return;
+    api.getExternalVoiceServices(agent.id)
+      .then(setVoiceServices)
+      .catch(() => setVoiceServices(null));
+  }, [agent?.id]);
+
+  // Initialize the baseline so we don't speak existing history on mount —
+  // only future replies (any assistant message beyond the current count).
+  useEffect(() => {
+    if (turnBaselineRef.current < 0 && history) {
+      turnBaselineRef.current = history.length;
+    }
+  }, [agent?.id, history?.length]);
+
+  // Reset baseline + speaker state when switching agents.
+  useEffect(() => {
+    turnBaselineRef.current = history ? history.length : 0;
+    lastSpokenRef.current = null;
+    stopTts();
+    stopStt();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent?.id]);
+
+  // Speak the latest assistant reply when streaming completes — but only if
+  // it appeared after the current turn baseline and isn't the one we already
+  // spoke. Streaming is detected via `streamBuffer` / agent.status === busy.
+  useEffect(() => {
+    if (!ttsEnabled || speakerMuted) return;
+    if (isBusy || streamBuffer) return;
+    if (!Array.isArray(history) || history.length === 0) return;
+    if (history.length <= turnBaselineRef.current) return;
+    const last = history[history.length - 1];
+    if (!last || last.role !== 'assistant') return;
+    const text = (last.content || '').toString().trim();
+    if (!text) return;
+    const key = `${history.length}:${text.slice(0, 64)}`;
+    if (lastSpokenRef.current === key) return;
+    lastSpokenRef.current = key;
+    speak(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [history, streamBuffer, isBusy, ttsEnabled, speakerMuted]);
+
+  const speak = useCallback((text: string) => {
+    const cfg = voiceServices?.tts;
+    if (!cfg?.available || !cfg.wsUrl) return;
+    stopTts();
+    const player = new TtsPlayer(
+      { wsUrl: cfg.wsUrl, sampleRate: cfg.sampleRate || 22050, voiceId: cfg.voiceId || '' },
+      {
+        onStart: () => setTtsSpeaking(true),
+        onEnd: () => { setTtsSpeaking(false); ttsRef.current = null; },
+        onError: (msg) => { setVoiceError(msg); setTtsSpeaking(false); },
+      },
+    );
+    ttsRef.current = player;
+    player.speak(text);
+  }, [voiceServices]);
+
+  const stopTts = useCallback(() => {
+    if (ttsRef.current) {
+      try { ttsRef.current.stop(); } catch { /* ignore */ }
+      ttsRef.current = null;
+    }
+    setTtsSpeaking(false);
+  }, []);
+
+  const stopStt = useCallback(() => {
+    if (sttRef.current) {
+      try { sttRef.current.stop(); } catch { /* ignore */ }
+      sttRef.current = null;
+    }
+    setSttState('idle');
+    setPartial('');
+  }, []);
+
+  const startStt = useCallback(async () => {
+    const cfg = voiceServices?.stt;
+    if (!cfg?.available || !cfg.wsUrl) {
+      setVoiceError('STT service is not configured.');
+      return;
+    }
+    setVoiceError(null);
+    setPartial('');
+    // Stop any ongoing playback so the mic doesn't capture our own TTS.
+    stopTts();
+    const session = new SttSession(
+      { wsUrl: cfg.wsUrl, sampleRate: cfg.sampleRate || 16000 },
+      {
+        onStateChange: (state) => setSttState(state),
+        onPartial: (text) => setPartial(text),
+        onError: (msg) => setVoiceError(msg),
+        onFinal: (text) => {
+          sttRef.current = null;
+          setPartial('');
+          setSttState('idle');
+          const trimmed = (text || '').trim();
+          if (!trimmed) return;
+          // Mark the baseline so the upcoming assistant reply is spoken.
+          turnBaselineRef.current = (history ? history.length : 0) + 1;
+          // Append (rather than replace) so the user can chain dictation
+          // onto whatever is already in the textarea.
+          setMessage((prev) => (prev && prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
+          // Auto-send on a microtask so React commits the textarea update.
+          setTimeout(() => { onSend?.(); }, 0);
+        },
+      },
+    );
+    sttRef.current = session;
+    try {
+      await session.start();
+    } catch {
+      sttRef.current = null;
+    }
+  }, [voiceServices, history, setMessage, onSend, stopTts]);
+
+  // Tear everything down when leaving the tab / unmounting.
+  useEffect(() => {
+    return () => {
+      stopStt();
+      stopTts();
+    };
+  }, [stopStt, stopTts]);
+
+  const handleMicClick = () => {
+    if (sttState === 'listening') {
+      // Second click → tell STT to finalize the current utterance.
+      sttRef.current?.finalize();
+    } else if (sttState === 'idle') {
+      startStt();
+    }
+  };
 
   const handleReload = async () => {
     if (!onReload || reloading) return;
@@ -116,6 +282,32 @@ export default function ChatTab({ history, thinking, streamBuffer, message, setM
 
       {/* Input */}
       <div className="border-t border-dark-700 p-3">
+        {/* Voice status row — only visible while STT/TTS is active or errored */}
+        {(sttState !== 'idle' || partial || ttsSpeaking || voiceError) && (
+          <div className="mb-2 flex items-center gap-2 text-xs">
+            {sttState === 'listening' && (
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Listening… {partial && <span className="italic text-dark-300">"{partial}"</span>}
+              </span>
+            )}
+            {sttState === 'finalizing' && (
+              <span className="flex items-center gap-1.5 text-amber-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Transcribing…
+              </span>
+            )}
+            {ttsSpeaking && (
+              <span className="flex items-center gap-1.5 text-indigo-400">
+                <Volume2 className="w-3 h-3" />
+                Speaking…
+              </span>
+            )}
+            {voiceError && (
+              <span className="text-red-400">{voiceError}</span>
+            )}
+          </div>
+        )}
         {/* Image previews */}
         {pendingImages && pendingImages.length > 0 && (
           <div className="flex gap-2 mb-2 flex-wrap">
@@ -181,6 +373,55 @@ export default function ChatTab({ history, thinking, streamBuffer, message, setM
               </button>
             </>
           )}
+          {/* Microphone (STT) — only shown when the global STT service is configured. */}
+          {sttAvailable && (
+            <button
+              onClick={handleMicClick}
+              disabled={sending && sttState === 'idle'}
+              className={`p-2 rounded-lg transition-colors flex-shrink-0 disabled:opacity-40 ${
+                sttState === 'listening'
+                  ? 'text-red-300 bg-red-500/20 hover:bg-red-500/30 animate-pulse'
+                  : sttState === 'finalizing'
+                    ? 'text-amber-400 bg-amber-500/10'
+                    : 'text-dark-500 hover:text-emerald-400 hover:bg-dark-700'
+              }`}
+              title={
+                sttState === 'listening' ? 'Stop recording (auto-stops on silence)' :
+                sttState === 'finalizing' ? 'Transcribing…' :
+                'Speak to send (Speech-to-Text)'
+              }
+            >
+              {sttState === 'finalizing'
+                ? <Loader2 className="w-4 h-4 animate-spin" />
+                : sttState === 'listening'
+                  ? <MicOff className="w-4 h-4" />
+                  : <Mic className="w-4 h-4" />}
+            </button>
+          )}
+          {/* Speaker mute — only shown when TTS is enabled on this agent. Lets
+              the user temporarily silence playback without touching settings. */}
+          {ttsEnabled && (
+            <button
+              onClick={() => {
+                if (speakerMuted) {
+                  setSpeakerMuted(false);
+                } else {
+                  setSpeakerMuted(true);
+                  stopTts();
+                }
+              }}
+              className={`p-2 rounded-lg transition-colors flex-shrink-0 ${
+                speakerMuted
+                  ? 'text-red-400 bg-red-500/10 hover:bg-red-500/20'
+                  : ttsSpeaking
+                    ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20'
+                    : 'text-dark-500 hover:text-indigo-400 hover:bg-dark-700'
+              }`}
+              title={speakerMuted ? 'Speaker muted — click to enable' : ttsSpeaking ? 'Stop speaking' : 'TTS on — click to mute'}
+            >
+              {speakerMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+            </button>
+          )}
           <div className="flex-1 relative">
             <textarea
               value={message}
@@ -188,6 +429,8 @@ export default function ChatTab({ history, thinking, streamBuffer, message, setM
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !sending) {
                   e.preventDefault();
+                  // Track baseline so the upcoming reply is eligible for TTS.
+                  if (ttsEnabled) turnBaselineRef.current = (history ? history.length : 0) + 1;
                   onSend();
                 }
               }}
@@ -212,7 +455,15 @@ export default function ChatTab({ history, thinking, streamBuffer, message, setM
                 }
               }}
               className="w-full px-4 py-2.5 bg-dark-800 border border-dark-600 rounded-xl text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 resize-none"
-              placeholder={supportsImages ? "Type a message or paste an image... (Shift+Enter for new line)" : "Type a message... (Shift+Enter for new line)"}
+              placeholder={
+                sttAvailable
+                  ? (supportsImages
+                      ? "Type, paste an image, or click the mic to speak…"
+                      : "Type a message or click the mic to speak…")
+                  : (supportsImages
+                      ? "Type a message or paste an image... (Shift+Enter for new line)"
+                      : "Type a message... (Shift+Enter for new line)")
+              }
               rows={1}
               disabled={sending}
             />
@@ -227,7 +478,10 @@ export default function ChatTab({ history, thinking, streamBuffer, message, setM
             </button>
           ) : (
             <button
-              onClick={onSend}
+              onClick={() => {
+                if (ttsEnabled) turnBaselineRef.current = (history ? history.length : 0) + 1;
+                onSend();
+              }}
               disabled={sending || (!message.trim() && (!pendingImages || pendingImages.length === 0))}
               className="p-2.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >

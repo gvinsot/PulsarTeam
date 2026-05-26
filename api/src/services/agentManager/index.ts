@@ -229,6 +229,7 @@ export class AgentManager {
         agent.credentials = agent.credentials || {};
         agent.isVoice = agent.isVoice || false;
         agent.voice = agent.voice || 'alloy';
+        agent.ttsEnabled = agent.ttsEnabled || false;
         agent.projectContexts = agent.projectContexts || {};
         agent.runnerSessions = agent.runnerSessions || {};
         let needsSave = false;
