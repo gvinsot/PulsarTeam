@@ -474,17 +474,67 @@ def resolve_token(agent_user: dict) -> Optional[str]:
     return load_agent_token(agent_user)
 
 
+def seed_onboarding_state(agent_user: dict) -> bool:
+    """Pre-populate `~/.claude.json` with the flags the Claude Code CLI 2.1+
+    normally writes after a successful first-run OAuth login. Without these
+    flags the TUI shows its onboarding sequence (theme picker → "Select
+    login method" → OAuth browser flow) that the PTY driver can't satisfy
+    even with a valid token in env vars.
+
+    Flags seeded:
+      - hasCompletedOnboarding=true   → skips theme picker + login-method
+                                        picker + OAuth flow
+      - hasAvailableSubscription=true → confirms the subscription tier
+                                        without re-validating
+
+    Idempotent.
+    """
+    if not agent_user:
+        return False
+    home = agent_user.get("home")
+    if not home:
+        return False
+    path = os.path.join(home, ".claude.json")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    changed = False
+    if not data.get("hasCompletedOnboarding"):
+        data["hasCompletedOnboarding"] = True
+        changed = True
+    if not data.get("hasAvailableSubscription"):
+        data["hasAvailableSubscription"] = True
+        changed = True
+    if not changed:
+        return True
+    try:
+        # NOT encrypted — consumed directly by the Claude Code CLI.
+        _atomic_write_secret(path, json.dumps(data, indent=2), encrypt=False)
+    except OSError as e:
+        logger.warning(f"[Agent Auth] Failed to write {path}: {e}")
+        return False
+    uid = agent_user.get("uid")
+    gid = agent_user.get("gid", uid)
+    if uid is not None:
+        try:
+            os.chown(path, uid, gid)
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    logger.info(f"[Agent Auth] Seeded {path} (hasCompletedOnboarding=true)")
+    return True
+
+
 def seed_credentials_file(agent_user: dict) -> bool:
     """Write `~/.claude/.credentials.json` in the agent's HOME from the token
     currently in storage (owner DB record or local files).
 
-    Claude Code CLI 2.1+ ignores the `CLAUDE_CODE_OAUTH_TOKEN` env var when
-    starting the interactive TUI — it only honors the credentials file. Without
-    this seed the TUI falls through to its OAuth login flow (`Opening browser
-    to sign in… / Paste code here >`), which the runner has no way to satisfy.
-
-    Idempotent: call at every spawn so the file always reflects the latest
-    (possibly refreshed) token. Returns True when the file was written.
+    Defense-in-depth alongside [[seed_onboarding_state]] and the env-var
+    token injection: some auth code paths inside the CLI prefer the on-disk
+    credentials file. Idempotent: call at every spawn so the file always
+    reflects the latest (possibly refreshed) token.
     """
     if not agent_user:
         return False

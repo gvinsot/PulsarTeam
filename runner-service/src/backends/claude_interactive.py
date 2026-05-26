@@ -35,13 +35,21 @@ import os
 import re
 import pty
 import errno
+import fcntl
+import struct
 import select
 import signal
 import asyncio
+import termios
 import subprocess
 from typing import Optional, Callable
 
 import httpx
+
+try:
+    import pyte  # type: ignore
+except ImportError:  # pragma: no cover — installed via requirements.txt
+    pyte = None  # falls back to the legacy strip-ANSI extractor
 
 from config import (
     CLAUDE_INTERACTIVE_IDLE_SECS,
@@ -52,6 +60,14 @@ from config import (
     logger,
 )
 from backends.fallback_llm_resolver import resolve_fallback_llm
+
+
+# Fixed PTY size for the Claude Code TUI. Wider than typical terminals so
+# the assistant's lines aren't pre-wrapped too aggressively, and tall enough
+# that a normal answer fits on-screen (anything that scrolls off is captured
+# in pyte's HistoryScreen scrollback). Operator-tunable via env vars.
+_TERM_COLS = max(80, int(os.getenv("CLAUDE_PTY_COLS", "200")))
+_TERM_ROWS = max(24, int(os.getenv("CLAUDE_PTY_ROWS", "60")))
 
 
 # ─── ANSI stripping ────────────────────────────────────────────────────────
@@ -97,13 +113,38 @@ _YN_RE = re.compile(r"\[\s*y\s*/\s*n\s*\]\s*$", re.IGNORECASE | re.MULTILINE)
 # timeout. The matched text is only counted, not extracted, so over-matching
 # (e.g. ` 1.5`) is harmless.
 _NUMBERED_RE = re.compile(r"^\s*[❯>]?\s*\d+[\.\)]\s*\S", re.MULTILINE)
-_TRUST_RE = re.compile(r"do you trust this folder", re.IGNORECASE)
+# Trust-folder prompt: the wording varies across Claude Code CLI versions
+# AND the TUI lays each word out with absolute cursor positions (so after
+# _strip_ansi the buffer is compacted to e.g. "Isthisaprojectyou…trust?").
+# We use `\s*` between every word to match either form. Each alternative is
+# distinctive enough that over-matching against chat content is unlikely.
+_TRUST_RE = re.compile(
+    r"(do\s*you\s*trust\s*this\s*folder"
+    r"|is\s*this\s*a\s*project\s*you\s*(created|trust)"
+    r"|trust\s*this\s*folder\s*\?"
+    r"|yes,?\s*i\s*trust\s*this\s*folder)",
+    re.IGNORECASE,
+)
+# Bypass-permissions warning: shown when the CLI is started with
+# `--dangerously-skip-permissions`. Two numbered options where the DEFAULT
+# (option 1) is "No, exit" — picking the default would terminate the CLI.
+# Match this explicitly so we can ship "2" (Yes, I accept) instead of the
+# generic numbered-choice path that would send "1".
+_BYPASS_PERMS_RE = re.compile(
+    r"(bypass\s*permissions\s*mode|yes,?\s*i\s*accept)",
+    re.IGNORECASE,
+)
 # Arrow-key selector: a caret + a selector-y keyword nearby. Catches non-
 # numbered onboarding menus like the post-theme-picker "Select login method"
 # screen where each option is just preceded by `❯` (highlighted) or space
-# (not highlighted). Pressing Enter (no char) accepts the default.
+# (not highlighted). `\s*` between words because the TUI lays out text with
+# absolute cursor moves, which `_strip_ansi` removes (so the buffer ends up
+# as "Selectloginmethod" / "Entertoconfirm" etc. with no spaces).
 _ARROW_HINT_RE = re.compile(
-    r"(select login method|select an option|use arrow|press enter to (confirm|continue|select))",
+    r"(select\s*login\s*method"
+    r"|select\s*an\s*option"
+    r"|use\s*arrow"
+    r"|press\s*enter\s*to\s*(confirm|continue|select))",
     re.IGNORECASE,
 )
 
@@ -113,13 +154,16 @@ def _looks_like_yn_prompt(tail: str) -> bool:
 
 
 def _looks_like_numbered_choice(tail: str) -> bool:
-    # At least two numbered lines + an instruction line like "press 1-N" or
-    # "select an option". Tightening the heuristic so chat content that happens
-    # to include "1. foo\n2. bar" doesn't trigger.
+    # At least two numbered lines + an instruction keyword. Tightening the
+    # heuristic so chat content that happens to include "1. foo\n2. bar"
+    # doesn't trigger. `\s*` allows the strip-ANSI-compacted form too.
     matches = _NUMBERED_RE.findall(tail)
     if len(matches) < 2:
         return False
-    return bool(re.search(r"(select|choose|press \d|enter your choice|use arrow)", tail, re.IGNORECASE))
+    return bool(re.search(
+        r"(select|choose|press\s*\d|enter\s*your\s*choice|use\s*arrow)",
+        tail, re.IGNORECASE,
+    ))
 
 
 def _looks_like_arrow_selector(tail: str) -> bool:
@@ -264,11 +308,22 @@ def _drive_pty_blocking(
 
     master_fd, slave_fd = pty.openpty()
 
+    # Tell the slave-side PTY the agreed dimensions BEFORE the child execs so
+    # the TUI lays out at our chosen size (pyte uses the same size to
+    # reconstruct the screen). Failure here is non-fatal — the TUI will fall
+    # back to its default ~80x24 and pyte will just see a smaller virtual
+    # screen.
+    try:
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ,
+                    struct.pack("HHHH", _TERM_ROWS, _TERM_COLS, 0, 0))
+    except OSError as e:
+        logger.debug(f"[Interactive] TIOCSWINSZ failed: {e}")
+
     try:
         proc = subprocess.Popen(
             cmd,
             cwd=cwd,
-            env=env,
+            env={**env, "COLUMNS": str(_TERM_COLS), "LINES": str(_TERM_ROWS)},
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=subprocess.PIPE,
@@ -283,6 +338,22 @@ def _drive_pty_blocking(
     # We keep the slave open on the parent side too so we can detect EIO
     # cleanly later. Close it now — the child has its own dup.
     os.close(slave_fd)
+
+    # Pyte virtual terminal — feeds the raw bytes through a proper terminal
+    # emulator so we get the final screen state (text laid out at absolute
+    # positions, redraws collapsed) instead of the messy concatenation that
+    # `_strip_ansi` produces. None when pyte is unavailable (we fall back to
+    # the legacy extractor).
+    screen = None
+    stream = None
+    if pyte is not None:
+        try:
+            screen = pyte.HistoryScreen(_TERM_COLS, _TERM_ROWS, history=2000, ratio=0.5)
+            stream = pyte.ByteStream(screen)
+        except Exception as e:
+            logger.warning(f"[Interactive] pyte init failed, falling back: {e}")
+            screen = None
+            stream = None
 
     import time
     deadline = time.monotonic() + total_timeout
@@ -335,11 +406,30 @@ def _drive_pty_blocking(
             detection_offset = len(raw_buf)
             return answer
         if _TRUST_RE.search(tail):
-            logger.info(f"[Interactive] Trust-folder prompt → 'y' (prompt_sent={prompt_sent})")
-            _ship_keystroke("y")
+            # Send "1" (not "y"): in 2.1.x the trust prompt is a numbered
+            # menu where option 1 is "Yes, I trust this folder". "1\r"
+            # works for both the 1.x Y/N form and the 2.x numbered form
+            # (`1` is also a valid Y/N answer in the older prompt).
+            logger.info(f"[Interactive] Trust-folder prompt → '1' (prompt_sent={prompt_sent})")
+            _ship_keystroke("1")
             last_auto_answer_at = time.monotonic()
             detection_offset = len(raw_buf)
-            return "y"
+            return "1"
+        if _BYPASS_PERMS_RE.search(tail):
+            # `--dangerously-skip-permissions` warning. Option 1 is "No, exit"
+            # (the highlighted default) and option 2 is "Yes, I accept". We
+            # MUST navigate to option 2 then press Enter — the TUI ignores
+            # the `2` keystroke for selection and a bare Enter confirms the
+            # currently-highlighted "No, exit" (the CLI then exits rc=1).
+            logger.info(f"[Interactive] Bypass-permissions warning → option 2 (Down+Enter) (prompt_sent={prompt_sent})")
+            try:
+                os.write(master_fd, b"\x1b[B")  # CSI B = Down arrow
+            except OSError:
+                pass
+            _ship_keystroke("")  # Bare Enter to confirm
+            last_auto_answer_at = time.monotonic()
+            detection_offset = len(raw_buf)
+            return "2"
         if _looks_like_numbered_choice(tail):
             answer = (fallback_resolver(tail, "choice") if fallback_resolver else None) or "1"
             logger.info(f"[Interactive] Numbered-choice → '{answer}' (prompt_sent={prompt_sent})")
@@ -400,6 +490,13 @@ def _drive_pty_blocking(
                 chunk = _read_pty(master_fd)
                 if chunk:
                     raw_buf.extend(chunk)
+                    if stream is not None:
+                        try:
+                            stream.feed(chunk)
+                        except Exception as e:
+                            # A malformed escape sequence shouldn't kill the
+                            # whole session; fall back to text-only extraction.
+                            logger.debug(f"[Interactive] pyte feed error (ignored): {e}")
                     visible_buf = _strip_ansi(raw_buf.decode("utf-8", "replace"))
                     last_data_at = time.monotonic()
 
@@ -472,7 +569,17 @@ def _drive_pty_blocking(
         pass
 
     visible = _strip_ansi(raw_buf.decode("utf-8", "replace"))
-    output_text = _extract_assistant_reply(visible, prompt)
+    # Prefer the pyte-reconstructed screen when available — it gives us the
+    # TUI's true final state with absolute-cursor layout collapsed, so the
+    # extractor only has to recognize `● ` bullet lines for Claude's reply.
+    output_text = ""
+    if screen is not None:
+        try:
+            output_text = _extract_assistant_reply_from_screen(screen)
+        except Exception as e:
+            logger.warning(f"[Interactive] pyte extraction failed, falling back: {e}")
+    if not output_text:
+        output_text = _extract_assistant_reply(visible, prompt)
 
     status = "success" if proc.returncode in (0, None) and output_text else "error"
     return {
@@ -482,6 +589,80 @@ def _drive_pty_blocking(
         "stderr": stderr_out,
         "returncode": proc.returncode,
     }
+
+
+def _pyte_screen_lines(screen) -> list[str]:
+    """Flatten a pyte HistoryScreen into a list of rendered lines, history
+    scrollback first, then the currently-visible display."""
+    lines: list[str] = []
+    history = getattr(screen, "history", None)
+    if history is not None:
+        # `history.top` is a deque of buffers. Each buffer is a dict-like
+        # mapping column index → pyte Char. Sort columns to get the line in
+        # the right order.
+        for buf in list(history.top):
+            try:
+                line = "".join(buf[col].data for col in sorted(buf)).rstrip()
+            except Exception:
+                continue
+            lines.append(line)
+    try:
+        for line in screen.display:
+            lines.append(line.rstrip())
+    except Exception:
+        pass
+    return lines
+
+
+def _extract_assistant_reply_from_screen(screen) -> str:
+    """Pull Claude's response out of a fully-rendered pyte screen.
+
+    The TUI marks each assistant message with a `● ` bullet at the start of
+    the line; continuation lines are indented with two spaces. Everything
+    else (caret `❯`, status banner `⏵⏵ bypass permissions…`, spinner glyphs
+    `✶ ✻ ✽ ✢ ·`, box drawing, "What's new" panel) is chrome we want to drop.
+    """
+    lines = _pyte_screen_lines(screen)
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    in_block = False
+    empty_run = 0
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if line.startswith("● "):
+            if current:
+                blocks.append(current)
+                current = []
+            current.append(line[2:].rstrip())
+            in_block = True
+            empty_run = 0
+        elif in_block and line.startswith("  "):
+            # Continuation line (Claude wraps its replies with a 2-space hang).
+            if empty_run:
+                current.extend([""] * empty_run)
+                empty_run = 0
+            current.append(line[2:].rstrip())
+        elif in_block and not line.strip():
+            # Tolerate a single blank line inside an answer (paragraph break);
+            # two or more close the block.
+            empty_run += 1
+            if empty_run >= 2:
+                blocks.append(current)
+                current = []
+                in_block = False
+                empty_run = 0
+        else:
+            if current:
+                blocks.append(current)
+                current = []
+            in_block = False
+            empty_run = 0
+
+    if current:
+        blocks.append(current)
+
+    return "\n\n".join("\n".join(b).strip() for b in blocks if b).strip()
 
 
 def _extract_assistant_reply(visible: str, user_prompt: str) -> str:

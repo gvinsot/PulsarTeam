@@ -38,3 +38,7 @@ pyyaml>=6.0.1
 black>=24.1.0
 pytest>=8.0.0
 cryptography>=42.0.0
+# Terminal emulator — used by the Claude Code interactive backend to
+# reconstruct the TUI's final screen state and extract Claude's response
+# free of TUI chrome (caret, status bar, spinners).
+pyte>=0.8.1

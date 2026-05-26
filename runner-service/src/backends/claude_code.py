@@ -27,7 +27,7 @@ from .claude_token_store import (
     get_agent_env, get_subprocess_kwargs,
     load_saved_token, get_saved_refresh_token,
     save_agent_token, save_owner_token, save_token,
-    resolve_token, seed_credentials_file,
+    resolve_token, seed_credentials_file, seed_onboarding_state,
     is_token_expired, is_agent_token_expired, is_owner_token_expired,
     load_owner_token, load_agent_token,
     get_token_cooldown_until,
@@ -510,9 +510,13 @@ class ClaudeCodeBackend(RunnerBackend):
         # at every spawn so toggles take effect on the next message without
         # having to recreate the agent's HOME.
         self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
-        # Seed `.claude/.credentials.json` from the latest stored token. The
-        # interactive TUI ignores CLAUDE_CODE_OAUTH_TOKEN in CLI 2.1+ and
-        # falls through to its OAuth browser flow without this file.
+        # Mark onboarding as already completed in `.claude.json` so the TUI
+        # skips its first-run theme picker / login-method picker / OAuth
+        # flow — none of which the PTY driver can satisfy. The CLI normally
+        # writes these flags after a successful interactive OAuth login.
+        seed_onboarding_state(effective_user)
+        # Seed `.claude/.credentials.json` as defense in depth alongside the
+        # env-var token injection.
         seed_credentials_file(effective_user)
 
         # Decide initial session strategy. If the caller handed us a
@@ -868,8 +872,8 @@ class ClaudeCodeBackend(RunnerBackend):
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
-        # See run_sync — TUI mode needs the credentials file on disk; env vars
-        # alone aren't honored by the Claude Code 2.1+ interactive driver.
+        # See run_sync for rationale on both seeds.
+        seed_onboarding_state(effective_user)
         seed_credentials_file(effective_user)
 
         # Same resume/replay strategy as run_sync. The route handler hands us
