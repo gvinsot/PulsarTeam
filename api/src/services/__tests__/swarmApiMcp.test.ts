@@ -121,7 +121,6 @@ test('add_task forwards repo_full_name and storage_path to agentManager.addTask'
 
   const handler = getToolHandler(server, 'add_task');
   const result = await handler({
-    agent_id: 'agent-1',
     board_id: 'board-1',
     task: 'Implement login flow',
     repo_full_name: 'acme/widgets',
@@ -150,7 +149,6 @@ test('add_task rejects malformed repo_full_name with a clear error', async () =>
   const handler = getToolHandler(server, 'add_task');
 
   const result = await handler({
-    agent_id: 'agent-1',
     board_id: 'board-1',
     task: 'Bad repo',
     repo_full_name: 'not-a-valid-repo-name',
@@ -169,7 +167,6 @@ test('add_task accepts a custom repo_provider override', async () => {
   const handler = getToolHandler(server, 'add_task');
 
   await handler({
-    agent_id: 'agent-1',
     board_id: 'board-1',
     task: 'Work on gitlab repo',
     repo_full_name: 'acme/widgets',
@@ -184,7 +181,7 @@ test('add_task without repo / storage leaves both null (no auto-binding)', async
   const server = createSwarmApiMcpServer(am as any);
   const handler = getToolHandler(server, 'add_task');
 
-  const result = await handler({ agent_id: 'agent-1', board_id: 'board-1', task: 'Plain task' });
+  const result = await handler({ board_id: 'board-1', task: 'Plain task' });
   const body = parseResult(result);
 
   assert.equal(body.task.repoFullName, null);
@@ -199,7 +196,7 @@ test('add_task rejects calls without board_id', async () => {
   // Zod marks board_id as required at the schema layer, so calling the handler
   // directly with a missing board_id still produces a runtime error from our
   // own check (in case a transport bypasses the schema validation).
-  const result = await handler({ agent_id: 'agent-1', task: 'No board' });
+  const result = await handler({ task: 'No board' });
 
   assert.equal(result.isError, true);
   const body = parseResult(result);
@@ -207,7 +204,7 @@ test('add_task rejects calls without board_id', async () => {
   assert.equal(am._calls.addTask.length, 0);
 });
 
-test('add_task creates an unassigned task when no agent is provided', async () => {
+test('add_task always creates an unassigned task (no agent_id accepted)', async () => {
   const am = makeFakeAgentManager();
   const server = createSwarmApiMcpServer(am as any);
   const handler = getToolHandler(server, 'add_task');
@@ -216,27 +213,31 @@ test('add_task creates an unassigned task when no agent is provided', async () =
   const body = parseResult(result);
 
   assert.equal(body.success, true);
-  assert.equal(body.agent, null, 'agent should be null for unassigned tasks');
+  assert.equal(body.agent, null, 'agent should always be null — agent targeting was removed');
   assert.equal(body.board_id, 'board-1');
   assert.equal(am._calls.addTask.length, 1);
-  assert.equal(am._calls.addTask[0].agentId, null, 'addTask should be called with agentId=null');
+  assert.equal(am._calls.addTask[0].agentId, null, 'addTask is always called with agentId=null');
 });
 
-test('add_task rejects calls with an unknown agent identifier', async () => {
+test('add_task ignores agent_id/agent_name if a caller still passes them (schema strips them)', async () => {
   const am = makeFakeAgentManager();
   const server = createSwarmApiMcpServer(am as any);
   const handler = getToolHandler(server, 'add_task');
 
+  // Even if a legacy caller tries to pass agent_id, the task should still be
+  // created unassigned. The Zod schema does not declare agent_id/agent_name so
+  // they are ignored by the destructuring in the handler.
   const result = await handler({
     board_id: 'board-1',
-    agent_name: 'NonexistentAgent',
-    task: 'Should fail',
+    task: 'Should still be unassigned',
+    agent_id: 'agent-1',
+    agent_name: 'Builder',
   });
 
-  assert.equal(result.isError, true);
   const body = parseResult(result);
-  assert.match(body.error, /Agent not found/);
-  assert.equal(am._calls.addTask.length, 0);
+  assert.equal(body.success, true);
+  assert.equal(body.agent, null);
+  assert.equal(am._calls.addTask[0].agentId, null);
 });
 
 test('update_task changes the task status', async () => {
@@ -367,7 +368,6 @@ test('add_task rejects unknown status not in the board workflow', async () => {
   const handler = getToolHandler(server, 'add_task');
 
   const result = await handler({
-    agent_id: 'agent-1',
     board_id: 'board-1',
     task: 'New task',
     status: 'not_a_column',
@@ -386,7 +386,6 @@ test('add_task rejects unknown board_id', async () => {
   const handler = getToolHandler(server, 'add_task');
 
   const result = await handler({
-    agent_id: 'agent-1',
     task: 'New task',
     board_id: 'does-not-exist',
   });
