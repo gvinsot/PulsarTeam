@@ -103,6 +103,57 @@ def _human_pause(base: float, jitter: float = 0.5) -> None:
     _time.sleep(max(0.0, base * factor))
 
 
+def _terminate_proc(master_fd: int, proc: "subprocess.Popen") -> None:
+    """Best-effort shutdown of the Claude CLI subprocess.
+
+    The runner container drops most capabilities (cap_drop=ALL with a minimal
+    cap_add list — see docker-compose) and the CLI subprocess runs under a
+    per-agent UID, so the parent (root inside the container) has NO right to
+    send signals to it. `proc.send_signal()` / `proc.terminate()` / `proc.kill()`
+    therefore raise `PermissionError`, which previously bubbled out of
+    `_drive_pty_blocking` and aborted the whole turn.
+
+    Strategy now:
+      1. Write Ctrl-C (`\\x03`) to the master end of the PTY. The kernel
+         delivers SIGINT to the foreground process group of the slave side —
+         this works without CAP_KILL because it's an I/O operation, not a
+         signal call.
+      2. Wait briefly. If still alive, try the regular signal API in case
+         CAP_KILL is in fact available; swallow PermissionError silently.
+      3. Last resort: SIGKILL via the signal API; if that also EPERM's,
+         we've done what we can — `proc.wait` will finish whenever the CLI
+         exits on its own from the SIGINT in step 1.
+    """
+    def _signal_safe(fn):
+        try:
+            fn()
+        except (PermissionError, ProcessLookupError, OSError):
+            pass
+
+    try:
+        os.write(master_fd, b"\x03")
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=2)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    _signal_safe(proc.terminate)
+    try:
+        proc.wait(timeout=2)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    _signal_safe(proc.kill)
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _strip_ansi(text: str) -> str:
     text = _ANSI_RE.sub("", text)
     text = _CR_RE.sub("", text)
@@ -493,14 +544,7 @@ def _drive_pty_blocking(
         while True:
             if time.monotonic() > deadline:
                 logger.warning("[Interactive] Hard timeout reached, killing CLI")
-                try:
-                    proc.send_signal(signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _terminate_proc(master_fd, proc)
                 stderr_out = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
                 return {
                     "status": "timeout",
@@ -565,19 +609,13 @@ def _drive_pty_blocking(
                     os.write(master_fd, b"/exit\r")
                 except OSError:
                     pass
-                # Then give it a beat to drain, then send Ctrl-C as a fallback.
+                # Give it a beat to drain; if it doesn't exit on its own,
+                # fall through to the PTY-based Ctrl-C path that doesn't
+                # require CAP_KILL.
                 try:
                     proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    try:
-                        proc.send_signal(signal.SIGINT)
-                        proc.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
+                    _terminate_proc(master_fd, proc)
                 break
     finally:
         try:
