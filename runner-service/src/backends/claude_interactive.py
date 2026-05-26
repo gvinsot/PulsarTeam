@@ -256,6 +256,11 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
           "choice" → expect a digit '1'..'9' (numbered list, type the digit).
           "arrow"  → expect a digit '1'..'9' (arrow-key menu, 1 = first
                       option; caller turns this into N-1 down arrows + Enter).
+          "any"    → expect a single char ('y','n','1'-'9') OR the literal
+                      string 'enter' to confirm the highlighted default.
+                      Used as a catch-all advisor on unrecognised TUI screens
+                      so we don't deadlock on a screen we don't have a regex
+                      pattern for yet.
     """
     cfg = resolve_fallback_llm()
     if not cfg:
@@ -281,6 +286,21 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
             "subscription / default option; never pick options labeled "
             "'Cancel', 'Quit', 'Skip permissions', or 'Untrusted'."
         )
+    elif kind == "any":
+        instructions = (
+            "You are reading a terminal screen displayed by Claude Code's CLI "
+            "during startup. The runner is stuck waiting for input and we "
+            "don't have a hardcoded handler for this screen. Decide what to "
+            "press so the CLI proceeds to the actual chat (the user is "
+            "waiting). Reply with EXACTLY one of:\n"
+            "  - 'y' or 'n' for a yes/no question\n"
+            "  - '1' through '9' to pick an option number\n"
+            "  - 'enter' to press Enter (confirms the highlighted default)\n"
+            "If the screen looks like a warning to accept, like 'Accept', "
+            "'Continue', or a trust folder confirmation: prefer the option "
+            "that proceeds (often the highlighted default — reply 'enter'). "
+            "Never reply with anything that would cancel, exit, or quit."
+        )
     else:
         instructions = (
             "You are answering a multiple-choice prompt that appeared in a "
@@ -298,7 +318,8 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
             {"role": "user", "content": f"Prompt:\n{question.strip()}\n\nYour reply (single character):"},
         ],
         "temperature": 0,
-        "max_tokens": 4,
+        # "any" needs room for "enter" (5 chars); the others only need 1.
+        "max_tokens": 8 if kind == "any" else 4,
     }
 
     url = cfg["endpoint"].rstrip("/")
@@ -322,6 +343,11 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
         reply = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip().lower()
         if not reply:
             return None
+        # "any" advisor: accept "enter" as a literal symbolic Enter (returned
+        # as the empty string so the caller's _ship_keystroke("") sends just
+        # \r). Otherwise fall through to single-char extraction.
+        if kind == "any" and "enter" in reply:
+            return ""
         # Take the first meaningful char
         for ch in reply:
             if ch in "yn123456789":
@@ -690,6 +716,31 @@ def _drive_pty_blocking(
             detection_offset = len(raw_buf)
             stream_raw_offset = len(raw_buf)
             return str(target)
+
+        # Last-resort "unknown screen advisor": when none of the specific
+        # patterns matched, the user prompt hasn't been sent yet, and the
+        # TUI has been quiet for a few seconds, consult the fallback LLM
+        # with the whole visible buffer and ship whatever it suggests.
+        # Without this branch, ANY future Claude Code onboarding screen we
+        # haven't modeled yet would deadlock the runner.
+        if (
+            not prompt_sent
+            and fallback_resolver is not None
+            and tail.strip()
+            and time.monotonic() - last_data_at > 3.0
+        ):
+            answer = fallback_resolver(tail, "any")
+            if answer is not None:
+                shipped = answer if answer in "yn123456789" else ""
+                logger.info(
+                    f"[Interactive] Unknown-screen advisor → "
+                    f"{repr(shipped) if shipped else 'Enter'} (prompt_sent=False)"
+                )
+                _ship_keystroke(shipped)
+                last_auto_answer_at = time.monotonic()
+                detection_offset = len(raw_buf)
+                stream_raw_offset = len(raw_buf)
+                return shipped or "enter"
         return None
 
     try:
@@ -769,6 +820,20 @@ def _drive_pty_blocking(
                     f"exiting loop after {time.monotonic() - (deadline - total_timeout):.1f}s"
                 )
                 break
+
+            # Diagnostic: every ~10s of silence (before the idle window kicks
+            # in), dump a short tail of the visible buffer so we can see
+            # what's on screen when the CLI looks stuck. Helps distinguish
+            # "Claude is generating tokens" from "we missed an interactive
+            # screen and the CLI is waiting for input we'll never send".
+            stuck_silence = time.monotonic() - last_data_at
+            if stuck_silence > 10.0 and stuck_silence < 11.0:
+                tail_dbg = _strip_ansi(raw_buf[-512:].decode("utf-8", "replace"))
+                logger.info(
+                    f"[Interactive] Silent for {stuck_silence:.1f}s "
+                    f"(prompt_sent={prompt_sent}, raw_len={len(raw_buf)}) — "
+                    f"tail: {tail_dbg[-300:]!r}"
+                )
 
             # Idle-based "response complete" detection — only after the prompt
             # has been delivered.
