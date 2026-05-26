@@ -219,3 +219,37 @@ async def push_agent_auth_if_changed(agent_user: Optional[dict], owner_id: Optio
     if baseline_mtime is not None and mtime <= baseline_mtime:
         return False
     return await asyncio.get_event_loop().run_in_executor(None, save_owner_blob, owner_id, current)
+
+
+# --- Auth status helpers (used by the backend's auth_status endpoints) -------
+
+def auth_method_for_blob(blob: Optional[dict]) -> str:
+    """Return 'oauth' if a ChatGPT-plan OAuth token is present in the blob,
+    'api_key' if only an OPENAI_API_KEY is set, 'none' otherwise."""
+    if not isinstance(blob, dict):
+        return "none"
+    tokens = blob.get("tokens") or {}
+    if isinstance(tokens, dict) and tokens.get("access_token"):
+        return "oauth"
+    if blob.get("OPENAI_API_KEY"):
+        return "api_key"
+    return "none"
+
+
+def global_auth_method() -> str:
+    """Detect the global codex auth method by inspecting ~/.codex/auth.json
+    and the OPENAI_API_KEY env var."""
+    blob, _ = read_local_auth(None)
+    method = auth_method_for_blob(blob)
+    if method != "none":
+        return method
+    if os.getenv("OPENAI_API_KEY"):
+        return "api_key"
+    return "none"
+
+
+async def hydrate_owner_blob_async(owner_id: str) -> Optional[dict]:
+    """Async wrapper over `load_owner_blob` so route handlers don't block
+    on the team-api HTTP call."""
+    return await asyncio.get_event_loop().run_in_executor(None, load_owner_blob, owner_id)
+

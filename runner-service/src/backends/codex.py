@@ -1,10 +1,13 @@
 """
 OpenAI Codex backend — wraps the `@openai/codex` CLI in headless mode.
 
-Mirrors the claude-code pattern so operators can lean on their ChatGPT
-plan (OAuth) the same way they lean on a Claude Pro/Max plan:
-  - `codex login` writes ~/.codex/auth.json (OAuth tokens for ChatGPT plan)
+Mirrors the claude-code (paid) pattern so operators can lean on their
+ChatGPT plan (OAuth) the same way they lean on a Claude Pro/Max plan:
+  - OAuth PKCE flow against auth.openai.com (see codex_oauth.py)
+  - Per-owner token persistence via team-api (encrypted at rest)
   - Per-agent HOME isolation gives each agent its own auth.json copy
+  - Automatic refresh_token grant before each spawn (matching the claude
+    paid pattern)
   - Falls back to OPENAI_API_KEY when no OAuth token is present
 
 CLI surface (from `codex exec --help`):
@@ -42,6 +45,27 @@ from .codex_token_store import (
     push_agent_auth_if_changed,
     read_local_auth,
     auth_file_path,
+    load_owner_blob,
+    save_owner_blob,
+    write_local_auth,
+    auth_method_for_blob,
+    global_auth_method,
+)
+from .codex_oauth import (
+    initiate_owner_login,
+    initiate_agent_login,
+    get_owner_oauth_flow,
+    pop_owner_oauth_flow,
+    get_agent_oauth_flow,
+    pop_agent_oauth_flow,
+    exchange_owner_code,
+    exchange_agent_code,
+    refresh_blob,
+    is_blob_expired,
+    blob_account_email,
+    blob_plan_type,
+    parse_blob_input,
+    try_exchange_code_from_prompt,
 )
 from agent_user import ensure_agent_user
 
@@ -57,8 +81,8 @@ class CodexBackend(CliBackend):
     name = "codex"
     cli_command = "codex"
     pass_prompt_via_stdin = False  # prompt goes in as a positional arg
-    supports_oauth_login = False   # OAuth is done by `codex login` inside the container
-    supports_token_set = False     # codex auth.json has a complex shape — not pasteable
+    supports_oauth_login = True    # OAuth PKCE against auth.openai.com
+    supports_token_set = True      # accepts a full auth.json blob via /auth/token
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -66,19 +90,47 @@ class CodexBackend(CliBackend):
         await super().startup()
         auth_json = os.path.expanduser("~/.codex/auth.json")
         if os.path.isfile(auth_json):
-            logger.info("  Auth: ChatGPT plan (OAuth) — ~/.codex/auth.json present")
+            try:
+                with open(auth_json) as f:
+                    blob = json.load(f)
+                method = auth_method_for_blob(blob)
+                if method == "oauth":
+                    email = blob_account_email(blob) or "unknown"
+                    plan = blob_plan_type(blob) or "unknown"
+                    logger.info(f"  Auth: ChatGPT plan OAuth ({plan}, {email})")
+                else:
+                    logger.info("  Auth: ~/.codex/auth.json present (API key)")
+            except (OSError, json.JSONDecodeError):
+                logger.info("  Auth: ~/.codex/auth.json present but unreadable")
         elif os.getenv("OPENAI_API_KEY"):
             logger.info("  Auth: OPENAI_API_KEY (API credits)")
         else:
             logger.info(
-                "  No auth configured for codex yet. Upload an auth.json via the UI "
-                "(Login ChatGPT) OR set OPENAI_API_KEY. Falls back at exec time."
+                "  No auth configured for codex yet. Use POST /auth/login to start an OAuth "
+                "flow, paste an auth.json via POST /auth/token, or set OPENAI_API_KEY. "
+                "Falls back at exec time."
             )
 
     # ── Per-exec hydration + push-back ────────────────────────────────────
 
     async def run_sync(self, prompt, system_prompt=None, agent_id=None,
                        owner_id=None, task_id=None, session_id=None, messages=None):
+        # Allow in-chat completion of a pending OAuth flow (mirrors the
+        # claude-code paid backend): when the user just pasted a verification
+        # code as their last message, exchange it before spawning the CLI.
+        exchange_result = await try_exchange_code_from_prompt(prompt, agent_id=agent_id, owner_id=owner_id)
+        if exchange_result is not None:
+            if exchange_result.get("status") == "authenticated":
+                return {
+                    "status": "success",
+                    "output": f"Codex authentication successful ({exchange_result.get('email','')}). You can now send your request.",
+                }
+            return {
+                "status": "auth_required",
+                "output": "",
+                "error": exchange_result.get("message", "Token exchange failed."),
+            }
+
         baseline_mtime = await self._hydrate_for_exec(agent_id, owner_id)
         try:
             return await super().run_sync(
@@ -92,6 +144,20 @@ class CodexBackend(CliBackend):
     async def stream_events(self, prompt, system_prompt=None, agent_id=None,
                             owner_id=None, task_id=None, session_id=None,
                             messages=None) -> AsyncIterator[dict]:
+        exchange_result = await try_exchange_code_from_prompt(prompt, agent_id=agent_id, owner_id=owner_id)
+        if exchange_result is not None:
+            if exchange_result.get("status") == "authenticated":
+                yield {
+                    "type": "result",
+                    "content": f"Codex authentication successful ({exchange_result.get('email','')}). You can now send your request.",
+                }
+                return
+            yield {
+                "type": "error",
+                "content": exchange_result.get("message", "Token exchange failed."),
+            }
+            return
+
         baseline_mtime = await self._hydrate_for_exec(agent_id, owner_id)
         try:
             async for event in super().stream_events(
@@ -105,8 +171,27 @@ class CodexBackend(CliBackend):
 
     async def _hydrate_for_exec(self, agent_id: Optional[str], owner_id: Optional[str]) -> Optional[float]:
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        # Pull the owner-shared blob from team-api into the agent's local
+        # ~/.codex/auth.json (per-agent HOME). Same pattern as claude-code's
+        # owner-token hydration.
         if owner_id:
             await hydrate_agent_auth(agent_user, owner_id)
+        # Proactively refresh the access_token if it's about to expire so the
+        # codex CLI doesn't burn the request seeing an expired JWT. Mirrors
+        # the claude-code paid backend's refresh_owner_token() path.
+        blob, _ = read_local_auth(agent_user)
+        if isinstance(blob, dict) and auth_method_for_blob(blob) == "oauth" and is_blob_expired(blob):
+            new_blob = await refresh_blob(blob)
+            if new_blob:
+                try:
+                    write_local_auth(agent_user, new_blob)
+                except OSError as e:
+                    logger.warning(f"[Codex Auth] refresh ok but write_local_auth failed: {e}")
+                if owner_id:
+                    save_owner_blob(owner_id, new_blob)
+                logger.info("[Codex Auth] Refreshed access_token via refresh_token grant")
+            else:
+                logger.warning("[Codex Auth] Token expired and refresh failed — codex may prompt for re-login")
         _, mtime = read_local_auth(agent_user)
         return mtime
 
@@ -241,3 +326,124 @@ class CodexBackend(CliBackend):
             return {"type": "error", "content": msg.get("message", str(msg))}
 
         return None
+
+    # ── Auth: global ──────────────────────────────────────────────────────
+
+    async def auth_status(self) -> dict:
+        method = global_auth_method()
+        blob, _ = read_local_auth(None)
+        if method == "oauth" and isinstance(blob, dict):
+            return {
+                "authenticated": True,
+                "method": "oauth",
+                "expired": is_blob_expired(blob),
+                "email": blob_account_email(blob),
+                "subscription": blob_plan_type(blob),
+            }
+        return {"authenticated": method != "none", "method": method}
+
+    async def auth_login_url(self) -> Optional[str]:
+        # Reuse the owner-flow store keyed by a sentinel id so a global flow
+        # is still resumable across HTTP calls.
+        return initiate_owner_login("__global__")
+
+    async def auth_set_token(self, token: str) -> None:
+        """Accepts either a full auth.json JSON blob or a raw access_token.
+        Writes to ~/.codex/auth.json (used as the server-wide default)."""
+        blob = parse_blob_input(token)
+        write_local_auth(None, blob)
+        logger.info("[Codex Auth] Saved global auth.json from /auth/token request")
+
+    # ── Auth: per-owner ───────────────────────────────────────────────────
+
+    async def owner_auth_status(self, owner_id: str) -> dict:
+        blob = load_owner_blob(owner_id)
+        if not isinstance(blob, dict):
+            return {"authenticated": False, "owner_id": owner_id}
+        method = auth_method_for_blob(blob)
+        if method == "none":
+            return {"authenticated": False, "owner_id": owner_id}
+        return {
+            "authenticated": True,
+            "method": method,
+            "expired": is_blob_expired(blob) if method == "oauth" else False,
+            "owner_id": owner_id,
+            "email": blob_account_email(blob),
+            "subscription": blob_plan_type(blob),
+        }
+
+    async def owner_auth_login_url(self, owner_id: str) -> Optional[str]:
+        blob = load_owner_blob(owner_id)
+        if isinstance(blob, dict) and auth_method_for_blob(blob) == "oauth" and not is_blob_expired(blob):
+            return None
+        flow = get_owner_oauth_flow(owner_id)
+        if flow:
+            return flow["auth_url"]
+        return initiate_owner_login(owner_id)
+
+    async def owner_auth_callback(self, owner_id: str, code: str) -> dict:
+        return await exchange_owner_code(owner_id, code)
+
+    async def owner_set_token(self, owner_id: str, token: str) -> None:
+        blob = parse_blob_input(token)
+        if not save_owner_blob(owner_id, blob):
+            raise RuntimeError("Failed to persist owner auth blob (team-api unreachable)")
+
+    # ── Auth: per-agent ───────────────────────────────────────────────────
+
+    async def agent_auth_status(self, agent_id: str) -> dict:
+        agent_user = await ensure_agent_user(agent_id)
+        if not agent_user:
+            return {"authenticated": False, "agent_id": agent_id, "error": "Failed to resolve agent user"}
+        # If the agent has an owner, the owner blob is authoritative.
+        owner_id = agent_user.get("owner_id")
+        if owner_id:
+            blob = load_owner_blob(owner_id)
+        else:
+            blob, _ = read_local_auth(agent_user)
+        if not isinstance(blob, dict):
+            return {"authenticated": False, "agent_id": agent_id}
+        method = auth_method_for_blob(blob)
+        if method == "none":
+            return {"authenticated": False, "agent_id": agent_id}
+        return {
+            "authenticated": True,
+            "method": method,
+            "expired": is_blob_expired(blob) if method == "oauth" else False,
+            "agent_id": agent_id,
+            "email": blob_account_email(blob),
+            "subscription": blob_plan_type(blob),
+        }
+
+    async def agent_auth_login_url(self, agent_id: str) -> Optional[str]:
+        agent_user = await ensure_agent_user(agent_id)
+        if not agent_user:
+            return None
+        owner_id = agent_user.get("owner_id")
+        if owner_id:
+            blob = load_owner_blob(owner_id)
+        else:
+            blob, _ = read_local_auth(agent_user)
+        if isinstance(blob, dict) and auth_method_for_blob(blob) == "oauth" and not is_blob_expired(blob):
+            return None
+        flow = get_agent_oauth_flow(agent_id)
+        if flow:
+            return flow["auth_url"]
+        return initiate_agent_login(agent_id)
+
+    async def agent_auth_callback(self, agent_id: str, code: str) -> dict:
+        agent_user = await ensure_agent_user(agent_id)
+        owner_id = agent_user.get("owner_id") if agent_user else None
+        return await exchange_agent_code(agent_id, code, owner_id=owner_id)
+
+    async def agent_set_token(self, agent_id: str, token: str) -> None:
+        agent_user = await ensure_agent_user(agent_id)
+        if not agent_user:
+            raise RuntimeError("Failed to resolve agent user")
+        blob = parse_blob_input(token)
+        owner_id = agent_user.get("owner_id")
+        if owner_id:
+            if not save_owner_blob(owner_id, blob):
+                raise RuntimeError("Failed to persist agent auth blob (team-api unreachable)")
+        else:
+            write_local_auth(agent_user, blob)
