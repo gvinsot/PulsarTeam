@@ -258,7 +258,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             <p className="text-[11px] text-dark-500 mt-0.5">
               {ttsAvailable
                 ? 'Speak the assistant replies aloud using the configured TTS service.'
-                : 'TTS service is not configured. Set it in Admin Settings → External Voice Services.'}
+                : 'TTS service is not configured. Set it in Admin Settings → Text-to-Speech (TTS) Service.'}
             </p>
           </div>
           <button

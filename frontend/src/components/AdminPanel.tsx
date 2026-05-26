@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   X, Users, Plus, Trash2, Edit3, Shield, ShieldCheck, ShieldAlert,
   UserCheck, Eye, Save, AlertCircle, Crown, Settings, ToggleLeft, ToggleRight,
-  Cpu, Bell, RotateCcw, LayoutGrid, GripVertical, Bot, ListTodo
+  Cpu, Bell, RotateCcw, LayoutGrid, GripVertical, Bot, ListTodo, Mic, Volume2, Plug, CheckCircle2
 } from 'lucide-react';
 import { api } from '../api';
 import LlmConfigModal from './LlmConfigModal';
@@ -60,6 +60,31 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmForm, setLlmForm] = useState(null); // null = closed, {} = new, {id} = editing
   const [llmSaving, setLlmSaving] = useState(false);
+
+  // Voice services (STT/TTS) connection test state
+  const [voiceTest, setVoiceTest] = useState<{ stt: any; tts: any }>({ stt: null, tts: null });
+  const [voiceTesting, setVoiceTesting] = useState<{ stt: boolean; tts: boolean }>({ stt: false, tts: false });
+
+  const handleTestVoiceService = useCallback(async (service: 'stt' | 'tts') => {
+    setVoiceTesting(s => ({ ...s, [service]: true }));
+    setVoiceTest(s => ({ ...s, [service]: null }));
+    try {
+      const url = service === 'stt' ? settings?.sttServiceUrl : settings?.ttsServiceUrl;
+      const apiKey = service === 'stt' ? settings?.sttApiKey : settings?.ttsApiKey;
+      const result = await api.testExternalVoiceService(service, url, apiKey);
+      setVoiceTest(s => ({ ...s, [service]: result }));
+      if (result?.ok) {
+        showToast?.(`${service.toUpperCase()} connected${result.latencyMs != null ? ` (${result.latencyMs} ms)` : ''}`, 'success');
+      } else {
+        showToast?.(`${service.toUpperCase()} test failed: ${result?.error || 'unknown error'}`, 'error');
+      }
+    } catch (err: any) {
+      setVoiceTest(s => ({ ...s, [service]: { ok: false, error: err.message } }));
+      showToast?.(`${service.toUpperCase()} test failed: ${err.message}`, 'error');
+    } finally {
+      setVoiceTesting(s => ({ ...s, [service]: false }));
+    }
+  }, [settings, showToast]);
 
   // Boards tab state
   const [boardsList, setBoardsList] = useState([]);
@@ -625,22 +650,36 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                 </select>
               </div>
 
-              {/* External Voice Services (STT + TTS) */}
+              {/* Speech-to-Text (STT) service */}
               <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
-                <div>
-                  <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
-                    <Cpu className="w-4 h-4 text-emerald-400" />
-                    External Voice Services (STT + TTS)
-                  </h4>
-                  <p className="text-xs text-dark-400 mt-1">
-                    Used by "External Voice" agents: the browser streams the
-                    microphone to the STT WebSocket, the transcript is sent to
-                    the agent's LLM, then the response is read back through the
-                    TTS WebSocket. Compatible with HighSpeedToText
-                    (<a className="underline" href="https://speech-ui.methodinfo.fr/" target="_blank" rel="noreferrer">speech-ui.methodinfo.fr</a>).
-                  </p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
+                      <Mic className="w-4 h-4 text-emerald-400" />
+                      Speech-to-Text (STT) Service
+                    </h4>
+                    <p className="text-xs text-dark-400 mt-1">
+                      The browser streams microphone audio (PCM16 mono @ 16 kHz) to this WebSocket
+                      and receives transcripts back. Used both in regular agent chat (mic input)
+                      and by external-voice agents. Compatible with{' '}
+                      <a className="underline" href="https://speech-ui.methodinfo.fr/" target="_blank" rel="noreferrer">HighSpeedToText</a>.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleTestVoiceService('stt')}
+                    disabled={voiceTesting.stt || !settings.sttServiceUrl}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    {voiceTesting.stt ? (
+                      <div className="w-3.5 h-3.5 border-2 border-emerald-300 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Plug className="w-3.5 h-3.5" />
+                    )}
+                    Test connection
+                  </button>
                 </div>
-                <div className="grid grid-cols-1 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-dark-400 mb-1">STT WebSocket URL</label>
                     <input
@@ -650,6 +689,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                       className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
                       placeholder="wss://speech.methodinfo.fr/v1/ws/transcribe"
                     />
+                    <p className="text-[10px] text-dark-500 mt-1">Provider can be different from TTS.</p>
                   </div>
                   <div>
                     <label className="block text-xs text-dark-400 mb-1">STT API Key</label>
@@ -660,7 +700,56 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                       className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
                       placeholder="sk_..."
                     />
+                    <p className="text-[10px] text-dark-500 mt-1">Injected as <code>?api_key=…</code> when the browser opens the WS.</p>
                   </div>
+                </div>
+                {voiceTest.stt && (
+                  <div
+                    className={`text-xs px-3 py-2 rounded-lg border flex items-center gap-2 ${
+                      voiceTest.stt.ok
+                        ? 'bg-emerald-900/20 text-emerald-300 border-emerald-800/40'
+                        : 'bg-red-900/20 text-red-300 border-red-800/40'
+                    }`}
+                  >
+                    {voiceTest.stt.ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                    <span>
+                      {voiceTest.stt.ok
+                        ? `Connected${voiceTest.stt.latencyMs != null ? ` in ${voiceTest.stt.latencyMs} ms` : ''}.`
+                        : `Failed: ${voiceTest.stt.error || 'unknown error'}`}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Text-to-Speech (TTS) service */}
+              <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
+                      <Volume2 className="w-4 h-4 text-indigo-400" />
+                      Text-to-Speech (TTS) Service
+                    </h4>
+                    <p className="text-xs text-dark-400 mt-1">
+                      The browser sends text to this WebSocket and streams back PCM16 mono @ 22 050 Hz.
+                      Used both for spoken-reply in agent chat (when enabled per-agent) and by
+                      external-voice agents. Can use a different provider from STT.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleTestVoiceService('tts')}
+                    disabled={voiceTesting.tts || !settings.ttsServiceUrl}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 rounded-lg text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                  >
+                    {voiceTesting.tts ? (
+                      <div className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Plug className="w-3.5 h-3.5" />
+                    )}
+                    Test connection
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-dark-400 mb-1">TTS WebSocket URL</label>
                     <input
@@ -670,6 +759,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                       className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
                       placeholder="wss://speech.methodinfo.fr/v1/ws/synthesize"
                     />
+                    <p className="text-[10px] text-dark-500 mt-1">Provider can be different from STT.</p>
                   </div>
                   <div>
                     <label className="block text-xs text-dark-400 mb-1">TTS API Key</label>
@@ -681,94 +771,36 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
                       placeholder="sk_..."
                     />
                   </div>
-                  <div>
+                  <div className="md:col-span-2">
                     <label className="block text-xs text-dark-400 mb-1">Default TTS Voice ID</label>
                     <input
                       type="text"
                       value={settings.ttsVoiceId || ''}
                       onChange={e => setSettings(s => ({ ...s, ttsVoiceId: e.target.value }))}
                       className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
-                      placeholder="(leave empty for service default)"
-                    />
-                    <p className="text-[11px] text-dark-500 mt-1">Per-agent voice IDs can override this default.</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* External Voice Services (STT/TTS) */}
-              <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-4">
-                <div>
-                  <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
-                    <Bot className="w-4 h-4 text-emerald-400" />
-                    External Voice Services (STT / TTS)
-                  </h4>
-                  <p className="text-xs text-dark-400 mt-1">
-                    Used by voice agents whose <code className="px-1 rounded bg-dark-900/60">voiceMode</code> is <code className="px-1 rounded bg-dark-900/60">external</code>.
-                    The browser opens these WebSockets directly — no audio passes through this backend. Compatible with{' '}
-                    <a href="https://speech-ui.methodinfo.fr/get-started" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">
-                      HighSpeedToText
-                    </a>.
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-dark-400 mb-1">Speech-to-Text WebSocket URL</label>
-                    <input
-                      type="text"
-                      placeholder="wss://speech.methodinfo.fr/v1/ws/transcribe"
-                      value={settings.sttServiceUrl || ''}
-                      onChange={e => setSettings(s => ({ ...s, sttServiceUrl: e.target.value }))}
-                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                    />
-                    <p className="text-[10px] text-dark-500 mt-1">Expects PCM16 mono @ 16 kHz over WS.</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-dark-400 mb-1">STT API Key</label>
-                    <input
-                      type="password"
-                      placeholder="sk_..."
-                      value={settings.sttApiKey || ''}
-                      onChange={e => setSettings(s => ({ ...s, sttApiKey: e.target.value }))}
-                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                    />
-                    <p className="text-[10px] text-dark-500 mt-1">Injected as <code>?api_key=…</code> when the browser opens the WS.</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-dark-400 mb-1">Text-to-Speech WebSocket URL</label>
-                    <input
-                      type="text"
-                      placeholder="wss://speech.methodinfo.fr/v1/ws/synthesize"
-                      value={settings.ttsServiceUrl || ''}
-                      onChange={e => setSettings(s => ({ ...s, ttsServiceUrl: e.target.value }))}
-                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                    />
-                    <p className="text-[10px] text-dark-500 mt-1">Streams back PCM16 mono @ 22 050 Hz.</p>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-dark-400 mb-1">TTS API Key</label>
-                    <input
-                      type="password"
-                      placeholder="sk_..."
-                      value={settings.ttsApiKey || ''}
-                      onChange={e => setSettings(s => ({ ...s, ttsApiKey: e.target.value }))}
-                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-xs text-dark-400 mb-1">Default TTS voice ID</label>
-                    <input
-                      type="text"
                       placeholder="voice-uuid (optional — per-agent ttsVoiceId overrides)"
-                      value={settings.ttsVoiceId || ''}
-                      onChange={e => setSettings(s => ({ ...s, ttsVoiceId: e.target.value }))}
-                      className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                     />
                     <p className="text-[10px] text-dark-500 mt-1">
-                      Used in <code>session.start</code> as <code>voice_id</code> (zero-shot mode).
+                      Used in <code>session.start</code> as <code>voice_id</code> (zero-shot mode). Per-agent voice IDs can override this default.
                     </p>
                   </div>
                 </div>
+                {voiceTest.tts && (
+                  <div
+                    className={`text-xs px-3 py-2 rounded-lg border flex items-center gap-2 ${
+                      voiceTest.tts.ok
+                        ? 'bg-emerald-900/20 text-emerald-300 border-emerald-800/40'
+                        : 'bg-red-900/20 text-red-300 border-red-800/40'
+                    }`}
+                  >
+                    {voiceTest.tts.ok ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertCircle className="w-3.5 h-3.5" />}
+                    <span>
+                      {voiceTest.tts.ok
+                        ? `Connected${voiceTest.tts.latencyMs != null ? ` in ${voiceTest.tts.latencyMs} ms` : ''}.`
+                        : `Failed: ${voiceTest.tts.error || 'unknown error'}`}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Reset Agent Instructions */}

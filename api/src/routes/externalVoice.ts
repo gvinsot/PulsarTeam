@@ -92,5 +92,87 @@ export function externalVoiceRoutes(agentManager) {
     });
   });
 
+  // Quick connectivity probe — opens the WS, waits for the server's first
+  // ack, then closes. Used by Admin Settings "Test connection" buttons.
+  // Body: { url, apiKey } — when omitted, falls back to the saved settings
+  // for the given service ("stt" or "tts").
+  async function probeWebSocket(wsUrl: string, timeoutMs = 5000): Promise<{ ok: boolean; error?: string; latencyMs?: number }> {
+    if (typeof (globalThis as any).WebSocket === 'undefined') {
+      return { ok: false, error: 'Node WebSocket API not available on this server (Node >= 22 required).' };
+    }
+    return new Promise(resolve => {
+      let settled = false;
+      const start = Date.now();
+      let ws: any;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try { ws?.close(); } catch {}
+        resolve({ ok: false, error: `Timeout after ${timeoutMs}ms` });
+      }, timeoutMs);
+      try {
+        ws = new (globalThis as any).WebSocket(wsUrl);
+      } catch (err: any) {
+        clearTimeout(timer);
+        return resolve({ ok: false, error: err?.message || 'Invalid URL' });
+      }
+      ws.addEventListener('open', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const latencyMs = Date.now() - start;
+        try { ws.close(1000, 'probe'); } catch {}
+        resolve({ ok: true, latencyMs });
+      });
+      ws.addEventListener('error', (ev: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { ws.close(); } catch {}
+        resolve({ ok: false, error: ev?.message || 'WebSocket error' });
+      });
+      ws.addEventListener('close', (ev: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (ev?.code && ev.code !== 1000) {
+          resolve({ ok: false, error: `Closed with code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}` });
+        } else {
+          resolve({ ok: true, latencyMs: Date.now() - start });
+        }
+      });
+    });
+  }
+
+  router.post('/test/:service', async (req, res) => {
+    const service = String(req.params.service || '').toLowerCase();
+    if (service !== 'stt' && service !== 'tts') {
+      return res.status(400).json({ ok: false, error: 'Service must be "stt" or "tts"' });
+    }
+    const settings = await getSettings();
+    const url =
+      typeof req.body?.url === 'string' && req.body.url.trim()
+        ? req.body.url.trim()
+        : service === 'stt'
+          ? settings.sttServiceUrl
+          : settings.ttsServiceUrl;
+    const apiKey =
+      typeof req.body?.apiKey === 'string'
+        ? req.body.apiKey
+        : service === 'stt'
+          ? settings.sttApiKey
+          : settings.ttsApiKey;
+
+    if (!url) {
+      return res.status(400).json({ ok: false, error: `${service.toUpperCase()} URL is not set` });
+    }
+    const fullUrl = buildWsUrl(url, apiKey || '');
+    if (!fullUrl) {
+      return res.status(400).json({ ok: false, error: 'Could not build a valid WebSocket URL' });
+    }
+    const result = await probeWebSocket(fullUrl);
+    res.json(result);
+  });
+
   return router;
 }

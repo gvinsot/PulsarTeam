@@ -622,6 +622,15 @@ export const api = {
       headers: getHeaders(),
     }).then(handleResponse),
 
+  // Probes the configured STT or TTS WebSocket. service must be "stt" or "tts".
+  // url + apiKey are optional — when omitted, the server uses the saved settings.
+  testExternalVoiceService: (service: 'stt' | 'tts', url?: string, apiKey?: string) =>
+    fetch(`${API_BASE}/external-voice/test/${service}`, {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ ...(url ? { url } : {}), ...(apiKey !== undefined ? { apiKey } : {}) }),
+    }).then(handleResponse),
+
   // Templates
   getTemplates: () =>
     fetch(`${API_BASE}/templates`, { headers: getHeaders() }).then(handleResponse),
