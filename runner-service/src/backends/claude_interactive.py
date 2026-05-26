@@ -362,12 +362,24 @@ def _drive_pty_blocking(
     idle_secs: float = CLAUDE_INTERACTIVE_IDLE_SECS,
     total_timeout: int = CLAUDE_INTERACTIVE_TIMEOUT,
     fallback_resolver: Optional[Callable[[str, str], Optional[str]]] = None,
+    on_event: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     """Blocking PTY driver. Run from a thread executor — DO NOT call from the
     asyncio event loop directly.
 
     fallback_resolver is called for unrecognised interactive prompts. It must
     be a synchronous callable returning the single-character reply or None.
+
+    on_event, when provided, is invoked on each new fragment of Claude's
+    response as the TUI repaints. The callback runs on the executor thread,
+    so callers in an asyncio context should marshal back to the event loop
+    via `loop.call_soon_threadsafe(...)`. The dict shape is:
+        {"type": "thinking", "content": "<incremental delta>"}
+    Deltas are emitted as "thinking" (not "text") so the UI can render them
+    in a transient/spinner block while the response is being composed. The
+    full, polished reply is returned in the final dict's "output" field —
+    the caller is expected to yield it as a single "text" event at the end.
+    on_event is purely additive: callers can ignore it.
     """
 
     master_fd, slave_fd = pty.openpty()
@@ -438,12 +450,107 @@ def _drive_pty_blocking(
     # without this offset our numbered-choice regex would keep matching the
     # old options).
     detection_offset = 0
+    # Streaming bookkeeping: when on_event is provided, we recompute the
+    # pyte-extracted reply after each chunk and push only the new tail to
+    # the caller. `last_pushed` is the cumulative text already shipped via
+    # the polished pyte path. `stream_raw_offset` tracks how far into
+    # raw_buf we've pushed the raw fallback stream — used when pyte can't
+    # be trusted (long replies that overflow the virtual screen).
+    last_pushed = ""
+    last_push_at = 0.0
+    stream_raw_offset = 0
+    STREAM_THROTTLE_S = 0.15  # avoid hammering on every single byte arrival
+    # Hide raw-stream chrome that's pure TUI bookkeeping. We strip line by
+    # line so we don't accidentally remove user content that happens to
+    # contain the same words.
+    _CHROME_LINE_RE = re.compile(
+        r"^\s*("
+        r"⏵⏵.*bypass.*permissions"
+        r"|❯\s*$"
+        r"|✓\s*Anthropic.*marketplace"
+        r"|[─━╌═]+\s*$"
+        r"|✻\s*\w+\s+for\s+\d+s"
+        r"|[✶✻✽✢●·*]\s*$"
+        r"|\(\d+s\s*·\s*[↓↑]?\d+\s*tokens?\)"
+        r"|●\s*high\s*·"
+        r")",
+        re.IGNORECASE,
+    )
 
     def _ship_keystroke(ch: str) -> None:
         try:
             os.write(master_fd, (ch + "\r").encode())
         except OSError:
             pass
+
+    def _push_text_delta() -> None:
+        """Push progress to the caller as `thinking` deltas.
+
+        Strategy in two steps:
+        1. **Pyte path (clean)**: try to extract the polished `● `-bullet
+           reply. If it extends what we've already shipped, push the tail.
+        2. **Raw fallback (verbose)**: when pyte produces no usable delta
+           (typically because a long reply has scrolled off the virtual
+           screen), push freshly-stripped lines from raw_buf — minus the
+           known TUI chrome lines. Less clean but guarantees the user sees
+           live progress even on long answers.
+
+        Throttled so the executor thread doesn't drown the asyncio queue
+        on bursty PTY writes. Skipped when on_event isn't provided.
+        """
+        nonlocal last_pushed, last_push_at, stream_raw_offset
+        if on_event is None:
+            return
+        now = time.monotonic()
+        if now - last_push_at < STREAM_THROTTLE_S:
+            return
+
+        # 1) Polished pyte delta
+        pushed_clean = False
+        if screen is not None:
+            try:
+                current = _extract_assistant_reply_from_screen(screen)
+            except Exception as e:
+                logger.debug(f"[Interactive] streaming extract failed: {e}")
+                current = ""
+            if current and current != last_pushed and current.startswith(last_pushed):
+                delta = current[len(last_pushed):]
+                if delta.strip():
+                    try:
+                        on_event({"type": "thinking", "content": delta})
+                    except Exception as e:
+                        logger.debug(f"[Interactive] on_event failed: {e}")
+                    last_pushed = current
+                    last_push_at = now
+                    # Treat the raw stream as caught up too, otherwise we'd
+                    # double-emit the same characters.
+                    stream_raw_offset = len(raw_buf)
+                    pushed_clean = True
+
+        # 2) Raw fallback — only when pyte didn't produce a usable delta.
+        if not pushed_clean:
+            new_bytes = bytes(raw_buf[stream_raw_offset:])
+            if not new_bytes:
+                return
+            new_text = _strip_ansi(new_bytes.decode("utf-8", "replace"))
+            kept: list[str] = []
+            for line in new_text.splitlines():
+                if not line.strip():
+                    continue
+                if _CHROME_LINE_RE.search(line):
+                    continue
+                if line.startswith("● "):
+                    line = line[2:]
+                kept.append(line)
+            stream_raw_offset = len(raw_buf)
+            if not kept:
+                return
+            delta = "\n".join(kept)
+            try:
+                on_event({"type": "thinking", "content": delta})
+            except Exception as e:
+                logger.debug(f"[Interactive] on_event raw failed: {e}")
+            last_push_at = now
 
     def _maybe_auto_answer() -> Optional[str]:
         """Detect a known interactive prompt on the NEW content since the last
@@ -598,6 +705,14 @@ def _drive_pty_blocking(
                     # raw_buf[detection_offset:] directly so stale prompts
                     # from already-dismissed screens don't fire again.
                     _maybe_auto_answer()
+
+                    # Stream incremental assistant text to the caller once
+                    # the user prompt has been delivered — before that, any
+                    # `●` we see is from the welcome banner / onboarding,
+                    # not Claude's reply, so streaming it would just leak
+                    # chrome to the chat.
+                    if prompt_sent:
+                        _push_text_delta()
 
             # If the child exited, we're done.
             if proc.poll() is not None:
@@ -781,12 +896,18 @@ async def run_interactive(
     env: dict,
     prompt: str,
     preexec_fn: Optional[Callable] = None,
+    on_event: Optional[Callable[[dict], None]] = None,
 ) -> dict:
     """Async wrapper around the blocking PTY driver. Runs the driver in a
     thread pool so we don't block the FastAPI event loop.
 
     The fallback-LLM resolver is set up here (async-aware) and bridged into
     the blocking driver via an `asyncio.run_coroutine_threadsafe` shim.
+
+    `on_event` is forwarded to the driver. The driver runs in a thread
+    executor, so the callback fires from that thread — wrap it with
+    `loop.call_soon_threadsafe(...)` on the caller side to bridge back to
+    the asyncio event loop without races.
     """
     loop = asyncio.get_running_loop()
 
@@ -809,5 +930,6 @@ async def run_interactive(
             idle_secs=CLAUDE_INTERACTIVE_IDLE_SECS,
             total_timeout=CLAUDE_INTERACTIVE_TIMEOUT,
             fallback_resolver=_sync_resolver,
+            on_event=on_event,
         ),
     )

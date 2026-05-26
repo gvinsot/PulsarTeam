@@ -904,16 +904,61 @@ class ClaudeCodeBackend(RunnerBackend):
             logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
             _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
             preexec_fn = _subp_kwargs.get("preexec_fn")
+
+            # Bridge the executor-thread callback into the asyncio event loop
+            # via a queue. The driver fires `on_event` from its thread for
+            # each new fragment of Claude's reply; we marshal those into the
+            # async generator's yield stream as `thinking` events so the UI
+            # can render a live "Claude is composing…" block. The final
+            # polished reply still arrives as a single `text` event built
+            # from the driver's return dict — so a non-streaming client
+            # that ignores `thinking` events still gets the full answer.
+            loop = asyncio.get_running_loop()
+            event_queue: asyncio.Queue = asyncio.Queue()
+
+            def _push_event(ev: dict) -> None:
+                loop.call_soon_threadsafe(event_queue.put_nowait, ev)
+
+            runner_task = asyncio.create_task(asyncio.wait_for(
+                run_interactive(
+                    cmd=cmd, cwd=proc_cwd,
+                    env=get_agent_env(effective_user),
+                    prompt=used_prompt, preexec_fn=preexec_fn,
+                    on_event=_push_event,
+                ),
+                timeout=TIMEOUT,
+            ))
+
             try:
-                result = await asyncio.wait_for(
-                    run_interactive(
-                        cmd=cmd, cwd=proc_cwd,
-                        env=get_agent_env(effective_user),
-                        prompt=used_prompt, preexec_fn=preexec_fn,
-                    ),
-                    timeout=TIMEOUT,
-                )
+                while True:
+                    # Race: either a streamed delta or the runner finishing.
+                    get_task = asyncio.create_task(event_queue.get())
+                    done, pending = await asyncio.wait(
+                        {get_task, runner_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if get_task in done:
+                        ev = get_task.result()
+                        yield ev
+                        # If the runner also finished on the same tick, fall
+                        # through and drain the rest below; otherwise loop.
+                        if runner_task not in done:
+                            continue
+                    else:
+                        # Runner finished while no delta was pending; cancel
+                        # the parked get_task so it doesn't leak.
+                        get_task.cancel()
+                    # Drain anything still queued before the final event.
+                    while not event_queue.empty():
+                        try:
+                            yield event_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    break
+
+                result = runner_task.result()
             except asyncio.TimeoutError:
+                runner_task.cancel()
                 yield {"type": "error", "content": f"Claude CLI timed out after {TIMEOUT}s"}
                 return
             except RuntimeError as e:
