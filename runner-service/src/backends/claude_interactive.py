@@ -711,6 +711,10 @@ def _drive_pty_blocking(
                             logger.warning(f"[Interactive] Failed to send prompt: {e}")
                         prompt_sent = True
                         last_data_at = time.monotonic()
+                        # Anchor the raw streaming window so the welcome
+                        # banner, theme picker, and trust/bypass screens
+                        # don't leak into the user-visible thinking stream.
+                        stream_raw_offset = len(raw_buf)
                         continue
 
                     # Auto-answer interactive prompts — runs both before and
