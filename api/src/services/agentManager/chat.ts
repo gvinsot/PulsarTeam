@@ -7,6 +7,7 @@ import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
 import { AgentManager } from './index.js';
+import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
 
 const MAX_DELEGATION_DEPTH = 5;
 
@@ -464,17 +465,85 @@ export const chatMethods = {
       }
     }
 
-    // Task list intentionally omitted from the system prompt: the full
-    // task texts + their attached commit history can push the prompt past
-    // 100 KB / 30 k tokens, which slows down every turn (Anthropic API has
-    // to ingest that input on every message). Agents that need the task
-    // list call the Swarm API MCP tools (`get_agent_tasks`, `list_tasks`,
-    // etc.) on demand instead.
+    // Inject only the 3 most-relevant active tasks into the system prompt,
+    // ranked by a combined semantic + recency score against the latest
+    // user message. Each task is text-truncated and stripped of commit
+    // history to keep the prompt small. Older / overflow tasks remain
+    // reachable via @mcp_call(Swarm API, get_agent_tasks, …) on demand.
+    //
+    // Without this bound, agents that had accumulated many tasks shipped
+    // 100+ KB / 30k tokens to Anthropic on every turn, which added minutes
+    // of latency before the first response token.
+    const RECENT_TASKS_LIMIT = 3;
+    const TASK_TEXT_MAX_CHARS = 300;
+    const SEMANTIC_WEIGHT = 0.7;       // 70% semantic, 30% recency
+    const RECENCY_HALF_LIFE_MS = 7 * 24 * 3600 * 1000;  // 7 days
+
     const activeTasks = this._getAgentTasks(id).filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
-    if (activeTasks.length > 0) {
-      systemContent += `\n\n--- Current Task List ---\n`;
-      systemContent += `You have ${activeTasks.length} active task${activeTasks.length > 1 ? 's' : ''}. `;
-      systemContent += `Use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see details.\n`;
+
+    // Look for the latest user message to use as the relevance query.
+    let relevanceQuery = '';
+    const history = agent.conversationHistory || [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const msg = history[i];
+      if (msg?.role === 'user' && typeof msg.content === 'string' && msg.content.trim()) {
+        relevanceQuery = msg.content;
+        break;
+      }
+    }
+
+    let rankedTasks: any[];
+    if (activeTasks.length <= RECENT_TASKS_LIMIT) {
+      // All tasks fit — sort by recency just for a stable display order.
+      rankedTasks = [...activeTasks].sort((a: any, b: any) => {
+        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return tb - ta;
+      });
+    } else if (relevanceQuery) {
+      // Combined score: cosine similarity (text + commits vs user query)
+      // weighted with an exponential recency decay over `updatedAt`.
+      const queryVec = createHashedEmbedding(relevanceQuery);
+      const now = Date.now();
+      const scored = activeTasks.map((task: any) => {
+        const corpus = [
+          task.text || '',
+          ...((task.commits || []) as any[]).map((c: any) => c.message || ''),
+        ].join('\n');
+        const taskVec = createHashedEmbedding(corpus);
+        const semantic = Math.max(0, cosineSimilarity(queryVec, taskVec));
+        const updatedAt = new Date(task.updatedAt || task.createdAt || 0).getTime();
+        const ageMs = Math.max(0, now - updatedAt);
+        const recency = Math.exp(-ageMs / RECENCY_HALF_LIFE_MS);
+        const score = SEMANTIC_WEIGHT * semantic + (1 - SEMANTIC_WEIGHT) * recency;
+        return { task, score };
+      });
+      scored.sort((a: any, b: any) => b.score - a.score);
+      rankedTasks = scored.slice(0, RECENT_TASKS_LIMIT).map((s: any) => s.task);
+    } else {
+      // No user query (first turn or non-text content) → pure recency.
+      rankedTasks = [...activeTasks].sort((a: any, b: any) => {
+        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return tb - ta;
+      }).slice(0, RECENT_TASKS_LIMIT);
+    }
+
+    if (rankedTasks.length > 0) {
+      systemContent += `\n\n--- Relevant Tasks (${rankedTasks.length} of ${activeTasks.length}) ---\n`;
+      for (const task of rankedTasks) {
+        const mark = this._isActiveTaskStatus(task.status) ? '~' : '!';
+        const text = String(task.text || '');
+        const truncated = text.length > TASK_TEXT_MAX_CHARS
+          ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…'
+          : text;
+        systemContent += `- [${mark}] (${task.id.slice(0, 8)}) ${truncated}\n`;
+      }
+      const overflow = activeTasks.length - rankedTasks.length;
+      if (overflow > 0) {
+        systemContent += `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — `;
+        systemContent += `use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see all)\n`;
+      }
     }
 
     if (agent.project) {
