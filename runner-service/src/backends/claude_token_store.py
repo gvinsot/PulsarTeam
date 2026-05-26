@@ -474,6 +474,80 @@ def resolve_token(agent_user: dict) -> Optional[str]:
     return load_agent_token(agent_user)
 
 
+def seed_credentials_file(agent_user: dict) -> bool:
+    """Write `~/.claude/.credentials.json` in the agent's HOME from the token
+    currently in storage (owner DB record or local files).
+
+    Claude Code CLI 2.1+ ignores the `CLAUDE_CODE_OAUTH_TOKEN` env var when
+    starting the interactive TUI — it only honors the credentials file. Without
+    this seed the TUI falls through to its OAuth login flow (`Opening browser
+    to sign in… / Paste code here >`), which the runner has no way to satisfy.
+
+    Idempotent: call at every spawn so the file always reflects the latest
+    (possibly refreshed) token. Returns True when the file was written.
+    """
+    if not agent_user:
+        return False
+    home = agent_user.get("home")
+    if not home:
+        return False
+
+    # Build a full oauth_data block. Prefer the owner DB record because it
+    # carries the real expiresAt; fall back to local agent files / a
+    # generous default when only the access token is known.
+    owner_id = agent_user.get("owner_id")
+    access_token = None
+    refresh_token = ""
+    expires_at = 0
+    if owner_id:
+        record = _fetch_owner_record(owner_id)
+        if record:
+            access_token = record.get("accessToken")
+            refresh_token = record.get("refreshToken") or ""
+            expires_at = record.get("expiresAt") or 0
+    if not access_token:
+        access_token = load_agent_token(agent_user)
+        if access_token:
+            refresh_token = get_agent_refresh_token(agent_user) or refresh_token
+    if not access_token:
+        logger.warning(f"[Agent Auth] No token available to seed credentials for {agent_user.get('username')}")
+        return False
+    if not expires_at:
+        # Unknown expiry — use 8 h from now (matches the default elsewhere).
+        expires_at = int((time.time() + 28800) * 1000)
+
+    oauth_data = {
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
+        "expiresAt": expires_at,
+        "scopes": OAUTH_SCOPES.split(),
+    }
+
+    creds_path = os.path.join(home, ".claude", ".credentials.json")
+    try:
+        # NOT encrypted — the Claude Code CLI reads this file directly.
+        _atomic_write_secret(creds_path, json.dumps({"claudeAiOauth": oauth_data}, indent=2), encrypt=False)
+    except OSError as e:
+        logger.warning(f"[Agent Auth] Failed to write {creds_path}: {e}")
+        return False
+    uid = agent_user.get("uid")
+    gid = agent_user.get("gid", uid)
+    if uid is not None:
+        # Chown the .claude dir too, in case _secure_makedirs created it as root.
+        claude_dir = os.path.dirname(creds_path)
+        for path in (claude_dir, creds_path):
+            try:
+                os.chown(path, uid, gid)
+            except OSError:
+                pass
+        try:
+            os.chmod(creds_path, 0o600)
+        except OSError:
+            pass
+    logger.info(f"[Agent Auth] Seeded {creds_path} (owner_id={owner_id or 'none'})")
+    return True
+
+
 # =============================================================================
 # Token HTTP request (shared by all refresh flows)
 # =============================================================================
