@@ -473,15 +473,30 @@ def _drive_pty_blocking(
     # line so we don't accidentally remove user content that happens to
     # contain the same words.
     _CHROME_LINE_RE = re.compile(
-        r"^\s*("
+        r"("
+        # Status bar / footer
         r"⏵⏵.*bypass.*permissions"
-        r"|❯\s*$"
         r"|✓\s*Anthropic.*marketplace"
-        r"|[─━╌═]+\s*$"
-        r"|✻\s*\w+\s+for\s+\d+s"
-        r"|[✶✻✽✢●·*]\s*$"
-        r"|\(\d+s\s*·\s*[↓↑]?\d+\s*tokens?\)"
-        r"|●\s*high\s*·"
+        r"|✻\s*\w+\s+for\s+\d+s"               # ✻ Crunched for 3s
+        r"|\(\d+s\s*·\s*[↓↑]?\s*\d+\s*tokens?\)" # (3s · ↓74 tokens)
+        r"|●\s*high\s*·"                         # ● high·/effort
+        # Welcome banner content
+        r"|welcome\s+back"
+        r"|tips\s+for\s+getting\s+started"
+        r"|run\s+/init"
+        r"|what.s\s+new"
+        r"|/release-notes"
+        r"|/usage.*per-category"
+        r"|/diff.*detail.*view"
+        r"|/plugin.*to\s+see"
+        r"|Opus.*with.*effort.*Claude\s+API"
+        r"|~/projects"
+        r"|claude\s+code\s+v\d"
+        # Pure decoration
+        r"|^\s*[─━╌═│┃┌┐└┘├┤┬┴┼╭╮╰╯▐▛▜▌▝▘▚▞]+\s*$"
+        r"|^\s*[✶✻✽✢●·*]\s*$"
+        r"|^\s*❯\s*$"
+        r"|^\s*\d+\s*$"                          # bare numbers (line counters)
         r")",
         re.IGNORECASE,
     )
@@ -711,10 +726,6 @@ def _drive_pty_blocking(
                             logger.warning(f"[Interactive] Failed to send prompt: {e}")
                         prompt_sent = True
                         last_data_at = time.monotonic()
-                        # Anchor the raw streaming window so the welcome
-                        # banner, theme picker, and trust/bypass screens
-                        # don't leak into the user-visible thinking stream.
-                        stream_raw_offset = len(raw_buf)
                         continue
 
                     # Auto-answer interactive prompts — runs both before and
