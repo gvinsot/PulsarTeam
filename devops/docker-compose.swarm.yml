@@ -43,6 +43,7 @@ services:
       - OPENCLAW_SERVICE_URL=http://openclaw-service:8000
       - HERMES_SERVICE_URL=http://hermes-service:8000
       - OPENCODE_SERVICE_URL=http://opencode-service:8000
+      - CODEX_SERVICE_URL=http://codex-service:8000
       - MCP_ENDPOINT=http://swarm-manager:8000/ai/mcp
       - MCP_ACTIONS_ENDPOINT=http://swarm-manager:8000/ai/actions/mcp
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
@@ -453,6 +454,78 @@ services:
       retries: 3
       start_period: 120s
 
+  codex-service:
+    image: registry.methodinfo.fr/codex-service:latest
+    build:
+      context: ..
+      dockerfile: runner-service/Dockerfile
+    networks:
+      backend:
+        aliases:
+          - codex-service
+    environment:
+      - RUNNER_TYPE=codex
+      - TZ=Europe/Paris
+      - LOG_LEVEL=info
+      - RUNNER_MODEL=${CODEX_MODEL:-gpt-5-codex}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
+      # Fallback when no OAuth/ChatGPT plan is configured for the owner.
+      # OAuth tokens are managed per-owner via team-api (encrypted at rest)
+      # and hydrated into the agent's ~/.codex/auth.json at each spawn.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://team-api:3001
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - codex-data:/app/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == none
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        order: start-first
+        delay: 10s
+        failure_action: rollback
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   hermes-service:
     image: registry.methodinfo.fr/hermes-service:latest
     build:
@@ -620,6 +693,8 @@ volumes:
   opencode-data:
     driver: local
   hermes-data:
+    driver: local
+  codex-data:
     driver: local
 
 # Note: Docker secrets are NOT declared here.
