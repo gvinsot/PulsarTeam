@@ -40,8 +40,19 @@ _AGENT_UID_RANGE = _AGENT_UID_MAX - _AGENT_UID_BASE
 
 
 def _allocate_agent_uid(agent_id: str) -> int:
-    """Deterministic UID for a given agent_id, in [_AGENT_UID_BASE, _AGENT_UID_MAX)."""
-    digest = hashlib.sha256(agent_id.encode("utf-8")).digest()
+    """Deterministic UID, in [_AGENT_UID_BASE, _AGENT_UID_MAX), keyed by the
+    SANITIZED username (not the raw agent_id).
+
+    Why: `_sanitize_agent_id` strips non-alphanumerics and truncates to 24
+    chars, so two agent_ids like "72b35c69-fdcd-4f9f-bc8d-08e6" and
+    "72b35c69-fdcd-4f9f-bc8d-08e67e2bd051" both map to the same HOME
+    (`agent_72b35c69fdcd4f9fbc8d08e6`). If we hashed the raw agent_id, each
+    would get a different UID — and the second spawn would fail to read
+    files chowned by the first. Keying on the username binds UID and HOME
+    together, so any caller variation on the suffix still resolves to the
+    same UID."""
+    username = _sanitize_agent_id(agent_id)
+    digest = hashlib.sha256(username.encode("utf-8")).digest()
     offset = int.from_bytes(digest[:4], "big") % _AGENT_UID_RANGE
     return _AGENT_UID_BASE + offset
 
@@ -170,8 +181,49 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
 # --- Agent project management -------------------------------------------------
 
 def get_agent_project_dir(agent_id: str) -> Optional[str]:
+    """Return the agent's working tree path.
+
+    Looks first at the in-memory cache (populated by `ensure_agent_project`).
+    If empty — typically after a container restart where the cache is lost
+    but the cloned tree is still on disk under the persistent volume — fall
+    back to a filesystem probe: any directory under
+    `<HOME>/projects/.../.git` is treated as a valid project root.
+
+    Without this fallback, the next `/v1/chat/completions` after a restart
+    would land in `CLI_CWD=/app` (the wrong cwd), and the spawned Claude
+    CLI would be working in the wrong tree entirely.
+    """
     entry = _agent_projects.get(agent_id)
-    return entry["path"] if entry else None
+    if entry:
+        return entry["path"]
+    username = _sanitize_agent_id(agent_id)
+    projects_base = os.path.join(DATA_DIR, "agents", username, "projects")
+    if not os.path.isdir(projects_base):
+        return None
+    # Scan up to 2 levels deep so `owner/repo` paths are found.
+    for entry_name in os.listdir(projects_base):
+        first_level = os.path.join(projects_base, entry_name)
+        if not os.path.isdir(first_level):
+            continue
+        if os.path.isdir(os.path.join(first_level, ".git")):
+            _agent_projects[agent_id] = {
+                "project": entry_name, "path": first_level,
+                "updated_at": 0.0,  # 0 so the next ensure call still re-fetches
+            }
+            return first_level
+        try:
+            children = os.listdir(first_level)
+        except OSError:
+            continue
+        for sub in children:
+            sub_dir = os.path.join(first_level, sub)
+            if os.path.isdir(os.path.join(sub_dir, ".git")):
+                _agent_projects[agent_id] = {
+                    "project": f"{entry_name}/{sub}", "path": sub_dir,
+                    "updated_at": 0.0,
+                }
+                return sub_dir
+    return None
 
 
 def _chown_recursive(path: str, uid: int, gid: int):
