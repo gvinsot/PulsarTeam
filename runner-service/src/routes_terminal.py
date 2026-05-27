@@ -140,7 +140,11 @@ async def ws_terminal(
         # tell us the subprocess just exited — close the socket politely.
         if not data:
             try:
-                await websocket.send_text(json.dumps({"type": "exit"}))
+                await websocket.send_text(json.dumps({
+                    "type": "exit",
+                    "code": session.exit_code,
+                    "tail": session.tail_text(2048),
+                }))
             finally:
                 try:
                     await websocket.close()

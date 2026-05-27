@@ -86,6 +86,7 @@ const getTerminalTheme = (theme: string) => (
 export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const { theme } = useTheme();
   const [connected, setConnected] = useState(false);
+  const [exited, setExited] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -94,6 +95,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const reconnectAttemptRef = useRef(0);
   const fitFrameRef = useRef<number | null>(null);
   const encoderRef = useRef(new TextEncoder());
+  const suppressReconnectRef = useRef(false);
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
@@ -221,6 +223,8 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       const ws = new WebSocket(url.toString());
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
+      suppressReconnectRef.current = false;
+      setExited(false);
 
       ws.onopen = () => {
         if (wsRef.current !== ws) return;
@@ -247,7 +251,19 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           try {
             const ctrl = JSON.parse(ev.data);
             if (ctrl?.type === 'exit') {
-              t.writeln('\r\n\x1b[2m[runner subprocess exited — reconnecting…]\x1b[0m');
+              suppressReconnectRef.current = true;
+              setExited(true);
+              setConnected(false);
+              const code = ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
+              const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
+              t.writeln(`\r\n\x1b[2m[runner subprocess exited, code=${code}]\x1b[0m`);
+              if (tail) {
+                const lines = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-6);
+                for (const line of lines) {
+                  t.writeln(`\x1b[2m${line}\x1b[0m`);
+                }
+              }
+              t.writeln('\x1b[2m[close and reopen the terminal tab to start a new session]\x1b[0m');
             } else if (ctrl?.type === 'error') {
               t.writeln(`\r\n\x1b[31m[error: ${ctrl.message || 'unknown'}]\x1b[0m`);
             }
@@ -267,6 +283,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         if (wsRef.current !== ws) return;
         wsRef.current = null;
         setConnected(false);
+        if (suppressReconnectRef.current) return;
         if (!aliveRef.current) return;
         scheduleReconnect();
       };
@@ -296,6 +313,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       try { wsRef.current?.close(); } catch { /* noop */ }
       wsRef.current = null;
       setConnected(false);
+      setExited(false);
     };
   }, [agent.id, token]);
 
@@ -306,7 +324,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         <span>Terminal</span>
         <span className="opacity-60">— {agent.runner || 'cli'}</span>
         <span className="ml-auto opacity-60">
-          {connected ? 'connected' : 'reconnecting'} · multi-client
+          {connected ? 'connected' : exited ? 'exited' : 'reconnecting'} · multi-client
         </span>
       </div>
       <div
