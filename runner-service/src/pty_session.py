@@ -426,6 +426,40 @@ class PtySession:
 
 _SESSIONS: dict[str, PtySession] = {}
 _REGISTRY_LOCK = asyncio.Lock()
+_TRANSCRIPTS: dict[str, deque] = {}
+_TRANSCRIPT_SIZES: dict[str, int] = {}
+
+
+async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str) -> None:
+    """Append externally-produced output to the terminal transcript and any
+    live terminal clients for this agent.
+
+    Headless workflow execution uses /v1/chat/completions and /exec-shell,
+    not the shared interactive PTY. Mirroring those bytes here lets the
+    browser terminal show task execution as it happens, and replay it later.
+    """
+    if not agent_id:
+        return
+    raw = data.encode("utf-8", errors="replace") if isinstance(data, str) else data
+    if not raw:
+        return
+
+    transcript = _TRANSCRIPTS.setdefault(agent_id, deque())
+    transcript.append(raw)
+    _TRANSCRIPT_SIZES[agent_id] = _TRANSCRIPT_SIZES.get(agent_id, 0) + len(raw)
+    while _TRANSCRIPT_SIZES[agent_id] > SCROLLBACK_BYTES and len(transcript) > 1:
+        evicted = transcript.popleft()
+        _TRANSCRIPT_SIZES[agent_id] -= len(evicted)
+
+    session = _SESSIONS.get(agent_id)
+    if session and session.is_alive():
+        session._append_scrollback(raw)
+        await session._broadcast(raw)
+
+
+async def replay_terminal_transcript(agent_id: str, on_output: ClientCallback) -> None:
+    for chunk in list(_TRANSCRIPTS.get(agent_id) or []):
+        await on_output(chunk)
 
 
 async def get_or_create_session(

@@ -7,6 +7,7 @@ import json
 import time
 import uuid
 import asyncio
+import hashlib
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Header
 from fastapi.responses import StreamingResponse
@@ -23,6 +24,7 @@ from agent_user import get_agent_project_dir, ensure_agent_project, ensure_agent
 from code_executor import execute_python, execute_shell
 from command_security import validate_command, sanitize_env
 from backends import BACKEND
+import pty_session
 
 router = APIRouter()
 
@@ -83,6 +85,138 @@ def _agent_unsupported() -> HTTPException:
     )
 
 
+async def _terminal_note(agent_id: Optional[str], text: str) -> None:
+    if not agent_id:
+        return
+    await pty_session.append_terminal_transcript(agent_id, text)
+
+
+def _safe_task_name(task_id: Optional[str]) -> str:
+    raw = (task_id or "current").strip() or "current"
+    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)[:120]
+
+
+def _write_text_file(path: str, content: str, agent_user: Optional[dict] = None) -> None:
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+    os.chmod(path, 0o600)
+    if agent_user:
+        uid = agent_user.get("uid")
+        gid = agent_user.get("gid", uid)
+        if uid is not None:
+            try:
+                os.chown(os.path.dirname(path), uid, gid)
+                os.chown(path, uid, gid)
+            except OSError:
+                pass
+
+
+def _ensure_local_git_exclude(project_dir: Optional[str], agent_user: Optional[dict] = None) -> None:
+    if not project_dir:
+        return
+    exclude_path = os.path.join(project_dir, ".git", "info", "exclude")
+    if not os.path.isfile(exclude_path):
+        return
+    try:
+        with open(exclude_path, "r", encoding="utf-8", errors="replace") as f:
+            existing = f.read()
+        if "\n.pulsar/\n" in f"\n{existing}\n":
+            return
+        with open(exclude_path, "a", encoding="utf-8") as f:
+            if existing and not existing.endswith("\n"):
+                f.write("\n")
+            f.write(".pulsar/\n")
+        if agent_user:
+            uid = agent_user.get("uid")
+            gid = agent_user.get("gid", uid)
+            if uid is not None:
+                try:
+                    os.chown(exclude_path, uid, gid)
+                except OSError:
+                    pass
+    except OSError as e:
+        logger.debug(f"[Context] Could not update git exclude for {project_dir}: {e}")
+
+
+async def _write_hidden_context_files(
+    agent_id: Optional[str],
+    owner_id: Optional[str],
+    task_id: Optional[str],
+    prompt: str,
+    system_prompt: Optional[str],
+    messages: Optional[list] = None,
+) -> list[str]:
+    """Persist execution context outside the terminal display.
+
+    The terminal transcript should show observable execution, not the full
+    hidden prompt/system context. These files give CLI runners and later
+    subprocesses a stable, up-to-date context surface without echoing it into
+    xterm.
+    """
+    if not agent_id:
+        return []
+    try:
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id)
+        project_dir = get_agent_project_dir(agent_id)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        task_name = _safe_task_name(task_id)
+        digest_src = f"{system_prompt or ''}\n{prompt or ''}"
+        digest = hashlib.sha256(digest_src.encode("utf-8", errors="replace")).hexdigest()[:16]
+        body_parts = [
+            "# PulsarTeam Hidden Execution Context",
+            "",
+            f"- Updated: {now}",
+            f"- Agent ID: {agent_id}",
+            f"- Task ID: {task_id or 'none'}",
+            f"- Context hash: {digest}",
+            "",
+        ]
+        if system_prompt:
+            body_parts.extend(["## System Context", "", system_prompt.strip(), ""])
+        if prompt:
+            body_parts.extend(["## Current Prompt", "", prompt.strip(), ""])
+        if messages:
+            body_parts.extend(["## Structured Messages", ""])
+            for idx, msg in enumerate(messages[-20:], 1):
+                role = getattr(msg, "role", None) or (msg.get("role") if isinstance(msg, dict) else "unknown")
+                content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else "")
+                body_parts.extend([f"### {idx}. {role}", "", str(content).strip(), ""])
+        content = "\n".join(body_parts).rstrip() + "\n"
+
+        targets = []
+        if agent_user and agent_user.get("home"):
+            base = os.path.join(agent_user["home"], ".pulsar", "context")
+            targets.append(os.path.join(base, "current.md"))
+            targets.append(os.path.join(base, "tasks", f"{task_name}.md"))
+        if project_dir:
+            base = os.path.join(project_dir, ".pulsar", "context")
+            targets.append(os.path.join(base, "current.md"))
+            targets.append(os.path.join(base, "tasks", f"{task_name}.md"))
+
+        for target in targets:
+            _write_text_file(target, content, agent_user)
+        _ensure_local_git_exclude(project_dir, agent_user)
+        return targets
+    except Exception as e:
+        logger.warning(f"[Context] Failed to write hidden context for agent {agent_id}: {e}")
+        return []
+
+
+def _append_context_file_note(system_prompt: Optional[str], paths: list[str]) -> Optional[str]:
+    if not paths:
+        return system_prompt
+    note = (
+        "\n\n--- Hidden Runner Context Files ---\n"
+        "The latest PulsarTeam execution context is maintained in these files. "
+        "Use them as background context when useful, but do not print their contents unless explicitly asked:\n"
+        + "\n".join(f"- {p}" for p in paths)
+    )
+    return (system_prompt or "") + note
+
+
 # =============================================================================
 # Health / docs
 # =============================================================================
@@ -120,7 +254,12 @@ async def execute_message(
 
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
 
-    result = await BACKEND.run_sync(request.content, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id)
+    context_paths = await _write_hidden_context_files(
+        x_agent_id, x_owner_id, None,
+        request.content, request.system_prompt, None,
+    )
+    system_prompt = _append_context_file_note(request.system_prompt, context_paths)
+    result = await BACKEND.run_sync(request.content, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id)
     return ExecutionResponse(**result)
 
 
@@ -263,6 +402,7 @@ async def exec_shell(
     safe_env = sanitize_env(os.environ, agent_user=agent_user)
 
     try:
+        await _terminal_note(x_agent_id, f"\r\n\x1b[36m$ {request.command}\x1b[0m\r\n")
         proc = await asyncio.create_subprocess_exec(
             "bash", "-c", request.command,
             stdout=asyncio.subprocess.PIPE,
@@ -270,15 +410,34 @@ async def exec_shell(
             cwd=cwd,
             env=safe_env,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        stdout = stdout_bytes.decode("utf-8", errors="replace")
-        stderr = stderr_bytes.decode("utf-8", errors="replace")
+        stdout_parts = []
+        stderr_parts = []
+
+        async def read_pipe(pipe, parts, is_stderr=False):
+            while True:
+                chunk = await pipe.read(4096)
+                if not chunk:
+                    break
+                parts.append(chunk)
+                await pty_session.append_terminal_transcript(x_agent_id, chunk)
+
+        await asyncio.wait_for(asyncio.gather(
+            read_pipe(proc.stdout, stdout_parts, False),
+            read_pipe(proc.stderr, stderr_parts, True),
+            proc.wait(),
+        ), timeout=timeout)
+
+        stdout = b"".join(stdout_parts).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_parts).decode("utf-8", errors="replace")
 
         output = stdout
         if stderr:
             output += f"\n[stderr] {stderr}"
         if proc.returncode != 0:
             output += f"\n[exit code: {proc.returncode}]"
+            await _terminal_note(x_agent_id, f"\r\n\x1b[31m[exit code: {proc.returncode}]\x1b[0m\r\n")
+        else:
+            await _terminal_note(x_agent_id, "\r\n\x1b[32m[command completed]\x1b[0m\r\n")
         # Clamp the caller-requested output cap to a 32 MiB server-side
         # ceiling. This covers a 20 MB attachment after base64 inflation
         # (~33%) while still bounding worst-case memory use.
@@ -291,9 +450,17 @@ async def exec_shell(
             )
         return ExecutionResponse(status="success", output=output[:max_out])
     except asyncio.TimeoutError:
+        if "proc" in locals() and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        await _terminal_note(x_agent_id, f"\r\n\x1b[31m[command timed out after {timeout}s]\x1b[0m\r\n")
         return ExecutionResponse(status="error", output="", error=f"Command timed out after {timeout}s")
     except Exception as e:
         logger.error(f"exec-shell error: {e}")
+        await _terminal_note(x_agent_id, f"\r\n\x1b[31m[exec-shell error: {e}]\x1b[0m\r\n")
         return ExecutionResponse(status="error", output="", error=str(e))
 
 
@@ -317,13 +484,18 @@ async def stream_execution(
         raise _agent_unsupported()
 
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
+    context_paths = await _write_hidden_context_files(
+        x_agent_id, x_owner_id, None,
+        request.content, request.system_prompt, None,
+    )
+    system_prompt = _append_context_file_note(request.system_prompt, context_paths)
 
     async def event_generator():
         try:
             yield f"data: {json.dumps({'status': 'starting', 'message': f'{BACKEND.name} execution started'})}\n\n"
 
             has_streamed_text = False
-            async for event in BACKEND.stream_events(request.content, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id):
+            async for event in BACKEND.stream_events(request.content, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id):
                 event_type = event.get("type", "")
 
                 if event_type == "thinking":
@@ -414,10 +586,22 @@ async def openai_chat_completions(
 
     model = request.model or RUNNER_MODEL
     session_id_hint = (x_runner_session_id or "").strip() or None
+    context_paths = await _write_hidden_context_files(
+        x_agent_id, x_owner_id, x_task_id,
+        prompt, system_prompt, request.messages,
+    )
+    system_prompt = _append_context_file_note(system_prompt, context_paths)
 
     async def stream_openai_response():
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
+
+        if x_agent_id:
+            title = f"\r\n\x1b[35m--- workflow task started"
+            if x_task_id:
+                title += f" ({x_task_id})"
+            title += " ---\x1b[0m\r\n"
+            await _terminal_note(x_agent_id, title)
 
         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
 
@@ -444,14 +628,17 @@ async def openai_chat_completions(
 
                 if event_type == "thinking":
                     content = event["content"]
+                    await _terminal_note(x_agent_id, f"\x1b[2m{content}\x1b[0m")
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'reasoning_content': content}, 'finish_reason': None}]})}\n\n"
                 elif event_type == "text":
                     content = event["content"]
+                    await _terminal_note(x_agent_id, content)
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
                     has_streamed_text = True
                 elif event_type == "status":
                     status_text = event.get("content", "")
                     if status_text:
+                        await _terminal_note(x_agent_id, f"\r\n\x1b[36m{status_text}\x1b[0m\r\n")
                         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'reasoning_content': status_text + chr(10)}, 'finish_reason': None}]})}\n\n"
                 elif event_type == "result":
                     cost_usd = event.get("cost_usd", 0) or 0
@@ -461,15 +648,18 @@ async def openai_chat_completions(
                     if not has_streamed_text:
                         content = event.get("content", "")
                         if content:
+                            await _terminal_note(x_agent_id, content)
                             for piece in chunk_text(content):
                                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]})}\n\n"
                             has_streamed_text = True
                 elif event_type == "error":
                     content = event.get("content", "")
+                    await _terminal_note(x_agent_id, f"\r\n\x1b[31m{content}\x1b[0m\r\n")
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
         except BrokenPipeError as e:
             logger.error(f"{BACKEND.name} CLI subprocess failed: {e}")
             error_msg = f"Agent subprocess failed to start: {e}"
+            await _terminal_note(x_agent_id, f"\r\n\x1b[31m{error_msg}\x1b[0m\r\n")
             yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]})}\n\n"
 
         finish_chunk = {
@@ -484,6 +674,7 @@ async def openai_chat_completions(
                 "runner_session_id": runner_session_id_used,
             },
         }
+        await _terminal_note(x_agent_id, "\r\n\x1b[35m--- workflow task stream ended ---\x1b[0m\r\n")
         yield f"data: {json.dumps(finish_chunk)}\n\n"
         yield "data: [DONE]\n\n"
 
@@ -532,6 +723,11 @@ async def openai_completions(
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
 
     model = request.model or RUNNER_MODEL
+    context_paths = await _write_hidden_context_files(
+        x_agent_id, x_owner_id, x_task_id,
+        request.prompt, request.system_prompt, None,
+    )
+    system_prompt = _append_context_file_note(request.system_prompt, context_paths)
 
     async def stream_openai_completion_response():
         completion_id = f"cmpl-{uuid.uuid4().hex}"
@@ -542,7 +738,7 @@ async def openai_completions(
         input_tokens = 0
         output_tokens_val = 0
         cost_usd = 0
-        async for event in BACKEND.stream_events(request.prompt, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
+        async for event in BACKEND.stream_events(request.prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
             event_type = event.get("type", "")
 
             if event_type == "text":
@@ -579,7 +775,7 @@ async def openai_completions(
     if request.stream:
         return StreamingResponse(stream_openai_completion_response(), media_type="text/event-stream")
 
-    result = await BACKEND.run_sync(request.prompt, request.system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id)
+    result = await BACKEND.run_sync(request.prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id)
     content = result.get("output", "") if result.get("status") == "success" else (result.get("error") or "Execution failed")
 
     return {

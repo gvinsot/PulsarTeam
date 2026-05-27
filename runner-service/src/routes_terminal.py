@@ -154,6 +154,7 @@ async def ws_terminal(
         await websocket.send_bytes(data)
 
     label = f"ws@{websocket.client.host}:{websocket.client.port}" if websocket.client else "ws"
+    await pty_session.replay_terminal_transcript(agent_id, push_bytes_to_client)
     client_id = await session.attach(push_bytes_to_client, label=label)
 
     try:
