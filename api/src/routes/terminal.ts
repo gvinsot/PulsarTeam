@@ -5,7 +5,7 @@
  * runner-service's shared-PTY endpoint (`/ws/terminal/{agent_id}`). This
  * is the ONLY user-facing interface for CLI runners in interactive mode —
  * the chat tab is hidden for `agent.runner ∈ {claudecode, codex, opencode,
- * openclaw}` so the user drives the real TUI here.
+ * openclaw, hermes}` so the user drives the real TUI here.
  *
  * Auth + authorization:
  *   • The browser passes the user's JWT via `?token=…` on the WS handshake
@@ -30,13 +30,14 @@ import { getAgentById } from '../services/database.js';
 
 // Only these runners get a terminal — the others are LLM-providers or
 // non-CLI runtimes for which the chat UI is the correct interface.
-const TERMINAL_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw']);
+const TERMINAL_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes']);
 
 const RUNNER_URLS: Record<string, string> = {
   claudecode: process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
   codex: process.env.CODEX_SERVICE_URL || 'http://codex-service:8000',
   opencode: process.env.OPENCODE_SERVICE_URL || 'http://opencode-service:8000',
   openclaw: process.env.OPENCLAW_SERVICE_URL || 'http://openclaw-service:8000',
+  hermes: process.env.HERMES_SERVICE_URL || 'http://hermes-service:8000',
 };
 
 const TERMINAL_PATH_RE = /^\/ws\/agents\/([^\/]+)\/terminal$/;
