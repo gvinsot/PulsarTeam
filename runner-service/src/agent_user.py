@@ -234,22 +234,41 @@ def _chown_recursive(path: str, uid: int, gid: int):
     needs to chdir/traverse. Files keep their existing mode so executable
     bits in the cloned repo are preserved.
     """
-    if uid == os.getuid():
-        return
+    failure_count = 0
+    examples = []
+
+    def record_failure(target: str, exc: OSError) -> None:
+        nonlocal failure_count
+        failure_count += 1
+        if len(examples) < 5:
+            examples.append(f"{target}: {exc}")
+
     try:
         for root, dirs, files in os.walk(path):
             try:
                 os.chown(root, uid, gid)
                 os.chmod(root, 0o700)
-            except OSError:
-                pass
+            except OSError as e:
+                record_failure(root, e)
             for name in files:
+                file_path = os.path.join(root, name)
                 try:
-                    os.chown(os.path.join(root, name), uid, gid)
-                except OSError:
-                    pass
+                    os.chown(file_path, uid, gid)
+                except OSError as e:
+                    record_failure(file_path, e)
     except OSError as e:
         logger.warning(f"[Agent User] chown {path} -> uid={uid} failed: {e}")
+        return
+
+    if failure_count:
+        logger.warning(
+            "[Agent User] chown %s -> uid=%s gid=%s had %s failures%s",
+            path,
+            uid,
+            gid,
+            failure_count,
+            f" (examples: {'; '.join(examples)})" if examples else "",
+        )
 
 
 def _ensure_project_parents(projects_base: str, project_dir: str,
@@ -440,10 +459,14 @@ async def _ensure_agent_project_locked(
     agent_data_dir = os.path.join(DATA_DIR, "agents", username)
     projects_base = os.path.join(agent_data_dir, "projects")
     project_dir = os.path.join(projects_base, project)
-    cached_user = _agent_users.get(agent_id) or {}
-    agent_uid = cached_user.get("uid", os.getuid())
-    agent_gid = cached_user.get("gid", os.getgid())
-    home_dir = cached_user.get("home", agent_data_dir)
+    cached_user = _agent_users.get(agent_id)
+    if not cached_user or cached_user.get("uid") is None or cached_user.get("gid") is None or not cached_user.get("home"):
+        raise RuntimeError(
+            "Agent user is not initialized; call ensure_agent_user(agent_id, owner_id=...) before ensure_agent_project"
+        )
+    agent_uid = cached_user["uid"]
+    agent_gid = cached_user["gid"]
+    home_dir = cached_user["home"]
 
     cached = _agent_projects.get(agent_id)
     # TTL fast path: same project, working tree present, and we updated it
@@ -479,6 +502,10 @@ async def _ensure_agent_project_locked(
                 await asyncio.wait_for(proc.communicate(), timeout=30)
             except asyncio.TimeoutError:
                 proc.kill()
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
                 raise RuntimeError("git fetch --all timed out after 30s")
             proc = await asyncio.create_subprocess_exec(
                 "git", "reset", "--hard", "origin/HEAD",
@@ -490,15 +517,20 @@ async def _ensure_agent_project_locked(
                 await asyncio.wait_for(proc.communicate(), timeout=15)
             except asyncio.TimeoutError:
                 proc.kill()
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
                 raise RuntimeError("git reset --hard origin/HEAD timed out after 15s")
             cached["updated_at"] = time.monotonic()
             logger.info(f"[Project] Updated {project} for agent {agent_id[:12]}")
-            # fetch/reset ran as parent UID; new files inherit parent ownership.
-            # Re-hand the tree to the agent UID so the CLI subprocess can read
-            # everything after dropping privileges.
-            _chown_recursive(project_dir, agent_uid, agent_gid)
         except Exception as e:
             logger.warning(f"[Project] Failed to update {project} for agent {agent_id[:12]}: {type(e).__name__}: {e}")
+        finally:
+            # fetch/reset ran as parent UID; new files inherit parent ownership.
+            # Re-hand the tree to the agent UID even after timeout/errors so
+            # partially updated files remain readable by the dropped CLI.
+            _chown_recursive(project_dir, agent_uid, agent_gid)
         return project_dir
 
     os.makedirs(projects_base, exist_ok=True)

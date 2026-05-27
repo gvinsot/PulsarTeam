@@ -24,6 +24,7 @@ from agent_user import get_agent_project_dir, ensure_agent_project, ensure_agent
 from code_executor import execute_python, execute_shell
 from command_security import validate_command, sanitize_env
 from backends import BACKEND
+from backends.claude_token_store import get_subprocess_kwargs
 import pty_session
 
 router = APIRouter()
@@ -328,6 +329,7 @@ async def ensure_project(
                 "token": request.git_credentials.token,
                 "username": request.git_credentials.username or "",
             }
+        await ensure_agent_user(x_agent_id, owner_id=x_owner_id)
         project_dir = await ensure_agent_project(
             x_agent_id, request.project, request.git_url, git_credentials=creds,
         )
@@ -400,6 +402,7 @@ async def exec_shell(
 
     # Security: use sanitized environment to prevent secret leakage
     safe_env = sanitize_env(os.environ, agent_user=agent_user)
+    subprocess_kwargs = get_subprocess_kwargs(agent_user)
 
     try:
         await _terminal_note(x_agent_id, f"\r\n\x1b[36m$ {request.command}\x1b[0m\r\n")
@@ -409,6 +412,7 @@ async def exec_shell(
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=safe_env,
+            **subprocess_kwargs,
         )
         stdout_parts = []
         stderr_parts = []
