@@ -21,7 +21,7 @@ import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { Send, Terminal as TerminalIcon } from 'lucide-react';
+import { Terminal as TerminalIcon } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface TerminalTabProps {
@@ -85,7 +85,6 @@ const getTerminalTheme = (theme: string) => (
 
 export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const { theme } = useTheme();
-  const [draft, setDraft] = useState('');
   const [connected, setConnected] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
@@ -93,8 +92,8 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const fitFrameRef = useRef<number | null>(null);
   const encoderRef = useRef(new TextEncoder());
-  const pendingInputRef = useRef<string | null>(null);
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
@@ -106,15 +105,20 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     return true;
   };
 
-  const sendDraft = () => {
-    const text = draft.trimEnd();
-    if (!text.trim()) return;
-    const payload = `${text}\r`;
-    if (!sendToRunner(payload)) {
-      pendingInputRef.current = payload;
+  const fitTerminalNow = () => {
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* xterm not mounted yet */
     }
-    setDraft('');
-    termRef.current?.focus();
+  };
+
+  const fitTerminal = () => {
+    if (fitFrameRef.current !== null) return;
+    fitFrameRef.current = window.requestAnimationFrame(() => {
+      fitFrameRef.current = null;
+      fitTerminalNow();
+    });
   };
 
   // ── xterm.js setup ────────────────────────────────────────────────────
@@ -127,25 +131,34 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       fontFamily: '"Cascadia Code", "SFMono-Regular", "Segoe UI Mono", Menlo, Consolas, monospace',
       fontSize: 14,
       lineHeight: 1.35,
+      letterSpacing: 0,
       scrollback: 5000,
+      altClickMovesCursor: true,
+      macOptionIsMeta: true,
+      rightClickSelectsWord: true,
+      scrollOnUserInput: true,
       theme: getTerminalTheme(theme),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.open(containerRef.current);
-    fit.fit();
-    term.focus();
+    fitTerminal();
 
     termRef.current = term;
     fitRef.current = fit;
+
+    window.requestAnimationFrame(() => {
+      fitTerminal();
+      term.focus();
+    });
 
     // Resize handling. Two triggers:
     //   • the container resizes (window/sidebar/devtools)
     //   • the user changes tabs and comes back (the parent unmounts/remounts
     //     but the xterm instance is kept alive within THIS effect).
     const resizeObserver = new ResizeObserver(() => {
-      try { fit.fit(); } catch { /* xterm not mounted yet */ }
+      fitTerminal();
     });
     resizeObserver.observe(containerRef.current);
 
@@ -168,6 +181,10 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+      if (fitFrameRef.current !== null) {
+        window.cancelAnimationFrame(fitFrameRef.current);
+        fitFrameRef.current = null;
       }
       try { wsRef.current?.close(); } catch { /* noop */ }
       wsRef.current = null;
@@ -193,6 +210,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       if (!aliveRef.current) return;
       const term = termRef.current;
       if (!term) return;
+      fitTerminalNow();
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const url = new URL(`${proto}//${window.location.host}/ws/agents/${encodeURIComponent(agent.id)}/terminal`);
@@ -205,8 +223,10 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return;
         reconnectAttemptRef.current = 0;
         setConnected(true);
+        fitTerminalNow();
         term.focus();
         // Send the current geometry once explicitly so the runner-side PTY
         // is sized correctly before the first rendering happens. The
@@ -214,13 +234,10 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         // resending here covers the reconnect case where the user's
         // window changed between attempts.
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        if (pendingInputRef.current) {
-          ws.send(encoderRef.current.encode(pendingInputRef.current));
-          pendingInputRef.current = null;
-        }
       };
 
       ws.onmessage = (ev) => {
+        if (wsRef.current !== ws) return;
         const t = termRef.current;
         if (!t) return;
         if (typeof ev.data === 'string') {
@@ -247,6 +264,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       };
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return;
         wsRef.current = null;
         setConnected(false);
         if (!aliveRef.current) return;
@@ -293,36 +311,9 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       </div>
       <div
         ref={containerRef}
-        className="flex-1 p-2 overflow-hidden bg-dark-900"
+        className="min-h-0 flex-1 overflow-hidden bg-dark-900"
         onClick={() => termRef.current?.focus()}
-        onMouseDown={() => termRef.current?.focus()}
       />
-      <div className="border-t border-dark-700/50 bg-dark-900 p-3">
-        <div className="flex items-end gap-2">
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendDraft();
-              }
-            }}
-            className="min-h-[42px] max-h-32 flex-1 resize-none rounded-xl border border-dark-600 bg-dark-800 px-4 py-2.5 font-sans text-sm leading-5 text-dark-100 placeholder-dark-500 transition-colors focus:border-indigo-500 focus:outline-none disabled:opacity-60"
-            placeholder="Message..."
-            rows={1}
-          />
-          <button
-            type="button"
-            onClick={sendDraft}
-            disabled={!draft.trim()}
-            className="flex h-[42px] w-[42px] flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition-colors hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Send"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

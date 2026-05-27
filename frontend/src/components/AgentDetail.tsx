@@ -40,6 +40,7 @@ const TABS = [
 
 export default function AgentDetail({ agent, agents, projects, skills, thinking, streamBuffer, socket, onClose, onSelectAgent, onRefresh, onActiveTabChange, requestedTab, userRole, currentUser, showToast }) {
   const [activeTab, setActiveTab] = useState('chat');
+  const isCliRunner = CLI_RUNNERS.has(agent.runner);
 
   // Notify parent of active tab changes
   const handleTabChange = (tabId) => {
@@ -390,9 +391,9 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-auto">
+      <div className={`flex-1 min-h-0 ${activeTab === 'chat' && isCliRunner ? 'overflow-hidden' : 'overflow-auto'}`}>
         {activeTab === 'chat' && (
-          CLI_RUNNERS.has(agent.runner) ? (
+          isCliRunner ? (
             // CLI runners (claudecode, codex, opencode, openclaw) drive a real
             // TUI in a shared PTY — bypassing the chat surface entirely.
             <TerminalTab agent={agent} token={localStorage.getItem('token') || ''} />

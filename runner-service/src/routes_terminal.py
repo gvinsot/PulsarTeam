@@ -129,10 +129,11 @@ async def ws_terminal(
         await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
         return
 
-    # Adopt this client's geometry up front so the existing session (if any)
-    # re-lays out to the smaller of the connected viewports.
+    # Adopt this client's geometry up front so the shared PTY matches the
+    # browser terminal that just attached. A PTY has one canonical size, so the
+    # latest active terminal wins, like an SSH session resized from its client.
     if cols != session.cols or rows != session.rows:
-        await session.resize(min(cols, session.cols), min(rows, session.rows))
+        await session.resize(cols, rows)
 
     async def push_bytes_to_client(data: bytes) -> None:
         # A zero-length payload is the convention used by PtySession to
