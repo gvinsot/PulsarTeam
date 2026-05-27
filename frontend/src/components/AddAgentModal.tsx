@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid } from 'lucide-react';
+import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api';
 
 export default function AddAgentModal({ templates, projects, agents = [], onClose, onCreated }) {
@@ -23,6 +23,8 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     voice: 'alloy',
     voiceMode: 'realtime', // 'realtime' (OpenAI) or 'external' (STT/LLM/TTS)
     ttsVoiceId: '',
+    isBatch: false,
+    batchSize: 2,
   });
   const [creating, setCreating] = useState(false);
 
@@ -62,13 +64,23 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     if (!form.name.trim()) return;
     setCreating(true);
     try {
-      const payload = { ...form };
+      const payload: any = { ...form };
       payload.llmConfigId = payload.llmConfigId || null;
       payload.boardId = payload.boardId || null;
-      const agent = await api.createAgent({
+      // Voice agents are inherently single-instance — never batch them
+      const batchSize = (payload.isBatch && !payload.isVoice)
+        ? Math.max(2, Math.min(50, Number(payload.batchSize) || 2))
+        : 1;
+      delete payload.isBatch;
+      delete payload.batchSize;
+      if (batchSize > 1) payload.batchSize = batchSize;
+      const result = await api.createAgent({
         ...payload,
         template: selectedTemplate?.id || null,
       });
+      // Backend returns { batch: true, agents: [...] } for batch creates;
+      // pass the first agent up so the UI can focus it.
+      const agent = result?.batch && Array.isArray(result.agents) ? result.agents[0] : result;
       onCreated(agent);
     } catch (err) {
       console.error(err);
@@ -383,6 +395,40 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                       placeholder="Leave empty to use the global default"
                     />
                     <p className="text-[11px] text-dark-500 mt-1">Voice ID sent to the TTS service. Falls back to the global default in Admin Settings.</p>
+                  </div>
+                )}
+
+                {!form.isVoice && (
+                  <div className="col-span-2 border-t border-dark-700 pt-4">
+                    <label className="flex items-center gap-3 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={form.isBatch}
+                        onChange={(e) => updateField('isBatch', e.target.checked)}
+                        className="w-4 h-4 rounded border-dark-600 bg-dark-700 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-dark-800"
+                      />
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-indigo-400" />
+                        <span className="text-sm text-dark-200 group-hover:text-dark-100">Create as Batch</span>
+                      </div>
+                    </label>
+                    <p className="text-[11px] text-dark-500 mt-1 ml-7">
+                      Spawn several identical agents at once. The Agents view collapses a batch into a single card with a member dropdown.
+                    </p>
+                    {form.isBatch && (
+                      <div className="mt-3 ml-7">
+                        <label className="block text-xs text-dark-400 mb-1.5">Number of agents</label>
+                        <input
+                          type="number"
+                          min={2}
+                          max={50}
+                          value={form.batchSize}
+                          onChange={(e) => updateField('batchSize', Math.max(2, Math.min(50, parseInt(e.target.value) || 2)))}
+                          className="w-32 px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                        />
+                        <p className="text-[11px] text-dark-500 mt-1">2–50. Each will be named "{form.name || 'Agent'} #1", #2, …</p>
+                      </div>
+                    )}
                   </div>
                 )}
 

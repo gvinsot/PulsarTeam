@@ -82,6 +82,10 @@ const createAgentSchema = z.object({
   }).optional(),
   // 'coder' is a deprecated alias for 'claudecode' (kept for backward compat with stored agents)
   runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'codex']).optional(),
+  // Batch creation: when batchSize > 1, the server creates that many agents
+  // sharing the same configuration and a common batchId. Names are auto
+  // suffixed `#1`, `#2`, … so each agent stays uniquely identifiable.
+  batchSize: z.number().int().min(1).max(50).optional(),
 });
 
 // Schema for updating an agent (all fields optional)
@@ -214,6 +218,11 @@ export function agentRoutes(agentManager) {
       // Agents are scoped to a board (not a user). The boardId comes from the request body.
       // We still set ownerId for backward compat / token tracking.
       parsed.ownerId = req.user.userId;
+      const batchSize = Math.max(1, Math.min(50, parsed.batchSize || 1));
+      if (batchSize > 1) {
+        const agents = await agentManager.createBatch(parsed, batchSize);
+        return res.status(201).json({ batch: true, agents });
+      }
       const agent = await agentManager.create(parsed);
       res.status(201).json(agent);
     } catch (err) {

@@ -8,6 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
+import BatchAgentCard from './BatchAgentCard';
 import AgentDetail from './AgentDetail';
 import SwarmOverview from './SwarmOverview';
 import ActiveVoiceIndicator from './ActiveVoiceIndicator';
@@ -493,17 +494,53 @@ export default function Dashboard({
                     ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
                     : 'space-y-3'
                 }>
-                  {filteredAgents.map(agent => (
-                    <AgentCard
-                      key={agent.id}
-                      agent={agent}
-                      thinking={thinkingMap[agent.id]}
-                      isSelected={selectedAgent === agent.id}
-                      viewMode={viewMode}
-                      onClick={() => setSelectedAgent(agent.id === selectedAgent ? null : agent.id)}
-                      onStop={handleStopAgent}
-                    />
-                  ))}
+                  {(() => {
+                    // Group agents that share a batchId into a single rendered card.
+                    // Standalone agents (batchId == null) render normally. Order is
+                    // preserved using the first occurrence of each batch in the list.
+                    const groups: Array<{ key: string; isBatch: boolean; members: any[] }> = [];
+                    const byBatch = new Map<string, number>();
+                    for (const a of filteredAgents) {
+                      if (a.batchId) {
+                        const idx = byBatch.get(a.batchId);
+                        if (idx === undefined) {
+                          byBatch.set(a.batchId, groups.length);
+                          groups.push({ key: a.batchId, isBatch: true, members: [a] });
+                        } else {
+                          groups[idx].members.push(a);
+                        }
+                      } else {
+                        groups.push({ key: a.id, isBatch: false, members: [a] });
+                      }
+                    }
+                    return groups.map(g => {
+                      if (g.isBatch && g.members.length > 1) {
+                        return (
+                          <BatchAgentCard
+                            key={g.key}
+                            members={g.members}
+                            thinkingMap={thinkingMap}
+                            selectedAgentId={selectedAgent}
+                            viewMode={viewMode}
+                            onSelect={(id) => setSelectedAgent(id === selectedAgent ? null : id)}
+                            onStop={handleStopAgent}
+                          />
+                        );
+                      }
+                      const agent = g.members[0];
+                      return (
+                        <AgentCard
+                          key={agent.id}
+                          agent={agent}
+                          thinking={thinkingMap[agent.id]}
+                          isSelected={selectedAgent === agent.id}
+                          viewMode={viewMode}
+                          onClick={() => setSelectedAgent(agent.id === selectedAgent ? null : agent.id)}
+                          onStop={handleStopAgent}
+                        />
+                      );
+                    });
+                  })()}
                 </div>
               )}
             </div>

@@ -10,6 +10,8 @@ export const crudMethods = {
     const id = uuidv4();
     const agent = {
       id,
+      batchId: config.batchId || null,
+      batchIndex: config.batchIndex ?? null,
       name: config.name || 'Unnamed Agent',
       role: config.role || 'general',
       description: config.description || '',
@@ -73,6 +75,32 @@ export const crudMethods = {
     }
     this._emit('agent:created', this._sanitize(agent));
     return this._sanitize(agent);
+  },
+
+  /**
+   * Create N agents sharing the same configuration and a common batchId.
+   * Names get suffixed with `#1`, `#2`, … so each agent stays addressable
+   * individually (chat, tasks, runner sessions are all per-agent). The UI
+   * collapses a batch into a single card with a member dropdown.
+   */
+  async createBatch(this: any, config: any, size: number): Promise<any[]> {
+    const batchId = uuidv4();
+    const baseName = (config.name || 'Unnamed Agent').replace(/\s+#\d+$/, '');
+    const created: any[] = [];
+    for (let i = 1; i <= size; i++) {
+      const memberConfig = {
+        ...config,
+        name: `${baseName} #${i}`,
+        batchId,
+        batchIndex: i,
+      };
+      // Avoid the route layer re-triggering batch creation when create() is
+      // called for each member.
+      delete memberConfig.batchSize;
+      const agent = await this.create(memberConfig);
+      created.push(agent);
+    }
+    return created;
   },
 
   async update(this: any, id: string, updates: any): Promise<any> {
