@@ -84,6 +84,7 @@ class PtySession:
     _idle_timer: Optional[asyncio.Task] = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _closed: bool = False
+    exit_code: Optional[int] = None
 
     async def start(self) -> None:
         """Spawn the subprocess in a fresh PTY and start the reader loop."""
@@ -131,7 +132,7 @@ class PtySession:
         self.master_fd = master_fd
         logger.info(
             f"[Terminal] Spawned PTY session for agent {self.agent_id} "
-            f"(pid={self.proc.pid}, cols={self.cols}, rows={self.rows}, cmd={self.cmd[0]})"
+            f"(pid={self.proc.pid}, cols={self.cols}, rows={self.rows}, cmd={self.cmd!r}, cwd={self.cwd})"
         )
 
         loop = asyncio.get_running_loop()
@@ -296,17 +297,42 @@ class PtySession:
             "alive": self.is_alive(),
             "clients": len(self._clients),
             "pid": self.proc.pid if self.proc else None,
+            "exit_code": self.exit_code,
             "scrollback_bytes": self._scrollback_size,
             "cols": self.cols,
             "rows": self.rows,
         }
+
+    def tail_text(self, max_bytes: int = 4096) -> str:
+        """Return a short decoded tail of recent PTY output for diagnostics."""
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in reversed(self.scrollback):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= max_bytes:
+                break
+        data = b"".join(reversed(chunks))
+        if len(data) > max_bytes:
+            data = data[-max_bytes:]
+        return data.decode("utf-8", errors="replace")
 
     async def _on_subprocess_exit(self) -> None:
         """Called when EOF on the master fd indicates the child has exited.
         Drop all clients (their WS handlers see the close and clean up) and
         mark the session for removal by the registry."""
         rc = self.proc.poll() if self.proc else None
-        logger.info(f"[Terminal] Subprocess for agent {self.agent_id} exited (rc={rc})")
+        if rc is None and self.proc is not None:
+            try:
+                rc = self.proc.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                rc = None
+        self.exit_code = rc
+        tail = self.tail_text(2048).replace("\r", "\\r").replace("\n", "\\n")
+        logger.info(
+            f"[Terminal] Subprocess for agent {self.agent_id} exited "
+            f"(rc={rc}, cmd={self.cmd!r}, cwd={self.cwd}, tail={tail[-1000:]!r})"
+        )
         # Notify clients by closing their stream. We send a sentinel '' that
         # the WS handler interprets as "the PTY is dead, close the socket
         # politely". Without this they'd just hang reading nothing.
