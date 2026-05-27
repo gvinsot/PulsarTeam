@@ -5,6 +5,7 @@ import { saveAgent, searchAgentSkills, getAgentSkillById, saveAgentSkill, delete
 import { getWorkflowForBoard } from '../configManager.js';
 import { setTaskSignal } from './tasks.js';
 import { checkToolHooks } from '../toolHooks.js';
+import { findBuiltinMcpServer } from '../mcpManager.js';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Commit detection helpers ────────────────────────────────────────────────
@@ -1046,6 +1047,52 @@ export const toolsMethods = {
           console.log(`🛡️ [ToolHook] Blocked mcp_call for agent "${agent.name}": ${mcpHookResult.message}`);
           results.push({ tool: 'mcp_call', args: call.args, success: false, error: mcpHookResult.message });
           if (streamCallback) streamCallback(`\n✗ mcp_call — blocked by security rule\n`);
+          continue;
+        }
+
+        // ── Plugin gate: server must be enabled via agent plugins, board plugins,
+        //    or direct agent.mcpServers. The LLM may "remember" a tool from a
+        //    previous run when more plugins were enabled — refuse to dispatch it.
+        const _allowedMcpIds = new Set<string>();
+        const _agentSkillIds: string[] = Array.isArray(agent.skills) ? agent.skills : [];
+        let _boardPluginIds: string[] = [];
+        if (agent.boardId) {
+          try {
+            const _board = await getBoardById(agent.boardId);
+            if (_board && Array.isArray(_board.plugins)) _boardPluginIds = _board.plugins;
+          } catch { /* board may not exist */ }
+        }
+        for (const sid of new Set([..._agentSkillIds, ..._boardPluginIds])) {
+          const plugin = this.skillManager ? this.skillManager.getById(sid) : null;
+          if (plugin && Array.isArray((plugin as any).mcpServerIds)) {
+            for (const mid of (plugin as any).mcpServerIds) _allowedMcpIds.add(mid);
+          }
+        }
+        for (const mid of (agent.mcpServers || [])) _allowedMcpIds.add(mid);
+
+        // Resolve the requested server name to a known id without triggering
+        // builtin auto-registration (we don't want to "wake up" a server the
+        // agent isn't allowed to use just to deny it).
+        const _requestedNameLc = String(serverName).toLowerCase();
+        let _resolvedServerId: string | null = null;
+        for (const s of this.mcpManager.servers.values()) {
+          if (s.name && s.name.toLowerCase() === _requestedNameLc) { _resolvedServerId = s.id; break; }
+          if (s.id && s.id.toLowerCase() === _requestedNameLc) { _resolvedServerId = s.id; break; }
+        }
+        if (!_resolvedServerId) {
+          const _builtin = findBuiltinMcpServer(serverName);
+          if (_builtin) _resolvedServerId = _builtin.id;
+        }
+
+        if (!_resolvedServerId || !_allowedMcpIds.has(_resolvedServerId)) {
+          const errMsg = `MCP server "${serverName}" is not enabled for this agent. ` +
+            `The agent must have a plugin that provides this server in its own plugin list, ` +
+            `or in the current board's plugin list. ` +
+            `Do not call @mcp_call(${serverName}, ...) — this tool is not available in this run.`;
+          console.log(`🛡️ [MCP Gate] Blocked @mcp_call(${serverName}, ${toolName}) for agent "${agent.name}": server not in enabled plugin set`);
+          results.push({ tool: 'mcp_call', args: call.args, success: false, error: errMsg });
+          if (streamCallback) streamCallback(`\n✗ MCP: ${serverName} → ${toolName} — blocked: server not enabled for this agent\n`);
+          this._emit('agent:tool:error', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', error: errMsg });
           continue;
         }
 
