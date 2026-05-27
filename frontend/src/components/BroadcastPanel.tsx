@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Globe, Send, Loader2, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, Plug, RefreshCw, Search } from 'lucide-react';
+import { X, Globe, Send, Loader2, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, Plug, RefreshCw, Search, Lock, KeyRound } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
@@ -430,7 +430,66 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
               </div>
 
               {/* ── Plugins List Sub-tab ──────────────────────────── */}
-              {pluginSubTab === 'list' && (
+              {pluginSubTab === 'list' && (() => {
+                // Split plugins into two clear groups for the SaaS UX:
+                //  - "Mes plugins"     → plugins I created (or admin-managed built-ins for admins)
+                //  - "Plugins partagés" → plugins owned by others (or built-ins for non-admins)
+                const myPlugins = skills.filter((p) => canManagePlugin(p));
+                const sharedPlugins = skills.filter((p) => !canManagePlugin(p));
+
+                const renderPluginRow = (plugin, opts) => {
+                  const mine = opts?.mine ?? false;
+                  return (
+                    <div
+                      key={plugin.id}
+                      className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors group cursor-pointer ${
+                        editingPlugin === plugin.id
+                          ? 'bg-indigo-500/10 border-indigo-500/30'
+                          : 'bg-dark-800/30 border-dark-700/30 hover:border-dark-600'
+                      }`}
+                      onClick={() => startEdit(plugin)}
+                    >
+                      <span className="text-base flex-shrink-0">{plugin.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
+                            {plugin.category}
+                          </span>
+                          {plugin.builtin && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">builtin</span>
+                          )}
+                          {mine && plugin.shared && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
+                              <Globe className="w-2.5 h-2.5" /> partagé
+                            </span>
+                          )}
+                          {mine && !plugin.shared && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600 flex items-center gap-0.5">
+                              <Lock className="w-2.5 h-2.5" /> privé
+                            </span>
+                          )}
+                          {(plugin.mcps || []).length > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30 flex items-center gap-0.5">
+                              <Plug className="w-2.5 h-2.5" />
+                              {(plugin.mcps || []).length} MCP
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
+                      </div>
+                      {mine && (
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                          <button onClick={(e) => { e.stopPropagation(); handleDelete(plugin.id); }} className="p-1.5 text-dark-400 hover:text-red-400 rounded-md hover:bg-dark-700 transition-colors" title="Supprimer le plugin">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
+
+                return (
                 <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
                   {/* Header */}
                   <div className="flex items-center justify-between flex-shrink-0">
@@ -448,7 +507,7 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                     </button>
                   </div>
 
-                  {/* Create plugin form */}
+                  {/* Create plugin form — always configure mode */}
                   {showCreate && (
                     <div className="max-h-[60vh] overflow-auto rounded-lg">
                       <PluginEditor
@@ -458,68 +517,54 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                         onCancel={() => setShowCreate(false)}
                         saving={false}
                         submitLabel="Creer le plugin"
+                        mode="configure"
                       />
                     </div>
                   )}
 
-                  {/* Plugins list (scrollable) */}
-                  <div className="flex-1 overflow-auto min-h-0 space-y-1.5">
-                    {skills.map(plugin => {
-                      const mine = canManagePlugin(plugin);
-                      const isOwner = !!plugin.ownerId && plugin.ownerId === currentUserId;
-                      return (
-                      <div
-                        key={plugin.id}
-                        className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors group cursor-pointer ${
-                          editingPlugin === plugin.id
-                            ? 'bg-indigo-500/10 border-indigo-500/30'
-                            : 'bg-dark-800/30 border-dark-700/30 hover:border-dark-600'
-                        }`}
-                        onClick={() => startEdit(plugin)}
-                      >
-                        <span className="text-base flex-shrink-0">{plugin.icon}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
-                              {plugin.category}
-                            </span>
-                            {plugin.builtin && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">builtin</span>
-                            )}
-                            {isOwner && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">mine</span>
-                            )}
-                            {plugin.shared ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">partagé</span>
-                            ) : isOwner ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600">privé</span>
-                            ) : null}
-                            {(plugin.mcps || []).length > 0 && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30 flex items-center gap-0.5">
-                                <Plug className="w-2.5 h-2.5" />
-                                {(plugin.mcps || []).length} MCP
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
-                        </div>
-                        {mine && (
-                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                            <button onClick={(e) => { e.stopPropagation(); handleDelete(plugin.id); }} className="p-1.5 text-dark-400 hover:text-red-400 rounded-md hover:bg-dark-700 transition-colors" title="Supprimer le plugin">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                  {/* Plugins lists (scrollable) */}
+                  <div className="flex-1 overflow-auto min-h-0 space-y-4">
+                    {/* My plugins */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-1.5 px-1">
+                        <Lock className="w-3 h-3 text-indigo-400" />
+                        <h5 className="text-[11px] font-semibold uppercase tracking-wider text-dark-400">
+                          Mes plugins <span className="text-dark-500 normal-case font-normal">({myPlugins.length})</span>
+                        </h5>
+                      </div>
+                      <div className="space-y-1.5">
+                        {myPlugins.length === 0 ? (
+                          <p className="text-center text-dark-500 text-xs py-4 border border-dashed border-dark-700/50 rounded-lg">
+                            Vous n'avez pas encore créé de plugin. Cliquez sur « Nouveau plugin ».
+                          </p>
+                        ) : (
+                          myPlugins.map((p) => renderPluginRow(p, { mine: true }))
                         )}
                       </div>
-                      );
-                    })}
-                    {skills.length === 0 && (
-                      <p className="text-center text-dark-500 text-xs py-8">No plugins created yet</p>
-                    )}
+                    </div>
+
+                    {/* Shared plugins */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-1.5 px-1">
+                        <Globe className="w-3 h-3 text-emerald-400" />
+                        <h5 className="text-[11px] font-semibold uppercase tracking-wider text-dark-400">
+                          Plugins partagés <span className="text-dark-500 normal-case font-normal">({sharedPlugins.length})</span>
+                        </h5>
+                      </div>
+                      <div className="space-y-1.5">
+                        {sharedPlugins.length === 0 ? (
+                          <p className="text-center text-dark-500 text-xs py-4 border border-dashed border-dark-700/50 rounded-lg">
+                            Aucun plugin partagé disponible.
+                          </p>
+                        ) : (
+                          sharedPlugins.map((p) => renderPluginRow(p, { mine: false }))
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              )}
+                );
+              })()}
 
               {/* ── MCP Explorer Sub-tab ─────────────────────────── */}
               {pluginSubTab === 'mcp-explorer' && (
@@ -714,9 +759,9 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
           <div className="hidden sm:flex flex-col w-[400px] border-l border-dark-700 bg-dark-850 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-dark-700 flex-shrink-0">
               <div className="flex items-center gap-2">
-                <Pencil className="w-3.5 h-3.5 text-indigo-400" />
+                {mine ? <Pencil className="w-3.5 h-3.5 text-indigo-400" /> : <KeyRound className="w-3.5 h-3.5 text-amber-400" />}
                 <span className="text-sm font-semibold text-dark-100">
-                  {mine ? 'Configurer le plugin' : 'Activer le plugin'}
+                  {mine ? 'Configurer le plugin' : 'Activer mes accès'}
                 </span>
               </div>
               <button onClick={cancelEdit} className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
@@ -730,8 +775,8 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
                 onSubmit={saveEdit}
                 onCancel={cancelEdit}
                 saving={false}
-                submitLabel="Sauvegarder"
-                readOnly={!mine}
+                submitLabel={mine ? 'Sauvegarder' : 'Enregistrer mes accès'}
+                mode={mine ? 'configure' : 'activate'}
               />
             </div>
           </div>
