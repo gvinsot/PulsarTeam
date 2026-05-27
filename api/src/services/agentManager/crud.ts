@@ -3,6 +3,24 @@ import { v4 as uuidv4 } from 'uuid';
 import { saveAgent, deleteAgentFromDb, setAgentOwner, setAgentBoard } from '../database.js';
 import { AGENT_TEMPLATES } from '../../data/templates.js';
 
+const AGENT_UPDATE_FIELDS = [
+  'name', 'role', 'description', 'instructions', 'temperature',
+  'maxTokens', 'contextLength', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
+  'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'ttsEnabled', 'enabled',
+  'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId', 'boardId', 'permissions', 'credentials', 'runner', 'toolHooks'
+];
+
+const LLM_FIELDS = ['provider', 'model', 'llmConfigId', 'endpoint'];
+
+// Fields that define how a batch member runs. These are propagated to every
+// member in the same batch; runtime state (history, sessions, metrics, tasks)
+// remains per-agent.
+const BATCH_SHARED_FIELDS = new Set(AGENT_UPDATE_FIELDS);
+
+function _batchBaseName(name: string): string {
+  return (name || 'Unnamed Agent').replace(/\s+#\d+$/, '');
+}
+
 /** @this {import('./index.js').AgentManager} */
 export const crudMethods = {
 
@@ -107,74 +125,89 @@ export const crudMethods = {
     const agent = this.agents.get(id);
     if (!agent) return null;
 
-    const allowed = [
-      'name', 'role', 'description', 'instructions', 'temperature',
-      'maxTokens', 'contextLength', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
-      'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'ttsEnabled', 'enabled',
-      'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId', 'boardId', 'credentials', 'runner', 'toolHooks'
-    ];
+    const targets = agent.batchId
+      ? Array.from(this.agents.values())
+          .filter((candidate: any) => candidate.batchId === agent.batchId)
+          .sort((a: any, b: any) => (a.batchIndex || 0) - (b.batchIndex || 0))
+      : [agent];
+    const batchBaseName = updates.name !== undefined ? _batchBaseName(updates.name) : null;
+    let selectedResult: any = null;
 
-    const llmFields = ['provider', 'model', 'llmConfigId', 'endpoint'];
-    const llmChanged = llmFields.some(f => updates[f] !== undefined && updates[f] !== agent[f]);
+    for (const target of targets) {
+      const effectiveUpdates: any = agent.batchId
+        ? Object.fromEntries(
+            Object.entries(updates).filter(([key]) => BATCH_SHARED_FIELDS.has(key))
+          )
+        : updates;
 
-    if (llmChanged) {
-      agent.conversationHistory = [];
-      agent.runnerSessions = {};
-      agent.currentThinking = '';
-      delete agent._compactionArmed;
-      console.log(`🔄 [LLM Change] Reset session and history for "${agent.name}" — LLM config changed`);
-    }
+      const llmChanged = LLM_FIELDS.some(f => effectiveUpdates[f] !== undefined && effectiveUpdates[f] !== target[f]);
 
-    for (const key of allowed) {
-      if (updates[key] !== undefined) {
-        if (key === 'apiKey' && !updates[key] && agent[key]) continue;
-        if (key === 'ownerId' && updates[key] !== agent[key]) {
-          agent[key] = updates[key];
-          setAgentOwner(agent.id, updates[key]);
+      if (llmChanged) {
+        target.conversationHistory = [];
+        target.runnerSessions = {};
+        target.currentThinking = '';
+        delete target._compactionArmed;
+        console.log(`🔄 [LLM Change] Reset session and history for "${target.name}" — LLM config changed`);
+      }
+
+      for (const key of AGENT_UPDATE_FIELDS) {
+        if (effectiveUpdates[key] === undefined) continue;
+
+        if (key === 'name' && agent.batchId) {
+          target.name = `${batchBaseName} #${target.batchIndex ?? 1}`;
           continue;
         }
-        if (key === 'boardId' && updates[key] !== agent[key]) {
-          agent[key] = updates[key];
-          setAgentBoard(agent.id, updates[key]);
+        if (key === 'apiKey' && !effectiveUpdates[key] && target[key]) continue;
+        if (key === 'ownerId' && effectiveUpdates[key] !== target[key]) {
+          target[key] = effectiveUpdates[key];
+          await setAgentOwner(target.id, effectiveUpdates[key]);
+          continue;
+        }
+        if (key === 'boardId' && effectiveUpdates[key] !== target[key]) {
+          target[key] = effectiveUpdates[key];
+          await setAgentBoard(target.id, effectiveUpdates[key]);
           continue;
         }
         if (key === 'mcpAuth') {
-          if (!agent.mcpAuth) agent.mcpAuth = {};
-          for (const [serverId, conf] of Object.entries(updates.mcpAuth || {})) {
+          if (!target.mcpAuth) target.mcpAuth = {};
+          for (const [serverId, conf] of Object.entries(effectiveUpdates.mcpAuth || {})) {
             if ((conf as any)?.apiKey) {
-              agent.mcpAuth[serverId] = { apiKey: (conf as any).apiKey };
+              target.mcpAuth[serverId] = { apiKey: (conf as any).apiKey };
             } else {
-              delete agent.mcpAuth[serverId];
+              delete target.mcpAuth[serverId];
             }
           }
           if (this.mcpManager) {
-            this.mcpManager.disconnectAgent(id).catch(() => {});
+            this.mcpManager.disconnectAgent(target.id).catch(() => {});
           }
           continue;
         }
         if (key === 'credentials') {
-          if (!agent.credentials) agent.credentials = {};
-          for (const [name, value] of Object.entries(updates.credentials || {})) {
+          if (!target.credentials) target.credentials = {};
+          for (const [name, value] of Object.entries(effectiveUpdates.credentials || {})) {
             if (value) {
-              agent.credentials[name] = value;
+              target.credentials[name] = value;
             } else {
-              delete agent.credentials[name];
+              delete target.credentials[name];
             }
           }
           continue;
         }
-        if (key === 'project' && updates[key] !== agent[key]) {
-          this._switchProjectContext(agent, agent.project, updates[key]);
-          agent.projectChangedAt = updates[key] ? new Date().toISOString() : null;
+        if (key === 'project' && effectiveUpdates[key] !== target[key]) {
+          this._switchProjectContext(target, target.project, effectiveUpdates[key]);
+          target.projectChangedAt = effectiveUpdates[key] ? new Date().toISOString() : null;
         }
-        agent[key] = updates[key];
+        target[key] = effectiveUpdates[key];
       }
-    }
-    agent.updatedAt = new Date().toISOString();
 
-    await saveAgent(agent);
-    this._emit('agent:updated', this._sanitize(agent));
-    return this._sanitize(agent);
+      target.updatedAt = new Date().toISOString();
+      await saveAgent(target);
+      const sanitized = this._sanitize(target);
+      this._emit('agent:updated', sanitized);
+      if (target.id === id) selectedResult = sanitized;
+    }
+
+    return selectedResult || this._sanitize(this.agents.get(id));
   },
 
   /**
