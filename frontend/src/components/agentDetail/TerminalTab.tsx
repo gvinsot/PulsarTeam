@@ -94,6 +94,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const encoderRef = useRef(new TextEncoder());
+  const pendingInputRef = useRef<string | null>(null);
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
@@ -108,7 +109,10 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const sendDraft = () => {
     const text = draft.trimEnd();
     if (!text.trim()) return;
-    if (!sendToRunner(`${text}\r`)) return;
+    const payload = `${text}\r`;
+    if (!sendToRunner(payload)) {
+      pendingInputRef.current = payload;
+    }
     setDraft('');
     termRef.current?.focus();
   };
@@ -210,6 +214,10 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         // resending here covers the reconnect case where the user's
         // window changed between attempts.
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        if (pendingInputRef.current) {
+          ws.send(encoderRef.current.encode(pendingInputRef.current));
+          pendingInputRef.current = null;
+        }
       };
 
       ws.onmessage = (ev) => {
@@ -279,7 +287,9 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         <TerminalIcon className="w-3.5 h-3.5 text-indigo-400" />
         <span>Terminal</span>
         <span className="opacity-60">— {agent.runner || 'cli'}</span>
-        <span className="ml-auto opacity-60">multi-client · scrollback persistent</span>
+        <span className="ml-auto opacity-60">
+          {connected ? 'connected' : 'reconnecting'} · multi-client
+        </span>
       </div>
       <div
         ref={containerRef}
@@ -299,13 +309,13 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               }
             }}
             className="min-h-[42px] max-h-32 flex-1 resize-none rounded-xl border border-dark-600 bg-dark-800 px-4 py-2.5 font-sans text-sm leading-5 text-dark-100 placeholder-dark-500 transition-colors focus:border-indigo-500 focus:outline-none disabled:opacity-60"
-            placeholder={connected ? 'Message...' : 'Reconnexion...'}
+            placeholder="Message..."
             rows={1}
           />
           <button
             type="button"
             onClick={sendDraft}
-            disabled={!connected || !draft.trim()}
+            disabled={!draft.trim()}
             className="flex h-[42px] w-[42px] flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition-colors hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
             title="Send"
           >
