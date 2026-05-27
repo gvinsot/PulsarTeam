@@ -30,6 +30,8 @@ import termios
 import signal
 import asyncio
 import subprocess
+import re
+import time
 from collections import deque
 from typing import Awaitable, Callable, Optional
 from dataclasses import dataclass, field
@@ -44,6 +46,26 @@ IDLE_TIMEOUT_SEC = int(os.getenv("TERMINAL_IDLE_TIMEOUT_SEC", str(60 * 60)))    
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 40
 READ_CHUNK = 4096
+
+_ANSI_RE = re.compile(
+    r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
+)
+_TRUST_RE = re.compile(
+    r"(do\s*you\s*trust\s*this\s*folder"
+    r"|is\s*this\s*a\s*project\s*you\s*(created|trust)"
+    r"|trust\s*this\s*folder\s*\?"
+    r"|yes,?\s*i\s*trust\s*this\s*folder)",
+    re.IGNORECASE,
+)
+_BYPASS_PERMS_RE = re.compile(
+    r"(bypass\s*permissions\s*mode|yes,?\s*i\s*accept)",
+    re.IGNORECASE,
+)
+_AUTO_ANSWER_COOLDOWN_S = 1.0
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 # A "client" callback type: an async function the session calls to push
@@ -85,6 +107,9 @@ class PtySession:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _closed: bool = False
     exit_code: Optional[int] = None
+    _auto_answer_buf: bytearray = field(default_factory=bytearray)
+    _auto_answered: set[str] = field(default_factory=set)
+    _last_auto_answer_at: float = 0.0
 
     async def start(self) -> None:
         """Spawn the subprocess in a fresh PTY and start the reader loop."""
@@ -171,7 +196,11 @@ class PtySession:
 
         try:
             while not self._closed:
-                await chunk_event.wait()
+                try:
+                    await asyncio.wait_for(chunk_event.wait(), timeout=0.2)
+                except asyncio.TimeoutError:
+                    self._maybe_auto_answer_startup_prompt()
+                    continue
                 chunk_event.clear()
                 while latest_chunk:
                     data = latest_chunk.pop(0)
@@ -182,11 +211,67 @@ class PtySession:
                         return
                     self._append_scrollback(data)
                     await self._broadcast(data)
+                    self._maybe_auto_answer_startup_prompt(data)
+                self._maybe_auto_answer_startup_prompt()
         finally:
             try:
                 loop.remove_reader(self.master_fd)
             except (OSError, ValueError):
                 pass
+
+    def _write_keystroke(self, data: bytes) -> None:
+        if self.master_fd < 0 or self._closed:
+            return
+        try:
+            os.write(self.master_fd, data)
+        except OSError as e:
+            logger.debug(f"[Terminal] auto-answer write failed for {self.agent_id}: {e}")
+
+    def _maybe_auto_answer_startup_prompt(self, data: bytes = b"") -> None:
+        """Dismiss Claude Code startup confirmations in the shared terminal.
+
+        The one-shot PTY driver already handles these screens, but the shared
+        /ws terminal intentionally runs as a transparent PTY broker. Without a
+        tiny prompt recognizer here, Claude Code can stop on first-run trust /
+        bypass-permissions confirmations before the user can use the terminal.
+        """
+        if data:
+            self._auto_answer_buf.extend(data)
+            if len(self._auto_answer_buf) > 8192:
+                del self._auto_answer_buf[:-8192]
+
+        if self.master_fd < 0 or self._closed:
+            return
+        if time.monotonic() - self._last_auto_answer_at < _AUTO_ANSWER_COOLDOWN_S:
+            return
+
+        tail = _strip_ansi(self._auto_answer_buf.decode("utf-8", errors="replace"))[-4096:]
+        if not tail.strip():
+            return
+
+        if "trust" not in self._auto_answered and _TRUST_RE.search(tail):
+            # Option 1 ("Yes, I trust this folder") is highlighted by default
+            # in Claude Code's TUI; Enter confirms it without leaking a typed
+            # "1" into the following screen.
+            logger.info(f"[Terminal] Auto-answer trust-folder prompt for agent {self.agent_id}: Enter")
+            self._write_keystroke(b"\r")
+            self._auto_answered.add("trust")
+            self._last_auto_answer_at = time.monotonic()
+            return
+
+        if "bypass" not in self._auto_answered and _BYPASS_PERMS_RE.search(tail):
+            # On the bypass-permissions warning, option 1 is "No, exit" and
+            # option 2 is "Yes, I accept". Move down once, then confirm.
+            logger.info(f"[Terminal] Auto-answer bypass-permissions prompt for agent {self.agent_id}: Down+Enter")
+            self._write_keystroke(b"\x1b[B")
+            self._last_auto_answer_at = time.monotonic()
+
+            async def confirm_after_render_tick() -> None:
+                await asyncio.sleep(0.12)
+                self._write_keystroke(b"\r")
+
+            asyncio.create_task(confirm_after_render_tick())
+            self._auto_answered.add("bypass")
 
     def _append_scrollback(self, data: bytes) -> None:
         """Append to the ring buffer, evicting oldest chunks once the byte
