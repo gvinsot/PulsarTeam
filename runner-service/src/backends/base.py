@@ -27,6 +27,7 @@ class RunnerBackend:
     supports_agent: bool = True       # /execute, /stream, /v1/chat/completions
     supports_oauth_login: bool = False  # /auth/login, /auth/agent/.../login, /auth/owner/.../login
     supports_token_set: bool = False    # /auth/token, /auth/agent/.../token, /auth/owner/.../token
+    supports_interactive_terminal: bool = False  # /ws/terminal/{agent_id}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -107,6 +108,31 @@ class RunnerBackend:
         """
         raise NotImplementedError(f"{self.name} backend does not support stream_events")
         yield  # pragma: no cover — make this an async generator
+
+    # ── Interactive terminal (TUI runners only) ───────────────────────────
+
+    async def prepare_interactive(
+        self,
+        agent_id: Optional[str],
+        owner_id: Optional[str] = None,
+    ) -> dict:
+        """Return everything needed to spawn the backend's CLI in a real
+        PTY for a shared interactive terminal session.
+
+        Returned dict keys:
+            cmd        — list[str], full argv (CLI binary + flags, no prompt)
+            cwd        — str, working directory the CLI should start in
+            env        — dict, full environment for the subprocess
+            preexec_fn — callable or None, applied in the child before exec
+                          (used to drop privileges to the per-agent UID)
+
+        Subclasses provision the agent's HOME, hydrate auth credentials,
+        and resolve the project working directory here — same setup as for
+        a one-shot `run_sync`/`stream_events`, but the caller (the terminal
+        PTY broker) will manage lifecycle, I/O, and multi-client fan-out
+        instead of treating the subprocess as a one-shot request.
+        """
+        raise NotImplementedError(f"{self.name} backend does not support interactive terminals")
 
     # ── Auth (only for backends with supports_oauth_login or supports_token_set) ──
 

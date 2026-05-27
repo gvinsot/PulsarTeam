@@ -68,6 +68,7 @@ import { boardRoutes } from './routes/boards.js';
 import { contactRoutes } from './routes/contact.js';
 import taskRoutes from './routes/tasks.js';
 import { setAgentManager } from './services/userProvisioning.js';
+import { installTerminalProxy } from './routes/terminal.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -110,6 +111,12 @@ const agentManager = new AgentManager(io, skillManager, executionManager, mcpMan
 setAgentManager(agentManager);
 app.set('io', io);
 app.set('agentManager', agentManager);
+
+// Mount the terminal WebSocket proxy on the same http.Server. Lives at
+// /ws/agents/:id/terminal — separate path from socket.io's /socket.io/*,
+// so the two upgrade handlers don't collide. Only intercepts paths that
+// match the terminal route; everything else flows on to socket.io.
+installTerminalProxy(httpServer);
 
 app.use(cors(buildCorsOptions(corsOrigins)));
 

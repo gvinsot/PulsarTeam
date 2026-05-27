@@ -27,6 +27,8 @@ from config import RUNNER_TYPE, logger
 from backends import BACKEND
 from routes_api import router as api_router
 from routes_auth import router as auth_router
+from routes_terminal import router as terminal_router
+import pty_session
 
 
 app = FastAPI(
@@ -37,6 +39,10 @@ app = FastAPI(
 
 app.include_router(auth_router)
 app.include_router(api_router)
+# Interactive terminal endpoints. Always mounted; the WS handler returns
+# WS_1003_UNSUPPORTED_DATA when the backend doesn't expose a CLI TUI, so
+# the route is harmless on non-CLI runners.
+app.include_router(terminal_router)
 
 
 @asynccontextmanager
@@ -45,6 +51,9 @@ async def lifespan(application: FastAPI):
     await BACKEND.startup()
     yield
     logger.info("Runner Service shutting down...")
+    # Tear down any live PTY sessions BEFORE the backend shuts down so the
+    # subprocesses get a chance to receive Ctrl-C / SIGTERM cleanly.
+    await pty_session.close_all_sessions()
     await BACKEND.shutdown()
 
 

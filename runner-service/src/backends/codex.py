@@ -83,6 +83,53 @@ class CodexBackend(CliBackend):
     pass_prompt_via_stdin = False  # prompt goes in as a positional arg
     supports_oauth_login = True    # OAuth PKCE against auth.openai.com
     supports_token_set = True      # accepts a full auth.json blob via /auth/token
+    supports_interactive_terminal = True  # `codex` (no `exec` subcommand) is a real TUI
+
+    # ── Interactive terminal recipe ───────────────────────────────────────
+
+    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
+        """Build a recipe to spawn `codex` (no `exec` subcommand) in a
+        shared PTY. Same per-agent isolation and auth hydration as the
+        headless `run_sync`/`stream_events` path."""
+        from .cli_backend import CliBackend as _CliBackend
+        # Hydrate the per-agent ~/.codex/auth.json + refresh the OAuth
+        # token if it's about to expire. Reuses the same code path the
+        # headless modes call before every spawn.
+        await self._hydrate_for_exec(agent_id, owner_id)
+
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        effective_user = self._resolve_effective_user(agent_id, agent_user) \
+            if hasattr(self, "_resolve_effective_user") else agent_user
+
+        # cwd: the agent's project workspace when available, else the
+        # generic CLI cwd. Same resolution as cli_backend uses.
+        from agent_user import get_agent_project_dir
+        from config import CLI_CWD
+        project_dir = get_agent_project_dir(agent_id) if agent_id else None
+        cwd = project_dir if (project_dir and os.path.isdir(project_dir)) else CLI_CWD
+
+        # The interactive CLI is just `codex` — no `exec`, no `--json`, no
+        # positional prompt. The user types into the TUI. We still pass
+        # `--model` so the agent's configured model is used.
+        cmd = [self.cli_command, "--model", RUNNER_MODEL or DEFAULT_CODEX_MODEL]
+
+        # Env: same per-agent env as headless. CODEX_HOME is implicit via
+        # the HOME of the dropped UID (see ensure_agent_user).
+        env = self._build_env(agent_user) if hasattr(self, "_build_env") else None
+        if env is None:
+            # Fallback: minimal sanitized env.
+            from command_security import sanitize_env
+            env = sanitize_env(os.environ, agent_user)
+
+        from .claude_token_store import get_subprocess_kwargs as _drop_kw
+        kwargs = _drop_kw(effective_user) or {}
+
+        return {
+            "cmd": cmd,
+            "cwd": cwd,
+            "env": env,
+            "preexec_fn": kwargs.get("preexec_fn"),
+        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 

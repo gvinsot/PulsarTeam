@@ -14,7 +14,13 @@ const CHAT_ACK_TIMEOUT_MS = 8000;
 import VoiceChatTab from './VoiceChatTab';
 import ExternalVoiceChatTab from './ExternalVoiceChatTab';
 import ChatTab from './agentDetail/ChatTab';
+import TerminalTab from './agentDetail/TerminalTab';
 import PluginsTab from './agentDetail/PluginsTab';
+
+// CLI runners that get a real TUI in a shared PTY instead of the chat
+// surface. The terminal is the canonical interactive interface for these —
+// the chat would just relay a flaky approximation of the real CLI output.
+const CLI_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw']);
 import ContextTab from './agentDetail/ContextTab';
 import ActionLogsTab from './agentDetail/ActionLogsTab';
 import SettingsTab from './agentDetail/SettingsTab';
@@ -386,7 +392,11 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       {/* Tab content */}
       <div className="flex-1 overflow-auto">
         {activeTab === 'chat' && (
-          agent.isVoice ? (
+          CLI_RUNNERS.has(agent.runner) ? (
+            // CLI runners (claudecode, codex, opencode, openclaw) drive a real
+            // TUI in a shared PTY — bypassing the chat surface entirely.
+            <TerminalTab agent={agent} token={localStorage.getItem('token') || ''} />
+          ) : agent.isVoice ? (
             agent.voiceMode === 'external'
               ? <ExternalVoiceChatTab agent={agent} />
               : <VoiceChatTab agent={agent} />

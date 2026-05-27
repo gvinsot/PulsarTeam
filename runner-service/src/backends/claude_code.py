@@ -105,9 +105,63 @@ class ClaudeCodeBackend(RunnerBackend):
     supports_agent = True
     supports_oauth_login = True
     supports_token_set = True
+    supports_interactive_terminal = True
 
     def __init__(self):
         self._permissions: dict[str, dict] = {}
+
+    # ── Interactive terminal recipe ───────────────────────────────────────
+
+    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
+        """Provision the agent's HOME + hydrate auth + build the CLI argv
+        for a shared interactive PTY session.
+
+        This is the same setup as a one-shot `run_sync`/`stream_events`
+        except we don't supply a `--session-id` or system prompt — the
+        user is driving the TUI themselves and the CLI manages its own
+        session/history inside the agent's per-HOME `.claude` tree.
+        """
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        # Bootstrap from the global token if the per-owner record is empty
+        # (mirrors the early lines of run_sync). We don't refresh proactively
+        # here — the CLI itself will refresh if it needs to.
+        if agent_user:
+            _owner_id = agent_user.get("owner_id")
+            if not resolve_token(agent_user):
+                global_token = load_saved_token()
+                if global_token:
+                    global_refresh = get_saved_refresh_token()
+                    if _owner_id:
+                        save_owner_token(_owner_id, global_token, refresh_token=global_refresh)
+                    else:
+                        save_agent_token(agent_user, global_token, refresh_token=global_refresh)
+
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
+        self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
+        seed_onboarding_state(effective_user)
+        seed_credentials_file(effective_user)
+
+        # Reuse _build_cmd to get the same flags as the chat path, but in
+        # interactive mode (no session_id → no --resume; the user drives
+        # session restoration via /resume inside the TUI if they want).
+        cmd, proc_cwd = self._build_cmd(
+            output_format="text",
+            system_prompt=None,
+            agent_id=agent_id,
+            task_id=None,
+            permissions=self._get_permissions(agent_id),
+            agent_user=effective_user,
+            session_id=None,
+            is_resume=False,
+        )
+        env = get_agent_env(effective_user)
+        kwargs = get_subprocess_kwargs(effective_user) or {}
+        return {
+            "cmd": cmd,
+            "cwd": proc_cwd,
+            "env": env,
+            "preexec_fn": kwargs.get("preexec_fn"),
+        }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
