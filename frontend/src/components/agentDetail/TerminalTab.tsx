@@ -22,6 +22,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { Terminal as TerminalIcon } from 'lucide-react';
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface TerminalTabProps {
   agent: { id: string; name?: string; runner?: string };
@@ -32,13 +33,65 @@ interface TerminalTabProps {
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15_000;
 
+const getTerminalTheme = (theme: string) => (
+  theme === 'light'
+    ? {
+        background: '#ffffff',
+        foreground: '#374151',
+        cursor: '#4f46e5',
+        cursorAccent: '#ffffff',
+        selectionBackground: '#c7d2fe',
+        black: '#111827',
+        red: '#dc2626',
+        green: '#059669',
+        yellow: '#d97706',
+        blue: '#2563eb',
+        magenta: '#7c3aed',
+        cyan: '#0891b2',
+        white: '#f9fafb',
+        brightBlack: '#6b7280',
+        brightRed: '#ef4444',
+        brightGreen: '#10b981',
+        brightYellow: '#f59e0b',
+        brightBlue: '#3b82f6',
+        brightMagenta: '#8b5cf6',
+        brightCyan: '#06b6d4',
+        brightWhite: '#ffffff',
+      }
+    : {
+        background: '#020617',
+        foreground: '#e2e8f0',
+        cursor: '#818cf8',
+        cursorAccent: '#020617',
+        selectionBackground: '#334155',
+        black: '#020617',
+        red: '#ef4444',
+        green: '#10b981',
+        yellow: '#f59e0b',
+        blue: '#60a5fa',
+        magenta: '#a78bfa',
+        cyan: '#06b6d4',
+        white: '#e2e8f0',
+        brightBlack: '#64748b',
+        brightRed: '#f87171',
+        brightGreen: '#34d399',
+        brightYellow: '#fbbf24',
+        brightBlue: '#93c5fd',
+        brightMagenta: '#c4b5fd',
+        brightCyan: '#22d3ee',
+        brightWhite: '#f8fafc',
+      }
+);
+
 export default function TerminalTab({ agent, token }: TerminalTabProps) {
+  const { theme } = useTheme();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
+  const encoderRef = useRef(new TextEncoder());
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
@@ -50,35 +103,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
     const term = new XTerminal({
       cursorBlink: true,
-      fontFamily: '"JetBrains Mono", Menlo, Consolas, "Courier New", monospace',
-      fontSize: 13,
+      fontFamily: '"Cascadia Code", "SFMono-Regular", "Segoe UI Mono", Menlo, Consolas, monospace',
+      fontSize: 14,
+      lineHeight: 1.35,
       scrollback: 5000,
-      // Match the dark theme of the rest of the app. Picked to render
-      // claude/codex/opencode TUIs (which use the full ANSI palette)
-      // legibly without burning the eyes.
-      theme: {
-        background: '#0b0b14',
-        foreground: '#e5e7eb',
-        cursor: '#a78bfa',
-        cursorAccent: '#0b0b14',
-        selectionBackground: '#374151',
-        black: '#000000',
-        red: '#ef4444',
-        green: '#10b981',
-        yellow: '#f59e0b',
-        blue: '#60a5fa',
-        magenta: '#a78bfa',
-        cyan: '#06b6d4',
-        white: '#e5e7eb',
-        brightBlack: '#6b7280',
-        brightRed: '#f87171',
-        brightGreen: '#34d399',
-        brightYellow: '#fbbf24',
-        brightBlue: '#93c5fd',
-        brightMagenta: '#c4b5fd',
-        brightCyan: '#22d3ee',
-        brightWhite: '#f9fafb',
-      },
+      theme: getTerminalTheme(theme),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -111,7 +140,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     term.onData((data) => {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
+        ws.send(encoderRef.current.encode(data));
       }
     });
 
@@ -129,6 +158,12 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       fitRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.theme = getTerminalTheme(theme);
+  }, [theme]);
 
   // ── WebSocket lifecycle ───────────────────────────────────────────────
   // Connect once on mount, reconnect on close. Kept in its own effect so
@@ -153,6 +188,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
       ws.onopen = () => {
         reconnectAttemptRef.current = 0;
+        term.focus();
         // Send the current geometry once explicitly so the runner-side PTY
         // is sized correctly before the first rendering happens. The
         // server already received cols/rows on the handshake URL, but
@@ -221,14 +257,19 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   }, [agent.id, token]);
 
   return (
-    <div className="flex flex-col h-full bg-[#0b0b14]">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-dark-700/50 text-xs text-dark-400">
+    <div className="flex flex-col h-full bg-dark-900 text-dark-200">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-dark-700/50 text-xs text-dark-400 bg-dark-900">
         <TerminalIcon className="w-3.5 h-3.5 text-indigo-400" />
         <span>Terminal</span>
         <span className="opacity-60">— {agent.runner || 'cli'}</span>
         <span className="ml-auto opacity-60">multi-client · scrollback persistent</span>
       </div>
-      <div ref={containerRef} className="flex-1 p-2 overflow-hidden" />
+      <div
+        ref={containerRef}
+        className="flex-1 p-2 overflow-hidden bg-dark-900"
+        onClick={() => termRef.current?.focus()}
+        onMouseDown={() => termRef.current?.focus()}
+      />
     </div>
   );
 }
