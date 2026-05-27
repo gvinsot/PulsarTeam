@@ -1108,8 +1108,11 @@ class ClaudeCodeBackend(RunnerBackend):
 
         try:
             async for line in proc.stdout:
-                line = line.decode("utf-8", errors="replace").strip()
-                if not line:
+                # Keep only the line terminator stripped — preserve all internal
+                # and leading whitespace so plain-text CLI output (auth banners,
+                # error messages) is not silently mangled when re-emitted.
+                line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line or not line.strip():
                     continue
 
                 is_json_event = False
@@ -1140,7 +1143,22 @@ class ClaudeCodeBackend(RunnerBackend):
 
                 if check_auth:
                     line_lower = line.lower()
-                    if "token has expired" in line_lower or ("authentication_error" in line_lower and "401" in line_lower):
+                    # Recognise the various phrasings the Claude CLI uses for
+                    # an expired / rejected OAuth token. The CLI may emit any of:
+                    #   • "OAuth token has expired"
+                    #   • "API Error: 401 ..."  (JSON or plain text)
+                    #   • "Please run /login"
+                    #   • "Invalid authentication credentials"
+                    #   • "Invalid API key"
+                    is_expired_or_unauthorized = (
+                        "token has expired" in line_lower
+                        or ("authentication_error" in line_lower and "401" in line_lower)
+                        or "please run /login" in line_lower
+                        or "invalid authentication credentials" in line_lower
+                        or "invalid api key" in line_lower
+                        or ("401" in line_lower and "invalid" in line_lower and "credential" in line_lower)
+                    )
+                    if is_expired_or_unauthorized:
                         try:
                             proc.terminate()
                         except ProcessLookupError:
@@ -1238,8 +1256,14 @@ class ClaudeCodeBackend(RunnerBackend):
                             }
                         return
 
+                    # Preserve the line break — these chunks are concatenated
+                    # downstream (OpenAI-stream `delta.content` accumulation)
+                    # and without a separator, the last word of line N and the
+                    # first word of line N+1 would be jammed together. This was
+                    # the cause of garbled output like
+                    # "API Error:401Invalidauthenticationcredentials".
                     has_content = True
-                    yield {"type": "text", "content": line}
+                    yield {"type": "text", "content": line + "\n"}
                     continue
 
                 event_type = event.get("type", "")

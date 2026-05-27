@@ -93,7 +93,10 @@ class CliBackend(RunnerBackend):
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            return {"type": "text", "content": line}
+            # Preserve a line break so multi-line plain-text CLI output (banners,
+            # error messages) is not collapsed into a single space-less blob
+            # when chunks are concatenated by the OpenAI-stream consumer.
+            return {"type": "text", "content": line + "\n"}
 
         event_type = event.get("type", "")
         if event_type == "assistant":
@@ -278,8 +281,11 @@ class CliBackend(RunnerBackend):
 
         try:
             async for line in proc.stdout:
-                line = line.decode("utf-8", errors="replace").strip()
-                if not line:
+                # Preserve internal whitespace; only strip the line terminator
+                # so that plain-text fallbacks emitted by the CLI keep their
+                # spacing when concatenated downstream.
+                line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line or not line.strip():
                     continue
                 event = self._parse_stream_event(line)
                 if not event:
