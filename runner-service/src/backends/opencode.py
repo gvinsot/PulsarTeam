@@ -19,13 +19,33 @@ Note: opencode passes the message as a positional argument, not via stdin.
 from typing import Optional
 
 from config import RUNNER_MODEL
+from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
+from .claude_token_store import get_subprocess_kwargs
 
 
 class OpenCodeBackend(CliBackend):
     name = "opencode"
     cli_command = "opencode"
     pass_prompt_via_stdin = False  # opencode takes the message as positional arg
+    supports_interactive_terminal = True
+
+    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
+        """Spawn OpenCode in its interactive TUI for the shared PTY."""
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
+
+        cmd = [self.cli_command]
+        if RUNNER_MODEL:
+            cmd += ["--model", RUNNER_MODEL]
+
+        kwargs = get_subprocess_kwargs(effective_user) or {}
+        return {
+            "cmd": cmd,
+            "cwd": self._resolve_cwd(agent_id),
+            "env": self._agent_env(effective_user),
+            "preexec_fn": kwargs.get("preexec_fn"),
+        }
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
         cmd = [self.cli_command, "run"]

@@ -2,6 +2,9 @@
 OpenClaw backend — wraps the openclaw CLI (https://openclaw.ai).
 
 Real CLI surface:
+  openclaw tui [flags]                 # interactive terminal UI
+  openclaw chat                         # alias for `openclaw tui --local`
+  openclaw terminal                     # alias for `openclaw tui --local`
   openclaw agent --message "..." [flags]
     --json              # JSON output (suitable for piping)
     --plain             # disable styling
@@ -19,7 +22,9 @@ the OpenClaw gateway.
 
 import os
 
+from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
+from .claude_token_store import get_subprocess_kwargs
 
 
 OPENCLAW_AGENT = os.getenv("OPENCLAW_AGENT", "default")
@@ -30,6 +35,26 @@ class OpenClawBackend(CliBackend):
     name = "openclaw"
     cli_command = "openclaw"
     pass_prompt_via_stdin = False
+    supports_interactive_terminal = True
+
+    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
+        """Spawn OpenClaw's TUI for the shared PTY."""
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
+
+        cmd = [self.cli_command, "tui"]
+        if OPENCLAW_LOCAL:
+            cmd.append("--local")
+        if OPENCLAW_AGENT and OPENCLAW_AGENT != "default":
+            cmd += ["--session", f"agent:{OPENCLAW_AGENT}:main"]
+
+        kwargs = get_subprocess_kwargs(effective_user) or {}
+        return {
+            "cmd": cmd,
+            "cwd": self._resolve_cwd(agent_id),
+            "env": self._agent_env(effective_user),
+            "preexec_fn": kwargs.get("preexec_fn"),
+        }
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
         cmd = [self.cli_command, "agent"]
