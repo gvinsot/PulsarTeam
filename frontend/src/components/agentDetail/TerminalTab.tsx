@@ -16,12 +16,12 @@
  *   • The xterm scrollback survives reconnects because xterm.js holds it
  *     locally on top of whatever the server replays.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TerminalIcon } from 'lucide-react';
+import { Send, Terminal as TerminalIcon } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface TerminalTabProps {
@@ -85,6 +85,8 @@ const getTerminalTheme = (theme: string) => (
 
 export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const { theme } = useTheme();
+  const [draft, setDraft] = useState('');
+  const [connected, setConnected] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -95,6 +97,21 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
+
+  const sendToRunner = (data: string) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(encoderRef.current.encode(data));
+    return true;
+  };
+
+  const sendDraft = () => {
+    const text = draft.trimEnd();
+    if (!text.trim()) return;
+    if (!sendToRunner(`${text}\r`)) return;
+    setDraft('');
+    termRef.current?.focus();
+  };
 
   // ── xterm.js setup ────────────────────────────────────────────────────
   useEffect(() => {
@@ -138,10 +155,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
     // Keystrokes from the user → bytes to the server.
     term.onData((data) => {
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(encoderRef.current.encode(data));
-      }
+      sendToRunner(data);
     });
 
     return () => {
@@ -188,6 +202,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
       ws.onopen = () => {
         reconnectAttemptRef.current = 0;
+        setConnected(true);
         term.focus();
         // Send the current geometry once explicitly so the runner-side PTY
         // is sized correctly before the first rendering happens. The
@@ -225,6 +240,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
       ws.onclose = () => {
         wsRef.current = null;
+        setConnected(false);
         if (!aliveRef.current) return;
         scheduleReconnect();
       };
@@ -253,6 +269,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       }
       try { wsRef.current?.close(); } catch { /* noop */ }
       wsRef.current = null;
+      setConnected(false);
     };
   }, [agent.id, token]);
 
@@ -270,6 +287,32 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         onClick={() => termRef.current?.focus()}
         onMouseDown={() => termRef.current?.focus()}
       />
+      <div className="border-t border-dark-700/50 bg-dark-900 p-3">
+        <div className="flex items-end gap-2">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendDraft();
+              }
+            }}
+            className="min-h-[42px] max-h-32 flex-1 resize-none rounded-xl border border-dark-600 bg-dark-800 px-4 py-2.5 font-sans text-sm leading-5 text-dark-100 placeholder-dark-500 transition-colors focus:border-indigo-500 focus:outline-none disabled:opacity-60"
+            placeholder={connected ? 'Message...' : 'Reconnexion...'}
+            rows={1}
+          />
+          <button
+            type="button"
+            onClick={sendDraft}
+            disabled={!connected || !draft.trim()}
+            className="flex h-[42px] w-[42px] flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition-colors hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Send"
+          >
+            <Send className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
