@@ -52,6 +52,7 @@ export const conversationMethods = {
    *  - LLM configs cache (reload from DB so model/endpoint edits land)
    *  - Per-agent MCP client connections (reconnect with current auth)
    *  - Project file tree (re-read so file additions/deletions show up)
+   *  - Shared CLI terminal session (next terminal attach starts a fresh CLI)
    *
    * Returns true on success, false if the agent doesn't exist.
    */
@@ -96,7 +97,25 @@ export const conversationMethods = {
       }
     }
 
-    this.addActionLog(agentId, 'info', 'Context reloaded — caches invalidated');
+    // 9. Restart the shared CLI terminal session. The Settings tab unmounts
+    //    the browser terminal, so closing the runner-side PTY here ensures
+    //    returning to Chat spawns a fresh CLI with the reloaded context.
+    let terminalClosed = false;
+    if (this.executionManager?.closeTerminalSession) {
+      try {
+        terminalClosed = await this.executionManager.closeTerminalSession(agentId);
+      } catch (err: any) {
+        console.warn(`⚠️  [ReloadContext] closeTerminalSession failed: ${err.message}`);
+      }
+    }
+
+    this.addActionLog(
+      agentId,
+      'info',
+      terminalClosed
+        ? 'Context reloaded — caches invalidated and CLI restarted'
+        : 'Context reloaded — caches invalidated'
+    );
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },

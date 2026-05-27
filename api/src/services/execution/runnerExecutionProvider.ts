@@ -190,6 +190,21 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     console.log('🗑️  [Runner] Cleared all agent states');
   }
 
+  async closeTerminalSession(agentId: string): Promise<boolean> {
+    const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
+      method: 'DELETE',
+      headers: this._headers(agentId),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 404) return false;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`terminal session close failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+    }
+    const data: any = await res.json().catch(() => ({}));
+    return Boolean(data.closed);
+  }
+
   hasEnvironment(agentId: string): boolean {
     return this._agents.has(agentId);
   }

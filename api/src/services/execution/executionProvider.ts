@@ -82,6 +82,14 @@ export class ExecutionProvider {
     throw new Error('destroyAll() not implemented');
   }
 
+  /**
+   * Close the interactive terminal session for this agent, if the provider
+   * supports one. The next terminal attach will spawn a fresh CLI process.
+   */
+  async closeTerminalSession(agentId: string): Promise<boolean> {
+    return false;
+  }
+
   // ── Query ─────────────────────────────────────────────────────────────
 
   /**

@@ -192,6 +192,10 @@ export class ExecutionManager {
     this._agentProviders.clear();
   }
 
+  async closeTerminalSession(agentId: string): Promise<boolean> {
+    return this._providerFor(agentId).closeTerminalSession(agentId);
+  }
+
   hasEnvironment(agentId: string): boolean {
     return this._providerFor(agentId).hasEnvironment(agentId);
   }
