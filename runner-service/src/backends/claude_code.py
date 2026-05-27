@@ -43,6 +43,7 @@ from .claude_oauth import (
     token_http_request,
 )
 from .claude_interactive import run_interactive
+from .runner_mcp_config import configure_claude_mcp
 
 
 MAX_AUTH_RETRIES = 2
@@ -137,6 +138,7 @@ class ClaudeCodeBackend(RunnerBackend):
                         save_agent_token(agent_user, global_token, refresh_token=global_refresh)
 
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        configure_claude_mcp(effective_user, agent_id)
         self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
         seed_onboarding_state(effective_user)
         seed_credentials_file(effective_user)
@@ -559,6 +561,7 @@ class ClaudeCodeBackend(RunnerBackend):
         # run as the server's root UID. Off by default — when off, we keep the
         # dedicated agent UID resolved by ensure_agent_user.
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        configure_claude_mcp(effective_user, agent_id)
         # Translate permissions (network / filesystem / execution.shell) into
         # native Claude Code deny rules in the per-agent settings.json. Done
         # at every spawn so toggles take effect on the next message without
@@ -925,6 +928,7 @@ class ClaudeCodeBackend(RunnerBackend):
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        configure_claude_mcp(effective_user, agent_id)
         self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
         # See run_sync for rationale on both seeds.
         seed_onboarding_state(effective_user)

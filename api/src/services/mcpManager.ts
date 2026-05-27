@@ -80,6 +80,14 @@ function createBuiltinServerEntry(def: any) {
   };
 }
 
+function slugMcpName(value: string): string {
+  return String(value || 'mcp')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80) || 'mcp';
+}
+
 export class MCPManager {
   servers: Map<string, any>;
   clients: Map<string, any>;
@@ -701,6 +709,72 @@ export class MCPManager {
       }
     }
     return { tools, unavailable };
+  }
+
+  getClaudeMcpConfigForAgent(agent, skillManager = null) {
+    if (!agent) return { mcpServers: {}, serverIds: [] };
+
+    const entries = new Map();
+    const addEntry = (serverId, authOverride = null) => {
+      if (!serverId || entries.has(serverId)) return;
+      const server = this.getById(serverId);
+      if (!server || server.enabled === false || !server.url) return;
+
+      const internal = resolveInternalMcpConfig(server.url);
+      const headers = {
+        ...(internal.headers || {}),
+      };
+      const agentAuth = agent.mcpAuth?.[server.id];
+      const apiKey = authOverride?.apiKey || agentAuth?.apiKey || server.apiKey || '';
+      if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+      if (Object.keys(internal.headers || {}).length > 0) {
+        headers['X-Agent-Id'] = agent.id;
+        if (agent.boardId) headers['X-Board-Id'] = agent.boardId;
+      }
+
+      const baseName = slugMcpName(server.name || server.id);
+      let name = baseName;
+      let suffix = 2;
+      while ([...entries.values()].some((entry) => entry.name === name)) {
+        name = `${baseName}-${suffix++}`;
+      }
+
+      entries.set(server.id, {
+        name,
+        config: {
+          type: 'http',
+          url: internal.url || server.url,
+          ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        },
+      });
+    };
+
+    const pluginManaged = new Set(agent.pluginMcpServers || []);
+    const directServerIds = Array.isArray(agent.mcpServersExplicit)
+      ? agent.mcpServersExplicit
+      : (agent.mcpServers || []).filter((serverId) => !pluginManaged.has(serverId));
+    for (const serverId of directServerIds) {
+      addEntry(serverId);
+    }
+
+    if (skillManager) {
+      for (const pluginId of agent.skills || []) {
+        const plugin = skillManager.getById(pluginId);
+        for (const serverId of plugin?.mcpServerIds || []) {
+          const pluginMcp = Array.isArray(plugin?.mcps) ? plugin.mcps.find((m) => m.id === serverId) : null;
+          addEntry(serverId, pluginMcp);
+        }
+        for (const pluginMcp of plugin?.mcps || []) {
+          addEntry(pluginMcp.id, pluginMcp);
+        }
+      }
+    }
+
+    const mcpServers = {};
+    for (const entry of entries.values()) {
+      mcpServers[entry.name] = entry.config;
+    }
+    return { mcpServers, serverIds: [...entries.keys()] };
   }
 
   /**

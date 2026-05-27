@@ -4,6 +4,44 @@ import dns from 'dns/promises';
 import net from 'net';
 import { saveAgent } from '../database.js';
 
+function _pluginMcpIds(plugin: any): string[] {
+  const ids = new Set<string>();
+  for (const id of plugin?.mcpServerIds || []) {
+    if (id) ids.add(id);
+  }
+  for (const mcp of plugin?.mcps || []) {
+    if (mcp?.id) ids.add(mcp.id);
+  }
+  return Array.from(ids);
+}
+
+function _syncPluginMcps(agent: any, skillManager: any): void {
+  const explicit = new Set(agent.mcpServersExplicit || []);
+  const pluginIds = Array.isArray(agent.skills) ? agent.skills : [];
+  const pluginMcpIds = new Set<string>();
+  if (skillManager) {
+    for (const pluginId of pluginIds) {
+      const plugin = skillManager.getById(pluginId);
+      for (const mcpId of _pluginMcpIds(plugin)) {
+        pluginMcpIds.add(mcpId);
+      }
+    }
+  }
+  agent.mcpServers = Array.from(new Set([...explicit, ...pluginMcpIds]));
+  agent.pluginMcpServers = Array.from(pluginMcpIds);
+}
+
+async function _restartCliForPluginChange(manager: any, agentId: string): Promise<void> {
+  if (manager.mcpManager?.disconnectAgent) {
+    manager.mcpManager.disconnectAgent(agentId).catch(() => {});
+  }
+  if (manager.executionManager?.closeTerminalSession) {
+    manager.executionManager.closeTerminalSession(agentId).catch((err: any) => {
+      console.warn(`⚠️ [Plugins] closeTerminalSession failed for ${agentId}: ${err.message}`);
+    });
+  }
+}
+
 // SSRF guard — reject private/loopback/link-local addresses (incl. AWS metadata 169.254.169.254).
 function isPrivateIPv4(ip: string): boolean {
   const parts = ip.split('.').map(Number);
@@ -145,10 +183,13 @@ export const agentFeaturesMethods = {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     if (!agent.skills) agent.skills = [];
-    if (agent.skills.includes(skillId)) return agent.skills;
-    agent.skills.push(skillId);
+    if (!agent.skills.includes(skillId)) {
+      agent.skills.push(skillId);
+    }
+    _syncPluginMcps(agent, this.skillManager);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
+    _restartCliForPluginChange(this, agentId);
     return agent.skills;
   },
 
@@ -157,8 +198,10 @@ export const agentFeaturesMethods = {
     if (!agent) return false;
     if (!agent.skills) agent.skills = [];
     agent.skills = agent.skills.filter((id: string) => id !== skillId);
+    _syncPluginMcps(agent, this.skillManager);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
+    _restartCliForPluginChange(this, agentId);
     return true;
   },
 
@@ -166,21 +209,35 @@ export const agentFeaturesMethods = {
   assignMcpServer(this: any, agentId: string, serverId: string): any {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    if (!agent.mcpServers) agent.mcpServers = [];
-    if (agent.mcpServers.includes(serverId)) return agent.mcpServers;
-    agent.mcpServers.push(serverId);
+    if (!agent.mcpServersExplicit) {
+      const pluginManaged = new Set(agent.pluginMcpServers || []);
+      agent.mcpServersExplicit = Array.isArray(agent.mcpServers)
+        ? agent.mcpServers.filter((id: string) => !pluginManaged.has(id))
+        : [];
+    }
+    if (agent.mcpServersExplicit.includes(serverId)) return agent.mcpServers;
+    agent.mcpServersExplicit.push(serverId);
+    _syncPluginMcps(agent, this.skillManager);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
+    _restartCliForPluginChange(this, agentId);
     return agent.mcpServers;
   },
 
   removeMcpServer(this: any, agentId: string, serverId: string): boolean {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
-    if (!agent.mcpServers) agent.mcpServers = [];
-    agent.mcpServers = agent.mcpServers.filter((id: string) => id !== serverId);
+    if (!agent.mcpServersExplicit) {
+      const pluginManaged = new Set(agent.pluginMcpServers || []);
+      agent.mcpServersExplicit = Array.isArray(agent.mcpServers)
+        ? agent.mcpServers.filter((id: string) => !pluginManaged.has(id))
+        : [];
+    }
+    agent.mcpServersExplicit = agent.mcpServersExplicit.filter((id: string) => id !== serverId);
+    _syncPluginMcps(agent, this.skillManager);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
+    _restartCliForPluginChange(this, agentId);
     return true;
   },
 };
