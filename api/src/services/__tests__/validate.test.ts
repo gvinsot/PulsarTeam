@@ -103,6 +103,15 @@ test('express.json body limit rejects oversize payload with 413', async () => {
   const app = express();
   app.use(express.json({ limit: '1kb' }));
   app.post('/big', validateBody(z.object({ s: z.string() })), (_req, res) => res.json({ ok: true }));
+  // Swallow body-parser's PayloadTooLargeError so it doesn't print a stack to stderr.
+  // The default Express error handler still responds with the correct 413 status.
+  app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+      res.status(413).json({ error: 'Payload too large' });
+      return;
+    }
+    next(err);
+  });
   const server = http.createServer(app);
   await new Promise<void>(resolve => server.listen(0, resolve));
   const address = server.address();
