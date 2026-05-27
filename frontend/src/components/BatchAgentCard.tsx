@@ -45,53 +45,47 @@ export default function BatchAgentCard({
 
   return (
     <div className="relative">
-      {/* Stack effect: a second card peeking behind to hint there's more than one */}
-      <div
-        aria-hidden
-        className="absolute inset-0 translate-x-1.5 translate-y-1.5 rounded-xl border border-dark-700/40 bg-dark-800/30 pointer-events-none"
+      <AgentCard
+        agent={active}
+        thinking={thinkingMap?.[active.id]}
+        isSelected={selectedAgentId === active.id}
+        viewMode={viewMode}
+        onClick={() => onSelect(active.id)}
+        onStop={onStop}
+        emphasizedBorder
       />
-      <div className="relative">
-        <AgentCard
-          agent={active}
-          thinking={thinkingMap?.[active.id]}
-          isSelected={selectedAgentId === active.id}
-          viewMode={viewMode}
-          onClick={() => onSelect(active.id)}
-          onStop={onStop}
-        />
-        {/* Batch header overlay */}
-        <div className="absolute top-0 right-0 m-2 flex items-center gap-2 z-10">
-          <span
-            className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
-            title={`${sorted.length} agents in batch — ${busyCount} busy, ${errorCount} error`}
+      {/* Batch header overlay */}
+      <div className="absolute top-0 right-0 m-2 flex items-center gap-2 z-10">
+        <span
+          className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/20 text-indigo-300 border border-indigo-500/30"
+          title={`${sorted.length} agents in batch — ${busyCount} busy, ${errorCount} error`}
+        >
+          <Users className="w-3 h-3" />
+          {sorted.length}
+          {busyCount > 0 && <span className="text-amber-300">· {busyCount} busy</span>}
+          {errorCount > 0 && <span className="text-red-300">· {errorCount} err</span>}
+        </span>
+      </div>
+      {/* Member dropdown — bottom-right so it doesn't fight with status pill */}
+      <div className="absolute bottom-2 right-2 z-10" onClick={(e) => e.stopPropagation()}>
+        <div className="relative">
+          <select
+            value={activeId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setActiveId(id);
+              onSelect(id);
+            }}
+            className="appearance-none pl-2 pr-7 py-1 bg-dark-900/80 border border-dark-600 rounded-md text-[11px] text-dark-200 hover:border-indigo-500/40 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            title={`Batch "${baseName}" — ${sorted.length} members`}
           >
-            <Users className="w-3 h-3" />
-            {sorted.length}
-            {busyCount > 0 && <span className="text-amber-300">· {busyCount} busy</span>}
-            {errorCount > 0 && <span className="text-red-300">· {errorCount} err</span>}
-          </span>
-        </div>
-        {/* Member dropdown — bottom-right so it doesn't fight with status pill */}
-        <div className="absolute bottom-2 right-2 z-10" onClick={(e) => e.stopPropagation()}>
-          <div className="relative">
-            <select
-              value={activeId}
-              onChange={(e) => {
-                const id = e.target.value;
-                setActiveId(id);
-                onSelect(id);
-              }}
-              className="appearance-none pl-2 pr-7 py-1 bg-dark-900/80 border border-dark-600 rounded-md text-[11px] text-dark-200 hover:border-indigo-500/40 focus:outline-none focus:border-indigo-500 cursor-pointer"
-              title={`Batch "${baseName}" — ${sorted.length} members`}
-            >
-              {sorted.map(m => (
-                <option key={m.id} value={m.id}>
-                  #{m.batchIndex ?? '?'} {m.status === 'busy' || thinkingMap?.[m.id] ? '· busy' : m.status === 'error' ? '· err' : ''}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 text-dark-400 pointer-events-none" />
-          </div>
+            {sorted.map(m => (
+              <option key={m.id} value={m.id}>
+                #{m.batchIndex ?? '?'} {m.status === 'busy' || thinkingMap?.[m.id] ? '· busy' : m.status === 'error' ? '· err' : ''}
+              </option>
+            ))}
+          </select>
+          <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 text-dark-400 pointer-events-none" />
         </div>
       </div>
     </div>

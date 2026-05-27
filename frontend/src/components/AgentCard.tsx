@@ -6,7 +6,7 @@ const STATUS_STYLES = {
   error: { dot: 'bg-red-500', label: 'Error', textColor: 'text-red-400' },
 };
 
-export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop }) {
+export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop, emphasizedBorder = false }) {
   const effectiveStatus = thinking ? 'busy' : agent.status;
   const status = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.idle;
   const truncatedThinking = thinking ? thinking.slice(-120) + (thinking.length > 120 ? '' : '') : null;
@@ -16,7 +16,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
     return (
       <div
         onClick={onClick}
-        className={`flex items-center gap-4 px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 border ${
+        className={`flex items-center gap-4 px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 ${emphasizedBorder ? 'border-2' : 'border'} ${
           disabled ? 'opacity-50' : ''
         } ${
           isSelected
@@ -71,7 +71,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
   return (
     <div
       onClick={onClick}
-      className={`rounded-xl cursor-pointer transition-all duration-200 border overflow-hidden group ${
+      className={`rounded-xl cursor-pointer transition-all duration-200 ${emphasizedBorder ? 'border-2' : 'border'} overflow-hidden group ${
         disabled ? 'opacity-50' : ''
       } ${
         isSelected
