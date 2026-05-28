@@ -114,8 +114,8 @@ function formatDuration(ms) {
 //   abc123def
 //   ghi456jkl
 //
-// We join the URL prefix with the following non-empty trimmed lines (which
-// contain no spaces) until a blank line is encountered, producing a single URL.
+// We join the URL prefix with the following non-empty trimmed lines until a
+// blank line is encountered, producing a single URL.
 function reconstructWrappedOAuthUrls(text) {
   if (typeof text !== 'string') return text;
   const marker = /https?:\/\/claude\.com\/cai\/oauth\/authorize\?code=\S*/g;
@@ -126,16 +126,17 @@ function reconstructWrappedOAuthUrls(text) {
     result += text.slice(lastIdx, m.index);
     let url = m[0];
     let i = m.index + m[0].length;
-    // Continue consuming subsequent lines (separated by \n) that are non-empty
-    // and contain no whitespace, stopping at a blank line or whitespace.
-    while (i < text.length && text[i] === '\n') {
-      // Find next newline
-      let j = i + 1;
+    // Continue consuming subsequent non-empty lines up to the next blank line.
+    // Claude Code may leave trailing spaces after `code=` or indent wrapped lines.
+    while (i < text.length) {
+      const leadingWhitespaceAndNewlineLength = text.slice(i).match(/^[^\S\n]*\n/)?.[0].length;
+      if (leadingWhitespaceAndNewlineLength === undefined) break;
+      const lineStart = i + leadingWhitespaceAndNewlineLength;
+      let j = lineStart;
       while (j < text.length && text[j] !== '\n') j++;
-      const line = text.slice(i + 1, j);
+      const line = text.slice(lineStart, j);
       const trimmed = line.trim();
-      // Stop on blank line, or any line containing spaces/tabs (real prose).
-      if (trimmed === '' || /\s/.test(trimmed)) break;
+      if (trimmed === '') break;
       url += trimmed;
       i = j;
     }
