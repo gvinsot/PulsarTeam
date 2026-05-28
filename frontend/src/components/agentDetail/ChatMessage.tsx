@@ -108,10 +108,50 @@ function formatDuration(ms) {
   return `${minutes}m ${remSec}s`;
 }
 
+// Reconstruct Claude Code CLI OAuth URLs that get wrapped across multiple lines
+// in the terminal output. The CLI prints something like:
+//   https://claude.com/cai/oauth/authorize?code=
+//   abc123def
+//   ghi456jkl
+//
+// We join the URL prefix with the following non-empty trimmed lines (which
+// contain no spaces) until a blank line is encountered, producing a single URL.
+function reconstructWrappedOAuthUrls(text) {
+  if (typeof text !== 'string') return text;
+  const marker = /https?:\/\/claude\.com\/cai\/oauth\/authorize\?code=\S*/g;
+  let result = '';
+  let lastIdx = 0;
+  let m;
+  while ((m = marker.exec(text)) !== null) {
+    result += text.slice(lastIdx, m.index);
+    let url = m[0];
+    let i = m.index + m[0].length;
+    // Continue consuming subsequent lines (separated by \n) that are non-empty
+    // and contain no whitespace, stopping at a blank line or whitespace.
+    while (i < text.length && text[i] === '\n') {
+      // Find next newline
+      let j = i + 1;
+      while (j < text.length && text[j] !== '\n') j++;
+      const line = text.slice(i + 1, j);
+      const trimmed = line.trim();
+      // Stop on blank line, or any line containing spaces/tabs (real prose).
+      if (trimmed === '' || /\s/.test(trimmed)) break;
+      url += trimmed;
+      i = j;
+    }
+    result += url;
+    lastIdx = i;
+    marker.lastIndex = i;
+  }
+  result += text.slice(lastIdx);
+  return result;
+}
+
 // Convert raw URLs to markdown links so ReactMarkdown renders them clickable
 function linkifyRawUrls(text) {
   if (typeof text !== 'string') return text;
-  return text.replace(/(https?:\/\/[^\s,)"']+)/g, (url) => `[${url}](${url})`);
+  const reconstructed = reconstructWrappedOAuthUrls(text);
+  return reconstructed.replace(/(https?:\/\/[^\s,)"']+)/g, (url) => `[${url}](${url})`);
 }
 
 // Make all links open in a new tab
