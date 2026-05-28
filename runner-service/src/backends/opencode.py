@@ -18,19 +18,24 @@ Note: opencode passes the message as a positional argument, not via stdin.
 Per-agent LLM selection:
   When the API forwards an X-LLM-Config header (cached via
   set_agent_llm_config), this backend formats the model as
-  "<provider>/<model>" so opencode picks the right vendor. The matching
-  API key env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / ...) is injected
-  by CliBackend._agent_env. When no per-agent LLM config is set, the
-  static RUNNER_MODEL env var is used as a fallback.
+  "<provider>/<model>" so opencode picks the right vendor. The provider
+  config (apiKey, baseURL) is written to the agent's opencode config
+  file (~/.config/opencode/config.json) — no env vars are used for LLM
+  auth so there is no risk of env-var / SDK conflicts. When no per-agent
+  LLM config is set, the static RUNNER_MODEL env var is used as a fallback.
 """
 
 from typing import Optional
 import json
+import logging
+import os
 
 from config import RUNNER_MODEL
 from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
+
+logger = logging.getLogger("runner_service")
 
 
 # Map our internal provider names to the namespace opencode uses in its
@@ -167,6 +172,37 @@ def _merge_opencode_config(existing_raw: Optional[str], managed: Optional[dict])
     return json.dumps(merged, separators=(",", ":"))
 
 
+def _write_opencode_config_file(
+    home_dir: str,
+    config_json: str,
+    uid: Optional[int],
+    gid: Optional[int],
+) -> None:
+    """Write the provider config to ~/.config/opencode/config.json.
+
+    Opencode reads its configuration exclusively from this file (XDG path).
+    We merge the managed provider block on top of any existing content so
+    that user-level settings (MCP servers, keybindings, …) are preserved.
+    File and parent directories are chowned to the agent's UID/GID so the
+    opencode process (running as that user) can read it.
+    """
+    config_dir = os.path.join(home_dir, ".config", "opencode")
+    config_path = os.path.join(config_dir, "config.json")
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+        with open(config_path, "w") as f:
+            f.write(config_json)
+        if uid is not None and gid is not None:
+            # Ensure the agent process (non-root UID) can read the file.
+            for path in (os.path.join(home_dir, ".config"), config_dir, config_path):
+                try:
+                    os.chown(path, uid, gid)
+                except OSError:
+                    pass
+    except Exception as exc:
+        logger.warning(f"[OpenCode] Could not write config to {config_path}: {exc}")
+
+
 class OpenCodeBackend(CliBackend):
     name = "opencode"
     cli_command = "opencode"
@@ -174,17 +210,32 @@ class OpenCodeBackend(CliBackend):
     supports_interactive_terminal = True
 
     def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
-        # Pass agent_id=None so CliBackend skips injecting LLM-specific env vars
-        # (ANTHROPIC_API_KEY, OPENAI_BASE_URL, …). All provider configuration for
-        # opencode is delivered exclusively via OPENCODE_CONFIG_CONTENT JSON so
-        # there is no risk of env-var/config conflicts.
+        # Skip LLM env-var injection (agent_id=None) — all provider config is
+        # delivered via the config file written below, not via env vars.
         env = super()._agent_env(agent_user, None)
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
         managed = _opencode_provider_config(llm_config, model)
-        merged = _merge_opencode_config(env.get("OPENCODE_CONFIG_CONTENT"), managed)
-        if merged:
-            env["OPENCODE_CONFIG_CONTENT"] = merged
+        if not managed:
+            return env
+        # Merge on top of any existing config file content so we don't clobber
+        # MCP server definitions or other user-level opencode settings.
+        existing_json: Optional[str] = None
+        if agent_user and agent_user.get("home"):
+            cfg_path = os.path.join(agent_user["home"], ".config", "opencode", "config.json")
+            try:
+                with open(cfg_path) as _f:
+                    existing_json = _f.read()
+            except OSError:
+                pass
+        merged = _merge_opencode_config(existing_json, managed)
+        if merged and agent_user and agent_user.get("home"):
+            _write_opencode_config_file(
+                agent_user["home"],
+                merged,
+                agent_user.get("uid"),
+                agent_user.get("gid"),
+            )
         return env
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
