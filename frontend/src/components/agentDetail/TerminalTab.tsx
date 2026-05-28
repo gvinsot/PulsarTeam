@@ -17,7 +17,7 @@
  *     local replay after transient WebSocket drops.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Terminal as XTerminal } from '@xterm/xterm';
+import { Terminal as XTerminal, type ILink, type ILinkProvider } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
@@ -32,6 +32,9 @@ interface TerminalTabProps {
 // Backoff schedule for reconnects: 0.5s → 1s → 2s → … capped at 15s.
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15_000;
+const CLAUDE_OAUTH_PREFIX = 'https://claude.com/cai/oauth/authorize?code=';
+const CLAUDE_OAUTH_MAX_CONTINUATION_LINES = 32;
+const CLAUDE_OAUTH_FALLBACK_SEARCH_LINES = 500;
 
 const getTerminalTheme = (theme: string) => (
   theme === 'light'
@@ -82,6 +85,88 @@ const getTerminalTheme = (theme: string) => (
         brightWhite: '#f8fafc',
       }
 );
+
+function openExternalLink(uri: string) {
+  const opened = window.open('');
+  if (opened) {
+    try { opened.opener = null; } catch { /* noop */ }
+    opened.location.href = uri;
+  } else {
+    console.warn('Opening link blocked as opener could not be cleared');
+  }
+}
+
+function getTerminalLine(term: XTerminal, y: number) {
+  return term.buffer.active.getLine(y)?.translateToString(true) ?? '';
+}
+
+function firstNonWhitespaceIndex(line: string) {
+  return line.search(/\S/);
+}
+
+function buildClaudeOAuthLink(term: XTerminal, startLine: number, firstLine = getTerminalLine(term, startLine)): ILink | undefined {
+  const markerIndex = firstLine.indexOf(CLAUDE_OAUTH_PREFIX);
+  if (markerIndex < 0) return undefined;
+
+  const initialMatch = firstLine.slice(markerIndex).match(/^https?:\/\/claude\.com\/cai\/oauth\/authorize\?code=\S*/);
+  if (!initialMatch) return undefined;
+
+  let url = initialMatch[0];
+  let endLine = startLine;
+  let endColumn = markerIndex + initialMatch[0].length;
+
+  for (
+    let y = startLine + 1, consumed = 0;
+    y < term.buffer.active.length && consumed < CLAUDE_OAUTH_MAX_CONTINUATION_LINES;
+    y += 1, consumed += 1
+  ) {
+    const line = getTerminalLine(term, y);
+    const trimmed = line.trim();
+    if (!trimmed) break;
+    const textStart = firstNonWhitespaceIndex(line);
+    url += trimmed;
+    endLine = y;
+    endColumn = textStart + trimmed.length;
+  }
+
+  return {
+    range: {
+      start: { x: markerIndex + 1, y: startLine + 1 },
+      end: { x: Math.max(1, endColumn + 1), y: endLine + 1 },
+    },
+    text: url,
+    activate: (event, text) => {
+      event.preventDefault();
+      openExternalLink(text);
+    },
+  };
+}
+
+function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
+  return {
+    provideLinks(bufferLineNumber, callback) {
+      const startLine = bufferLineNumber - 1;
+      const line = getTerminalLine(term, startLine);
+      const link = line.includes(CLAUDE_OAUTH_PREFIX)
+        ? buildClaudeOAuthLink(term, startLine, line)
+        : undefined;
+      callback(link ? [link] : undefined);
+    },
+  };
+}
+
+function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string) {
+  if (!uri.startsWith(CLAUDE_OAUTH_PREFIX)) return uri;
+  const buffer = term.buffer.active;
+  const earliestLine = Math.max(0, buffer.length - CLAUDE_OAUTH_FALLBACK_SEARCH_LINES);
+  for (let y = buffer.length - 1; y >= earliestLine; y -= 1) {
+    const line = getTerminalLine(term, y);
+    if (!line.includes(CLAUDE_OAUTH_PREFIX)) continue;
+    const link = buildClaudeOAuthLink(term, y, line);
+    if (link?.text.startsWith(uri)) return link.text;
+  }
+  return uri;
+}
 
 export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const { theme } = useTheme();
@@ -156,7 +241,15 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.loadAddon(new WebLinksAddon());
+    const claudeOAuthLinkProvider = term.registerLinkProvider(createClaudeOAuthLinkProvider(term));
+    term.loadAddon(new WebLinksAddon((event, uri) => {
+      if (uri.startsWith(CLAUDE_OAUTH_PREFIX)) {
+        event.preventDefault();
+        openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
+        return;
+      }
+      openExternalLink(uri);
+    }));
     term.open(containerRef.current);
     fitTerminal();
 
@@ -207,6 +300,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       }
       try { wsRef.current?.close(); } catch { /* noop */ }
       wsRef.current = null;
+      claudeOAuthLinkProvider.dispose();
       try { term.dispose(); } catch { /* noop */ }
       termRef.current = null;
       fitRef.current = null;
