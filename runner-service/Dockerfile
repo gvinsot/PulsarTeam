@@ -55,8 +55,17 @@ RUN npm install -g opencode-ai \
 # Lets the runner act as a "codex" backend that taps into the operator's
 # ChatGPT plan via `codex login` (OAuth) — exactly like claude-code does
 # with a Claude Pro/Max plan.
-RUN npm install -g @openai/codex \
-    || (echo "WARN: @openai/codex install failed — installing stub" \
+#
+# The npm package ships a platform-specific native binary under
+# node_modules/@openai/codex-<platform>/vendor/.../codex/codex. Some npm
+# tarball extractions strip the exec bit, and even when they don't, the
+# per-agent UIDs (20000+) the runner drops to before spawning need every
+# parent dir to be world-traversable. Chmod the install tree the same
+# way the hermes line does, then force +x on the vendored binaries.
+RUN (npm install -g @openai/codex \
+     && chmod -R a+rX /usr/lib/node_modules/@openai \
+     && find /usr/lib/node_modules/@openai -type f -path "*/vendor/*" -exec chmod +x {} \; \
+    ) || (echo "WARN: @openai/codex install failed — installing stub" \
         && printf '#!/bin/sh\necho "codex-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/codex \
         && chmod +x /usr/local/bin/codex)
 

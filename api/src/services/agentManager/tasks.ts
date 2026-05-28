@@ -11,6 +11,25 @@ function isCliRunner(agent: any): boolean {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
 }
 
+async function bindAgentRunner(manager: any, agent: any): Promise<void> {
+  if (!manager.executionManager?.bindAgent || !agent?.id) return;
+  const llmConfig = manager.resolveLlmConfig?.(agent) || {};
+  const providerType = agent.runner || (llmConfig.managesContext ? 'claudecode' : 'sandbox');
+  let gitCreds = null;
+  try {
+    const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
+    gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
+  } catch {
+    gitCreds = null;
+  }
+  manager.executionManager.bindAgent(agent.id, providerType, {
+    ownerId: agent.ownerId || null,
+    gitCredentials: gitCreds,
+    permissions: agent.permissions || null,
+    llmConfig: agent.llmConfigId ? llmConfig : null,
+  });
+}
+
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
 // Replaces in-memory task._execution* properties.
@@ -1034,6 +1053,7 @@ export const tasksMethods = {
         const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @task_execution_complete(summary of what was done) to signal completion.\n\nIf you have already finished all the work, call @task_execution_complete now with a summary of what was accomplished.`;
 
         if (terminalDriven && isCliRunner(currentExecutor) && this.executionManager?.sendTerminalInput) {
+          await bindAgentRunner(this, currentExecutor);
           await this.executionManager.sendTerminalInput(executorId, reminderPrompt, { submit: true });
         } else {
           await this.sendMessage(
@@ -1148,6 +1168,7 @@ export const tasksMethods = {
 
       const terminalDriven = isCliRunner(executor) && executor.status === 'idle' && this.executionManager?.sendTerminalInput;
       if (terminalDriven) {
+        await bindAgentRunner(this, executor);
         await this.executionManager.sendTerminalInput(executorId, messageToSend, { submit: true });
       } else {
         await this.sendMessage(executorId, messageToSend, streamCallback);

@@ -22,6 +22,24 @@ function isCliRunner(agent) {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
 }
 
+async function bindAgentRunner(agentManager, agent) {
+  if (!agentManager.executionManager?.bindAgent || !agent?.id) return;
+  const llmConfig = agentManager.resolveLlmConfig?.(agent) || {};
+  const providerType = agent.runner || (llmConfig.managesContext ? 'claudecode' : 'sandbox');
+  let gitCreds = null;
+  try {
+    gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
+  } catch {
+    gitCreds = null;
+  }
+  agentManager.executionManager.bindAgent(agent.id, providerType, {
+    ownerId: agent.ownerId || null,
+    gitCredentials: gitCreds,
+    permissions: agent.permissions || null,
+    llmConfig: agent.llmConfigId ? llmConfig : null,
+  });
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -719,6 +737,7 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
 
   if (isCliRunner(agent) && agent.status === 'idle' && agentManager.executionManager?.sendTerminalInput) {
     console.log(`[ActionExecutor] execute: injecting task prompt into CLI terminal for "${agent.name}"`);
+    await bindAgentRunner(agentManager, agent);
     await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
     await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
