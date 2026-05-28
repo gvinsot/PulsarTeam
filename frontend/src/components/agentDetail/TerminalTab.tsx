@@ -104,8 +104,7 @@ function firstNonWhitespaceIndex(line: string) {
   return line.search(/\S/);
 }
 
-function buildClaudeOAuthLink(term: XTerminal, startLine: number): ILink | undefined {
-  const firstLine = getTerminalLine(term, startLine);
+function buildClaudeOAuthLink(term: XTerminal, startLine: number, firstLine = getTerminalLine(term, startLine)): ILink | undefined {
   const markerIndex = firstLine.indexOf(CLAUDE_OAUTH_PREFIX);
   if (markerIndex < 0) return undefined;
 
@@ -146,7 +145,11 @@ function buildClaudeOAuthLink(term: XTerminal, startLine: number): ILink | undef
 function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const link = buildClaudeOAuthLink(term, bufferLineNumber - 1);
+      const startLine = bufferLineNumber - 1;
+      const line = getTerminalLine(term, startLine);
+      const link = line.includes(CLAUDE_OAUTH_PREFIX)
+        ? buildClaudeOAuthLink(term, startLine, line)
+        : undefined;
       callback(link ? [link] : undefined);
     },
   };
@@ -157,7 +160,9 @@ function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string) {
   const buffer = term.buffer.active;
   const earliestLine = Math.max(0, buffer.length - CLAUDE_OAUTH_FALLBACK_SEARCH_LINES);
   for (let y = buffer.length - 1; y >= earliestLine; y -= 1) {
-    const link = buildClaudeOAuthLink(term, y);
+    const line = getTerminalLine(term, y);
+    if (!line.includes(CLAUDE_OAUTH_PREFIX)) continue;
+    const link = buildClaudeOAuthLink(term, y, line);
     if (link?.text.startsWith(uri)) return link.text;
   }
   return uri;
@@ -238,8 +243,12 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     term.loadAddon(fit);
     const claudeOAuthLinkProvider = term.registerLinkProvider(createClaudeOAuthLinkProvider(term));
     term.loadAddon(new WebLinksAddon((event, uri) => {
-      event.preventDefault();
-      openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
+      if (uri.startsWith(CLAUDE_OAUTH_PREFIX)) {
+        event.preventDefault();
+        openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
+        return;
+      }
+      openExternalLink(uri);
     }));
     term.open(containerRef.current);
     fitTerminal();
