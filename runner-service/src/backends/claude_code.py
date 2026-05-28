@@ -158,12 +158,59 @@ class ClaudeCodeBackend(RunnerBackend):
         )
         env = get_agent_env(effective_user)
         kwargs = get_subprocess_kwargs(effective_user) or {}
+
+        # Reverse-sync hook: when the user runs `/login` inside the TUI, the
+        # CLI writes a fresh token to `<HOME>/.claude/.credentials.json`. The
+        # PTY session polls that file and calls this callable on change so
+        # the new token gets persisted to the team-api DB (or the local
+        # store). Without it, `seed_credentials_file` would overwrite the
+        # fresh file at every restart from the stale DB record, forcing the
+        # user to /login again every time the container is recycled.
+        captured_user = effective_user
+
+        def _persist_creds(creds: dict) -> None:
+            oauth = (creds or {}).get("claudeAiOauth") or {}
+            access = oauth.get("accessToken")
+            if not access:
+                return
+            refresh = oauth.get("refreshToken") or ""
+            expires_at_ms = oauth.get("expiresAt") or 0
+            if expires_at_ms:
+                expires_in = max(60, int((expires_at_ms / 1000) - time.time()))
+            else:
+                expires_in = 28800
+            owner = (captured_user or {}).get("owner_id")
+            # Raise on persistence failure so PtySession._maybe_sync_creds
+            # doesn't mark the token as synced — next poll retries instead
+            # of leaving the stale DB record in place. save_owner_token /
+            # save_agent_token return False on HTTP failure without raising,
+            # so we translate that into an exception here.
+            if owner:
+                ok = save_owner_token(owner, access, refresh_token=refresh, expires_in=expires_in)
+                if not ok:
+                    raise RuntimeError(f"save_owner_token failed for owner {owner}")
+            elif captured_user:
+                ok = save_agent_token(captured_user, access, refresh_token=refresh, expires_in=expires_in)
+                if not ok:
+                    raise RuntimeError(f"save_agent_token failed for {captured_user.get('username')}")
+            else:
+                save_token(access, refresh_token=refresh, expires_in=expires_in)
+
+        # In runAsRoot mode effective_user is None and the CLI writes to
+        # /root/.claude/.credentials.json. Watch that too — `_persist_creds`
+        # falls through to `save_token` (global store, persisted under
+        # /app/data which IS volumed).
+        home = (effective_user or {}).get("home") if effective_user else os.path.expanduser("~")
+        creds_watch_path = os.path.join(home, ".claude", ".credentials.json") if home else None
+
         return {
             "cmd": cmd,
             "cwd": proc_cwd,
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
             "render_mode": "snapshot",
+            "creds_watch_path": creds_watch_path,
+            "creds_on_change": _persist_creds,
         }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────

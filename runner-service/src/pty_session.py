@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import pty
+import json
 import fcntl
 import struct
 import termios
@@ -37,6 +38,14 @@ from typing import Awaitable, Callable, Optional
 from dataclasses import dataclass, field
 
 from config import logger
+
+
+# How often the PTY session polls `<HOME>/.claude/.credentials.json` for a
+# fresh token written by the CLI's `/login` flow. 5 s is responsive enough
+# that closing the browser right after pasting the verification code still
+# captures the new token before the WS detaches, and the stat cost is
+# negligible.
+CREDS_SYNC_INTERVAL_SEC = float(os.getenv("TERMINAL_CREDS_SYNC_INTERVAL_SEC", "5.0"))
 
 try:
     import pyte  # type: ignore
@@ -105,6 +114,11 @@ class PtySession:
     rows: int = DEFAULT_ROWS
     config_fingerprint: Optional[str] = None
     render_mode: str = "raw"
+    # Reverse-sync of in-TUI `/login` results back to the backend store. The
+    # backend's `prepare_interactive` recipe supplies both fields; when
+    # either is None the polling loop is a no-op.
+    creds_watch_path: Optional[str] = None
+    creds_on_change: Optional[Callable[[dict], None]] = None
 
     # Internals — filled in by start() and the background reader.
     master_fd: int = -1
@@ -125,6 +139,9 @@ class PtySession:
     _screen_stream: Optional[object] = None
     _snapshot_task: Optional[asyncio.Task] = None
     _snapshot_dirty: bool = False
+    _creds_sync_task: Optional[asyncio.Task] = None
+    _last_synced_access_token: Optional[str] = None
+    _last_creds_mtime: float = 0.0
 
     def _snapshot_enabled(self) -> bool:
         return self.render_mode == "snapshot" and self._screen is not None and self._screen_stream is not None
@@ -181,6 +198,82 @@ class PtySession:
 
         loop = asyncio.get_running_loop()
         self._reader_task = loop.create_task(self._read_loop())
+        # Baseline the credentials.json that `seed_credentials_file` just
+        # wrote so the polling loop only fires when the CLI's /login flow
+        # produces a NEWER token. Without this baseline, the first poll
+        # would always treat the seed as "fresh" and push it back to the
+        # store unnecessarily.
+        if self.creds_watch_path and self.creds_on_change:
+            self._capture_creds_baseline()
+            self._creds_sync_task = loop.create_task(self._creds_sync_loop())
+
+    def _capture_creds_baseline(self) -> None:
+        try:
+            self._last_creds_mtime = os.path.getmtime(self.creds_watch_path)
+            with open(self.creds_watch_path) as f:
+                data = json.load(f)
+            self._last_synced_access_token = (data.get("claudeAiOauth") or {}).get("accessToken")
+        except (OSError, json.JSONDecodeError):
+            # Missing or unreadable seed is fine — any write the CLI makes
+            # afterward will appear "newer" and trigger the first sync.
+            self._last_creds_mtime = 0.0
+            self._last_synced_access_token = None
+
+    async def _creds_sync_loop(self) -> None:
+        """Poll `creds_watch_path` until the session closes.
+
+        Any change to the file's mtime triggers a re-read; if the parsed
+        accessToken differs from the last one we pushed, we call
+        `creds_on_change` (which persists to team-api / local store). The
+        callable is sync and may do blocking HTTP, so we run it in a
+        thread executor to avoid stalling the event loop.
+        """
+        try:
+            while not self._closed:
+                try:
+                    await asyncio.sleep(CREDS_SYNC_INTERVAL_SEC)
+                except asyncio.CancelledError:
+                    return
+                if self._closed:
+                    return
+                await self._maybe_sync_creds()
+        except Exception as e:
+            logger.warning(f"[Terminal] creds sync loop crashed for {self.agent_id}: {e}")
+
+    async def _maybe_sync_creds(self) -> None:
+        if not self.creds_watch_path or not self.creds_on_change:
+            return
+        try:
+            mtime = os.path.getmtime(self.creds_watch_path)
+        except OSError:
+            return
+        if mtime <= self._last_creds_mtime:
+            return
+        try:
+            with open(self.creds_watch_path) as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.debug(f"[Terminal] creds read failed for {self.agent_id}: {e}")
+            return
+        access = (data.get("claudeAiOauth") or {}).get("accessToken")
+        if not access:
+            self._last_creds_mtime = mtime
+            return
+        if access == self._last_synced_access_token:
+            self._last_creds_mtime = mtime
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self.creds_on_change, data)
+        except Exception as e:
+            logger.warning(f"[Terminal] creds_on_change failed for {self.agent_id}: {e}")
+            return
+        self._last_synced_access_token = access
+        self._last_creds_mtime = mtime
+        logger.info(
+            f"[Terminal] Persisted fresh OAuth token to backend store for agent {self.agent_id} "
+            f"(triggered by in-TUI /login)"
+        )
 
     def _init_screen_renderer(self) -> None:
         if self.render_mode != "snapshot":
@@ -572,8 +665,19 @@ class PtySession:
         """Best-effort shutdown: send SIGTERM, wait briefly, then SIGKILL."""
         if self._closed:
             return
+        # Final creds sync BEFORE we mark closed and tear the proc down — the
+        # user may have done /login at the last moment and the polling
+        # interval may not have fired yet. Safe even if no token is fresh:
+        # _maybe_sync_creds is a no-op when nothing has changed.
+        try:
+            await self._maybe_sync_creds()
+        except Exception as e:
+            logger.warning(f"[Terminal] final creds sync failed for {self.agent_id}: {e}")
         self._closed = True
         self._cancel_idle_timer()
+        if self._creds_sync_task and not self._creds_sync_task.done():
+            self._creds_sync_task.cancel()
+            self._creds_sync_task = None
         if self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
             self._snapshot_task = None
@@ -719,6 +823,8 @@ async def get_or_create_session(
             rows=rows,
             config_fingerprint=config_fingerprint,
             render_mode=recipe.get("render_mode", "raw"),
+            creds_watch_path=recipe.get("creds_watch_path"),
+            creds_on_change=recipe.get("creds_on_change"),
         )
         await session.start()
         _SESSIONS[agent_id] = session
