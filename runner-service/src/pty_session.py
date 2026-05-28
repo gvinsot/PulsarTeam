@@ -114,11 +114,22 @@ class PtySession:
     rows: int = DEFAULT_ROWS
     config_fingerprint: Optional[str] = None
     render_mode: str = "raw"
-    # Reverse-sync of in-TUI `/login` results back to the backend store. The
-    # backend's `prepare_interactive` recipe supplies both fields; when
-    # either is None the polling loop is a no-op.
+    # Reverse-sync of in-TUI `/login` (or `codex login` etc.) results back to
+    # the backend store. The backend's `prepare_interactive` recipe supplies
+    # these fields:
+    #   - creds_watch_path:    the credentials file the CLI writes after login
+    #   - creds_on_change:     sync callable; receives the parsed JSON and
+    #                          MUST raise on persistence failure so the
+    #                          marker isn't advanced (next poll retries)
+    #   - creds_dedup_key:     cheap extractor that returns a stable string
+    #                          (e.g. the access token) so a same-content
+    #                          rewrite doesn't trigger a useless re-push.
+    #                          Optional — when None we fall back to mtime-
+    #                          only dedup.
+    # When either path or on_change is None, the polling loop is a no-op.
     creds_watch_path: Optional[str] = None
     creds_on_change: Optional[Callable[[dict], None]] = None
+    creds_dedup_key: Optional[Callable[[dict], Optional[str]]] = None
 
     # Internals — filled in by start() and the background reader.
     master_fd: int = -1
@@ -140,7 +151,7 @@ class PtySession:
     _snapshot_task: Optional[asyncio.Task] = None
     _snapshot_dirty: bool = False
     _creds_sync_task: Optional[asyncio.Task] = None
-    _last_synced_access_token: Optional[str] = None
+    _last_synced_dedup_key: Optional[str] = None
     _last_creds_mtime: float = 0.0
 
     def _snapshot_enabled(self) -> bool:
@@ -210,14 +221,15 @@ class PtySession:
     def _capture_creds_baseline(self) -> None:
         try:
             self._last_creds_mtime = os.path.getmtime(self.creds_watch_path)
-            with open(self.creds_watch_path) as f:
-                data = json.load(f)
-            self._last_synced_access_token = (data.get("claudeAiOauth") or {}).get("accessToken")
+            if self.creds_dedup_key:
+                with open(self.creds_watch_path) as f:
+                    data = json.load(f)
+                self._last_synced_dedup_key = self.creds_dedup_key(data)
         except (OSError, json.JSONDecodeError):
             # Missing or unreadable seed is fine — any write the CLI makes
             # afterward will appear "newer" and trigger the first sync.
             self._last_creds_mtime = 0.0
-            self._last_synced_access_token = None
+            self._last_synced_dedup_key = None
 
     async def _creds_sync_loop(self) -> None:
         """Poll `creds_watch_path` until the session closes.
@@ -255,24 +267,35 @@ class PtySession:
         except (OSError, json.JSONDecodeError) as e:
             logger.debug(f"[Terminal] creds read failed for {self.agent_id}: {e}")
             return
-        access = (data.get("claudeAiOauth") or {}).get("accessToken")
-        if not access:
-            self._last_creds_mtime = mtime
-            return
-        if access == self._last_synced_access_token:
-            self._last_creds_mtime = mtime
-            return
+        # Dedup against a stable content key when the backend provides one;
+        # otherwise rely on mtime alone (any newer write triggers a sync).
+        new_key: Optional[str] = None
+        if self.creds_dedup_key:
+            try:
+                new_key = self.creds_dedup_key(data)
+            except Exception as e:
+                logger.debug(f"[Terminal] creds_dedup_key failed for {self.agent_id}: {e}")
+                new_key = None
+            if not new_key:
+                # File present but no recognisable token — advance the mtime
+                # marker so we don't re-read the same incomplete blob next tick.
+                self._last_creds_mtime = mtime
+                return
+            if new_key == self._last_synced_dedup_key:
+                self._last_creds_mtime = mtime
+                return
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(None, self.creds_on_change, data)
         except Exception as e:
             logger.warning(f"[Terminal] creds_on_change failed for {self.agent_id}: {e}")
             return
-        self._last_synced_access_token = access
+        if new_key is not None:
+            self._last_synced_dedup_key = new_key
         self._last_creds_mtime = mtime
         logger.info(
-            f"[Terminal] Persisted fresh OAuth token to backend store for agent {self.agent_id} "
-            f"(triggered by in-TUI /login)"
+            f"[Terminal] Persisted fresh credentials to backend store for agent {self.agent_id} "
+            f"(triggered by in-TUI login)"
         )
 
     def _init_screen_renderer(self) -> None:
@@ -825,6 +848,7 @@ async def get_or_create_session(
             render_mode=recipe.get("render_mode", "raw"),
             creds_watch_path=recipe.get("creds_watch_path"),
             creds_on_change=recipe.get("creds_on_change"),
+            creds_dedup_key=recipe.get("creds_dedup_key"),
         )
         await session.start()
         _SESSIONS[agent_id] = session

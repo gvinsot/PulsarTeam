@@ -124,11 +124,42 @@ class CodexBackend(CliBackend):
         from .claude_token_store import get_subprocess_kwargs as _drop_kw
         kwargs = _drop_kw(effective_user) or {}
 
+        # Reverse-sync hook (same idea as claude-code): when the user runs
+        # `codex login` inside the TUI, the CLI rewrites ~/.codex/auth.json.
+        # The headless `run_sync` / `stream_events` already do this via
+        # `_push_back_if_changed` around each exec, but the interactive
+        # session lives for hours — without a poll the fresh blob only gets
+        # pushed back at session close, and if the container restarts
+        # before then the stale team-api record overwrites the file again.
+        captured_owner = owner_id
+        captured_user = agent_user
+
+        def _persist_blob(blob: dict) -> None:
+            if not captured_owner:
+                # No owner → no team-api persistence; the per-agent HOME is
+                # already on the volumed /app/data, so the local auth.json
+                # survives restarts on its own.
+                return
+            ok = save_owner_blob(captured_owner, blob)
+            if not ok:
+                raise RuntimeError(f"save_owner_blob failed for owner {captured_owner}")
+
+        def _creds_dedup_key(blob: dict) -> Optional[str]:
+            tokens = (blob or {}).get("tokens") or {}
+            if isinstance(tokens, dict):
+                return tokens.get("access_token")
+            return None
+
+        creds_watch_path = auth_file_path(captured_user) if captured_user else os.path.expanduser("~/.codex/auth.json")
+
         return {
             "cmd": cmd,
             "cwd": cwd,
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
+            "creds_watch_path": creds_watch_path,
+            "creds_on_change": _persist_blob,
+            "creds_dedup_key": _creds_dedup_key,
         }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────

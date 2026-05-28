@@ -203,6 +203,9 @@ class ClaudeCodeBackend(RunnerBackend):
         home = (effective_user or {}).get("home") if effective_user else os.path.expanduser("~")
         creds_watch_path = os.path.join(home, ".claude", ".credentials.json") if home else None
 
+        def _creds_dedup_key(creds: dict) -> Optional[str]:
+            return ((creds or {}).get("claudeAiOauth") or {}).get("accessToken")
+
         return {
             "cmd": cmd,
             "cwd": proc_cwd,
@@ -211,6 +214,7 @@ class ClaudeCodeBackend(RunnerBackend):
             "render_mode": "snapshot",
             "creds_watch_path": creds_watch_path,
             "creds_on_change": _persist_creds,
+            "creds_dedup_key": _creds_dedup_key,
         }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
