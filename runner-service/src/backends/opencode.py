@@ -31,7 +31,7 @@ import logging
 import os
 
 from config import RUNNER_MODEL
-from agent_user import ensure_agent_user
+from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
 
@@ -218,24 +218,45 @@ class OpenCodeBackend(CliBackend):
         managed = _opencode_provider_config(llm_config, model)
         if not managed:
             return env
+        # Always resolve the agent's HOME from the cache, even when running as
+        # root (effective_user=None from linuxUser.runAsRoot). Without this the
+        # provider config file is never written and opencode receives only
+        # `--model vllm/...` with no endpoint/apiKey, so the connection fails.
+        home_user = agent_user
+        if (not home_user or not home_user.get("home")) and agent_id:
+            home_user = _agent_users.get(agent_id)
+        if not (home_user and home_user.get("home")):
+            logger.warning(
+                "[OpenCode] No HOME available for agent %s — skipping provider config write",
+                (agent_id or "unknown")[:12],
+            )
+            return env
+        home_dir = home_user["home"]
+        cfg_path = os.path.join(home_dir, ".config", "opencode", "config.json")
         # Merge on top of any existing config file content so we don't clobber
         # MCP server definitions or other user-level opencode settings.
         existing_json: Optional[str] = None
-        if agent_user and agent_user.get("home"):
-            cfg_path = os.path.join(agent_user["home"], ".config", "opencode", "config.json")
-            try:
-                with open(cfg_path) as _f:
-                    existing_json = _f.read()
-            except OSError:
-                pass
+        try:
+            with open(cfg_path) as _f:
+                existing_json = _f.read()
+        except OSError:
+            pass
         merged = _merge_opencode_config(existing_json, managed)
-        if merged and agent_user and agent_user.get("home"):
-            _write_opencode_config_file(
-                agent_user["home"],
-                merged,
-                agent_user.get("uid"),
-                agent_user.get("gid"),
+        if merged:
+            # When the spawn keeps its parent UID (root via runAsRoot), don't
+            # chown the file to the agent UID — root needs to read it back,
+            # and chown after creation could lock it away from the real spawn.
+            uid = agent_user.get("uid") if agent_user else None
+            gid = agent_user.get("gid") if agent_user else None
+            _write_opencode_config_file(home_dir, merged, uid, gid)
+            logger.info(
+                "[OpenCode] Wrote provider config for agent %s at %s (model=%s)",
+                (agent_id or "unknown")[:12], cfg_path, model,
             )
+        # opencode reads its config from $HOME/.config/opencode/config.json.
+        # Force HOME to the agent's home so root-spawns find the file we just
+        # wrote (sanitize_env only sets HOME when agent_user is provided).
+        env["HOME"] = home_dir
         return env
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
@@ -249,6 +270,12 @@ class OpenCodeBackend(CliBackend):
         cmd = [self.cli_command]
         if model:
             cmd += ["--model", model]
+
+        endpoint = (llm_config or {}).get("endpoint") if llm_config else None
+        logger.info(
+            "[OpenCode] prepare_interactive agent=%s model=%s endpoint=%s",
+            (agent_id or "unknown")[:12], model or "<none>", endpoint or "<none>",
+        )
 
         kwargs = get_subprocess_kwargs(effective_user) or {}
         return {
