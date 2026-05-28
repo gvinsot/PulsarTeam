@@ -140,7 +140,8 @@ function buildClaudeOAuthLink(term: XTerminal, startLine: number): ILink | undef
 function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      callback(buildClaudeOAuthLink(term, bufferLineNumber - 1) ? [buildClaudeOAuthLink(term, bufferLineNumber - 1)!] : undefined);
+      const link = buildClaudeOAuthLink(term, bufferLineNumber - 1);
+      callback(link ? [link] : undefined);
     },
   };
 }
