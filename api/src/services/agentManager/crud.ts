@@ -194,8 +194,42 @@ export const crudMethods = {
           continue;
         }
         if (key === 'project' && effectiveUpdates[key] !== target[key]) {
-          this._switchProjectContext(target, target.project, effectiveUpdates[key]);
-          target.projectChangedAt = effectiveUpdates[key] ? new Date().toISOString() : null;
+          const newProject = effectiveUpdates[key];
+          // Stop any in-flight work before swapping the agent's repo so we
+          // don't keep streaming/exec-ing against the old project's files.
+          try { this.stopAgent(target.id); } catch (e: any) {
+            console.warn(`⚠️  [Project Change] stopAgent(${target.id}) failed:`, e?.message);
+          }
+          this._switchProjectContext(target, target.project, newProject);
+          target.projectChangedAt = newProject ? new Date().toISOString() : null;
+          // Re-sync the runner's working copy in the background so the agent
+          // is ready to serve the next message. We don't await — cloning can
+          // be slow and the HTTP update response shouldn't block on it.
+          const targetIdForSync = target.id;
+          const targetNameForSync = target.name;
+          const boardIdForSync = target.boardId || null;
+          if (this.executionManager) {
+            (async () => {
+              try {
+                const { buildRepoCloneUrl } = await import('../repoUrl.js');
+                const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
+                const gitCreds = await getGitHubCredentialsForAgent(targetIdForSync, boardIdForSync).catch(() => null);
+                if (newProject) {
+                  const gitUrl = buildRepoCloneUrl(newProject);
+                  if (gitUrl) {
+                    await this.executionManager.switchProject(targetIdForSync, newProject, gitUrl, gitCreds);
+                    console.log(`🔄 [Project Change] Repo synced for "${targetNameForSync}" → "${newProject}"`);
+                  }
+                } else {
+                  await this.executionManager.ensureProject(targetIdForSync, null, null, gitCreds);
+                  console.log(`🔄 [Project Change] Cleared repo for "${targetNameForSync}"`);
+                }
+                this._emit('agent:updated', this._sanitize(this.agents.get(targetIdForSync)));
+              } catch (err: any) {
+                console.error(`🔄 [Project Change] Repo sync failed for "${targetNameForSync}":`, err?.message);
+              }
+            })();
+          }
         }
         target[key] = effectiveUpdates[key];
       }
@@ -262,17 +296,51 @@ export const crudMethods = {
 
   async updateAllProjects(this: any, project: string | null, agentIdFilter: Set<string> | null = null): Promise<any[]> {
     const updated: any[] = [];
+    const toSync: Array<{ id: string; name: string; boardId: string | null }> = [];
     for (const agent of this.agents.values()) {
       if (agentIdFilter && !agentIdFilter.has((agent as any).id)) continue;
-      if (project !== (agent as any).project) {
+      const projectChanged = project !== (agent as any).project;
+      if (projectChanged) {
+        try { this.stopAgent((agent as any).id); } catch (e: any) {
+          console.warn(`⚠️  [Project Change] stopAgent(${(agent as any).id}) failed:`, e?.message);
+        }
         this._switchProjectContext(agent, (agent as any).project, project);
         (agent as any).projectChangedAt = project ? new Date().toISOString() : null;
+        toSync.push({ id: (agent as any).id, name: (agent as any).name, boardId: (agent as any).boardId || null });
       }
       (agent as any).project = project;
       (agent as any).updatedAt = new Date().toISOString();
       await saveAgent(agent);
       updated.push(this._sanitize(agent));
       this._emit('agent:updated', this._sanitize(agent));
+    }
+    if (toSync.length > 0 && this.executionManager) {
+      (async () => {
+        try {
+          const { buildRepoCloneUrl } = await import('../repoUrl.js');
+          const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
+          for (const t of toSync) {
+            try {
+              const gitCreds = await getGitHubCredentialsForAgent(t.id, t.boardId).catch(() => null);
+              if (project) {
+                const gitUrl = buildRepoCloneUrl(project);
+                if (gitUrl) {
+                  await this.executionManager.switchProject(t.id, project, gitUrl, gitCreds);
+                  console.log(`🔄 [Project Change] Repo synced for "${t.name}" → "${project}"`);
+                }
+              } else {
+                await this.executionManager.ensureProject(t.id, null, null, gitCreds);
+                console.log(`🔄 [Project Change] Cleared repo for "${t.name}"`);
+              }
+              this._emit('agent:updated', this._sanitize(this.agents.get(t.id)));
+            } catch (err: any) {
+              console.error(`🔄 [Project Change] Repo sync failed for "${t.name}":`, err?.message);
+            }
+          }
+        } catch (err: any) {
+          console.error(`🔄 [Project Change] Bulk sync failed:`, err?.message);
+        }
+      })();
     }
     return updated;
   },

@@ -231,6 +231,28 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     });
   };
 
+  // Constrain the container to the visible viewport so the FitAddon sees the
+  // actual user-visible area instead of the full CSS box (which on mobile
+  // doesn't shrink when the soft keyboard opens). Without this, fit() would
+  // resize the PTY to a size that's partly hidden behind the keyboard.
+  const adjustForViewport = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if (!vv || vv.height >= window.innerHeight - 1) {
+      el.style.maxHeight = '';
+      el.style.maxWidth = '';
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    const topOffset = rect.top - vv.offsetTop;
+    const leftOffset = rect.left - vv.offsetLeft;
+    const availableH = Math.max(0, Math.floor(vv.height - topOffset));
+    const availableW = Math.max(0, Math.floor(vv.width - leftOffset));
+    el.style.maxHeight = `${availableH}px`;
+    el.style.maxWidth = `${availableW}px`;
+  };
+
   // ── xterm.js setup ────────────────────────────────────────────────────
   useEffect(() => {
     aliveRef.current = true;
@@ -271,14 +293,37 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       term.focus();
     });
 
-    // Resize handling. Two triggers:
+    // Resize handling. Triggers:
     //   • the container resizes (window/sidebar/devtools)
     //   • the user changes tabs and comes back (the parent unmounts/remounts
     //     but the xterm instance is kept alive within THIS effect).
+    //   • on mobile, the soft keyboard opens/closes — visualViewport reports
+    //     this even when the container's CSS box doesn't change, which is the
+    //     case here (the keyboard overlays the page without reflowing it).
+    //     Without this, the PTY stays sized to the pre-keyboard viewport and
+    //     output overlaps with the keyboard area.
     const resizeObserver = new ResizeObserver(() => {
       fitTerminal();
     });
     resizeObserver.observe(containerRef.current);
+
+    // Mobile soft keyboard / page zoom / browser UI changes don't shrink the
+    // container's CSS box, so they wouldn't trigger ResizeObserver on their
+    // own. We listen to visualViewport, constrain the container to the
+    // user-visible area, then re-fit so the PTY's cols/rows match what the
+    // user actually sees (and the runner redraws to fit, instead of the
+    // bottom of its output disappearing behind the keyboard).
+    const onViewportChange = () => {
+      adjustForViewport();
+      fitTerminal();
+    };
+    const onOrientationChange = onViewportChange;
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if (vv) {
+      vv.addEventListener('resize', onViewportChange);
+      vv.addEventListener('scroll', onViewportChange);
+    }
+    window.addEventListener('orientationchange', onOrientationChange);
 
     // Push resize events to the server so the PTY re-flows to match.
     term.onResize(({ cols, rows }) => {
@@ -296,6 +341,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     return () => {
       aliveRef.current = false;
       resizeObserver.disconnect();
+      if (vv) {
+        vv.removeEventListener('resize', onViewportChange);
+        vv.removeEventListener('scroll', onViewportChange);
+      }
+      window.removeEventListener('orientationchange', onOrientationChange);
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
@@ -496,7 +546,12 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       </div>
       <div
         ref={containerRef}
-        className={`min-h-0 flex-1 overflow-hidden ${bodyClass}`}
+        // overflow-auto lets the container show scrollbars whenever the
+        // rendered terminal grid is larger than the visible viewport — which
+        // happens on mobile when the soft keyboard reduces visualViewport but
+        // we deliberately keep the PTY at its full cols×rows.
+        className={`min-h-0 flex-1 overflow-auto ${bodyClass}`}
+        style={{ touchAction: 'manipulation' }}
         onClick={() => termRef.current?.focus()}
       />
     </div>
