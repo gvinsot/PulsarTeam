@@ -84,7 +84,15 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
  * socket.io (different path), so the existing chat WS stays untouched.
  */
 export function installTerminalProxy(httpServer: HttpServer): void {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: {
+      threshold: 512,
+      clientNoContextTakeover: false,
+      serverNoContextTakeover: false,
+      concurrencyLimit: 10,
+    },
+  });
   const runnerApiKey = readSecret('CODER_API_KEY') || '';
 
   httpServer.on('upgrade', async (req: IncomingMessage, socket, head) => {
@@ -185,7 +193,11 @@ function wireProxy(
   if (context.llmConfig !== undefined) headers['X-LLM-Config'] = JSON.stringify(context.llmConfig);
 
   const runnerWs = new WebSocket(wsUrl, {
-    perMessageDeflate: false,
+    perMessageDeflate: {
+      threshold: 512,
+      clientNoContextTakeover: false,
+      serverNoContextTakeover: false,
+    },
     headers,
   });
 

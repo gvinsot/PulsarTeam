@@ -38,6 +38,11 @@ from dataclasses import dataclass, field
 
 from config import logger
 
+try:
+    import pyte  # type: ignore
+except Exception:
+    pyte = None
+
 
 # Tunables — picked to be safe defaults, not necessarily optimal. Operators
 # can override via env if a deployment ever needs to.
@@ -46,6 +51,10 @@ IDLE_TIMEOUT_SEC = int(os.getenv("TERMINAL_IDLE_TIMEOUT_SEC", str(60 * 60)))    
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 40
 READ_CHUNK = 4096
+SNAPSHOT_INTERVAL_SEC = max(
+    0.03,
+    int(os.getenv("TERMINAL_SNAPSHOT_INTERVAL_MS", "100")) / 1000,
+)
 
 _ANSI_RE = re.compile(
     r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
@@ -95,6 +104,7 @@ class PtySession:
     cols: int = DEFAULT_COLS
     rows: int = DEFAULT_ROWS
     config_fingerprint: Optional[str] = None
+    render_mode: str = "raw"
 
     # Internals — filled in by start() and the background reader.
     master_fd: int = -1
@@ -111,6 +121,13 @@ class PtySession:
     _auto_answer_buf: bytearray = field(default_factory=bytearray)
     _auto_answered: set[str] = field(default_factory=set)
     _last_auto_answer_at: float = 0.0
+    _screen: Optional[object] = None
+    _screen_stream: Optional[object] = None
+    _snapshot_task: Optional[asyncio.Task] = None
+    _snapshot_dirty: bool = False
+
+    def _snapshot_enabled(self) -> bool:
+        return self.render_mode == "snapshot" and self._screen is not None and self._screen_stream is not None
 
     async def start(self) -> None:
         """Spawn the subprocess in a fresh PTY and start the reader loop."""
@@ -118,6 +135,7 @@ class PtySession:
             return
         self.scrollback = deque()  # holds raw byte chunks; size bounded manually
         self._scrollback_size = 0
+        self._init_screen_renderer()
 
         master_fd, slave_fd = pty.openpty()
         # Honour the agreed window size before the child execs so the TUI
@@ -164,8 +182,83 @@ class PtySession:
         loop = asyncio.get_running_loop()
         self._reader_task = loop.create_task(self._read_loop())
 
+    def _init_screen_renderer(self) -> None:
+        if self.render_mode != "snapshot":
+            return
+        if pyte is None:
+            logger.warning(
+                f"[Terminal] Snapshot render requested for {self.agent_id}, "
+                "but pyte is unavailable; falling back to raw PTY streaming"
+            )
+            self.render_mode = "raw"
+            return
+        try:
+            self._screen = pyte.Screen(self.cols, self.rows)
+            self._screen_stream = pyte.ByteStream(self._screen)
+            logger.info(
+                f"[Terminal] Snapshot renderer enabled for agent {self.agent_id} "
+                f"({self.cols}x{self.rows})"
+            )
+        except Exception as e:
+            logger.warning(f"[Terminal] Snapshot renderer init failed for {self.agent_id}: {e}")
+            self.render_mode = "raw"
+            self._screen = None
+            self._screen_stream = None
+
     def _record_output(self, data: bytes) -> None:
         self._append_scrollback(data)
+        if self._snapshot_enabled():
+            try:
+                self._screen_stream.feed(data)
+                self._snapshot_dirty = True
+            except Exception as e:
+                logger.warning(f"[Terminal] Snapshot feed failed for {self.agent_id}: {e}")
+                self.render_mode = "raw"
+
+    async def _handle_output(self, data: bytes) -> None:
+        self._record_output(data)
+        if self._snapshot_enabled():
+            self._schedule_snapshot_broadcast()
+        else:
+            await self._broadcast(data)
+
+    def _schedule_snapshot_broadcast(self) -> None:
+        if self._snapshot_task is not None and not self._snapshot_task.done():
+            return
+
+        async def _send_later() -> None:
+            await asyncio.sleep(SNAPSHOT_INTERVAL_SEC)
+            self._snapshot_task = None
+            if self._closed or not self._snapshot_dirty:
+                return
+            self._snapshot_dirty = False
+            await self._broadcast(self._snapshot_bytes())
+
+        self._snapshot_task = asyncio.create_task(_send_later())
+
+    def _snapshot_bytes(self) -> bytes:
+        screen = self._screen
+        if screen is None:
+            return b""
+        display = list(getattr(screen, "display", []) or [])
+        rows = self.rows
+        cols = self.cols
+        parts = ["\x1b[?25l\x1b[H\x1b[2J"]
+        for idx in range(rows):
+            line = display[idx] if idx < len(display) else ""
+            if len(line) > cols:
+                line = line[:cols]
+            line = line.rstrip()
+            parts.append(line)
+            parts.append("\x1b[K")
+            if idx < rows - 1:
+                parts.append("\r\n")
+        cursor = getattr(screen, "cursor", None)
+        cursor_x = max(0, min(cols - 1, int(getattr(cursor, "x", 0) or 0)))
+        cursor_y = max(0, min(rows - 1, int(getattr(cursor, "y", 0) or 0)))
+        parts.append(f"\x1b[{cursor_y + 1};{cursor_x + 1}H\x1b[?25h")
+        return "".join(parts).encode("utf-8", errors="replace")
+
 
     async def _read_loop(self) -> None:
         """Read from master_fd and append to scrollback + broadcast to clients.
@@ -213,8 +306,7 @@ class PtySession:
                         logger.info(f"[Terminal] EOF on master_fd for agent {self.agent_id}")
                         await self._on_subprocess_exit()
                         return
-                    self._record_output(data)
-                    await self._broadcast(data)
+                    await self._handle_output(data)
                     self._maybe_auto_answer_startup_prompt(data)
                 self._maybe_auto_answer_startup_prompt()
         finally:
@@ -310,13 +402,16 @@ class PtySession:
         start arriving. Returns the opaque client id used for detach()."""
         async with self._lock:
             self._cancel_idle_timer()
-            replay_chunks = list(self.scrollback)
+            replay_chunks = [] if self._snapshot_enabled() else list(self.scrollback)
+            snapshot = self._snapshot_bytes() if self._snapshot_enabled() else b""
 
         # Replay before registering the live observer. Otherwise fresh PTY
         # output can interleave with old scrollback and make the browser end
         # up behind the real process.
         for chunk in replay_chunks:
             await on_output(chunk)
+        if snapshot:
+            await on_output(snapshot)
 
         async with self._lock:
             client_id = self._next_client_id
@@ -365,6 +460,18 @@ class PtySession:
         self.rows = rows
         if self.master_fd < 0:
             return
+        if self._snapshot_enabled():
+            try:
+                self._screen.resize(lines=rows, columns=cols)
+            except TypeError:
+                try:
+                    self._screen.resize(cols, rows)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            self._snapshot_dirty = True
+            self._schedule_snapshot_broadcast()
         try:
             fcntl.ioctl(
                 self.master_fd, termios.TIOCSWINSZ,
@@ -390,6 +497,7 @@ class PtySession:
             "scrollback_bytes": self._scrollback_size,
             "cols": self.cols,
             "rows": self.rows,
+            "render_mode": self.render_mode,
         }
 
     def tail_text(self, max_bytes: int = 4096) -> str:
@@ -462,6 +570,9 @@ class PtySession:
             return
         self._closed = True
         self._cancel_idle_timer()
+        if self._snapshot_task and not self._snapshot_task.done():
+            self._snapshot_task.cancel()
+            self._snapshot_task = None
 
         # Try to terminate the subprocess. The runner container has
         # restricted capabilities so direct signals can EPERM when the
@@ -548,8 +659,7 @@ async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str)
 
     session = _SESSIONS.get(agent_id)
     if session and session.is_alive():
-        session._record_output(raw)
-        await session._broadcast(raw)
+        await session._handle_output(raw)
         return
 
     transcript = _TRANSCRIPTS.setdefault(agent_id, deque())
@@ -604,6 +714,7 @@ async def get_or_create_session(
             cols=cols,
             rows=rows,
             config_fingerprint=config_fingerprint,
+            render_mode=recipe.get("render_mode", "raw"),
         )
         await session.start()
         _SESSIONS[agent_id] = session

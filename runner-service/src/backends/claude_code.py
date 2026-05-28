@@ -163,6 +163,7 @@ class ClaudeCodeBackend(RunnerBackend):
             "cwd": proc_cwd,
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
+            "render_mode": "snapshot",
         }
 
     # ── Lifecycle ─────────────────────────────────────────────────────────

@@ -112,10 +112,12 @@ def _opencode_provider_config(llm_config: Optional[dict], model_spec: str) -> Op
             },
         },
     }
+    options: dict = {}
     if endpoint:
-        options = {"baseURL": endpoint}
-        if api_key:
-            options["apiKey"] = api_key
+        options["baseURL"] = endpoint
+    if api_key:
+        options["apiKey"] = api_key
+    if options:
         block["options"] = options
 
     if raw_provider in ("vllm", "openai-compatible", "lmstudio") or (
