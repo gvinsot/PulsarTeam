@@ -114,7 +114,13 @@ def _opencode_provider_config(llm_config: Optional[dict], model_spec: str) -> Op
     }
     options: dict = {}
     if endpoint:
-        options["baseURL"] = endpoint
+        # Normalise the endpoint the same way VLLMProvider (TypeScript) does:
+        # strip trailing slashes, then ensure the path ends with /v1 so that
+        # @ai-sdk/openai-compatible resolves /chat/completions correctly.
+        base = endpoint.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        options["baseURL"] = base
     if api_key:
         options["apiKey"] = api_key
     if options:
