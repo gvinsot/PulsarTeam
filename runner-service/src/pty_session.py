@@ -38,11 +38,6 @@ from dataclasses import dataclass, field
 
 from config import logger
 
-try:
-    import pyte  # type: ignore
-except ImportError:  # pragma: no cover - installed in the runner image
-    pyte = None
-
 
 # Tunables — picked to be safe defaults, not necessarily optimal. Operators
 # can override via env if a deployment ever needs to.
@@ -116,8 +111,6 @@ class PtySession:
     _auto_answer_buf: bytearray = field(default_factory=bytearray)
     _auto_answered: set[str] = field(default_factory=set)
     _last_auto_answer_at: float = 0.0
-    _screen: object | None = None
-    _stream: object | None = None
 
     async def start(self) -> None:
         """Spawn the subprocess in a fresh PTY and start the reader loop."""
@@ -125,7 +118,6 @@ class PtySession:
             return
         self.scrollback = deque()  # holds raw byte chunks; size bounded manually
         self._scrollback_size = 0
-        self._init_screen_emulator()
 
         master_fd, slave_fd = pty.openpty()
         # Honour the agreed window size before the child execs so the TUI
@@ -172,37 +164,8 @@ class PtySession:
         loop = asyncio.get_running_loop()
         self._reader_task = loop.create_task(self._read_loop())
 
-    def _init_screen_emulator(self) -> None:
-        """Maintain a lightweight terminal model for reconnect snapshots.
-
-        Raw scrollback is still replayed for history, but a reconstructed final
-        screen corrects stale / mid-escape replays for full-screen TUIs.
-        """
-        self._screen = None
-        self._stream = None
-        if pyte is None:
-            return
-        try:
-            self._screen = pyte.HistoryScreen(self.cols, self.rows, history=2000, ratio=0.5)
-            self._stream = pyte.ByteStream(self._screen)
-        except Exception as e:
-            logger.debug(f"[Terminal] pyte init failed for {self.agent_id}: {e}")
-            self._screen = None
-            self._stream = None
-
-    def _feed_screen(self, data: bytes) -> None:
-        if self._stream is None:
-            return
-        try:
-            self._stream.feed(data)
-        except Exception as e:
-            logger.debug(f"[Terminal] pyte feed failed for {self.agent_id}: {e}")
-            self._screen = None
-            self._stream = None
-
     def _record_output(self, data: bytes) -> None:
         self._append_scrollback(data)
-        self._feed_screen(data)
 
     async def _read_loop(self) -> None:
         """Read from master_fd and append to scrollback + broadcast to clients.
@@ -341,36 +304,6 @@ class PtySession:
                 # the snapshot list short on bursty output.
                 self._clients.pop(client_id, None)
 
-    def snapshot_bytes(self) -> bytes:
-        """Return ANSI bytes that redraw the current visible screen.
-
-        The snapshot is deliberately plain text: it is a corrective overlay
-        after raw replay, so preserving the latest layout matters more than
-        trying to synthesize every color/style mode.
-        """
-        screen = self._screen
-        if screen is None:
-            return b""
-        try:
-            lines = list(getattr(screen, "display", []) or [])
-            cursor = getattr(screen, "cursor", None)
-            cursor_x = max(0, int(getattr(cursor, "x", 0) or 0))
-            cursor_y = max(0, int(getattr(cursor, "y", 0) or 0))
-        except Exception:
-            return b""
-        if not lines:
-            return b""
-
-        rendered = "\r\n".join(str(line).rstrip() for line in lines)
-        # Clear only the visible screen. The frontend clears old local replay
-        # state before attach; keeping scrollback here preserves useful history.
-        payload = (
-            "\x1b[H\x1b[2J"
-            + rendered
-            + f"\x1b[{cursor_y + 1};{cursor_x + 1}H"
-        )
-        return payload.encode("utf-8", errors="replace")
-
     async def attach(self, on_output: ClientCallback, label: str = "?") -> int:
         """Register a new client. Replays the current scrollback synchronously
         so the client renders the existing screen state before live bytes
@@ -384,9 +317,6 @@ class PtySession:
         # up behind the real process.
         for chunk in replay_chunks:
             await on_output(chunk)
-        snapshot = self.snapshot_bytes()
-        if snapshot:
-            await on_output(snapshot)
 
         async with self._lock:
             client_id = self._next_client_id
@@ -433,16 +363,6 @@ class PtySession:
         rows = max(5, min(200, int(rows)))
         self.cols = cols
         self.rows = rows
-        if self._screen is not None:
-            try:
-                self._screen.resize(lines=rows, columns=cols)
-            except TypeError:
-                try:
-                    self._screen.resize(rows, cols)
-                except Exception:
-                    pass
-            except Exception:
-                pass
         if self.master_fd < 0:
             return
         try:

@@ -90,6 +90,15 @@ def _maybe_set_llm_config(agent_id: Optional[str], header: Optional[str]) -> boo
     return False
 
 
+def _llm_config_fingerprint(header: Optional[str]) -> Optional[str]:
+    if not header:
+        return None
+    try:
+        return json.dumps(json.loads(header), sort_keys=True, separators=(",", ":"))
+    except (json.JSONDecodeError, TypeError):
+        return header.strip() or None
+
+
 @router.get("/terminal/sessions")
 def list_terminal_sessions(authorization: Optional[str] = Header(None)) -> JSONResponse:
     _check_api_key(authorization, None)
@@ -135,16 +144,19 @@ async def send_terminal_input(
         )
 
     _maybe_set_permissions(agent_id, x_agent_permissions)
-    llm_config_changed = _maybe_set_llm_config(agent_id, x_llm_config)
-    if llm_config_changed:
-        await pty_session.close_session(agent_id)
-    config_fingerprint = x_llm_config.strip() if x_llm_config else None
+    existing = pty_session.get_session(agent_id)
+    session_was_alive = bool(existing and existing.is_alive())
+    if session_was_alive:
+        # A task prompt should be pasted into the current interactive TUI, not
+        # restart it because the API's config header differs from the browser's.
+        config_fingerprint = existing.config_fingerprint
+    else:
+        _maybe_set_llm_config(agent_id, x_llm_config)
+        config_fingerprint = _llm_config_fingerprint(x_llm_config)
 
     async def factory() -> dict:
         return await BACKEND.prepare_interactive(agent_id=agent_id, owner_id=x_owner_id)
 
-    existing = pty_session.get_session(agent_id)
-    session_was_alive = bool(existing and existing.is_alive())
     session = await pty_session.get_or_create_session(
         agent_id=agent_id,
         factory=factory,
@@ -203,10 +215,15 @@ async def ws_terminal(
     await websocket.accept()
     _maybe_set_permissions(agent_id, websocket.headers.get("x-agent-permissions"))
     x_llm_config = websocket.headers.get("x-llm-config")
-    llm_config_changed = _maybe_set_llm_config(agent_id, x_llm_config)
-    if llm_config_changed:
-        await pty_session.close_session(agent_id)
-    config_fingerprint = x_llm_config.strip() if x_llm_config else None
+    existing = pty_session.get_session(agent_id)
+    if existing and existing.is_alive():
+        # Attaching a browser must never kill a task that was just injected by
+        # POST /terminal/sessions/:id/input. The running CLI owns its config
+        # until an explicit terminal reset/reload starts a new process.
+        config_fingerprint = existing.config_fingerprint
+    else:
+        _maybe_set_llm_config(agent_id, x_llm_config)
+        config_fingerprint = _llm_config_fingerprint(x_llm_config)
 
     async def factory() -> dict:
         # Per-spawn provisioning (agent HOME, token hydration, project clone,
