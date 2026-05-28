@@ -69,8 +69,20 @@ RUN npm install -g openclaw \
 # Hermes Agent (https://github.com/NousResearch/hermes-agent)
 # Their installer is interactive in some paths; we run it non-interactively
 # and fall back to a stub if it fails.
+#
+# The installer relies on `uv`, which by default puts its managed Python
+# under $HOME/.local/share/uv/python. Built as root that lands in
+# /root/.local — unreadable by the per-agent UIDs (20000+) the runner
+# drops to before spawning the CLI, which makes /usr/local/bin/hermes
+# fail with "bad interpreter: Permission denied" and leaves the chat
+# terminal empty. Pin uv's install dirs to a world-readable location and
+# chmod the resulting trees a+rX so every UID can exec the shim.
 RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh -o /tmp/hermes-install.sh \
-    && bash /tmp/hermes-install.sh < /dev/null \
+    && UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
+       UV_PYTHON_BIN_DIR=/usr/local/share/uv/python-bin \
+       bash /tmp/hermes-install.sh < /dev/null \
+    && chmod -R a+rX /usr/local/share/uv /usr/local/lib/hermes-agent 2>/dev/null \
+    ; [ -x /usr/local/bin/hermes ] && /usr/local/bin/hermes --version >/dev/null 2>&1 \
     || (echo "WARN: hermes install failed — installing stub" \
         && printf '#!/bin/sh\necho "hermes-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/hermes \
         && chmod +x /usr/local/bin/hermes)
