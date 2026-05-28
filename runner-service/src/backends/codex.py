@@ -74,7 +74,7 @@ from agent_user import ensure_agent_user
 # tokens live in $CODEX_HOME/auth.json instead of ~/.codex/auth.json. We do
 # NOT set it ourselves — per-agent HOME isolation (handled by
 # ensure_agent_user) already gives every agent its own ~/.codex tree.
-DEFAULT_CODEX_MODEL = "gpt-5-codex"
+DEFAULT_CODEX_MODEL = "gpt-5.5"
 
 
 class CodexBackend(CliBackend):
