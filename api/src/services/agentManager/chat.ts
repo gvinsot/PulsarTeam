@@ -94,6 +94,11 @@ export const chatMethods = {
               // Only refresh if the background generation hasn't completed yet
               await this.executionManager.refreshFileTree(id);
             }
+          } else if (gitCreds?.token && this.executionManager.installGitCredentials) {
+            // No project → no ensureProject call would carry the token. Ship
+            // it explicitly so ~/.git-credentials and GITHUB_TOKEN are wired
+            // up for any tooling the LLM spawns.
+            await this.executionManager.installGitCredentials(id, gitCreds);
           }
         } catch (err: any) {
           console.warn(`⚠️  [Execution] Early init for file tree failed: ${err.message}`);

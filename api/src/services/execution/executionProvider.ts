@@ -38,6 +38,16 @@ export class ExecutionProvider {
   }
 
   /**
+   * Push the agent's git plugin credentials to the runner without requiring a
+   * project clone — covers the case of CLI runners whose LLM may interact
+   * with GitHub repos on its own initiative even when no `project` is pinned.
+   * Default no-op; only providers backed by a remote runner override this.
+   */
+  async installGitCredentials(agentId: string, creds: GitCredentials | null = null): Promise<void> {
+    // no-op
+  }
+
+  /**
    * Associate (or clear) the resolved LLM configuration for an agent so the
    * runner can forward provider/model/API-key when invoking CLI backends
    * (opencode, claudecode, codex, ...). No-op by default.

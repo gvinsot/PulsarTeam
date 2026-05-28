@@ -58,6 +58,18 @@ class EnsureProjectRequest(BaseModel):
     git_credentials: Optional["GitCredentials"] = None
 
 
+class InstallGitCredentialsRequest(BaseModel):
+    """Push git plugin credentials for an agent without requiring a project.
+
+    Used by the API when an agent has a GitHub plugin connected (at agent or
+    board scope) but no project pinned — CLI runners still need the token in
+    ~/.git-credentials so `git clone/push/pull` and `gh` (via GITHUB_TOKEN
+    mirrored in env) work when the LLM decides to interact with a repo.
+    """
+    git_credentials: "GitCredentials"
+    host: Optional[str] = None  # defaults to 'github.com'
+
+
 class GitCredentials(BaseModel):
     """Per-agent git authentication forwarded by the API when an agent (or its
     parent board) has a connected git plugin (currently GitHub OAuth).
@@ -72,6 +84,7 @@ class GitCredentials(BaseModel):
 
 
 EnsureProjectRequest.model_rebuild()
+InstallGitCredentialsRequest.model_rebuild()
 
 
 class AgentAuthCallback(BaseModel):

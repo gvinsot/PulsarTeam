@@ -425,6 +425,100 @@ def await_blocking_call(cmd: list) -> int:
         return -1
 
 
+_GIT_CRED_LINE_RE = re.compile(
+    r"^https?://(?P<user>[^:/@]+):(?P<token>[^@]+)@(?P<host>[^/]+)/?$"
+)
+
+
+def read_github_token_from_credentials(home_dir: str) -> Optional[dict]:
+    """Parse ~/.git-credentials and return the GitHub entry, if any.
+
+    Returns ``{"token": str, "username": str, "host": str}`` for the first
+    line matching `github.com` (or `*.github.com` for GHES), or None when no
+    such entry exists / the file is unreadable.
+
+    The CLI runners (claudecode, codex, opencode, openclaw, hermes) and any
+    tool the LLM spawns (`gh`, npm scripts using octokit, ...) read
+    `GITHUB_TOKEN`/`GH_TOKEN` from the environment. The credential helper
+    file only covers raw `git` invocations, so we mirror its token into the
+    process env to extend coverage at no extra cost.
+    """
+    if not home_dir:
+        return None
+    from urllib.parse import unquote
+    cred_path = os.path.join(home_dir, ".git-credentials")
+    try:
+        with open(cred_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                m = _GIT_CRED_LINE_RE.match(line)
+                if not m:
+                    continue
+                host = m.group("host")
+                # Match `github.com` exactly or any GHES subdomain.
+                if host != "github.com" and not host.endswith(".github.com"):
+                    continue
+                return {
+                    "token": unquote(m.group("token")),
+                    "username": unquote(m.group("user")),
+                    "host": host,
+                }
+    except OSError:
+        pass
+    return None
+
+
+async def install_agent_git_credentials(
+    agent_id: str,
+    git_credentials: dict,
+    host_hint: Optional[str] = None,
+) -> bool:
+    """Install plugin git credentials in the agent's HOME without requiring a
+    project clone.
+
+    Used by the API to push credentials for agents that have a GitHub plugin
+    connected (at the agent or board level) but no project pinned yet — the
+    CLI runner still needs `GITHUB_TOKEN`/`GH_TOKEN` so the LLM can clone,
+    open PRs, etc. on its own initiative.
+
+    `host_hint` lets the caller override the credential host (defaults to
+    `github.com`). Returns True on success, False if the agent user can't be
+    resolved or the credentials lack a token.
+    """
+    if not agent_id or not git_credentials or not git_credentials.get("token"):
+        return False
+    cached_user = _agent_users.get(agent_id)
+    if not cached_user:
+        # ensure_agent_user is async — caller is responsible. But fall back
+        # to creating the HOME so the credentials land somewhere usable.
+        cached_user = await ensure_agent_user(agent_id)
+        if not cached_user:
+            return False
+    home_dir = cached_user.get("home")
+    agent_uid = cached_user.get("uid")
+    agent_gid = cached_user.get("gid")
+    if not home_dir or agent_uid is None or agent_gid is None:
+        return False
+
+    host = host_hint or "github.com"
+    pseudo_url = f"https://{host}/_/_.git"
+    try:
+        os.makedirs(home_dir, exist_ok=True)
+        _install_git_credentials(home_dir, agent_uid, agent_gid, pseudo_url, git_credentials)
+        logger.info(
+            f"[Credentials] Installed git credentials for agent {agent_id[:12]} "
+            f"(host={host}, user={git_credentials.get('username') or 'x-access-token'})"
+        )
+        return True
+    except Exception as e:
+        logger.warning(
+            f"[Credentials] Failed to install git credentials for agent {agent_id[:12]}: {e}"
+        )
+        return False
+
+
 async def ensure_agent_project(
     agent_id: str,
     project: str,

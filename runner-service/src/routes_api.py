@@ -16,11 +16,14 @@ from config import RUNNER_MODEL, PROJECTS_DIR, logger
 from models import (
     MessageRequest, CodeRequest, ExecutionResponse,
     OpenAIChatCompletionRequest, OpenAICompletionRequest,
-    ShellExecRequest, EnsureProjectRequest,
+    ShellExecRequest, EnsureProjectRequest, InstallGitCredentialsRequest,
     chunk_text, messages_to_prompt,
 )
 from security import extract_api_key, verify_api_key
-from agent_user import get_agent_project_dir, ensure_agent_project, ensure_agent_user
+from agent_user import (
+    get_agent_project_dir, ensure_agent_project, ensure_agent_user,
+    install_agent_git_credentials,
+)
 from code_executor import execute_python, execute_shell
 from command_security import validate_command, sanitize_env
 from backends import BACKEND
@@ -361,6 +364,54 @@ async def ensure_project(
             exc_info=True,
         )
         return {"status": "error", "error": err_msg}
+
+
+@router.post("/credentials/git")
+async def install_git_credentials_route(
+    request: InstallGitCredentialsRequest,
+    x_api_key: Optional[str] = Header(None),
+    authorization: Optional[str] = Header(None),
+    x_agent_id: Optional[str] = Header(None),
+    x_owner_id: Optional[str] = Header(None),
+):
+    """Push git plugin credentials for an agent without cloning a project.
+
+    Symmetric with /projects/ensure for the credential-install side, but
+    skips the working-tree work. Lets the API ship the token for agents
+    that have a GitHub plugin connected at the agent or board level but no
+    project pinned yet — the CLI runner still needs ~/.git-credentials so
+    `git`/`gh` authenticate as soon as the LLM decides to interact with a
+    repo.
+    """
+    api_key = extract_api_key(x_api_key, authorization)
+    verify_api_key(api_key)
+
+    if not x_agent_id:
+        raise HTTPException(status_code=400, detail="X-Agent-Id header required")
+    if not request.git_credentials or not request.git_credentials.token:
+        raise HTTPException(status_code=400, detail="git_credentials.token is required")
+
+    creds = {
+        "provider": request.git_credentials.provider or "github",
+        "token": request.git_credentials.token,
+        "username": request.git_credentials.username or "",
+    }
+    try:
+        await ensure_agent_user(x_agent_id, owner_id=x_owner_id)
+        ok = await install_agent_git_credentials(
+            x_agent_id, creds, host_hint=request.host or None,
+        )
+        if not ok:
+            return {"status": "error", "error": "credentials install failed"}
+        return {"status": "success"}
+    except Exception as e:
+        err_type = type(e).__name__
+        err_msg = str(e).strip() or err_type
+        logger.error(
+            f"[Credentials] Install failed for agent {x_agent_id[:12]}: {err_type}: {err_msg}",
+            exc_info=True,
+        )
+        return {"status": "error", "error": f"{err_type}: {err_msg}"}
 
 
 @router.post("/exec-shell")

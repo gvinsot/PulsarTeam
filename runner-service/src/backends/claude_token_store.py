@@ -817,6 +817,25 @@ def get_agent_env(agent_user: dict = None) -> dict:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
         elif env.get("CLAUDE_CODE_OAUTH_TOKEN"):
             del env["CLAUDE_CODE_OAUTH_TOKEN"]
+        # GitHub plugin token mirror — same rationale as in CliBackend._agent_env:
+        # the credential helper covers `git`, but `gh` and SDK-based tools need
+        # GITHUB_TOKEN/GH_TOKEN in the environment.
+        home = agent_user.get("home") if agent_user else None
+        if home:
+            try:
+                from agent_user import read_github_token_from_credentials
+                gh = read_github_token_from_credentials(home)
+            except Exception:
+                gh = None
+            if gh and gh.get("token"):
+                env["GITHUB_TOKEN"] = gh["token"]
+                env["GH_TOKEN"] = gh["token"]
+                if gh.get("username") and gh["username"] != "x-access-token":
+                    env.setdefault("GITHUB_USER", gh["username"])
+                host = gh.get("host") or "github.com"
+                if host != "github.com":
+                    env.setdefault("GH_HOST", host)
+                    env.setdefault("GITHUB_API_URL", f"https://{host}/api/v3")
         return env
     return get_claude_env()
 

@@ -28,6 +28,7 @@ import { URL } from 'url';
 import { readSecret } from '../secrets.js';
 import { getAgentById } from '../services/database.js';
 import { getLlmConfig } from '../services/database/llmConfigs.js';
+import { getGitHubCredentialsForAgent } from './github.js';
 
 // Only these runners get a terminal — the others are LLM-providers or
 // non-CLI runtimes for which the chat UI is the correct interface.
@@ -82,8 +83,14 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
 /**
  * Install the terminal WS proxy on the given http.Server. Sits alongside
  * socket.io (different path), so the existing chat WS stays untouched.
+ *
+ * `executionManager` is optional but recommended: it's used to push the
+ * agent's GitHub plugin credentials to the runner-service BEFORE the WS
+ * handshake, so the CLI subprocess sees `GITHUB_TOKEN`/`GH_TOKEN` and the
+ * `~/.git-credentials` file from its first byte. Without it, the LLM would
+ * have to wait for the first `/projects/ensure` round-trip to authenticate.
  */
-export function installTerminalProxy(httpServer: HttpServer): void {
+export function installTerminalProxy(httpServer: HttpServer, executionManager?: any): void {
   const wss = new WebSocketServer({
     noServer: true,
     perMessageDeflate: {
@@ -154,6 +161,26 @@ export function installTerminalProxy(httpServer: HttpServer): void {
       socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
       socket.destroy();
       return;
+    }
+
+    // Push the agent's GitHub plugin credentials (agent → board → user
+    // fallback) to the runner before opening the PTY, so the CLI subprocess
+    // starts with ~/.git-credentials installed and GITHUB_TOKEN/GH_TOKEN in
+    // its env. Best-effort: a failure shouldn't block the terminal — the LLM
+    // will simply not be able to authenticate to GitHub until a later sync.
+    if (executionManager?.installGitCredentials) {
+      try {
+        const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
+        if (gitCreds?.token) {
+          await executionManager.installGitCredentials(agentId, {
+            provider: 'github',
+            token: gitCreds.token,
+            username: gitCreds.login || null,
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[Terminal] Failed to push git credentials for agent ${agentId.slice(0, 8)}: ${err.message}`);
+      }
     }
 
     // Finalise the upgrade now that auth + authz passed.

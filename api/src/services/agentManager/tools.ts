@@ -241,6 +241,12 @@ export const toolsMethods = {
           }
         } else {
           await this.executionManager.ensureProject(agentId);
+          // No project pinned → /projects/ensure won't ship git_credentials.
+          // Push them via /credentials/git so the runner still gets
+          // ~/.git-credentials + GITHUB_TOKEN exposed to the CLI subprocess.
+          if (gitCreds?.token && this.executionManager.installGitCredentials) {
+            await this.executionManager.installGitCredentials(agentId, gitCreds);
+          }
         }
         console.log(`📦 [Execution] After ensureProject: hasEnvironment=${this.executionManager.hasEnvironment(agentId)}, provider=${providerType}`);
       } catch (err: any) {

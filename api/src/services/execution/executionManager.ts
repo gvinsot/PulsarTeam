@@ -165,6 +165,16 @@ export class ExecutionManager {
     this._providerFor(agentId).setGitCredentials(agentId, creds);
   }
 
+  /**
+   * Push the agent's git plugin credentials to the runner without cloning a
+   * project. See ExecutionProvider.installGitCredentials for the rationale —
+   * this is the public delegate so chat/terminal entry points can call it
+   * during agent binding.
+   */
+  async installGitCredentials(agentId: string, creds: GitCredentials | null = null): Promise<void> {
+    return this._providerFor(agentId).installGitCredentials(agentId, creds);
+  }
+
   async ensureProject(
     agentId: string,
     project: string | null = null,

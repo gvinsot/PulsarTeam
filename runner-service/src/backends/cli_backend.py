@@ -254,6 +254,26 @@ class CliBackend(RunnerBackend):
                     env["ANTHROPIC_BASE_URL"] = endpoint
                 elif provider == "ollama":
                     env["OLLAMA_HOST"] = endpoint
+        # GitHub plugin token: mirror the OAuth token from ~/.git-credentials
+        # (installed by /projects/ensure or /credentials/git) into the env so
+        # the LLM's tooling (`gh` CLI, octokit-based npm scripts, anything that
+        # reads GITHUB_TOKEN/GH_TOKEN) authenticates without re-prompting. The
+        # `git` CLI itself doesn't need this — the credential helper already
+        # covers it — but every higher-level wrapper does.
+        if agent_user and agent_user.get("home"):
+            from agent_user import read_github_token_from_credentials
+            gh = read_github_token_from_credentials(agent_user["home"])
+            if gh and gh.get("token"):
+                env["GITHUB_TOKEN"] = gh["token"]
+                env["GH_TOKEN"] = gh["token"]
+                if gh.get("username") and gh["username"] != "x-access-token":
+                    env.setdefault("GITHUB_USER", gh["username"])
+                # GHES support: point gh CLI at the right host when the cred
+                # entry came from a non-github.com host.
+                host = gh.get("host") or "github.com"
+                if host != "github.com":
+                    env.setdefault("GH_HOST", host)
+                    env.setdefault("GITHUB_API_URL", f"https://{host}/api/v3")
         return env
 
     async def _report_usage_for_agent(self, agent_id: Optional[str], result: dict) -> None:

@@ -79,6 +79,9 @@ ENV_ALLOWLIST = {
     # Display
     "NO_COLOR", "FORCE_COLOR",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+    # GitHub — injected per-agent from the plugin token resolved by the API,
+    # so CLI runners and the `gh` tool can authenticate without re-prompting.
+    "GITHUB_TOKEN", "GH_TOKEN", "GH_HOST", "GITHUB_USER", "GITHUB_API_URL",
 }
 
 # Environment variable name patterns that are safe to pass through

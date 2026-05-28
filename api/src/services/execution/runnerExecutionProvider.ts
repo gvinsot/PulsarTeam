@@ -88,6 +88,44 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   /**
+   * Push the agent's git plugin credentials to the runner WITHOUT cloning a
+   * project. Used when an agent has a GitHub plugin connected (at agent or
+   * board level) but no project pinned — the CLI runner still needs the token
+   * in `~/.git-credentials` (and mirrored into `GITHUB_TOKEN`/`GH_TOKEN`) so
+   * the LLM's tooling authenticates as soon as it decides to interact with
+   * GitHub (clone, `gh pr create`, octokit, ...).
+   *
+   * Best-effort: a failure here is logged but doesn't break agent binding —
+   * the runner will simply lack the token until the next /projects/ensure
+   * succeeds.
+   */
+  async installGitCredentials(agentId: string, creds: GitCredentials | null = null): Promise<void> {
+    if (!agentId) return;
+    if (creds !== null) this.setGitCredentials(agentId, creds);
+    const effective = (this.gitCredentials.get(agentId) || null) as (GitCredentials & { login?: string | null }) | null;
+    if (!effective || !effective.token) return;
+    try {
+      const res = await fetch(`${this.baseUrl}/credentials/git`, {
+        method: 'POST',
+        headers: this._headers(agentId),
+        body: JSON.stringify({
+          git_credentials: {
+            provider: effective.provider || 'github',
+            token: effective.token,
+            username: effective.username || effective.login || null,
+          },
+        }),
+      });
+      const data: any = await res.json().catch(() => ({}));
+      if (data?.status === 'error') {
+        console.warn(`🤖 [Runner] installGitCredentials reported error: ${data.error || 'unknown'}`);
+      }
+    } catch (err: any) {
+      console.warn(`🤖 [Runner] installGitCredentials failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
+    }
+  }
+
+  /**
    * Associate (or clear) per-agent permissions. Forwarded to the runner on
    * every HTTP call via X-Agent-Permissions so shellAccess / internetAccess /
    * restrictedPaths are enforced even by the sandbox backend.
