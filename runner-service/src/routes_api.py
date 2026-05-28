@@ -38,6 +38,20 @@ def _maybe_set_permissions(agent_id: Optional[str], header: Optional[str]) -> No
             pass
 
 
+def _maybe_set_llm_config(agent_id: Optional[str], header: Optional[str]) -> None:
+    """Cache the per-agent LLM config (provider/model/apiKey) so CLI backends
+    that wrap multi-provider tools (opencode, ...) can configure the CLI to
+    use the agent's selected LLM instead of the static RUNNER_MODEL."""
+    if not agent_id or not header:
+        return
+    try:
+        cfg = json.loads(header)
+        if isinstance(cfg, dict):
+            BACKEND.set_agent_llm_config(agent_id, cfg)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+
 def _resolve_permissions(agent_id: Optional[str], header: Optional[str]) -> dict:
     """Permissions for this request: header takes precedence (most up-to-date),
     fall back to whatever the backend has cached from the last /execute or
@@ -480,6 +494,7 @@ async def stream_execution(
     x_agent_id: Optional[str] = Header(None),
     x_owner_id: Optional[str] = Header(None),
     x_agent_permissions: Optional[str] = Header(None),
+    x_llm_config: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -488,6 +503,7 @@ async def stream_execution(
         raise _agent_unsupported()
 
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
+    _maybe_set_llm_config(x_agent_id, x_llm_config)
     context_paths = await _write_hidden_context_files(
         x_agent_id, x_owner_id, None,
         request.content, request.system_prompt, None,
@@ -571,6 +587,7 @@ async def openai_chat_completions(
     x_owner_id: Optional[str] = Header(None),
     x_task_id: Optional[str] = Header(None),
     x_agent_permissions: Optional[str] = Header(None),
+    x_llm_config: Optional[str] = Header(None),
     x_runner_session_id: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
@@ -580,6 +597,7 @@ async def openai_chat_completions(
         raise _agent_unsupported()
 
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
+    _maybe_set_llm_config(x_agent_id, x_llm_config)
 
     if not request.messages:
         raise HTTPException(status_code=400, detail="At least one message is required")
@@ -717,6 +735,7 @@ async def openai_completions(
     x_owner_id: Optional[str] = Header(None),
     x_task_id: Optional[str] = Header(None),
     x_agent_permissions: Optional[str] = Header(None),
+    x_llm_config: Optional[str] = Header(None),
 ):
     api_key = extract_api_key(x_api_key, authorization)
     verify_api_key(api_key)
@@ -725,6 +744,7 @@ async def openai_completions(
         raise _agent_unsupported()
 
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
+    _maybe_set_llm_config(x_agent_id, x_llm_config)
 
     model = request.model or RUNNER_MODEL
     context_paths = await _write_hidden_context_files(

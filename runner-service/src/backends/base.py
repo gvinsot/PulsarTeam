@@ -52,6 +52,16 @@ class RunnerBackend:
     def set_agent_permissions(self, agent_id: str, permissions: dict) -> None:
         """Store permissions for an agent (sent via X-Agent-Permissions header)."""
 
+    # ── LLM configuration (forwarded by the API) ──────────────────────────
+    #
+    # The API may forward the agent's resolved LLM config via the
+    # X-LLM-Config header (JSON: {provider, model, apiKey, endpoint}). CLI
+    # backends that wrap multi-provider tools (opencode, openclaw, ...) can
+    # then configure the underlying CLI to use the selected LLM instead of
+    # the static RUNNER_MODEL env.
+    def set_agent_llm_config(self, agent_id: str, llm_config: dict) -> None:
+        """Store LLM config for an agent (sent via X-LLM-Config header)."""
+
     # ── Agent execution ───────────────────────────────────────────────────
     #
     # Conversation state lives in the caller's DB. Each call passes:

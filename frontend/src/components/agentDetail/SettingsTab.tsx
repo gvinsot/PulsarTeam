@@ -170,21 +170,36 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         </div>
         <div className="col-span-2">
           <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration</label>
-          <select
-            value={form.llmConfigId}
-            onChange={(e) => updateField('llmConfigId', e.target.value)}
-            className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="">-- Select an LLM config --</option>
-            {(agent.isVoice
-              ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
-              : llmConfigs
-            ).map(c => (
-              <option key={c.id} value={c.id}>
-                {c.name} ({c.provider}/{c.model})
-              </option>
-            ))}
-          </select>
+          {(() => {
+            // CLI runners (claudecode, opencode, codex, hermes, openclaw) ship with
+            // their own built-in LLM credentials (e.g. Claude Pro/Max plan, ChatGPT
+            // plan, or the operator's auth). When the user picks one of those
+            // runners, "Default LLM" is a valid choice: the runner uses its own
+            // LLM and no per-agent llmConfig is required.
+            const CLI_RUNNERS = new Set(['claudecode', 'opencode', 'codex', 'hermes', 'openclaw']);
+            const effectiveRunner = form.runner || resolveAutoRunner(form.llmConfigId);
+            const isCliRunner = CLI_RUNNERS.has(effectiveRunner);
+            const placeholderLabel = isCliRunner
+              ? 'Default LLM (use runner’s built-in model)'
+              : '-- Select an LLM config --';
+            return (
+              <select
+                value={form.llmConfigId}
+                onChange={(e) => updateField('llmConfigId', e.target.value)}
+                className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="">{placeholderLabel}</option>
+                {(agent.isVoice
+                  ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+                  : llmConfigs
+                ).map(c => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.provider}/{c.model})
+                  </option>
+                ))}
+              </select>
+            );
+          })()}
           {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
             <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
           )}

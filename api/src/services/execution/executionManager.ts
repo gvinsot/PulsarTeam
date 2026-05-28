@@ -39,6 +39,7 @@ interface BindAgentMeta {
   ownerId?: string;
   gitCredentials?: GitCredentials | null;
   permissions?: any | null;
+  llmConfig?: any | null;
 }
 
 const DEFAULT_URLS: Record<ProviderType, string> = {
@@ -139,6 +140,14 @@ export class ExecutionManager {
     if (meta.permissions !== undefined) {
       this._getProvider(normalized).setPermissions(agentId, meta.permissions);
     }
+    if (meta.llmConfig !== undefined) {
+      this._getProvider(normalized).setLlmConfig(agentId, meta.llmConfig);
+    }
+  }
+
+  /** Update (or clear) the per-agent resolved LLM config forwarded to the runner. */
+  setLlmConfig(agentId: string, llmConfig: any | null): void {
+    this._providerFor(agentId).setLlmConfig(agentId, llmConfig);
   }
 
   getProviderType(agentId: string): ProviderType | undefined {

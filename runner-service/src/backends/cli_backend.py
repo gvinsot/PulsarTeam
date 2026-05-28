@@ -38,6 +38,7 @@ class CliBackend(RunnerBackend):
 
     def __init__(self):
         self._permissions: dict[str, dict] = {}
+        self._llm_configs: dict[str, dict] = {}
 
     # ── Hooks subclasses override ─────────────────────────────────────────
 
@@ -128,6 +129,13 @@ class CliBackend(RunnerBackend):
     def _get_permissions(self, agent_id: Optional[str]) -> Optional[dict]:
         return self._permissions.get(agent_id) if agent_id else None
 
+    def set_agent_llm_config(self, agent_id: str, llm_config: dict) -> None:
+        if agent_id and llm_config:
+            self._llm_configs[agent_id] = llm_config
+
+    def _get_llm_config(self, agent_id: Optional[str]) -> Optional[dict]:
+        return self._llm_configs.get(agent_id) if agent_id else None
+
     def _resolve_effective_user(
         self, agent_id: Optional[str], agent_user: Optional[dict],
     ) -> Optional[dict]:
@@ -184,9 +192,28 @@ class CliBackend(RunnerBackend):
 
     # ── Common helpers ────────────────────────────────────────────────────
 
-    def _agent_env(self, agent_user: Optional[dict]) -> dict:
+    def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
         from command_security import sanitize_env
-        return sanitize_env(os.environ, agent_user)
+        env = sanitize_env(os.environ, agent_user)
+        llm = self._get_llm_config(agent_id) if agent_id else None
+        if llm:
+            api_key = (llm.get("apiKey") or llm.get("api_key") or "").strip()
+            provider = (llm.get("provider") or "").lower().strip()
+            if api_key:
+                # Expose the agent's API key under the env-var name expected by
+                # each provider's official SDK. opencode / openclaw read these
+                # automatically when no auth.json is present.
+                if provider in ("anthropic", "claude"):
+                    env["ANTHROPIC_API_KEY"] = api_key
+                elif provider == "openai":
+                    env["OPENAI_API_KEY"] = api_key
+                elif provider == "mistral":
+                    env["MISTRAL_API_KEY"] = api_key
+                elif provider == "google" or provider == "gemini":
+                    env["GOOGLE_API_KEY"] = api_key
+                elif provider == "groq":
+                    env["GROQ_API_KEY"] = api_key
+        return env
 
     def _resolve_cwd(self, agent_id: Optional[str]) -> str:
         agent_project_dir = get_agent_project_dir(agent_id) if agent_id else None
@@ -222,7 +249,7 @@ class CliBackend(RunnerBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
-                env=self._agent_env(effective_user),
+                env=self._agent_env(effective_user, agent_id),
                 **get_subprocess_kwargs(effective_user),
             )
             stdin_input = prompt.encode("utf-8") if self.pass_prompt_via_stdin else None

@@ -229,7 +229,8 @@ export const toolsMethods = {
         const providerType = llmCfg.managesContext ? 'claudecode' : 'sandbox';
         const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
         const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
-        this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null });
+        const llmConfigForRunner = agent.llmConfigId ? llmCfg : null;
+        this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
 
         if (agent.project) {
           const gitUrl = buildRepoCloneUrl(agent.project);

@@ -48,6 +48,11 @@ export class RunnerExecutionProvider extends ExecutionProvider {
    *  the runner enforces shellAccess / internetAccess / restrictedPaths even
    *  for backends with no LLM (sandbox) or no per-agent permission cache. */
   permissions: Map<string, any>;
+  /** Per-agent resolved LLM config, forwarded as X-LLM-Config so CLI backends
+   *  that wrap multi-provider tools (opencode, openclaw, ...) can configure
+   *  the underlying CLI with the agent's selected provider/model/apiKey
+   *  instead of falling back to the static RUNNER_MODEL env. */
+  llmConfigs: Map<string, any>;
 
   constructor(options: RunnerOptions = {}) {
     super();
@@ -58,6 +63,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this.ownerIds = new Map();
     this.gitCredentials = new Map();
     this.permissions = new Map();
+    this.llmConfigs = new Map();
   }
 
   /**
@@ -92,6 +98,26 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       this.permissions.set(agentId, permissions);
     } else {
       this.permissions.delete(agentId);
+    }
+  }
+
+  /**
+   * Associate (or clear) the agent's resolved LLM config. Only a small
+   * subset of fields is forwarded — provider, model, apiKey, endpoint —
+   * so the runner can configure its CLI without leaking unrelated data.
+   */
+  setLlmConfig(agentId: string, llmConfig: any | null): void {
+    if (!agentId) return;
+    if (llmConfig && typeof llmConfig === 'object') {
+      const minimal = {
+        provider: llmConfig.provider || null,
+        model: llmConfig.model || null,
+        apiKey: llmConfig.apiKey || null,
+        endpoint: llmConfig.endpoint || null,
+      };
+      this.llmConfigs.set(agentId, minimal);
+    } else {
+      this.llmConfigs.delete(agentId);
     }
   }
 
@@ -179,6 +205,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this._fileTreeCache.delete(agentId);
     this.ownerIds.delete(agentId);
     this.gitCredentials.delete(agentId);
+    this.permissions.delete(agentId);
+    this.llmConfigs.delete(agentId);
     console.log(`🗑️  [Runner] Cleared state for agent ${agentId.slice(0, 8)}`);
   }
 
@@ -187,6 +215,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this._fileTreeCache.clear();
     this.ownerIds.clear();
     this.gitCredentials.clear();
+    this.permissions.clear();
+    this.llmConfigs.clear();
     console.log('🗑️  [Runner] Cleared all agent states');
   }
 
@@ -319,6 +349,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     if (resolvedOwner) h['X-Owner-Id'] = resolvedOwner;
     const perms = agentId ? this.permissions.get(agentId) : null;
     if (perms) h['X-Agent-Permissions'] = JSON.stringify(perms);
+    const llm = agentId ? this.llmConfigs.get(agentId) : null;
+    if (llm) h['X-LLM-Config'] = JSON.stringify(llm);
     return h;
   }
 

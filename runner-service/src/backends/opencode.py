@@ -14,6 +14,14 @@ Real CLI surface:
     --dangerously-skip-permissions
 
 Note: opencode passes the message as a positional argument, not via stdin.
+
+Per-agent LLM selection:
+  When the API forwards an X-LLM-Config header (cached via
+  set_agent_llm_config), this backend formats the model as
+  "<provider>/<model>" so opencode picks the right vendor. The matching
+  API key env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / ...) is injected
+  by CliBackend._agent_env. When no per-agent LLM config is set, the
+  static RUNNER_MODEL env var is used as a fallback.
 """
 
 from typing import Optional
@@ -22,6 +30,41 @@ from config import RUNNER_MODEL
 from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
+
+
+# Map our internal provider names to the namespace opencode uses in its
+# `provider/model` model spec. Anything not in this map is forwarded as-is.
+_PROVIDER_TO_OPENCODE_NAMESPACE = {
+    "anthropic": "anthropic",
+    "claude": "anthropic",
+    "claude-paid": "anthropic",
+    "openai": "openai",
+    "mistral": "mistral",
+    "google": "google",
+    "gemini": "google",
+    "groq": "groq",
+    "ollama": "ollama",
+    "vllm": "openai",  # vLLM exposes an OpenAI-compatible API
+}
+
+
+def _resolve_opencode_model(llm_config: Optional[dict]) -> str:
+    """Compute the `--model` value opencode should use.
+
+    Prefers the per-agent LLM config when set (formatted as
+    `<provider>/<model>`), falling back to the static RUNNER_MODEL env.
+    """
+    if llm_config:
+        model = (llm_config.get("model") or "").strip()
+        provider = (llm_config.get("provider") or "").lower().strip()
+        if model and "/" in model:
+            return model  # caller already provided a provider-prefixed spec
+        ns = _PROVIDER_TO_OPENCODE_NAMESPACE.get(provider, provider)
+        if model and ns:
+            return f"{ns}/{model}"
+        if model:
+            return model
+    return RUNNER_MODEL
 
 
 class OpenCodeBackend(CliBackend):
@@ -35,21 +78,28 @@ class OpenCodeBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
 
+        llm_config = self._get_llm_config(agent_id)
+        model = _resolve_opencode_model(llm_config)
+
         cmd = [self.cli_command]
-        if RUNNER_MODEL:
-            cmd += ["--model", RUNNER_MODEL]
+        if model:
+            cmd += ["--model", model]
 
         kwargs = get_subprocess_kwargs(effective_user) or {}
         return {
             "cmd": cmd,
             "cwd": self._resolve_cwd(agent_id),
-            "env": self._agent_env(effective_user),
+            "env": self._agent_env(effective_user, agent_id),
             "preexec_fn": kwargs.get("preexec_fn"),
         }
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
+        llm_config = self._get_llm_config(agent_id)
+        model = _resolve_opencode_model(llm_config)
+
         cmd = [self.cli_command, "run"]
-        cmd += ["--model", RUNNER_MODEL]
+        if model:
+            cmd += ["--model", model]
         cmd += ["--format", "json"]  # opencode has no separate stream-json — JSON events on stdout
         # Permissions: default to skip if backend is configured for headless ops
         exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
