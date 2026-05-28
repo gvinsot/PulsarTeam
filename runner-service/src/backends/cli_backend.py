@@ -23,6 +23,18 @@ from .claude_token_store import get_subprocess_kwargs
 from usage_reporter import report_usage
 
 
+# Most CLI agents (claude, opencode, codex, hermes, openclaw) render an initial
+# splash / model-pick / permissions screen on cold start that they auto-dismiss
+# after a beat. Piping the prompt immediately races those screens and can land
+# the user's request *into* a dialog field. Sleep briefly after spawn so the CLI
+# has time to settle on its real REPL prompt before we feed it input. Tunable via
+# the CLI_PREP_DELAY_S env var (default 2.0 s, set to 0 to disable).
+try:
+    CLI_PREP_DELAY_S = float(os.environ.get("CLI_PREP_DELAY_S", "2.0"))
+except ValueError:
+    CLI_PREP_DELAY_S = 2.0
+
+
 class CliBackend(RunnerBackend):
     """Base class for CLI-driven runners.
 
@@ -305,6 +317,11 @@ class CliBackend(RunnerBackend):
                 **get_subprocess_kwargs(effective_user),
             )
             stdin_input = prompt.encode("utf-8") if self.pass_prompt_via_stdin else None
+            if CLI_PREP_DELAY_S > 0:
+                # Let the CLI dismiss its splash/permission/model-pick prompts
+                # before we pipe the real prompt into stdin. See module-level
+                # CLI_PREP_DELAY_S comment.
+                await asyncio.sleep(CLI_PREP_DELAY_S)
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(input=stdin_input),
                 timeout=TIMEOUT,
@@ -353,6 +370,10 @@ class CliBackend(RunnerBackend):
             **get_subprocess_kwargs(effective_user),
         )
         if self.pass_prompt_via_stdin:
+            if CLI_PREP_DELAY_S > 0:
+                # See module-level CLI_PREP_DELAY_S comment — let the CLI's
+                # auto-dismissed startup screens settle before feeding stdin.
+                await asyncio.sleep(CLI_PREP_DELAY_S)
             try:
                 proc.stdin.write(prompt.encode("utf-8"))
                 await proc.stdin.drain()
