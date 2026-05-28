@@ -25,6 +25,7 @@ Per-agent LLM selection:
 """
 
 from typing import Optional
+import json
 
 from config import RUNNER_MODEL
 from agent_user import ensure_agent_user
@@ -39,12 +40,18 @@ _PROVIDER_TO_OPENCODE_NAMESPACE = {
     "claude": "anthropic",
     "claude-paid": "anthropic",
     "openai": "openai",
+    "openrouter": "openrouter",
     "mistral": "mistral",
     "google": "google",
     "gemini": "google",
     "groq": "groq",
     "ollama": "ollama",
-    "vllm": "openai",  # vLLM exposes an OpenAI-compatible API
+    "deepseek": "deepseek",
+    "xai": "xai",
+    "grok": "xai",
+    "nvidia": "nvidia",
+    "huggingface": "huggingface",
+    "vllm": "vllm",  # configured as an OpenAI-compatible custom provider
 }
 
 
@@ -64,7 +71,92 @@ def _resolve_opencode_model(llm_config: Optional[dict]) -> str:
             return f"{ns}/{model}"
         if model:
             return model
-    return RUNNER_MODEL
+    fallback = (RUNNER_MODEL or "").strip()
+    if fallback and "/" not in fallback:
+        return f"anthropic/{fallback}"
+    return fallback
+
+
+def _split_model_spec(model_spec: str) -> tuple[Optional[str], Optional[str]]:
+    if not model_spec or "/" not in model_spec:
+        return None, None
+    provider_id, model_id = model_spec.split("/", 1)
+    provider_id = provider_id.strip()
+    model_id = model_id.strip()
+    if not provider_id or not model_id:
+        return None, None
+    return provider_id, model_id
+
+
+def _opencode_provider_config(llm_config: Optional[dict], model_spec: str) -> Optional[dict]:
+    """Declare the selected model so OpenCode accepts custom/uncached IDs.
+
+    OpenCode validates `--model` against configured providers/models. The API
+    can point an agent at arbitrary OpenAI-compatible endpoints (vLLM, local
+    gateways, proxies), so we feed an ephemeral config through
+    OPENCODE_CONFIG_CONTENT instead of relying on the global models cache.
+    """
+    provider_id, model_id = _split_model_spec(model_spec)
+    if not provider_id or not model_id:
+        return None
+
+    cfg = llm_config or {}
+    raw_provider = (cfg.get("provider") or "").lower().strip()
+    endpoint = (cfg.get("endpoint") or "").strip()
+    api_key = (cfg.get("apiKey") or cfg.get("api_key") or "").strip()
+
+    block: dict = {
+        "models": {
+            model_id: {
+                "name": model_id,
+            },
+        },
+    }
+    if endpoint:
+        options = {"baseURL": endpoint}
+        if api_key:
+            options["apiKey"] = api_key
+        block["options"] = options
+
+    if raw_provider in ("vllm", "openai-compatible", "lmstudio") or (
+        endpoint and provider_id not in _PROVIDER_TO_OPENCODE_NAMESPACE.values()
+    ):
+        block["npm"] = "@ai-sdk/openai-compatible"
+        block["name"] = raw_provider or provider_id
+
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "model": model_spec,
+        "provider": {
+            provider_id: block,
+        },
+    }
+
+
+def _merge_opencode_config(existing_raw: Optional[str], managed: Optional[dict]) -> Optional[str]:
+    if not managed:
+        return existing_raw
+    try:
+        existing = json.loads(existing_raw) if existing_raw else {}
+        if not isinstance(existing, dict):
+            existing = {}
+    except (TypeError, json.JSONDecodeError):
+        existing = {}
+
+    merged = {**existing, "$schema": managed.get("$schema", existing.get("$schema"))}
+    if managed.get("model"):
+        merged["model"] = managed["model"]
+    providers = existing.get("provider") if isinstance(existing.get("provider"), dict) else {}
+    merged_providers = {**providers}
+    for provider_id, block in (managed.get("provider") or {}).items():
+        previous = merged_providers.get(provider_id) if isinstance(merged_providers.get(provider_id), dict) else {}
+        previous_models = previous.get("models") if isinstance(previous.get("models"), dict) else {}
+        block_models = block.get("models") if isinstance(block.get("models"), dict) else {}
+        merged_block = {**previous, **block}
+        merged_block["models"] = {**previous_models, **block_models}
+        merged_providers[provider_id] = merged_block
+    merged["provider"] = merged_providers
+    return json.dumps(merged, separators=(",", ":"))
 
 
 class OpenCodeBackend(CliBackend):
@@ -72,6 +164,16 @@ class OpenCodeBackend(CliBackend):
     cli_command = "opencode"
     pass_prompt_via_stdin = False  # opencode takes the message as positional arg
     supports_interactive_terminal = True
+
+    def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
+        env = super()._agent_env(agent_user, agent_id)
+        llm_config = self._get_llm_config(agent_id)
+        model = _resolve_opencode_model(llm_config)
+        managed = _opencode_provider_config(llm_config, model)
+        merged = _merge_opencode_config(env.get("OPENCODE_CONFIG_CONTENT"), managed)
+        if merged:
+            env["OPENCODE_CONFIG_CONTENT"] = merged
+        return env
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
         """Spawn OpenCode in its interactive TUI for the shared PTY."""
