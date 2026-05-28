@@ -74,35 +74,38 @@ export const chatMethods = {
         }
       }
 
-      if (!this.executionManager.getFileTree(id)) {
-        try {
-          // Bind agent to the correct execution provider based on runner field or LLM config
-          const earlyLlm = this.resolveLlmConfig(agent);
-          const providerType = agent.runner || (earlyLlm.managesContext ? 'claudecode' : 'sandbox');
-          const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
-          // Only forward the LLM config when the agent actually has one
-          // assigned. With llmConfigId="" ("Default LLM") the runner is
-          // expected to fall back to its built-in credentials.
-          const llmConfigForRunner = agent.llmConfigId ? earlyLlm : null;
-          this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
+      try {
+        // Bind agent to the correct execution provider based on runner field or LLM config
+        const earlyLlm = this.resolveLlmConfig(agent);
+        const providerType = agent.runner || (earlyLlm.managesContext ? 'claudecode' : 'sandbox');
+        const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
+        // Only forward the LLM config when the agent actually has one
+        // assigned. With llmConfigId="" ("Default LLM") the runner is
+        // expected to fall back to its built-in credentials.
+        const llmConfigForRunner = agent.llmConfigId ? earlyLlm : null;
+        this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
 
-          const gitUrl = buildRepoCloneUrl(agent.project);
-          if (gitUrl) {
-            // ensureProject handles project cloning across all runner backends
-            await this.executionManager.ensureProject(id, agent.project, gitUrl, gitCreds);
-            if (!this.executionManager.getFileTree(id)) {
-              // Only refresh if the background generation hasn't completed yet
-              await this.executionManager.refreshFileTree(id);
-            }
-          } else if (gitCreds?.token && this.executionManager.installGitCredentials) {
-            // No project → no ensureProject call would carry the token. Ship
-            // it explicitly so ~/.git-credentials and GITHUB_TOKEN are wired
-            // up for any tooling the LLM spawns.
-            await this.executionManager.installGitCredentials(id, gitCreds);
+        const gitUrl = buildRepoCloneUrl(agent.project);
+        if (gitUrl) {
+          // ensureProject must run on every chat — not just when the API-side
+          // file tree is empty. If the runner-service container was restarted
+          // while the API kept its file-tree cache, the runner has lost its
+          // in-memory `_agent_projects` mapping and would otherwise fall back
+          // to cwd=/app instead of the agent's configured repo. The provider
+          // applies a 60s TTL internally so this stays cheap.
+          await this.executionManager.ensureProject(id, agent.project, gitUrl, gitCreds);
+          if (!this.executionManager.getFileTree(id)) {
+            // Only refresh if the background generation hasn't completed yet
+            await this.executionManager.refreshFileTree(id);
           }
-        } catch (err: any) {
-          console.warn(`⚠️  [Execution] Early init for file tree failed: ${err.message}`);
+        } else if (gitCreds?.token && this.executionManager.installGitCredentials) {
+          // No project → no ensureProject call would carry the token. Ship
+          // it explicitly so ~/.git-credentials and GITHUB_TOKEN are wired
+          // up for any tooling the LLM spawns.
+          await this.executionManager.installGitCredentials(id, gitCreds);
         }
+      } catch (err: any) {
+        console.warn(`⚠️  [Execution] Early init for file tree failed: ${err.message}`);
       }
     }
 

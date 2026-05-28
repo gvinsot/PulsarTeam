@@ -519,6 +519,13 @@ class ClaudeCodeBackend(RunnerBackend):
             cwd = agent_project_dir
         else:
             cwd = CLI_CWD
+            if agent_id:
+                logger.warning(
+                    f"[Cwd] No project dir resolved for agent {agent_id[:12]} — "
+                    f"falling back to {CLI_CWD}. Likely the API did not call "
+                    f"/projects/ensure (cache desync after runner restart) or "
+                    f"the per-agent data volume is missing the cloned tree."
+                )
             if os.path.isdir(PROJECTS_DIR):
                 cmd.extend(["--add-dir", PROJECTS_DIR])
 

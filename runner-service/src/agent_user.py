@@ -195,7 +195,13 @@ def get_agent_project_dir(agent_id: str) -> Optional[str]:
     """
     entry = _agent_projects.get(agent_id)
     if entry:
-        return entry["path"]
+        cached_path = entry.get("path")
+        # Verify the cached path still exists — otherwise the caller would
+        # treat it as the cwd, find it missing, and silently fall back to
+        # /app. Re-scan the disk to recover the real project location.
+        if cached_path and os.path.isdir(os.path.join(cached_path, ".git")):
+            return cached_path
+        _agent_projects.pop(agent_id, None)
     username = _sanitize_agent_id(agent_id)
     projects_base = os.path.join(DATA_DIR, "agents", username, "projects")
     if not os.path.isdir(projects_base):
