@@ -174,7 +174,11 @@ class OpenCodeBackend(CliBackend):
     supports_interactive_terminal = True
 
     def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
-        env = super()._agent_env(agent_user, agent_id)
+        # Pass agent_id=None so CliBackend skips injecting LLM-specific env vars
+        # (ANTHROPIC_API_KEY, OPENAI_BASE_URL, …). All provider configuration for
+        # opencode is delivered exclusively via OPENCODE_CONFIG_CONTENT JSON so
+        # there is no risk of env-var/config conflicts.
+        env = super()._agent_env(agent_user, None)
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
         managed = _opencode_provider_config(llm_config, model)
