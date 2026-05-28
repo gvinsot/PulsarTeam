@@ -38,6 +38,15 @@ export class ExecutionProvider {
   }
 
   /**
+   * Associate (or clear) the resolved LLM configuration for an agent so the
+   * runner can forward provider/model/API-key when invoking CLI backends
+   * (opencode, claudecode, codex, ...). No-op by default.
+   */
+  setLlmConfig(agentId: string, llmConfig: any | null): void {
+    // no-op
+  }
+
+  /**
    * Ensure the execution environment is ready for the given agent.
    * Idempotent — safe to call multiple times.
    *
