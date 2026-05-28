@@ -1,15 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
 import { api } from '../../api';
-import { TASK_TYPES } from './taskConstants';
-
-const RECURRENCE_PERIODS = [
-  { value: 'hourly', label: 'Every hour', minutes: 60 },
-  { value: 'daily', label: 'Every day', minutes: 1440 },
-  { value: 'weekly', label: 'Every week', minutes: 10080 },
-  { value: 'monthly', label: 'Every month', minutes: 43200 },
-  { value: 'custom', label: 'Custom interval', minutes: null },
-];
+import { TASK_TYPES, RECURRENCE_PERIODS } from './taskConstants';
 
 export default function CreateTaskModal({ agents, onClose, onCreated, statusOptions, defaultStatus, boardId, projectName, defaultRepoFullName = null, defaultStoragePath = null }) {
   // Allow all columns as creation statuses (don't exclude the last one —

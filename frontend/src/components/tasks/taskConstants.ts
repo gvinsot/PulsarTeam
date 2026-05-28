@@ -93,6 +93,16 @@ export const TASK_TYPES = [
 
 export const TASK_TYPE_MAP = Object.fromEntries(TASK_TYPES.map(t => [t.value, t]));
 
+// ── Recurrence periods ────────────────────────────────────────────────────────
+
+export const RECURRENCE_PERIODS = [
+  { value: 'hourly',  label: 'Every hour',     minutes: 60 },
+  { value: 'daily',   label: 'Every day',      minutes: 1440 },
+  { value: 'weekly',  label: 'Every week',     minutes: 10080 },
+  { value: 'monthly', label: 'Every month',    minutes: 43200 },
+  { value: 'custom',  label: 'Custom interval', minutes: null },
+];
+
 // ── Priority definitions ──────────────────────────────────────────────────────
 
 export const PRIORITIES = [

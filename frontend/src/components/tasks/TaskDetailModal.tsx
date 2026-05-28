@@ -9,7 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
-import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, timeAgo, formatDate } from './taskConstants';
+import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, RECURRENCE_PERIODS, timeAgo, formatDate } from './taskConstants';
 
 export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete, onStop, onResume, onClearStopped, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
   const [editing, setEditing] = useState(false);
@@ -29,6 +29,12 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
   const [transferring, setTransferring] = useState(false);
   const [editingType, setEditingType] = useState(false);
   const [savingType, setSavingType] = useState(false);
+  const [editingRecurrence, setEditingRecurrence] = useState(false);
+  const [savingRecurrence, setSavingRecurrence] = useState(false);
+  const [recEnabled, setRecEnabled] = useState(!!task.recurrence?.enabled);
+  const [recPeriod, setRecPeriod] = useState(task.recurrence?.period || 'daily');
+  const [recCustomInterval, setRecCustomInterval] = useState(task.recurrence?.intervalMinutes || 60);
+  const [recRetentionDays, setRecRetentionDays] = useState(task.recurrence?.historyRetentionDays || 0);
   const [editingBoard, setEditingBoard] = useState(false);
   const [boardMoveTarget, setBoardMoveTarget] = useState(null);
   const [movingBoard, setMovingBoard] = useState(false);
@@ -149,6 +155,33 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     } finally {
       setSavingStorage(false);
     }
+  };
+
+  const handleRecurrenceSave = async () => {
+    setSavingRecurrence(true);
+    try {
+      const recurrence = recEnabled ? {
+        enabled: true,
+        period: recPeriod,
+        intervalMinutes: recPeriod === 'custom'
+          ? recCustomInterval
+          : RECURRENCE_PERIODS.find(p => p.value === recPeriod)?.minutes || 1440,
+        historyRetentionDays: recRetentionDays > 0 ? recRetentionDays : null,
+      } : { enabled: false };
+      await api.updateTask(task.agentId, task.id, { recurrence });
+      await onRefresh();
+      setEditingRecurrence(false);
+    } finally {
+      setSavingRecurrence(false);
+    }
+  };
+
+  const handleRecurrenceCancel = () => {
+    setRecEnabled(!!task.recurrence?.enabled);
+    setRecPeriod(task.recurrence?.period || 'daily');
+    setRecCustomInterval(task.recurrence?.intervalMinutes || 60);
+    setRecRetentionDays(task.recurrence?.historyRetentionDays || 0);
+    setEditingRecurrence(false);
   };
 
   const handleDelete = async () => {
@@ -472,33 +505,131 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
             )}
 
             {/* Recurrence */}
-            {task.recurrence?.enabled && (
-              <div className="flex items-center justify-between py-2 border-b border-dark-800">
+            <div className="py-2 border-b border-dark-800">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs text-dark-400">
                   <Repeat className="w-3.5 h-3.5" />
                   Recurring
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
-                    {task.recurrence.period === 'custom'
-                      ? `Every ${task.recurrence.intervalMinutes} min`
-                      : task.recurrence.period === 'hourly' ? 'Every hour'
-                      : task.recurrence.period === 'daily' ? 'Every day'
-                      : task.recurrence.period === 'weekly' ? 'Every week'
-                      : task.recurrence.period === 'monthly' ? 'Every month'
-                      : task.recurrence.period}
-                  </span>
-                  {task.recurrence.historyRetentionDays > 0 && (
-                    <span
-                      className="text-[10px] px-2 py-0.5 rounded-full font-medium ring-1 bg-dark-700/40 text-dark-300 ring-dark-600"
-                      title="History/commits older than this are dropped at each reset"
+                {editingRecurrence ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={handleRecurrenceSave}
+                      disabled={savingRecurrence}
+                      className="px-2 py-0.5 text-[11px] font-medium text-white bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 rounded transition-colors flex items-center gap-1"
+                      title="Save recurrence"
                     >
-                      Purge {task.recurrence.historyRetentionDays}d
-                    </span>
+                      <Save className="w-3 h-3" />
+                      {savingRecurrence ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={handleRecurrenceCancel}
+                      disabled={savingRecurrence}
+                      className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
+                      title="Cancel"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    {task.recurrence?.enabled ? (
+                      <>
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
+                          {task.recurrence.period === 'custom'
+                            ? `Every ${task.recurrence.intervalMinutes} min`
+                            : task.recurrence.period === 'hourly' ? 'Every hour'
+                            : task.recurrence.period === 'daily' ? 'Every day'
+                            : task.recurrence.period === 'weekly' ? 'Every week'
+                            : task.recurrence.period === 'monthly' ? 'Every month'
+                            : task.recurrence.period}
+                        </span>
+                        {task.recurrence.historyRetentionDays > 0 && (
+                          <span
+                            className="text-[10px] px-2 py-0.5 rounded-full font-medium ring-1 bg-dark-700/40 text-dark-300 ring-dark-600"
+                            title="History/commits older than this are dropped at each reset"
+                          >
+                            Purge {task.recurrence.historyRetentionDays}d
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-xs text-dark-500 italic">None</span>
+                    )}
+                    <button
+                      onClick={() => {
+                        setRecEnabled(!!task.recurrence?.enabled);
+                        setRecPeriod(task.recurrence?.period || 'daily');
+                        setRecCustomInterval(task.recurrence?.intervalMinutes || 60);
+                        setRecRetentionDays(task.recurrence?.historyRetentionDays || 0);
+                        setEditingRecurrence(true);
+                      }}
+                      className="p-0.5 rounded text-dark-500 hover:text-teal-400 hover:bg-dark-700 transition-colors"
+                      title="Edit recurrence"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+              {editingRecurrence && (
+                <div className="mt-3 p-3 border border-dark-700 rounded-lg space-y-3 bg-dark-800/40">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={recEnabled}
+                      onChange={e => setRecEnabled(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-dark-600 bg-dark-800 text-teal-500 focus:ring-teal-500 focus:ring-offset-0"
+                    />
+                    <span className="text-xs font-semibold text-dark-300 uppercase tracking-wide">Enable recurrence</span>
+                  </label>
+                  {recEnabled && (
+                    <>
+                      <div className="flex gap-3 items-end">
+                        <div className="flex-1">
+                          <label className="block text-xs text-dark-400 mb-1">Period</label>
+                          <select
+                            value={recPeriod}
+                            onChange={e => setRecPeriod(e.target.value)}
+                            className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-teal-500 transition-colors"
+                          >
+                            {RECURRENCE_PERIODS.map(p => (
+                              <option key={p.value} value={p.value}>{p.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                        {recPeriod === 'custom' && (
+                          <div className="w-32">
+                            <label className="block text-xs text-dark-400 mb-1">Minutes</label>
+                            <input
+                              type="number"
+                              min={1}
+                              value={recCustomInterval}
+                              onChange={e => setRecCustomInterval(Math.max(1, parseInt(e.target.value) || 1))}
+                              className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-teal-500 transition-colors"
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-xs text-dark-400 mb-1">
+                          Purge history after (days)
+                          <span className="text-[10px] text-dark-500 ml-1">— 0 = keep everything</span>
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={3650}
+                          value={recRetentionDays}
+                          onChange={e => setRecRetentionDays(Math.max(0, Math.min(3650, parseInt(e.target.value) || 0)))}
+                          className="w-32 px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-teal-500 transition-colors"
+                        />
+                      </div>
+                    </>
                   )}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Manual toggle */}
             <div className="flex items-center justify-between py-2 border-b border-dark-800">
