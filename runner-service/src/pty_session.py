@@ -38,6 +38,11 @@ from dataclasses import dataclass, field
 
 from config import logger
 
+try:
+    import pyte  # type: ignore
+except ImportError:  # pragma: no cover - installed in the runner image
+    pyte = None
+
 
 # Tunables — picked to be safe defaults, not necessarily optimal. Operators
 # can override via env if a deployment ever needs to.
@@ -111,6 +116,8 @@ class PtySession:
     _auto_answer_buf: bytearray = field(default_factory=bytearray)
     _auto_answered: set[str] = field(default_factory=set)
     _last_auto_answer_at: float = 0.0
+    _screen: object | None = None
+    _stream: object | None = None
 
     async def start(self) -> None:
         """Spawn the subprocess in a fresh PTY and start the reader loop."""
@@ -118,6 +125,7 @@ class PtySession:
             return
         self.scrollback = deque()  # holds raw byte chunks; size bounded manually
         self._scrollback_size = 0
+        self._init_screen_emulator()
 
         master_fd, slave_fd = pty.openpty()
         # Honour the agreed window size before the child execs so the TUI
@@ -163,6 +171,38 @@ class PtySession:
 
         loop = asyncio.get_running_loop()
         self._reader_task = loop.create_task(self._read_loop())
+
+    def _init_screen_emulator(self) -> None:
+        """Maintain a lightweight terminal model for reconnect snapshots.
+
+        Raw scrollback is still replayed for history, but a reconstructed final
+        screen corrects stale / mid-escape replays for full-screen TUIs.
+        """
+        self._screen = None
+        self._stream = None
+        if pyte is None:
+            return
+        try:
+            self._screen = pyte.HistoryScreen(self.cols, self.rows, history=2000, ratio=0.5)
+            self._stream = pyte.ByteStream(self._screen)
+        except Exception as e:
+            logger.debug(f"[Terminal] pyte init failed for {self.agent_id}: {e}")
+            self._screen = None
+            self._stream = None
+
+    def _feed_screen(self, data: bytes) -> None:
+        if self._stream is None:
+            return
+        try:
+            self._stream.feed(data)
+        except Exception as e:
+            logger.debug(f"[Terminal] pyte feed failed for {self.agent_id}: {e}")
+            self._screen = None
+            self._stream = None
+
+    def _record_output(self, data: bytes) -> None:
+        self._append_scrollback(data)
+        self._feed_screen(data)
 
     async def _read_loop(self) -> None:
         """Read from master_fd and append to scrollback + broadcast to clients.
@@ -210,7 +250,7 @@ class PtySession:
                         logger.info(f"[Terminal] EOF on master_fd for agent {self.agent_id}")
                         await self._on_subprocess_exit()
                         return
-                    self._append_scrollback(data)
+                    self._record_output(data)
                     await self._broadcast(data)
                     self._maybe_auto_answer_startup_prompt(data)
                 self._maybe_auto_answer_startup_prompt()
@@ -301,12 +341,54 @@ class PtySession:
                 # the snapshot list short on bursty output.
                 self._clients.pop(client_id, None)
 
+    def snapshot_bytes(self) -> bytes:
+        """Return ANSI bytes that redraw the current visible screen.
+
+        The snapshot is deliberately plain text: it is a corrective overlay
+        after raw replay, so preserving the latest layout matters more than
+        trying to synthesize every color/style mode.
+        """
+        screen = self._screen
+        if screen is None:
+            return b""
+        try:
+            lines = list(getattr(screen, "display", []) or [])
+            cursor = getattr(screen, "cursor", None)
+            cursor_x = max(0, int(getattr(cursor, "x", 0) or 0))
+            cursor_y = max(0, int(getattr(cursor, "y", 0) or 0))
+        except Exception:
+            return b""
+        if not lines:
+            return b""
+
+        rendered = "\r\n".join(str(line).rstrip() for line in lines)
+        # Clear only the visible screen. The frontend clears old local replay
+        # state before attach; keeping scrollback here preserves useful history.
+        payload = (
+            "\x1b[H\x1b[2J"
+            + rendered
+            + f"\x1b[{cursor_y + 1};{cursor_x + 1}H"
+        )
+        return payload.encode("utf-8", errors="replace")
+
     async def attach(self, on_output: ClientCallback, label: str = "?") -> int:
         """Register a new client. Replays the current scrollback synchronously
         so the client renders the existing screen state before live bytes
         start arriving. Returns the opaque client id used for detach()."""
         async with self._lock:
             self._cancel_idle_timer()
+            replay_chunks = list(self.scrollback)
+
+        # Replay before registering the live observer. Otherwise fresh PTY
+        # output can interleave with old scrollback and make the browser end
+        # up behind the real process.
+        for chunk in replay_chunks:
+            await on_output(chunk)
+        snapshot = self.snapshot_bytes()
+        if snapshot:
+            await on_output(snapshot)
+
+        async with self._lock:
             client_id = self._next_client_id
             self._next_client_id += 1
             self._clients[client_id] = _Client(on_output=on_output, label=label)
@@ -314,15 +396,6 @@ class PtySession:
                 f"[Terminal] Client {client_id} ({label}) attached to agent "
                 f"{self.agent_id} (now {len(self._clients)} clients)"
             )
-
-        # Replay scrollback OUTSIDE the lock so we don't serialize attaches.
-        try:
-            for chunk in list(self.scrollback):
-                await on_output(chunk)
-        except Exception as e:
-            logger.debug(f"[Terminal] Scrollback replay to client {client_id} failed: {e}")
-            await self.detach(client_id)
-            raise
 
         return client_id
 
@@ -360,6 +433,16 @@ class PtySession:
         rows = max(5, min(200, int(rows)))
         self.cols = cols
         self.rows = rows
+        if self._screen is not None:
+            try:
+                self._screen.resize(lines=rows, columns=cols)
+            except TypeError:
+                try:
+                    self._screen.resize(rows, cols)
+                except Exception:
+                    pass
+            except Exception:
+                pass
         if self.master_fd < 0:
             return
         try:
@@ -516,6 +599,17 @@ _TRANSCRIPTS: dict[str, deque] = {}
 _TRANSCRIPT_SIZES: dict[str, int] = {}
 
 
+def _normalize_transcript_bytes(raw: bytes) -> bytes:
+    """Make pipe output render like terminal output in xterm.js.
+
+    PTY streams usually emit CRLF. Plain stdout/stderr pipes usually emit LF
+    only, which leaves xterm at the previous column and creates the visible
+    staircase effect. Keep carriage-return progress updates intact while
+    converting lone LF into CRLF.
+    """
+    return re.sub(b"(?<!\r)\n", b"\r\n", raw)
+
+
 async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str) -> None:
     """Append externally-produced output to the terminal transcript and any
     live terminal clients for this agent.
@@ -528,7 +622,14 @@ async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str)
     if not agent_id:
         return
     raw = data.encode("utf-8", errors="replace") if isinstance(data, str) else data
+    raw = _normalize_transcript_bytes(raw)
     if not raw:
+        return
+
+    session = _SESSIONS.get(agent_id)
+    if session and session.is_alive():
+        session._record_output(raw)
+        await session._broadcast(raw)
         return
 
     transcript = _TRANSCRIPTS.setdefault(agent_id, deque())
@@ -537,10 +638,6 @@ async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str)
     while _TRANSCRIPT_SIZES[agent_id] > SCROLLBACK_BYTES and len(transcript) > 1:
         evicted = transcript.popleft()
         _TRANSCRIPT_SIZES[agent_id] -= len(evicted)
-
-    session = _SESSIONS.get(agent_id)
-    if session and session.is_alive():
-        await session._broadcast(raw)
 
 
 async def replay_terminal_transcript(agent_id: str, on_output: ClientCallback) -> None:

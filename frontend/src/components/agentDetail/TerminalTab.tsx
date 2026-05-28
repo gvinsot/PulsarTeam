@@ -9,12 +9,12 @@
  *
  * Behaviour:
  *   • Reconnects automatically with exponential backoff after a network
- *     drop. Each reconnect re-attaches to the existing PTY (the runner
- *     replays the scrollback) so the user just sees a brief blank moment.
+ *     drop. Each reconnect re-attaches to the existing PTY; the runner asks
+ *     xterm to clear before replaying its authoritative scrollback.
  *   • Resizes the PTY whenever the visible area changes, so the TUI
  *     re-lays out to fill the viewport without scrollbars.
- *   • The xterm scrollback survives reconnects because xterm.js holds it
- *     locally on top of whatever the server replays.
+ *   • Scrollback is server-authoritative on reconnect, avoiding duplicated
+ *     local replay after transient WebSocket drops.
  */
 import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
@@ -267,7 +267,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           // handler trigger the reconnect.
           try {
             const ctrl = JSON.parse(ev.data);
-            if (ctrl?.type === 'exit') {
+            if (ctrl?.type === 'reset') {
+              t.reset();
+              t.clear();
+              setTerminalActive(false);
+            } else if (ctrl?.type === 'exit') {
               suppressReconnectRef.current = true;
               setExited(true);
               setConnected(false);
