@@ -62,7 +62,11 @@ RUN npm install -g opencode-ai \
 # per-agent UIDs (20000+) the runner drops to before spawning need every
 # parent dir to be world-traversable. Chmod the install tree the same
 # way the hermes line does, then force +x on the vendored binaries.
-RUN (npm install -g @openai/codex \
+# Pinned version: bumping this string forces Docker to re-run the install
+# layer. Without a pin, `latest` is captured at first build and never
+# refreshed because the layer cache hit on the unchanged RUN command.
+ARG CODEX_CLI_VERSION=0.134.0
+RUN (npm install -g @openai/codex@${CODEX_CLI_VERSION} \
      && chmod -R a+rX /usr/lib/node_modules/@openai \
      && find /usr/lib/node_modules/@openai -type f -path "*/vendor/*" -exec chmod +x {} \; \
     ) || (echo "WARN: @openai/codex install failed — installing stub" \
