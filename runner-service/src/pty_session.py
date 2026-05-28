@@ -64,6 +64,15 @@ SNAPSHOT_INTERVAL_SEC = max(
     0.03,
     int(os.getenv("TERMINAL_SNAPSHOT_INTERVAL_MS", "100")) / 1000,
 )
+# After a resize, wait longer before broadcasting the snapshot so the
+# subprocess has time to handle SIGWINCH and redraw. Otherwise the snapshot
+# is a full repaint (\x1b[2J\x1b[3J) of a near-empty pyte screen, and the
+# user briefly sees a blank terminal. Two quick resizes in a row (mobile
+# virtual keyboard open → close) can leave the screen blank entirely.
+SNAPSHOT_POST_RESIZE_DELAY_SEC = max(
+    SNAPSHOT_INTERVAL_SEC,
+    int(os.getenv("TERMINAL_SNAPSHOT_POST_RESIZE_MS", "350")) / 1000,
+)
 
 _ANSI_RE = re.compile(
     r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
@@ -338,12 +347,15 @@ class PtySession:
         else:
             await self._broadcast(data)
 
-    def _schedule_snapshot_broadcast(self) -> None:
+    def _schedule_snapshot_broadcast(self, delay: float = SNAPSHOT_INTERVAL_SEC) -> None:
+        # If a snapshot is already scheduled with a longer delay (e.g. the
+        # post-resize grace period), don't shorten it — we want to wait for
+        # the subprocess to finish redrawing before clearing+repainting.
         if self._snapshot_task is not None and not self._snapshot_task.done():
             return
 
         async def _send_later() -> None:
-            await asyncio.sleep(SNAPSHOT_INTERVAL_SEC)
+            await asyncio.sleep(delay)
             self._snapshot_task = None
             if self._closed or not self._snapshot_dirty:
                 return
@@ -591,7 +603,15 @@ class PtySession:
             except Exception:
                 pass
             self._snapshot_dirty = True
-            self._schedule_snapshot_broadcast()
+            # Cancel a pending short-delay snapshot so we don't repaint a
+            # half-resized screen right before the subprocess redraws on
+            # SIGWINCH. The fresh schedule below uses the longer post-resize
+            # delay.
+            existing = self._snapshot_task
+            if existing is not None and not existing.done():
+                existing.cancel()
+                self._snapshot_task = None
+            self._schedule_snapshot_broadcast(delay=SNAPSHOT_POST_RESIZE_DELAY_SEC)
         try:
             fcntl.ioctl(
                 self.master_fd, termios.TIOCSWINSZ,

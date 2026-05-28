@@ -181,6 +181,8 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const activityTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const fitFrameRef = useRef<number | null>(null);
+  const resizeSendTimerRef = useRef<number | null>(null);
+  const pendingResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const encoderRef = useRef(new TextEncoder());
   const suppressReconnectRef = useRef(false);
   // Tracks whether the component is still mounted. Used to suppress retries
@@ -216,6 +218,14 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   };
 
   const fitTerminalNow = () => {
+    // Skip fit when the container is collapsed (typically mid-animation while
+    // the mobile virtual keyboard opens/closes). FitAddon would otherwise
+    // compute a pathological geometry, push it to the runner, and the snapshot
+    // renderer would repaint a near-empty screen — making the whole TUI vanish
+    // after a couple of keyboard cycles.
+    const el = containerRef.current;
+    if (!el) return;
+    if (el.clientWidth < 8 || el.clientHeight < 8) return;
     try {
       fitRef.current?.fit();
     } catch {
@@ -326,11 +336,25 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     window.addEventListener('orientationchange', onOrientationChange);
 
     // Push resize events to the server so the PTY re-flows to match.
+    // Debounced so a burst of resizes (typical when the mobile virtual
+    // keyboard animates open/close) collapses into a single resize at the
+    // final geometry, instead of triggering several PTY resizes + snapshot
+    // repaints that race the subprocess's SIGWINCH redraw.
     term.onResize(({ cols, rows }) => {
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+      pendingResizeRef.current = { cols, rows };
+      if (resizeSendTimerRef.current !== null) {
+        window.clearTimeout(resizeSendTimerRef.current);
       }
+      resizeSendTimerRef.current = window.setTimeout(() => {
+        resizeSendTimerRef.current = null;
+        const pending = pendingResizeRef.current;
+        pendingResizeRef.current = null;
+        if (!pending) return;
+        const ws = wsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'resize', cols: pending.cols, rows: pending.rows }));
+        }
+      }, 150);
     });
 
     // Keystrokes from the user → bytes to the server.
@@ -358,6 +382,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         window.cancelAnimationFrame(fitFrameRef.current);
         fitFrameRef.current = null;
       }
+      if (resizeSendTimerRef.current !== null) {
+        window.clearTimeout(resizeSendTimerRef.current);
+        resizeSendTimerRef.current = null;
+      }
+      pendingResizeRef.current = null;
       try { wsRef.current?.close(); } catch { /* noop */ }
       wsRef.current = null;
       claudeOAuthLinkProvider.dispose();
