@@ -813,7 +813,7 @@ export class VLLMProvider {
   ownerId: string | null;
   client: OpenAI;
 
-  constructor(baseUrl: string, model: string, apiKey: string, agentId: string | null = null, ownerId: string | null = null, permissions: any = null) {
+  constructor(baseUrl: string, model: string, apiKey: string, agentId: string | null = null, ownerId: string | null = null, permissions: any = null, llmConfig: any = null) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.model = model;
     this.agentId = agentId;
@@ -826,6 +826,17 @@ export class VLLMProvider {
     if (agentId) headers['X-Agent-Id'] = agentId;
     if (ownerId) headers['X-Owner-Id'] = ownerId;
     if (permissions) headers['X-Agent-Permissions'] = JSON.stringify(permissions);
+    // Forward the per-agent LLM config so CLI-backed runner-services
+    // (opencode, openclaw, ...) can configure the wrapped CLI with the
+    // user-selected provider/model/apiKey instead of the static RUNNER_MODEL.
+    if (llmConfig && typeof llmConfig === 'object') {
+      const minimal: Record<string, any> = {};
+      if (llmConfig.provider) minimal.provider = llmConfig.provider;
+      if (llmConfig.model) minimal.model = llmConfig.model;
+      if (llmConfig.apiKey) minimal.apiKey = llmConfig.apiKey;
+      if (llmConfig.endpoint) minimal.endpoint = llmConfig.endpoint;
+      if (Object.keys(minimal).length) headers['X-LLM-Config'] = JSON.stringify(minimal);
+    }
     if (Object.keys(headers).length) clientOpts.defaultHeaders = headers;
     this.client = new OpenAI(clientOpts);
   }
@@ -1071,6 +1082,62 @@ export function createProvider(config: any): any {
         config.agentId || null,
         config.ownerId || null,
         config.permissions || null
+      );
+    // ── CLI-runner providers ─────────────────────────────────────────────
+    // When agent.runner is set to a CLI runner (opencode, openclaw, hermes,
+    // codex, claudecode), the LLM chat is routed through that runner-service
+    // instead of the provider's API directly. The runner CLI receives the
+    // user-selected LLM config via X-LLM-Config and uses it to call the
+    // appropriate vendor (Anthropic / OpenAI / Mistral / ...).
+    case 'opencode':
+      return new VLLMProvider(
+        process.env.OPENCODE_SERVICE_URL || 'http://opencode-service:8000',
+        config.model,
+        readSecret('CODER_API_KEY'),
+        config.agentId || null,
+        config.ownerId || null,
+        config.permissions || null,
+        config.llmConfig || null,
+      );
+    case 'openclaw':
+      return new VLLMProvider(
+        process.env.OPENCLAW_SERVICE_URL || 'http://openclaw-service:8000',
+        config.model,
+        readSecret('CODER_API_KEY'),
+        config.agentId || null,
+        config.ownerId || null,
+        config.permissions || null,
+        config.llmConfig || null,
+      );
+    case 'hermes':
+      return new VLLMProvider(
+        process.env.HERMES_SERVICE_URL || 'http://hermes-service:8000',
+        config.model,
+        readSecret('CODER_API_KEY'),
+        config.agentId || null,
+        config.ownerId || null,
+        config.permissions || null,
+        config.llmConfig || null,
+      );
+    case 'codex':
+      return new VLLMProvider(
+        process.env.CODEX_SERVICE_URL || 'http://codex-service:8000',
+        config.model,
+        readSecret('CODER_API_KEY'),
+        config.agentId || null,
+        config.ownerId || null,
+        config.permissions || null,
+        config.llmConfig || null,
+      );
+    case 'claudecode':
+      return new VLLMProvider(
+        process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
+        config.model,
+        readSecret('CODER_API_KEY'),
+        config.agentId || null,
+        config.ownerId || null,
+        config.permissions || null,
+        config.llmConfig || null,
       );
     case 'mistral':
       return new MistralProvider(
