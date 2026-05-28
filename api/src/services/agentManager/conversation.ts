@@ -97,11 +97,17 @@ export const conversationMethods = {
       }
     }
 
-    // 9. Restart the shared CLI terminal session. The Settings tab unmounts
-    //    the browser terminal, so closing the runner-side PTY here ensures
-    //    returning to Chat spawns a fresh CLI with the reloaded context.
+    // 9. Restart shared CLI terminal sessions. Close all CLI runner services
+    //    because reload can run before this API replica has bound the agent,
+    //    or after the runner setting changed.
     let terminalClosed = false;
-    if (this.executionManager?.closeTerminalSession) {
+    if (this.executionManager?.closeCliTerminalSessions) {
+      try {
+        terminalClosed = await this.executionManager.closeCliTerminalSessions(agentId);
+      } catch (err: any) {
+        console.warn(`⚠️  [ReloadContext] closeCliTerminalSessions failed: ${err.message}`);
+      }
+    } else if (this.executionManager?.closeTerminalSession) {
       try {
         terminalClosed = await this.executionManager.closeTerminalSession(agentId);
       } catch (err: any) {

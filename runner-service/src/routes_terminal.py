@@ -63,6 +63,33 @@ def _check_api_key(header: Optional[str], qs_key: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
+def _maybe_set_permissions(agent_id: Optional[str], header: Optional[str]) -> None:
+    if agent_id and header:
+        try:
+            permissions = json.loads(header)
+            if isinstance(permissions, dict):
+                BACKEND.set_agent_permissions(agent_id, permissions)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+
+def _maybe_set_llm_config(agent_id: Optional[str], header: Optional[str]) -> bool:
+    if agent_id and header:
+        try:
+            cfg = json.loads(header)
+            if isinstance(cfg, dict):
+                previous = getattr(BACKEND, "_llm_configs", {}).get(agent_id)
+                BACKEND.set_agent_llm_config(agent_id, cfg)
+                return previous != cfg
+            if cfg is None:
+                previous = getattr(BACKEND, "_llm_configs", {}).get(agent_id)
+                BACKEND.set_agent_llm_config(agent_id, None)
+                return previous is not None
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return False
+
+
 @router.get("/terminal/sessions")
 def list_terminal_sessions(authorization: Optional[str] = Header(None)) -> JSONResponse:
     _check_api_key(authorization, None)
@@ -91,6 +118,8 @@ async def send_terminal_input(
     request: TerminalInputRequest,
     authorization: Optional[str] = Header(None),
     x_owner_id: Optional[str] = Header(None),
+    x_agent_permissions: Optional[str] = Header(None),
+    x_llm_config: Optional[str] = Header(None),
 ) -> JSONResponse:
     """Inject a real prompt into the backend TUI.
 
@@ -105,6 +134,12 @@ async def send_terminal_input(
             detail=f"Backend {BACKEND.name} does not support interactive terminals",
         )
 
+    _maybe_set_permissions(agent_id, x_agent_permissions)
+    llm_config_changed = _maybe_set_llm_config(agent_id, x_llm_config)
+    if llm_config_changed:
+        await pty_session.close_session(agent_id)
+    config_fingerprint = x_llm_config.strip() if x_llm_config else None
+
     async def factory() -> dict:
         return await BACKEND.prepare_interactive(agent_id=agent_id, owner_id=x_owner_id)
 
@@ -115,6 +150,7 @@ async def send_terminal_input(
         factory=factory,
         cols=request.cols,
         rows=request.rows,
+        config_fingerprint=config_fingerprint,
     )
     if not session_was_alive:
         delay = float(os.getenv("TERMINAL_INPUT_STARTUP_DELAY_SEC", "0.75"))
@@ -165,6 +201,12 @@ async def ws_terminal(
         return
 
     await websocket.accept()
+    _maybe_set_permissions(agent_id, websocket.headers.get("x-agent-permissions"))
+    x_llm_config = websocket.headers.get("x-llm-config")
+    llm_config_changed = _maybe_set_llm_config(agent_id, x_llm_config)
+    if llm_config_changed:
+        await pty_session.close_session(agent_id)
+    config_fingerprint = x_llm_config.strip() if x_llm_config else None
 
     async def factory() -> dict:
         # Per-spawn provisioning (agent HOME, token hydration, project clone,
@@ -175,6 +217,7 @@ async def ws_terminal(
     try:
         session = await pty_session.get_or_create_session(
             agent_id=agent_id, factory=factory, cols=cols, rows=rows,
+            config_fingerprint=config_fingerprint,
         )
     except NotImplementedError as e:
         await websocket.send_text(json.dumps({"type": "error", "message": str(e)}))

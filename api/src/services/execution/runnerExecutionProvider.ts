@@ -117,7 +117,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       };
       this.llmConfigs.set(agentId, minimal);
     } else {
-      this.llmConfigs.delete(agentId);
+      this.llmConfigs.set(agentId, null);
     }
   }
 
@@ -369,8 +369,9 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     if (resolvedOwner) h['X-Owner-Id'] = resolvedOwner;
     const perms = agentId ? this.permissions.get(agentId) : null;
     if (perms) h['X-Agent-Permissions'] = JSON.stringify(perms);
-    const llm = agentId ? this.llmConfigs.get(agentId) : null;
-    if (llm) h['X-LLM-Config'] = JSON.stringify(llm);
+    if (agentId && this.llmConfigs.has(agentId)) {
+      h['X-LLM-Config'] = JSON.stringify(this.llmConfigs.get(agentId));
+    }
     return h;
   }
 

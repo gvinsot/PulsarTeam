@@ -836,6 +836,8 @@ export class VLLMProvider {
       if (llmConfig.apiKey) minimal.apiKey = llmConfig.apiKey;
       if (llmConfig.endpoint) minimal.endpoint = llmConfig.endpoint;
       if (Object.keys(minimal).length) headers['X-LLM-Config'] = JSON.stringify(minimal);
+    } else if (agentId && llmConfig === null) {
+      headers['X-LLM-Config'] = 'null';
     }
     if (Object.keys(headers).length) clientOpts.defaultHeaders = headers;
     this.client = new OpenAI(clientOpts);

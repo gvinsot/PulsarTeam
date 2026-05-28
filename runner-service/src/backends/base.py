@@ -59,7 +59,7 @@ class RunnerBackend:
     # backends that wrap multi-provider tools (opencode, openclaw, ...) can
     # then configure the underlying CLI to use the selected LLM instead of
     # the static RUNNER_MODEL env.
-    def set_agent_llm_config(self, agent_id: str, llm_config: dict) -> None:
+    def set_agent_llm_config(self, agent_id: str, llm_config: Optional[dict]) -> None:
         """Store LLM config for an agent (sent via X-LLM-Config header)."""
 
     # ── Agent execution ───────────────────────────────────────────────────

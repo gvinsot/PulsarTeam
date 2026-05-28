@@ -48,6 +48,8 @@ def _maybe_set_llm_config(agent_id: Optional[str], header: Optional[str]) -> Non
         cfg = json.loads(header)
         if isinstance(cfg, dict):
             BACKEND.set_agent_llm_config(agent_id, cfg)
+        elif cfg is None:
+            BACKEND.set_agent_llm_config(agent_id, None)
     except (json.JSONDecodeError, TypeError):
         pass
 
@@ -253,6 +255,7 @@ async def execute_message(
     x_agent_id: Optional[str] = Header(None),
     x_owner_id: Optional[str] = Header(None),
     x_agent_permissions: Optional[str] = Header(None),
+    x_llm_config: Optional[str] = Header(None),
 ):
     """Execute a natural language request via the configured runner."""
     api_key = extract_api_key(x_api_key, authorization)
@@ -262,6 +265,7 @@ async def execute_message(
         raise _agent_unsupported()
 
     _maybe_set_permissions(x_agent_id, x_agent_permissions)
+    _maybe_set_llm_config(x_agent_id, x_llm_config)
 
     context_paths = await _write_hidden_context_files(
         x_agent_id, x_owner_id, None,

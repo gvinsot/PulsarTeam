@@ -205,6 +205,36 @@ export class ExecutionManager {
     return this._providerFor(agentId).closeTerminalSession(agentId);
   }
 
+  /**
+   * Close the shared PTY for this agent on every terminal-capable CLI runner.
+   *
+   * Context reloads can happen before an agent has been bound in this API
+   * process, or after the agent's runner was changed in settings. In those
+   * cases _providerFor(agentId) may point at the wrong service, leaving the
+   * old CLI process alive with stale context. Fan out across all CLI runners
+   * so the next terminal attach always starts fresh.
+   */
+  async closeCliTerminalSessions(agentId: string): Promise<boolean> {
+    const providers = [
+      this.claudecode,
+      this.codex,
+      this.opencode,
+      this.openclaw,
+      this.hermes,
+    ];
+    const results = await Promise.allSettled(
+      providers.map(provider => provider.closeTerminalSession(agentId))
+    );
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) return true;
+    }
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (firstError) {
+      console.warn(`⚠️ [Execution] closeCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`);
+    }
+    return false;
+  }
+
   async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
     return this._providerFor(agentId).sendTerminalInput(agentId, input, options);
   }

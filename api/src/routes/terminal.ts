@@ -27,6 +27,7 @@ import { URL } from 'url';
 
 import { readSecret } from '../secrets.js';
 import { getAgentById } from '../services/database.js';
+import { getLlmConfig } from '../services/database/llmConfigs.js';
 
 // Only these runners get a terminal — the others are LLM-providers or
 // non-CLI runtimes for which the chat UI is the correct interface.
@@ -52,6 +53,30 @@ interface DecodedToken {
   userId?: string;
   username?: string;
   role?: string;
+}
+
+interface TerminalRunnerContext {
+  permissions?: any | null;
+  llmConfig?: any | null;
+}
+
+async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
+  let llmConfig: any = null;
+  if (agent.llmConfigId) {
+    const cfg = await getLlmConfig(agent.llmConfigId);
+    if (cfg) {
+      llmConfig = {
+        provider: cfg.provider || null,
+        model: cfg.model || null,
+        apiKey: cfg.apiKey || agent.apiKey || null,
+        endpoint: cfg.endpoint || agent.endpoint || null,
+      };
+    }
+  }
+  return {
+    permissions: agent.permissions || null,
+    llmConfig,
+  };
 }
 
 /**
@@ -114,9 +139,18 @@ export function installTerminalProxy(httpServer: HttpServer): void {
       return;
     }
 
+    let runnerContext: TerminalRunnerContext;
+    try {
+      runnerContext = await buildRunnerContext(agent);
+    } catch (err: any) {
+      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     // Finalise the upgrade now that auth + authz passed.
     wss.handleUpgrade(req, socket as any, head, (clientWs) => {
-      wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows);
+      wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows, runnerContext);
     });
   });
 }
@@ -133,6 +167,7 @@ function wireProxy(
   apiKey: string,
   cols: string,
   rows: string,
+  context: TerminalRunnerContext = {},
 ): void {
   const baseUrl = RUNNER_URLS[runner];
   if (!baseUrl) {
@@ -145,8 +180,13 @@ function wireProxy(
     + (ownerId ? `&owner_id=${encodeURIComponent(ownerId)}` : '')
     + `&cols=${encodeURIComponent(cols)}&rows=${encodeURIComponent(rows)}`;
 
+  const headers: Record<string, string> = {};
+  if (context.permissions) headers['X-Agent-Permissions'] = JSON.stringify(context.permissions);
+  if (context.llmConfig !== undefined) headers['X-LLM-Config'] = JSON.stringify(context.llmConfig);
+
   const runnerWs = new WebSocket(wsUrl, {
     perMessageDeflate: false,
+    headers,
   });
 
   let closed = false;

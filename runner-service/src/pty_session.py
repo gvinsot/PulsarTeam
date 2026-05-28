@@ -94,6 +94,7 @@ class PtySession:
     preexec_fn: Optional[Callable] = None
     cols: int = DEFAULT_COLS
     rows: int = DEFAULT_ROWS
+    config_fingerprint: Optional[str] = None
 
     # Internals — filled in by start() and the background reader.
     master_fd: int = -1
@@ -552,6 +553,7 @@ async def get_or_create_session(
     factory: Callable[[], Awaitable[dict]],
     cols: int = DEFAULT_COLS,
     rows: int = DEFAULT_ROWS,
+    config_fingerprint: Optional[str] = None,
 ) -> PtySession:
     """Return the existing session for `agent_id` or spawn a new one.
 
@@ -563,7 +565,14 @@ async def get_or_create_session(
     """
     async with _REGISTRY_LOCK:
         existing = _SESSIONS.get(agent_id)
-        if existing is not None and existing.is_alive():
+        if (
+            existing is not None
+            and existing.is_alive()
+            and (
+                config_fingerprint is None
+                or existing.config_fingerprint == config_fingerprint
+            )
+        ):
             return existing
         # Either no session yet, or the previous one died — replace it.
         if existing is not None:
@@ -577,6 +586,7 @@ async def get_or_create_session(
             preexec_fn=recipe.get("preexec_fn"),
             cols=cols,
             rows=rows,
+            config_fingerprint=config_fingerprint,
         )
         await session.start()
         _SESSIONS[agent_id] = session

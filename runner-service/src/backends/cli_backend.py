@@ -142,9 +142,13 @@ class CliBackend(RunnerBackend):
     def _get_permissions(self, agent_id: Optional[str]) -> Optional[dict]:
         return self._permissions.get(agent_id) if agent_id else None
 
-    def set_agent_llm_config(self, agent_id: str, llm_config: dict) -> None:
-        if agent_id and llm_config:
+    def set_agent_llm_config(self, agent_id: str, llm_config: Optional[dict]) -> None:
+        if not agent_id:
+            return
+        if llm_config:
             self._llm_configs[agent_id] = llm_config
+        else:
+            self._llm_configs.pop(agent_id, None)
 
     def _get_llm_config(self, agent_id: Optional[str]) -> Optional[dict]:
         return self._llm_configs.get(agent_id) if agent_id else None
