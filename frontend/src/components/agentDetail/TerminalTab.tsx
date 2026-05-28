@@ -87,7 +87,7 @@ const getTerminalTheme = (theme: string) => (
 );
 
 function openExternalLink(uri: string) {
-  const opened = window.open();
+  const opened = window.open('');
   if (opened) {
     try { opened.opener = null; } catch { /* noop */ }
     opened.location.href = uri;
@@ -127,13 +127,13 @@ function buildClaudeOAuthLink(term: XTerminal, startLine: number): ILink | undef
     const textStart = firstNonWhitespaceIndex(line);
     url += trimmed;
     endLine = y;
-    endColumn = (textStart < 0 ? 0 : textStart) + trimmed.length;
+    endColumn = textStart + trimmed.length;
   }
 
   return {
     range: {
       start: { x: markerIndex + 1, y: startLine + 1 },
-      end: { x: Math.max(1, endColumn), y: endLine + 1 },
+      end: { x: Math.max(1, endColumn + 1), y: endLine + 1 },
     },
     text: url,
     activate: (event, text) => {
