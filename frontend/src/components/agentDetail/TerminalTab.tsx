@@ -21,7 +21,7 @@ import { Terminal as XTerminal, type ILink, type ILinkProvider } from '@xterm/xt
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TerminalIcon } from 'lucide-react';
+import { Terminal as TerminalIcon, ArrowUp, ArrowDown, CornerDownLeft } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface TerminalTabProps {
@@ -203,6 +203,16 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       activityTimerRef.current = null;
       setTerminalActive(false);
     }, 1800);
+  };
+
+  // Send a literal control sequence to the PTY and refocus xterm so the next
+  // keystroke from a physical keyboard still lands in the terminal. Used by
+  // the on-screen arrow / enter buttons in the header — they're the only way
+  // to drive a TUI from a touch device, and they're handy on desktop too when
+  // the focus has wandered to a button.
+  const sendKey = (seq: string) => {
+    if (!sendToRunner(seq)) return;
+    termRef.current?.focus();
   };
 
   const fitTerminalNow = () => {
@@ -448,9 +458,41 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         <TerminalIcon className="w-3.5 h-3.5 text-indigo-400" />
         <span>Terminal</span>
         <span className="opacity-60">— {agent.runner || 'cli'}</span>
-        <span className="ml-auto opacity-60">
-          {connected ? (terminalActive ? 'active' : 'connected') : exited ? 'exited' : 'reconnecting'} · multi-client
-        </span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => sendKey('\x1b[A')}
+            disabled={!connected}
+            title="Up arrow — select previous option"
+            aria-label="Send up arrow"
+            className="flex items-center justify-center w-7 h-7 rounded border border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => sendKey('\x1b[B')}
+            disabled={!connected}
+            title="Down arrow — select next option"
+            aria-label="Send down arrow"
+            className="flex items-center justify-center w-7 h-7 rounded border border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ArrowDown className="w-3.5 h-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => sendKey('\r')}
+            disabled={!connected}
+            title="Enter — confirm selection"
+            aria-label="Send enter"
+            className="flex items-center justify-center w-7 h-7 rounded border border-dark-700/60 bg-dark-800/60 hover:bg-dark-700/60 hover:text-dark-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <CornerDownLeft className="w-3.5 h-3.5" />
+          </button>
+          <span className="opacity-60 ml-1">
+            {connected ? (terminalActive ? 'active' : 'connected') : exited ? 'exited' : 'reconnecting'} · multi-client
+          </span>
+        </div>
       </div>
       <div
         ref={containerRef}
