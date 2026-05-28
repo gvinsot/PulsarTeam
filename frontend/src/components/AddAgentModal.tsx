@@ -14,6 +14,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     description: '',
     instructions: 'You are a helpful AI assistant.',
     llmConfigId: '',
+    runner: 'opencode',
     icon: '🤖',
     color: '#6366f1',
     project: '',
@@ -67,6 +68,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
       const payload: any = { ...form };
       payload.llmConfigId = payload.llmConfigId || null;
       payload.boardId = payload.boardId || null;
+      payload.runner = payload.runner || null;
       // Voice agents are inherently single-instance — never batch them
       const batchSize = (payload.isBatch && !payload.isVoice)
         ? Math.max(2, Math.min(50, Number(payload.batchSize) || 2))
@@ -316,6 +318,8 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                         updateField('isVoice', isVoice);
                         if (isVoice) {
                           updateField('isLeader', true);
+                          // Voice agents shouldn't run on opencode CLI — let "Auto" pick sandbox.
+                          updateField('runner', '');
                           if (form.voiceMode === 'realtime') {
                             // Auto-select an LLM config with gpt-realtime model
                             const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
@@ -434,18 +438,48 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
 
                 <div className="col-span-2 border-t border-dark-700 pt-4">
                   <h4 className="text-xs font-medium text-dark-300 mb-3 flex items-center gap-2">
-                    <Cpu className="w-3.5 h-3.5" /> LLM Configuration
+                    <Cpu className="w-3.5 h-3.5" /> Runner & LLM
                   </h4>
                 </div>
 
                 <div className="col-span-2">
-                  <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration *</label>
+                  <label className="block text-xs text-dark-400 mb-1.5">Runner (execution backend)</label>
+                  <select
+                    value={form.runner}
+                    onChange={(e) => updateField('runner', e.target.value)}
+                    disabled={form.isVoice}
+                    className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
+                  >
+                    <option value="">Auto (based on LLM config)</option>
+                    <option value="sandbox">Pulsar Agent (sandbox)</option>
+                    <option value="claudecode">Claude Code Agent</option>
+                    <option value="openclaw">OpenClaw Agent</option>
+                    <option value="hermes">Hermes Agent</option>
+                    <option value="opencode">OpenCode Agent</option>
+                    <option value="codex">OpenAI Codex Agent</option>
+                  </select>
+                  <p className="text-[11px] text-dark-500 mt-1">Default is OpenCode. "Auto" picks a runner from the LLM provider.</p>
+                </div>
+
+                <div className="col-span-2">
+                  {(() => {
+                    // CLI runners ship with their own LLM, so "Default LLM" is a valid choice
+                    // (the runner uses its built-in model). Sandbox requires an explicit config.
+                    const CLI_RUNNERS = new Set(['claudecode', 'opencode', 'codex', 'hermes', 'openclaw']);
+                    const isCliRunner = CLI_RUNNERS.has(form.runner);
+                    const placeholder = isCliRunner
+                      ? 'Default LLM (use runner’s built-in model)'
+                      : '-- Select an LLM config --';
+                    const required = !isCliRunner && !form.isVoice;
+                    return (
+                      <>
+                  <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration{required ? ' *' : ''}</label>
                   <select
                     value={form.llmConfigId}
                     onChange={(e) => updateField('llmConfigId', e.target.value)}
                     className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                   >
-                    <option value="">-- Select an LLM config --</option>
+                    <option value="">{placeholder}</option>
                     {(form.isVoice && form.voiceMode === 'realtime'
                       ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
                       : llmConfigs
@@ -455,6 +489,9 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
                       </option>
                     ))}
                   </select>
+                      </>
+                    );
+                  })()}
                   {form.isVoice && form.voiceMode === 'realtime' && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
                     <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
                   )}
