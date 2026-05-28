@@ -34,6 +34,7 @@ const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15_000;
 const CLAUDE_OAUTH_PREFIX = 'https://claude.com/cai/oauth/authorize?code=';
 const CLAUDE_OAUTH_MAX_CONTINUATION_LINES = 32;
+const CLAUDE_OAUTH_FALLBACK_SEARCH_LINES = 500;
 
 const getTerminalTheme = (theme: string) => (
   theme === 'light'
@@ -99,6 +100,10 @@ function getTerminalLine(term: XTerminal, y: number) {
   return term.buffer.active.getLine(y)?.translateToString(true) ?? '';
 }
 
+function firstNonWhitespaceIndex(line: string) {
+  return line.search(/\S/);
+}
+
 function buildClaudeOAuthLink(term: XTerminal, startLine: number): ILink | undefined {
   const firstLine = getTerminalLine(term, startLine);
   const markerIndex = firstLine.indexOf(CLAUDE_OAUTH_PREFIX);
@@ -119,9 +124,10 @@ function buildClaudeOAuthLink(term: XTerminal, startLine: number): ILink | undef
     const line = getTerminalLine(term, y);
     const trimmed = line.trim();
     if (!trimmed) break;
+    const textStart = firstNonWhitespaceIndex(line);
     url += trimmed;
     endLine = y;
-    endColumn = line.indexOf(trimmed) + trimmed.length;
+    endColumn = (textStart < 0 ? 0 : textStart) + trimmed.length;
   }
 
   return {
@@ -149,7 +155,8 @@ function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
 function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string) {
   if (!uri.startsWith(CLAUDE_OAUTH_PREFIX)) return uri;
   const buffer = term.buffer.active;
-  for (let y = buffer.length - 1; y >= 0; y -= 1) {
+  const earliestLine = Math.max(0, buffer.length - CLAUDE_OAUTH_FALLBACK_SEARCH_LINES);
+  for (let y = buffer.length - 1; y >= earliestLine; y -= 1) {
     const link = buildClaudeOAuthLink(term, y);
     if (link?.text.startsWith(uri)) return link.text;
   }
