@@ -2,8 +2,14 @@
 import { v4 as uuidv4 } from 'uuid';
 import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getActiveTasksByAgent, getActiveTaskForExecutor, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
-import { isActiveStatus, getWorkflowManagedStatuses } from '../workflow/index.js';
+import { isActiveStatus, getWorkflowManagedStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
+
+const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes']);
+
+function isCliRunner(agent: any): boolean {
+  return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
+}
 
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
@@ -856,7 +862,8 @@ export const tasksMethods = {
     });
   },
 
-  async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string): Promise<string> {
+  async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
+    const terminalDriven = Boolean(options.terminalDriven);
     const freshTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
     console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
 
@@ -911,7 +918,7 @@ export const tasksMethods = {
     // the task immediately instead of waiting for the slow reminder loop.
     // Check if executor is already idle (not busy from another concurrent task).
     const immediateExecutor = this.agents.get(executorId);
-    if (immediateExecutor && immediateExecutor.status === 'idle' && !getTaskSignal(taskId, 'stopped')) {
+    if (!terminalDriven && immediateExecutor && immediateExecutor.status === 'idle' && !getTaskSignal(taskId, 'stopped')) {
       // Brief delay to let any in-flight state settle (e.g. socket events)
       await new Promise(resolve => setTimeout(resolve, 5000));
 
@@ -1024,14 +1031,20 @@ export const tasksMethods = {
         const reminderStartIdx = currentExecutor.conversationHistory.length;
         const reminderStartedAt = new Date().toISOString();
 
-        await this.sendMessage(
-          executorId,
-          `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @task_execution_complete(summary of what was done) to signal completion.\n\nIf you have already finished all the work, call @task_execution_complete now with a summary of what was accomplished.`,
-          (chunk: any) => {
-            this._emit('agent:stream:chunk', { agentId: executorId, chunk });
-            this._emit('agent:thinking', { agentId: executorId, thinking: currentExecutor.currentThinking || '' });
-          }
-        );
+        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @task_execution_complete(summary of what was done) to signal completion.\n\nIf you have already finished all the work, call @task_execution_complete now with a summary of what was accomplished.`;
+
+        if (terminalDriven && isCliRunner(currentExecutor) && this.executionManager?.sendTerminalInput) {
+          await this.executionManager.sendTerminalInput(executorId, reminderPrompt, { submit: true });
+        } else {
+          await this.sendMessage(
+            executorId,
+            reminderPrompt,
+            (chunk: any) => {
+              this._emit('agent:stream:chunk', { agentId: executorId, chunk });
+              this._emit('agent:thinking', { agentId: executorId, thinking: currentExecutor.currentThinking || '' });
+            }
+          );
+        }
 
         // _saveExecutionLog moved to caller — captures full conversation including reminders
       } catch (reminderErr: any) {
@@ -1133,17 +1146,40 @@ export const tasksMethods = {
         ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @task_execution_complete(summary of what was done).`
         : task.text;
 
-      const result = await this.sendMessage(executorId, messageToSend, streamCallback);
+      const terminalDriven = isCliRunner(executor) && executor.status === 'idle' && this.executionManager?.sendTerminalInput;
+      if (terminalDriven) {
+        await this.executionManager.sendTerminalInput(executorId, messageToSend, { submit: true });
+      } else {
+        await this.sendMessage(executorId, messageToSend, streamCallback);
+      }
+
+      // CLI runners like opencode, openclaw, hermes, and codex manage their own
+      // tool execution pipeline internally and exit when their work is done.
+      // They do NOT emit @task_execution_complete via our text-based tool parser
+      // (they use their own JSON tool systems). Without this signal,
+      // _waitForExecutionComplete sees the agent as idle and fires an immediate
+      // "went idle" retry, then the full reminder loop — causing an infinite loop.
+      // Fix: auto-signal task completion when these runners exit, unless the
+      // task was already completed (e.g. opencode somehow did call the tool).
+      const SELF_COMPLETING_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex']);
+      if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
+        if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
+          console.log(`✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`);
+          setTaskSignal(task.id, 'completed', true);
+        }
+      }
 
       // _saveExecutionLog moved after _waitForExecutionComplete — captures full conversation
 
-      const waitResult = await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text);
+      const waitResult = await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text, {
+        terminalDriven,
+      });
 
       // Save execution log AFTER wait completes — captures the full conversation
       // including retries, reminders, tool calls, and task_execution_complete
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, waitResult !== "error" && waitResult !== "timeout");
     } catch (err: any) {
-      const isUserStop = err.message === 'Agent stopped by user';
+      const isUserStop = isUserStopError(err);
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
       this._emit('agent:stream:error', { agentId: executorId, error: err.message });
 
@@ -1174,27 +1210,27 @@ export const tasksMethods = {
           this._emit('task:updated', { agentId, task: { ...stoppedTask, agentId } });
         }
       } else {
-        // Real error — keep task in current column, mark as error via errorFromStatus
+        // Real error — keep task in its originating column via errorFromStatus.
+        // markTaskError guards against the disappearance bug (errorFromStatus
+        // clobbered to 'error' when the task was already errored, or set to a
+        // status that no longer exists in the workflow).
         const errorTask = this._getAgentTasks(agentId).find((t: any) => t.id === task.id);
         if (errorTask) {
-          const prevStatus = errorTask.status;
-          errorTask.errorFromStatus = prevStatus;
-          errorTask.status = 'error';
-          errorTask.error = err.message;
-          if (!errorTask.history) errorTask.history = [];
-          errorTask.history.push({
-            status: 'error',
-            from: prevStatus,
-            at: errorTimestamp,
+          // Load the workflow so markTaskError can validate the fallback column.
+          // Best-effort: if it fails the helper still works (just no validation).
+          let wf: any = null;
+          if (errorTask.boardId) {
+            try { wf = await getWorkflowForBoard(errorTask.boardId); } catch { /* ignore */ }
+          }
+          const mutated = markTaskError(errorTask, err.message, {
             by: executor.name,
-            type: 'error',
-            error: err.message,
+            agentName: executor.name,
+            workflow: wf,
           });
-          errorTask.actionRunning = false;
-          delete errorTask.actionRunningAgentId;
-          delete errorTask.actionRunningMode;
-          await saveTaskToDb({ ...errorTask, agentId });
-          this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
+          if (mutated) {
+            await saveTaskToDb({ ...errorTask, agentId });
+            this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
+          }
         } else {
           await this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
           await updateTaskFields(task.id, { error: err.message });

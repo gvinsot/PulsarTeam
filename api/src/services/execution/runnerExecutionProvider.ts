@@ -235,6 +235,26 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     return Boolean(data.closed);
   }
 
+  async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
+    if (!input) return false;
+    const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/input`, {
+      method: 'POST',
+      headers: this._headers(agentId),
+      body: JSON.stringify({
+        input,
+        submit: options.submit !== false,
+        bracketed_paste: true,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`terminal input failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+    }
+    const data: any = await res.json().catch(() => ({}));
+    return data.status === 'success';
+  }
+
   hasEnvironment(agentId: string): boolean {
     return this._agents.has(agentId);
   }

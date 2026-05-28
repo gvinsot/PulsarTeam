@@ -12,6 +12,7 @@ Routes:
     GET    /terminal/sessions                   — list active sessions
     GET    /terminal/sessions/{agent_id}        — status of one session
     DELETE /terminal/sessions/{agent_id}        — kill a session
+    POST   /terminal/sessions/{agent_id}/input  — paste task prompt into TUI
     WS     /ws/terminal/{agent_id}              — attach to / create a session
 
 The WS protocol is bidirectional binary + small JSON control frames:
@@ -26,10 +27,13 @@ or the `?api_key=` query parameter on the WS handshake.
 from __future__ import annotations
 
 import json
+import os
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Header, Query, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from config import API_KEY, logger
 from backends import BACKEND
@@ -37,6 +41,14 @@ import pty_session
 
 
 router = APIRouter()
+
+
+class TerminalInputRequest(BaseModel):
+    input: str = Field(..., min_length=1)
+    submit: bool = True
+    bracketed_paste: bool = True
+    cols: int = 120
+    rows: int = 40
 
 
 def _check_api_key(header: Optional[str], qs_key: Optional[str]) -> None:
@@ -71,6 +83,51 @@ async def delete_terminal_session(agent_id: str, authorization: Optional[str] = 
     _check_api_key(authorization, None)
     closed = await pty_session.close_session(agent_id)
     return JSONResponse({"closed": closed})
+
+
+@router.post("/terminal/sessions/{agent_id}/input")
+async def send_terminal_input(
+    agent_id: str,
+    request: TerminalInputRequest,
+    authorization: Optional[str] = Header(None),
+    x_owner_id: Optional[str] = Header(None),
+) -> JSONResponse:
+    """Inject a real prompt into the backend TUI.
+
+    This is reserved for workflow execute actions: when the API has selected
+    an idle CLI runner, it pastes the task instruction into the actual
+    terminal input instead of mirroring synthetic text into scrollback.
+    """
+    _check_api_key(authorization, None)
+    if not getattr(BACKEND, "supports_interactive_terminal", False):
+        raise HTTPException(
+            status_code=501,
+            detail=f"Backend {BACKEND.name} does not support interactive terminals",
+        )
+
+    async def factory() -> dict:
+        return await BACKEND.prepare_interactive(agent_id=agent_id, owner_id=x_owner_id)
+
+    existing = pty_session.get_session(agent_id)
+    session_was_alive = bool(existing and existing.is_alive())
+    session = await pty_session.get_or_create_session(
+        agent_id=agent_id,
+        factory=factory,
+        cols=request.cols,
+        rows=request.rows,
+    )
+    if not session_was_alive:
+        delay = float(os.getenv("TERMINAL_INPUT_STARTUP_DELAY_SEC", "0.75"))
+        if delay > 0:
+            await asyncio.sleep(delay)
+
+    payload = request.input.encode("utf-8", errors="replace")
+    if request.bracketed_paste:
+        payload = b"\x1b[200~" + payload + b"\x1b[201~"
+    if request.submit:
+        payload += b"\r"
+    await session.write(payload)
+    return JSONResponse({"status": "success", "alive": session.is_alive()})
 
 
 @router.websocket("/ws/terminal/{agent_id}")

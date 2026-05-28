@@ -100,12 +100,6 @@ def _agent_unsupported() -> HTTPException:
     )
 
 
-async def _terminal_note(agent_id: Optional[str], text: str) -> None:
-    if not agent_id:
-        return
-    await pty_session.append_terminal_transcript(agent_id, text)
-
-
 def _safe_task_name(task_id: Optional[str]) -> str:
     raw = (task_id or "current").strip() or "current"
     return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in raw)[:120]
@@ -419,7 +413,6 @@ async def exec_shell(
     subprocess_kwargs = get_subprocess_kwargs(agent_user)
 
     try:
-        await _terminal_note(x_agent_id, f"\r\n\x1b[36m$ {request.command}\x1b[0m\r\n")
         proc = await asyncio.create_subprocess_exec(
             "bash", "-c", request.command,
             stdout=asyncio.subprocess.PIPE,
@@ -453,9 +446,6 @@ async def exec_shell(
             output += f"\n[stderr] {stderr}"
         if proc.returncode != 0:
             output += f"\n[exit code: {proc.returncode}]"
-            await _terminal_note(x_agent_id, f"\r\n\x1b[31m[exit code: {proc.returncode}]\x1b[0m\r\n")
-        else:
-            await _terminal_note(x_agent_id, "\r\n\x1b[32m[command completed]\x1b[0m\r\n")
         # Clamp the caller-requested output cap to a 32 MiB server-side
         # ceiling. This covers a 20 MB attachment after base64 inflation
         # (~33%) while still bounding worst-case memory use.
@@ -474,11 +464,9 @@ async def exec_shell(
                 await proc.wait()
             except Exception:
                 pass
-        await _terminal_note(x_agent_id, f"\r\n\x1b[31m[command timed out after {timeout}s]\x1b[0m\r\n")
         return ExecutionResponse(status="error", output="", error=f"Command timed out after {timeout}s")
     except Exception as e:
         logger.error(f"exec-shell error: {e}")
-        await _terminal_note(x_agent_id, f"\r\n\x1b[31m[exec-shell error: {e}]\x1b[0m\r\n")
         return ExecutionResponse(status="error", output="", error=str(e))
 
 
@@ -618,13 +606,6 @@ async def openai_chat_completions(
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
 
-        if x_agent_id:
-            title = f"\r\n\x1b[35m--- workflow task started"
-            if x_task_id:
-                title += f" ({x_task_id})"
-            title += " ---\x1b[0m\r\n"
-            await _terminal_note(x_agent_id, title)
-
         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
 
         has_streamed_text = False
@@ -650,17 +631,14 @@ async def openai_chat_completions(
 
                 if event_type == "thinking":
                     content = event["content"]
-                    await _terminal_note(x_agent_id, f"\x1b[2m{content}\x1b[0m")
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'reasoning_content': content}, 'finish_reason': None}]})}\n\n"
                 elif event_type == "text":
                     content = event["content"]
-                    await _terminal_note(x_agent_id, content)
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
                     has_streamed_text = True
                 elif event_type == "status":
                     status_text = event.get("content", "")
                     if status_text:
-                        await _terminal_note(x_agent_id, f"\r\n\x1b[36m{status_text}\x1b[0m\r\n")
                         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'reasoning_content': status_text + chr(10)}, 'finish_reason': None}]})}\n\n"
                 elif event_type == "result":
                     cost_usd = event.get("cost_usd", 0) or 0
@@ -670,18 +648,15 @@ async def openai_chat_completions(
                     if not has_streamed_text:
                         content = event.get("content", "")
                         if content:
-                            await _terminal_note(x_agent_id, content)
                             for piece in chunk_text(content):
                                 yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]})}\n\n"
                             has_streamed_text = True
                 elif event_type == "error":
                     content = event.get("content", "")
-                    await _terminal_note(x_agent_id, f"\r\n\x1b[31m{content}\x1b[0m\r\n")
                     yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
         except BrokenPipeError as e:
             logger.error(f"{BACKEND.name} CLI subprocess failed: {e}")
             error_msg = f"Agent subprocess failed to start: {e}"
-            await _terminal_note(x_agent_id, f"\r\n\x1b[31m{error_msg}\x1b[0m\r\n")
             yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]})}\n\n"
 
         finish_chunk = {
@@ -696,7 +671,6 @@ async def openai_chat_completions(
                 "runner_session_id": runner_session_id_used,
             },
         }
-        await _terminal_note(x_agent_id, "\r\n\x1b[35m--- workflow task stream ended ---\x1b[0m\r\n")
         yield f"data: {json.dumps(finish_chunk)}\n\n"
         yield "data: [DONE]\n\n"
 

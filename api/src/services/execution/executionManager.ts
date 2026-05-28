@@ -205,6 +205,10 @@ export class ExecutionManager {
     return this._providerFor(agentId).closeTerminalSession(agentId);
   }
 
+  async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
+    return this._providerFor(agentId).sendTerminalInput(agentId, input, options);
+  }
+
   hasEnvironment(agentId: string): boolean {
     return this._providerFor(agentId).hasEnvironment(agentId);
   }

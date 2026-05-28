@@ -87,11 +87,13 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const { theme } = useTheme();
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
+  const [terminalActive, setTerminalActive] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
+  const activityTimerRef = useRef<number | null>(null);
   const reconnectAttemptRef = useRef(0);
   const fitFrameRef = useRef<number | null>(null);
   const encoderRef = useRef(new TextEncoder());
@@ -105,6 +107,17 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(encoderRef.current.encode(data));
     return true;
+  };
+
+  const markTerminalActivity = () => {
+    setTerminalActive(true);
+    if (activityTimerRef.current !== null) {
+      window.clearTimeout(activityTimerRef.current);
+    }
+    activityTimerRef.current = window.setTimeout(() => {
+      activityTimerRef.current = null;
+      setTerminalActive(false);
+    }, 1800);
   };
 
   const fitTerminalNow = () => {
@@ -183,6 +196,10 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+      if (activityTimerRef.current !== null) {
+        window.clearTimeout(activityTimerRef.current);
+        activityTimerRef.current = null;
       }
       if (fitFrameRef.current !== null) {
         window.cancelAnimationFrame(fitFrameRef.current);
@@ -268,6 +285,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               t.writeln(`\r\n\x1b[31m[error: ${ctrl.message || 'unknown'}]\x1b[0m`);
             }
           } catch {
+            markTerminalActivity();
             t.write(ev.data);
           }
           return;
@@ -276,6 +294,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         const buf = ev.data instanceof ArrayBuffer
           ? new Uint8Array(ev.data)
           : new Uint8Array(ev.data as any);
+        if (buf.byteLength > 0) markTerminalActivity();
         t.write(buf);
       };
 
@@ -317,19 +336,27 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     };
   }, [agent.id, token]);
 
+  const shellClass = theme === 'light'
+    ? 'bg-white text-gray-700'
+    : 'bg-dark-900 text-dark-200';
+  const headerClass = theme === 'light'
+    ? 'border-gray-200 text-gray-500 bg-gray-50'
+    : 'border-dark-700/50 text-dark-400 bg-dark-900';
+  const bodyClass = theme === 'light' ? 'bg-white' : 'bg-dark-900';
+
   return (
-    <div className="flex flex-col h-full bg-dark-900 text-dark-200">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-dark-700/50 text-xs text-dark-400 bg-dark-900">
+    <div className={`flex flex-col h-full ${shellClass}`}>
+      <div className={`flex items-center gap-2 px-3 py-2 border-b text-xs ${headerClass}`}>
         <TerminalIcon className="w-3.5 h-3.5 text-indigo-400" />
         <span>Terminal</span>
         <span className="opacity-60">— {agent.runner || 'cli'}</span>
         <span className="ml-auto opacity-60">
-          {connected ? 'connected' : exited ? 'exited' : 'reconnecting'} · multi-client
+          {connected ? (terminalActive ? 'active' : 'connected') : exited ? 'exited' : 'reconnecting'} · multi-client
         </span>
       </div>
       <div
         ref={containerRef}
-        className="min-h-0 flex-1 overflow-hidden bg-dark-900"
+        className={`min-h-0 flex-1 overflow-hidden ${bodyClass}`}
         onClick={() => termRef.current?.focus()}
       />
     </div>

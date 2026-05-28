@@ -20,6 +20,7 @@
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
 import { saveTaskToDb } from '../database.js';
 import { executeAction } from './actionExecutor.js';
+import { markTaskError } from './taskErrors.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import {
   isValidTransition,
@@ -369,27 +370,26 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
 
     if (result.error) {
       // Action failed with an error — mark task as error and stop chain.
-      // The task stays in its column (via errorFromStatus) and appears in red.
+      // The task stays in its originating column (via errorFromStatus) and
+      // appears in red. markTaskError guarantees errorFromStatus stays valid
+      // even when the task was already errored or the workflow was edited.
       console.log(`[WorkflowEngine] Action ${i} errored: ${result.message} — setting task to error`);
       const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-      if (actualTask && actualTask.status !== 'error') {
-        actualTask.errorFromStatus = actualTask.status;
-        actualTask.status = 'error';
-        actualTask.error = result.message;
-        if (!actualTask.history) actualTask.history = [];
-        actualTask.history.push({
-          status: 'error',
-          from: actualTask.errorFromStatus,
-          at: new Date().toISOString(),
+      if (actualTask) {
+        const mutated = markTaskError(actualTask, result.message, {
           by: 'workflow',
-          type: 'error',
-          error: result.message,
+          mode: action.mode || null,
           actionIndex: i,
-          actionType: action.type,
-          actionMode: action.mode || null,
+          workflow,
         });
-        await saveTaskToDb({ ...actualTask, agentId: task.agentId });
-        agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+        // Preserve the actionType detail that the old inline code emitted —
+        // markTaskError doesn't know about workflow-specific fields.
+        if (mutated) {
+          const lastEntry = actualTask.history[actualTask.history.length - 1];
+          if (lastEntry) lastEntry.actionType = action.type;
+          await saveTaskToDb({ ...actualTask, agentId: task.agentId });
+          agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+        }
       }
       task.status = 'error';
       break;

@@ -99,6 +99,15 @@ export class ExecutionProvider {
     return false;
   }
 
+  /**
+   * Paste text into the interactive terminal prompt for runners that expose a
+   * real CLI. This is intentionally narrow: workflow execute actions use it
+   * to submit the task prompt to an idle CLI runner.
+   */
+  async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
+    return false;
+  }
+
   // ── Query ─────────────────────────────────────────────────────────────
 
   /**

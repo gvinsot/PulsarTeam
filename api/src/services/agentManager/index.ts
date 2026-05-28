@@ -117,7 +117,7 @@ export interface AgentManager {
   stopTaskLoop(): void;
   _processRecurringTasks(): Promise<void>;
   _processNextPendingTasks(): void;
-  _waitForExecutionComplete(creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string): Promise<string>;
+  _waitForExecutionComplete(creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options?: any): Promise<string>;
   _resumeActiveTask(agentId: string, agent: any, task: any): Promise<void>;
   getTask(taskId: string): any | null;
   saveTaskDirectly(task: any): any;

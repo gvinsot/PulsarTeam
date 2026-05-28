@@ -966,22 +966,14 @@ class ClaudeCodeBackend(RunnerBackend):
             # Bridge the executor-thread callback into the asyncio event loop
             # via a queue. The driver fires `on_event` from its thread for
             # each new fragment of Claude's reply; we marshal those into the
-            # async generator's yield stream as `thinking` events so the UI
-            # can render a live "Claude is composing…" block. The final
-            # polished reply still arrives as a single `text` event built
-            # from the driver's return dict — so a non-streaming client
-            # that ignores `thinking` events still gets the full answer.
+            # async generator's yield stream as `thinking` events so callers
+            # can mirror real CLI activity to the terminal without inventing
+            # placeholder text.
             loop = asyncio.get_running_loop()
             event_queue: asyncio.Queue = asyncio.Queue()
 
             def _push_event(ev: dict) -> None:
                 loop.call_soon_threadsafe(event_queue.put_nowait, ev)
-
-            # Immediate placeholder so the UI gets a `thinking` block right
-            # away — without this, agents with a large system prompt (e.g.
-            # full-CLAUDE config) sit silent for 5-15 s before the first
-            # real delta lands, which looks like a freeze.
-            yield {"type": "thinking", "content": "Claude réfléchit…\n"}
 
             runner_task = asyncio.create_task(asyncio.wait_for(
                 run_interactive(
@@ -993,23 +985,6 @@ class ClaudeCodeBackend(RunnerBackend):
                 timeout=TIMEOUT,
             ))
 
-            # Periodic heartbeat: every few seconds, if no real delta has
-            # arrived, push a status dot so the UI sees ongoing activity.
-            # Cancelled as soon as the first real `thinking` chunk lands
-            # or the runner finishes.
-            HEARTBEAT_INTERVAL_S = 5.0
-            heartbeat_active = True
-
-            async def _heartbeat_loop():
-                while heartbeat_active:
-                    await asyncio.sleep(HEARTBEAT_INTERVAL_S)
-                    if not heartbeat_active:
-                        return
-                    event_queue.put_nowait({"type": "thinking", "content": "."})
-
-            heartbeat_task = asyncio.create_task(_heartbeat_loop())
-            first_real_delta_seen = False
-
             try:
                 while True:
                     # Race: either a streamed delta or the runner finishing.
@@ -1020,13 +995,6 @@ class ClaudeCodeBackend(RunnerBackend):
                     )
                     if get_task in done:
                         ev = get_task.result()
-                        # The heartbeat task itself emits "." chunks; treat
-                        # anything longer as a real delta and stop the dots.
-                        if (not first_real_delta_seen and
-                                ev.get("type") == "thinking" and
-                                ev.get("content", "") not in (".", "Claude réfléchit…\n")):
-                            first_real_delta_seen = True
-                            heartbeat_active = False
                         yield ev
                         # If the runner also finished on the same tick, fall
                         # through and drain the rest below; otherwise loop.
@@ -1052,9 +1020,6 @@ class ClaudeCodeBackend(RunnerBackend):
             except RuntimeError as e:
                 yield {"type": "error", "content": str(e)}
                 return
-            finally:
-                heartbeat_active = False
-                heartbeat_task.cancel()
 
             output = (result.get("output") or "").strip()
             stderr_text = (result.get("stderr") or "").strip()

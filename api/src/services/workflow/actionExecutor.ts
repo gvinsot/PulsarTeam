@@ -11,9 +11,16 @@
 
 import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
-import { saveTaskToDb } from '../database.js';
+import { markTaskError, isUserStopError } from './taskErrors.js';
+import { saveTaskToDb, updateTaskExecutionStatus } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
+
+const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes']);
+
+function isCliRunner(agent) {
+  return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -472,6 +479,23 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
 
     return result;
   } catch (err) {
+    // Distinguish a user-triggered Stop from a real failure. stopAgent() aborts
+    // the in-flight stream and llmProviders throws "Agent stopped by user",
+    // which propagates up here. Without this check, a user pressing Stop on a
+    // running workflow action would flip the task to status=error — and if
+    // that errorFromStatus path ever clobbers itself, the task disappears
+    // from the board entirely. stopAgent already marked the task as stopped
+    // and cleaned actionRunning flags, so we just log + return cleanly.
+    if (isUserStopError(err)) {
+      console.log(`[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`);
+      agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, mode);
+      // Belt-and-suspenders: ensure executionStatus=stopped is durable even
+      // if stopAgent's iteration missed this task (e.g. race between assign
+      // and stop). The in-memory 'stopped' signal is set by stopAgent itself.
+      try { await updateTaskExecutionStatus(task.id, 'stopped'); } catch { /* best-effort */ }
+      return { executed: false, skipped: true, reason: 'user-stop' };
+    }
+
     console.error(`[ActionExecutor] run_agent error for "${task.text?.slice(0, 60)}":`, err.message);
     // Save error execution log
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, mode);
@@ -486,26 +510,22 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       isSystemError: true,
       taskId: task.id,
     });
-    // Log detailed error in task history and set error status
+    // Log detailed error in task history and set error status.
+    // markTaskError guarantees the task stays visible on the board even if
+    // it was already errored or if the prior status no longer exists in the
+    // workflow (renamed/deleted columns).
     try {
       if (actualTask) {
-        const prevStatus = actualTask.status;
-        actualTask.errorFromStatus = prevStatus;
-        actualTask.status = 'error';
-        actualTask.error = err.message;
-        if (!actualTask.history) actualTask.history = [];
-        actualTask.history.push({
-          status: 'error',
-          from: prevStatus,
-          at: errorTimestamp,
+        const mutated = markTaskError(actualTask, err.message, {
           by: agent.name || 'workflow',
-          type: 'error',
-          error: err.message,
-          actionMode: mode,
+          mode,
           agentName: agent.name,
+          workflow,
         });
-        await saveTaskToDb({ ...actualTask, agentId: task.agentId });
-        agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+        if (mutated) {
+          await saveTaskToDb({ ...actualTask, agentId: task.agentId });
+          agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+        }
       } else {
         agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
       }
@@ -696,6 +716,16 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
   console.log(`[ActionExecutor] execute: "${task.text?.slice(0, 60)}" via ${agent.name}${hasInstructions ? ' (with instructions)' : ''}`);
 
   let fullResponse = '';
+
+  if (isCliRunner(agent) && agent.status === 'idle' && agentManager.executionManager?.sendTerminalInput) {
+    console.log(`[ActionExecutor] execute: injecting task prompt into CLI terminal for "${agent.name}"`);
+    await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
+    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
+    await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
+      terminalDriven: true,
+    });
+    return { executed: true };
+  }
 
   agentManager.wsEmitter.streamStart(agent.id);
   try {

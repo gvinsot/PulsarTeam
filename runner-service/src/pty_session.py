@@ -520,8 +520,9 @@ async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str)
     live terminal clients for this agent.
 
     Headless workflow execution uses /v1/chat/completions and /exec-shell,
-    not the shared interactive PTY. Mirroring those bytes here lets the
-    browser terminal show task execution as it happens, and replay it later.
+    not the shared interactive PTY. These bytes are kept in a separate
+    transcript so reconnects can replay them without duplicating the PTY's
+    own scrollback.
     """
     if not agent_id:
         return
@@ -538,7 +539,6 @@ async def append_terminal_transcript(agent_id: Optional[str], data: bytes | str)
 
     session = _SESSIONS.get(agent_id)
     if session and session.is_alive():
-        session._append_scrollback(raw)
         await session._broadcast(raw)
 
 

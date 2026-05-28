@@ -366,22 +366,55 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     });
   }, [allTasks, agentFilter, repoFilter, search, agentNameById]);
 
+  // Resolve which column a task should appear in. Used by both the kanban
+  // grouping AND the drag/drop handlers so the two stay in lock-step (otherwise
+  // a task can render in column A via fallback but the drop handler thinks it
+  // belongs to column B, treating a same-column drop as a column move).
+  //
+  // SAFETY NET: a task MUST always land in some column. Without this, a task
+  // whose status (or errorFromStatus) doesn't match any column id silently
+  // disappears from the board — the API still returns it, but the user can't
+  // see it. This happens e.g. when a workflow column is renamed/deleted, or
+  // when a buggy backend path sets errorFromStatus to 'error' itself. We
+  // always fall back to the first column, logging once so the underlying
+  // data bug can still be diagnosed.
+  const resolveTaskColumnId = useCallback((t) => {
+    const fallbackColId = columns[0]?.id;
+    const validColIds = new Set(columns.map(c => c.id));
+    // For tasks whose status maps to a column (col.statuses = [col.id] in
+    // taskConstants.buildColumns), pick that column.
+    if (t.status !== 'error' && validColIds.has(t.status)) return t.status;
+    // Errored tasks render in their originating column.
+    if (t.status === 'error' && t.errorFromStatus && validColIds.has(t.errorFromStatus)) {
+      return t.errorFromStatus;
+    }
+    if (fallbackColId) {
+      console.warn(
+        `[TasksBoard] Task ${t.id} has unresolvable column ` +
+        `(status="${t.status}", errorFromStatus="${t.errorFromStatus}") — ` +
+        `pinning to fallback column "${fallbackColId}" so it stays visible.`
+      );
+      return fallbackColId;
+    }
+    return null;
+  }, [columns]);
+
   // Group by column — error is an internal state, not a workflow column.
   // Use errorFromStatus to keep error tasks visible in their originating column.
   const tasksByColumn = useMemo(() => {
     const groups = {};
-    const fallbackColId = columns[0]?.id;
+    const buckets = new Map();
+    for (const t of filteredTasks) {
+      const colId = resolveTaskColumnId(t);
+      if (!colId) continue;
+      if (!buckets.has(colId)) buckets.set(colId, []);
+      buckets.get(colId).push(t);
+    }
     columns.forEach(col => {
-      const colTasks = filteredTasks.filter(t => {
-        if (t.status === 'error') {
-          return (t.errorFromStatus || fallbackColId) === col.id;
-        }
-        return col.statuses.includes(t.status || fallbackColId);
-      });
-      groups[col.id] = sortTasks(colTasks, sortBy);
+      groups[col.id] = sortTasks(buckets.get(col.id) || [], sortBy);
     });
     return groups;
-  }, [filteredTasks, columns, sortBy]);
+  }, [filteredTasks, columns, sortBy, resolveTaskColumnId]);
 
   const handleDelete = useCallback(async (task) => {
     await deleteTaskById(task.id);
@@ -461,10 +494,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       if (!task) task = allTasks.find(t => t.id === taskId);
       if (!task) return;
       if (task.actionRunning) return;
-      const fallbackColId = columns[0]?.id;
-      const isAlreadyInColumn = task.status === 'error'
-        ? (task.errorFromStatus || fallbackColId) === col.id
-        : col.statuses.includes(task.status || fallbackColId);
+      const isAlreadyInColumn = resolveTaskColumnId(task) === col.id;
 
       if (isAlreadyInColumn) {
         // Same column — just reorder
@@ -508,7 +538,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     } catch (err) {
       console.error('[TasksBoard] Drop status change failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks]);
+  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks, resolveTaskColumnId]);
 
   // Touch drag-and-drop handler
   const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
@@ -526,10 +556,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         console.warn('[TasksBoard] Touch drop: column not found', targetColumnId);
         return;
       }
-      const fallbackColId = columns[0]?.id;
-      const isAlreadyInColumn = task.status === 'error'
-        ? (task.errorFromStatus || fallbackColId) === col.id
-        : col.statuses.includes(task.status || fallbackColId);
+      const isAlreadyInColumn = resolveTaskColumnId(task) === col.id;
       if (isAlreadyInColumn) return;
 
       const prevStatus = task.status;
@@ -558,7 +585,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     } catch (err) {
       console.error('[TasksBoard] Touch drop failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks, tasksByColumn]);
+  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks, tasksByColumn, resolveTaskColumnId]);
 
   // Batch move all tasks from one column to another
   const handleBatchMove = useCallback(async (sourceColId, targetColId, tasks) => {

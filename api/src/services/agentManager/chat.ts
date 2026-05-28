@@ -806,12 +806,9 @@ export const chatMethods = {
     let thinkingBuffer = '';
     let finishReason: string | null = null;
     let totalOutputTokens = 0;
-    // For CLI runners we treat the upstream "thinking" deltas as live console
-    // output and stream them directly into the chat — claude_code interactive
-    // mode then re-emits the consolidated answer as a single `text` chunk.
-    // Track whether anything was already streamed-as-text from thinking so we
-    // can dedupe that consolidated tail and avoid printing the answer twice.
-    let streamedAsText = '';
+    // CLI runners have a real terminal surface. Their upstream "thinking"
+    // deltas are console activity mirrored to xterm by the runner-service,
+    // so the chat history must not reflow them as markdown/text.
     const responseStartedAt = Date.now();
 
     const safeMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
@@ -845,13 +842,7 @@ export const chatMethods = {
 
       if (chunk.type === 'thinking') {
         if (useCliRunner) {
-          // CLI runner: the "thinking" deltas ARE the live console output
-          // (claude_code interactive uses them to stream the composing reply).
-          // Surface them in the chat as text rather than in a separate thinking
-          // bubble so the user sees a single, live console view.
-          fullResponse += chunk.text;
-          streamedAsText += chunk.text;
-          if (streamCallback) streamCallback(chunk.text);
+          continue;
         } else {
           thinkingBuffer += chunk.text;
           agent.currentThinking = thinkingBuffer;
@@ -860,14 +851,8 @@ export const chatMethods = {
       }
 
       if (chunk.type === 'text') {
-        // Dedupe the consolidated final reply that claude_code interactive
-        // emits after already streaming the same content via thinking deltas.
-        if (useCliRunner && streamedAsText && streamedAsText.includes(chunk.text)) {
-          // already shown live; skip
-        } else {
-          fullResponse += chunk.text;
-          if (streamCallback) streamCallback(chunk.text);
-        }
+        fullResponse += chunk.text;
+        if (!useCliRunner && streamCallback) streamCallback(chunk.text);
       }
       if (chunk.type === 'done') {
         if (chunk.usage) {
@@ -926,10 +911,7 @@ export const chatMethods = {
         }
         if (chunk.type === 'thinking') {
           if (useCliRunner) {
-            fullResponse += chunk.text;
-            streamedAsText += chunk.text;
-            agent.currentThinking = fullResponse;
-            if (streamCallback) streamCallback(chunk.text);
+            continue;
           } else {
             thinkingBuffer += chunk.text;
             agent.currentThinking = thinkingBuffer;
@@ -937,13 +919,8 @@ export const chatMethods = {
           }
         }
         if (chunk.type === 'text') {
-          if (useCliRunner && streamedAsText && streamedAsText.includes(chunk.text)) {
-            // duplicate of already-streamed thinking content — skip
-          } else {
-            fullResponse += chunk.text;
-            agent.currentThinking = fullResponse;
-            if (streamCallback) streamCallback(chunk.text);
-          }
+          fullResponse += chunk.text;
+          if (!useCliRunner && streamCallback) streamCallback(chunk.text);
         }
         if (chunk.type === 'done') {
           if (chunk.usage) {

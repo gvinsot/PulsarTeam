@@ -39,5 +39,8 @@ export {
 // Action execution
 export { executeAction, stripToolCalls } from './actionExecutor.js';
 
+// Error helpers — guarantee tasks stay visible on the board after a failure
+export { markTaskError, isUserStopError } from './taskErrors.js';
+
 // Orchestration — main entry points
 export { processColumnEntry, recheckPendingTransitions } from './workflowEngine.js';
