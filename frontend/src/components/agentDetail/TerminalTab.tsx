@@ -147,7 +147,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       fontSize: 14,
       lineHeight: 1.35,
       letterSpacing: 0,
-      scrollback: 5000,
+      scrollback: agent.runner === 'claudecode' ? 0 : 5000,
       altClickMovesCursor: true,
       macOptionIsMeta: true,
       rightClickSelectsWord: true,

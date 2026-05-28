@@ -243,20 +243,24 @@ class PtySession:
         display = list(getattr(screen, "display", []) or [])
         rows = self.rows
         cols = self.cols
-        parts = ["\x1b[?25l\x1b[H\x1b[2J"]
+        # Repaint by absolute cursor moves, not by CRLF. Writing a full screen
+        # with newlines makes xterm grow scrollback and can trigger autowrap at
+        # the right edge. Disable autowrap while painting, clear the viewport
+        # and scrollback, then restore the cursor.
+        parts = ["\x1b[?25l\x1b[?7l\x1b[H\x1b[2J\x1b[3J"]
         for idx in range(rows):
             line = display[idx] if idx < len(display) else ""
             if len(line) > cols:
                 line = line[:cols]
             line = line.rstrip()
-            parts.append(line)
+            parts.append(f"\x1b[{idx + 1};1H")
+            if line:
+                parts.append(line)
             parts.append("\x1b[K")
-            if idx < rows - 1:
-                parts.append("\r\n")
         cursor = getattr(screen, "cursor", None)
         cursor_x = max(0, min(cols - 1, int(getattr(cursor, "x", 0) or 0)))
         cursor_y = max(0, min(rows - 1, int(getattr(cursor, "y", 0) or 0)))
-        parts.append(f"\x1b[{cursor_y + 1};{cursor_x + 1}H\x1b[?25h")
+        parts.append(f"\x1b[{cursor_y + 1};{cursor_x + 1}H\x1b[?7h\x1b[?25h")
         return "".join(parts).encode("utf-8", errors="replace")
 
 
