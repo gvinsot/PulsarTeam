@@ -20,6 +20,7 @@ from config import (
 from agent_user import get_agent_project_dir, ensure_agent_user
 from .base import RunnerBackend
 from .claude_token_store import get_subprocess_kwargs
+from usage_reporter import report_usage
 
 
 class CliBackend(RunnerBackend):
@@ -215,6 +216,33 @@ class CliBackend(RunnerBackend):
                     env["GROQ_API_KEY"] = api_key
         return env
 
+    async def _report_usage_for_agent(self, agent_id: Optional[str], result: dict) -> None:
+        """Push token usage to team-api so it shows up on the budget screen."""
+        if not agent_id or not isinstance(result, dict):
+            return
+        try:
+            in_toks = int(result.get("input_tokens") or 0)
+            out_toks = int(result.get("output_tokens") or 0)
+            cost = float(result.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            return
+        if not in_toks and not out_toks and not cost:
+            return
+        llm = self._get_llm_config(agent_id) or {}
+        provider = (llm.get("provider") or self.name or "cli").strip()
+        model = (llm.get("model") or RUNNER_MODEL or "unknown").strip()
+        try:
+            await report_usage(
+                agent_id,
+                input_tokens=in_toks,
+                output_tokens=out_toks,
+                cost_usd=cost,
+                provider=provider,
+                model=model,
+            )
+        except Exception as e:
+            logger.debug(f"[Usage] reporter raised for agent {agent_id[:8]}: {e}")
+
     def _resolve_cwd(self, agent_id: Optional[str]) -> str:
         agent_project_dir = get_agent_project_dir(agent_id) if agent_id else None
         if agent_project_dir and os.path.isdir(agent_project_dir):
@@ -266,7 +294,9 @@ class CliBackend(RunnerBackend):
         if proc.returncode != 0 and not stdout:
             return {"status": "error", "output": "", "error": stderr or f"{self.cli_command} exited with code {proc.returncode}"}
 
-        return self._parse_sync_result(stdout)
+        result = self._parse_sync_result(stdout)
+        await self._report_usage_for_agent(agent_id, result)
+        return result
 
     # ── Streaming ─────────────────────────────────────────────────────────
 
@@ -330,6 +360,8 @@ class CliBackend(RunnerBackend):
                         elif btype == "tool_use":
                             yield {"type": "status", "content": f"Using tool: {block.get('name', 'unknown')}"}
                 else:
+                    if event.get("type") == "result":
+                        await self._report_usage_for_agent(agent_id, event)
                     yield event
         finally:
             try:

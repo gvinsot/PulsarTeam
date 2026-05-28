@@ -52,6 +52,7 @@ import { internalClaudeTokenRoutes } from './routes/internalClaudeTokens.js';
 import { internalCodexTokenRoutes } from './routes/internalCodexTokens.js';
 import { internalRunnerLlmRoutes } from './routes/internalRunnerLlm.js';
 import { internalRunnerMcpRoutes } from './routes/internalRunnerMcp.js';
+import { internalTokenUsageRoutes } from './routes/internalTokenUsage.js';
 import { codexAuthRoutes } from './routes/codexAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
 import { jiraRoutes } from './routes/jira.js';
@@ -221,6 +222,7 @@ app.use('/api/internal/claude-tokens', authenticateCoderApiKey, internalClaudeTo
 app.use('/api/internal/codex-tokens', authenticateCoderApiKey, internalCodexTokenRoutes());
 app.use('/api/internal/runner-llm', authenticateCoderApiKey, internalRunnerLlmRoutes());
 app.use('/api/internal/runner-mcp', authenticateCoderApiKey, internalRunnerMcpRoutes(agentManager, skillManager, mcpManager));
+app.use('/api/internal/token-usage', authenticateCoderApiKey, internalTokenUsageRoutes(agentManager));
 app.use('/api/codex-auth', authenticateToken, codexAuthRoutes());
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
