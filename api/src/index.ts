@@ -118,7 +118,7 @@ app.set('agentManager', agentManager);
 // /ws/agents/:id/terminal — separate path from socket.io's /socket.io/*,
 // so the two upgrade handlers don't collide. Only intercepts paths that
 // match the terminal route; everything else flows on to socket.io.
-installTerminalProxy(httpServer, executionManager);
+installTerminalProxy(httpServer, executionManager, agentManager);
 
 app.use(cors(buildCorsOptions(corsOrigins)));
 

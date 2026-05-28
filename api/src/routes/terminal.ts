@@ -44,6 +44,58 @@ const RUNNER_URLS: Record<string, string> = {
 
 const TERMINAL_PATH_RE = /^\/ws\/agents\/([^\/]+)\/terminal$/;
 
+// ─── Console-activity → agent.status ──────────────────────────────────────
+//
+// When the wrapped CLI prints anything to the PTY (LLM thinking, tool calls,
+// shell commands…) the agent should appear "busy" in the UI even if no task
+// was explicitly assigned via the workflow. After CONSOLE_IDLE_TIMEOUT_MS of
+// quiet on the PTY, we flip back to "idle" — but only when no `currentTask`
+// is set, so the workflow engine remains the authority for task-driven busy.
+//
+// REPLAY_GRACE_MS skips the scrollback burst the runner sends right after WS
+// attach: otherwise every reconnect to a long-idle session would briefly
+// show "busy" while the buffered bytes are flushed.
+const CONSOLE_IDLE_TIMEOUT_MS = 5000;
+const REPLAY_GRACE_MS = 1500;
+
+interface ConsoleActivityState {
+  idleTimer: NodeJS.Timeout;
+}
+const consoleActivity = new Map<string, ConsoleActivityState>();
+
+function noteConsoleOutput(agentId: string, agentManager: any): void {
+  if (!agentManager || !agentId) return;
+  const prev = consoleActivity.get(agentId);
+  if (prev?.idleTimer) clearTimeout(prev.idleTimer);
+
+  const agent = agentManager.agents?.get?.(agentId);
+  if (agent && agent.status !== 'busy') {
+    try {
+      agentManager.setStatus(agentId, 'busy', 'Console activity');
+    } catch (err: any) {
+      console.warn(`[Terminal] setStatus(busy) failed for ${agentId.slice(0, 8)}: ${err.message}`);
+    }
+  }
+
+  const idleTimer = setTimeout(() => {
+    consoleActivity.delete(agentId);
+    const a = agentManager.agents?.get?.(agentId);
+    if (!a) return;
+    // Workflow-driven busy owns the status: when a task is in progress, leave
+    // the agent busy so the task pipeline can clear it the usual way.
+    if (a.currentTask) return;
+    if (a.status === 'busy') {
+      try {
+        agentManager.setStatus(agentId, 'idle', 'Console quiet');
+      } catch (err: any) {
+        console.warn(`[Terminal] setStatus(idle) failed for ${agentId.slice(0, 8)}: ${err.message}`);
+      }
+    }
+  }, CONSOLE_IDLE_TIMEOUT_MS);
+
+  consoleActivity.set(agentId, { idleTimer });
+}
+
 function getJwtSecret(): string {
   const s = readSecret('JWT_SECRET');
   if (!s) throw new Error('JWT_SECRET is not configured');
@@ -90,7 +142,7 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
  * `~/.git-credentials` file from its first byte. Without it, the LLM would
  * have to wait for the first `/projects/ensure` round-trip to authenticate.
  */
-export function installTerminalProxy(httpServer: HttpServer, executionManager?: any): void {
+export function installTerminalProxy(httpServer: HttpServer, executionManager?: any, agentManager?: any): void {
   const wss = new WebSocketServer({
     noServer: true,
     perMessageDeflate: {
@@ -185,7 +237,7 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
 
     // Finalise the upgrade now that auth + authz passed.
     wss.handleUpgrade(req, socket as any, head, (clientWs) => {
-      wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows, runnerContext);
+      wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows, runnerContext, agentManager);
     });
   });
 }
@@ -203,6 +255,7 @@ function wireProxy(
   cols: string,
   rows: string,
   context: TerminalRunnerContext = {},
+  agentManager?: any,
 ): void {
   const baseUrl = RUNNER_URLS[runner];
   if (!baseUrl) {
@@ -236,6 +289,8 @@ function wireProxy(
     try { runnerWs.close(code, reason); } catch { /* noop */ }
   };
 
+  const connectionOpenedAt = Date.now();
+
   runnerWs.on('open', () => {
     // No-op — we just start forwarding messages once both ends are alive.
   });
@@ -248,6 +303,14 @@ function wireProxy(
     } catch (err) {
       // Client probably gone — schedule a clean close.
       closeBoth(1011, 'client send failed');
+      return;
+    }
+    // Reflect PTY activity as agent.status='busy' so the UI/workflow sees the
+    // CLI is currently working. Text frames are control envelopes (exit,
+    // resize), not CLI output — skip them. The grace window suppresses the
+    // scrollback replay sent right after attach.
+    if (isBinary && (Date.now() - connectionOpenedAt) > REPLAY_GRACE_MS) {
+      noteConsoleOutput(agentId, agentManager);
     }
   });
   runnerWs.on('close', (code, reason) => closeBoth(code, reason?.toString() || ''));
