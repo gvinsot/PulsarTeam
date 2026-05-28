@@ -200,20 +200,44 @@ class CliBackend(RunnerBackend):
         if llm:
             api_key = (llm.get("apiKey") or llm.get("api_key") or "").strip()
             provider = (llm.get("provider") or "").lower().strip()
+            endpoint = (llm.get("endpoint") or "").strip()
             if api_key:
                 # Expose the agent's API key under the env-var name expected by
-                # each provider's official SDK. opencode / openclaw read these
-                # automatically when no auth.json is present.
-                if provider in ("anthropic", "claude"):
+                # each provider's official SDK. opencode / openclaw / hermes read
+                # these automatically when no auth.json is present.
+                if provider in ("anthropic", "claude", "claude-paid"):
                     env["ANTHROPIC_API_KEY"] = api_key
                 elif provider == "openai":
                     env["OPENAI_API_KEY"] = api_key
+                elif provider == "openrouter":
+                    env["OPENROUTER_API_KEY"] = api_key
                 elif provider == "mistral":
                     env["MISTRAL_API_KEY"] = api_key
-                elif provider == "google" or provider == "gemini":
+                elif provider in ("google", "gemini"):
                     env["GOOGLE_API_KEY"] = api_key
+                    env["GEMINI_API_KEY"] = api_key
                 elif provider == "groq":
                     env["GROQ_API_KEY"] = api_key
+                elif provider == "deepseek":
+                    env["DEEPSEEK_API_KEY"] = api_key
+                elif provider in ("xai", "grok"):
+                    env["XAI_API_KEY"] = api_key
+                elif provider == "nvidia":
+                    env["NVIDIA_API_KEY"] = api_key
+                elif provider == "huggingface":
+                    env["HF_TOKEN"] = api_key
+                elif provider == "ollama":
+                    env["OLLAMA_API_KEY"] = api_key
+            if endpoint:
+                # Some CLIs (litellm-based, openai-compatible) honor a base URL
+                # override via env. Set the common ones so vLLM / Ollama / proxy
+                # setups work without per-CLI config files.
+                if provider in ("openai", "vllm"):
+                    env["OPENAI_BASE_URL"] = endpoint
+                elif provider == "anthropic":
+                    env["ANTHROPIC_BASE_URL"] = endpoint
+                elif provider == "ollama":
+                    env["OLLAMA_HOST"] = endpoint
         return env
 
     async def _report_usage_for_agent(self, agent_id: Optional[str], result: dict) -> None:
@@ -324,7 +348,7 @@ class CliBackend(RunnerBackend):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env=self._agent_env(effective_user),
+            env=self._agent_env(effective_user, agent_id),
             limit=10 * 1024 * 1024,
             **get_subprocess_kwargs(effective_user),
         )
