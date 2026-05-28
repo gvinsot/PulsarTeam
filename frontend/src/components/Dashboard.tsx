@@ -176,7 +176,7 @@ export default function Dashboard({
   };
 
   return (
-    <div className="h-screen bg-dark-950 flex flex-col overflow-hidden">
+    <div className="h-[100dvh] bg-dark-950 flex flex-col overflow-hidden">
       {/* Impersonation banner */}
       {user?.impersonatedBy && (
         <div className="sticky top-0 z-[60] flex items-center justify-center gap-3 px-4 py-2 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-sm">

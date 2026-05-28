@@ -8,6 +8,39 @@ import { RichAssistantContent } from './ChatMessage';
 import { api } from '../../api';
 import { SttSession, TtsPlayer } from '../../lib/externalVoiceClient';
 
+// Renders the live CLI/PTY output streamed as the agent's "thinking". Keeps
+// terminal alignment intact (no wrap), exposes both axes of scroll so long
+// lines or tall screens stay reachable, and auto-pins to the bottom so the
+// latest output is always in view — unless the user scrolls up to inspect
+// earlier rows, in which case we leave their scroll position alone.
+function TerminalView({ text, className = '' }: { text: string; className?: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el) return;
+    // 8px tolerance so subpixel rounding doesn't unpin
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+  };
+
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [text]);
+
+  return (
+    <div
+      ref={ref}
+      onScroll={onScroll}
+      className={`text-xs text-dark-400 font-mono whitespace-pre max-h-[40vh] overflow-auto scrollbar-thin-dark ${className}`}
+    >
+      {text}
+    </div>
+  );
+}
+
 export default function ChatTab({
   history, thinking, streamBuffer, message, setMessage, sending, isBusy, onSend, onStop,
   onClear, onReload, onTruncate, chatEndRef, agentName, autoScroll, onToggleAutoScroll,
@@ -240,9 +273,7 @@ export default function ChatTab({
                 <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
                 <span className="text-xs text-amber-400 font-medium">Thinking...</span>
               </div>
-              <div className="text-xs text-dark-400 font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto">
-                {thinking.slice(-500)}
-              </div>
+              <TerminalView text={thinking} />
             </div>
           </div>
         )}
@@ -260,9 +291,7 @@ export default function ChatTab({
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                     Thinking...
                   </summary>
-                  <div className="mt-1 text-xs text-dark-400 font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto border-l-2 border-amber-500/30 pl-2">
-                    {thinking.slice(-500)}
-                  </div>
+                  <TerminalView text={thinking} className="mt-1 border-l-2 border-amber-500/30 pl-2" />
                 </details>
               )}
               <div className="markdown-content text-sm text-dark-200">

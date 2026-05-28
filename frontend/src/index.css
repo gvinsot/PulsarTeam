@@ -94,6 +94,7 @@ code, pre, .font-mono {
 /* Thin dark scrollbar for inner containers (e.g. kanban columns) */
 .scrollbar-thin-dark::-webkit-scrollbar {
   width: 5px;
+  height: 5px;
 }
 .scrollbar-thin-dark::-webkit-scrollbar-track {
   background: transparent;
