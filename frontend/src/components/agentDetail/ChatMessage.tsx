@@ -130,7 +130,7 @@ function reconstructWrappedOAuthUrls(text) {
     // Claude Code may leave trailing spaces after `code=` or indent wrapped lines.
     while (i < text.length) {
       const leadingWhitespaceAndNewlineLength = text.slice(i).match(/^[^\S\n]*\n/)?.[0].length;
-      if (leadingWhitespaceAndNewlineLength == null) break;
+      if (leadingWhitespaceAndNewlineLength === undefined) break;
       const lineStart = i + leadingWhitespaceAndNewlineLength;
       let j = lineStart;
       while (j < text.length && text[j] !== '\n') j++;
