@@ -300,7 +300,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       fontSize: 14,
       lineHeight: 1.35,
       letterSpacing: 0,
-      scrollback: agent.runner === 'claudecode' ? 0 : 5000,
+      // Raw PTY passthrough for all CLI runners now (claudecode included) —
+      // xterm keeps a real scrollback buffer so the user can scroll back
+      // through history. (claudecode used to be 0 for the server-side snapshot
+      // renderer, which has been removed in favour of raw streaming.)
+      scrollback: 5000,
       altClickMovesCursor: true,
       macOptionIsMeta: true,
       rightClickSelectsWord: true,

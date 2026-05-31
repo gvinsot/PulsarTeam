@@ -211,7 +211,15 @@ class ClaudeCodeBackend(RunnerBackend):
             "cwd": proc_cwd,
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
-            "render_mode": "snapshot",
+            # Raw passthrough: stream the PTY bytes straight to xterm.js (the
+            # client terminal) and let IT render them. xterm is a full, proven
+            # terminal emulator — exactly what every other CLI runner uses.
+            # The previous "snapshot" mode re-derived the screen server-side
+            # from pyte's display grid and re-emitted it with absolute cursor
+            # moves; for Claude Code's dense, absolute-positioned TUI that
+            # reconstruction dropped inter-word spaces and overlapped frames
+            # (garbled output). Raw mode renders the live TUI correctly.
+            "render_mode": "raw",
             "creds_watch_path": creds_watch_path,
             "creds_on_change": _persist_creds,
             "creds_dedup_key": _creds_dedup_key,
