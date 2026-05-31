@@ -551,7 +551,7 @@ export function agentRoutes(agentManager) {
     if (taskToDelete?.startedAt && agentManager._isActiveTaskStatus(taskToDelete.status) && agent?.status === 'busy') {
       return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
     }
-    const success = agentManager.deleteTask(req.params.id, req.params.taskId);
+    const success = await agentManager.deleteTask(req.params.id, req.params.taskId);
     if (!success) return res.status(404).json({ error: 'Not found' });
     res.json({ success: true });
   });

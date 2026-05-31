@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireRole, checkBoardAccess } from '../middleware/auth.js';
-import { getPool, getBoardById, getBoardsByUser, rowToTask, getOAuthToken } from '../services/database.js';
+import { getPool, getBoardById, getBoardsByUser, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
@@ -27,15 +27,16 @@ const router = Router();
 /** Check if the authenticated user has access to a task (via agent ownership OR board access) */
 async function requireTaskAccess(mgr, task, user) {
   if (user.role === 'admin') return true;
-  const agent = mgr.agents.get(task.agentId);
-  if (!agent) return true; // agent deleted — allow access
-  // Agent owner always has access
-  if (!agent.ownerId || agent.ownerId === user.userId) return true;
-  // Also allow if the user has edit access on the task's board
+  const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
+  // Agent owner always has access (covers agent-scoped tasks).
+  if (agent && (!agent.ownerId || agent.ownerId === user.userId)) return true;
+  // Board edit access (covers unassigned/board-only tasks and shared boards).
   if (task.boardId) {
     const access = await checkBoardAccess(task.boardId, user.userId, user.role, 'edit');
     if (access.ok) return true;
   }
+  // Orphaned task with no agent and no board to gate on — allow so it stays deletable.
+  if (!agent && !task.boardId) return true;
   return false;
 }
 
@@ -194,7 +195,9 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
 router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    const task = mgr.getTask(req.params.id);
+    // Fall back to the DB for unassigned/board-only tasks, which never live in
+    // the agentId-keyed in-memory store that getTask() searches.
+    const task = mgr.getTask(req.params.id) || await getTaskById(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
@@ -577,19 +580,21 @@ router.patch('/:id/clear-stopped', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    const task = mgr.getTask(req.params.id);
+    // Fall back to the DB for unassigned/board-only tasks, which never live in
+    // the agentId-keyed in-memory store that getTask() searches.
+    const task = mgr.getTask(req.params.id) || await getTaskById(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
     // Block deletion of tasks being executed by a busy agent
-    const agent = mgr.agents.get(task.agentId);
+    const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
     if (task.startedAt && mgr._isActiveTaskStatus(task.status) && agent?.status === 'busy') {
       return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
     }
 
-    const ok = mgr.deleteTask(task.agentId, req.params.id, req.user.userId);
+    const ok = await mgr.deleteTask(task.agentId, req.params.id);
     if (!ok) return res.status(404).json({ error: 'Task not found' });
 
     // Record deleted_by in the database

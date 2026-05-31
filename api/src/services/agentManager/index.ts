@@ -104,7 +104,7 @@ export interface AgentManager {
   addTaskCommit(agentId: string, taskId: string, hash: string, message: string): any | null;
   removeTaskCommit(agentId: string, taskId: string, hash: string): any | null;
   setTaskAssignee(agentId: string, taskId: string, assigneeId: string): any | null;
-  deleteTask(agentId: string, taskId: string): boolean;
+  deleteTask(agentId: string | null, taskId: string): Promise<boolean>;
   restoreTask(taskId: string): Promise<any | null>;
   hardDeleteTask(taskId: string): Promise<any>;
   getDeletedTasks(): Promise<any[]>;

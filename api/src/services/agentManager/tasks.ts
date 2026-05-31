@@ -533,13 +533,15 @@ export const tasksMethods = {
     return task;
   },
 
-  deleteTask(this: any, agentId: string, taskId: string): boolean {
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-    if (!task) return false;
-    this._removeTaskFromStore(agentId, taskId);
-    deleteTaskFromDb(taskId);
+  async deleteTask(this: any, agentId: string | null, taskId: string): Promise<boolean> {
+    // Unassigned/board-only tasks have no agentId and never live in the
+    // agentId-keyed in-memory store, so soft-delete must fall back to the DB.
+    const inMemory = agentId ? this._getAgentTasks(agentId).some((t: any) => t.id === taskId) : false;
+    if (agentId) this._removeTaskFromStore(agentId, taskId);
+    const dbDeleted = await deleteTaskFromDb(taskId);
+    if (!inMemory && !dbDeleted) return false;
     clearTaskSignals(taskId);
-    const agent = this.agents.get(agentId);
+    const agent = agentId ? this.agents.get(agentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     this._emit('task:deleted', { taskId, agentId });
     return true;
@@ -1360,7 +1362,7 @@ export const tasksMethods = {
 
   /** Save a task to the database (returns a promise for awaitable saves) */
   saveTaskDirectly(this: any, task: any): any {
-    if (!task || !task.agentId) return;
+    if (!task || !task.id) return;
     return saveTaskToDb(task);
   },
 

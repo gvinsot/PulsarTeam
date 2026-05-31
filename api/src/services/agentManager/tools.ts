@@ -688,7 +688,7 @@ export const toolsMethods = {
           results.push({ tool: 'delete_task', args: call.args, success: false, error: `Task not found: ${taskId}` });
           continue;
         }
-        const deleted = this.deleteTask(taskAgentId, task.id);
+        const deleted = await this.deleteTask(taskAgentId, task.id);
         if (deleted) {
           console.log(`🗑️ [DeleteTask] Agent "${agent.name}" deleted task "${task.text.slice(0, 50)}" (${task.id})`);
           results.push({ tool: 'delete_task', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" (${task.id}) deleted successfully.` });
