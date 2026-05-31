@@ -673,6 +673,14 @@ async function _runRefineMode(agent, task, instructions, { agentManager, io, exe
   return { executed: true };
 }
 
+// A decide action that never yields a decision used to retry forever (the
+// WorkflowEngine re-fires on_enter with a progressive cooldown capped at 2s).
+// For agents that structurally CAN'T decide — e.g. a CLI runner with no
+// swarm_api MCP, so no update_task tool — this looped indefinitely and
+// invisibly. Cap the no-decision retries and then fail the task with an
+// actionable error instead of spinning.
+const MAX_DECIDE_NO_DECISION = 4;
+
 async function _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt }) {
   if (!instructions) {
     console.log(`[ActionExecutor] decide: no instructions — skipping`);
@@ -682,35 +690,54 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   const prompt = buildInstructionsPrompt(task, instructions, columns);
   console.log(`[ActionExecutor] decide: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
-  // Snapshot task state so we can detect whether the agent actually called @update_task.
-  // The agent is supposed to either move the task to a new status, or at least append
-  // details (which mutates task.text). If neither happens we treat the action as a
-  // no-op and let the WorkflowEngine retry it.
+  // Snapshot task state so we can detect whether the agent actually made a
+  // decision (moved the task to a new status, or appended details). Detection
+  // is by task mutation — which works whether the agent used the @update_task
+  // text tool (LLM-chat agents) or the update_task MCP tool (CLI runners).
   const beforeTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
   const beforeStatus = beforeTask?.status ?? task.status;
   const beforeTextLen = (beforeTask?.text || '').length;
 
   let fullResponse = '';
 
-  agentManager.wsEmitter.streamStart(agent.id);
-  try {
-    const workflowMeta = { type: 'workflow-action', mode: 'decide', taskId: task.id };
-    await agentManager.sendMessage(
-      agent.id,
-      prompt,
-      (chunk) => {
-        fullResponse += chunk;
-        agentManager.wsEmitter.streamChunk(agent.id, chunk);
-        agentManager.wsEmitter.thinking(agent.id);
-      },
-      0,
-      workflowMeta
-    );
-
+  // CLI runners drive their interactive PTY (visible in the terminal tab) and
+  // signal via their MCP tools — never the headless sendMessage path, which
+  // spawns a separate invisible claude process that also conflicts with the
+  // shared PTY. The agent's decision lands as a task mutation (update_task MCP)
+  // which the before/after comparison below detects.
+  if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
+    console.log(`[ActionExecutor] decide: injecting prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
+    await bindAgentRunner(agentManager, agent);
+    await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
+    const waitResult = await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
+      terminalDriven: true,
+    });
+    if (waitResult === 'error') {
+      const authError = agentManager._consumeTaskAuthError?.(task.id);
+      throw new Error(authError || 'Claude Code CLI ended in an authentication or runtime error');
+    }
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
-  } finally {
-    agentManager.wsEmitter.streamEnd(agent.id);
-    agentManager.wsEmitter.agentUpdated(agent.id);
+  } else {
+    agentManager.wsEmitter.streamStart(agent.id);
+    try {
+      const workflowMeta = { type: 'workflow-action', mode: 'decide', taskId: task.id };
+      await agentManager.sendMessage(
+        agent.id,
+        prompt,
+        (chunk) => {
+          fullResponse += chunk;
+          agentManager.wsEmitter.streamChunk(agent.id, chunk);
+          agentManager.wsEmitter.thinking(agent.id);
+        },
+        0,
+        workflowMeta
+      );
+
+      agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
+    } finally {
+      agentManager.wsEmitter.streamEnd(agent.id);
+      agentManager.wsEmitter.agentUpdated(agent.id);
+    }
   }
 
   // Verify the agent actually made a decision: status changed OR details appended.
@@ -720,10 +747,30 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   const decided = afterStatus !== beforeStatus || afterTextLen !== beforeTextLen;
 
   if (!decided) {
-    console.warn(`[ActionExecutor] decide: agent "${agent.name}" produced no @update_task call for task="${task.id}" — flagging for retry`);
+    // Count consecutive no-decision attempts on the live in-memory task so a
+    // structurally-stuck agent fails fast instead of retrying forever.
+    const liveTask = afterTask || beforeTask;
+    const attempts = ((liveTask?._decideNoDecisionCount as number) || 0) + 1;
+    if (liveTask) liveTask._decideNoDecisionCount = attempts;
+
+    if (attempts >= MAX_DECIDE_NO_DECISION) {
+      if (liveTask) delete liveTask._decideNoDecisionCount;
+      const why = isCliRunner(agent)
+        ? `Agent "${agent.name}" (CLI runner) produced no decision after ${attempts} attempts. It likely has no tool to update the task — assign the Swarm API MCP (update_task) to this agent, or use an "execute" action instead of "decide".`
+        : `Agent "${agent.name}" produced no @update_task call after ${attempts} attempts.`;
+      console.error(`[ActionExecutor] decide: ${why} — failing task="${task.id}"`);
+      // Throw so executeRunAgent's catch marks the task error (visible on the
+      // board, with the message) and stops the retry loop.
+      throw new Error(`Decide action failed: ${why}`);
+    }
+
+    console.warn(`[ActionExecutor] decide: agent "${agent.name}" produced no decision for task="${task.id}" (attempt ${attempts}/${MAX_DECIDE_NO_DECISION}) — flagging for retry`);
     return { executed: false, skipped: true, reason: 'no-decision' };
   }
 
+  // Decision made — clear the no-decision counter.
+  const liveTask = afterTask || beforeTask;
+  if (liveTask?._decideNoDecisionCount) delete liveTask._decideNoDecisionCount;
   console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
   return { executed: true };
 }
