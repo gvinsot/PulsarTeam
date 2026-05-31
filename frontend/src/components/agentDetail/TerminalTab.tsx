@@ -32,6 +32,12 @@ interface TerminalTabProps {
 // Backoff schedule for reconnects: 0.5s → 1s → 2s → … capped at 15s.
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15_000;
+// Minimum readable grid. When the visible area is smaller than this, we keep
+// the terminal at the minimum and let the container scroll (overflow-auto)
+// instead of shrinking the TUI into an unreadable sliver. Tuned so a TUI like
+// Claude Code's stays legible in a narrow agent-detail panel or on mobile.
+const MIN_COLS = 80;
+const MIN_ROWS = 10;
 const CLAUDE_OAUTH_PREFIX = 'https://claude.com/cai/oauth/authorize?code=';
 const CLAUDE_OAUTH_MAX_CONTINUATION_LINES = 32;
 const CLAUDE_OAUTH_FALLBACK_SEARCH_LINES = 500;
@@ -224,12 +230,32 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     // renderer would repaint a near-empty screen — making the whole TUI vanish
     // after a couple of keyboard cycles.
     const el = containerRef.current;
-    if (!el) return;
+    const term = termRef.current;
+    const fit = fitRef.current;
+    if (!el || !term || !fit) return;
     if (el.clientWidth < 8 || el.clientHeight < 8) return;
+
+    // Use proposeDimensions() (what fit() would apply) and clamp UP to a
+    // readable minimum. Plain fit() always shrinks the grid to the container,
+    // so the terminal could never overflow and the container's overflow-auto
+    // never produced scrollbars. By clamping to MIN_COLS/MIN_ROWS, a small
+    // viewport keeps a legible grid and the container scrolls instead.
+    let dims: { cols: number; rows: number } | undefined;
     try {
-      fitRef.current?.fit();
+      dims = fit.proposeDimensions();
     } catch {
-      /* xterm not mounted yet */
+      return; /* xterm not mounted yet */
+    }
+    if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+
+    const cols = Math.max(MIN_COLS, dims.cols);
+    const rows = Math.max(MIN_ROWS, dims.rows);
+    if (cols !== term.cols || rows !== term.rows) {
+      try {
+        term.resize(cols, rows);
+      } catch {
+        /* xterm not mounted yet */
+      }
     }
   };
 
@@ -438,6 +464,12 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         // resending here covers the reconnect case where the user's
         // window changed between attempts.
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        // Ask the runner to repaint the current screen right now. Messages are
+        // processed in order, so this paints at the geometry we just sent —
+        // the terminal shows its live state the instant the tab opens, instead
+        // of staying blank/stale until the next subprocess output (snapshot
+        // mode only re-emits on output or the delayed post-resize tick).
+        ws.send(JSON.stringify({ type: 'refresh' }));
       };
 
       ws.onmessage = (ev) => {

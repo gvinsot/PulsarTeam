@@ -735,14 +735,29 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
 
   let fullResponse = '';
 
-  if (isCliRunner(agent) && agent.status === 'idle' && agentManager.executionManager?.sendTerminalInput) {
-    console.log(`[ActionExecutor] execute: injecting task prompt into CLI terminal for "${agent.name}"`);
+  // CLI runners always execute inside their interactive PTY — never the
+  // headless sendMessage fallback. Even if agent.status flipped to "busy"
+  // (e.g. console activity from an attached browser terminal), we still drive
+  // the same shared PTY: the runner blocks the inject call until the TUI is
+  // back at an input-ready prompt (the PTY-is-free gate). Falling back to
+  // headless here would create an invisible session the user can't see in the
+  // terminal tab and would split the task's context across two backends.
+  if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
+    console.log(`[ActionExecutor] execute: injecting task prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
     await bindAgentRunner(agentManager, agent);
     await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
-    await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
+    const waitResult = await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
       terminalDriven: true,
     });
+    // Honor the wait result: a CLI auth failure (or other hard error) must NOT
+    // be reported as a successful execution, otherwise the workflow chain
+    // advances (e.g. → done/review) over a task that never ran. Throw so
+    // executeRunAgent's catch marks the task error + saves the execution log.
+    if (waitResult === 'error') {
+      const authError = agentManager._consumeTaskAuthError?.(task.id);
+      throw new Error(authError || 'Claude Code CLI ended in an authentication or runtime error');
+    }
+    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
     return { executed: true };
   }
 

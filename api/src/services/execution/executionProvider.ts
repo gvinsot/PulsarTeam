@@ -118,6 +118,15 @@ export class ExecutionProvider {
     return false;
   }
 
+  /**
+   * Fetch the provider's interactive terminal session status (alive, pid,
+   * latched `auth_error`, …) or null when no session / unsupported. Used by
+   * the workflow engine to detect CLI auth failures on terminal-driven tasks.
+   */
+  async getTerminalSession(agentId: string): Promise<any | null> {
+    return null;
+  }
+
   // ── Query ─────────────────────────────────────────────────────────────
 
   /**

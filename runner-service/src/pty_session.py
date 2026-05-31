@@ -90,6 +90,38 @@ _BYPASS_PERMS_RE = re.compile(
 )
 _AUTO_ANSWER_COOLDOWN_S = 1.0
 
+# Auth-failure sentinels the Claude Code (and other) CLIs print when their
+# token/key is missing, expired, or rejected. The shared PTY broker is a
+# transparent pipe, so unlike the one-shot headless driver it has no auth
+# handling of its own — without this, an auth failure renders to the terminal
+# and the agent simply goes quiet, which the workflow engine misreads as
+# "task finished". We latch the first match into `PtySession.auth_error` and
+# expose it via the session status endpoint so the API can fail the task.
+# Patterns are kept tight (distinctive CLI phrasings) to avoid latching on the
+# agent's own output that merely *mentions* authentication.
+_AUTH_ERROR_RE = re.compile(
+    r"(invalid\s+api\s+key"
+    r"|please\s+run\s+/login"
+    r"|run\s+/login\s+to\s+(authenticate|log\s*in)"
+    r"|oauth\s+token\s+(has\s+)?expired"
+    r"|invalid\s+authentication\s+credentials"
+    r"|authentication_error)",
+    re.IGNORECASE,
+)
+
+# Banner sentinels that mean the TUI is ready to accept a typed prompt. A
+# workflow-injected prompt is only pasted once the input box exists — not while
+# a trust/bypass screen is up (would swallow it) and not mid-response (would
+# interleave). We deliberately omit a bare "> " here: it appears inside the
+# assistant's own streamed markdown (blockquotes) and would falsely read as
+# "ready" while the CLI is still working. The caret + the input-box hint text
+# only appear when the CLI has returned to an idle prompt.
+_INPUT_READY_HINTS = (
+    "▌",                # ▌ the "type a message" caret (idle input box)
+    "Type / for commands",
+    "Try \"",
+)
+
 
 def _strip_ansi(text: str) -> str:
     return _ANSI_RE.sub("", text)
@@ -162,6 +194,11 @@ class PtySession:
     _creds_sync_task: Optional[asyncio.Task] = None
     _last_synced_dedup_key: Optional[str] = None
     _last_creds_mtime: float = 0.0
+    # First detected auth failure (decoded sentinel line). Latched until the
+    # next prompt injection clears it (see clear_auth_error). Exposed in
+    # status() so the API can fail the in-flight task instead of treating the
+    # silent CLI as "done".
+    auth_error: Optional[str] = None
 
     def _snapshot_enabled(self) -> bool:
         return self.render_mode == "snapshot" and self._screen is not None and self._screen_stream is not None
@@ -342,10 +379,65 @@ class PtySession:
 
     async def _handle_output(self, data: bytes) -> None:
         self._record_output(data)
+        self._maybe_detect_auth_error(data)
         if self._snapshot_enabled():
             self._schedule_snapshot_broadcast()
         else:
             await self._broadcast(data)
+
+    def _maybe_detect_auth_error(self, data: bytes) -> None:
+        """Latch the first auth-failure sentinel seen in the PTY output.
+
+        Scans a short rolling tail (the auto-answer buffer is already fed the
+        same bytes by the reader) so we don't re-decode the whole scrollback.
+        Idempotent once latched — cleared only by clear_auth_error() at the
+        next prompt injection."""
+        if self.auth_error is not None:
+            return
+        if not data:
+            return
+        # Include the current chunk: the reader only extends _auto_answer_buf
+        # with this data AFTER _handle_output returns, so reading the buffer
+        # alone would lag one chunk behind.
+        tail = _strip_ansi((bytes(self._auto_answer_buf) + data).decode("utf-8", errors="replace"))[-4096:]
+        m = _AUTH_ERROR_RE.search(tail)
+        if not m:
+            return
+        # Capture the line carrying the match for a useful API-side message.
+        line = ""
+        for raw_line in tail.splitlines():
+            if _AUTH_ERROR_RE.search(raw_line):
+                line = raw_line.strip()
+        self.auth_error = (line or m.group(0)).strip()[:300]
+        logger.warning(
+            f"[Terminal] Auth failure detected in CLI output for agent {self.agent_id}: "
+            f"{self.auth_error!r}"
+        )
+
+    def clear_auth_error(self) -> None:
+        """Reset the latched auth error. Called before a fresh prompt injection
+        so a recovered login (or a new attempt) starts from a clean slate."""
+        if self.auth_error is not None:
+            logger.info(f"[Terminal] Clearing latched auth error for agent {self.agent_id}")
+        self.auth_error = None
+
+    async def wait_until_input_ready(self, timeout: float = 20.0) -> bool:
+        """Block until the TUI shows an input-ready hint (or timeout).
+
+        Lets a workflow-injected prompt be pasted into the actual message box
+        instead of into a startup confirmation screen (trust folder / bypass
+        permissions), which would swallow or mangle the instructions. Returns
+        True if input-ready was observed, False on timeout / dead session.
+        The reader loop keeps auto-answering trust/bypass concurrently."""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            if self._closed or not self.is_alive():
+                return False
+            tail = _strip_ansi(self._auto_answer_buf.decode("utf-8", errors="replace"))[-4096:]
+            if any(h in tail for h in _INPUT_READY_HINTS):
+                return True
+            await asyncio.sleep(0.2)
+        return False
 
     def _schedule_snapshot_broadcast(self, delay: float = SNAPSHOT_INTERVAL_SEC) -> None:
         # If a snapshot is already scheduled with a longer delay (e.g. the
@@ -363,6 +455,17 @@ class PtySession:
             await self._broadcast(self._snapshot_bytes())
 
         self._snapshot_task = asyncio.create_task(_send_later())
+
+    def current_snapshot(self) -> bytes:
+        """Return a full repaint of the current screen (snapshot mode only).
+
+        Used to satisfy a client's explicit `refresh` request so opening the
+        terminal tab paints the live state immediately, instead of waiting for
+        the next subprocess output or the post-resize snapshot tick. Empty in
+        raw mode (those clients get scrollback replay on attach instead)."""
+        if not self._snapshot_enabled():
+            return b""
+        return self._snapshot_bytes()
 
     def _snapshot_bytes(self) -> bytes:
         screen = self._screen
@@ -638,6 +741,7 @@ class PtySession:
             "cols": self.cols,
             "rows": self.rows,
             "render_mode": self.render_mode,
+            "auth_error": self.auth_error,
         }
 
     def tail_text(self, max_bytes: int = 4096) -> str:

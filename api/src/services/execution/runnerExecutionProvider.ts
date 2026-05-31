@@ -273,6 +273,27 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     return Boolean(data.closed);
   }
 
+  /**
+   * Fetch the runner-side shared-PTY session status for an agent, or null if
+   * there's no session (404) or the runner is unreachable. The status carries
+   * `auth_error` (a latched CLI auth-failure message) which the workflow uses
+   * to fail a terminal-driven task instead of treating the silent CLI as done.
+   */
+  async getTerminalSession(agentId: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
+        method: 'GET',
+        headers: this._headers(agentId),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.status === 404) return null;
+      if (!res.ok) return null;
+      return await res.json().catch(() => null);
+    } catch {
+      return null;
+    }
+  }
+
   async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
     if (!input) return false;
     const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/input`, {
@@ -283,7 +304,10 @@ export class RunnerExecutionProvider extends ExecutionProvider {
         submit: options.submit !== false,
         bracketed_paste: true,
       }),
-      signal: AbortSignal.timeout(30_000),
+      // The runner blocks this call until the TUI is input-ready (the
+      // PTY-is-free gate, up to ~45s for a fresh session) before pasting, so
+      // the client timeout must comfortably exceed that window.
+      signal: AbortSignal.timeout(90_000),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => '');

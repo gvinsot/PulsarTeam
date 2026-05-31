@@ -92,7 +92,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
   const [boardsAgentCounts, setBoardsAgentCounts] = useState({});
   const [boardsTaskCounts, setBoardsTaskCounts] = useState({});
   const [boardEditingId, setBoardEditingId] = useState(null);
-  const [boardForm, setBoardForm] = useState({ name: '', columns: [] });
+  const [boardForm, setBoardForm] = useState({ name: '', columns: [], transitions: [] });
   const [boardCreating, setBoardCreating] = useState(false);
   const [boardSaving, setBoardSaving] = useState(false);
 
@@ -236,6 +236,17 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
         { id: 'in_progress', label: 'In Progress', color: '#eab308' },
         { id: 'done', label: 'Done', color: '#22c55e' },
       ],
+      transitions: [
+        {
+          from: 'in_progress',
+          trigger: 'on_enter',
+          conditions: [],
+          actions: [
+            { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+            { type: 'change_status', target: '__next__' },
+          ],
+        },
+      ],
     });
   };
 
@@ -243,7 +254,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
     setBoardEditingId(board.id);
     setBoardCreating(false);
     const cols = board.workflow?.columns || [];
-    setBoardForm({ name: board.name, columns: cols.map(c => ({ ...c })) });
+    setBoardForm({ name: board.name, columns: cols.map(c => ({ ...c })), transitions: board.workflow?.transitions || [] });
   };
 
   const cancelBoardEdit = () => {
@@ -254,7 +265,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
   const handleSaveBoard = async () => {
     try {
       setBoardSaving(true);
-      const workflow = { columns: boardForm.columns };
+      const workflow = { columns: boardForm.columns, transitions: boardForm.transitions || [] };
       if (boardCreating) {
         await api.createBoard(boardForm.name || 'New Board', workflow, {});
         showToast?.('Board created', 'success');

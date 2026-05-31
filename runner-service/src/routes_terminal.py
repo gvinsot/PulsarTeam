@@ -164,10 +164,34 @@ async def send_terminal_input(
         rows=request.rows,
         config_fingerprint=config_fingerprint,
     )
-    if not session_was_alive:
+
+    # A workflow-injected prompt must land in the TUI's message box, not in a
+    # startup confirmation screen (trust folder / bypass-permissions) that
+    # would swallow it, nor mid-response where it would interleave. Wait until
+    # the CLI returns to an input-ready prompt — this doubles as the
+    # "PTY-is-free" gate so a CLI runner that's still finishing a previous turn
+    # doesn't get a second prompt jammed into its stream. The reader loop
+    # auto-answers trust/bypass concurrently. Falls back to a short fixed delay
+    # only when the readiness hint never appears within the window.
+    #   • fresh session  → longer window (CLI is still booting its TUI)
+    #   • alive session  → wait for the current turn to wind down to the prompt
+    ready_timeout = float(os.getenv(
+        "TERMINAL_INPUT_READY_TIMEOUT_SEC",
+        "45" if not session_was_alive else "30",
+    ))
+    ready = await session.wait_until_input_ready(timeout=ready_timeout)
+    if not ready:
         delay = float(os.getenv("TERMINAL_INPUT_STARTUP_DELAY_SEC", "0.75"))
         if delay > 0:
             await asyncio.sleep(delay)
+        logger.warning(
+            f"[Terminal] Input-ready hint not seen for agent {agent_id} within "
+            f"{ready_timeout}s — pasting prompt anyway after {delay}s fallback"
+        )
+
+    # Fresh task attempt: drop any latched auth error from a previous run so a
+    # recovered login isn't reported as still-broken to the API.
+    session.clear_auth_error()
 
     payload = request.input.encode("utf-8", errors="replace")
     if request.bracketed_paste:
@@ -301,6 +325,14 @@ async def ws_terminal(
                     except (TypeError, ValueError):
                         continue
                     await session.resize(c, r)
+                elif ctype == "refresh":
+                    # Client asks for an immediate repaint of the current screen
+                    # (e.g. it just attached and wants live state now, not on the
+                    # next output). Snapshot mode only — raw clients already got a
+                    # scrollback replay on attach.
+                    snap = session.current_snapshot()
+                    if snap:
+                        await push_bytes_to_client(snap)
                 elif ctype == "input":
                     raw = ctrl.get("data", "")
                     if isinstance(raw, str):

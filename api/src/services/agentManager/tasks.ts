@@ -881,6 +881,32 @@ export const tasksMethods = {
     });
   },
 
+  /**
+   * Probe the runner's shared-PTY session for a latched CLI auth failure.
+   * Returns the auth-error message (e.g. "Please run /login") or null. Used by
+   * the terminal-driven execution path so an expired/rejected token fails the
+   * task instead of looking like a silently-finished run.
+   */
+  async _checkTerminalAuthError(this: any, executorId: string): Promise<string | null> {
+    if (!this.executionManager?.getTerminalSession) return null;
+    try {
+      const status = await this.executionManager.getTerminalSession(executorId);
+      const err = status?.auth_error;
+      return (typeof err === 'string' && err.trim()) ? err.trim() : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /** Read-and-clear the auth error stashed on a task by _waitForExecutionComplete.
+   *  Exposed as a manager method so workflow/actionExecutor can consume it
+   *  without importing this module (avoids a circular import). */
+  _consumeTaskAuthError(this: any, taskId: string): string | null {
+    const err = getTaskSignal(taskId, 'authError');
+    if (err) clearTaskSignal(taskId, 'authError');
+    return (typeof err === 'string' && err.trim()) ? err.trim() : null;
+  },
+
   async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
     const terminalDriven = Boolean(options.terminalDriven);
     const freshTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
@@ -931,6 +957,33 @@ export const tasksMethods = {
     // Mark task as watching so the task loop doesn't re-send
     setTaskSignal(taskId, 'watching', true);
     updateTaskExecutionStatus(taskId, 'watching');
+
+    // ── Terminal-driven auth/error probe ──────────────────────────────────
+    // CLI runners (claudecode, …) execute inside a shared PTY. An auth failure
+    // (expired token, "Please run /login", invalid key) renders to the
+    // terminal and then the CLI goes quiet — which otherwise looks identical
+    // to a finished task, so the workflow would advance as if it succeeded.
+    // Poll the runner's session status for the latched auth_error; it surfaces
+    // within the first seconds after injection.
+    if (terminalDriven) {
+      const AUTH_PROBE_ATTEMPTS = 8;
+      const AUTH_PROBE_INTERVAL_MS = 3000;
+      for (let i = 0; i < AUTH_PROBE_ATTEMPTS; i++) {
+        await new Promise(resolve => setTimeout(resolve, AUTH_PROBE_INTERVAL_MS));
+        const probeCompleted = await _checkCompleted();
+        if (probeCompleted) return probeCompleted;
+        if (getTaskSignal(taskId, 'stopped')) { clearTaskSignal(taskId, 'stopped'); return 'stopped'; }
+        const probeTask = await getTaskById(taskId);
+        if (!probeTask) return 'deleted';
+        if (!this._isActiveTaskStatus((probeTask as any).status)) return 'moved';
+        const authErr = await this._checkTerminalAuthError(executorId);
+        if (authErr) {
+          setTaskSignal(taskId, 'authError', authErr);
+          console.warn(`🔐 [Execution] CLI auth failure for "${executorName}" on task ${taskId} "${taskText.slice(0, 60)}": ${authErr}`);
+          return 'error';
+        }
+      }
+    }
 
     // ── Immediate retry: if the agent went idle without producing any output
     // (empty response from coder-service, e.g. session corruption), re-send
@@ -1032,6 +1085,18 @@ export const tasksMethods = {
       if (currentExecutor.status === 'error') {
         console.log(`🔔 [Execution] Executor "${executorName}" is in error — exiting reminder loop`);
         return 'error';
+      }
+
+      // Late CLI auth failure (token expired mid-run, re-auth needed). Surface
+      // it the same way as the early probe so the task is failed, not left to
+      // exhaust the reminder loop and time out as if "done".
+      if (terminalDriven) {
+        const loopAuthErr = await this._checkTerminalAuthError(executorId);
+        if (loopAuthErr) {
+          setTaskSignal(taskId, 'authError', loopAuthErr);
+          console.warn(`🔐 [Execution] CLI auth failure (mid-run) for "${executorName}" on task ${taskId}: ${loopAuthErr}`);
+          return 'error';
+        }
       }
 
       // Cooldown: skip if a reminder was sent too recently
@@ -1166,7 +1231,10 @@ export const tasksMethods = {
         ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @task_execution_complete(summary of what was done).`
         : task.text;
 
-      const terminalDriven = isCliRunner(executor) && executor.status === 'idle' && this.executionManager?.sendTerminalInput;
+      // CLI runners always resume through their interactive PTY (not headless
+      // sendMessage), regardless of the transient agent.status — the runner
+      // gates the inject on the TUI being input-ready (PTY-is-free).
+      const terminalDriven = isCliRunner(executor) && this.executionManager?.sendTerminalInput;
       if (terminalDriven) {
         await bindAgentRunner(this, executor);
         await this.executionManager.sendTerminalInput(executorId, messageToSend, { submit: true });
@@ -1195,6 +1263,14 @@ export const tasksMethods = {
       const waitResult = await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text, {
         terminalDriven,
       });
+
+      // A detected CLI auth failure (or other hard error) must fail the task
+      // rather than silently complete. Throw so the catch below runs the
+      // standard error path (markTaskError + error report + execution log).
+      if (waitResult === 'error') {
+        const authError = this._consumeTaskAuthError(task.id);
+        throw new Error(authError || 'CLI execution ended in error');
+      }
 
       // Save execution log AFTER wait completes — captures the full conversation
       // including retries, reminders, tool calls, and task_execution_complete

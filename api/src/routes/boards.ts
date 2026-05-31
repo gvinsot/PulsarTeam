@@ -29,7 +29,7 @@ const DEFAULT_BOARD_WORKFLOW = {
       trigger: 'on_enter',
       conditions: [],
       actions: [
-        { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task' },
+        { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
         { type: 'change_status', target: '__next__' },
       ],
     },

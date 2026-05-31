@@ -249,6 +249,11 @@ export class ExecutionManager {
     return this._providerFor(agentId).sendTerminalInput(agentId, input, options);
   }
 
+  /** Fetch the runner-side PTY session status (incl. `auth_error`) or null. */
+  async getTerminalSession(agentId: string): Promise<any | null> {
+    return this._providerFor(agentId).getTerminalSession(agentId);
+  }
+
   hasEnvironment(agentId: string): boolean {
     return this._providerFor(agentId).hasEnvironment(agentId);
   }
