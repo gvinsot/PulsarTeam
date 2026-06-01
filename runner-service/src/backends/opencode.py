@@ -22,7 +22,8 @@ Per-agent LLM selection:
   config (apiKey, baseURL) is written to the agent's opencode config
   file (~/.config/opencode/config.json) — no env vars are used for LLM
   auth so there is no risk of env-var / SDK conflicts. When no per-agent
-  LLM config is set, the static RUNNER_MODEL env var is used as a fallback.
+  LLM config is set, no model override is passed so OpenCode can use its
+  own default model selection.
 """
 
 from typing import Optional
@@ -30,7 +31,6 @@ import json
 import logging
 import os
 
-from config import RUNNER_MODEL
 from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
@@ -63,8 +63,9 @@ _PROVIDER_TO_OPENCODE_NAMESPACE = {
 def _resolve_opencode_model(llm_config: Optional[dict]) -> str:
     """Compute the `--model` value opencode should use.
 
-    Prefers the per-agent LLM config when set (formatted as
-    `<provider>/<model>`), falling back to the static RUNNER_MODEL env.
+    Return the per-agent LLM config when set (formatted as
+    `<provider>/<model>`). An empty value deliberately leaves model
+    selection to OpenCode.
     """
     if llm_config:
         model = (llm_config.get("model") or "").strip()
@@ -76,10 +77,7 @@ def _resolve_opencode_model(llm_config: Optional[dict]) -> str:
             return f"{ns}/{model}"
         if model:
             return model
-    fallback = (RUNNER_MODEL or "").strip()
-    if fallback and "/" not in fallback:
-        return f"anthropic/{fallback}"
-    return fallback
+    return ""
 
 
 def _split_model_spec(model_spec: str) -> tuple[Optional[str], Optional[str]]:
@@ -146,8 +144,12 @@ def _opencode_provider_config(llm_config: Optional[dict], model_spec: str) -> Op
     }
 
 
-def _merge_opencode_config(existing_raw: Optional[str], managed: Optional[dict]) -> Optional[str]:
-    if not managed:
+def _merge_opencode_config(
+    existing_raw: Optional[str],
+    managed: Optional[dict],
+    clear_model: bool = False,
+) -> Optional[str]:
+    if not managed and not clear_model:
         return existing_raw
     try:
         existing = json.loads(existing_raw) if existing_raw else {}
@@ -156,19 +158,27 @@ def _merge_opencode_config(existing_raw: Optional[str], managed: Optional[dict])
     except (TypeError, json.JSONDecodeError):
         existing = {}
 
-    merged = {**existing, "$schema": managed.get("$schema", existing.get("$schema"))}
-    if managed.get("model"):
+    if clear_model and not managed and "model" not in existing:
+        return existing_raw
+
+    merged = {**existing}
+    if managed:
+        merged["$schema"] = managed.get("$schema", existing.get("$schema"))
+    if clear_model:
+        merged.pop("model", None)
+    elif managed and managed.get("model"):
         merged["model"] = managed["model"]
     providers = existing.get("provider") if isinstance(existing.get("provider"), dict) else {}
     merged_providers = {**providers}
-    for provider_id, block in (managed.get("provider") or {}).items():
+    for provider_id, block in ((managed or {}).get("provider") or {}).items():
         previous = merged_providers.get(provider_id) if isinstance(merged_providers.get(provider_id), dict) else {}
         previous_models = previous.get("models") if isinstance(previous.get("models"), dict) else {}
         block_models = block.get("models") if isinstance(block.get("models"), dict) else {}
         merged_block = {**previous, **block}
         merged_block["models"] = {**previous_models, **block_models}
         merged_providers[provider_id] = merged_block
-    merged["provider"] = merged_providers
+    if managed:
+        merged["provider"] = merged_providers
     return json.dumps(merged, separators=(",", ":"))
 
 
@@ -216,8 +226,6 @@ class OpenCodeBackend(CliBackend):
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
         managed = _opencode_provider_config(llm_config, model)
-        if not managed:
-            return env
         # Always resolve the agent's HOME from the cache, even when running as
         # root (effective_user=None from linuxUser.runAsRoot). Without this the
         # provider config file is never written and opencode receives only
@@ -241,8 +249,11 @@ class OpenCodeBackend(CliBackend):
                 existing_json = _f.read()
         except OSError:
             pass
-        merged = _merge_opencode_config(existing_json, managed)
-        if merged:
+        # Returning to "Default LLM" must also remove any model pin written by
+        # an earlier explicit selection. Otherwise OpenCode reads the stale
+        # config-level model even though the command no longer passes --model.
+        merged = _merge_opencode_config(existing_json, managed, clear_model=not model)
+        if merged and merged != existing_json:
             # When the spawn keeps its parent UID (root via runAsRoot), don't
             # chown the file to the agent UID — root needs to read it back,
             # and chown after creation could lock it away from the real spawn.
@@ -250,8 +261,8 @@ class OpenCodeBackend(CliBackend):
             gid = agent_user.get("gid") if agent_user else None
             _write_opencode_config_file(home_dir, merged, uid, gid)
             logger.info(
-                "[OpenCode] Wrote provider config for agent %s at %s (model=%s)",
-                (agent_id or "unknown")[:12], cfg_path, model,
+                "[OpenCode] Wrote config for agent %s at %s (model=%s)",
+                (agent_id or "unknown")[:12], cfg_path, model or "<default>",
             )
         # opencode reads its config from $HOME/.config/opencode/config.json.
         # Force HOME to the agent's home so root-spawns find the file we just
