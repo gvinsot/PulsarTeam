@@ -7,7 +7,7 @@ import {
   getUserByGoogleId, createGoogleUser, linkGoogleId,
   getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
   getUserByGitHubId, createGitHubUser, linkGitHubId,
-  getBoardById, getBoardShare, getProjectById,
+  getBoardById, getBoardShare, getProjectById, hasProjectBoardAccess,
   acceptTerms, completeTutorial,
   isDatabaseConnected,
 } from '../services/database.js';
@@ -860,7 +860,7 @@ export interface ProjectAccessResult {
 
 /**
  * Resolve effective access on a project.
- * - Read: any authenticated user (projects are global metadata).
+ * - Read: admin, project owner, or user with access to an attached board.
  * - Edit/admin: admin role OR project owner only.
  */
 export async function checkProjectAccess(
@@ -879,7 +879,9 @@ export async function checkProjectAccess(
     return { ok: true, project, isOwner };
   }
   if (required === 'read') {
-    return { ok: true, project, isOwner };
+    const canRead = isOwner || await hasProjectBoardAccess(projectId, userId);
+    if (canRead) return { ok: true, project, isOwner };
+    return { ok: false, status: 403, error: 'Access denied' };
   }
   if (!isOwner) {
     return { ok: false, status: 403, error: 'You can only modify projects you created' };

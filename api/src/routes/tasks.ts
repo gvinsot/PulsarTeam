@@ -684,14 +684,23 @@ router.get('/project-stats', async (req, res) => {
 
     const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
 
-    // Scope to user's boards (admins see all)
+    // Scope counts and project names to resources visible to the caller.
     let boardFilter = '';
-    const baseParams: any[] = [];
+    let projectFilter = '';
+    let summaryParams: any[] = [];
+    let dailyParams: any[] = [days];
+    let daysParamIdx = 1;
     if (req.user.role !== 'admin') {
       const boardIds = await getUserBoardIds(req.user.userId);
-      if (boardIds.length === 0) return res.json({ projects: [] });
-      baseParams.push(boardIds);
-      boardFilter = ` AND t.board_id = ANY($${baseParams.length})`;
+      summaryParams = [boardIds, req.user.userId];
+      dailyParams = [boardIds, days];
+      daysParamIdx = 2;
+      boardFilter = ' AND t.board_id = ANY($1)';
+      projectFilter = `WHERE p.owner_id = $2
+        OR EXISTS (
+          SELECT 1 FROM boards visible_b
+          WHERE visible_b.project_id = p.id AND visible_b.id = ANY($1)
+        )`;
     }
 
     // 1. Per-project summary counts — join tasks → boards → projects
@@ -708,13 +717,12 @@ router.get('/project-stats', async (req, res) => {
       FROM projects p
       LEFT JOIN boards b ON b.project_id = p.id
       LEFT JOIN tasks t ON t.board_id = b.id AND t.deleted_at IS NULL${boardFilter ? ' AND ' + boardFilter.slice(5) : ''}
+      ${projectFilter}
       GROUP BY p.id, p.name
       ORDER BY p.name
-    `, baseParams);
+    `, summaryParams);
 
     // 2. Daily created/completed counts per project (last N days)
-    const dailyParams = [...baseParams, days];
-    const daysParamIdx = dailyParams.length;
     const dailyResult = await pool.query(`
       SELECT project_id, day::date AS day, created, completed FROM (
         SELECT b.project_id, d.day,

@@ -1,7 +1,7 @@
 import express from 'express';
 import { requireRole, checkBoardAccess, checkProjectAccess } from '../middleware/auth.js';
 import {
-  getAllProjects, getProjectByName, createProject, updateProject, deleteProject,
+  getProjectsForUser, getProjectByName, createProject, updateProject, deleteProject,
   getBoardsForProject, setBoardProject,
   getReposForBoard, getReposForProject, getAccessibleBoardRepos,
   getStoragesForBoard, getStoragesForProject,
@@ -41,12 +41,14 @@ export function projectRoutes() {
 
   router.get('/', async (req: any, res) => {
     try {
-      const projects = await getAllProjects();
+      const userId = req.user?.userId || null;
+      const role = req.user?.role || 'basic';
+      const projects = await getProjectsForUser(userId, role);
       // Enrich with board/repo/storage counts
       const enriched = await Promise.all(projects.map(async p => {
-        const boards = await getBoardsForProject(p.id);
-        const repos = await getReposForProject(p.id);
-        const storages = await getStoragesForProject(p.id);
+        const boards = await getBoardsForProject(p.id, userId, role);
+        const repos = await getReposForProject(p.id, userId, role);
+        const storages = await getStoragesForProject(p.id, userId, role);
         return {
           ...p,
           boardCount: boards.length,
@@ -66,9 +68,11 @@ export function projectRoutes() {
       const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role || 'basic', 'read');
       if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
       const project = access.project;
-      const boards = await getBoardsForProject(project.id);
-      const repos = await getReposForProject(project.id);
-      const storages = await getStoragesForProject(project.id);
+      const userId = req.user?.userId || null;
+      const role = req.user?.role || 'basic';
+      const boards = await getBoardsForProject(project.id, userId, role);
+      const repos = await getReposForProject(project.id, userId, role);
+      const storages = await getStoragesForProject(project.id, userId, role);
       res.json({ ...project, boards, repos, storages });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -118,7 +122,7 @@ export function projectRoutes() {
     try {
       const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'read');
       if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      const boards = await getBoardsForProject(req.params.id);
+      const boards = await getBoardsForProject(req.params.id, req.user?.userId || null, req.user?.role || 'basic');
       res.json(boards);
     } catch (err: any) {
       res.status(500).json({ error: err.message });

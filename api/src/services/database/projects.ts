@@ -19,6 +19,34 @@ export async function getAllProjects(): Promise<Project[]> {
   return result.rows;
 }
 
+export async function getProjectsForUser(userId: string | null, role: string): Promise<Project[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  if (role === 'admin') return getAllProjects();
+  if (!userId) return [];
+  const result = await pool.query(
+    `SELECT id, name, description, rules, owner_id, created_at, updated_at
+     FROM projects p
+     WHERE p.owner_id = $1
+        OR EXISTS (
+          SELECT 1
+          FROM boards b
+          WHERE b.project_id = p.id
+            AND (
+              b.is_default = TRUE
+              OR b.user_id = $1
+              OR EXISTS (
+                SELECT 1 FROM board_shares bs
+                WHERE bs.board_id = b.id AND bs.user_id = $1
+              )
+            )
+        )
+     ORDER BY name`,
+    [userId]
+  );
+  return result.rows;
+}
+
 export async function getProjectById(id: string): Promise<Project | null> {
   const pool = getPool();
   if (!pool) return null;
@@ -90,13 +118,47 @@ export async function deleteProject(id: string): Promise<boolean> {
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function getBoardsForProject(projectId: string) {
+export async function hasProjectBoardAccess(projectId: string, userId: string | null): Promise<boolean> {
+  const pool = getPool();
+  if (!pool || !userId) return false;
+  const result = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM boards b
+       WHERE b.project_id = $1
+         AND (
+           b.is_default = TRUE
+           OR b.user_id = $2
+           OR EXISTS (
+             SELECT 1 FROM board_shares bs
+             WHERE bs.board_id = b.id AND bs.user_id = $2
+           )
+         )
+     ) AS has_access`,
+    [projectId, userId]
+  );
+  return result.rows[0]?.has_access === true;
+}
+
+export async function getBoardsForProject(projectId: string, userId: string | null, role: string) {
   const pool = getPool();
   if (!pool) return [];
+  if (role !== 'admin' && !userId) return [];
+  const accessFilter = role === 'admin'
+    ? ''
+    : ` AND (
+          is_default = TRUE
+          OR user_id = $2
+          OR EXISTS (
+            SELECT 1 FROM board_shares bs
+            WHERE bs.board_id = boards.id AND bs.user_id = $2
+          )
+        )`;
+  const params = role === 'admin' ? [projectId] : [projectId, userId];
   const result = await pool.query(
     `SELECT id, user_id, name, workflow, filters, position, is_default, plugins, mcp_auth, project_id, created_at, updated_at
-     FROM boards WHERE project_id = $1 ORDER BY position, created_at`,
-    [projectId]
+     FROM boards WHERE project_id = $1${accessFilter} ORDER BY position, created_at`,
+    params
   );
   return result.rows;
 }

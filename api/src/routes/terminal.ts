@@ -29,6 +29,7 @@ import { readSecret } from '../secrets.js';
 import { getAgentById } from '../services/database.js';
 import { getLlmConfig } from '../services/database/llmConfigs.js';
 import { getGitHubCredentialsForAgent } from './github.js';
+import { buildRepoCloneUrl } from '../services/repoUrl.js';
 
 // Only these runners get a terminal — the others are LLM-providers or
 // non-CLI runtimes for which the chat UI is the correct interface.
@@ -215,23 +216,38 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
       return;
     }
 
-    // Push the agent's GitHub plugin credentials (agent → board → user
-    // fallback) to the runner before opening the PTY, so the CLI subprocess
-    // starts with ~/.git-credentials installed and GITHUB_TOKEN/GH_TOKEN in
-    // its env. Best-effort: a failure shouldn't block the terminal — the LLM
-    // will simply not be able to authenticate to GitHub until a later sync.
-    if (executionManager?.installGitCredentials) {
+    // Provision the agent's execution environment BEFORE opening the PTY so
+    // the runner's prepare_interactive resolves cwd to the selected repo
+    // instead of falling back to CLI_CWD=/app. Mirrors the chat path
+    // (agentManager/chat.ts). Best-effort: a failure shouldn't block the
+    // terminal.
+    //
+    //  1. Bind the agent to its real runner (claudecode/codex/…). Without
+    //     this, _providerFor defaults to 'sandbox' for an agent that hasn't
+    //     been bound by a chat/workflow yet, so steps 2-3 would target the
+    //     wrong runner.
+    //  2. Project pinned → clone/update it on the runner so the interactive
+    //     CLI starts inside the working tree (and ~/.git-credentials +
+    //     GITHUB_TOKEN/GH_TOKEN are installed along the way).
+    //  3. No project → just push git credentials so any repo the LLM clones
+    //     itself authenticates.
+    if (executionManager) {
       try {
         const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
-        if (gitCreds?.token) {
-          await executionManager.installGitCredentials(agentId, {
-            provider: 'github',
-            token: gitCreds.token,
-            username: gitCreds.login || null,
-          });
+        executionManager.bindAgent?.(agentId, runner, {
+          ownerId: agent.ownerId || null,
+          gitCredentials: gitCreds,
+          permissions: agent.permissions || null,
+          llmConfig: runnerContext.llmConfig || null,
+        });
+        const gitUrl = buildRepoCloneUrl(agent.project);
+        if (gitUrl && executionManager.ensureProject) {
+          await executionManager.ensureProject(agentId, agent.project, gitUrl, gitCreds);
+        } else if (gitCreds?.token && executionManager.installGitCredentials) {
+          await executionManager.installGitCredentials(agentId, gitCreds);
         }
       } catch (err: any) {
-        console.warn(`[Terminal] Failed to push git credentials for agent ${agentId.slice(0, 8)}: ${err.message}`);
+        console.warn(`[Terminal] Project/credential provisioning failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
       }
     }
 

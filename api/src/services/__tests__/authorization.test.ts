@@ -20,7 +20,11 @@ const boardShares: Array<{ board_id: string; user_id: string; permission: 'read'
 ];
 const projects: Record<string, any> = {
   'proj-A': { id: 'proj-A', name: 'Project A', owner_id: 'user-A' },
+  'proj-shared': { id: 'proj-shared', name: 'Shared Project', owner_id: 'user-A' },
   'proj-orphan': { id: 'proj-orphan', name: 'Orphan', owner_id: null },
+};
+const projectBoardMembers: Record<string, string[]> = {
+  'proj-shared': ['user-C'],
 };
 
 // Stub database module BEFORE importing the middleware under test
@@ -30,6 +34,8 @@ mock.module('../database.js', {
     getBoardShare: async (boardId: string, userId: string) =>
       boardShares.find(s => s.board_id === boardId && s.user_id === userId) || null,
     getProjectById: async (id: string) => projects[id] || null,
+    hasProjectBoardAccess: async (projectId: string, userId: string) =>
+      (projectBoardMembers[projectId] || []).includes(userId),
     isDatabaseConnected: () => true,
     // Other exports stubbed as no-ops so importing auth.ts doesn't blow up
     getUserByUsername: async () => null,
@@ -130,8 +136,20 @@ test('checkBoardAccess: default board NOT writable by non-admin', async () => {
 
 // ── Project access ──────────────────────────────────────────────────────────
 
-test('checkProjectAccess: any user may read a project', async () => {
+test('checkProjectAccess: stranger CANNOT read another user project (IDOR)', async () => {
   const r = await checkProjectAccess('proj-A', 'user-Z', 'basic', 'read');
+  assert.equal(r.ok, false);
+  assert.equal(r.status, 403);
+});
+
+test('checkProjectAccess: project owner may read their project', async () => {
+  const r = await checkProjectAccess('proj-A', 'user-A', 'basic', 'read');
+  assert.equal(r.ok, true);
+  assert.equal(r.isOwner, true);
+});
+
+test('checkProjectAccess: attached board member may read a shared project', async () => {
+  const r = await checkProjectAccess('proj-shared', 'user-C', 'basic', 'read');
   assert.equal(r.ok, true);
   assert.equal(r.isOwner, false);
 });

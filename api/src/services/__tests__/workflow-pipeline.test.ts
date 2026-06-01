@@ -49,11 +49,13 @@ mock.module('../database.js', {
     deleteMcpServerFromDb: noop,
     // projects
     getAllProjects: async () => [],
+    getProjectsForUser: async () => [],
     getProjectById: async () => null,
     getProjectByName: async () => null,
     createProject: noop,
     updateProject: noop,
     deleteProject: noop,
+    hasProjectBoardAccess: async () => false,
     getBoardsForProject: async () => [],
     setBoardProject: noop,
     // boardRepos
