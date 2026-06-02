@@ -140,6 +140,12 @@ class _Client:
     on_output: ClientCallback
     # Tracked just for logging / status — never the source of truth.
     label: str = "?"
+    # While True, live output from the reader is buffered into `pending`
+    # instead of being pushed straight to the socket. attach() flips this
+    # off only after it has finished replaying the scrollback snapshot, so
+    # the initial full-screen TUI paint can never be lost or reordered.
+    replaying: bool = True
+    pending: deque = field(default_factory=deque)
 
 
 @dataclass
@@ -378,12 +384,43 @@ class PtySession:
                 self.render_mode = "raw"
 
     async def _handle_output(self, data: bytes) -> None:
-        self._record_output(data)
-        self._maybe_detect_auth_error(data)
         if self._snapshot_enabled():
+            # Snapshot mode is self-healing (each broadcast is a full repaint),
+            # so a missed frame can't leave a persistently blank screen.
+            self._record_output(data)
+            self._maybe_detect_auth_error(data)
             self._schedule_snapshot_broadcast()
-        else:
-            await self._broadcast(data)
+            return
+
+        # Raw mode: record the chunk and decide each client's delivery path
+        # atomically under the lock, so this can't interleave with attach()'s
+        # scrollback snapshot + client registration. A client still replaying
+        # its scrollback buffers the chunk in `pending`; live clients get it
+        # pushed below (outside the lock, to avoid stalling the reader on a
+        # slow socket).
+        targets: list[tuple[int, _Client]] = []
+        async with self._lock:
+            self._record_output(data)
+            self._maybe_detect_auth_error(data)
+            for client_id, client in self._clients.items():
+                if client.replaying:
+                    client.pending.append(data)
+                else:
+                    targets.append((client_id, client))
+
+        if not targets:
+            return
+        dead: list[int] = []
+        for client_id, client in targets:
+            try:
+                await client.on_output(data)
+            except Exception as e:
+                logger.debug(f"[Terminal] Client {client_id} broadcast failed: {e}")
+                dead.append(client_id)
+        if dead:
+            async with self._lock:
+                for client_id in dead:
+                    self._clients.pop(client_id, None)
 
     def _maybe_detect_auth_error(self, data: bytes) -> None:
         """Latch the first auth-failure sentinel seen in the PTY output.
@@ -639,23 +676,41 @@ class PtySession:
             self._cancel_idle_timer()
             replay_chunks = [] if self._snapshot_enabled() else list(self.scrollback)
             snapshot = self._snapshot_bytes() if self._snapshot_enabled() else b""
+            # Register the client atomically with the scrollback snapshot: from
+            # here on the reader buffers live output into client.pending (the
+            # client starts in replaying=True) instead of dropping it. This
+            # closes the race where output emitted between the snapshot and the
+            # registration was lost — for a TUI that meant a missed initial
+            # full-screen paint and a blank screen.
+            client_id = self._next_client_id
+            self._next_client_id += 1
+            client = _Client(on_output=on_output, label=label)
+            self._clients[client_id] = client
+            logger.info(
+                f"[Terminal] Client {client_id} ({label}) attached to agent "
+                f"{self.agent_id} (now {len(self._clients)} clients)"
+            )
 
-        # Replay before registering the live observer. Otherwise fresh PTY
-        # output can interleave with old scrollback and make the browser end
-        # up behind the real process.
+        # Replay the captured screen state directly to the socket (this path
+        # bypasses client.pending). Live bytes arriving meanwhile accumulate in
+        # client.pending and are flushed below, preserving order.
         for chunk in replay_chunks:
             await on_output(chunk)
         if snapshot:
             await on_output(snapshot)
 
-        async with self._lock:
-            client_id = self._next_client_id
-            self._next_client_id += 1
-            self._clients[client_id] = _Client(on_output=on_output, label=label)
-            logger.info(
-                f"[Terminal] Client {client_id} ({label}) attached to agent "
-                f"{self.agent_id} (now {len(self._clients)} clients)"
-            )
+        # Flush anything buffered during replay, then switch to live delivery.
+        # The flip to replaying=False happens under the lock while pending is
+        # empty, so no chunk can slip past between the last drain and going live.
+        while True:
+            async with self._lock:
+                if not client.pending:
+                    client.replaying = False
+                    break
+                batch = list(client.pending)
+                client.pending.clear()
+            for chunk in batch:
+                await on_output(chunk)
 
         return client_id
 

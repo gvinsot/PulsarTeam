@@ -206,10 +206,10 @@ export function projectRoutes() {
 
       const tok = getOAuthToken('github', 'board', req.params.boardId);
       if (!tok || !tok.accessToken) {
-        return res.status(400).json({
-          error: 'No GitHub plugin connected on this board',
-          code: 'GITHUB_NOT_CONNECTED',
-        });
+        // No GitHub plugin connected on this board is a normal state, not an
+        // error — the picker simply has no repos to offer. Return an empty
+        // list (200) so the frontend doesn't log a noisy 400 in the console.
+        return res.json([]);
       }
 
       // Fetch repos accessible to the connected GitHub user/installation.
