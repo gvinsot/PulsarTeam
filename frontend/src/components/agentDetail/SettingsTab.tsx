@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Trash2, RotateCw } from 'lucide-react';
+import { Save, Trash2, RotateCw, Power } from 'lucide-react';
 import { api } from '../../api';
 import CodexAuthSection from './CodexAuthSection';
 
@@ -369,6 +369,17 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           title="Reload context — invalidate all caches (conversation, model info, MCP, file tree) to apply config changes"
         >
           <RotateCw className="w-4 h-4" />
+        </button>
+        <button
+          onClick={async () => {
+            if (!confirm('Restart agent? This restarts the CLI process, reconnects MCP and refreshes the file tree to apply config changes, while KEEPING the conversation so the agent resumes exactly where it left off.')) return;
+            await api.restartRuntime(agent.id);
+            onRefresh();
+          }}
+          className="px-4 py-2 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/20 rounded-lg text-sm font-medium transition-colors"
+          title="Restart — reset the runtime (CLI, MCP, file tree) and apply config changes while keeping the conversation so the agent resumes where it left off"
+        >
+          <Power className="w-4 h-4" />
         </button>
         <button
           onClick={handleDelete}

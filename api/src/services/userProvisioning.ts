@@ -4,8 +4,8 @@ import { AGENT_TEMPLATES } from '../data/templates.js';
 const DEFAULT_USER_WORKFLOW = {
   columns: [
     { id: 'todo', label: 'Todo', color: '#6b7280' },
-    { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
-    { id: 'done', label: 'Done', color: '#22c55e' },
+    { id: 'in_progress', label: 'In Progress', color: '#3b82f6', showAgent: true, showProject: true, showTaskType: true },
+    { id: 'done', label: 'Done', color: '#22c55e', showAgent: true, showProject: true, showTaskType: true },
   ],
   transitions: [
     {
@@ -48,8 +48,9 @@ export async function provisionNewUser(userId: string): Promise<void> {
           ownerId: userId,
           boardId: board.id,
           runner: 'opencode',
+          skills: ['skill-basic-tools', 'skill-web-browser'],
         });
-        console.log(`✅ Created default developer agent for user ${userId} (runner=opencode, llmConfig=default)`);
+        console.log(`✅ Created default developer agent for user ${userId} (runner=opencode, llmConfig=default, plugins=Basic Tools/Web Browser)`);
       }
     }
   } catch (err) {

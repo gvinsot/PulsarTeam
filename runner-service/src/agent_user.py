@@ -117,20 +117,43 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
         agent_uid = _allocate_agent_uid(agent_id)
         agent_gid = agent_uid
         try:
+            # Detect whether this HOME was already set up under the agent's UID
+            # on a prior run. The UID is deterministic per agent and the HOME
+            # lives on the persistent volume, so after a container restart the
+            # whole tree (incl. the cloned project, node_modules, .git…) is
+            # already owned correctly. In that case the recursive chown below is
+            # pure wasted work — re-walking tens of thousands of files is the
+            # dominant cost of the first spawn after a restart. We skip it and
+            # only fix the handful of config files we (re)copy as root.
+            already_isolated = False
+            try:
+                already_isolated = os.path.isdir(home_dir) and os.stat(home_dir).st_uid == agent_uid
+            except OSError:
+                already_isolated = False
+
             agent_claude_dir = os.path.join(home_dir, ".claude")
             os.makedirs(agent_claude_dir, mode=0o700, exist_ok=True)
             coder_home = os.path.expanduser("~")
+            # Track the root-owned files we copy in so we can chown just these
+            # when we skip the full recursive walk.
+            copied_paths: list[str] = []
             coder_settings = os.path.join(coder_home, ".claude", "settings.json")
             if os.path.exists(coder_settings):
-                shutil.copy2(coder_settings, os.path.join(agent_claude_dir, "settings.json"))
+                dest = os.path.join(agent_claude_dir, "settings.json")
+                shutil.copy2(coder_settings, dest)
+                copied_paths.append(dest)
             coder_claude_json = os.path.join(coder_home, ".claude.json")
             if os.path.exists(coder_claude_json):
-                shutil.copy2(coder_claude_json, os.path.join(home_dir, ".claude.json"))
+                dest = os.path.join(home_dir, ".claude.json")
+                shutil.copy2(coder_claude_json, dest)
+                copied_paths.append(dest)
             # Mirror the root .gitconfig (notably safe.directory='*') so git
             # subcommands launched under the agent's UID don't refuse the repo.
             coder_gitconfig = os.path.join(coder_home, ".gitconfig")
             if os.path.exists(coder_gitconfig):
-                shutil.copy2(coder_gitconfig, os.path.join(home_dir, ".gitconfig"))
+                dest = os.path.join(home_dir, ".gitconfig")
+                shutil.copy2(coder_gitconfig, dest)
+                copied_paths.append(dest)
             # Hand ownership to the agent's UID and lock down the HOME so other
             # agents (or anything else running in this container) cannot peek.
             # Per-inode try/except + lchown (don't follow symlinks): a transient
@@ -150,25 +173,45 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
                 agent_uid = os.getuid()
                 agent_gid = os.getgid()
             else:
-                for walk_root, dirs, files in os.walk(home_dir):
-                    for name in dirs:
-                        dpath = os.path.join(walk_root, name)
-                        try:
-                            os.lchown(dpath, agent_uid, agent_gid)
-                            os.chmod(dpath, 0o700)
-                        except OSError as ce:
-                            logger.debug(f"[Agent User] skip chown {dpath}: {ce}")
-                    for name in files:
-                        fpath = os.path.join(walk_root, name)
+                if already_isolated:
+                    # Fast path (restart): the tree is already owned by this
+                    # UID. Only the freshly copied root-owned config files and
+                    # the .claude dir need fixing.
+                    os.lchown(agent_claude_dir, agent_uid, agent_gid)
+                    try:
+                        os.chmod(agent_claude_dir, 0o700)
+                    except OSError:
+                        pass
+                    for fpath in copied_paths:
                         try:
                             os.lchown(fpath, agent_uid, agent_gid)
+                            os.chmod(fpath, 0o600)
                         except OSError as ce:
                             logger.debug(f"[Agent User] skip chown {fpath}: {ce}")
-                            continue
-                        try:
-                            os.chmod(fpath, 0o600)
-                        except OSError:
-                            pass
+                    logger.info(
+                        f"[Agent User] Reused isolated home for agent {agent_id[:12]} "
+                        f"at {home_dir} (uid={agent_uid}) — skipped recursive chown"
+                    )
+                else:
+                    for walk_root, dirs, files in os.walk(home_dir):
+                        for name in dirs:
+                            dpath = os.path.join(walk_root, name)
+                            try:
+                                os.lchown(dpath, agent_uid, agent_gid)
+                                os.chmod(dpath, 0o700)
+                            except OSError as ce:
+                                logger.debug(f"[Agent User] skip chown {dpath}: {ce}")
+                        for name in files:
+                            fpath = os.path.join(walk_root, name)
+                            try:
+                                os.lchown(fpath, agent_uid, agent_gid)
+                            except OSError as ce:
+                                logger.debug(f"[Agent User] skip chown {fpath}: {ce}")
+                                continue
+                            try:
+                                os.chmod(fpath, 0o600)
+                            except OSError:
+                                pass
             user_info = {"username": username, "uid": agent_uid, "gid": agent_gid, "home": home_dir, "owner_id": owner_id}
             _agent_users[agent_id] = user_info
             logger.info(f"[Agent User] Created isolated home for agent {agent_id[:12]} at {home_dir} (uid={agent_uid}, owner={owner_id})")

@@ -330,6 +330,16 @@ export function agentRoutes(agentManager) {
     res.json({ success: true });
   });
 
+  // Restart runtime — resets the live process/connections (CLI session, MCP
+  // clients, file tree) and refreshes config caches WITHOUT erasing the
+  // conversation or the runner session UUIDs, so the agent resumes exactly
+  // where it left off with any pending config change applied.
+  router.post('/:id/restart', requireAgentEditAccess, async (req, res) => {
+    const success = await agentManager.restartRuntime(req.params.id);
+    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    res.json({ success: true });
+  });
+
   // Truncate conversation history after a specific message index
   router.delete('/:id/history/after/:index', requireAgentEditAccess, (req, res) => {
     const result = agentManager.truncateHistory(req.params.id, req.params.index);
