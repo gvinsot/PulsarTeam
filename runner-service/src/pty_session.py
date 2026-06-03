@@ -79,6 +79,7 @@ _ANSI_RE = re.compile(
 )
 _TRUST_RE = re.compile(
     r"(do\s*you\s*trust\s*this\s*folder"
+    r"|do\s*you\s*trust\s*the\s*contents\s*of\s*this\s*director(y|ies)"
     r"|is\s*this\s*a\s*project\s*you\s*(created|trust)"
     r"|trust\s*this\s*folder\s*\?"
     r"|yes,?\s*i\s*trust\s*this\s*folder)",

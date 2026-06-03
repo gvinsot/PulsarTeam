@@ -31,6 +31,7 @@ from config import RUNNER_MODEL, logger
 from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
+from .runner_mcp_config import configure_hermes_mcp
 
 
 HERMES_PROVIDER = os.getenv("HERMES_PROVIDER")  # e.g. "openrouter", "anthropic"
@@ -84,6 +85,15 @@ class HermesBackend(CliBackend):
     pass_prompt_via_stdin = False
     supports_interactive_terminal = True
 
+    def _configure_mcp(self, agent_user, agent_id) -> None:
+        # Writes mcp_servers into ~/.hermes/config.yaml and records whether any
+        # MCP server is present so _common_chat_args can decide on
+        # --ignore-user-config. A return of -1 means the fetch failed and the
+        # existing config (and flag) are left untouched.
+        n = configure_hermes_mcp(agent_user, agent_id)
+        if agent_id and n >= 0:
+            self._mcp_present[agent_id] = n > 0
+
     def _common_chat_args(self, agent_id: Optional[str], permissions: Optional[dict]) -> list[str]:
         """Build the shared `chat`-mode args used by both interactive and
         one-shot invocations: provider, model, permission flags, isolation.
@@ -92,9 +102,13 @@ class HermesBackend(CliBackend):
         provider, model = _resolve_hermes_provider_and_model(llm_config)
 
         args: list[str] = []
-        # Always ignore on-disk ~/.hermes/config.yaml so the agent's run is
+        # Normally ignore on-disk ~/.hermes/config.yaml so the agent's run is
         # fully driven by the LLM config we forward — not by stale defaults.
-        args.append("--ignore-user-config")
+        # BUT hermes reads its MCP wiring from that same config.yaml, so when we
+        # have MCP servers to inject we must NOT ignore it. The explicit
+        # --provider/--model flags below still override any stale config pins.
+        if not self._mcp_present.get(agent_id, False):
+            args.append("--ignore-user-config")
         if provider:
             args += ["--provider", provider]
         if model:
@@ -116,6 +130,7 @@ class HermesBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         permissions = self._get_permissions(agent_id)
+        self._configure_mcp(effective_user, agent_id)
 
         cmd = [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
 

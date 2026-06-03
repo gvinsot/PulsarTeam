@@ -34,6 +34,7 @@ import os
 from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
+from .runner_mcp_config import configure_opencode_mcp
 
 logger = logging.getLogger("runner_service")
 
@@ -219,6 +220,12 @@ class OpenCodeBackend(CliBackend):
     pass_prompt_via_stdin = False  # opencode takes the message as positional arg
     supports_interactive_terminal = True
 
+    def _configure_mcp(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        # Writes the `mcp` block into ~/.config/opencode/config.json. Runs
+        # before _agent_env (which rewrites the same file) — _merge_opencode_config
+        # preserves the `mcp` / managed keys, so model+MCP coexist.
+        configure_opencode_mcp(agent_user, agent_id)
+
     def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
         # Skip LLM env-var injection (agent_id=None) — all provider config is
         # delivered via the config file written below, not via env vars.
@@ -274,6 +281,7 @@ class OpenCodeBackend(CliBackend):
         """Spawn OpenCode in its interactive TUI for the shared PTY."""
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        self._configure_mcp(effective_user, agent_id)
 
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)

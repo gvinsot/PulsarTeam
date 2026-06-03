@@ -52,6 +52,10 @@ class CliBackend(RunnerBackend):
     def __init__(self):
         self._permissions: dict[str, dict] = {}
         self._llm_configs: dict[str, dict] = {}
+        # Per-agent flag set by _configure_mcp: True when the last reconcile
+        # wrote ≥1 MCP server. Backends whose argv depends on MCP presence
+        # (e.g. hermes' --ignore-user-config) read this.
+        self._mcp_present: dict[str, bool] = {}
 
     # ── Hooks subclasses override ─────────────────────────────────────────
 
@@ -309,6 +313,15 @@ class CliBackend(RunnerBackend):
             return agent_project_dir
         return CLI_CWD
 
+    def _configure_mcp(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        """Materialize the agent's team-api MCP servers into this CLI's native
+        config before a spawn. No-op in the base class; each CLI subclass
+        overrides it with its own translator (see runner_mcp_config.py). Called
+        from run_sync / stream_events / prepare_interactive so plugin/tool
+        assignment changes take effect on the next message without recreating
+        the agent's HOME."""
+        return
+
     # ── Sync execution ────────────────────────────────────────────────────
 
     async def run_sync(
@@ -325,6 +338,10 @@ class CliBackend(RunnerBackend):
         cwd = self._resolve_cwd(agent_id)
         permissions = self._get_permissions(agent_id)
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        # Materialize MCP tools into the CLI's native config BEFORE building the
+        # command (some backends, e.g. hermes, branch their argv on whether MCP
+        # is present).
+        self._configure_mcp(effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=False, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)
         logger.info(f"Executing {self.cli_command}: {prompt[:100]}...")
@@ -379,6 +396,8 @@ class CliBackend(RunnerBackend):
         cwd = self._resolve_cwd(agent_id)
         permissions = self._get_permissions(agent_id)
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        # See run_sync: write MCP config before building argv.
+        self._configure_mcp(effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=True, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)
         logger.info(f"Streaming {self.cli_command}: {prompt[:100]}...")

@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pandoc \
     util-linux \
     openssh-client \
+    bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium headless environment

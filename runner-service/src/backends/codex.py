@@ -68,6 +68,7 @@ from .codex_oauth import (
     try_exchange_code_from_prompt,
 )
 from agent_user import ensure_agent_user
+from .runner_mcp_config import configure_codex_mcp
 
 
 # Codex CLI honors $CODEX_HOME for its auth/state location. When set, the
@@ -85,6 +86,11 @@ class CodexBackend(CliBackend):
     supports_token_set = True      # accepts a full auth.json blob via /auth/token
     supports_interactive_terminal = True  # `codex` (no `exec` subcommand) is a real TUI
 
+    def _configure_mcp(self, agent_user, agent_id) -> None:
+        # Writes [mcp_servers.*] tables into ~/.codex/config.toml. NOTE: HTTP
+        # MCP support in codex is version-dependent — see configure_codex_mcp.
+        configure_codex_mcp(agent_user, agent_id)
+
     # ── Interactive terminal recipe ───────────────────────────────────────
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
@@ -100,6 +106,7 @@ class CodexBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user) \
             if hasattr(self, "_resolve_effective_user") else agent_user
+        self._configure_mcp(effective_user, agent_id)
 
         # cwd: the agent's project workspace when available, else the
         # generic CLI cwd. Same resolution as cli_backend uses.

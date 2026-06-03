@@ -25,6 +25,7 @@ import os
 from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
+from .runner_mcp_config import configure_openclaw_mcp
 
 
 OPENCLAW_AGENT = os.getenv("OPENCLAW_AGENT", "default")
@@ -37,10 +38,16 @@ class OpenClawBackend(CliBackend):
     pass_prompt_via_stdin = False
     supports_interactive_terminal = True
 
+    def _configure_mcp(self, agent_user, agent_id) -> None:
+        # Best-effort: writes mcpServers into ~/.openclaw/config.json. The
+        # format is UNVERIFIED against an installed CLI — see configure_openclaw_mcp.
+        configure_openclaw_mcp(agent_user, agent_id)
+
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
         """Spawn OpenClaw's TUI for the shared PTY."""
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        self._configure_mcp(effective_user, agent_id)
 
         cmd = [self.cli_command, "tui"]
         if OPENCLAW_LOCAL:
