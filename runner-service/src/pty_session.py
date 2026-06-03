@@ -30,6 +30,7 @@ import struct
 import termios
 import signal
 import asyncio
+import shutil
 import subprocess
 import re
 import time
@@ -73,6 +74,37 @@ SNAPSHOT_POST_RESIZE_DELAY_SEC = max(
     SNAPSHOT_INTERVAL_SEC,
     int(os.getenv("TERMINAL_SNAPSHOT_POST_RESIZE_MS", "350")) / 1000,
 )
+
+# ── tmux backing ────────────────────────────────────────────────────────────
+#
+# The CLI runs inside a detached tmux session; the broker's PTY is a
+# `tmux attach` client. This gives us three properties the bare-PTY model
+# lacked:
+#   • the CLI survives broker/WS churn (it lives in the tmux server, not as a
+#     child of the broker subprocess), so a reconnect re-attaches to the exact
+#     session the user left;
+#   • tmux repaints the authoritative current screen on attach / refresh,
+#     fixing the garbled raw-scrollback replay for alt-screen TUIs;
+#   • a runner-service process restart (without a container restart) can
+#     re-attach to the still-running tmux session.
+#
+# tmux runs as the agent's dropped UID (preexec_fn), so its socket lives under
+# /tmp/tmux-<uid>/<socket> — naturally isolated per agent UID. We still key the
+# session name on agent_id so the runAsRoot (shared UID) case stays correct.
+# Falls back to a direct CLI spawn when tmux isn't installed (safe before the
+# image carrying tmux is deployed).
+_TMUX_BIN = "tmux"
+_TMUX_SOCKET = os.getenv("TERMINAL_TMUX_SOCKET", "pulsar")
+_TMUX_ENABLED = os.getenv("TERMINAL_USE_TMUX", "1").lower() not in ("0", "false", "no")
+
+
+def _tmux_available() -> bool:
+    return _TMUX_ENABLED and shutil.which(_TMUX_BIN) is not None
+
+
+def _tmux_session_name(agent_id: str) -> str:
+    """tmux session names may not contain '.' or ':' — sanitise the agent id."""
+    return "pt-" + re.sub(r"[.:\s]", "_", agent_id)
 
 _ANSI_RE = re.compile(
     r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
@@ -207,16 +239,101 @@ class PtySession:
     # silent CLI as "done".
     auth_error: Optional[str] = None
 
+    # tmux backing (see module header). When `_use_tmux` is False we fall back
+    # to spawning `self.cmd` directly in the PTY (legacy behaviour).
+    _use_tmux: bool = False
+    _tmux_session: Optional[str] = None
+    _slave_tty: Optional[str] = None
+
     def _snapshot_enabled(self) -> bool:
         return self.render_mode == "snapshot" and self._screen is not None and self._screen_stream is not None
 
+    # ── tmux helpers ──────────────────────────────────────────────────────
+    def _tmux_env(self) -> dict:
+        return {
+            **self.env,
+            "COLUMNS": str(self.cols),
+            "LINES": str(self.rows),
+            "TERM": self.env.get("TERM", "xterm-256color"),
+        }
+
+    def _tmux_run(self, args: list[str], timeout: float = 5.0) -> subprocess.CompletedProcess:
+        """Run a tmux management subcommand as the agent's UID (so it talks to
+        the agent's per-UID tmux server socket)."""
+        full = [_TMUX_BIN, "-L", _TMUX_SOCKET, *args]
+        return subprocess.run(
+            full, cwd=self.cwd, env=self._tmux_env(),
+            preexec_fn=self.preexec_fn, capture_output=True, timeout=timeout,
+        )
+
+    def _ensure_tmux_session(self) -> None:
+        """Create the detached tmux session running the CLI if it doesn't yet
+        exist. Idempotent: an existing session (e.g. after a runner-service
+        process restart) is reattached untouched, preserving the running CLI.
+        Raises so start() can fall back to a direct spawn on any tmux failure."""
+        name = _tmux_session_name(self.agent_id)
+        self._tmux_session = name
+        has = self._tmux_run(["has-session", "-t", name])
+        if has.returncode == 0:
+            logger.info(f"[Terminal] Reattaching existing tmux session {name} for agent {self.agent_id}")
+            return
+        create = self._tmux_run(
+            ["new-session", "-d", "-s", name,
+             "-x", str(self.cols), "-y", str(self.rows), "--", *self.cmd],
+            timeout=15.0,
+        )
+        if create.returncode != 0:
+            raise RuntimeError(
+                f"tmux new-session failed (rc={create.returncode}): "
+                f"{create.stderr.decode('utf-8', 'replace')[:300]}"
+            )
+        # No tmux status bar in the pane (it would steal a row and render its
+        # green chrome into the user's terminal), and let the most recently
+        # active client drive the geometry.
+        self._tmux_run(["set-option", "-t", name, "status", "off"])
+        self._tmux_run(["set-option", "-t", name, "window-size", "latest"])
+        logger.info(f"[Terminal] Created tmux session {name} for agent {self.agent_id} (cmd={self.cmd!r})")
+
+    async def request_repaint(self) -> None:
+        """Ask tmux to redraw the authoritative current screen to the broker's
+        client. Called on each new WS attach (instead of replaying raw
+        scrollback, which corrupts alt-screen TUIs). No-op without tmux."""
+        if not self._use_tmux or not self._slave_tty or self._closed:
+            return
+        def _do() -> None:
+            try:
+                self._tmux_run(["refresh-client", "-t", self._slave_tty])
+            except Exception as e:
+                logger.debug(f"[Terminal] refresh-client failed for {self.agent_id}: {e}")
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _do)
+        except Exception:
+            pass
+
     async def start(self) -> None:
-        """Spawn the subprocess in a fresh PTY and start the reader loop."""
+        """Spawn the CLI in a fresh PTY and start the reader loop.
+
+        When tmux is available the CLI runs inside a detached tmux session and
+        the broker's PTY is a `tmux attach` client (see module header); the
+        subprocess we track is then the attach client, and the real CLI lives
+        in the tmux server so it survives this broker. Without tmux we spawn
+        `self.cmd` directly (legacy path)."""
         if self.proc is not None:
             return
         self.scrollback = deque()  # holds raw byte chunks; size bounded manually
         self._scrollback_size = 0
         self._init_screen_renderer()
+
+        self._use_tmux = _tmux_available()
+        if self._use_tmux:
+            try:
+                self._ensure_tmux_session()
+            except Exception as e:
+                logger.warning(
+                    f"[Terminal] tmux unavailable for agent {self.agent_id} ({e}); "
+                    "spawning CLI directly"
+                )
+                self._use_tmux = False
 
         master_fd, slave_fd = pty.openpty()
         # Honour the agreed window size before the child execs so the TUI
@@ -228,17 +345,22 @@ class PtySession:
             )
         except OSError as e:
             logger.debug(f"[Terminal] TIOCSWINSZ failed at spawn: {e}")
+        # The slave's /dev/pts path is the tmux client tty — needed to target
+        # `refresh-client` at exactly this broker connection.
+        try:
+            self._slave_tty = os.ttyname(slave_fd)
+        except OSError:
+            self._slave_tty = None
 
-        env = {
-            **self.env,
-            "COLUMNS": str(self.cols),
-            "LINES": str(self.rows),
-            "TERM": self.env.get("TERM", "xterm-256color"),
-        }
+        env = self._tmux_env()
+        spawn_cmd = (
+            [_TMUX_BIN, "-L", _TMUX_SOCKET, "attach-session", "-t", self._tmux_session]
+            if self._use_tmux else self.cmd
+        )
 
         try:
             self.proc = subprocess.Popen(
-                self.cmd,
+                spawn_cmd,
                 cwd=self.cwd,
                 env=env,
                 stdin=slave_fd,
@@ -250,14 +372,15 @@ class PtySession:
         except Exception as e:
             os.close(master_fd)
             os.close(slave_fd)
-            logger.error(f"[Terminal] Failed to spawn {self.cmd[0]} for agent {self.agent_id}: {e}")
+            logger.error(f"[Terminal] Failed to spawn {spawn_cmd[0]} for agent {self.agent_id}: {e}")
             raise
 
         os.close(slave_fd)
         self.master_fd = master_fd
         logger.info(
-            f"[Terminal] Spawned PTY session for agent {self.agent_id} "
-            f"(pid={self.proc.pid}, cols={self.cols}, rows={self.rows}, cmd={self.cmd!r}, cwd={self.cwd})"
+            f"[Terminal] Spawned {'tmux-attach' if self._use_tmux else 'direct'} PTY session "
+            f"for agent {self.agent_id} (pid={self.proc.pid}, cols={self.cols}, rows={self.rows}, "
+            f"cmd={self.cmd!r}, cwd={self.cwd})"
         )
 
         loop = asyncio.get_running_loop()
@@ -675,7 +798,10 @@ class PtySession:
         start arriving. Returns the opaque client id used for detach()."""
         async with self._lock:
             self._cancel_idle_timer()
-            replay_chunks = [] if self._snapshot_enabled() else list(self.scrollback)
+            # Under tmux we don't replay the raw scrollback ring — that corrupts
+            # an alt-screen TUI. Instead request_repaint() (below) makes tmux
+            # re-emit the authoritative current screen to all clients.
+            replay_chunks = [] if (self._use_tmux or self._snapshot_enabled()) else list(self.scrollback)
             snapshot = self._snapshot_bytes() if self._snapshot_enabled() else b""
             # Register the client atomically with the scrollback snapshot: from
             # here on the reader buffers live output into client.pending (the
@@ -712,6 +838,12 @@ class PtySession:
                 client.pending.clear()
             for chunk in batch:
                 await on_output(chunk)
+
+        # tmux repaints the authoritative screen to the broker's client, which
+        # the reader loop then fans out to every attached client (this one
+        # included) — replacing the corrupt raw-scrollback replay.
+        if self._use_tmux:
+            await self.request_repaint()
 
         return client_id
 
@@ -884,6 +1016,16 @@ class PtySession:
         if self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
             self._snapshot_task = None
+
+        # Kill the tmux session first: the real CLI lives in the tmux server
+        # (not as a child of `self.proc`, which is only the attach client), so
+        # terminating the attach alone would orphan the CLI in tmux. kill-session
+        # ends the CLI and makes the attach client exit cleanly.
+        if self._use_tmux and self._tmux_session:
+            try:
+                self._tmux_run(["kill-session", "-t", self._tmux_session])
+            except Exception as e:
+                logger.debug(f"[Terminal] tmux kill-session failed for {self.agent_id}: {e}")
 
         # Try to terminate the subprocess. The runner container has
         # restricted capabilities so direct signals can EPERM when the

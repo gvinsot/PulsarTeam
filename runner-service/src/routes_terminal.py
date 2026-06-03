@@ -328,11 +328,16 @@ async def ws_terminal(
                 elif ctype == "refresh":
                     # Client asks for an immediate repaint of the current screen
                     # (e.g. it just attached and wants live state now, not on the
-                    # next output). Snapshot mode only — raw clients already got a
-                    # scrollback replay on attach.
-                    snap = session.current_snapshot()
-                    if snap:
-                        await push_bytes_to_client(snap)
+                    # next output). Under tmux, ask tmux to re-emit the
+                    # authoritative screen; in snapshot mode, push the rendered
+                    # snapshot. Raw (non-tmux) clients already got a scrollback
+                    # replay on attach.
+                    if getattr(session, "_use_tmux", False):
+                        await session.request_repaint()
+                    else:
+                        snap = session.current_snapshot()
+                        if snap:
+                            await push_bytes_to_client(snap)
                 elif ctype == "input":
                     raw = ctrl.get("data", "")
                     if isinstance(raw, str):

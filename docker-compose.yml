@@ -158,7 +158,10 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONFAULTHANDLER=1
     volumes:
-      - claudecode-auth-data:/app/data
+      # Stateless runner: /app/data is NOT persisted — agent HOMEs, OAuth tokens
+      # (hydrated from team-api per owner), MCP/settings and project clones are
+      # all re-injected at spawn. A global (no-owner) token must come from the
+      # CLAUDE_CODE_OAUTH_TOKEN env. Only the Android SDK cache is kept.
       - claudecode-android-cache:/opt/android-sdk
     cap_drop:
       - ALL
@@ -214,8 +217,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - openclaw-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -266,8 +268,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - opencode-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -324,8 +325,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - codex-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -378,8 +378,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - hermes-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -560,13 +559,10 @@ services:
 
 volumes:
   pgdata:
-  claudecode-auth-data:
   claudecode-android-cache:
+  # CLI runner *-data volumes removed — those runners are stateless now
+  # (/app/data re-injected at spawn). sandbox/mock keep their data volumes.
   sandbox-data:
-  openclaw-data:
-  opencode-data:
-  codex-data:
-  hermes-data:
   mock-data:
 
 networks:

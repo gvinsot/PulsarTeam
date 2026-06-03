@@ -223,7 +223,13 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONFAULTHANDLER=1
     volumes:
-      - claudecode-auth-data:/app/data
+      # Stateless runner: /app/data (agent HOMEs, tokens, CLI sessions, project
+      # clones) is NOT persisted. Everything is re-injected at spawn — OAuth
+      # tokens are hydrated from team-api per owner (resolve_token /
+      # seed_credentials_file), MCP/settings are rewritten, projects re-cloned.
+      # A node move therefore needs no re-auth for owner-scoped agents. A global
+      # (no-owner) token, if used, must be supplied via the CLAUDE_CODE_OAUTH_TOKEN
+      # secret above. Only the large, owner-agnostic Android SDK cache is kept.
       - claudecode-android-cache:/opt/android-sdk
     cap_drop:
       - ALL
@@ -347,8 +353,7 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - openclaw-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -411,8 +416,7 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - opencode-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -483,8 +487,7 @@ services:
       - SWARM_API_BASE_URL=http://team-api:3001
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - codex-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -552,8 +555,7 @@ services:
       - SWARM_API_BASE_URL=http://team-api:3001
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
-    volumes:
-      - hermes-data:/app/data
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
       - ALL
     cap_add:
@@ -684,17 +686,10 @@ services:
 volumes:
   claudecode-android-cache:
     driver: local
-  claudecode-auth-data:
-    driver: local
+  # NOTE: the CLI runner *-data volumes were removed — those runners are now
+  # stateless (/app/data re-injected at spawn; see claudecode-service). sandbox
+  # keeps its own data volume below.
   sandbox-data:
-    driver: local
-  openclaw-data:
-    driver: local
-  opencode-data:
-    driver: local
-  hermes-data:
-    driver: local
-  codex-data:
     driver: local
 
 # Note: Docker secrets are NOT declared here.

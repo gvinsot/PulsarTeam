@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     util-linux \
     openssh-client \
     bubblewrap \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Chromium headless environment

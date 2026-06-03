@@ -21,7 +21,7 @@ import { Terminal as XTerminal, type ILink, type ILinkProvider } from '@xterm/xt
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TerminalIcon, ArrowUp, ArrowDown, CornerDownLeft } from 'lucide-react';
+import { Terminal as TerminalIcon, ArrowUp, ArrowDown, CornerDownLeft, RotateCcw } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface TerminalTabProps {
@@ -194,12 +194,41 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // Tracks whether the component is still mounted. Used to suppress retries
   // that would otherwise fire after unmount (e.g. quick tab switches).
   const aliveRef = useRef(true);
+  // Latest connect() impl, published by the WS effect so relaunch() (defined at
+  // component scope) can re-open the socket on demand.
+  const connectRef = useRef<(() => void) | null>(null);
+  // Mirror of `exited` readable from xterm's onData closure without re-running
+  // its (mount-only) effect.
+  const exitedRef = useRef(false);
+
+  const setExitedState = (v: boolean) => {
+    exitedRef.current = v;
+    setExited(v);
+  };
 
   const sendToRunner = (data: string) => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(encoderRef.current.encode(data));
     return true;
+  };
+
+  // The runner reports the tmux session ended (CLI quit/killed). Reconnecting
+  // makes the runner spawn a fresh session, so offer an explicit relaunch
+  // rather than the old dead-end "close and reopen the tab".
+  const relaunch = () => {
+    setExitedState(false);
+    suppressReconnectRef.current = false;
+    reconnectAttemptRef.current = 0;
+    const term = termRef.current;
+    if (term) {
+      term.reset();
+      term.clear();
+    }
+    setTerminalActive(false);
+    try { wsRef.current?.close(); } catch { /* noop */ }
+    wsRef.current = null;
+    connectRef.current?.();
   };
 
   const markTerminalActivity = () => {
@@ -387,8 +416,13 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       }, 150);
     });
 
-    // Keystrokes from the user → bytes to the server.
+    // Keystrokes from the user → bytes to the server. When the session has
+    // ended, any keypress relaunches it (e.g. Enter) instead of being dropped.
     term.onData((data) => {
+      if (exitedRef.current) {
+        relaunch();
+        return;
+      }
       sendToRunner(data);
     });
 
@@ -454,7 +488,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
       suppressReconnectRef.current = false;
-      setExited(false);
+      setExitedState(false);
 
       ws.onopen = () => {
         if (wsRef.current !== ws) return;
@@ -491,19 +525,22 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               t.clear();
               setTerminalActive(false);
             } else if (ctrl?.type === 'exit') {
+              // The CLI/tmux session genuinely ended. Don't auto-loop (a crash
+              // on startup would spin) — latch exited and offer an explicit
+              // relaunch (Relaunch button or any keypress).
               suppressReconnectRef.current = true;
-              setExited(true);
+              setExitedState(true);
               setConnected(false);
               const code = ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
               const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
-              t.writeln(`\r\n\x1b[2m[runner subprocess exited, code=${code}]\x1b[0m`);
+              t.writeln(`\r\n\x1b[2m[runner session ended, code=${code}]\x1b[0m`);
               if (tail) {
                 const lines = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-6);
                 for (const line of lines) {
                   t.writeln(`\x1b[2m${line}\x1b[0m`);
                 }
               }
-              t.writeln('\x1b[2m[close and reopen the terminal tab to start a new session]\x1b[0m');
+              t.writeln('\x1b[2m[press Enter or click Relaunch to start a new session]\x1b[0m');
             } else if (ctrl?.type === 'error') {
               t.writeln(`\r\n\x1b[31m[error: ${ctrl.message || 'unknown'}]\x1b[0m`);
             }
@@ -546,16 +583,20 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       }, delay);
     };
 
+    // Publish connect() so relaunch() (component scope) can re-open on demand.
+    connectRef.current = connect;
+
     connect();
     return () => {
       if (reconnectTimerRef.current !== null) {
         window.clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
       }
+      connectRef.current = null;
       try { wsRef.current?.close(); } catch { /* noop */ }
       wsRef.current = null;
       setConnected(false);
-      setExited(false);
+      setExitedState(false);
     };
   }, [agent.id, token]);
 
@@ -604,8 +645,19 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           >
             <CornerDownLeft className="w-3.5 h-3.5" />
           </button>
+          {exited && (
+            <button
+              type="button"
+              onClick={relaunch}
+              title="Relaunch the CLI session"
+              aria-label="Relaunch session"
+              className="flex items-center gap-1 px-2 h-7 rounded border border-indigo-500/50 bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 transition-colors text-[11px] font-medium"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> Relaunch
+            </button>
+          )}
           <span className="opacity-60 ml-1">
-            {connected ? (terminalActive ? 'active' : 'connected') : exited ? 'exited' : 'reconnecting'} · multi-client
+            {connected ? (terminalActive ? 'active' : 'connected') : exited ? 'ended' : 'reconnecting'} · multi-client
           </span>
         </div>
       </div>
