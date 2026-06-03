@@ -38,7 +38,7 @@ import os
 import json
 from typing import Optional, AsyncIterator
 
-from config import RUNNER_MODEL, logger
+from config import logger
 from .cli_backend import CliBackend
 from .codex_token_store import (
     hydrate_agent_auth,
@@ -75,7 +75,23 @@ from .runner_mcp_config import configure_codex_mcp
 # tokens live in $CODEX_HOME/auth.json instead of ~/.codex/auth.json. We do
 # NOT set it ourselves — per-agent HOME isolation (handled by
 # ensure_agent_user) already gives every agent its own ~/.codex tree.
-DEFAULT_CODEX_MODEL = "gpt-5.5"
+
+
+def _resolve_codex_model(llm_config: Optional[dict]) -> str:
+    """Return the `--model` value codex should run with.
+
+    We deliberately do NOT fall back to RUNNER_MODEL / a hardcoded default:
+    pinning a model (e.g. gpt-5-codex) fights codex's own evolving default and
+    can downgrade the operator's ChatGPT-plan model. Return the per-agent model
+    only when one is explicitly configured; an empty string means "pass no
+    --model flag" so codex uses its built-in default — mirrors the opencode
+    backend's _resolve_opencode_model.
+    """
+    if llm_config:
+        model = (llm_config.get("model") or "").strip()
+        if model:
+            return model
+    return ""
 
 
 class CodexBackend(CliBackend):
@@ -116,9 +132,13 @@ class CodexBackend(CliBackend):
         cwd = project_dir if (project_dir and os.path.isdir(project_dir)) else CLI_CWD
 
         # The interactive CLI is just `codex` — no `exec`, no `--json`, no
-        # positional prompt. The user types into the TUI. We still pass
-        # `--model` so the agent's configured model is used.
-        cmd = [self.cli_command, "--model", RUNNER_MODEL or DEFAULT_CODEX_MODEL]
+        # positional prompt. The user types into the TUI. Pass `--model` ONLY
+        # when the agent has an explicit model; otherwise let codex use its
+        # own default (see _resolve_codex_model).
+        cmd = [self.cli_command]
+        model = _resolve_codex_model(self._get_llm_config(agent_id))
+        if model:
+            cmd += ["--model", model]
 
         # Env: same per-agent env as headless. CODEX_HOME is implicit via
         # the HOME of the dropped UID (see ensure_agent_user).
@@ -299,7 +319,12 @@ class CodexBackend(CliBackend):
         if stream:
             cmd.append("--json")
 
-        cmd += ["--model", RUNNER_MODEL or DEFAULT_CODEX_MODEL]
+        # Pass --model ONLY when the agent explicitly selected one; otherwise
+        # let codex use its own (evolving) default rather than pinning a stale
+        # model. See _resolve_codex_model.
+        model = _resolve_codex_model(self._get_llm_config(agent_id))
+        if model:
+            cmd += ["--model", model]
         # Codex refuses to run outside a git repo unless told otherwise; the
         # per-agent workspace isn't always a repo (e.g. fresh sandbox dir).
         cmd.append("--skip-git-repo-check")

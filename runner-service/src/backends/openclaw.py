@@ -39,8 +39,8 @@ class OpenClawBackend(CliBackend):
     supports_interactive_terminal = True
 
     def _configure_mcp(self, agent_user, agent_id) -> None:
-        # Best-effort: writes mcpServers into ~/.openclaw/config.json. The
-        # format is UNVERIFIED against an installed CLI — see configure_openclaw_mcp.
+        # Writes mcp.servers into ~/.openclaw/openclaw.json (schema verified
+        # against openclaw 2026.5.27) — see configure_openclaw_mcp.
         configure_openclaw_mcp(agent_user, agent_id)
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:

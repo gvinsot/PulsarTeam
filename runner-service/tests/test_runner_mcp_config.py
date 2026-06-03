@@ -64,15 +64,21 @@ def test_to_opencode_mcp_maps_http_to_remote():
     assert out["code-index"]["headers"] == {"Authorization": "Bearer tok"}
 
 
-def test_to_openclaw_keeps_http_shape():
+def test_to_openclaw_uses_streamable_http():
+    # openclaw 2026.5.27: HTTP servers stored as {url, transport, headers}.
     out = to_openclaw_mcp(CANONICAL)
-    assert out["swarm-manager"] == {"type": "http", "url": "http://swarm:8000/ai/mcp"}
+    assert out["swarm-manager"] == {
+        "url": "http://swarm:8000/ai/mcp",
+        "transport": "streamable-http",
+    }
     assert out["code-index"]["headers"] == {"Authorization": "Bearer tok"}
 
 
-def test_to_hermes_uses_transport_http():
+def test_to_hermes_uses_url_only_for_http():
+    # hermes v0.15.0: an entry with `url` (and no transport) is HTTP/StreamableHTTP.
     out = to_hermes_mcp(CANONICAL)
-    assert out["swarm-manager"] == {"transport": "http", "url": "http://swarm:8000/ai/mcp"}
+    assert out["swarm-manager"] == {"url": "http://swarm:8000/ai/mcp"}
+    assert "transport" not in out["swarm-manager"]
     assert out["code-index"]["headers"] == {"Authorization": "Bearer tok"}
 
 
@@ -205,10 +211,7 @@ def test_configure_hermes_writes_yaml_and_counts(tmp_path, monkeypatch):
     n = configure_hermes_mcp(_agent(tmp_path), "a")
     assert n == 2
     data = yaml.safe_load((tmp_path / ".hermes" / "config.yaml").read_text())
-    assert data["mcp_servers"]["swarm-manager"] == {
-        "transport": "http",
-        "url": "http://swarm:8000/ai/mcp",
-    }
+    assert data["mcp_servers"]["swarm-manager"] == {"url": "http://swarm:8000/ai/mcp"}
 
 
 def test_configure_hermes_returns_minus_one_on_failure(tmp_path, monkeypatch):
@@ -227,12 +230,42 @@ def test_hermes_drops_ignore_user_config_when_mcp_present():
 
 # ── openclaw writer ──────────────────────────────────────────────────────────
 
-def test_configure_openclaw_writes_mcpservers(tmp_path, monkeypatch):
+def test_configure_openclaw_nested_servers_preserves_config(tmp_path, monkeypatch):
+    cfg = tmp_path / ".openclaw" / "openclaw.json"
+    cfg.parent.mkdir(parents=True)
+    # Pre-existing openclaw.json with unrelated keys + a user-added MCP server.
+    cfg.write_text(json.dumps({
+        "commands": {"native": "auto"},
+        "mcp": {"servers": {"user-srv": {"command": "npx", "args": ["x"]}}},
+        "meta": {"lastTouchedVersion": "2026.5.27"},
+    }))
     _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
+
     configure_openclaw_mcp(_agent(tmp_path), "a")
-    data = json.loads((tmp_path / ".openclaw" / "config.json").read_text())
-    assert data["mcpServers"]["swarm-manager"] == {
-        "type": "http",
+
+    data = json.loads(cfg.read_text())
+    assert data["commands"] == {"native": "auto"}                  # untouched
+    assert data["meta"]["lastTouchedVersion"] == "2026.5.27"        # untouched
+    assert "__pulsarManagedMcpServers" not in data                 # no pollution
+    srv = data["mcp"]["servers"]
+    assert srv["user-srv"] == {"command": "npx", "args": ["x"]}     # user MCP preserved
+    assert srv["swarm-manager"] == {
         "url": "http://swarm:8000/ai/mcp",
+        "transport": "streamable-http",
     }
-    assert set(data["__pulsarManagedMcpServers"]) == {"swarm-manager", "code-index"}
+    # Managed list tracked in a sidecar, not in openclaw.json.
+    sidecar = json.loads((tmp_path / ".openclaw" / ".pulsar-managed-mcp.json").read_text())
+    assert set(sidecar) == {"swarm-manager", "code-index"}
+
+
+def test_configure_openclaw_idempotent_removes_stale(tmp_path, monkeypatch):
+    agent = _agent(tmp_path)
+    _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
+    configure_openclaw_mcp(agent, "a")
+    # Plugin removed → only swarm-manager remains; code-index must be dropped.
+    _patch_fetch(monkeypatch, {"mcpServers": {"swarm-manager": CANONICAL["swarm-manager"]}})
+    configure_openclaw_mcp(agent, "a")
+
+    srv = json.loads((tmp_path / ".openclaw" / "openclaw.json").read_text())["mcp"]["servers"]
+    assert "code-index" not in srv
+    assert "swarm-manager" in srv

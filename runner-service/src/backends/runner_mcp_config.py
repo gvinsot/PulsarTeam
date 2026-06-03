@@ -299,10 +299,17 @@ def configure_opencode_mcp(agent_user: Optional[dict], agent_id: Optional[str]) 
 
 
 # ── openclaw ──────────────────────────────────────────────────────────────────
-# Best-effort: openclaw's config format is NOT verified against an installed
-# CLI. We assume ~/.openclaw/config.json with a Claude-style `mcpServers` key
-# (openclaw is a Claude-compatible "claw"). VERIFY against the real CLI and
-# adjust the path/key/schema if tools still don't appear.
+# ~/.openclaw/openclaw.json, NESTED under mcp.servers.<name>. Schema VERIFIED
+# against openclaw 2026.5.27 (`openclaw mcp set` normalizes a {type:http,url,
+# headers} input to):
+#
+#     { "mcp": { "servers": { "<name>": {
+#         "url": "...", "transport": "streamable-http", "headers": {...} } } } }
+#
+# openclaw.json carries many other top-level keys (commands, agents, cron, …)
+# and has a `config validate` command, so we MUST NOT pollute it with our own
+# bookkeeping key. The managed-server list is tracked in a sidecar file
+# (.pulsar-managed-mcp.json) instead.
 
 def to_openclaw_mcp(servers: Optional[dict]) -> dict:
     out: dict = {}
@@ -312,7 +319,7 @@ def to_openclaw_mcp(servers: Optional[dict]) -> dict:
         url = cfg.get("url")
         if not url:
             continue
-        entry = {"type": "http", "url": url}
+        entry: dict = {"url": url, "transport": "streamable-http"}
         headers = cfg.get("headers")
         if isinstance(headers, dict) and headers:
             entry["headers"] = dict(headers)
@@ -320,22 +327,76 @@ def to_openclaw_mcp(servers: Optional[dict]) -> dict:
     return out
 
 
+def _read_managed_sidecar(path: str) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [n for n in data if isinstance(n, str)] if isinstance(data, list) else []
+
+
 def configure_openclaw_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> None:
     servers = _fetch_servers_or_none(agent_id)
     if servers is None:
         return
-    _reconcile_json_mcp(
-        agent_user, agent_id,
-        cfg_subpath=(".openclaw", "config.json"),
-        key="mcpServers", block=to_openclaw_mcp(servers), label="OpenClaw MCP",
-    )
+    home, uid, gid = _resolve_home(agent_user, agent_id)
+    if not home:
+        logger.warning(f"[OpenClaw MCP] no HOME for agent {(agent_id or '?')[:12]} — skipping MCP write")
+        return
+    cfg_dir = os.path.join(home, ".openclaw")
+    cfg_path = os.path.join(cfg_dir, "openclaw.json")
+    sidecar = os.path.join(cfg_dir, ".pulsar-managed-mcp.json")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+
+    block = to_openclaw_mcp(servers)
+    mcp = data.get("mcp")
+    if not isinstance(mcp, dict):
+        mcp = {}
+    srv = mcp.get("servers")
+    if not isinstance(srv, dict):
+        srv = {}
+    for name in _read_managed_sidecar(sidecar):
+        srv.pop(name, None)
+    srv.update(block)
+
+    if srv:
+        mcp["servers"] = srv
+        data["mcp"] = mcp
+    else:
+        mcp.pop("servers", None)
+        if mcp:
+            data["mcp"] = mcp
+        else:
+            data.pop("mcp", None)
+
+    try:
+        _atomic_write(cfg_path, cfg_dir, json.dumps(data, indent=2) + "\n", uid, gid)
+        _atomic_write(sidecar, cfg_dir, json.dumps(list(block.keys())) + "\n", uid, gid)
+        logger.info(f"[OpenClaw MCP] configured {len(block)} MCP server(s) for agent {(agent_id or '?')[:12]}")
+    except OSError as e:
+        logger.warning(f"[OpenClaw MCP] failed to write {cfg_path}: {e}")
 
 
 # ── hermes ────────────────────────────────────────────────────────────────────
-# ~/.hermes/config.yaml, key `mcp_servers`. NOTE: the exact hermes MCP schema
-# is not verified against an installed CLI — adjust the key/transport fields if
-# needed. The hermes backend must ALSO drop `--ignore-user-config` when MCP is
-# present (otherwise this file is ignored) — see HermesBackend._configure_mcp.
+# ~/.hermes/config.yaml, key `mcp_servers`. Schema VERIFIED against hermes
+# v0.15.0 (tools/mcp_tool.py docstring + parser):
+#
+#     mcp_servers:
+#       <name>:
+#         url: "https://.../mcp"          # presence of `url` ⇒ HTTP/StreamableHTTP
+#         headers: { Authorization: "Bearer ..." }
+#
+# `transport:` is only read for the literal value "sse"; HTTP/StreamableHTTP is
+# the default for a `url` entry, so we omit it. The hermes backend must ALSO
+# drop `--ignore-user-config` when MCP is present (otherwise this file is
+# ignored) — see HermesBackend._configure_mcp.
 
 def to_hermes_mcp(servers: Optional[dict]) -> dict:
     out: dict = {}
@@ -345,7 +406,7 @@ def to_hermes_mcp(servers: Optional[dict]) -> dict:
         url = cfg.get("url")
         if not url:
             continue
-        entry: dict = {"transport": "http", "url": url}
+        entry: dict = {"url": url}
         headers = cfg.get("headers")
         if isinstance(headers, dict) and headers:
             entry["headers"] = dict(headers)

@@ -312,7 +312,7 @@ services:
       # once to seed /root/.codex/auth.json. Per-agent HOME isolation gives every
       # agent its own copy. Falls back to OPENAI_API_KEY when no OAuth token.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - RUNNER_MODEL=${CODEX_MODEL:-gpt-5-codex}
+      - RUNNER_MODEL=${CODEX_MODEL:-}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
