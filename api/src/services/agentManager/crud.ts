@@ -202,6 +202,10 @@ export const crudMethods = {
           }
           this._switchProjectContext(target, target.project, newProject);
           target.projectChangedAt = newProject ? new Date().toISOString() : null;
+          // Flag the switch as in-progress so the UI can show a dedicated
+          // "switching repository" animation until the new repo is cloned and
+          // the runtime has restarted in the new working directory.
+          target.projectSwitching = true;
           // Re-sync the runner's working copy in the background so the agent
           // is ready to serve the next message. We don't await — cloning can
           // be slow and the HTTP update response shouldn't block on it.
@@ -224,9 +228,24 @@ export const crudMethods = {
                   await this.executionManager.ensureProject(targetIdForSync, null, null, gitCreds);
                   console.log(`🔄 [Project Change] Cleared repo for "${targetNameForSync}"`);
                 }
-                this._emit('agent:updated', this._sanitize(this.agents.get(targetIdForSync)));
+                // The clone is now in place. Restart the live runtime so the
+                // interactive CLI (tmux/PTY) is torn down and respawns with the
+                // NEW repo as its working directory. Without this the agent
+                // keeps running in the previous repo's cwd until it dies.
+                try {
+                  await this.restartRuntime(targetIdForSync);
+                } catch (restartErr: any) {
+                  console.warn(`🔄 [Project Change] restartRuntime failed for "${targetNameForSync}":`, restartErr?.message);
+                }
               } catch (err: any) {
                 console.error(`🔄 [Project Change] Repo sync failed for "${targetNameForSync}":`, err?.message);
+              } finally {
+                const synced = this.agents.get(targetIdForSync);
+                if (synced) {
+                  synced.projectSwitching = false;
+                  try { await saveAgent(synced); } catch { /* best effort */ }
+                  this._emit('agent:updated', this._sanitize(synced));
+                }
               }
             })();
           }

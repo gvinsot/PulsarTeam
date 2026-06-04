@@ -344,6 +344,48 @@ def _ensure_project_parents(projects_base: str, project_dir: str,
         walk = parent
 
 
+def _prune_stale_project_dirs(projects_base: str, keep_dir: str) -> None:
+    """Remove any project working tree under `projects_base` other than the one
+    rooted at `keep_dir`.
+
+    Mirrors the scan in `get_agent_project_dir` (top level + one nested level)
+    so a leftover repo from a previous project assignment is fully removed when
+    the agent switches repos. This prevents the filesystem fallback from later
+    resolving the agent's cwd to the old repo and frees disk."""
+    keep_dir = os.path.normpath(keep_dir)
+    keep_parent = os.path.dirname(keep_dir)
+    try:
+        entries = os.listdir(projects_base)
+    except OSError:
+        return
+    for entry_name in entries:
+        first_level = os.path.join(projects_base, entry_name)
+        if not os.path.isdir(first_level):
+            continue
+        if os.path.isdir(os.path.join(first_level, ".git")):
+            if os.path.normpath(first_level) != keep_dir:
+                shutil.rmtree(first_level, ignore_errors=True)
+            continue
+        # Look one level deeper for `owner/repo` style layouts.
+        try:
+            children = os.listdir(first_level)
+        except OSError:
+            continue
+        removed_any = False
+        for sub in children:
+            sub_dir = os.path.join(first_level, sub)
+            if os.path.isdir(os.path.join(sub_dir, ".git")) and os.path.normpath(sub_dir) != keep_dir:
+                shutil.rmtree(sub_dir, ignore_errors=True)
+                removed_any = True
+        # Drop a now-empty owner dir, but never the parent that holds keep_dir.
+        if removed_any and os.path.normpath(first_level) != keep_parent:
+            try:
+                if not os.listdir(first_level):
+                    os.rmdir(first_level)
+            except OSError:
+                pass
+
+
 _SSH_GIT_RE = re.compile(r"^(?:ssh://)?(?:git@)?([^:/]+)[:/](.+?)(?:\.git)?/?$")
 
 
@@ -690,6 +732,13 @@ async def _ensure_agent_project_locked(
     # would create them under the parent UID with umask 0077 (root:root 0700),
     # leaving the agent UID unable to traverse its own cwd.
     _ensure_project_parents(projects_base, project_dir, agent_uid, agent_gid)
+
+    # Reaching the clone branch means we're (re)materializing `project`. Remove
+    # any *other* project tree left over from a previous assignment so it can't
+    # be picked up by the filesystem fallback in `get_agent_project_dir` (which
+    # scans `projects/` and returns the first `.git` it finds) — otherwise a
+    # repo switch could leave the agent running in the old repo's cwd.
+    _prune_stale_project_dirs(projects_base, project_dir)
 
     if os.path.exists(project_dir):
         shutil.rmtree(project_dir, ignore_errors=True)

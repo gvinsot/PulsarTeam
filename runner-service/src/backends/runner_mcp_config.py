@@ -232,6 +232,20 @@ def _atomic_write(
 ) -> None:
     """Write `text` to `path` atomically and chown it to the agent UID so the
     dropped-privilege CLI process can read it back."""
+    # Capture the ancestor directories we are about to create so we can chown
+    # *each* of them — not just `parent_dir`. os.makedirs creates intermediate
+    # dirs (e.g. `$HOME/.config` on the way to `$HOME/.config/opencode`) owned
+    # by the server process (root). If we only chown the leaf, that root-owned
+    # `.config` is mode 0700 and the agent-UID CLI can't traverse/write it,
+    # so opencode fails with `mkdir .config/opencode EACCES`.
+    created_dirs: list[str] = []
+    probe = parent_dir
+    while probe and not os.path.isdir(probe):
+        created_dirs.append(probe)
+        nxt = os.path.dirname(probe)
+        if nxt == probe:
+            break
+        probe = nxt
     os.makedirs(parent_dir, mode=dir_mode, exist_ok=True)
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -243,7 +257,8 @@ def _atomic_write(
         pass
     if uid is not None:
         eff_gid = gid if gid is not None else uid
-        for p in (parent_dir, path):
+        # Newly created dirs (deepest-first order is fine for chown) + the file.
+        for p in (*created_dirs, path):
             try:
                 os.chown(p, uid, eff_gid)
             except OSError:

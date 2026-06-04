@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import {
   X, MessageSquare, Settings,
-  StopCircle, FolderCode, Activity, Wrench, ArrowLeft, Layers, Shield,
+  StopCircle, FolderCode, Activity, Wrench, ArrowLeft, Layers, Shield, Loader2,
 } from 'lucide-react';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
@@ -132,6 +132,12 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       setProjectSaving(false);
     }
   };
+
+  // The repo switch isn't done when updateAgent returns — the runner still has
+  // to clone the new repo and restart the CLI in the new working directory.
+  // The backend reports that phase via `agent.projectSwitching`, so keep the
+  // waiting animation up until it clears.
+  const switching = projectSaving || agent?.projectSwitching === true;
 
   // Sync history from agent object (pushed via socket) instead of fetching from API.
   // This eliminates the flash between stream end and API response.
@@ -295,7 +301,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
               <select
                 value={currentProject}
                 onChange={(e) => handleProjectChange(e.target.value)}
-                disabled={projectSaving}
+                disabled={switching}
                 className="min-w-0 flex-1 px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
                 title="Working project"
               >
@@ -306,6 +312,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
                   </option>
                 ))}
               </select>
+              {switching && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
             </div>
           </div>
           {/* Desktop: agent icon + name */}
@@ -341,7 +348,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
             <select
               value={currentProject}
               onChange={(e) => handleProjectChange(e.target.value)}
-              disabled={projectSaving}
+              disabled={switching}
               className="px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500 max-w-[160px] disabled:opacity-60"
               title="Working project"
             >
@@ -352,6 +359,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
                 </option>
               ))}
             </select>
+            {switching && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
           </div>
           {agent.status === 'busy' && socket && (
             <button
@@ -391,7 +399,21 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
       </div>
 
       {/* Tab content */}
-      <div className={`flex-1 min-h-0 ${activeTab === 'chat' && isCliRunner ? 'overflow-hidden' : 'overflow-auto'}`}>
+      <div className={`relative flex-1 min-h-0 ${activeTab === 'chat' && isCliRunner ? 'overflow-hidden' : 'overflow-auto'}`}>
+        {switching && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-dark-900/80 backdrop-blur-sm">
+            <div className="relative">
+              <Loader2 className="w-10 h-10 text-indigo-400 animate-spin" />
+              <FolderCode className="w-4 h-4 text-indigo-300 absolute inset-0 m-auto" />
+            </div>
+            <div className="text-center">
+              <p className="text-sm font-medium text-dark-100">Switching repository…</p>
+              <p className="text-xs text-dark-400 mt-1">
+                Cloning <span className="font-mono text-dark-300">{currentProject || 'workspace'}</span> and restarting the agent
+              </p>
+            </div>
+          </div>
+        )}
         {activeTab === 'chat' && (
           isCliRunner ? (
             // CLI runners (claudecode, codex, opencode, openclaw) drive a real

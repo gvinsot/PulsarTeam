@@ -237,6 +237,38 @@ class OpenCodeBackend(CliBackend):
         # Writes the agent's base instructions into ~/.config/opencode/AGENTS.md.
         configure_opencode_instructions(agent_user, agent_id)
 
+    def _ensure_config_dir(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        """Guarantee `$HOME/.config/opencode` exists and is owned by the agent
+        UID before spawning opencode.
+
+        opencode (running as the dropped agent UID) creates this directory on
+        startup. If an earlier step created the intermediate `.config` as root
+        (mode 0700), the agent UID can't traverse/write it and opencode dies
+        with `mkdir .config/opencode EACCES`. Pre-creating the chain and handing
+        it to the agent UID makes the spawn robust regardless of whether any
+        MCP/instructions/provider config was written this round."""
+        home_user = agent_user
+        if (not home_user or not home_user.get("home")) and agent_id:
+            home_user = _agent_users.get(agent_id)
+        home_dir = (home_user or {}).get("home")
+        if not home_dir:
+            return
+        uid = (home_user or {}).get("uid")
+        gid = (home_user or {}).get("gid", uid)
+        config_dir = os.path.join(home_dir, ".config", "opencode")
+        try:
+            os.makedirs(config_dir, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            logger.warning("[OpenCode] could not create %s: %s", config_dir, exc)
+            return
+        if uid is not None:
+            eff_gid = gid if gid is not None else uid
+            for path in (os.path.join(home_dir, ".config"), config_dir):
+                try:
+                    os.chown(path, uid, eff_gid)
+                except OSError:
+                    pass
+
     def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
         # Skip LLM env-var injection (agent_id=None) — all provider config is
         # delivered via the config file written below, not via env vars.
@@ -292,6 +324,7 @@ class OpenCodeBackend(CliBackend):
         """Spawn OpenCode in its interactive TUI for the shared PTY."""
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
+        self._ensure_config_dir(agent_user, agent_id)
         self._configure_mcp(effective_user, agent_id)
         self._configure_instructions(effective_user, agent_id)
 
