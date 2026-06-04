@@ -711,7 +711,7 @@ export class MCPManager {
     return { tools, unavailable };
   }
 
-  getClaudeMcpConfigForAgent(agent, skillManager = null) {
+  getClaudeMcpConfigForAgent(agent, skillManager = null, opts: { forceServerIds?: string[] } = {}) {
     if (!agent) return { mcpServers: {}, serverIds: [] };
 
     const entries = new Map();
@@ -748,6 +748,14 @@ export class MCPManager {
         },
       });
     };
+
+    // Always-on servers forced by the caller (e.g. CLI runners always get the
+    // Swarm API MCP so the agent can signal task completion / inspect the swarm,
+    // regardless of explicit plugin/MCP assignment). Added first so their slug
+    // names are stable and they cannot be dropped by the dedup below.
+    for (const serverId of opts.forceServerIds || []) {
+      addEntry(serverId);
+    }
 
     const pluginManaged = new Set(agent.pluginMcpServers || []);
     const directServerIds = Array.isArray(agent.mcpServersExplicit)

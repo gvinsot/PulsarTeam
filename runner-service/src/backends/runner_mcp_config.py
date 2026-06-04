@@ -14,6 +14,7 @@ import os
 import re
 import time
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import yaml
@@ -26,6 +27,48 @@ _API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
 _API_KEY = read_secret("CODER_API_KEY", default="")
 _PATH = "/api/internal/runner-mcp/agents"
 _MANAGED_KEY = "__pulsarManagedMcpServers"
+
+# team-api mints its internal MCP server URLs relative to its OWN container
+# (http://localhost:<port>/api/...; see mcpManager.resolveInternalMcpConfig).
+# The CLI process we spawn runs in THIS (runner) container, where localhost is
+# not team-api — so those URLs must be rewritten to the runner-facing team-api
+# host (the same base we use to reach the API: SWARM_API_BASE_URL). Without this
+# every internal MCP (Swarm API, Code Index, …) would be unreachable from a CLI
+# runner agent.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _rewrite_internal_url(url: Optional[str]) -> Optional[str]:
+    """Rewrite a team-api internal MCP URL whose host is localhost/127.0.0.1 to
+    the runner-facing team-api host (SWARM_API_BASE_URL). External MCP URLs are
+    returned unchanged."""
+    if not isinstance(url, str) or not url:
+        return url
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if (parts.hostname or "").lower() not in _LOCAL_HOSTS:
+        return url
+    base = urlsplit(_API_BASE)
+    if not base.netloc:
+        return url
+    return urlunsplit(
+        (base.scheme or "http", base.netloc, parts.path, parts.query, parts.fragment)
+    )
+
+
+def _rewrite_internal_mcp_urls(servers: Optional[dict]) -> Optional[dict]:
+    """Return a copy of the canonical server map with localhost MCP URLs
+    rewritten to be reachable from inside the runner container."""
+    if not isinstance(servers, dict):
+        return servers
+    out: dict = {}
+    for name, cfg in servers.items():
+        if isinstance(cfg, dict) and cfg.get("url"):
+            cfg = {**cfg, "url": _rewrite_internal_url(cfg["url"])}
+        out[name] = cfg
+    return out
 
 
 def _fetch_agent_mcp(agent_id: str) -> Optional[dict]:
@@ -46,9 +89,14 @@ def _fetch_agent_mcp(agent_id: str) -> Optional[dict]:
         logger.warning(f"[Runner MCP] api {r.status_code} for agent {agent_id[:12]}: {r.text[:200]}")
         return None
     try:
-        return r.json()
+        data = r.json()
     except ValueError:
         return None
+    # Rewrite localhost internal MCP URLs to the runner-facing team-api host so
+    # the spawned CLI can actually reach them (see _rewrite_internal_url).
+    if isinstance(data, dict) and isinstance(data.get("mcpServers"), dict):
+        data["mcpServers"] = _rewrite_internal_mcp_urls(data["mcpServers"])
+    return data
 
 
 def configure_claude_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> None:

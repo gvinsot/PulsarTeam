@@ -23,6 +23,8 @@ from backends.runner_mcp_config import (  # noqa: E402
     _strip_managed_block,
     _CODEX_MARK_START,
     _CODEX_MARK_END,
+    _rewrite_internal_url,
+    _rewrite_internal_mcp_urls,
     configure_opencode_mcp,
     configure_codex_mcp,
     configure_hermes_mcp,
@@ -98,6 +100,65 @@ def test_translators_handle_none():
     assert to_opencode_mcp(None) == {}
     assert to_hermes_mcp(None) == {}
     assert to_codex_mcp_toml(None) == ""
+
+
+# ── Internal-MCP URL rewrite (localhost → runner-facing team-api) ─────────────
+
+def test_rewrite_internal_url_swaps_localhost_for_api_base(monkeypatch):
+    monkeypatch.setattr(rmc, "_API_BASE", "http://team-api:3001")
+    # localhost / 127.0.0.1 (any port) → team-api host, path/query preserved
+    assert (
+        _rewrite_internal_url("http://localhost:3001/api/swarm-api/mcp")
+        == "http://team-api:3001/api/swarm-api/mcp"
+    )
+    assert (
+        _rewrite_internal_url("http://127.0.0.1:9999/api/code-index/mcp?x=1")
+        == "http://team-api:3001/api/code-index/mcp?x=1"
+    )
+
+
+def test_rewrite_internal_url_leaves_external_untouched(monkeypatch):
+    monkeypatch.setattr(rmc, "_API_BASE", "http://team-api:3001")
+    external = "https://mcp.example.com/sse"
+    assert _rewrite_internal_url(external) == external
+    assert _rewrite_internal_url("") == ""
+    assert _rewrite_internal_url(None) is None
+
+
+def test_rewrite_internal_mcp_urls_maps_only_local(monkeypatch):
+    monkeypatch.setattr(rmc, "_API_BASE", "http://team-api:3001")
+    servers = {
+        "swarm-api": {"type": "http", "url": "http://localhost:3001/api/swarm-api/mcp",
+                      "headers": {"Authorization": "Bearer t"}},
+        "external": {"type": "http", "url": "https://x/mcp"},
+        "no_url": {"type": "http"},
+    }
+    out = _rewrite_internal_mcp_urls(servers)
+    assert out["swarm-api"]["url"] == "http://team-api:3001/api/swarm-api/mcp"
+    # headers and other fields preserved; original dict not mutated
+    assert out["swarm-api"]["headers"] == {"Authorization": "Bearer t"}
+    assert servers["swarm-api"]["url"] == "http://localhost:3001/api/swarm-api/mcp"
+    assert out["external"]["url"] == "https://x/mcp"
+    assert out["no_url"] == {"type": "http"}
+
+
+def test_fetch_agent_mcp_rewrites_localhost(monkeypatch):
+    """_fetch_agent_mcp applies the rewrite to the team-api payload so all
+    downstream writers materialize runner-reachable URLs."""
+    monkeypatch.setattr(rmc, "_API_BASE", "http://team-api:3001")
+    monkeypatch.setattr(rmc, "_API_KEY", "secret")
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"configured": True, "mcpServers": {
+                "swarm-api": {"type": "http", "url": "http://localhost:3001/api/swarm-api/mcp"},
+            }}
+
+    monkeypatch.setattr(rmc.httpx, "get", lambda *a, **k: _Resp())
+    data = rmc._fetch_agent_mcp("agent-1")
+    assert data["mcpServers"]["swarm-api"]["url"] == "http://team-api:3001/api/swarm-api/mcp"
 
 
 # ── Codex TOML rendering ─────────────────────────────────────────────────────

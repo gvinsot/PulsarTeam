@@ -244,6 +244,14 @@ class PtySession:
     _use_tmux: bool = False
     _tmux_session: Optional[str] = None
     _slave_tty: Optional[str] = None
+    # tmux dead-pane handling. With `remain-on-exit on` a CLI that exits leaves
+    # a *dead* pane (its final output preserved on screen) instead of the
+    # session being destroyed — so the attached broker still shows WHY the CLI
+    # died (e.g. opencode printing a provider/auth error) instead of a blank
+    # "[exited]". We poll for the dead pane here and translate it into the
+    # normal exit/relaunch flow once detected.
+    _pane_dead_handled: bool = False
+    _last_pane_check: float = 0.0
 
     def _snapshot_enabled(self) -> bool:
         return self.render_mode == "snapshot" and self._screen is not None and self._screen_stream is not None
@@ -277,6 +285,17 @@ class PtySession:
         if has.returncode == 0:
             logger.info(f"[Terminal] Reattaching existing tmux session {name} for agent {self.agent_id}")
             return
+        # Keep a dead pane around instead of destroying the session the instant
+        # the CLI exits. Without this, a CLI that fails on startup (opencode
+        # printing a provider/auth/model error, then exiting) tears the whole
+        # tmux session down before — or right as — the broker attaches, so the
+        # user only ever sees a blank "[exited]" with no clue why. With
+        # remain-on-exit the CLI's final output stays painted in the dead pane
+        # for the attached client to read; we then detect the dead pane and run
+        # the normal exit/relaunch flow (see _maybe_handle_tmux_exit).
+        # `-g` sets it as a global window option so the session's window
+        # inherits it even if the CLI exits in the same instant it is created.
+        self._tmux_run(["set-option", "-g", "remain-on-exit", "on"])
         create = self._tmux_run(
             ["new-session", "-d", "-s", name,
              "-x", str(self.cols), "-y", str(self.rows), "--", *self.cmd],
@@ -289,9 +308,11 @@ class PtySession:
             )
         # No tmux status bar in the pane (it would steal a row and render its
         # green chrome into the user's terminal), and let the most recently
-        # active client drive the geometry.
+        # active client drive the geometry. remain-on-exit is also set on the
+        # window directly (belt-and-braces with the global option above).
         self._tmux_run(["set-option", "-t", name, "status", "off"])
         self._tmux_run(["set-option", "-t", name, "window-size", "latest"])
+        self._tmux_run(["set-option", "-t", name, "remain-on-exit", "on"])
         logger.info(f"[Terminal] Created tmux session {name} for agent {self.agent_id} (cmd={self.cmd!r})")
 
     async def request_repaint(self) -> None:
@@ -309,6 +330,87 @@ class PtySession:
             await asyncio.get_running_loop().run_in_executor(None, _do)
         except Exception:
             pass
+
+    def _probe_tmux_pane_dead(self) -> Optional[tuple[Optional[int], str]]:
+        """Return `(exit_status, captured_pane_text)` when the CLI inside the
+        tmux session has exited (its pane is dead), else None.
+
+        Relies on `remain-on-exit on` (set in _ensure_tmux_session): a CLI that
+        exits leaves a dead pane whose final on-screen output we capture so the
+        user can read WHY it died. Runs blocking tmux subcommands, so callers
+        must invoke it off the event loop (run_in_executor)."""
+        if not self._use_tmux or not self._tmux_session:
+            return None
+        try:
+            info = self._tmux_run([
+                "list-panes", "-t", self._tmux_session,
+                "-F", "#{pane_dead} #{pane_dead_status}",
+            ])
+        except Exception:
+            return None
+        if info.returncode != 0:
+            # The session is gone entirely (killed externally / server died).
+            # Treat that as an exit too so the broker doesn't hang forever.
+            return (None, "")
+        line = info.stdout.decode("utf-8", "replace").splitlines()
+        if not line:
+            return None
+        first = line[0].strip().split()
+        if not first or first[0] != "1":
+            return None  # pane still alive
+        status: Optional[int] = None
+        if len(first) > 1:
+            try:
+                status = int(first[1])
+            except ValueError:
+                status = None
+        captured = ""
+        try:
+            cap = self._tmux_run([
+                "capture-pane", "-p", "-t", self._tmux_session, "-S", "-",
+            ])
+            if cap.returncode == 0:
+                captured = cap.stdout.decode("utf-8", "replace").rstrip("\n")
+        except Exception:
+            captured = ""
+        return (status, captured)
+
+    async def _maybe_handle_tmux_exit(self) -> None:
+        """Detect a dead tmux pane (CLI exited under remain-on-exit) and drive
+        the normal exit/relaunch flow once, surfacing the captured error."""
+        if not self._use_tmux or self._closed or self._pane_dead_handled:
+            return
+        now = time.monotonic()
+        if now - self._last_pane_check < 1.0:
+            return
+        self._last_pane_check = now
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, self._probe_tmux_pane_dead
+            )
+        except Exception:
+            return
+        if result is None:
+            return
+        self._pane_dead_handled = True
+        status, captured = result
+        self.exit_code = status
+        if captured:
+            # Fold the dead pane's final screen into scrollback so tail_text()
+            # (used for the client's exit notice) reports the real CLI error.
+            self._append_scrollback(captured.encode("utf-8", "replace"))
+        logger.info(
+            f"[Terminal] tmux pane for agent {self.agent_id} is dead "
+            f"(status={status}, cmd={self.cmd!r}); surfacing CLI exit"
+        )
+        clients = list(self._clients.values())
+        self._clients.clear()
+        for client in clients:
+            try:
+                await client.on_output(b"")
+            except Exception:
+                pass
+        await self.close()
 
     async def start(self) -> None:
         """Spawn the CLI in a fresh PTY and start the reader loop.
@@ -693,6 +795,7 @@ class PtySession:
                     await asyncio.wait_for(chunk_event.wait(), timeout=0.2)
                 except asyncio.TimeoutError:
                     self._maybe_auto_answer_startup_prompt()
+                    await self._maybe_handle_tmux_exit()
                     continue
                 chunk_event.clear()
                 while latest_chunk:
@@ -916,6 +1019,10 @@ class PtySession:
             self.proc is not None
             and self.proc.poll() is None
             and not self._closed
+            # Under tmux remain-on-exit the attach client (self.proc) stays up
+            # even after the CLI inside the pane has exited; once we've detected
+            # that dead pane, the session is no longer usable.
+            and not self._pane_dead_handled
         )
 
     def status(self) -> dict:

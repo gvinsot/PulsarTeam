@@ -14,7 +14,13 @@ export function internalRunnerMcpRoutes(agentManager, skillManager, mcpManager) 
       const agent = agentManager.getById(req.params.agentId);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-      const config = mcpManager.getClaudeMcpConfigForAgent(agent, skillManager);
+      // CLI runners always get the Swarm API MCP injected automatically — it
+      // carries task_execution_complete (how a CLI agent signals it is done) and
+      // the swarm-inspection tools — even when no plugin/MCP is explicitly
+      // assigned to the agent.
+      const config = mcpManager.getClaudeMcpConfigForAgent(agent, skillManager, {
+        forceServerIds: ['mcp-swarm-api'],
+      });
       res.json({
         configured: Object.keys(config.mcpServers || {}).length > 0,
         ...config,

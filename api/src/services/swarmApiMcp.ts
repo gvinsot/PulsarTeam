@@ -32,8 +32,15 @@ function normalizeStoragePath(value: any): string | null {
  * - list_boards: List all task boards (and the repos in use on each)
  * - add_task: Add an unassigned task to a board (with optional repo / storage targeting)
  * - update_task: Update an existing task's status, repo, or storage binding
+ * - task_execution_complete: Signal that the calling agent finished its task
+ *
+ * `callerAgentId` is the agent the MCP request is acting on behalf of, resolved
+ * from the `X-Agent-Id` header (set automatically when this MCP is wired into a
+ * CLI runner agent — see mcpManager.getClaudeMcpConfigForAgent). It scopes
+ * task_execution_complete to the right agent; it is null for external (API-key)
+ * callers, where that tool requires an explicit agent_id.
  */
-export function createSwarmApiMcpServer(agentManager) {
+export function createSwarmApiMcpServer(agentManager, callerAgentId: string | null = null) {
   const server = new McpServer({
     name: 'Swarm API',
     version: '1.0.0',
@@ -536,6 +543,55 @@ export function createSwarmApiMcpServer(agentManager) {
     }
   );
 
+  // ── task_execution_complete ──────────────────────────────────────────────
+  // CLI runner agents (claude-code/codex/opencode/openclaw/hermes) invoke MCP
+  // tools rather than emitting the @task_execution_complete text syntax our
+  // chat parser understands, so this is THE way they signal a task is done.
+  // It shares agentManager.applyTaskExecutionComplete with the native tool, so
+  // behaviour (completion signal, summary appended to the task, commit linking)
+  // is identical across both paths.
+  server.tool(
+    'task_execution_complete',
+    'Signal that you have finished executing your currently assigned task. You MUST call this when your work is done — until you do, the system considers the task still in progress and keeps sending reminders. Commit and push your code first.',
+    {
+      comment: z.string().describe('A brief summary of what was accomplished. Appended onto the task so the requester sees it.'),
+      task_id: z.string().optional().describe('Task UUID to mark complete. Optional — auto-detected from your active task when omitted.'),
+      agent_id: z.string().optional().describe('Agent UUID acting. Optional — inferred from the request context for CLI runner agents; only needed for external API-key callers.'),
+      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
+    },
+    async ({ comment, task_id, agent_id, commits }) => {
+      const agentId = (agent_id || callerAgentId || '').trim();
+      if (!agentId) {
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ error: 'No agent context. Provide agent_id (external callers) — CLI runner agents are resolved automatically.' }),
+          }],
+          isError: true,
+        };
+      }
+
+      const outcome = await agentManager.applyTaskExecutionComplete(agentId, {
+        comment: comment || '',
+        explicitTaskId: (task_id || '').trim(),
+        commitsArg: (commits || '').trim(),
+      });
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            success: outcome.success,
+            completed: Boolean(outcome.isTerminal),
+            task_id: outcome.taskId || null,
+            message: outcome.result,
+          }, null, 2),
+        }],
+        ...(outcome.success ? {} : { isError: true }),
+      };
+    }
+  );
+
   return server;
 }
 
@@ -549,8 +605,12 @@ export function createSwarmApiMcpHandler(agentManager) {
       return;
     }
     try {
+      // X-Agent-Id is injected when this MCP is wired into a CLI runner agent
+      // (mcpManager.getClaudeMcpConfigForAgent), scoping task_execution_complete
+      // to the calling agent. Absent for external API-key callers.
+      const callerAgentId = (req.headers['x-agent-id'] as string) || null;
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createSwarmApiMcpServer(agentManager);
+      const server = createSwarmApiMcpServer(agentManager, callerAgentId);
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
@@ -572,6 +632,7 @@ export function createSwarmApiMcpSseHandlers(agentManager) {
 
   const sseHandler = async (req, res) => {
     console.log('[Swarm API MCP] SSE connection established (legacy transport)');
+    const callerAgentId = (req.headers['x-agent-id'] as string) || null;
     const transport = new SSEServerTransport('/api/swarm/mcp/messages', res);
     sessions.set(transport.sessionId, transport);
 
@@ -580,7 +641,7 @@ export function createSwarmApiMcpSseHandlers(agentManager) {
       sessions.delete(transport.sessionId);
     });
 
-    const server = createSwarmApiMcpServer(agentManager);
+    const server = createSwarmApiMcpServer(agentManager, callerAgentId);
     await server.connect(transport);
   };
 
