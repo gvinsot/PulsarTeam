@@ -71,6 +71,23 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
     return 'sandbox';
   };
 
+  // Whether a given LLM config may be paired with a given runner. Claude Code
+  // only drives Anthropic models and Codex only OpenAI models; other runners
+  // accept any provider. An empty llmConfigId ("Default LLM") is always allowed
+  // because the runner falls back to its built-in credentials.
+  const isLlmAllowedForRunner = (llmConfigId, runner) => {
+    if (!llmConfigId) return true;
+    const sel = llmConfigs.find(c => c.id === llmConfigId);
+    const provider = (sel?.provider || '').toLowerCase();
+    if (runner === 'claudecode') {
+      return provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid';
+    }
+    if (runner === 'codex') {
+      return provider === 'openai';
+    }
+    return true;
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -169,7 +186,35 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           />
         </div>
         <div className="col-span-2">
-          <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration</label>
+          <label className="block text-xs text-dark-400 mb-1.5">Runner (execution backend)</label>
+          <select
+            value={form.runner}
+            onChange={(e) => {
+              const nextRunner = e.target.value;
+              updateField('runner', nextRunner);
+              // Some runners only accept models from a single provider (Claude
+              // Code → Anthropic, Codex → OpenAI). If the currently-selected LLM
+              // config no longer matches the new runner, clear it back to the
+              // runner's built-in default so we never submit a mismatched pair.
+              if (!isLlmAllowedForRunner(form.llmConfigId, nextRunner)) {
+                updateField('llmConfigId', '');
+              }
+            }}
+            className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="">Auto (based on LLM config)</option>
+            <option value="sandbox">Pulsar Agent (sandbox)</option>
+            <option value="claudecode">Claude Code Agent</option>
+            <option value="openclaw">OpenClaw Agent</option>
+            <option value="hermes">Hermes Agent</option>
+            <option value="opencode">OpenCode Agent</option>
+            <option value="codex">OpenAI Codex Agent</option>
+          </select>
+          <p className="text-[11px] text-dark-500 mt-1">Choose the container runtime for this agent first, then pick a compatible model below. "Auto" selects based on the LLM configuration.</p>
+        </div>
+
+        <div className="col-span-2">
+          <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration (model)</label>
           {(() => {
             // CLI runners (claudecode, opencode, codex, hermes, openclaw) ship with
             // their own built-in LLM credentials (e.g. Claude Pro/Max plan, ChatGPT
@@ -182,6 +227,11 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             const placeholderLabel = isCliRunner
               ? 'Default LLM (use runner’s built-in model)'
               : '-- Select an LLM config --';
+            // Restrict the model list to providers the selected runner accepts.
+            const modelOptions = (agent.isVoice
+              ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+              : llmConfigs
+            ).filter(c => isLlmAllowedForRunner(c.id, form.runner));
             return (
               <select
                 value={form.llmConfigId}
@@ -189,10 +239,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
               >
                 <option value="">{placeholderLabel}</option>
-                {(agent.isVoice
-                  ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
-                  : llmConfigs
-                ).map(c => (
+                {modelOptions.map(c => (
                   <option key={c.id} value={c.id}>
                     {c.name} ({c.provider}/{c.model})
                   </option>
@@ -200,6 +247,12 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
               </select>
             );
           })()}
+          {form.runner === 'claudecode' && (
+            <p className="text-[11px] text-dark-500 mt-1">Claude Code only accepts Anthropic models (or the runner’s built-in default).</p>
+          )}
+          {form.runner === 'codex' && (
+            <p className="text-[11px] text-dark-500 mt-1">Codex only accepts OpenAI models (or the runner’s built-in default).</p>
+          )}
           {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
             <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
           )}
@@ -218,24 +271,6 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             ) : null;
           })()}
           <p className="text-[11px] text-dark-500 mt-1">LLM configurations are managed in Admin Settings</p>
-        </div>
-
-        <div className="col-span-2">
-          <label className="block text-xs text-dark-400 mb-1.5">Runner (execution backend)</label>
-          <select
-            value={form.runner}
-            onChange={(e) => updateField('runner', e.target.value)}
-            className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="">Auto (based on LLM config)</option>
-            <option value="sandbox">Pulsar Agent (sandbox)</option>
-            <option value="claudecode">Claude Code Agent</option>
-            <option value="openclaw">OpenClaw Agent</option>
-            <option value="hermes">Hermes Agent</option>
-            <option value="opencode">OpenCode Agent</option>
-            <option value="codex">OpenAI Codex Agent</option>
-          </select>
-          <p className="text-[11px] text-dark-500 mt-1">Choose the container runtime for this agent. "Auto" selects based on the LLM configuration.</p>
         </div>
 
         <div>
