@@ -32,6 +32,7 @@ from agent_user import ensure_agent_user
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_hermes_mcp
+from .runner_instructions_config import configure_hermes_instructions
 
 
 HERMES_PROVIDER = os.getenv("HERMES_PROVIDER")  # e.g. "openrouter", "anthropic"
@@ -94,6 +95,11 @@ class HermesBackend(CliBackend):
         if agent_id and n >= 0:
             self._mcp_present[agent_id] = n > 0
 
+    def _configure_instructions(self, agent_user, agent_id) -> None:
+        # Writes the agent's base instructions into ~/.hermes/AGENTS.md
+        # (best-guess path — see configure_hermes_instructions).
+        configure_hermes_instructions(agent_user, agent_id)
+
     def _common_chat_args(self, agent_id: Optional[str], permissions: Optional[dict]) -> list[str]:
         """Build the shared `chat`-mode args used by both interactive and
         one-shot invocations: provider, model, permission flags, isolation.
@@ -131,6 +137,7 @@ class HermesBackend(CliBackend):
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         permissions = self._get_permissions(agent_id)
         self._configure_mcp(effective_user, agent_id)
+        self._configure_instructions(effective_user, agent_id)
 
         cmd = [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
 

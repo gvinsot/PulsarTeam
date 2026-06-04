@@ -35,8 +35,11 @@ from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_opencode_mcp
+from .runner_instructions_config import configure_opencode_instructions
 
 logger = logging.getLogger("runner_service")
+
+_PULSAR_CONFIG_METADATA_KEYS = ("__pulsarManagedMcpServers", "_pulsarMcpUpdatedAt")
 
 
 # Map our internal provider names to the namespace opencode uses in its
@@ -159,7 +162,11 @@ def _merge_opencode_config(
     except (TypeError, json.JSONDecodeError):
         existing = {}
 
-    if clear_model and not managed and "model" not in existing:
+    had_pulsar_metadata = any(key in existing for key in _PULSAR_CONFIG_METADATA_KEYS)
+    for key in _PULSAR_CONFIG_METADATA_KEYS:
+        existing.pop(key, None)
+
+    if clear_model and not managed and "model" not in existing and not had_pulsar_metadata:
         return existing_raw
 
     merged = {**existing}
@@ -226,6 +233,10 @@ class OpenCodeBackend(CliBackend):
         # preserves the `mcp` / managed keys, so model+MCP coexist.
         configure_opencode_mcp(agent_user, agent_id)
 
+    def _configure_instructions(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        # Writes the agent's base instructions into ~/.config/opencode/AGENTS.md.
+        configure_opencode_instructions(agent_user, agent_id)
+
     def _agent_env(self, agent_user: Optional[dict], agent_id: Optional[str] = None) -> dict:
         # Skip LLM env-var injection (agent_id=None) — all provider config is
         # delivered via the config file written below, not via env vars.
@@ -282,6 +293,7 @@ class OpenCodeBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         self._configure_mcp(effective_user, agent_id)
+        self._configure_instructions(effective_user, agent_id)
 
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)

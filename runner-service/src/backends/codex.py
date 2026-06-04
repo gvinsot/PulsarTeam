@@ -69,6 +69,7 @@ from .codex_oauth import (
 )
 from agent_user import ensure_agent_user
 from .runner_mcp_config import configure_codex_mcp
+from .runner_instructions_config import configure_codex_instructions
 
 
 # Codex CLI honors $CODEX_HOME for its auth/state location. When set, the
@@ -107,6 +108,10 @@ class CodexBackend(CliBackend):
         # MCP support in codex is version-dependent — see configure_codex_mcp.
         configure_codex_mcp(agent_user, agent_id)
 
+    def _configure_instructions(self, agent_user, agent_id) -> None:
+        # Writes the agent's base instructions into ~/.codex/AGENTS.md.
+        configure_codex_instructions(agent_user, agent_id)
+
     # ── Interactive terminal recipe ───────────────────────────────────────
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
@@ -123,6 +128,7 @@ class CodexBackend(CliBackend):
         effective_user = self._resolve_effective_user(agent_id, agent_user) \
             if hasattr(self, "_resolve_effective_user") else agent_user
         self._configure_mcp(effective_user, agent_id)
+        self._configure_instructions(effective_user, agent_id)
 
         # cwd: the agent's project workspace when available, else the
         # generic CLI cwd. Same resolution as cli_backend uses.

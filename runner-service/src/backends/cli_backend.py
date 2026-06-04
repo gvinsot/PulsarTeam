@@ -322,6 +322,15 @@ class CliBackend(RunnerBackend):
         the agent's HOME."""
         return
 
+    def _configure_instructions(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        """Materialize the agent's base instructions into this CLI's native
+        global instructions file (CLAUDE.md / AGENTS.md) before a spawn. No-op
+        in the base class; each CLI subclass overrides it with its own writer
+        (see runner_instructions_config.py). Called from the same three spots as
+        _configure_mcp so instruction edits take effect on the next message in
+        BOTH the interactive PTY and headless paths."""
+        return
+
     # ── Sync execution ────────────────────────────────────────────────────
 
     async def run_sync(
@@ -342,6 +351,10 @@ class CliBackend(RunnerBackend):
         # command (some backends, e.g. hermes, branch their argv on whether MCP
         # is present).
         self._configure_mcp(effective_user, agent_id)
+        # Materialize the agent's base instructions into the CLI's native global
+        # instructions file (CLAUDE.md / AGENTS.md) so they're in context even
+        # for backends that don't consume system_prompt in _build_command.
+        self._configure_instructions(effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=False, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)
         logger.info(f"Executing {self.cli_command}: {prompt[:100]}...")
@@ -396,8 +409,9 @@ class CliBackend(RunnerBackend):
         cwd = self._resolve_cwd(agent_id)
         permissions = self._get_permissions(agent_id)
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        # See run_sync: write MCP config before building argv.
+        # See run_sync: write MCP config + base instructions before building argv.
         self._configure_mcp(effective_user, agent_id)
+        self._configure_instructions(effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=True, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)
         logger.info(f"Streaming {self.cli_command}: {prompt[:100]}...")

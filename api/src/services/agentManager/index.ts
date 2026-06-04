@@ -77,6 +77,7 @@ export interface AgentManager {
   sendMessage(id: string, userMessage: string, streamCallback: any, delegationDepth?: number, messageMeta?: any): Promise<any>;
   _cleanMarkdown(response: string): string;
   _buildSystemPrompt(agent: any, id: string, delegationDepth: number): Promise<string>;
+  buildRunnerInstructions(id: string): Promise<string>;
   _assembleMessages(agent: any, messages: any[], systemContent: string, userMessage: string, delegationDepth: number, messageMeta: any, streamCallback: any): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }>;
   _streamAndContinue(agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId?: string | null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }>;
   _processPostResponseActions(agent: any, id: string, responseForParsing: string, fullResponse: string, streamCallback: any, delegationDepth: number, messageMeta: any): Promise<{ earlyReturn?: any }>;

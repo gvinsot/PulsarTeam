@@ -595,6 +595,124 @@ export const chatMethods = {
     return systemContent;
   },
 
+  // Build the agent's base instructions for a CLI runner (claudecode, codex,
+  // opencode, openclaw, hermes). Unlike _buildSystemPrompt — which targets the
+  // in-house chat text-tool protocol — this is a "complet sans protocole chat"
+  // variant: identity, collaboration context, reference docs, plugin
+  // instructions, credentials, relevant tasks and project context, but WITHOUT
+  // the text-protocol surface (@mcp_call / @ask / @read_file… / TOOL_DEFINITIONS
+  // / [TOOL RESULTS] continuation rule). CLI runners use their own native tools
+  // and real MCP, so injecting the @-syntax would be wrong/confusing.
+  //
+  // The runner-service fetches this via /api/internal/runner-instructions and
+  // writes it into each CLI's native global instructions file (CLAUDE.md /
+  // AGENTS.md), so it lands in the agent context in BOTH the interactive PTY
+  // and headless execution paths. Returns '' when there is nothing meaningful
+  // to inject (the runner then skips/clears the file).
+  async buildRunnerInstructions(this: any, id: string): Promise<string> {
+    const agent = this.agents.get(id);
+    if (!agent) return '';
+
+    const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
+    let out = `Your name is "${agent.name}".${agent.role ? ` Your role: ${agent.role}.` : ''}\n\nToday's date is ${todayStr}.\n\n${agent.instructions || 'You are a helpful AI assistant.'}`;
+
+    // Swarm-leader collaboration context — describe the real MCP tools, not the
+    // chat @mcp_call syntax. The Swarm API MCP server is assigned to the agent
+    // separately (mcpManager) so the CLI sees those tools natively.
+    if (agent.isLeader) {
+      const availableAgents = Array.from(this.agents.values())
+        .filter((a: any) => a.id !== id && a.enabled !== false)
+        .map((a: any) => {
+          const statusTag = ` [${a.status}]`;
+          const projectTag = a.project ? ` [project: ${a.project}]` : ' [no project]';
+          const taskInfo = a.currentTask ? ` (working on: "${a.currentTask.slice(0, 60)}${a.currentTask.length > 60 ? '...' : ''}")` : '';
+          return `- ${a.name} (${a.role})${statusTag}${projectTag}${taskInfo}: ${a.description || 'No description'}`;
+        });
+      out += `\n\n--- Swarm Leadership ---\nYou lead a swarm of agents. Use the Swarm API MCP tools (e.g. list_boards, add_task, list_agents, get_agent_status) to assign work and monitor progress. When adding a task, always specify the project so the agent works in the correct directory.`;
+      if (availableAgents.length > 0) {
+        out += `\n\nOther agents currently in the swarm:\n${availableAgents.join('\n')}`;
+      } else {
+        out += `\n\nNo other agents are currently available — complete tasks yourself or ask the user to create specialist agents.`;
+      }
+      try {
+        const projectNames = await this._listAvailableProjects();
+        if (projectNames.length > 0) out += `\n\nAvailable projects: ${projectNames.join(', ')}`;
+      } catch { /* best-effort */ }
+    }
+
+    // Reference documents (RAG). Use the content already on the agent — the
+    // chat path refreshes stale URL docs; here we keep it cheap and accept the
+    // last-fetched content (re-written on the next spawn anyway).
+    if (Array.isArray(agent.ragDocuments) && agent.ragDocuments.length > 0) {
+      out += '\n\n--- Reference Documents ---\n';
+      for (const doc of agent.ragDocuments) {
+        const label = doc.type === 'url' && doc.url ? `${doc.name} (source: ${doc.url})` : doc.name;
+        out += `\n[${label}]:\n${doc.content}\n`;
+      }
+    }
+
+    // Active plugin instructions (the human-readable guidance, not the MCP
+    // tool list which the CLI gets natively).
+    const agentSkills = agent.skills || [];
+    if (agentSkills.length > 0 && this.skillManager) {
+      const resolvedPlugins = agentSkills.map((sid: string) => this.skillManager.getById(sid)).filter(Boolean);
+      if (resolvedPlugins.length > 0) {
+        out += '\n\n--- Active Plugins ---\n';
+        for (const plugin of resolvedPlugins) {
+          out += `\n[${(plugin as any).name}]:\n${(plugin as any).instructions}\n`;
+        }
+      }
+    }
+
+    const agentCredentials = agent.credentials || {};
+    const credentialKeys = Object.keys(agentCredentials);
+    if (credentialKeys.length > 0) {
+      out += '\n\n--- Agent Credentials ---\n';
+      out += 'These credentials are available for use with plugins and external services.\n';
+      for (const key of credentialKeys) {
+        out += `- ${key}: ${agentCredentials[key]}\n`;
+      }
+    }
+
+    // Relevant tasks — recency-ranked (kept light: no embedding pass here).
+    const RECENT_TASKS_LIMIT = 3;
+    const TASK_TEXT_MAX_CHARS = 300;
+    const activeTasks = this._getAgentTasks(id)
+      .filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
+    const rankedTasks = [...activeTasks]
+      .sort((a: any, b: any) => {
+        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
+        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
+        return tb - ta;
+      })
+      .slice(0, RECENT_TASKS_LIMIT);
+    if (rankedTasks.length > 0) {
+      out += `\n\n--- Relevant Tasks (${rankedTasks.length} of ${activeTasks.length}) ---\n`;
+      for (const task of rankedTasks) {
+        const mark = this._isActiveTaskStatus(task.status) ? '~' : '!';
+        const text = String(task.text || '');
+        const truncated = text.length > TASK_TEXT_MAX_CHARS
+          ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…'
+          : text;
+        out += `- [${mark}] (${task.id.slice(0, 8)}) ${truncated}\n`;
+      }
+      const overflow = activeTasks.length - rankedTasks.length;
+      if (overflow > 0) {
+        out += `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — use the Swarm API MCP tools to list them all)\n`;
+      }
+    }
+
+    // Project context — real paths, no @-syntax (the CLI works in a real cwd).
+    if (agent.project) {
+      out += `\n\n--- Project Context ---\nYou are working on project: ${agent.project}\nYour current working directory IS the project root; use ordinary relative paths.`;
+    } else {
+      out += `\n\n--- Project Context ---\nNo specific project is assigned yet.`;
+    }
+    out += `\nIMPORTANT: Your workspace is EPHEMERAL — always commit and push after completing changes to preserve your work.`;
+
+    return out;
+  },
+
   async _assembleMessages(this: any, agent: any, messages: any[], systemContent: string, userMessage: string, delegationDepth: number, messageMeta: any, streamCallback: any, images: any[] | null = null): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }> {
     const earlyLlmConfig = this.resolveLlmConfig(agent);
     const managesContext = earlyLlmConfig.managesContext || false;

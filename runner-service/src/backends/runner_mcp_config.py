@@ -270,6 +270,8 @@ def _reconcile_json_mcp(
 # ── opencode ──────────────────────────────────────────────────────────────────
 # ~/.config/opencode/config.json, key `mcp`. Remote (HTTP) servers use
 # {type:"remote", url, headers, enabled:true}. See opencode.ai/docs config schema.
+_OPENCODE_MANAGED_SIDECAR = ".pulsar-managed-mcp.json"
+_PULSAR_MCP_UPDATED_AT_KEY = "_pulsarMcpUpdatedAt"
 
 def to_opencode_mcp(servers: Optional[dict]) -> dict:
     out: dict = {}
@@ -291,11 +293,50 @@ def configure_opencode_mcp(agent_user: Optional[dict], agent_id: Optional[str]) 
     servers = _fetch_servers_or_none(agent_id)
     if servers is None:
         return
-    _reconcile_json_mcp(
-        agent_user, agent_id,
-        cfg_subpath=(".config", "opencode", "config.json"),
-        key="mcp", block=to_opencode_mcp(servers), label="OpenCode MCP",
-    )
+    home, uid, gid = _resolve_home(agent_user, agent_id)
+    if not home:
+        logger.warning(f"[OpenCode MCP] no HOME for agent {(agent_id or '?')[:12]} — skipping MCP write")
+        return
+    cfg_dir = os.path.join(home, ".config", "opencode")
+    cfg_path = os.path.join(cfg_dir, "config.json")
+    sidecar = os.path.join(cfg_dir, _OPENCODE_MANAGED_SIDECAR)
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        if not isinstance(settings, dict):
+            settings = {}
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+
+    # OpenCode validates config.json with additionalProperties=false. Older
+    # Pulsar builds wrote bookkeeping keys into this file; migrate them into a
+    # sidecar so the config remains valid under OpenCode's strict schema.
+    legacy_managed = settings.pop(_MANAGED_KEY, []) or []
+    settings.pop(_PULSAR_MCP_UPDATED_AT_KEY, None)
+    previous = _read_managed_sidecar(sidecar) or [
+        name for name in legacy_managed if isinstance(name, str)
+    ]
+
+    servers_map = settings.get("mcp")
+    if not isinstance(servers_map, dict):
+        servers_map = {}
+    for name in previous:
+        servers_map.pop(name, None)
+
+    block = to_opencode_mcp(servers)
+    servers_map.update(block)
+
+    if servers_map:
+        settings["mcp"] = servers_map
+    else:
+        settings.pop("mcp", None)
+
+    try:
+        _atomic_write(cfg_path, cfg_dir, json.dumps(settings, indent=2) + "\n", uid, gid)
+        _atomic_write(sidecar, cfg_dir, json.dumps(list(block.keys())) + "\n", uid, gid)
+        logger.info(f"[OpenCode MCP] configured {len(block)} MCP server(s) for agent {(agent_id or '?')[:12]}")
+    except OSError as e:
+        logger.warning(f"[OpenCode MCP] failed to write {cfg_path}: {e}")
 
 
 # ── openclaw ──────────────────────────────────────────────────────────────────
