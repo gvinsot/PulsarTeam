@@ -342,10 +342,12 @@ class OpenCodeBackend(CliBackend):
         )
 
         kwargs = get_subprocess_kwargs(effective_user) or {}
+        env = self._agent_env(effective_user, agent_id)
+        self._verify_model_config(agent_id, model=model, env=env)
         return {
             "cmd": cmd,
             "cwd": self._resolve_cwd(agent_id),
-            "env": self._agent_env(effective_user, agent_id),
+            "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
         }
 

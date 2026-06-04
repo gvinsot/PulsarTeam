@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api';
 
-export default function AddAgentModal({ templates, projects, agents = [], onClose, onCreated }) {
+export default function AddAgentModal({ templates, projects, agents = [], initialBoardId = '', onClose, onCreated }) {
   const [step, setStep] = useState('choose'); // choose | template | custom
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -18,7 +18,7 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     icon: '🤖',
     color: '#6366f1',
     project: '',
-    boardId: '',
+    boardId: initialBoardId || '',
     isLeader: false,
     isVoice: false,
     voice: 'alloy',
@@ -33,9 +33,16 @@ export default function AddAgentModal({ templates, projects, agents = [], onClos
     api.getLlmConfigs().then(setLlmConfigs).catch(() => {});
     api.getBoards().then((b) => {
       setBoards(b);
-      if (b.length === 1) updateField('boardId', b[0].id);
+      const initialBoard = initialBoardId && b.some(board => board.id === initialBoardId)
+        ? initialBoardId
+        : '';
+      if (initialBoard) {
+        updateField('boardId', initialBoard);
+      } else if (b.length === 1) {
+        updateField('boardId', b[0].id);
+      }
     }).catch(() => {});
-  }, []);
+  }, [initialBoardId]);
 
   const filteredTemplates = templates.filter(t =>
     t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||

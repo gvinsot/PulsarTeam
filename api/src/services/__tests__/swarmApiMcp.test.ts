@@ -53,7 +53,7 @@ const { createSwarmApiMcpServer } = await import('../swarmApiMcp.js');
 function makeFakeAgentManager() {
   const agent = { id: 'agent-1', name: 'Builder', project: 'acme/widgets', boardId: 'board-1' };
   const tasks: any[] = [];
-  const calls: any = { addTask: [], setTaskStatus: [], updateTaskRepo: [], updateTaskStorage: [] };
+  const calls: any = { addTask: [], setTaskStatus: [], updateTaskRepo: [], updateTaskStorage: [], applyTaskExecutionComplete: [] };
 
   return {
     agents: new Map([[agent.id, agent]]),
@@ -97,6 +97,15 @@ function makeFakeAgentManager() {
       }
       calls.updateTaskStorage.push({ agentId, taskId, path, provider });
       return t;
+    },
+    async applyTaskExecutionComplete(agentId: string, args: any) {
+      calls.applyTaskExecutionComplete.push({ agentId, args });
+      return {
+        success: true,
+        result: 'Task "Existing" marked as execution complete. Comment: done',
+        isTerminal: true,
+        taskId: 'task-1',
+      };
     },
     _calls: calls,
     _tasks: tasks,
@@ -515,6 +524,52 @@ test('search_tasks rejects unknown agent_name', async () => {
   assert.equal(result.isError, true);
   const body = parseResult(result);
   assert.match(body.error, /Agent not found/);
+});
+
+test('task_execution_complete resolves the caller agent from request context (CLI runner path)', async () => {
+  const am = makeFakeAgentManager();
+  // callerAgentId mirrors the X-Agent-Id header injected for CLI runner agents.
+  const server = createSwarmApiMcpServer(am as any, 'agent-1');
+  const handler = getToolHandler(server, 'task_execution_complete');
+
+  const result = await handler({ comment: 'Implemented auth', commits: 'abc1234:feat: auth' });
+
+  assert.notEqual(result.isError, true);
+  assert.equal(am._calls.applyTaskExecutionComplete.length, 1);
+  const recorded = am._calls.applyTaskExecutionComplete[0];
+  assert.equal(recorded.agentId, 'agent-1');
+  assert.equal(recorded.args.comment, 'Implemented auth');
+  assert.equal(recorded.args.commitsArg, 'abc1234:feat: auth');
+
+  const body = parseResult(result);
+  assert.equal(body.success, true);
+  assert.equal(body.completed, true);
+  assert.equal(body.task_id, 'task-1');
+});
+
+test('task_execution_complete lets an explicit agent_id override the caller context', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any); // no caller context (external API-key path)
+  const handler = getToolHandler(server, 'task_execution_complete');
+
+  const result = await handler({ comment: 'Done', agent_id: 'agent-1', task_id: 'task-1' });
+
+  assert.notEqual(result.isError, true);
+  assert.equal(am._calls.applyTaskExecutionComplete[0].agentId, 'agent-1');
+  assert.equal(am._calls.applyTaskExecutionComplete[0].args.explicitTaskId, 'task-1');
+});
+
+test('task_execution_complete errors when there is no agent context', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any); // no caller, no agent_id arg
+  const handler = getToolHandler(server, 'task_execution_complete');
+
+  const result = await handler({ comment: 'Done' });
+
+  assert.equal(result.isError, true);
+  const body = parseResult(result);
+  assert.match(body.error, /No agent context/);
+  assert.equal(am._calls.applyTaskExecutionComplete.length, 0);
 });
 
 test('list_boards exposes repos in use on each board', async () => {

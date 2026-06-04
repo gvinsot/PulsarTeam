@@ -35,6 +35,27 @@ except ValueError:
     CLI_PREP_DELAY_S = 2.0
 
 
+# Providers that speak the OpenAI-compatible wire protocol and are typically
+# self-hosted / local (vLLM, LM Studio, generic OpenAI-compatible gateways).
+# They authenticate via OPENAI_API_KEY and need an explicit OPENAI_BASE_URL
+# pointing at the local server so the CLI's OpenAI SDK targets it instead of
+# api.openai.com. Centralised here so every CLI backend resolves "local model"
+# wiring the same way.
+OPENAI_COMPATIBLE_LOCAL_PROVIDERS = (
+    "vllm",
+    "lmstudio",
+    "lm-studio",
+    "openai-compatible",
+    "openai_compatible",
+    "local",
+    "custom",
+    "litellm",
+    "tgi",
+    "text-generation-webui",
+)
+
+
+
 class CliBackend(RunnerBackend):
     """Base class for CLI-driven runners.
 
@@ -227,7 +248,9 @@ class CliBackend(RunnerBackend):
                 # these automatically when no auth.json is present.
                 if provider in ("anthropic", "claude", "claude-paid"):
                     env["ANTHROPIC_API_KEY"] = api_key
-                elif provider == "openai":
+                elif provider == "openai" or provider in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
+                    # Local / self-hosted OpenAI-compatible servers (vLLM, LM
+                    # Studio, gateways) authenticate via OPENAI_API_KEY too.
                     env["OPENAI_API_KEY"] = api_key
                 elif provider == "openrouter":
                     env["OPENROUTER_API_KEY"] = api_key
@@ -252,12 +275,29 @@ class CliBackend(RunnerBackend):
                 # Some CLIs (litellm-based, openai-compatible) honor a base URL
                 # override via env. Set the common ones so vLLM / Ollama / proxy
                 # setups work without per-CLI config files.
-                if provider in ("openai", "vllm"):
+                if provider == "openai" or provider in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
                     env["OPENAI_BASE_URL"] = endpoint
+                    # Older OpenAI SDKs read OPENAI_API_BASE instead of _BASE_URL.
+                    env.setdefault("OPENAI_API_BASE", endpoint)
+                    # The OpenAI SDK refuses to start without OPENAI_API_KEY even
+                    # when the local server ignores auth. Inject a harmless
+                    # placeholder so the agent can reach a keyless local model.
+                    if not env.get("OPENAI_API_KEY"):
+                        env["OPENAI_API_KEY"] = "sk-local"
                 elif provider == "anthropic":
                     env["ANTHROPIC_BASE_URL"] = endpoint
                 elif provider == "ollama":
                     env["OLLAMA_HOST"] = endpoint
+                    # Ollama also exposes an OpenAI-compatible API at /v1, which
+                    # several CLIs prefer. Provide it so a local Ollama model is
+                    # reachable regardless of which client path the CLI takes.
+                    base = endpoint.rstrip("/")
+                    if not base.endswith("/v1"):
+                        base = f"{base}/v1"
+                    env.setdefault("OPENAI_BASE_URL", base)
+                    env.setdefault("OPENAI_API_BASE", base)
+                    env.setdefault("OPENAI_API_KEY", "ollama")
+
         # GitHub plugin token: mirror the OAuth token from ~/.git-credentials
         # (installed by /projects/ensure or /credentials/git) into the env so
         # the LLM's tooling (`gh` CLI, octokit-based npm scripts, anything that
@@ -279,6 +319,80 @@ class CliBackend(RunnerBackend):
                     env.setdefault("GH_HOST", host)
                     env.setdefault("GITHUB_API_URL", f"https://{host}/api/v3")
         return env
+
+    def _verify_model_config(
+        self,
+        agent_id: Optional[str],
+        *,
+        model: str,
+        env: Optional[dict] = None,
+    ) -> None:
+        """Log a startup summary of the agent's resolved model wiring and warn
+        on likely misconfiguration.
+
+        Called by CLI backends from `prepare_interactive` so an operator can
+        confirm — at spawn time — that the agent's selected model is actually
+        configured. For local / self-hosted models (a custom endpoint is set)
+        it verifies the endpoint and an API key reached the spawn environment,
+        which is the most common silent failure.
+        """
+        llm = self._get_llm_config(agent_id) or {}
+        provider = (llm.get("provider") or "").lower().strip()
+        endpoint = (llm.get("endpoint") or "").strip()
+        configured_model = (llm.get("model") or "").strip()
+        short = (agent_id or "unknown")[:12]
+        env = env or {}
+
+        is_local = bool(endpoint) or provider in OPENAI_COMPATIBLE_LOCAL_PROVIDERS or provider == "ollama"
+
+        if not llm:
+            logger.info(
+                "[%s] model verify agent=%s: no per-agent LLM config — using runner default",
+                self.name, short,
+            )
+            return
+
+        logger.info(
+            "[%s] model verify agent=%s provider=%s model=%s endpoint=%s local=%s resolved_cli_model=%s",
+            self.name, short, provider or "-", configured_model or "-",
+            endpoint or "-", is_local, model or "<default>",
+        )
+
+        if configured_model and not model:
+            logger.warning(
+                "[%s] agent=%s selected model '%s' did NOT resolve to a CLI model "
+                "argument — the runner may fall back to its built-in default.",
+                self.name, short, configured_model,
+            )
+
+        if is_local:
+            if not endpoint:
+                logger.warning(
+                    "[%s] agent=%s local/openai-compatible provider '%s' has no endpoint "
+                    "configured — the agent cannot reach the local model server.",
+                    self.name, short, provider or "-",
+                )
+            has_base = any(
+                env.get(k) for k in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "OLLAMA_HOST", "ANTHROPIC_BASE_URL")
+            )
+            if endpoint and not has_base:
+                logger.warning(
+                    "[%s] agent=%s endpoint '%s' was not propagated to the spawn env "
+                    "(no *_BASE_URL/OLLAMA_HOST set) — local model calls will hit the "
+                    "default cloud endpoint.",
+                    self.name, short, endpoint,
+                )
+            has_key = any(
+                env.get(k) for k in (
+                    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OLLAMA_API_KEY",
+                )
+            )
+            if not has_key:
+                logger.warning(
+                    "[%s] agent=%s no API key env reached the spawn for the local model — "
+                    "if the server enforces auth, requests will be rejected.",
+                    self.name, short,
+                )
 
     async def _report_usage_for_agent(self, agent_id: Optional[str], result: dict) -> None:
         """Push token usage to team-api so it shows up on the budget screen."""

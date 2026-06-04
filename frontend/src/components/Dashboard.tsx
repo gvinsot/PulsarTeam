@@ -579,6 +579,7 @@ export default function Dashboard({
             templates={templates}
             projects={projects}
             agents={agents}
+            initialBoardId={boardFilter}
             onClose={() => setShowAddModal(false)}
             onCreated={(agent) => {
               setShowAddModal(false);

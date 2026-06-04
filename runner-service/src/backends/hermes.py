@@ -29,7 +29,7 @@ from typing import Optional, Tuple
 
 from config import RUNNER_MODEL, logger
 from agent_user import ensure_agent_user
-from .cli_backend import CliBackend
+from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_hermes_mcp
 from .runner_instructions_config import configure_hermes_instructions
@@ -62,6 +62,14 @@ _PROVIDER_TO_HERMES = {
     "mistral": "auto",
     "groq": "auto",
 }
+
+# Local / self-hosted OpenAI-compatible providers (vLLM, LM Studio, gateways)
+# have no dedicated hermes provider. We route them through "auto" so hermes
+# uses its OpenAI-compatible client driven by the OPENAI_BASE_URL / OPENAI_API_KEY
+# env vars that CliBackend._agent_env now injects for these providers.
+for _p in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
+    _PROVIDER_TO_HERMES.setdefault(_p, "auto")
+
 
 
 def _resolve_hermes_provider_and_model(
@@ -141,11 +149,15 @@ class HermesBackend(CliBackend):
 
         cmd = [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
 
+        env = self._agent_env(effective_user, agent_id)
+        _, model = _resolve_hermes_provider_and_model(self._get_llm_config(agent_id))
+        self._verify_model_config(agent_id, model=model, env=env)
+
         kwargs = get_subprocess_kwargs(effective_user) or {}
         return {
             "cmd": cmd,
             "cwd": self._resolve_cwd(agent_id),
-            "env": self._agent_env(effective_user, agent_id),
+            "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
         }
 
