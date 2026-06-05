@@ -121,6 +121,18 @@ _BYPASS_PERMS_RE = re.compile(
     r"(bypass\s*permissions\s*mode|yes,?\s*i\s*accept)",
     re.IGNORECASE,
 )
+_CODEX_UPDATE_RE = re.compile(
+    r"(update\s+now"
+    r".{0,500}npm\s+install\s+-g\s+@openai/codex"
+    r".{0,500}\bskip\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+_OPENCODE_UPDATE_RE = re.compile(
+    r"(new\s+release\s+v?\d+(?:\.\d+){1,3}"
+    r".{0,500}\bis\s+available\b"
+    r".{0,500}would\s+you\s+like\s+to\s+update\s+now\??)",
+    re.IGNORECASE | re.DOTALL,
+)
 _AUTO_ANSWER_COOLDOWN_S = 1.0
 
 # Auth-failure sentinels the Claude Code (and other) CLIs print when their
@@ -823,12 +835,13 @@ class PtySession:
             logger.debug(f"[Terminal] auto-answer write failed for {self.agent_id}: {e}")
 
     def _maybe_auto_answer_startup_prompt(self, data: bytes = b"") -> None:
-        """Dismiss Claude Code startup confirmations in the shared terminal.
+        """Dismiss known CLI startup confirmations in the shared terminal.
 
         The one-shot PTY driver already handles these screens, but the shared
         /ws terminal intentionally runs as a transparent PTY broker. Without a
-        tiny prompt recognizer here, Claude Code can stop on first-run trust /
-        bypass-permissions confirmations before the user can use the terminal.
+        tiny prompt recognizer here, CLIs can stop on first-run trust /
+        bypass-permissions / update confirmations before the user can use the
+        terminal.
         """
         if data:
             self._auto_answer_buf.extend(data)
@@ -842,6 +855,26 @@ class PtySession:
 
         tail = _strip_ansi(self._auto_answer_buf.decode("utf-8", errors="replace"))[-4096:]
         if not tail.strip():
+            return
+
+        if "codex_update" not in self._auto_answered and _CODEX_UPDATE_RE.search(tail):
+            logger.info(f"[Terminal] Auto-answer codex update prompt for agent {self.agent_id}: 2+Enter")
+            self._write_keystroke(b"2\r")
+            self._auto_answered.add("codex_update")
+            self._last_auto_answer_at = time.monotonic()
+            return
+
+        if "opencode_update" not in self._auto_answered and _OPENCODE_UPDATE_RE.search(tail):
+            logger.info(f"[Terminal] Auto-answer opencode update prompt for agent {self.agent_id}: Left+Enter")
+            self._write_keystroke(b"\x1b[D")
+            self._last_auto_answer_at = time.monotonic()
+
+            async def confirm_after_render_tick() -> None:
+                await asyncio.sleep(0.12)
+                self._write_keystroke(b"\r")
+
+            asyncio.create_task(confirm_after_render_tick())
+            self._auto_answered.add("opencode_update")
             return
 
         if "trust" not in self._auto_answered and _TRUST_RE.search(tail):

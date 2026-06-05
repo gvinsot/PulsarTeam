@@ -1,7 +1,7 @@
 # Runner Service — generic agent runtime.
 #
 # A single image that ships every supported CLI; the active backend is
-# selected at startup via RUNNER_TYPE (claude-code, openclaw, hermes,
+# selected at startup via RUNNER_TYPE (claude-code, codex, openclaw, hermes,
 # opencode, sandbox).
 FROM python:3.12-slim
 
@@ -50,7 +50,20 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN npm install -g @anthropic-ai/claude-code
 
 # OpenCode CLI (https://opencode.ai)
-RUN npm install -g opencode-ai \
+# Resolve npm's latest tag during the image build by default. Set
+# OPENCODE_CLI_VERSION to a concrete version to pin a deployment, and bump
+# OPENCODE_CLI_CACHE_BUST (or build with --no-cache) when rebuilding an
+# unchanged Dockerfile so Docker re-runs this layer and re-checks npm.
+ARG OPENCODE_CLI_VERSION=latest
+ARG OPENCODE_CLI_CACHE_BUST=1
+RUN (echo "OpenCode CLI refresh key: ${OPENCODE_CLI_CACHE_BUST}" \
+     && if [ "${OPENCODE_CLI_VERSION}" = "latest" ]; then \
+          OPENCODE_RESOLVED_VERSION="$(npm view opencode-ai@latest version)" \
+          && echo "Resolved opencode-ai@latest to ${OPENCODE_RESOLVED_VERSION}" \
+          && npm install -g "opencode-ai@${OPENCODE_RESOLVED_VERSION}"; \
+        else \
+          npm install -g "opencode-ai@${OPENCODE_CLI_VERSION}"; \
+        fi) \
     || echo "WARN: opencode-ai install failed — backend will be unavailable"
 
 # OpenAI Codex CLI (https://github.com/openai/codex)
@@ -64,11 +77,20 @@ RUN npm install -g opencode-ai \
 # per-agent UIDs (20000+) the runner drops to before spawning need every
 # parent dir to be world-traversable. Chmod the install tree the same
 # way the hermes line does, then force +x on the vendored binaries.
-# Pinned version: bumping this string forces Docker to re-run the install
-# layer. Without a pin, `latest` is captured at first build and never
-# refreshed because the layer cache hit on the unchanged RUN command.
-ARG CODEX_CLI_VERSION=0.134.0
-RUN (npm install -g @openai/codex@${CODEX_CLI_VERSION} \
+# By default, resolve npm's latest tag during the image build. Set
+# CODEX_CLI_VERSION to a concrete version to pin a deployment, and bump
+# CODEX_CLI_CACHE_BUST (or build with --no-cache) when rebuilding an unchanged
+# Dockerfile so Docker re-runs this layer and re-checks npm.
+ARG CODEX_CLI_VERSION=latest
+ARG CODEX_CLI_CACHE_BUST=1
+RUN (echo "Codex CLI refresh key: ${CODEX_CLI_CACHE_BUST}" \
+     && if [ "${CODEX_CLI_VERSION}" = "latest" ]; then \
+          CODEX_RESOLVED_VERSION="$(npm view @openai/codex@latest version)" \
+          && echo "Resolved @openai/codex@latest to ${CODEX_RESOLVED_VERSION}" \
+          && npm install -g "@openai/codex@${CODEX_RESOLVED_VERSION}"; \
+        else \
+          npm install -g "@openai/codex@${CODEX_CLI_VERSION}"; \
+        fi \
      && chmod -R a+rX /usr/lib/node_modules/@openai \
      && find /usr/lib/node_modules/@openai -type f -path "*/vendor/*" -exec chmod +x {} \; \
     ) || (echo "WARN: @openai/codex install failed — installing stub" \

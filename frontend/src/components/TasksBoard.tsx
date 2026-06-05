@@ -967,7 +967,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           instructions={columnInstructionsMap[editInstructionsCol]}
           agents={agents.filter(a => a.boardId === activeBoardId)}
           onClose={() => setEditInstructionsCol(null)}
-          onSave={async (updatedEntries) => {
+          onSave={async (updatedEntries, newLabel) => {
             if (!workflow) return;
             const updated = JSON.parse(JSON.stringify(workflow));
             for (const entry of updatedEntries) {
@@ -976,6 +976,14 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
                 action.instructions = entry.instructions;
                 if (entry.role !== undefined) action.role = entry.role;
               }
+            }
+            // Persist the (possibly edited) column display name. Only the label
+            // changes — the column id stays stable so existing tasks and
+            // transitions keep referencing the same column.
+            const trimmed = (newLabel || '').trim();
+            if (trimmed) {
+              const col = updated.columns.find(c => c.id === editInstructionsCol);
+              if (col) col.label = trimmed;
             }
             await handleSaveWorkflow(updated);
             setEditInstructionsCol(null);

@@ -254,6 +254,9 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
+        OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-1}
     environment:
       - RUNNER_TYPE=opencode
       - TZ=${TZ:-Europe/Paris}
@@ -305,6 +308,9 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-latest}
+        CODEX_CLI_CACHE_BUST: ${CODEX_CLI_CACHE_BUST:-1}
     environment:
       - RUNNER_TYPE=codex
       - TZ=${TZ:-Europe/Paris}

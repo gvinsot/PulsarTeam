@@ -56,6 +56,46 @@ function ConditionValueWidget({ cond, onChange, agents = [] }) {
   );
 }
 
+// ── Color picker (swatches instead of color names) ───────────────────────────
+
+function ColorPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const current = AVAILABLE_COLORS.find(c => c.hex === value);
+  return (
+    <div className="relative flex-shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="w-5 h-5 rounded border border-dark-500 cursor-pointer hover:ring-2 hover:ring-white/20"
+        style={{ backgroundColor: value }}
+        title={current ? `Color: ${current.label}` : 'Column color'}
+      />
+      {open && (
+        <>
+          {/* click-away catcher */}
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-7 z-20 flex gap-1.5 p-2 bg-dark-700 border border-dark-600 rounded-lg shadow-xl">
+            {AVAILABLE_COLORS.map(c => (
+              <button
+                key={c.hex}
+                type="button"
+                onClick={() => { onChange(c.hex); setOpen(false); }}
+                className={`w-5 h-5 rounded-full transition-transform hover:scale-110 ${
+                  value === c.hex
+                    ? 'ring-2 ring-white ring-offset-1 ring-offset-dark-700'
+                    : 'ring-1 ring-dark-500'
+                }`}
+                style={{ backgroundColor: c.hex }}
+                title={c.label}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── WorkflowEditor ──────────────────────────────────────────────────────────
 
 export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
@@ -207,7 +247,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                 .filter(t => t.from === col.id);
 
               return (
-                <div key={col.id + '-' + idx} className="flex flex-col min-w-[240px] flex-1 relative">
+                <div key={idx} className="flex flex-col min-w-[240px] flex-1 relative">
                   {/* Column header card */}
                   <div className="bg-dark-800 rounded-lg px-3 py-2.5 space-y-2">
                     <div className="flex items-center gap-1">
@@ -221,10 +261,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                         title="Move column right">
                         <ChevronRight className="w-3.5 h-3.5" />
                       </button>
-                      <select value={col.color} onChange={e => updateCol(idx, { color: e.target.value })}
-                        className="w-6 h-5 bg-dark-700 border-0 rounded cursor-pointer text-[10px]" style={{ color: col.color }}>
-                        {AVAILABLE_COLORS.map(c => <option key={c.hex} value={c.hex} style={{ color: c.hex }}>{c.label}</option>)}
-                      </select>
+                      <ColorPicker value={col.color} onChange={hex => updateCol(idx, { color: hex })} />
                       <input value={col.label} onChange={e => updateCol(idx, { label: e.target.value })}
                         className="flex-1 bg-transparent text-sm font-medium text-dark-200 outline-none min-w-0" placeholder="Column name" />
                       <button onClick={() => removeCol(idx)} className="p-0.5 text-dark-500 hover:text-red-400" title="Remove column">

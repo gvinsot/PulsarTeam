@@ -3,6 +3,7 @@ import { X, Edit3, User, Loader2, Save } from 'lucide-react';
 
 export default function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onSave }) {
   const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
+  const [label, setLabel] = useState(columnLabel || '');
   const [saving, setSaving] = useState(false);
 
   const roles = useMemo(() => [...new Set((agents || []).filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
@@ -12,7 +13,7 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
   const handleSave = async () => {
     setSaving(true);
     try {
-      await onSave(items);
+      await onSave(items, label);
     } finally {
       setSaving(false);
     }
@@ -24,7 +25,14 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
         <div className="flex items-center justify-between px-5 py-4 border-b border-dark-700">
           <div className="flex items-center gap-2">
             <Edit3 className="w-4 h-4 text-indigo-400" />
-            <span className="text-sm font-semibold text-dark-100">Instructions — {columnLabel}</span>
+            <span className="text-sm font-semibold text-dark-100">Instructions —</span>
+            <input
+              value={label}
+              onChange={e => setLabel(e.target.value)}
+              placeholder="Column name"
+              title="Column name"
+              className="text-sm font-semibold text-dark-100 bg-dark-800 border border-dark-700 rounded px-2 py-1 outline-none focus:border-indigo-500 transition-colors"
+            />
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors">
             <X className="w-4 h-4" />

@@ -6,11 +6,26 @@ const STATUS_STYLES = {
   error: { dot: 'bg-red-500', label: 'Error', textColor: 'text-red-400' },
 };
 
+// Friendly names for the execution runners. Used when an agent has no explicit
+// LLM config and therefore runs on the runner's built-in default model — in
+// that case provider/model are empty/stale, so we show the runner name instead.
+const RUNNER_LABELS = {
+  sandbox: 'Pulsar Agent',
+  claudecode: 'Claude Code',
+  openclaw: 'OpenClaw',
+  hermes: 'Hermes',
+  opencode: 'OpenCode',
+  codex: 'OpenAI Codex',
+};
+
 export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop, emphasizedBorder = false }) {
   const effectiveStatus = thinking ? 'busy' : agent.status;
   const status = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.idle;
   const truncatedThinking = thinking ? thinking.slice(-120) + (thinking.length > 120 ? '' : '') : null;
   const disabled = agent.enabled === false;
+  // No explicit LLM config → the agent uses the runner's built-in default model.
+  const runnerLabel = RUNNER_LABELS[agent.runner];
+  const usesRunnerDefaultLlm = !agent.llmConfigId && !!runnerLabel;
 
   if (viewMode === 'list') {
     return (
@@ -31,7 +46,9 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             {agent.isLeader && <Crown className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" title="Leader" />}
             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${status.dot}`} />
           </div>
-          <p className="text-xs text-dark-400 truncate">{agent.role} · {agent.provider}/{agent.model}</p>
+          <p className="text-xs text-dark-400 truncate">
+            {agent.role} · {usesRunnerDefaultLlm ? `${runnerLabel} · default model` : `${agent.provider}/${agent.model}`}
+          </p>
           {agent.project && (
             <p className="text-xs text-indigo-400 truncate flex items-center gap-1">
               <FolderOpen className="w-3 h-3" />
@@ -115,14 +132,28 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
 
         {/* Provider info */}
         <div className="flex items-center gap-2 mb-3 text-xs">
-          <span className={`px-2 py-0.5 rounded-full ${
-            agent.provider === 'claude'
-              ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
-              : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
-          }`}>
-            {agent.provider}
-          </span>
-          <span className="text-dark-400 truncate font-mono text-[11px]">{agent.model}</span>
+          {usesRunnerDefaultLlm ? (
+            <>
+              <span
+                className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 truncate"
+                title="Using the runner's built-in default model"
+              >
+                {runnerLabel}
+              </span>
+              <span className="text-dark-400 truncate text-[11px]">default model</span>
+            </>
+          ) : (
+            <>
+              <span className={`px-2 py-0.5 rounded-full ${
+                agent.provider === 'claude'
+                  ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
+                  : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+              }`}>
+                {agent.provider}
+              </span>
+              <span className="text-dark-400 truncate font-mono text-[11px]">{agent.model}</span>
+            </>
+          )}
           {agent.project && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 truncate">
               <FolderOpen className="w-3 h-3 flex-shrink-0" />
