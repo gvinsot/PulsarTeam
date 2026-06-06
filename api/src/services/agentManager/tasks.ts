@@ -5,7 +5,7 @@ import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '..
 import { isActiveStatus, getWorkflowManagedStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 
-const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes']);
+const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
 
 function isCliRunner(agent: any): boolean {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
@@ -1252,7 +1252,7 @@ export const tasksMethods = {
       // "went idle" retry, then the full reminder loop — causing an infinite loop.
       // Fix: auto-signal task completion when these runners exit, unless the
       // task was already completed (e.g. opencode somehow did call the tool).
-      const SELF_COMPLETING_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex']);
+      const SELF_COMPLETING_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex', 'aider']);
       if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
         if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
           console.log(`✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`);

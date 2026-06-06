@@ -36,6 +36,7 @@ from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_opencode_mcp
 from .runner_instructions_config import configure_opencode_instructions
+from .runner_local_models import fetch_local_models
 
 logger = logging.getLogger("runner_service")
 
@@ -146,6 +147,39 @@ def _opencode_provider_config(llm_config: Optional[dict], model_spec: str) -> Op
             provider_id: block,
         },
     }
+
+
+def _inject_local_models(managed: Optional[dict], selected_spec: str) -> Optional[dict]:
+    """Add the operator's local vLLM/Ollama models to the opencode provider
+    config so they're selectable in the TUI alongside the agent's default.
+
+    `managed` is the provider block built for the agent's Settings-selected
+    model (or None for "Default LLM"). We extend its `provider` map with one
+    entry per local model. The selected model stays the default
+    (`managed["model"]`); when nothing is selected we still inject the locals
+    but pin no default. Best-effort: a fetch failure returns `managed` untouched.
+    """
+    local = fetch_local_models()
+    if not local:
+        return managed
+    base = managed if isinstance(managed, dict) else {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {},
+    }
+    providers = base.setdefault("provider", {})
+    for m in local:
+        spec = _resolve_opencode_model(m)
+        block = _opencode_provider_config(m, spec)
+        if not block:
+            continue
+        for pid, pblock in (block.get("provider") or {}).items():
+            prev = providers.get(pid) if isinstance(providers.get(pid), dict) else {}
+            prev_models = prev.get("models") if isinstance(prev.get("models"), dict) else {}
+            new_models = pblock.get("models") if isinstance(pblock.get("models"), dict) else {}
+            merged_block = {**prev, **pblock}
+            merged_block["models"] = {**prev_models, **new_models}
+            providers[pid] = merged_block
+    return base
 
 
 def _merge_opencode_config(
@@ -276,6 +310,10 @@ class OpenCodeBackend(CliBackend):
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
         managed = _opencode_provider_config(llm_config, model)
+        # Inject the operator's local vLLM/Ollama models as extra providers so
+        # they're switchable in the opencode TUI; the Settings-selected model
+        # (if any) stays the default.
+        managed = _inject_local_models(managed, model)
         # Always resolve the agent's HOME from the cache, even when running as
         # root (effective_user=None from linuxUser.runAsRoot). Without this the
         # provider config file is never written and opencode receives only

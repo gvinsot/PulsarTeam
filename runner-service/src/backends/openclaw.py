@@ -18,6 +18,13 @@ Real CLI surface:
 Note: prompt is passed via --message, not stdin.
 The --local flag is recommended when running inside a container without
 the OpenClaw gateway.
+
+Local-model injection: OpenClaw's surface has no --model flag and carries the
+model through a single env var (see _model_env), so — unlike opencode — there
+is no in-terminal switch across multiple local vLLM/Ollama models. The
+Settings-selected local model is the default and its endpoint/key are injected
+by _agent_env; multi-model config injection (see runner_local_models + opencode)
+does not apply to this CLI.
 """
 
 import os

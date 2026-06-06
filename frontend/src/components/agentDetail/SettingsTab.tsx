@@ -3,6 +3,11 @@ import { Save, Trash2, RotateCw, Power } from 'lucide-react';
 import { api } from '../../api';
 import CodexAuthSection from './CodexAuthSection';
 
+// Runners that pick their model inside the terminal (Claude Code plan / Codex
+// plan), not from Settings. The LLM selector is hidden for them and any
+// per-agent llmConfigId is cleared.
+const MODEL_IN_TERMINAL_RUNNERS = new Set(['claudecode', 'codex']);
+
 export default function SettingsTab({ agent, projects, currentProject, onRefresh, userRole, currentUser }) {
   const [form, setForm] = useState({
     name: agent.name,
@@ -98,6 +103,11 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
       payload.boardId = payload.boardId || null;
       // "Auto" resolves to a concrete runner so the backend (which rejects null/empty) accepts it.
       payload.runner = payload.runner || resolveAutoRunner(payload.llmConfigId);
+      // Claude Code / Codex choose their model in the terminal — never persist a
+      // per-agent LLM config for them, even if one lingered from a prior runner.
+      if (MODEL_IN_TERMINAL_RUNNERS.has(payload.runner)) {
+        payload.llmConfigId = null;
+      }
       await api.updateAgent(agent.id, payload);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -192,11 +202,10 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             onChange={(e) => {
               const nextRunner = e.target.value;
               updateField('runner', nextRunner);
-              // Some runners only accept models from a single provider (Claude
-              // Code → Anthropic, Codex → OpenAI). If the currently-selected LLM
-              // config no longer matches the new runner, clear it back to the
-              // runner's built-in default so we never submit a mismatched pair.
-              if (!isLlmAllowedForRunner(form.llmConfigId, nextRunner)) {
+              // Claude Code / Codex pick their model in the terminal, so clear
+              // any per-agent LLM config when switching to them. Other runners
+              // only clear on a provider mismatch (kept for safety).
+              if (MODEL_IN_TERMINAL_RUNNERS.has(nextRunner) || !isLlmAllowedForRunner(form.llmConfigId, nextRunner)) {
                 updateField('llmConfigId', '');
               }
             }}
@@ -208,70 +217,78 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             <option value="openclaw">OpenClaw Agent</option>
             <option value="hermes">Hermes Agent</option>
             <option value="opencode">OpenCode Agent</option>
+            <option value="aider">Aider Agent</option>
             <option value="codex">OpenAI Codex Agent</option>
           </select>
           <p className="text-[11px] text-dark-500 mt-1">Choose the container runtime for this agent first, then pick a compatible model below. "Auto" selects based on the LLM configuration.</p>
         </div>
 
-        <div className="col-span-2">
-          <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration (model)</label>
-          {(() => {
-            // CLI runners (claudecode, opencode, codex, hermes, openclaw) ship with
-            // their own built-in LLM credentials (e.g. Claude Pro/Max plan, ChatGPT
-            // plan, or the operator's auth). When the user picks one of those
-            // runners, "Default LLM" is a valid choice: the runner uses its own
-            // LLM and no per-agent llmConfig is required.
-            const CLI_RUNNERS = new Set(['claudecode', 'opencode', 'codex', 'hermes', 'openclaw']);
-            const effectiveRunner = form.runner || resolveAutoRunner(form.llmConfigId);
-            const isCliRunner = CLI_RUNNERS.has(effectiveRunner);
-            const placeholderLabel = isCliRunner
-              ? 'Default LLM (use runner’s built-in model)'
-              : '-- Select an LLM config --';
-            // Restrict the model list to providers the selected runner accepts.
-            const modelOptions = (agent.isVoice
-              ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
-              : llmConfigs
-            ).filter(c => isLlmAllowedForRunner(c.id, form.runner));
-            return (
-              <select
-                value={form.llmConfigId}
-                onChange={(e) => updateField('llmConfigId', e.target.value)}
-                className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-              >
-                <option value="">{placeholderLabel}</option>
-                {modelOptions.map(c => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} ({c.provider}/{c.model})
-                  </option>
-                ))}
-              </select>
-            );
-          })()}
-          {form.runner === 'claudecode' && (
-            <p className="text-[11px] text-dark-500 mt-1">Claude Code only accepts Anthropic models (or the runner’s built-in default).</p>
-          )}
-          {form.runner === 'codex' && (
-            <p className="text-[11px] text-dark-500 mt-1">Codex only accepts OpenAI models (or the runner’s built-in default).</p>
-          )}
-          {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
-            <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
-          )}
-          {form.llmConfigId && (() => {
-            const sel = llmConfigs.find(c => c.id === form.llmConfigId);
-            return sel ? (
-              <div className="mt-2 p-2.5 bg-dark-700/50 rounded-lg border border-dark-600/50 text-xs text-dark-400 space-y-0.5">
-                <p><span className="text-dark-300">Provider:</span> {sel.provider}</p>
-                <p><span className="text-dark-300">Model:</span> <span className="font-mono">{sel.model}</span></p>
-                {sel.endpoint && <p><span className="text-dark-300">Endpoint:</span> <span className="font-mono">{sel.endpoint}</span></p>}
-                {sel.isReasoning && <p><span className="text-dark-300">Reasoning:</span> Yes</p>}
-                {sel.contextSize && <p><span className="text-dark-300">Context:</span> {(sel.contextSize / 1000).toFixed(0)}k tokens</p>}
-                {sel.maxOutputTokens && <p><span className="text-dark-300">Max Output:</span> {(sel.maxOutputTokens / 1000).toFixed(0)}k tokens</p>}
-                {sel.temperature != null && <p><span className="text-dark-300">Temperature:</span> {sel.temperature}</p>}
-              </div>
-            ) : null;
-          })()}
-          <p className="text-[11px] text-dark-500 mt-1">LLM configurations are managed in Admin Settings</p>
-        </div>
+        {MODEL_IN_TERMINAL_RUNNERS.has(form.runner) ? (
+          <div className="col-span-2">
+            <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration (model)</label>
+            <div className="px-3 py-2.5 bg-dark-700/40 rounded-lg border border-dark-600/50 text-xs text-dark-400">
+              {form.runner === 'claudecode'
+                ? 'Claude Code chooses its model directly in the terminal (via its plan / OAuth login). No model is selected here.'
+                : 'Codex chooses its model directly in the terminal (via its ChatGPT plan login). No model is selected here.'}
+            </div>
+          </div>
+        ) : (
+          <div className="col-span-2">
+            <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration (model)</label>
+            {(() => {
+              // For the multi-provider CLI runners (opencode, openclaw, hermes,
+              // aider) and sandbox/Auto, any configured LLM is selectable. The
+              // chosen one is the default; for opencode the local vLLM/Ollama
+              // models are also injected into the runner config so they can be
+              // switched inside the terminal (see runner-service).
+              const CLI_RUNNERS = new Set(['opencode', 'hermes', 'openclaw', 'aider']);
+              const effectiveRunner = form.runner || resolveAutoRunner(form.llmConfigId);
+              const isCliRunner = CLI_RUNNERS.has(effectiveRunner);
+              const placeholderLabel = isCliRunner
+                ? 'Default LLM (use runner’s built-in model)'
+                : '-- Select an LLM config --';
+              const modelOptions = (agent.isVoice
+                ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+                : llmConfigs
+              ).filter(c => isLlmAllowedForRunner(c.id, form.runner));
+              return (
+                <select
+                  value={form.llmConfigId}
+                  onChange={(e) => updateField('llmConfigId', e.target.value)}
+                  className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">{placeholderLabel}</option>
+                  {modelOptions.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.provider}/{c.model})
+                    </option>
+                  ))}
+                </select>
+              );
+            })()}
+            {['opencode', 'hermes', 'openclaw', 'aider'].includes(form.runner) && (
+              <p className="text-[11px] text-dark-500 mt-1">Local vLLM/Ollama models are also injected into the runner; OpenCode lets you switch between them in the terminal. Your selection here is the default.</p>
+            )}
+            {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
+              <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
+            )}
+            {form.llmConfigId && (() => {
+              const sel = llmConfigs.find(c => c.id === form.llmConfigId);
+              return sel ? (
+                <div className="mt-2 p-2.5 bg-dark-700/50 rounded-lg border border-dark-600/50 text-xs text-dark-400 space-y-0.5">
+                  <p><span className="text-dark-300">Provider:</span> {sel.provider}</p>
+                  <p><span className="text-dark-300">Model:</span> <span className="font-mono">{sel.model}</span></p>
+                  {sel.endpoint && <p><span className="text-dark-300">Endpoint:</span> <span className="font-mono">{sel.endpoint}</span></p>}
+                  {sel.isReasoning && <p><span className="text-dark-300">Reasoning:</span> Yes</p>}
+                  {sel.contextSize && <p><span className="text-dark-300">Context:</span> {(sel.contextSize / 1000).toFixed(0)}k tokens</p>}
+                  {sel.maxOutputTokens && <p><span className="text-dark-300">Max Output:</span> {(sel.maxOutputTokens / 1000).toFixed(0)}k tokens</p>}
+                  {sel.temperature != null && <p><span className="text-dark-300">Temperature:</span> {sel.temperature}</p>}
+                </div>
+              ) : null;
+            })()}
+            <p className="text-[11px] text-dark-500 mt-1">LLM configurations are managed in Admin Settings</p>
+          </div>
+        )}
 
         <div>
           <label className="block text-xs text-dark-400 mb-1.5">Color</label>

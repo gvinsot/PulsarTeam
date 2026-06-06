@@ -243,14 +243,16 @@ def _owner_headers() -> dict:
     return {"X-Api-Key": _API_KEY, "Content-Type": "application/json"}
 
 
-def _fetch_owner_record(owner_id: str) -> Optional[dict]:
+def _fetch_owner_record(owner_id: str, force: bool = False) -> Optional[dict]:
     """Fetch `{accessToken, refreshToken, expiresAt}` from the api or None on 404.
 
     Uses a 30s in-process cache to avoid round-trips during a single exec.
+    Pass `force=True` to bypass that cache — used by credential seeding to
+    survive a stale cache / transient team-api hiccup during a restart window.
     Network/server errors return None so callers fall back to the login flow.
     """
     cached = _owner_token_cache.get(owner_id)
-    if cached and time.time() - cached["fetched_at"] < _OWNER_TOKEN_CACHE_TTL:
+    if not force and cached and time.time() - cached["fetched_at"] < _OWNER_TOKEN_CACHE_TTL:
         return cached["record"]
     url = f"{_API_BASE}{_OWNER_TOKEN_PATH}/{owner_id}"
     try:
@@ -551,6 +553,12 @@ def seed_credentials_file(agent_user: dict) -> bool:
     expires_at = 0
     if owner_id:
         record = _fetch_owner_record(owner_id)
+        if not (record and record.get("accessToken")):
+            # A stale 30s cache or a transient team-api hiccup during the
+            # restart window can hide a token that actually exists in the DB.
+            # Force one uncached retry before falling back / failing — this is
+            # the difference between a clean restart and a spurious 401.
+            record = _fetch_owner_record(owner_id, force=True)
         if record:
             access_token = record.get("accessToken")
             refresh_token = record.get("refreshToken") or ""
@@ -560,7 +568,15 @@ def seed_credentials_file(agent_user: dict) -> bool:
         if access_token:
             refresh_token = get_agent_refresh_token(agent_user) or refresh_token
     if not access_token:
-        logger.warning(f"[Agent Auth] No token available to seed credentials for {agent_user.get('username')}")
+        # Loud, not silent: this is exactly the state that makes the CLI start
+        # unauthenticated and report "Please run /login" / 401 after a restart.
+        logger.error(
+            "[Agent Auth] No OAuth token to seed credentials for %s (owner_id=%s) — "
+            "the Claude Code CLI will start UNAUTHENTICATED and report 401 / "
+            "'Please run /login'. No persisted token in team-api and no local "
+            "agent token found.",
+            agent_user.get("username"), owner_id or "none",
+        )
         return False
     if not expires_at:
         # Unknown expiry — use 8 h from now (matches the default elsewhere).

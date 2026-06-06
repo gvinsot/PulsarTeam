@@ -20,7 +20,7 @@ import PluginsTab from './agentDetail/PluginsTab';
 // CLI runners that get a real TUI in a shared PTY instead of the chat
 // surface. The terminal is the canonical interactive interface for these —
 // the chat would just relay a flaky approximation of the real CLI output.
-const CLI_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes']);
+const CLI_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
 import ContextTab from './agentDetail/ContextTab';
 import ActionLogsTab from './agentDetail/ActionLogsTab';
 import SettingsTab from './agentDetail/SettingsTab';

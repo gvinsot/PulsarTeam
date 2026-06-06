@@ -21,6 +21,17 @@ import yaml
 from swarm_secrets import read as read_secret
 
 from config import logger
+from .runner_local_models import fetch_local_models
+
+# Opt-in: write the operator's local (vLLM/Ollama) models into hermes'
+# ~/.hermes/config.yaml so they can be switched inside the TUI. OFF by default
+# because the hermes `providers:` schema below is NOT verified against a hermes
+# release (only `mcp_servers` is — see the comment above to_hermes_mcp). The
+# agent's Settings-selected model already works as the default via the
+# --provider/--model flags + env injection, independent of this. Verify the
+# schema against the deployed hermes build, then set HERMES_INJECT_LOCAL_PROVIDERS=true.
+_HERMES_INJECT_LOCAL = os.getenv("HERMES_INJECT_LOCAL_PROVIDERS", "false").lower() in ("1", "true", "yes")
+_HERMES_MANAGED_PROVIDERS_KEY = "__pulsarManagedProviders"
 
 
 _API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
@@ -560,6 +571,79 @@ def configure_hermes_mcp(agent_user: Optional[dict], agent_id: Optional[str]) ->
         logger.info(f"[Hermes MCP] configured {len(block)} MCP server(s) for agent {(agent_id or '?')[:12]}")
     except OSError as e:
         logger.warning(f"[Hermes MCP] failed to write {cfg_path}: {e}")
+        return -1
+    return len(block)
+
+
+def _to_hermes_local_providers(models: list) -> dict:
+    """Best-effort hermes `providers` map for local vLLM/Ollama models.
+
+    SCHEMA UNVERIFIED — this mirrors a conventional OpenAI-compatible provider
+    block; adjust to match the deployed hermes build before enabling
+    HERMES_INJECT_LOCAL_PROVIDERS. Keyed by a stable, collision-resistant name.
+    """
+    out: dict = {}
+    for m in models or []:
+        provider = (m.get("provider") or "").strip().lower()
+        model = (m.get("model") or "").strip()
+        if not provider or not model:
+            continue
+        endpoint = (m.get("endpoint") or "").strip().rstrip("/")
+        if endpoint and not endpoint.endswith("/v1"):
+            endpoint = f"{endpoint}/v1"
+        name = f"{provider}-{model}".replace("/", "-")
+        entry: dict = {"type": "openai", "models": [model]}
+        if endpoint:
+            entry["base_url"] = endpoint
+        entry["api_key"] = (m.get("apiKey") or "").strip() or "local"
+        out[name] = entry
+    return out
+
+
+def configure_hermes_local_providers(agent_user: Optional[dict], agent_id: Optional[str]) -> int:
+    """Inject the operator's local models into ~/.hermes/config.yaml (opt-in).
+
+    No-op unless HERMES_INJECT_LOCAL_PROVIDERS is set. Returns the number of
+    providers written, or -1 on skip/failure. Tracked via a managed key so a
+    stale set is replaced on the next spawn. Never raises.
+    """
+    if not _HERMES_INJECT_LOCAL:
+        return -1
+    models = fetch_local_models()
+    home, uid, gid = _resolve_home(agent_user, agent_id)
+    if not home:
+        return -1
+    cfg_dir = os.path.join(home, ".hermes")
+    cfg_path = os.path.join(cfg_dir, "config.yaml")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, yaml.YAMLError):
+        data = {}
+
+    block = _to_hermes_local_providers(models)
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+    for name in (data.get(_HERMES_MANAGED_PROVIDERS_KEY) or []):
+        if isinstance(name, str):
+            providers.pop(name, None)
+    providers.update(block)
+
+    if providers:
+        data["providers"] = providers
+    else:
+        data.pop("providers", None)
+    data[_HERMES_MANAGED_PROVIDERS_KEY] = list(block.keys())
+
+    text = yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+    try:
+        _atomic_write(cfg_path, cfg_dir, text, uid, gid)
+        logger.info(f"[Hermes LLM] injected {len(block)} local provider(s) for agent {(agent_id or '?')[:12]}")
+    except OSError as e:
+        logger.warning(f"[Hermes LLM] failed to write {cfg_path}: {e}")
         return -1
     return len(block)
 

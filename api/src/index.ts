@@ -221,7 +221,7 @@ app.use('/api/tasks', authenticateToken, taskRoutes);
 // Internal: runners read/write Claude OAuth tokens via shared CODER_API_KEY.
 app.use('/api/internal/claude-tokens', authenticateCoderApiKey, internalClaudeTokenRoutes());
 app.use('/api/internal/codex-tokens', authenticateCoderApiKey, internalCodexTokenRoutes());
-app.use('/api/internal/runner-llm', authenticateCoderApiKey, internalRunnerLlmRoutes());
+app.use('/api/internal/runner-llm', authenticateCoderApiKey, internalRunnerLlmRoutes(agentManager));
 app.use('/api/internal/runner-mcp', authenticateCoderApiKey, internalRunnerMcpRoutes(agentManager, skillManager, mcpManager));
 app.use('/api/internal/runner-instructions', authenticateCoderApiKey, internalRunnerInstructionsRoutes(agentManager));
 app.use('/api/internal/token-usage', authenticateCoderApiKey, internalTokenUsageRoutes(agentManager));

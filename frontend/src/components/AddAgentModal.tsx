@@ -463,6 +463,7 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                     <option value="openclaw">OpenClaw Agent</option>
                     <option value="hermes">Hermes Agent</option>
                     <option value="opencode">OpenCode Agent</option>
+                    <option value="aider">Aider Agent</option>
                     <option value="codex">OpenAI Codex Agent</option>
                   </select>
                   <p className="text-[11px] text-dark-500 mt-1">Default is OpenCode. "Auto" picks a runner from the LLM provider.</p>
@@ -472,7 +473,7 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                   {(() => {
                     // CLI runners ship with their own LLM, so "Default LLM" is a valid choice
                     // (the runner uses its built-in model). Sandbox requires an explicit config.
-                    const CLI_RUNNERS = new Set(['claudecode', 'opencode', 'codex', 'hermes', 'openclaw']);
+                    const CLI_RUNNERS = new Set(['claudecode', 'opencode', 'codex', 'hermes', 'openclaw', 'aider']);
                     const isCliRunner = CLI_RUNNERS.has(form.runner);
                     const placeholder = isCliRunner
                       ? 'Default LLM (use runner’s built-in model)'

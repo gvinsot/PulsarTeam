@@ -31,7 +31,7 @@ from config import RUNNER_MODEL, logger
 from agent_user import ensure_agent_user
 from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
 from .claude_token_store import get_subprocess_kwargs
-from .runner_mcp_config import configure_hermes_mcp
+from .runner_mcp_config import configure_hermes_mcp, configure_hermes_local_providers
 from .runner_instructions_config import configure_hermes_instructions
 
 
@@ -102,6 +102,10 @@ class HermesBackend(CliBackend):
         n = configure_hermes_mcp(agent_user, agent_id)
         if agent_id and n >= 0:
             self._mcp_present[agent_id] = n > 0
+        # Opt-in (HERMES_INJECT_LOCAL_PROVIDERS): make the operator's local
+        # vLLM/Ollama models switchable inside the TUI. No-op by default; the
+        # Settings-selected model is still the default via --provider/--model.
+        configure_hermes_local_providers(agent_user, agent_id)
 
     def _configure_instructions(self, agent_user, agent_id) -> None:
         # Writes the agent's base instructions into ~/.hermes/AGENTS.md

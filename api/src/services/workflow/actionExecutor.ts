@@ -16,7 +16,7 @@ import { saveTaskToDb, updateTaskExecutionStatus } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 
-const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes']);
+const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
 
 function isCliRunner(agent) {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());

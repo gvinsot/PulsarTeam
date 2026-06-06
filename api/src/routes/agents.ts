@@ -81,7 +81,7 @@ const createAgentSchema = z.object({
     })).optional(),
   }).optional(),
   // 'coder' is a deprecated alias for 'claudecode' (kept for backward compat with stored agents)
-  runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'codex']).optional(),
+  runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'aider', 'codex']).optional(),
   // Batch creation: when batchSize > 1, the server creates that many agents
   // sharing the same configuration and a common batchId. Names are auto
   // suffixed `#1`, `#2`, … so each agent stays uniquely identifiable.

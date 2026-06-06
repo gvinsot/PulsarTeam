@@ -12,12 +12,12 @@ import { readSecret } from '../../secrets.js';
 
 // Canonical provider types. 'coder' is accepted as a deprecated alias for
 // 'claudecode' (existing agents in the DB may still have runner='coder').
-type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode' | 'codex';
+type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode' | 'aider' | 'codex';
 type ProviderTypeInput = ProviderType | 'coder';
 
 function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null): ProviderType {
   if (t === 'coder') return 'claudecode';
-  if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode' || t === 'codex') return t;
+  if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode' || t === 'aider' || t === 'codex') return t;
   return 'sandbox';
 }
 
@@ -32,6 +32,7 @@ interface ExecutionManagerOptions {
   openclawOptions?: RunnerOpts;
   hermesOptions?: RunnerOpts;
   opencodeOptions?: RunnerOpts;
+  aiderOptions?: RunnerOpts;
   codexOptions?: RunnerOpts;
 }
 
@@ -48,6 +49,7 @@ const DEFAULT_URLS: Record<ProviderType, string> = {
   openclaw: 'http://openclaw-service:8000',
   hermes: 'http://hermes-service:8000',
   opencode: 'http://opencode-service:8000',
+  aider: 'http://aider-service:8000',
   codex: 'http://codex-service:8000',
 };
 
@@ -57,6 +59,7 @@ const URL_ENV_VARS: Record<ProviderType, string> = {
   openclaw: 'OPENCLAW_SERVICE_URL',
   hermes: 'HERMES_SERVICE_URL',
   opencode: 'OPENCODE_SERVICE_URL',
+  aider: 'AIDER_SERVICE_URL',
   codex: 'CODEX_SERVICE_URL',
 };
 
@@ -66,6 +69,7 @@ export class ExecutionManager {
   openclaw: RunnerExecutionProvider;
   hermes: RunnerExecutionProvider;
   opencode: RunnerExecutionProvider;
+  aider: RunnerExecutionProvider;
   codex: RunnerExecutionProvider;
   _resolveProvider: (agentId: string) => ProviderTypeInput;
   _agentProviders: Map<string, ProviderType>;
@@ -86,6 +90,7 @@ export class ExecutionManager {
     this.openclaw = make('openclaw', options.openclawOptions);
     this.hermes = make('hermes', options.hermesOptions);
     this.opencode = make('opencode', options.opencodeOptions);
+    this.aider = make('aider', options.aiderOptions);
     this.codex = make('codex', options.codexOptions);
 
     this._resolveProvider = options.resolveProvider || (() => 'sandbox');
@@ -115,6 +120,7 @@ export class ExecutionManager {
       case 'openclaw': return this.openclaw;
       case 'hermes': return this.hermes;
       case 'opencode': return this.opencode;
+      case 'aider': return this.aider;
       case 'codex': return this.codex;
       default: return this.sandbox;
     }
@@ -206,6 +212,7 @@ export class ExecutionManager {
       this.openclaw.destroyAll(),
       this.hermes.destroyAll(),
       this.opencode.destroyAll(),
+      this.aider.destroyAll(),
       this.codex.destroyAll(),
     ]);
     this._agentProviders.clear();
@@ -229,6 +236,7 @@ export class ExecutionManager {
       this.claudecode,
       this.codex,
       this.opencode,
+      this.aider,
       this.openclaw,
       this.hermes,
     ];

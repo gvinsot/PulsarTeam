@@ -158,3 +158,10 @@ def configure_openclaw_instructions(agent_user: Optional[dict], agent_id: Option
     # introspecting the runner image and adjust if openclaw reads a different
     # file or an instructions key in ~/.openclaw/openclaw.json.
     _write_instructions(agent_user, agent_id, (".openclaw", "AGENTS.md"), "OpenClaw Instructions")
+
+
+def configure_aider_instructions(agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+    # aider has no auto-loaded global instructions file; we write a managed
+    # AGENTS.md under ~/.aider and pass it to the CLI as a read-only context
+    # file via --read (see backends/aider.py).
+    _write_instructions(agent_user, agent_id, (".aider", "AGENTS.md"), "Aider Instructions")

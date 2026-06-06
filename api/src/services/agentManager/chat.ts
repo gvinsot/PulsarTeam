@@ -907,7 +907,7 @@ export const chatMethods = {
     // the CLI is the one talking to the LLM with the user-selected
     // provider/model/apiKey forwarded via X-LLM-Config. Falls back to the
     // direct provider when no CLI runner is set.
-    const CLI_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex', 'claudecode']);
+    const CLI_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex', 'claudecode', 'aider']);
     const useCliRunner = agent.runner && CLI_RUNNERS.has(agent.runner);
     const provider = createProvider({
       provider: useCliRunner ? agent.runner : llmConfig.provider,

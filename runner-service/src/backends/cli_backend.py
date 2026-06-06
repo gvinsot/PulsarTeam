@@ -20,6 +20,7 @@ from config import (
 from agent_user import get_agent_project_dir, ensure_agent_user
 from .base import RunnerBackend
 from .claude_token_store import get_subprocess_kwargs
+from .runner_llm_config import fetch_agent_llm_config
 from usage_reporter import report_usage
 
 
@@ -176,7 +177,21 @@ class CliBackend(RunnerBackend):
             self._llm_configs.pop(agent_id, None)
 
     def _get_llm_config(self, agent_id: Optional[str]) -> Optional[dict]:
-        return self._llm_configs.get(agent_id) if agent_id else None
+        if not agent_id:
+            return None
+        cfg = self._llm_configs.get(agent_id)
+        if cfg is not None:
+            return cfg
+        # Cache miss: the in-memory config set from the X-LLM-Config header was
+        # wiped by a runner restart, or this session spawned before any header
+        # arrived (e.g. a tmux terminal reattach). Re-hydrate from team-api so
+        # the agent's selected model survives restarts instead of silently
+        # falling back to RUNNER_MODEL. A later header still wins, since
+        # set_agent_llm_config overwrites this entry.
+        hydrated = fetch_agent_llm_config(agent_id)
+        if hydrated:
+            self._llm_configs[agent_id] = hydrated
+        return hydrated
 
     def _resolve_effective_user(
         self, agent_id: Optional[str], agent_user: Optional[dict],

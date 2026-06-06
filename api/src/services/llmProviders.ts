@@ -1101,6 +1101,16 @@ export function createProvider(config: any): any {
         config.permissions || null,
         config.llmConfig || null,
       );
+    case 'aider':
+      return new VLLMProvider(
+        process.env.AIDER_SERVICE_URL || 'http://aider-service:8000',
+        config.model,
+        readSecret('CODER_API_KEY'),
+        config.agentId || null,
+        config.ownerId || null,
+        config.permissions || null,
+        config.llmConfig || null,
+      );
     case 'openclaw':
       return new VLLMProvider(
         process.env.OPENCLAW_SERVICE_URL || 'http://openclaw-service:8000',

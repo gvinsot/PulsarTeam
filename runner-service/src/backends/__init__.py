@@ -24,6 +24,9 @@ def make_backend() -> RunnerBackend:
     if RUNNER_TYPE == "opencode":
         from .opencode import OpenCodeBackend
         return OpenCodeBackend()
+    if RUNNER_TYPE == "aider":
+        from .aider import AiderBackend
+        return AiderBackend()
     if RUNNER_TYPE == "codex":
         from .codex import CodexBackend
         return CodexBackend()

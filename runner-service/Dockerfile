@@ -2,7 +2,7 @@
 #
 # A single image that ships every supported CLI; the active backend is
 # selected at startup via RUNNER_TYPE (claude-code, codex, openclaw, hermes,
-# opencode, sandbox).
+# opencode, aider, sandbox).
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -126,6 +126,29 @@ RUN curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/
 # Make sure hermes is on PATH (installer may put it under ~/.hermes/bin)
 ENV PATH="/root/.hermes/bin:/usr/local/bin:${PATH}"
 
+# Aider CLI (https://aider.chat)
+# Installed in its own virtualenv so aider's (large) dependency tree never
+# conflicts with the runner-service venv. The launcher is symlinked onto PATH
+# and the tree is made world-readable so the per-agent UIDs (20000+) the runner
+# drops to can exec it. By default we resolve the latest release at build time;
+# set AIDER_CLI_VERSION to pin a deployment and bump AIDER_CLI_CACHE_BUST (or
+# build with --no-cache) to force this layer to re-run on an unchanged Dockerfile.
+ARG AIDER_CLI_VERSION=latest
+ARG AIDER_CLI_CACHE_BUST=1
+RUN (echo "Aider CLI refresh key: ${AIDER_CLI_CACHE_BUST}" \
+     && python3.12 -m venv /opt/aider \
+     && /opt/aider/bin/pip install --no-cache-dir --upgrade pip \
+     && if [ "${AIDER_CLI_VERSION}" = "latest" ]; then \
+          /opt/aider/bin/pip install --no-cache-dir aider-chat; \
+        else \
+          /opt/aider/bin/pip install --no-cache-dir "aider-chat==${AIDER_CLI_VERSION}"; \
+        fi \
+     && ln -sf /opt/aider/bin/aider /usr/local/bin/aider \
+     && chmod -R a+rX /opt/aider) \
+    || (echo "WARN: aider-chat install failed — installing stub" \
+        && printf '#!/bin/sh\necho "aider-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/aider \
+        && chmod +x /usr/local/bin/aider)
+
 # Install Go (dev tool inside agent workspaces)
 RUN curl -fsSL https://go.dev/dl/go1.24.1.linux-$(dpkg --print-architecture).tar.gz | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:/root/go/bin:$PATH"
@@ -164,6 +187,7 @@ RUN echo "=== Python ===" && python --version && \
     echo "=== Codex ===" && (codex --version 2>&1 || echo "not installed") && \
     echo "=== OpenClaw ===" && openclaw --version && \
     echo "=== Hermes ===" && hermes --version && \
+    echo "=== Aider ===" && (aider --version 2>&1 || echo "not installed") && \
     echo "=== Git ===" && git --version && \
     echo "=== Docker ===" && docker --version && \
     echo "=== Chromium ===" && chromium --version && \

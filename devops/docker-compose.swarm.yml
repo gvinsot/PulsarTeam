@@ -43,6 +43,7 @@ services:
       - OPENCLAW_SERVICE_URL=http://openclaw-service:8000
       - HERMES_SERVICE_URL=http://hermes-service:8000
       - OPENCODE_SERVICE_URL=http://opencode-service:8000
+      - AIDER_SERVICE_URL=http://aider-service:8000
       - CODEX_SERVICE_URL=http://codex-service:8000
       - MCP_ENDPOINT=http://swarm-manager:8000/ai/mcp
       - MCP_ACTIONS_ENDPOINT=http://swarm-manager:8000/ai/actions/mcp
@@ -461,6 +462,81 @@ services:
       retries: 3
       start_period: 120s
 
+  aider-service:
+    image: registry.methodinfo.fr/aider-service:latest
+    build:
+      context: ..
+      dockerfile: runner-service/Dockerfile
+      args:
+        AIDER_CLI_VERSION: ${AIDER_CLI_VERSION:-latest}
+        AIDER_CLI_CACHE_BUST: ${AIDER_CLI_CACHE_BUST:-1}
+    networks:
+      backend:
+        aliases:
+          - aider-service
+    environment:
+      - RUNNER_TYPE=aider
+      - TZ=Europe/Paris
+      - LOG_LEVEL=info
+      - RUNNER_MODEL=${AIDER_MODEL:-}
+      - TIMEOUT=600
+      - PORT=8000
+      - HOST=0.0.0.0
+      - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
+      - RUNNER_ENV=production
+      # Fallback provider keys — the per-agent LLM config forwarded via
+      # X-LLM-Config takes precedence; aider (litellm) reads these when an agent
+      # has no explicit config.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      - PUID=${CODER_PUID:-1000}
+      - PGID=${CODER_PGID:-1000}
+      - SWARM_API_BASE_URL=http://team-api:3001
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
+      - PYTHONUNBUFFERED=1
+    # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == none
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        order: start-first
+        delay: 10s
+        failure_action: rollback
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
   codex-service:
     image: registry.methodinfo.fr/codex-service:latest
     build:
@@ -548,7 +624,7 @@ services:
       - RUNNER_TYPE=hermes
       - TZ=Europe/Paris
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-6}
+      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-8}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0

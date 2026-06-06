@@ -33,12 +33,13 @@ import { buildRepoCloneUrl } from '../services/repoUrl.js';
 
 // Only these runners get a terminal — the others are LLM-providers or
 // non-CLI runtimes for which the chat UI is the correct interface.
-const TERMINAL_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes']);
+const TERMINAL_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'aider', 'openclaw', 'hermes']);
 
 const RUNNER_URLS: Record<string, string> = {
   claudecode: process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
   codex: process.env.CODEX_SERVICE_URL || 'http://codex-service:8000',
   opencode: process.env.OPENCODE_SERVICE_URL || 'http://opencode-service:8000',
+  aider: process.env.AIDER_SERVICE_URL || 'http://aider-service:8000',
   openclaw: process.env.OPENCLAW_SERVICE_URL || 'http://openclaw-service:8000',
   hermes: process.env.HERMES_SERVICE_URL || 'http://hermes-service:8000',
 };
