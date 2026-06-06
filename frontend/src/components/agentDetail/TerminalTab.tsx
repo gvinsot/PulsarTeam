@@ -179,6 +179,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
   const [terminalActive, setTerminalActive] = useState(false);
+  // Free-text input used to paste/type into the PTY. On mobile the soft keyboard
+  // drives xterm poorly (it's why the ↑↓⏎ buttons exist), and pasting a long
+  // value like the Claude Code /login authorization code into the terminal is
+  // effectively impossible — this field is the reliable path for both.
+  const [inputValue, setInputValue] = useState('');
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -252,6 +257,20 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     termRef.current?.focus();
   };
 
+  // Send the free-text input field to the PTY followed by Enter. This is the
+  // reliable way to paste the Claude Code /login authorization code (and to
+  // type at all) on mobile, where the soft keyboard drives xterm unreliably.
+  const sendInput = () => {
+    const value = inputValue;
+    if (!value) return;
+    if (exitedRef.current) {
+      relaunch();
+      return;
+    }
+    if (!sendToRunner(`${value}\r`)) return;
+    setInputValue('');
+  };
+
   const fitTerminalNow = () => {
     // Skip fit when the container is collapsed (typically mid-animation while
     // the mobile virtual keyboard opens/closes). FitAddon would otherwise
@@ -277,7 +296,13 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     }
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
 
-    const cols = Math.max(MIN_COLS, dims.cols);
+    // The MIN_COLS floor keeps a narrow *desktop* panel legible by letting the
+    // container scroll. On a real phone, though, forcing 80 cols makes the grid
+    // ~670px wide on a ~360px screen — the TUI overflows, only a cut-off slice
+    // is visible, and it reads as "broken". When the visible area is too small
+    // to hold the floor, fit to the actual width instead (the TUI reflows).
+    const narrow = el.clientWidth < 640;
+    const cols = narrow ? dims.cols : Math.max(MIN_COLS, dims.cols);
     const rows = Math.max(MIN_ROWS, dims.rows);
     if (cols !== term.cols || rows !== term.rows) {
       try {
@@ -323,10 +348,15 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     aliveRef.current = true;
     if (!containerRef.current) return;
 
+    // Smaller font on phones so more columns fit the narrow width (a 14px grid
+    // only fits ~40 cols at 360px; 12px fits ~50), reducing how much a wide TUI
+    // overflows. Paired with the responsive cols floor in fitTerminalNow.
+    const isMobileViewport = typeof window !== 'undefined'
+      && window.matchMedia('(max-width: 640px)').matches;
     const term = new XTerminal({
       cursorBlink: true,
       fontFamily: '"Cascadia Code", "SFMono-Regular", "Segoe UI Mono", Menlo, Consolas, monospace',
-      fontSize: 14,
+      fontSize: isMobileViewport ? 12 : 14,
       lineHeight: 1.35,
       letterSpacing: 0,
       // Raw PTY passthrough for all CLI runners now (claudecode included) —
@@ -661,6 +691,35 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           </span>
         </div>
       </div>
+      {/* Paste/type bar — the dependable input path on mobile (soft keyboards
+          drive xterm poorly) and the only practical way to enter the Claude
+          Code /login authorization code. Sends the text followed by Enter. */}
+      <form
+        onSubmit={(e) => { e.preventDefault(); sendInput(); }}
+        className={`flex items-center gap-2 px-3 py-1.5 border-b ${headerClass}`}
+      >
+        <input
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          placeholder="Type or paste, then Send (e.g. the /login code)…"
+          autoCapitalize="off"
+          autoCorrect="off"
+          autoComplete="off"
+          spellCheck={false}
+          inputMode="text"
+          className="flex-1 min-w-0 px-2 py-1 rounded border border-dark-700/60 bg-dark-800/60 text-xs text-dark-100 placeholder:text-dark-500 focus:outline-none focus:border-indigo-500"
+        />
+        <button
+          type="submit"
+          disabled={!connected || !inputValue}
+          title="Send the text above to the terminal, followed by Enter"
+          aria-label="Send input to terminal"
+          className="px-2.5 h-7 rounded border border-indigo-500/50 bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 transition-colors text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+        >
+          Send
+        </button>
+      </form>
       <div
         ref={containerRef}
         // overflow-auto lets the container show scrollbars whenever the
