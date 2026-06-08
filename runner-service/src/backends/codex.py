@@ -142,6 +142,9 @@ class CodexBackend(CliBackend):
         # when the agent has an explicit model; otherwise let codex use its
         # own default (see _resolve_codex_model).
         cmd = [self.cli_command]
+        exec_perms = (self._get_permissions(agent_id) or {}).get("execution", {}) if agent_id else {}
+        if exec_perms.get("dangerousSkipPermissions", True):
+            cmd.append("--dangerously-bypass-approvals-and-sandbox")
         model = _resolve_codex_model(self._get_llm_config(agent_id))
         if model:
             cmd += ["--model", model]

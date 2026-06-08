@@ -308,13 +308,29 @@ def test_configure_hermes_returns_minus_one_on_failure(tmp_path, monkeypatch):
     assert configure_hermes_mcp(_agent(tmp_path), "a") == -1
 
 
-def test_hermes_drops_ignore_user_config_when_mcp_present():
+def test_hermes_never_passes_ignore_user_config():
+    """~/.hermes/{config.yaml,.env} is now authoritative (restored from team-api
+    = what the user set up in the terminal), so we must never tell hermes to
+    ignore it — that flag was what caused the 'no providers found' setup loop."""
     from backends.hermes import HermesBackend
 
     b = HermesBackend()
-    assert "--ignore-user-config" in b._common_chat_args("a", None)
+    assert "--ignore-user-config" not in b._common_chat_args("a", None)
     b._mcp_present["a"] = True
     assert "--ignore-user-config" not in b._common_chat_args("a", None)
+
+
+def test_hermes_no_llm_config_emits_no_model_flag():
+    """Fix: never force the RUNNER_MODEL fallback (e.g. claude-opus-4-8) onto the
+    CLI when no per-agent model is selected — sending it to a vLLM endpoint just
+    fails. With no llm_config, emit no --provider/--model and let the restored
+    ~/.hermes config decide."""
+    from backends.hermes import HermesBackend, _resolve_hermes_provider_and_model
+
+    assert _resolve_hermes_provider_and_model(None) == ("", "")
+    args = HermesBackend()._common_chat_args("a", None)
+    assert "--model" not in args
+    assert "--provider" not in args
 
 
 # ── openclaw writer ──────────────────────────────────────────────────────────

@@ -340,6 +340,10 @@ services:
       backend:
         aliases:
           - openclaw-service
+      # Shared overlay to reach local LLM servers (vLLM/Ollama) hosted in a
+      # separate stack by their service name. See the llm-net note at the
+      # bottom of this file for the one-time `docker network create`.
+      llm-net: {}
     environment:
       - RUNNER_TYPE=openclaw
       - TZ=Europe/Paris
@@ -408,6 +412,10 @@ services:
       backend:
         aliases:
           - opencode-service
+      # Shared overlay to reach local LLM servers (vLLM/Ollama) hosted in a
+      # separate stack by their service name. See the llm-net note at the
+      # bottom of this file for the one-time `docker network create`.
+      llm-net: {}
     environment:
       - RUNNER_TYPE=opencode
       - TZ=Europe/Paris
@@ -474,6 +482,10 @@ services:
       backend:
         aliases:
           - aider-service
+      # Shared overlay to reach local LLM servers (vLLM/Ollama) hosted in a
+      # separate stack by their service name. See the llm-net note at the
+      # bottom of this file for the one-time `docker network create`.
+      llm-net: {}
     environment:
       - RUNNER_TYPE=aider
       - TZ=Europe/Paris
@@ -620,6 +632,10 @@ services:
       backend:
         aliases:
           - hermes-service
+      # Shared overlay to reach local LLM servers (vLLM/Ollama) hosted in a
+      # separate stack by their service name. See the llm-net note at the
+      # bottom of this file for the one-time `docker network create`.
+      llm-net: {}
     environment:
       - RUNNER_TYPE=hermes
       - TZ=Europe/Paris
@@ -788,3 +804,12 @@ networks:
   backend:
     driver: overlay
     attachable: true
+  # External shared overlay for reaching local LLM servers (vLLM/Ollama) that
+  # live in a SEPARATE stack, by their service name (e.g. http://vllm-dev-service:8000).
+  # Create it once before deploying this stack:
+  #   docker network create -d overlay --attachable llm-net
+  # then attach the vLLM/Ollama stack's service(s) to the same `llm-net`
+  # (networks: { llm-net: { external: true } }). Only the local-model CLI
+  # runners (hermes/opencode/openclaw/aider) join it — not claudecode/codex.
+  llm-net:
+    external: true

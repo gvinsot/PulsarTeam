@@ -28,6 +28,7 @@ def test_build_command_omits_model_by_default():
     assert "--model" not in cmd            # codex uses its own default
     assert cmd[:2] == ["codex", "exec"]
     assert "--skip-git-repo-check" in cmd
+    assert "--dangerously-bypass-approvals-and-sandbox" in cmd
 
 
 def test_build_command_passes_explicit_model():
@@ -37,3 +38,17 @@ def test_build_command_passes_explicit_model():
                            agent_id="a", task_id=None, permissions=None)
     assert cmd[cmd.index("--model") + 1] == "gpt-5.1-codex"
     assert "--json" in cmd
+
+
+def test_build_command_uses_full_auto_when_dangerous_permissions_disabled():
+    cmd = CodexBackend()._build_command(
+        "hi",
+        stream=False,
+        system_prompt=None,
+        agent_id="a",
+        task_id=None,
+        permissions={"execution": {"dangerousSkipPermissions": False}},
+    )
+
+    assert "--dangerously-bypass-approvals-and-sandbox" not in cmd
+    assert "--full-auto" in cmd

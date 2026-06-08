@@ -222,6 +222,12 @@ class PtySession:
     creds_watch_path: Optional[str] = None
     creds_on_change: Optional[Callable[[dict], None]] = None
     creds_dedup_key: Optional[Callable[[dict], Optional[str]]] = None
+    # Generic N-file watcher (parallel to the single-file creds one above).
+    # Used by hermes to persist ~/.hermes/{config.yaml,.env} the user sets up in
+    # the terminal, so a stateless restart can restore them. files_on_change
+    # receives a {basename: text_content} dict of the watched files that exist.
+    files_watch_paths: Optional[list] = None
+    files_on_change: Optional[Callable[[dict], None]] = None
 
     # Internals — filled in by start() and the background reader.
     master_fd: int = -1
@@ -245,6 +251,9 @@ class PtySession:
     _creds_sync_task: Optional[asyncio.Task] = None
     _last_synced_dedup_key: Optional[str] = None
     _last_creds_mtime: float = 0.0
+    _files_sync_task: Optional[asyncio.Task] = None
+    _last_files_sig: Optional[str] = None
+    _last_files_mtime: float = 0.0
     # First detected auth failure (decoded sentinel line). Latched until the
     # next prompt injection clears it (see clear_auth_error). Exposed in
     # status() so the API can fail the in-flight task instead of treating the
@@ -507,6 +516,9 @@ class PtySession:
         if self.creds_watch_path and self.creds_on_change:
             self._capture_creds_baseline()
             self._creds_sync_task = loop.create_task(self._creds_sync_loop())
+        if self.files_watch_paths and self.files_on_change:
+            self._capture_files_baseline()
+            self._files_sync_task = loop.create_task(self._files_sync_loop())
 
     def _capture_creds_baseline(self) -> None:
         try:
@@ -586,6 +598,88 @@ class PtySession:
         logger.info(
             f"[Terminal] Persisted fresh credentials to backend store for agent {self.agent_id} "
             f"(triggered by in-TUI login)"
+        )
+
+    # ── Generic N-file config watcher (parallel to the creds watcher) ─────────
+    def _read_watched_files(self) -> dict:
+        out: dict = {}
+        for path in (self.files_watch_paths or []):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    out[os.path.basename(path)] = f.read()
+            except (OSError, UnicodeDecodeError):
+                continue
+        return out
+
+    def _files_signature(self, files: dict) -> str:
+        import hashlib
+        h = hashlib.sha256()
+        for name in sorted(files):
+            h.update(name.encode("utf-8", "replace"))
+            h.update(b"\0")
+            h.update(files[name].encode("utf-8", "replace"))
+            h.update(b"\0")
+        return h.hexdigest()
+
+    def _files_max_mtime(self) -> float:
+        latest = 0.0
+        for path in (self.files_watch_paths or []):
+            try:
+                m = os.path.getmtime(path)
+            except OSError:
+                continue
+            if m > latest:
+                latest = m
+        return latest
+
+    def _capture_files_baseline(self) -> None:
+        # Record the signature of the just-restored files so the first poll
+        # doesn't persist them straight back; only a real in-terminal edit syncs.
+        try:
+            self._last_files_mtime = self._files_max_mtime()
+            self._last_files_sig = self._files_signature(self._read_watched_files())
+        except Exception:
+            self._last_files_mtime = 0.0
+            self._last_files_sig = None
+
+    async def _files_sync_loop(self) -> None:
+        try:
+            while not self._closed:
+                try:
+                    await asyncio.sleep(CREDS_SYNC_INTERVAL_SEC)
+                except asyncio.CancelledError:
+                    return
+                if self._closed:
+                    return
+                await self._maybe_sync_files()
+        except Exception as e:
+            logger.warning(f"[Terminal] files sync loop crashed for {self.agent_id}: {e}")
+
+    async def _maybe_sync_files(self) -> None:
+        if not self.files_watch_paths or not self.files_on_change:
+            return
+        mtime = self._files_max_mtime()
+        if mtime <= self._last_files_mtime:
+            return
+        files = self._read_watched_files()
+        if not files:
+            self._last_files_mtime = mtime
+            return
+        sig = self._files_signature(files)
+        if sig == self._last_files_sig:
+            self._last_files_mtime = mtime
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self.files_on_change, files)
+        except Exception as e:
+            logger.warning(f"[Terminal] files_on_change failed for {self.agent_id}: {e}")
+            return
+        self._last_files_sig = sig
+        self._last_files_mtime = mtime
+        logger.info(
+            f"[Terminal] Persisted runner config files for agent {self.agent_id} "
+            f"({', '.join(sorted(files))})"
         )
 
     def _init_screen_renderer(self) -> None:
@@ -1153,6 +1247,9 @@ class PtySession:
         if self._creds_sync_task and not self._creds_sync_task.done():
             self._creds_sync_task.cancel()
             self._creds_sync_task = None
+        if self._files_sync_task and not self._files_sync_task.done():
+            self._files_sync_task.cancel()
+            self._files_sync_task = None
         if self._snapshot_task and not self._snapshot_task.done():
             self._snapshot_task.cancel()
             self._snapshot_task = None
@@ -1311,6 +1408,8 @@ async def get_or_create_session(
             creds_watch_path=recipe.get("creds_watch_path"),
             creds_on_change=recipe.get("creds_on_change"),
             creds_dedup_key=recipe.get("creds_dedup_key"),
+            files_watch_paths=recipe.get("files_watch_paths"),
+            files_on_change=recipe.get("files_on_change"),
         )
         await session.start()
         _SESSIONS[agent_id] = session

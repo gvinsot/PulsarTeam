@@ -27,10 +27,12 @@ by _agent_env; multi-model config injection (see runner_local_models + opencode)
 does not apply to this CLI.
 """
 
+import json
 import os
 from typing import Optional
 
-from agent_user import ensure_agent_user
+from config import logger
+from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_openclaw_mcp
@@ -39,6 +41,7 @@ from .runner_instructions_config import configure_openclaw_instructions
 
 OPENCLAW_AGENT = os.getenv("OPENCLAW_AGENT", "default")
 OPENCLAW_LOCAL = os.getenv("OPENCLAW_LOCAL", "true").lower() in ("true", "1", "yes")
+_PULSAR_PERMISSIONS_SIDECAR = ".pulsar-managed-permissions.json"
 
 
 def _resolve_openclaw_model(llm_config: Optional[dict]) -> str:
@@ -52,6 +55,138 @@ def _resolve_openclaw_model(llm_config: Optional[dict]) -> str:
         if model:
             return model
     return ""
+
+
+def _dangerous_skip_permissions(permissions: Optional[dict]) -> bool:
+    exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
+    return bool(exec_perms.get("dangerousSkipPermissions", True))
+
+
+def _resolve_openclaw_home(agent_user: Optional[dict], agent_id: Optional[str]) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    home_user = agent_user
+    if (not home_user or not home_user.get("home")) and agent_id:
+        home_user = _agent_users.get(agent_id)
+    if not home_user or not home_user.get("home"):
+        return None, None, None
+    uid = home_user.get("uid")
+    gid = home_user.get("gid", uid)
+    return home_user["home"], uid, gid
+
+
+def _read_json_file(path: str) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_json_file(path: str, data: dict, uid: Optional[int], gid: Optional[int]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    if uid is not None:
+        try:
+            os.chown(path, uid, gid if gid is not None else uid)
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
+def _openclaw_permissions_were_managed(cfg_dir: str) -> bool:
+    data = _read_json_file(os.path.join(cfg_dir, _PULSAR_PERMISSIONS_SIDECAR))
+    return data.get("managed") is True
+
+
+def _set_openclaw_permissions_managed(cfg_dir: str, enabled: bool, uid: Optional[int], gid: Optional[int]) -> None:
+    sidecar = os.path.join(cfg_dir, _PULSAR_PERMISSIONS_SIDECAR)
+    if not enabled:
+        try:
+            os.remove(sidecar)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("[OpenClaw Permissions] could not remove %s: %s", sidecar, exc)
+        return
+    try:
+        _write_json_file(sidecar, {"managed": True}, uid, gid)
+    except OSError as exc:
+        logger.warning("[OpenClaw Permissions] could not write %s: %s", sidecar, exc)
+
+
+def configure_openclaw_permissions(agent_user: Optional[dict], agent_id: Optional[str], permissions: Optional[dict]) -> None:
+    """Apply Pulsar's dangerousSkipPermissions toggle to OpenClaw's native
+    no-approval policy surfaces.
+
+    OpenClaw has no single CLI flag for "skip approvals": docs define YOLO as
+    requested exec policy (`tools.exec.*`) plus host-local approvals defaults
+    in ~/.openclaw/exec-approvals.json.
+    """
+    home, uid, gid = _resolve_openclaw_home(agent_user, agent_id)
+    if not home:
+        logger.warning("[OpenClaw Permissions] no HOME for agent %s — skipping", (agent_id or "?")[:12])
+        return
+    cfg_dir = os.path.join(home, ".openclaw")
+    cfg_path = os.path.join(cfg_dir, "openclaw.json")
+    approvals_path = os.path.join(cfg_dir, "exec-approvals.json")
+    enabled = _dangerous_skip_permissions(permissions)
+    was_managed = _openclaw_permissions_were_managed(cfg_dir)
+
+    cfg = _read_json_file(cfg_path)
+    approvals = _read_json_file(approvals_path)
+
+    if enabled:
+        tools = cfg.setdefault("tools", {})
+        if not isinstance(tools, dict):
+            tools = {}
+            cfg["tools"] = tools
+        exec_cfg = tools.setdefault("exec", {})
+        if not isinstance(exec_cfg, dict):
+            exec_cfg = {}
+            tools["exec"] = exec_cfg
+        exec_cfg["mode"] = "full"
+        exec_cfg["security"] = "full"
+        exec_cfg["ask"] = "off"
+
+        approvals["version"] = approvals.get("version") or 1
+        defaults = approvals.setdefault("defaults", {})
+        if not isinstance(defaults, dict):
+            defaults = {}
+            approvals["defaults"] = defaults
+        defaults["security"] = "full"
+        defaults["ask"] = "off"
+        defaults["askFallback"] = "full"
+    elif was_managed:
+        tools = cfg.get("tools")
+        exec_cfg = tools.get("exec") if isinstance(tools, dict) else None
+        if isinstance(exec_cfg, dict):
+            for key in ("mode", "security", "ask"):
+                exec_cfg.pop(key, None)
+            if not exec_cfg:
+                tools.pop("exec", None)
+        if isinstance(tools, dict) and not tools:
+            cfg.pop("tools", None)
+        defaults = approvals.get("defaults")
+        if isinstance(defaults, dict):
+            for key in ("security", "ask", "askFallback"):
+                defaults.pop(key, None)
+            if not defaults:
+                approvals.pop("defaults", None)
+
+    if enabled or was_managed:
+        try:
+            _write_json_file(cfg_path, cfg, uid, gid)
+            _write_json_file(approvals_path, approvals, uid, gid)
+            _set_openclaw_permissions_managed(cfg_dir, enabled, uid, gid)
+            logger.info(
+                "[OpenClaw Permissions] %s YOLO exec policy for agent %s",
+                "enabled" if enabled else "cleared",
+                (agent_id or "?")[:12],
+            )
+        except OSError as exc:
+            logger.warning("[OpenClaw Permissions] failed to write policy files: %s", exc)
 
 
 class OpenClawBackend(CliBackend):
@@ -100,6 +235,11 @@ class OpenClawBackend(CliBackend):
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         self._configure_mcp(effective_user, agent_id)
         self._configure_instructions(effective_user, agent_id)
+        configure_openclaw_permissions(
+            effective_user or agent_user,
+            agent_id,
+            self._get_permissions(agent_id),
+        )
 
         cmd = [self.cli_command, "tui"]
         if OPENCLAW_LOCAL:
@@ -127,10 +267,14 @@ class OpenClawBackend(CliBackend):
         # Layer the model env on top of the base provider/credential env so the
         # headless (`agent --message`) path also carries the selected model.
         env = super()._agent_env(agent_user, agent_id)
+        home, _, _ = _resolve_openclaw_home(agent_user, agent_id)
+        if home:
+            env["HOME"] = home
         return self._model_env(agent_id, env)
 
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
+        configure_openclaw_permissions(None, agent_id, permissions)
         cmd = [self.cli_command, "agent"]
         cmd += ["--message", prompt]
         cmd += ["--json"]

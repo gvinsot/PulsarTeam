@@ -27,12 +27,17 @@ Per-agent LLM selection:
 import os
 from typing import Optional, Tuple
 
-from config import RUNNER_MODEL, logger
-from agent_user import ensure_agent_user
+from config import logger
+from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_hermes_mcp, configure_hermes_local_providers
 from .runner_instructions_config import configure_hermes_instructions
+from .runner_config_store import fetch_runner_config, save_runner_config
+
+# Files under ~/.hermes that the user configures (via `hermes setup` or by
+# editing) and that we persist/restore across stateless restarts.
+_HERMES_PERSISTED_FILES = ("config.yaml", ".env")
 
 
 HERMES_PROVIDER = os.getenv("HERMES_PROVIDER")  # e.g. "openrouter", "anthropic"
@@ -74,18 +79,38 @@ for _p in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
 
 def _resolve_hermes_provider_and_model(
     llm_config: Optional[dict],
-) -> Tuple[Optional[str], str]:
-    """Compute (provider, model) the hermes CLI should run with.
+) -> Tuple[str, str]:
+    """Compute the (provider, model) to pass as --provider/--model, or
+    ('', '') to leave model selection entirely to the restored ~/.hermes config.
 
-    Prefers the per-agent LLM config; falls back to HERMES_PROVIDER env
-    and RUNNER_MODEL env when no agent-level config is set.
+    We deliberately do NOT fall back to RUNNER_MODEL / HERMES_PROVIDER here:
+    forcing a default model (e.g. claude-opus-4-8) onto a vLLM endpoint just
+    fails, and the agent's persisted hermes config already carries the right
+    provider/model. The flags are only emitted when a real per-agent LLM config
+    is selected in Settings.
     """
     if llm_config:
         model = (llm_config.get("model") or "").strip()
         provider = (llm_config.get("provider") or "").lower().strip()
-        mapped_provider = _PROVIDER_TO_HERMES.get(provider, provider) if provider else None
-        return mapped_provider or HERMES_PROVIDER, model or RUNNER_MODEL
-    return HERMES_PROVIDER, RUNNER_MODEL
+        mapped_provider = _PROVIDER_TO_HERMES.get(provider, provider) if provider else ""
+        return (mapped_provider or ""), model
+    return "", ""
+
+
+def _hermes_home(agent_user: Optional[dict], agent_id: Optional[str]):
+    """Resolve agent HOME + uid/gid for ~/.hermes files, falling back to the
+    agent-user cache when running as root (effective_user=None)."""
+    home_user = agent_user
+    if (not home_user or not home_user.get("home")) and agent_id:
+        home_user = _agent_users.get(agent_id)
+    home = (home_user or {}).get("home")
+    uid = (home_user or {}).get("uid")
+    gid = (home_user or {}).get("gid", uid)
+    return home, uid, gid
+
+
+def _hermes_config_paths(home: str) -> list:
+    return [os.path.join(home, ".hermes", name) for name in _HERMES_PERSISTED_FILES]
 
 
 class HermesBackend(CliBackend):
@@ -93,6 +118,46 @@ class HermesBackend(CliBackend):
     cli_command = "hermes"
     pass_prompt_via_stdin = False
     supports_interactive_terminal = True
+
+    def _restore_config(self, agent_user, agent_id) -> None:
+        """Restore the agent's ~/.hermes/{config.yaml,.env} from team-api before
+        spawning, so the provider/model the user set up in the terminal survives
+        the stateless restart (no more `hermes setup` wizard, no wrong model)."""
+        if not agent_id:
+            return
+        files = fetch_runner_config("hermes", agent_id)
+        if not files:
+            return
+        home, uid, gid = _hermes_home(agent_user, agent_id)
+        if not home:
+            return
+        cfg_dir = os.path.join(home, ".hermes")
+        try:
+            os.makedirs(cfg_dir, exist_ok=True)
+        except OSError as e:
+            logger.warning(f"[Hermes] cannot create {cfg_dir}: {e}")
+            return
+        written = 0
+        for name, content in files.items():
+            if name not in _HERMES_PERSISTED_FILES:
+                continue
+            path = os.path.join(cfg_dir, name)
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                if uid is not None:
+                    os.chown(path, uid, gid if gid is not None else uid)
+                    os.chmod(path, 0o600)
+                written += 1
+            except OSError as e:
+                logger.warning(f"[Hermes] failed to restore {path}: {e}")
+        if uid is not None:
+            try:
+                os.chown(cfg_dir, uid, gid if gid is not None else uid)
+            except OSError:
+                pass
+        if written:
+            logger.info(f"[Hermes] restored {written} config file(s) for agent {(agent_id or '?')[:12]}")
 
     def _configure_mcp(self, agent_user, agent_id) -> None:
         # Writes mcp_servers into ~/.hermes/config.yaml and records whether any
@@ -120,13 +185,12 @@ class HermesBackend(CliBackend):
         provider, model = _resolve_hermes_provider_and_model(llm_config)
 
         args: list[str] = []
-        # Normally ignore on-disk ~/.hermes/config.yaml so the agent's run is
-        # fully driven by the LLM config we forward — not by stale defaults.
-        # BUT hermes reads its MCP wiring from that same config.yaml, so when we
-        # have MCP servers to inject we must NOT ignore it. The explicit
-        # --provider/--model flags below still override any stale config pins.
-        if not self._mcp_present.get(agent_id, False):
-            args.append("--ignore-user-config")
+        # Do NOT pass --ignore-user-config: ~/.hermes/{config.yaml,.env} is now
+        # the agent's authoritative configuration — restored from team-api (what
+        # the user set up in the terminal) and carrying its MCP wiring. Ignoring
+        # it is what made hermes report "no providers found" and run setup. The
+        # explicit --provider/--model below (only when a real per-agent LLM
+        # config is selected) still override the config's defaults.
         if provider:
             args += ["--provider", provider]
         if model:
@@ -148,6 +212,9 @@ class HermesBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         permissions = self._get_permissions(agent_id)
+        # Restore the persisted ~/.hermes config FIRST so configure_mcp merges
+        # its MCP wiring on top of the user's restored setup (not a blank file).
+        self._restore_config(effective_user, agent_id)
         self._configure_mcp(effective_user, agent_id)
         self._configure_instructions(effective_user, agent_id)
 
@@ -157,12 +224,24 @@ class HermesBackend(CliBackend):
         _, model = _resolve_hermes_provider_and_model(self._get_llm_config(agent_id))
         self._verify_model_config(agent_id, model=model, env=env)
 
+        # Live-sync: persist ~/.hermes/{config.yaml,.env} to team-api whenever
+        # the user runs `hermes setup` / edits config inside the terminal, so it
+        # survives the next stateless restart (see PtySession files watcher).
+        home, _, _ = _hermes_home(effective_user, agent_id)
+        watch_paths = _hermes_config_paths(home) if home else None
+        captured_agent_id = agent_id
+
+        def _persist_hermes_config(files: dict) -> None:
+            save_runner_config("hermes", captured_agent_id, files)
+
         kwargs = get_subprocess_kwargs(effective_user) or {}
         return {
             "cmd": cmd,
             "cwd": self._resolve_cwd(agent_id),
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
+            "files_watch_paths": watch_paths if agent_id else None,
+            "files_on_change": _persist_hermes_config if (watch_paths and agent_id) else None,
         }
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):

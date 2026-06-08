@@ -34,6 +34,7 @@ export {
   countUsers, updateLastSeen, acceptTerms, completeTutorial,
 } from './database/users.js';
 export { getAllLlmConfigs, getLlmConfig, saveLlmConfig, deleteLlmConfig } from './database/llmConfigs.js';
+export { getRunnerConfig, saveRunnerConfig, deleteRunnerConfig } from './database/runnerConfigs.js';
 export {
   getAllBoards, getBoardsByUser, getBoardById, createBoard, updateBoard, deleteBoard,
   getDefaultBoard, ensureDefaultBoard,

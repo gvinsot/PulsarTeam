@@ -233,6 +233,9 @@ services:
       - /tmp:size=512M,mode=1777
     networks:
       - sandbox-net
+      # Reach local LLM servers (vLLM/Ollama) by service name. See the llm-net
+      # note in the networks: block at the bottom of this file.
+      - llm-net
     depends_on:
       - api
     deploy:
@@ -287,6 +290,9 @@ services:
       - /tmp:size=512M,mode=1777
     networks:
       - sandbox-net
+      # Reach local LLM servers (vLLM/Ollama) by service name. See the llm-net
+      # note in the networks: block at the bottom of this file.
+      - llm-net
     depends_on:
       - api
     deploy:
@@ -347,6 +353,9 @@ services:
       - /tmp:size=512M,mode=1777
     networks:
       - sandbox-net
+      # Reach local LLM servers (vLLM/Ollama) by service name. See the llm-net
+      # note in the networks: block at the bottom of this file.
+      - llm-net
     depends_on:
       - api
     deploy:
@@ -460,6 +469,9 @@ services:
       - /tmp:size=512M,mode=1777
     networks:
       - sandbox-net
+      # Reach local LLM servers (vLLM/Ollama) by service name. See the llm-net
+      # note in the networks: block at the bottom of this file.
+      - llm-net
     depends_on:
       - api
     deploy:
@@ -636,3 +648,11 @@ networks:
   internal:
   sandbox-net:
   backend:
+  # Shared network so the local-model CLI runners (hermes/opencode/openclaw/
+  # aider) can reach a vLLM/Ollama server by name. Compose-managed here so
+  # `docker compose up` just works. If your vLLM/Ollama runs in a SEPARATE
+  # compose project, make this external and create it once
+  # (`docker network create llm-net`), then add the same external `llm-net`
+  # to that project's service. The swarm deploy (devops/docker-compose.swarm.yml)
+  # already declares it external.
+  llm-net:

@@ -7,6 +7,7 @@ no endpoint/credentials, so it quietly talks to the cloud default instead.
 """
 import os
 import sys
+import json
 from pathlib import Path
 
 
@@ -83,7 +84,44 @@ def test_openclaw_passes_agent_id_so_local_creds_are_injected():
     assert env["OPENAI_BASE_URL"] == "http://localhost:8000/v1"
     assert env["OPENAI_API_KEY"] == "k"
     assert env["OPENCLAW_MODEL"] == "qwen-local"
+    assert env["HOME"] == "/tmp/agent"
     assert _resolve_openclaw_model({"model": "qwen-local"}) == "qwen-local"
+
+
+def test_openclaw_dangerous_permissions_write_yolo_policy(tmp_path):
+    os.environ["RUNNER_TYPE"] = "openclaw"
+    from backends.openclaw import configure_openclaw_permissions
+
+    agent = {"home": str(tmp_path), "uid": None, "gid": None}
+    configure_openclaw_permissions(agent, "agent", None)
+
+    cfg = json.loads((tmp_path / ".openclaw" / "openclaw.json").read_text())
+    approvals = json.loads((tmp_path / ".openclaw" / "exec-approvals.json").read_text())
+    assert cfg["tools"]["exec"]["mode"] == "full"
+    assert cfg["tools"]["exec"]["security"] == "full"
+    assert cfg["tools"]["exec"]["ask"] == "off"
+    assert approvals["defaults"]["security"] == "full"
+    assert approvals["defaults"]["ask"] == "off"
+    assert approvals["defaults"]["askFallback"] == "full"
+
+
+def test_openclaw_disabling_dangerous_permissions_clears_managed_policy(tmp_path):
+    os.environ["RUNNER_TYPE"] = "openclaw"
+    from backends.openclaw import configure_openclaw_permissions
+
+    agent = {"home": str(tmp_path), "uid": None, "gid": None}
+    configure_openclaw_permissions(agent, "agent", None)
+    configure_openclaw_permissions(
+        agent,
+        "agent",
+        {"execution": {"dangerousSkipPermissions": False}},
+    )
+
+    cfg = json.loads((tmp_path / ".openclaw" / "openclaw.json").read_text())
+    approvals = json.loads((tmp_path / ".openclaw" / "exec-approvals.json").read_text())
+    assert "tools" not in cfg
+    assert "defaults" not in approvals
+    assert not (tmp_path / ".openclaw" / ".pulsar-managed-permissions.json").exists()
 
 
 def test_hermes_maps_local_provider_to_auto():

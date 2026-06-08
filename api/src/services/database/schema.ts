@@ -339,6 +339,27 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider, scope_type, scope_id)').catch(() => {});
       console.log('✅ OAuth tokens table ready');
 
+      // ── Runner configs table ─────────────────────────────────────────────
+      // Per-agent CLI runner config files (e.g. hermes ~/.hermes/{config.yaml,
+      // .env}) that the user sets up inside the terminal. Stateless runners lose
+      // these on restart, so we persist them here and restore on the next spawn.
+      // `data.files` is a JSON string of {filename: content}, encrypted at rest
+      // because the blob can carry provider API keys.
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS runner_configs (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          runner TEXT NOT NULL,
+          scope_type TEXT NOT NULL,
+          scope_id TEXT NOT NULL,
+          data JSONB NOT NULL,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          UNIQUE(runner, scope_type, scope_id)
+        )
+      `);
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_runner_configs_scope ON runner_configs(runner, scope_type, scope_id)').catch(() => {});
+      console.log('✅ Runner configs table ready');
+
       // ── Board plugins columns ─────────────────────────────────────────────
       await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS plugins JSONB NOT NULL DEFAULT \'[]\'').catch(() => {});
       await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS mcp_auth JSONB NOT NULL DEFAULT \'{}\'').catch(() => {});

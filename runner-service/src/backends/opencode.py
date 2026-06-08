@@ -11,8 +11,6 @@ Real CLI surface:
     --format default|json   # output format
     --file, -f              # attach file
     --share                 # share resulting session
-    --dangerously-skip-permissions
-
 Note: opencode passes the message as a positional argument, not via stdin.
 
 Per-agent LLM selection:
@@ -26,7 +24,7 @@ Per-agent LLM selection:
   own default model selection.
 """
 
-from typing import Optional
+from typing import Any, Optional
 import json
 import logging
 import os
@@ -41,6 +39,7 @@ from .runner_local_models import fetch_local_models
 logger = logging.getLogger("runner_service")
 
 _PULSAR_CONFIG_METADATA_KEYS = ("__pulsarManagedMcpServers", "_pulsarMcpUpdatedAt")
+_PULSAR_PERMISSION_SIDECAR = ".pulsar-managed-permission.json"
 
 
 # Map our internal provider names to the namespace opencode uses in its
@@ -186,8 +185,10 @@ def _merge_opencode_config(
     existing_raw: Optional[str],
     managed: Optional[dict],
     clear_model: bool = False,
+    permission_override: Optional[Any] = None,
+    clear_permission: bool = False,
 ) -> Optional[str]:
-    if not managed and not clear_model:
+    if not managed and not clear_model and permission_override is None and not clear_permission:
         return existing_raw
     try:
         existing = json.loads(existing_raw) if existing_raw else {}
@@ -200,7 +201,14 @@ def _merge_opencode_config(
     for key in _PULSAR_CONFIG_METADATA_KEYS:
         existing.pop(key, None)
 
-    if clear_model and not managed and "model" not in existing and not had_pulsar_metadata:
+    if (
+        clear_model
+        and not managed
+        and permission_override is None
+        and not clear_permission
+        and "model" not in existing
+        and not had_pulsar_metadata
+    ):
         return existing_raw
 
     merged = {**existing}
@@ -210,6 +218,10 @@ def _merge_opencode_config(
         merged.pop("model", None)
     elif managed and managed.get("model"):
         merged["model"] = managed["model"]
+    if permission_override is not None:
+        merged["permission"] = permission_override
+    elif clear_permission:
+        merged.pop("permission", None)
     providers = existing.get("provider") if isinstance(existing.get("provider"), dict) else {}
     merged_providers = {**providers}
     for provider_id, block in ((managed or {}).get("provider") or {}).items():
@@ -222,6 +234,33 @@ def _merge_opencode_config(
     if managed:
         merged["provider"] = merged_providers
     return json.dumps(merged, separators=(",", ":"))
+
+
+def _read_opencode_permission_sidecar(config_dir: str) -> bool:
+    try:
+        with open(os.path.join(config_dir, _PULSAR_PERMISSION_SIDECAR)) as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(isinstance(data, dict) and data.get("managed") is True)
+
+
+def _write_opencode_permission_sidecar(config_dir: str, enabled: bool) -> None:
+    path = os.path.join(config_dir, _PULSAR_PERMISSION_SIDECAR)
+    if not enabled:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning(f"[OpenCode] Could not remove permission sidecar {path}: {exc}")
+        return
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+        with open(path, "w") as f:
+            f.write(json.dumps({"managed": True}) + "\n")
+    except OSError as exc:
+        logger.warning(f"[OpenCode] Could not write permission sidecar {path}: {exc}")
 
 
 def _write_opencode_config_file(
@@ -326,9 +365,12 @@ class OpenCodeBackend(CliBackend):
                 "[OpenCode] No HOME available for agent %s — skipping provider config write",
                 (agent_id or "unknown")[:12],
             )
+            if self._dangerous_skip_permissions(agent_id):
+                env["OPENCODE_PERMISSION"] = json.dumps("allow")
             return env
         home_dir = home_user["home"]
-        cfg_path = os.path.join(home_dir, ".config", "opencode", "config.json")
+        config_dir = os.path.join(home_dir, ".config", "opencode")
+        cfg_path = os.path.join(config_dir, "config.json")
         # Merge on top of any existing config file content so we don't clobber
         # MCP server definitions or other user-level opencode settings.
         existing_json: Optional[str] = None
@@ -340,7 +382,20 @@ class OpenCodeBackend(CliBackend):
         # Returning to "Default LLM" must also remove any model pin written by
         # an earlier explicit selection. Otherwise OpenCode reads the stale
         # config-level model even though the command no longer passes --model.
-        merged = _merge_opencode_config(existing_json, managed, clear_model=not model)
+        skip_permissions = self._dangerous_skip_permissions(agent_id)
+        had_managed_permission = _read_opencode_permission_sidecar(config_dir)
+        permission_override = "allow" if skip_permissions else None
+        clear_permission = (not skip_permissions) and had_managed_permission
+        if skip_permissions:
+            env["OPENCODE_PERMISSION"] = json.dumps("allow")
+
+        merged = _merge_opencode_config(
+            existing_json,
+            managed,
+            clear_model=not model,
+            permission_override=permission_override,
+            clear_permission=clear_permission,
+        )
         if merged and merged != existing_json:
             # When the spawn keeps its parent UID (root via runAsRoot), don't
             # chown the file to the agent UID — root needs to read it back,
@@ -349,14 +404,22 @@ class OpenCodeBackend(CliBackend):
             gid = agent_user.get("gid") if agent_user else None
             _write_opencode_config_file(home_dir, merged, uid, gid)
             logger.info(
-                "[OpenCode] Wrote config for agent %s at %s (model=%s)",
+                "[OpenCode] Wrote config for agent %s at %s (model=%s permission=%s)",
                 (agent_id or "unknown")[:12], cfg_path, model or "<default>",
+                permission_override or ("cleared" if clear_permission else "<unchanged>"),
             )
+        if skip_permissions or clear_permission:
+            _write_opencode_permission_sidecar(config_dir, skip_permissions)
         # opencode reads its config from $HOME/.config/opencode/config.json.
         # Force HOME to the agent's home so root-spawns find the file we just
         # wrote (sanitize_env only sets HOME when agent_user is provided).
         env["HOME"] = home_dir
         return env
+
+    def _dangerous_skip_permissions(self, agent_id: Optional[str]) -> bool:
+        permissions = self._get_permissions(agent_id) if agent_id else None
+        exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
+        return bool(exec_perms.get("dangerousSkipPermissions", True))
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
         """Spawn OpenCode in its interactive TUI for the shared PTY."""
@@ -397,10 +460,9 @@ class OpenCodeBackend(CliBackend):
         if model:
             cmd += ["--model", model]
         cmd += ["--format", "json"]  # opencode has no separate stream-json — JSON events on stdout
-        # Permissions: default to skip if backend is configured for headless ops
-        exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
-        if exec_perms.get("dangerousSkipPermissions", True):
-            cmd.append("--dangerously-skip-permissions")
+        # Permissions are configured via ~/.config/opencode/config.json and
+        # OPENCODE_PERMISSION in _agent_env. Current OpenCode uses
+        # `permission: "allow"` as the no-approval equivalent.
         # Runner is stateless — conversation history is replayed inside `prompt`
         # by the caller. The opencode CLI's --session is not used.
         cmd.append(prompt)
