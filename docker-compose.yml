@@ -442,7 +442,7 @@ services:
       - RUNNER_TYPE=hermes
       - TZ=${TZ:-Europe/Paris}
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-8}
+      - RUNNER_MODEL=${HERMES_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TIMEOUT=600
       - PORT=8000

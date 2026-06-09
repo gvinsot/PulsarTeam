@@ -206,7 +206,7 @@ services:
       - LOG_LEVEL=info
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-80}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-80}
       - VERBOSE=${CODER_VERBOSE:-false}
@@ -640,7 +640,7 @@ services:
       - RUNNER_TYPE=hermes
       - TZ=Europe/Paris
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-8}
+      - RUNNER_MODEL=${HERMES_MODEL:-}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
