@@ -320,17 +320,24 @@ def test_hermes_never_passes_ignore_user_config():
     assert "--ignore-user-config" not in b._common_chat_args("a", None)
 
 
-def test_hermes_no_llm_config_emits_no_model_flag():
-    """Fix: never force the RUNNER_MODEL fallback (e.g. claude-opus-4-8) onto the
-    CLI when no per-agent model is selected — sending it to a vLLM endpoint just
-    fails. With no llm_config, emit no --provider/--model and let the restored
-    ~/.hermes config decide."""
-    from backends.hermes import HermesBackend, _resolve_hermes_provider_and_model
+def test_hermes_never_emits_model_flag():
+    """hermes' model is fully terminal-driven: it comes from ~/.hermes/config.yaml
+    (restored from team-api), never from the Settings per-agent LLM config. So we
+    must emit no --provider/--model — even WITH a per-agent config attached — or a
+    stale Settings pin (e.g. claude-opus-4-8) would override the terminal config
+    and the user could not change the model from the terminal."""
+    from backends.hermes import HermesBackend
 
-    assert _resolve_hermes_provider_and_model(None) == ("", "")
-    args = HermesBackend()._common_chat_args("a", None)
+    b = HermesBackend()
+    assert "--model" not in b._common_chat_args("a", None)
+    assert "--provider" not in b._common_chat_args("a", None)
+
+    # Even with a per-agent LLM config attached, no model/provider flag leaks.
+    b.set_agent_llm_config("a", {"provider": "anthropic", "model": "claude-opus-4-8"})
+    args = b._common_chat_args("a", None)
     assert "--model" not in args
     assert "--provider" not in args
+    assert "claude-opus-4-8" not in args
 
 
 # ── openclaw writer ──────────────────────────────────────────────────────────

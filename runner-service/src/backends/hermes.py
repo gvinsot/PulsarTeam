@@ -11,25 +11,28 @@ Real CLI surface:
   hermes chat --yolo -q "..."          # skip permission prompts
   hermes chat --ignore-user-config     # ignore ~/.hermes/config.yaml
 
-Per-agent LLM selection:
-  When the API forwards an X-LLM-Config header (cached via
-  set_agent_llm_config), the agent-selected provider/model are passed to
-  the hermes CLI as `--provider <p> --model <m>`. The matching API key env
-  var (ANTHROPIC_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY / ...) is
-  injected by CliBackend._agent_env. When no per-agent LLM config is
-  attached, we fall back to the HERMES_PROVIDER env / RUNNER_MODEL env.
+Model selection is fully terminal-driven:
+  hermes picks its provider/model from ~/.hermes/config.yaml — what the user
+  set up in the terminal (`hermes setup` / edits), restored from team-api on
+  every stateless spawn (see runner_config_store + _restore_config). We do
+  NOT forward the Settings per-agent LLM config as `--provider/--model`:
+  doing so let a stale Settings pin (e.g. claude-opus-4-8) override whatever
+  the user configured in the terminal — which the user could then no longer
+  change from the terminal at all. The matching API-key env vars are still
+  injected by CliBackend._agent_env if a per-agent config lingers, but
+  they're harmless: hermes follows the provider/model in config.yaml.
 
-  We also pass --ignore-user-config so the agent's run is fully driven by
-  the LLM config we forward, not by a stale ~/.hermes/config.yaml that may
-  pin a different provider/model.
+  We also never pass --ignore-user-config — that config file IS the agent's
+  authoritative source (ignoring it was what made hermes report "no
+  providers found" and re-run its setup wizard).
 """
 
 import os
-from typing import Optional, Tuple
+from typing import Optional
 
 from config import logger
 from agent_user import ensure_agent_user, _agent_users
-from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
+from .cli_backend import CliBackend
 from .claude_token_store import get_subprocess_kwargs
 from .runner_mcp_config import configure_hermes_mcp, configure_hermes_local_providers
 from .runner_instructions_config import configure_hermes_instructions
@@ -38,63 +41,6 @@ from .runner_config_store import fetch_runner_config, save_runner_config
 # Files under ~/.hermes that the user configures (via `hermes setup` or by
 # editing) and that we persist/restore across stateless restarts.
 _HERMES_PERSISTED_FILES = ("config.yaml", ".env")
-
-
-HERMES_PROVIDER = os.getenv("HERMES_PROVIDER")  # e.g. "openrouter", "anthropic"
-
-
-# Map our internal/canonical provider names to the value the hermes CLI
-# expects on its --provider flag. Anything not in this map is forwarded
-# as-is (hermes supports many providers — see its `--provider` docs).
-_PROVIDER_TO_HERMES = {
-    "anthropic": "anthropic",
-    "claude": "anthropic",
-    "claude-paid": "anthropic",
-    "openrouter": "openrouter",
-    "google": "gemini",
-    "gemini": "gemini",
-    "xai": "xai",
-    "grok": "xai",
-    "deepseek": "deepseek",
-    "huggingface": "huggingface",
-    "bedrock": "bedrock",
-    "azure": "azure-foundry",
-    "ollama": "ollama-cloud",
-    "nvidia": "nvidia",
-    # No direct hermes "openai" provider — falling back to "auto" lets
-    # hermes infer the right one from the model name.
-    "openai": "auto",
-    "mistral": "auto",
-    "groq": "auto",
-}
-
-# Local / self-hosted OpenAI-compatible providers (vLLM, LM Studio, gateways)
-# have no dedicated hermes provider. We route them through "auto" so hermes
-# uses its OpenAI-compatible client driven by the OPENAI_BASE_URL / OPENAI_API_KEY
-# env vars that CliBackend._agent_env now injects for these providers.
-for _p in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
-    _PROVIDER_TO_HERMES.setdefault(_p, "auto")
-
-
-
-def _resolve_hermes_provider_and_model(
-    llm_config: Optional[dict],
-) -> Tuple[str, str]:
-    """Compute the (provider, model) to pass as --provider/--model, or
-    ('', '') to leave model selection entirely to the restored ~/.hermes config.
-
-    We deliberately do NOT fall back to RUNNER_MODEL / HERMES_PROVIDER here:
-    forcing a default model (e.g. claude-opus-4-8) onto a vLLM endpoint just
-    fails, and the agent's persisted hermes config already carries the right
-    provider/model. The flags are only emitted when a real per-agent LLM config
-    is selected in Settings.
-    """
-    if llm_config:
-        model = (llm_config.get("model") or "").strip()
-        provider = (llm_config.get("provider") or "").lower().strip()
-        mapped_provider = _PROVIDER_TO_HERMES.get(provider, provider) if provider else ""
-        return (mapped_provider or ""), model
-    return "", ""
 
 
 def _hermes_home(agent_user: Optional[dict], agent_id: Optional[str]):
@@ -179,32 +125,20 @@ class HermesBackend(CliBackend):
 
     def _common_chat_args(self, agent_id: Optional[str], permissions: Optional[dict]) -> list[str]:
         """Build the shared `chat`-mode args used by both interactive and
-        one-shot invocations: provider, model, permission flags, isolation.
+        one-shot invocations: permission flags only.
+
+        We deliberately pass NO --provider/--model. hermes' model is fully
+        terminal-driven — it comes from ~/.hermes/config.yaml (set up in the
+        terminal, restored from team-api). Forwarding the Settings per-agent
+        LLM config as --model used to let a stale pin (e.g. claude-opus-4-8)
+        override the terminal config, so the user could not change the model
+        from the terminal. We also never pass --ignore-user-config — that
+        config file IS the agent's authoritative source.
         """
-        llm_config = self._get_llm_config(agent_id)
-        provider, model = _resolve_hermes_provider_and_model(llm_config)
-
         args: list[str] = []
-        # Do NOT pass --ignore-user-config: ~/.hermes/{config.yaml,.env} is now
-        # the agent's authoritative configuration — restored from team-api (what
-        # the user set up in the terminal) and carrying its MCP wiring. Ignoring
-        # it is what made hermes report "no providers found" and run setup. The
-        # explicit --provider/--model below (only when a real per-agent LLM
-        # config is selected) still override the config's defaults.
-        if provider:
-            args += ["--provider", provider]
-        if model:
-            args += ["--model", model]
-
         exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
         if exec_perms.get("dangerousSkipPermissions", True):
             args.append("--yolo")
-
-        if agent_id:
-            logger.debug(
-                f"[Hermes] agent={agent_id[:12]} provider={provider or '-'} model={model or '-'} "
-                f"llm_config_present={llm_config is not None}"
-            )
         return args
 
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
@@ -221,8 +155,6 @@ class HermesBackend(CliBackend):
         cmd = [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
 
         env = self._agent_env(effective_user, agent_id)
-        _, model = _resolve_hermes_provider_and_model(self._get_llm_config(agent_id))
-        self._verify_model_config(agent_id, model=model, env=env)
 
         # Live-sync: persist ~/.hermes/{config.yaml,.env} to team-api whenever
         # the user runs `hermes setup` / edits config inside the terminal, so it

@@ -121,8 +121,8 @@ def configure_openclaw_permissions(agent_user: Optional[dict], agent_id: Optiona
     no-approval policy surfaces.
 
     OpenClaw has no single CLI flag for "skip approvals": docs define YOLO as
-    requested exec policy (`tools.exec.*`) plus host-local approvals defaults
-    in ~/.openclaw/exec-approvals.json.
+    requested exec mode plus host-local approvals defaults in
+    ~/.openclaw/exec-approvals.json.
     """
     home, uid, gid = _resolve_openclaw_home(agent_user, agent_id)
     if not home:
@@ -147,8 +147,10 @@ def configure_openclaw_permissions(agent_user: Optional[dict], agent_id: Optiona
             exec_cfg = {}
             tools["exec"] = exec_cfg
         exec_cfg["mode"] = "full"
-        exec_cfg["security"] = "full"
-        exec_cfg["ask"] = "off"
+        # OpenClaw rejects the newer `mode` key when legacy policy keys are
+        # also present in tools.exec.
+        exec_cfg.pop("security", None)
+        exec_cfg.pop("ask", None)
 
         approvals["version"] = approvals.get("version") or 1
         defaults = approvals.setdefault("defaults", {})

@@ -3,10 +3,14 @@ import { Save, Trash2, RotateCw, Power } from 'lucide-react';
 import { api } from '../../api';
 import CodexAuthSection from './CodexAuthSection';
 
-// Runners that pick their model inside the terminal (Claude Code plan / Codex
-// plan), not from Settings. The LLM selector is hidden for them and any
-// per-agent llmConfigId is cleared.
-const MODEL_IN_TERMINAL_RUNNERS = new Set(['claudecode', 'codex']);
+// Runners that pick their model inside the terminal, not from Settings. The LLM
+// selector is hidden for them and any per-agent llmConfigId is cleared on save.
+//   claudecode / codex: model comes from their plan / OAuth login.
+//   hermes: model comes from ~/.hermes/config.yaml (`hermes setup` / edits in
+//     the terminal, persisted across restarts). Forwarding a Settings --model
+//     used to override it so the user could not change the model from the
+//     terminal — see runner-service backends/hermes.py.
+const MODEL_IN_TERMINAL_RUNNERS = new Set(['claudecode', 'codex', 'hermes']);
 
 export default function SettingsTab({ agent, projects, currentProject, onRefresh, userRole, currentUser }) {
   const [form, setForm] = useState({
@@ -229,6 +233,8 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             <div className="px-3 py-2.5 bg-dark-700/40 rounded-lg border border-dark-600/50 text-xs text-dark-400">
               {form.runner === 'claudecode'
                 ? 'Claude Code chooses its model directly in the terminal (via its plan / OAuth login). No model is selected here.'
+                : form.runner === 'hermes'
+                ? 'Hermes chooses its model in the terminal (via `hermes setup` / ~/.hermes/config.yaml, persisted across restarts). No model is selected here.'
                 : 'Codex chooses its model directly in the terminal (via its ChatGPT plan login). No model is selected here.'}
             </div>
           </div>
@@ -236,12 +242,13 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           <div className="col-span-2">
             <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration (model)</label>
             {(() => {
-              // For the multi-provider CLI runners (opencode, openclaw, hermes,
-              // aider) and sandbox/Auto, any configured LLM is selectable. The
-              // chosen one is the default; for opencode the local vLLM/Ollama
-              // models are also injected into the runner config so they can be
-              // switched inside the terminal (see runner-service).
-              const CLI_RUNNERS = new Set(['opencode', 'hermes', 'openclaw', 'aider']);
+              // For the multi-provider CLI runners (opencode, openclaw, aider)
+              // and sandbox/Auto, any configured LLM is selectable. The chosen
+              // one is the default; for opencode the local vLLM/Ollama models
+              // are also injected into the runner config so they can be switched
+              // inside the terminal (see runner-service). hermes is handled in
+              // the terminal-driven branch above, so it never reaches here.
+              const CLI_RUNNERS = new Set(['opencode', 'openclaw', 'aider']);
               const effectiveRunner = form.runner || resolveAutoRunner(form.llmConfigId);
               const isCliRunner = CLI_RUNNERS.has(effectiveRunner);
               const placeholderLabel = isCliRunner
@@ -266,7 +273,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
                 </select>
               );
             })()}
-            {['opencode', 'hermes', 'openclaw', 'aider'].includes(form.runner) && (
+            {['opencode', 'openclaw', 'aider'].includes(form.runner) && (
               <p className="text-[11px] text-dark-500 mt-1">Local vLLM/Ollama models are also injected into the runner; OpenCode lets you switch between them in the terminal. Your selection here is the default.</p>
             )}
             {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (

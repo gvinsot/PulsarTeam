@@ -98,8 +98,8 @@ def test_openclaw_dangerous_permissions_write_yolo_policy(tmp_path):
     cfg = json.loads((tmp_path / ".openclaw" / "openclaw.json").read_text())
     approvals = json.loads((tmp_path / ".openclaw" / "exec-approvals.json").read_text())
     assert cfg["tools"]["exec"]["mode"] == "full"
-    assert cfg["tools"]["exec"]["security"] == "full"
-    assert cfg["tools"]["exec"]["ask"] == "off"
+    assert "security" not in cfg["tools"]["exec"]
+    assert "ask" not in cfg["tools"]["exec"]
     assert approvals["defaults"]["security"] == "full"
     assert approvals["defaults"]["ask"] == "off"
     assert approvals["defaults"]["askFallback"] == "full"
@@ -124,15 +124,24 @@ def test_openclaw_disabling_dangerous_permissions_clears_managed_policy(tmp_path
     assert not (tmp_path / ".openclaw" / ".pulsar-managed-permissions.json").exists()
 
 
-def test_hermes_maps_local_provider_to_auto():
+def test_hermes_is_terminal_driven_no_model_flag():
+    """hermes no longer forwards the Settings per-agent model as --model; the
+    model is chosen in the terminal (~/.hermes/config.yaml). The shared
+    _agent_env still injects a local provider's endpoint/key so a terminal-
+    selected local model can still reach its server."""
     os.environ["RUNNER_TYPE"] = "hermes"
-    from backends.hermes import _PROVIDER_TO_HERMES, _resolve_hermes_provider_and_model
+    from backends.hermes import HermesBackend
 
-    for provider in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
-        assert _PROVIDER_TO_HERMES.get(provider) == "auto", provider
+    backend = HermesBackend()
+    backend.set_agent_llm_config("agent", {
+        "provider": "vllm", "model": "qwen", "endpoint": "http://localhost:8000/v1",
+        "apiKey": "k",
+    })
 
-    provider, model = _resolve_hermes_provider_and_model(
-        {"provider": "vllm", "model": "qwen"}
-    )
-    assert provider == "auto"
-    assert model == "qwen"
+    args = backend._common_chat_args("agent", None)
+    assert "--model" not in args
+    assert "--provider" not in args
+
+    env = backend._agent_env({"home": "/tmp/agent", "username": "agent"}, "agent")
+    assert env["OPENAI_BASE_URL"] == "http://localhost:8000/v1"
+    assert env["OPENAI_API_KEY"] == "k"
