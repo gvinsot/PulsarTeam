@@ -14,7 +14,6 @@ import assert from 'node:assert/strict';
 // ── Module mocks — must be registered BEFORE importing modules under test ────
 
 const noop = async () => {};
-const noopSync = () => {};
 
 // Mock database: every export as a no-op
 mock.module('../database.js', {
@@ -216,13 +215,6 @@ mock.module('../configManager.js', {
       intervalMinutes: 5, cooldownMinutes: 1, maxReminders: 3,
       intervalMs: 300000, cooldownMs: 60000,
     }),
-  },
-});
-
-mock.module('../jiraSync.js', {
-  namedExports: {
-    onTaskStatusChanged: noopSync,
-    executeTransitionActions: noop,
   },
 });
 

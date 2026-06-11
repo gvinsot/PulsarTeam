@@ -922,13 +922,6 @@ export const api = {
   getGlobalAgentTime: (days = 30) =>
     apiFetch(`${API_BASE}/agents/tasks/stats/agent-time?days=${days}`, { headers: getHeaders() }).then(handleResponse),
 
-  // Jira board sync (env-config-based)
-  getJiraSyncStatus: () =>
-    apiFetch(`${API_BASE}/jira/sync-status`, { headers: getHeaders() }).then(handleResponse),
-
-  getJiraColumns: () =>
-    apiFetch(`${API_BASE}/jira/columns`, { headers: getHeaders() }).then(handleResponse),
-
   // Jira (per-agent / per-board)
   getJiraStatus: (agentId?: string, boardId?: string) => {
     const params = new URLSearchParams();

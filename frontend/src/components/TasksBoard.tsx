@@ -33,7 +33,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   const [createDefaultStatus, setCreateDefaultStatus] = useState(null);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
   const [editInstructionsCol, setEditInstructionsCol] = useState(null);
-  const [jiraStatus, setJiraStatus] = useState(null);
   const [showDeletedTasks, setShowDeletedTasks] = useState(false);
   const [shareBoard, setShareBoard] = useState(null);
   const [activityTarget, setActivityTarget] = useState(null);
@@ -79,7 +78,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       }
     }
     loadBoards();
-    api.getJiraSyncStatus().then(setJiraStatus).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -1041,7 +1039,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         <WorkflowEditor
           workflow={workflow}
           agents={agents.filter(a => a.boardId === activeBoardId)}
-          jiraStatus={jiraStatus}
           onClose={() => setShowWorkflowEditor(false)}
           onSave={handleSaveWorkflow}
         />

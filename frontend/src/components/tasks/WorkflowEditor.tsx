@@ -98,13 +98,7 @@ function ColorPicker({ value, onChange }) {
 
 // ── WorkflowEditor ──────────────────────────────────────────────────────────
 
-interface JiraColumn {
-  name: string;
-  statusIds: string[];
-  statusNames?: string[];
-}
-
-export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
+export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
   const [cols, setCols] = useState(() => JSON.parse(JSON.stringify(workflow.columns)));
   const [transitions, setTransitions] = useState(() => {
     const raw = JSON.parse(JSON.stringify(workflow.transitions));
@@ -112,18 +106,9 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-  const [jiraColumns, setJiraColumns] = useState<JiraColumn[]>([]);
   const [showJson, setShowJson] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState(null);
-
-  const jiraEnabled = jiraStatus?.enabled || false;
-
-  // Fetch Jira columns for dropdowns.
-  useEffect(() => {
-    if (!jiraEnabled) return;
-    api.getJiraColumns().then(setJiraColumns).catch(() => {});
-  }, [jiraEnabled]);
 
   const enabledAgents = (agents || []).filter(a => a.enabled !== false);
   const availableRoles = [...new Set<string>(enabledAgents.map(a => a.role).filter(Boolean))].sort();
@@ -318,39 +303,11 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                               </button>
                             </div>
                     <select value={t.trigger || 'on_enter'}
-                      onChange={e => {
-                        const patch: { trigger: string; jiraStatusIds?: string[]; jiraStatusNames?: string[] } = { trigger: e.target.value };
-                        if (e.target.value === 'jira_ticket') { patch.jiraStatusIds = []; patch.jiraStatusNames = []; }
-                        updateTransition(idx, patch);
-                      }}
+                      onChange={e => updateTransition(idx, { trigger: e.target.value })}
                       className="w-full px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200">
                       <option value="on_enter">On enter (immediate)</option>
                       <option value="condition">When conditions met (periodic)</option>
-                      {jiraEnabled && <option value="jira_ticket">🔗 Jira ticket arrives</option>}
                     </select>
-                    {t.trigger === 'jira_ticket' && (
-                      <div className="mt-2 pl-3 border-l-2 border-blue-500/30 space-y-1.5">
-                        <div className="text-[10px] text-dark-400">Import tickets from Jira column(s):</div>
-                        {jiraColumns.map(jc => (
-                          <label key={jc.name} className="flex items-center gap-2 text-xs text-dark-200 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={(t.jiraStatusIds || []).some(id => jc.statusIds.includes(id))}
-                              onChange={e => {
-                                const current = new Set(t.jiraStatusIds || []);
-                                const currentNames = new Set(t.jiraStatusNames || []);
-                                jc.statusIds.forEach(id => e.target.checked ? current.add(id) : current.delete(id));
-                                (jc.statusNames || []).forEach(n => e.target.checked ? currentNames.add(n) : currentNames.delete(n));
-                                updateTransition(idx, { jiraStatusIds: [...current], jiraStatusNames: [...currentNames] });
-                              }}
-                              className="rounded border-dark-600"
-                            />
-                            {jc.name}{jc.statusIds.length === 0 && <span className="text-dark-500 text-[9px] ml-1">(no statuses mapped)</span>}
-                          </label>
-                        ))}
-                        {jiraColumns.length === 0 && <div className="text-[10px] text-dark-500 italic">Loading Jira columns...</div>}
-                      </div>
-                    )}
                     {t.trigger === 'condition' && (
                       <div className="mt-2 space-y-1.5 pl-3 border-l-2 border-amber-500/30">
                         <div className="text-[10px] text-dark-400">All conditions must be true:</div>
@@ -408,7 +365,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                             <select value={getActionKey(action)}
                               onChange={e => changeActionType(idx, ai, e.target.value)}
                               className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                              {ACTION_OPTIONS.filter(o => !o.jira || jiraEnabled).map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              {ACTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
 
                             {/* Role selector for assign_agent and run_agent */}
@@ -442,34 +399,6 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                               </select>
                             )}
 
-                            {/* Jira target status for move_jira_status */}
-                            {action.type === 'move_jira_status' && (
-                              <select
-                                value={(action.jiraStatusIds || [])[0] || ''}
-                                onChange={e => {
-                                  const jc = jiraColumns.find(c => c.statusIds.includes(e.target.value));
-                                  updateAction(idx, ai, { jiraStatusIds: jc ? jc.statusIds : [e.target.value] });
-                                }}
-                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                                <option value="">Jira column...</option>
-                                {jiraColumns.map(jc => (
-                                  <option key={jc.name} value={jc.statusIds[0]}>{jc.name}</option>
-                                ))}
-                              </select>
-                            )}
-
-                            {/* Agent role for jira_ai_comment */}
-                            {action.type === 'jira_ai_comment' && (
-                              <select value={action.role || ''}
-                                onChange={e => updateAction(idx, ai, { role: e.target.value })}
-                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-                                <option value="">Any agent...</option>
-                                {[...new Set<string>((agents || []).map(a => a.role).filter(Boolean))].map(r => (
-                                  <option key={r} value={r}>{r}</option>
-                                ))}
-                              </select>
-                            )}
-
                             <button onClick={() => removeAction(idx, ai)}
                               className="ml-auto p-0.5 text-dark-500 hover:text-red-400">
                               <Trash2 className="w-2.5 h-2.5" />
@@ -489,14 +418,6 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                             />
                           )}
 
-                          {/* Instructions for jira_ai_comment */}
-                          {action.type === 'jira_ai_comment' && (
-                            <textarea value={action.instructions || ''}
-                              onChange={e => updateAction(idx, ai, { instructions: e.target.value })}
-                              placeholder="Custom analysis instructions... (e.g., 'Focus on security risks and testing requirements' or leave empty for default analysis)"
-                              className="w-full bg-dark-900 border border-dark-600 rounded px-2 py-1.5 text-xs text-dark-200 placeholder-dark-500 resize-none h-14"
-                            />
-                          )}
                         </div>
                       ))}
                       <button onClick={() => addAction(idx)}

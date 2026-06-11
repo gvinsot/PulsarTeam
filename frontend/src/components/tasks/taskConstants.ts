@@ -186,8 +186,6 @@ export const ACTION_OPTIONS = [
   { value: 'run_agent:set_type', label: 'Set task type (agent)' },
   { value: 'run_agent:decide', label: 'Instructions (agent)' },
   { value: 'change_status', label: 'Move to status' },
-  { value: 'move_jira_status', label: '🔗 Move Jira ticket to status', jira: true },
-  { value: 'jira_ai_comment', label: '🤖 AI analyze & comment on Jira ticket', jira: true },
 ];
 
 export function createAction(key, cols) {
@@ -199,8 +197,6 @@ export function createAction(key, cols) {
   if (key === 'run_agent:set_type') return { type: 'run_agent', mode: 'set_type', role: '' };
   if (key === 'run_agent:decide') return { type: 'run_agent', mode: 'decide', role: '', instructions: '' };
   if (key === 'change_status') return { type: 'change_status', target: '__next__' };
-  if (key === 'move_jira_status') return { type: 'move_jira_status', jiraStatusIds: [] };
-  if (key === 'jira_ai_comment') return { type: 'jira_ai_comment', role: '', instructions: '' };
   return { type: 'change_status', target: '' };
 }
 
