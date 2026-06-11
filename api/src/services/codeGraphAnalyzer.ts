@@ -25,6 +25,16 @@ const SOURCE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py'];
 // Limits to keep network & memory bounded.
 const MAX_FILES_PER_LAYER = 120;
 const MAX_FILE_BYTES = 200_000;
+const FETCH_FILE_TIMEOUT_MS = 15_000;
+const LLM_REFINE_TIMEOUT_MS = 60_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
 
 export interface GraphNode {
   id: string;
@@ -151,7 +161,7 @@ async function downloadBatch(
       const f = files[idx];
       if (f.size > MAX_FILE_BYTES) continue;
       try {
-        const content = await fetchFile(f.path);
+        const content = await withTimeout(fetchFile(f.path), FETCH_FILE_TIMEOUT_MS, `fetch ${f.path}`);
         if (content != null) results.push({ path: f.path, content });
       } catch {
         /* ignore individual file errors */
@@ -451,10 +461,14 @@ async function refineWithLlm(graph: CodeGraph, llmConfigId: string) {
     apiKey: cfg.apiKey,
   });
 
-  const resp = await provider.chat([
-    { role: 'system', content: sys },
-    { role: 'user', content: user },
-  ], { maxTokens: 4000, temperature: cfg.temperature ?? 0.1 });
+  const resp = await withTimeout<any>(
+    provider.chat([
+      { role: 'system', content: sys },
+      { role: 'user', content: user },
+    ], { maxTokens: 4000, temperature: cfg.temperature ?? 0.1 }),
+    LLM_REFINE_TIMEOUT_MS,
+    'LLM graph refinement',
+  );
 
   const content = (resp?.content || '').trim();
   const jsonMatch = content.match(/\{[\s\S]*\}/);

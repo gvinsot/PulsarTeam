@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Plus, Trash2, FileText, ArrowRightLeft, AlertCircle, BarChart3, Globe, RefreshCw, Link, Save, ScrollText } from 'lucide-react';
 import { api } from '../../api';
@@ -8,6 +8,10 @@ function estimateTokens(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 3.8);
 }
+
+// Handoff runs a full LLM generation server-side, so be generous before
+// declaring the request lost.
+const HANDOFF_TIMEOUT_MS = 5 * 60 * 1000;
 
 export default function ContextTab({ agent, agents, socket, onRefresh }) {
   // RAG state
@@ -49,6 +53,10 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
   const [context, setContext] = useState('');
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
+  // Detaches the in-flight handoff's socket listeners + timeout, so they
+  // don't leak (and fire setState) after unmount or consume a later handoff.
+  const handoffCleanupRef = useRef(null);
+  useEffect(() => () => { handoffCleanupRef.current?.(); }, []);
 
   const otherAgents = agents.filter(a => a.id !== agent.id && a.enabled !== false);
 
@@ -148,15 +156,39 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
 
     try {
       if (socket) {
-        socket.emit(WsEvents.REQ_HANDOFF, { fromId: agent.id, toId: targetId, context: context.trim() });
-        socket.once(WsEvents.HANDOFF_COMPLETE, (data) => {
-          setResult({ success: true, response: data.response });
+        handoffCleanupRef.current?.();
+        const fromId = agent.id;
+        const toId = targetId;
+        let timer = null;
+        const cleanup = () => {
+          socket.off(WsEvents.HANDOFF_COMPLETE, onComplete);
+          socket.off(WsEvents.HANDOFF_ERROR, onError);
+          if (timer) clearTimeout(timer);
+          handoffCleanupRef.current = null;
+        };
+        const onComplete = (data) => {
+          // Ignore completions belonging to a different handoff request.
+          if (data?.fromId && data?.toId && (data.fromId !== fromId || data.toId !== toId)) return;
+          cleanup();
+          setResult({ success: true, response: data?.response });
           setSending(false);
-        });
-        socket.once(WsEvents.HANDOFF_ERROR, (data) => {
-          setResult({ success: false, error: data.error });
+        };
+        const onError = (data) => {
+          cleanup();
+          setResult({ success: false, error: data?.error || 'Handoff failed' });
           setSending(false);
-        });
+        };
+        socket.on(WsEvents.HANDOFF_COMPLETE, onComplete);
+        socket.on(WsEvents.HANDOFF_ERROR, onError);
+        // If the server never responds (handler crash, reconnect between
+        // request and response), unstick the button instead of spinning forever.
+        timer = setTimeout(() => {
+          cleanup();
+          setResult({ success: false, error: 'Handoff timed out — no response from the server.' });
+          setSending(false);
+        }, HANDOFF_TIMEOUT_MS);
+        handoffCleanupRef.current = cleanup;
+        socket.emit(WsEvents.REQ_HANDOFF, { fromId, toId, context: context.trim() });
       } else {
         const res = await api.handoff(agent.id, targetId, context.trim());
         setResult({ success: true, response: res.response });

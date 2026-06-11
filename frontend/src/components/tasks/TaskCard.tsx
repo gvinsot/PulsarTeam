@@ -261,6 +261,13 @@ export default function TaskCard({ task, agents, onDelete, onStop, onResume, onC
       el.removeEventListener('touchstart', handleTouchStart);
       el.removeEventListener('touchmove', handleTouchMove);
       cleanupTouchState();
+      // Unmounting mid-drag (e.g. a task:updated event removed the card):
+      // finalizeTouchDrop will never run, so remove the ghost clone and the
+      // column highlight here and reset the drag refs.
+      if (touchDragRef.current?.ghost) touchDragRef.current.ghost.remove();
+      highlightColumn(null);
+      touchDragRef.current = null;
+      isDraggingRef.current = false;
     };
   }, []);
 
@@ -273,10 +280,10 @@ export default function TaskCard({ task, agents, onDelete, onStop, onResume, onC
         isDraggingRef.current = true;
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('application/json', JSON.stringify({ agentId: task.agentId, taskId: task.id }));
-        setTimeout(() => e.target.classList.add('opacity-40'), 0);
+        setTimeout(() => (e.target as HTMLElement).classList.add('opacity-40'), 0);
       }}
       onDragEnd={(e) => {
-        e.target.classList.remove('opacity-40');
+        (e.target as HTMLElement).classList.remove('opacity-40');
         // Reset after a tick so click doesn't fire after drop
         setTimeout(() => { isDraggingRef.current = false; }, 50);
       }}

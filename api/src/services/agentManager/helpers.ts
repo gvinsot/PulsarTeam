@@ -1,23 +1,27 @@
 // ─── Standalone helper functions ─────────────────────────────────────────────
-import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
-import path from 'path';
 
 // ─── File System Handoff ────────────────────────────────────────────────────────
 export async function transferUserFiles(fromId: string, toId: string): Promise<{ success: boolean; message: string }> {
-  const tempDir = path.join('/tmp', `handoff-${uuidv4()}`);
   const fromHomeDir = `/home/${fromId}`;
   const toHomeDir = `/home/${toId}`;
 
   try {
-    await fs.mkdir(tempDir, { recursive: true });
-    await fs.cp(fromHomeDir, tempDir, { recursive: true });
-    await fs.chmod(tempDir, 0o755);
-    await fs.rename(tempDir, toHomeDir);
+    await fs.access(fromHomeDir);
+  } catch {
+    // Agent home directories live in the runner-service container on most
+    // deployments, not on this host — report that explicitly instead of
+    // failing later with a misleading filesystem error.
+    return { success: false, message: `Source home directory ${fromHomeDir} does not exist on this host — no files were transferred` };
+  }
+
+  try {
+    // Copy into place: rename() fails with ENOTEMPTY when the target home
+    // already has files and with EXDEV across filesystems (tmpfs /tmp).
+    await fs.cp(fromHomeDir, toHomeDir, { recursive: true, force: true });
     return { success: true, message: 'File system handoff completed successfully' };
   } catch (error: any) {
     console.error('File system handoff failed:', error);
-    try { await fs.rm(tempDir, { recursive: true, force: true }); } catch {}
     return { success: false, message: error.message };
   }
 }

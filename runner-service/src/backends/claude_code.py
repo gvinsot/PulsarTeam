@@ -33,6 +33,7 @@ from .claude_token_store import (
     get_token_cooldown_until,
     refresh_oauth_token, refresh_agent_token,
     auth_method, claude_auth_status,
+    run_blocking,
 )
 from .claude_oauth import (
     try_exchange_code_from_prompt,
@@ -129,21 +130,21 @@ class ClaudeCodeBackend(RunnerBackend):
         # here — the CLI itself will refresh if it needs to.
         if agent_user:
             _owner_id = agent_user.get("owner_id")
-            if not resolve_token(agent_user):
+            if not await run_blocking(resolve_token, agent_user):
                 global_token = load_saved_token()
                 if global_token:
                     global_refresh = get_saved_refresh_token()
                     if _owner_id:
-                        save_owner_token(_owner_id, global_token, refresh_token=global_refresh)
+                        await run_blocking(save_owner_token, _owner_id, global_token, refresh_token=global_refresh)
                     else:
                         save_agent_token(agent_user, global_token, refresh_token=global_refresh)
 
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        configure_claude_mcp(effective_user, agent_id)
-        configure_claude_instructions(effective_user, agent_id)
+        await run_blocking(configure_claude_mcp, effective_user, agent_id)
+        await run_blocking(configure_claude_instructions, effective_user, agent_id)
         self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
         seed_onboarding_state(effective_user)
-        seed_credentials_file(effective_user)
+        await run_blocking(seed_credentials_file, effective_user)
 
         # Reuse _build_cmd to get the same flags as the chat path, but in
         # interactive mode (no session_id → no --resume; the user drives
@@ -158,7 +159,7 @@ class ClaudeCodeBackend(RunnerBackend):
             session_id=None,
             is_resume=False,
         )
-        env = get_agent_env(effective_user)
+        env = await run_blocking(get_agent_env, effective_user)
         kwargs = get_subprocess_kwargs(effective_user) or {}
 
         # Reverse-sync hook: when the user runs `/login` inside the TUI, the
@@ -572,19 +573,19 @@ class ClaudeCodeBackend(RunnerBackend):
         if agent_user:
             _owner_id_sync = agent_user.get("owner_id")
             # Bootstrap from global token if agent has none yet (mirrors stream_events)
-            if not resolve_token(agent_user):
+            if not await run_blocking(resolve_token, agent_user):
                 global_token = load_saved_token()
                 if global_token:
                     global_refresh = get_saved_refresh_token()
                     if _owner_id_sync:
-                        save_owner_token(_owner_id_sync, global_token, refresh_token=global_refresh)
+                        await run_blocking(save_owner_token, _owner_id_sync, global_token, refresh_token=global_refresh)
                         logger.info(f"[Owner Auth] Bootstrapped owner {_owner_id_sync} with global token")
                     else:
                         save_agent_token(agent_user, global_token, refresh_token=global_refresh)
                         logger.info(f"[Agent Auth] Bootstrapped agent {agent_user['username']} with global token")
-            if is_agent_token_expired(agent_user) and time.time() >= cooldown:
+            if await run_blocking(is_agent_token_expired, agent_user) and time.time() >= cooldown:
                 refreshed = await refresh_agent_token(agent_user)
-                if not refreshed and not resolve_token(agent_user):
+                if not refreshed and not await run_blocking(resolve_token, agent_user):
                     login_url = initiate_owner_login(_owner_id_sync) if _owner_id_sync else initiate_agent_login(agent_id)
                     return {
                         "status": "auth_required",
@@ -593,7 +594,7 @@ class ClaudeCodeBackend(RunnerBackend):
                         "login_url": login_url,
                     }
             # Final guard: claude CLI exits silently with rc=0 if there's no token at all.
-            if not resolve_token(agent_user):
+            if not await run_blocking(resolve_token, agent_user):
                 who = f"owner {_owner_id_sync}" if _owner_id_sync else f"agent {agent_id}"
                 logger.error(f"[Auth] No token available for {who} — cannot spawn Claude CLI")
                 login_url = initiate_owner_login(_owner_id_sync) if _owner_id_sync else initiate_agent_login(agent_id)
@@ -630,8 +631,8 @@ class ClaudeCodeBackend(RunnerBackend):
         # run as the server's root UID. Off by default — when off, we keep the
         # dedicated agent UID resolved by ensure_agent_user.
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        configure_claude_mcp(effective_user, agent_id)
-        configure_claude_instructions(effective_user, agent_id)
+        await run_blocking(configure_claude_mcp, effective_user, agent_id)
+        await run_blocking(configure_claude_instructions, effective_user, agent_id)
         # Translate permissions (network / filesystem / execution.shell) into
         # native Claude Code deny rules in the per-agent settings.json. Done
         # at every spawn so toggles take effect on the next message without
@@ -644,7 +645,7 @@ class ClaudeCodeBackend(RunnerBackend):
         seed_onboarding_state(effective_user)
         # Seed `.claude/.credentials.json` as defense in depth alongside the
         # env-var token injection.
-        seed_credentials_file(effective_user)
+        await run_blocking(seed_credentials_file, effective_user)
 
         # Decide initial session strategy. If the caller handed us a
         # session_id, try to --resume it (fast path: prior turns live in
@@ -658,6 +659,10 @@ class ClaudeCodeBackend(RunnerBackend):
         used_prompt = self._extract_resume_prompt(messages, prompt) if is_resume else replay_prompt
 
         async def _run_sync_proc(sid: str, resume: bool, p_prompt: str):
+            # Expose the spawned child on the outer `proc` so the caller's
+            # timeout / cancellation handlers can terminate it even when this
+            # closure raises before returning.
+            nonlocal proc
             cmd, proc_cwd = self._build_cmd(
                 output_format="json", system_prompt=system_prompt,
                 agent_id=agent_id, task_id=task_id,
@@ -678,11 +683,12 @@ class ClaudeCodeBackend(RunnerBackend):
                 # historically produced.
                 _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
                 preexec_fn = _subp_kwargs.get("preexec_fn")
+                spawn_env = await run_blocking(get_agent_env, effective_user)
                 try:
                     interactive_result = await asyncio.wait_for(
                         run_interactive(
                             cmd=cmd, cwd=proc_cwd,
-                            env=get_agent_env(effective_user),
+                            env=spawn_env,
                             prompt=p_prompt, preexec_fn=preexec_fn,
                         ),
                         timeout=TIMEOUT,
@@ -709,6 +715,7 @@ class ClaudeCodeBackend(RunnerBackend):
                 se_b = (interactive_result.get("stderr") or "").encode("utf-8")
                 return fp, so_b, se_b
 
+            spawn_env = await run_blocking(get_agent_env, effective_user)
             try:
                 p = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -716,7 +723,7 @@ class ClaudeCodeBackend(RunnerBackend):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=proc_cwd,
-                    env=get_agent_env(effective_user),
+                    env=spawn_env,
                     **get_subprocess_kwargs(effective_user),
                 )
             except PermissionError as spawn_err:
@@ -730,10 +737,30 @@ class ClaudeCodeBackend(RunnerBackend):
                     f"The dedicated agent UID likely can't traverse cwd or its parents — "
                     f"see runner-service logs for the per-component mode/owner dump."
                 ) from spawn_err
-            so, se = await asyncio.wait_for(
-                p.communicate(input=p_prompt.encode("utf-8")),
-                timeout=TIMEOUT,
-            )
+            proc = p
+            try:
+                so, se = await asyncio.wait_for(
+                    p.communicate(input=p_prompt.encode("utf-8")),
+                    timeout=TIMEOUT,
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                # Reap the child here so every caller of this closure (initial
+                # run, BrokenPipe retry, resume-miss replay) is covered, not
+                # just the outer try/except.
+                if p.returncode is None:
+                    try:
+                        p.terminate()
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                    else:
+                        try:
+                            await asyncio.wait_for(p.wait(), timeout=5)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            try:
+                                p.kill()
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                raise
             return p, so, se
 
         proc = None
@@ -753,19 +780,22 @@ class ClaudeCodeBackend(RunnerBackend):
             if proc and proc.returncode is None:
                 try:
                     proc.terminate()
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
                 else:
                     try:
                         await asyncio.wait_for(proc.wait(), timeout=5)
                     except asyncio.TimeoutError:
-                        proc.kill()
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, PermissionError):
+                            pass
             return {"status": "timeout", "output": "", "error": f"Execution timeout after {TIMEOUT}s"}
         except asyncio.CancelledError:
             if proc and proc.returncode is None:
                 try:
                     proc.terminate()
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
                     pass
             raise
 
@@ -932,21 +962,21 @@ class ClaudeCodeBackend(RunnerBackend):
 
         _owner_id = agent_user.get("owner_id") if agent_user else None
         if agent_user:
-            if not resolve_token(agent_user):
+            if not await run_blocking(resolve_token, agent_user):
                 global_token = load_saved_token()
                 if global_token:
                     global_refresh = get_saved_refresh_token()
                     if _owner_id:
-                        save_owner_token(_owner_id, global_token, refresh_token=global_refresh)
+                        await run_blocking(save_owner_token, _owner_id, global_token, refresh_token=global_refresh)
                         logger.info(f"[Owner Auth] Bootstrapped owner {_owner_id} with global token")
                     else:
                         save_agent_token(agent_user, global_token, refresh_token=global_refresh)
                         logger.info(f"[Agent Auth] Bootstrapped agent {agent_user['username']} with global token")
-            if is_agent_token_expired(agent_user) and time.time() >= cooldown:
+            if await run_blocking(is_agent_token_expired, agent_user) and time.time() >= cooldown:
                 refreshed = await refresh_agent_token(agent_user)
                 if not refreshed:
                     who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
-                    if not resolve_token(agent_user):
+                    if not await run_blocking(resolve_token, agent_user):
                         logger.error(f"[Auth] No valid token for {who} — requiring re-authentication")
                         if agent_user:
                             login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
@@ -961,7 +991,7 @@ class ClaudeCodeBackend(RunnerBackend):
                     logger.warning(f"[Auth] Proactive token refresh failed for {who}, continuing with existing token...")
             # Final guard: if we still have no token after bootstrap, fail fast.
             # Without this, claude CLI exits silently with rc=0 and no output.
-            if not resolve_token(agent_user):
+            if not await run_blocking(resolve_token, agent_user):
                 who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
                 logger.error(f"[Auth] No token available for {who} — cannot spawn Claude CLI")
                 login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
@@ -998,12 +1028,12 @@ class ClaudeCodeBackend(RunnerBackend):
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        configure_claude_mcp(effective_user, agent_id)
-        configure_claude_instructions(effective_user, agent_id)
+        await run_blocking(configure_claude_mcp, effective_user, agent_id)
+        await run_blocking(configure_claude_instructions, effective_user, agent_id)
         self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
         # See run_sync for rationale on both seeds.
         seed_onboarding_state(effective_user)
-        seed_credentials_file(effective_user)
+        await run_blocking(seed_credentials_file, effective_user)
 
         # Same resume/replay strategy as run_sync. The route handler hands us
         # `prompt` already flattened from the full conversation history (it's
@@ -1046,10 +1076,11 @@ class ClaudeCodeBackend(RunnerBackend):
             def _push_event(ev: dict) -> None:
                 loop.call_soon_threadsafe(event_queue.put_nowait, ev)
 
+            spawn_env = await run_blocking(get_agent_env, effective_user)
             runner_task = asyncio.create_task(asyncio.wait_for(
                 run_interactive(
                     cmd=cmd, cwd=proc_cwd,
-                    env=get_agent_env(effective_user),
+                    env=spawn_env,
                     prompt=used_prompt, preexec_fn=preexec_fn,
                     on_event=_push_event,
                 ),
@@ -1125,6 +1156,7 @@ class ClaudeCodeBackend(RunnerBackend):
             )
             logger.info(f"Streaming Claude Code{agent_label} (prompt={len(p_prompt)}B, resume={resume}): {p_prompt[:100]}...")
             logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
+            spawn_env = await run_blocking(get_agent_env, effective_user)
             try:
                 p = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -1132,7 +1164,7 @@ class ClaudeCodeBackend(RunnerBackend):
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=proc_cwd,
-                    env=get_agent_env(effective_user),
+                    env=spawn_env,
                     limit=10 * 1024 * 1024,
                     **get_subprocess_kwargs(effective_user),
                 )
@@ -1147,6 +1179,10 @@ class ClaudeCodeBackend(RunnerBackend):
                     f"The dedicated agent UID likely can't traverse cwd or its parents — "
                     f"see runner-service logs for the per-component mode/owner dump."
                 ) from spawn_err
+            # Drain stderr concurrently so a chatty CLI can't fill the pipe and
+            # stall mid-run. All later stderr reads must go through this task —
+            # a direct p.stderr.read() would race it.
+            se_task = asyncio.create_task(p.stderr.read())
             try:
                 p.stdin.write(p_prompt.encode("utf-8"))
                 await p.stdin.drain()
@@ -1155,7 +1191,7 @@ class ClaudeCodeBackend(RunnerBackend):
             except BrokenPipeError:
                 stderr_out = ""
                 try:
-                    stderr_out = (await asyncio.wait_for(p.stderr.read(), timeout=5)).decode("utf-8", errors="replace").strip()
+                    stderr_out = (await asyncio.wait_for(se_task, timeout=5)).decode("utf-8", errors="replace").strip()
                 except Exception:
                     pass
                 try:
@@ -1167,10 +1203,10 @@ class ClaudeCodeBackend(RunnerBackend):
                     f"stderr: {stderr_out[:500]}" if stderr_out else
                     f"Claude CLI exited before reading prompt (rc={p.returncode})"
                 )
-            return p
+            return p, se_task
 
         try:
-            proc = await _start_stream_proc(current_session_id, is_resume, used_prompt)
+            proc, stderr_task = await _start_stream_proc(current_session_id, is_resume, used_prompt)
         except BrokenPipeError:
             if is_resume:
                 logger.warning(f"[Session] --resume {current_session_id[:12]} BrokenPipe — falling back to fresh session + replay")
@@ -1178,7 +1214,7 @@ class ClaudeCodeBackend(RunnerBackend):
                 is_resume = False
                 used_prompt = replay_prompt
                 try:
-                    proc = await _start_stream_proc(current_session_id, False, used_prompt)
+                    proc, stderr_task = await _start_stream_proc(current_session_id, False, used_prompt)
                 except BrokenPipeError as e:
                     logger.error(f"[Session] Fallback replay also failed: {e}")
                     raise
@@ -1200,8 +1236,25 @@ class ClaudeCodeBackend(RunnerBackend):
         # already streamed so the trailing `assistant` event doesn't duplicate.
         streamed_block_indices: set[int] = set()
 
+        timed_out = False
+
+        async def _stdout_lines():
+            # Overall deadline so a stalled CLI (waiting for input that will
+            # never come) can't hang the SSE stream forever. readline()
+            # returns b"" at EOF, ending iteration exactly like `async for`.
+            io_loop = asyncio.get_running_loop()
+            stream_deadline = io_loop.time() + TIMEOUT
+            while True:
+                remaining = stream_deadline - io_loop.time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                if not raw:
+                    return
+                yield raw
+
         try:
-            async for line in proc.stdout:
+            async for line in _stdout_lines():
                 # Keep only the line terminator stripped — preserve all internal
                 # and leading whitespace so plain-text CLI output (auth banners,
                 # error messages) is not silently mangled when re-emitted.
@@ -1544,10 +1597,19 @@ class ClaudeCodeBackend(RunnerBackend):
                     if VERBOSE:
                         logger.debug(f"Unhandled event type: {event_type}")
 
+        except asyncio.TimeoutError:
+            timed_out = True
+            # Kill before the finally's wait so cleanup can't block on the
+            # stalled CLI.
+            try:
+                proc.kill()
+            except (ProcessLookupError, PermissionError):
+                pass
         except asyncio.CancelledError:
+            stderr_task.cancel()
             try:
                 proc.terminate()
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
             raise
         finally:
@@ -1556,9 +1618,16 @@ class ClaudeCodeBackend(RunnerBackend):
             except asyncio.CancelledError:
                 pass
 
+        if timed_out:
+            # Do NOT fall through to the resume/replay fallbacks below — they
+            # could re-spawn the CLI we just killed.
+            stderr_task.cancel()
+            yield {"type": "error", "content": f"Execution timeout after {TIMEOUT}s"}
+            return
+
         # Read any stderr once after process completion (used by both branches below)
         try:
-            stderr_text = (await proc.stderr.read()).decode("utf-8", errors="replace").strip()
+            stderr_text = (await stderr_task).decode("utf-8", errors="replace").strip()
         except Exception:
             stderr_text = ""
 

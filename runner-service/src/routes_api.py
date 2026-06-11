@@ -302,11 +302,18 @@ async def execute_code(
     try:
         logger.info(f"Executing {request.language} code ({len(request.code)} chars)...")
 
+        # Run the blocking executors in a worker thread so a slow command can't
+        # stall the event loop; the outer timeout (70s) stays strictly above the
+        # executors' own 60s subprocess timeout, which bounds the worker thread.
         if request.language == "python":
-            return ExecutionResponse(status="success", output=execute_python(request.code))
+            output = await asyncio.wait_for(asyncio.to_thread(execute_python, request.code), timeout=70)
+            return ExecutionResponse(status="success", output=output)
         if request.language in ("shell", "bash"):
-            return ExecutionResponse(status="success", output=execute_shell(request.code))
+            output = await asyncio.wait_for(asyncio.to_thread(execute_shell, request.code), timeout=70)
+            return ExecutionResponse(status="success", output=output)
         return ExecutionResponse(status="error", output="", error=f"Unsupported language: {request.language}")
+    except asyncio.TimeoutError:
+        return ExecutionResponse(status="error", output="", error="Code execution timed out")
     except Exception as e:
         logger.error(f"Code execution error: {str(e)}", exc_info=True)
         return ExecutionResponse(status="error", output="", error=str(e))
@@ -458,6 +465,11 @@ async def exec_shell(
         )
 
     timeout = min(request.timeout, 120)
+    # Clamp the caller-requested output cap to a 32 MiB server-side
+    # ceiling. This covers a 20 MB attachment after base64 inflation
+    # (~33%) while still bounding worst-case memory use.
+    output_ceiling = 32 * 1024 * 1024
+    max_out = max(1, min(request.max_output, output_ceiling))
 
     # Ensure the agent's HOME exists so credential helpers, ~/.gitconfig and
     # ~/.git-credentials installed by /projects/ensure are picked up.
@@ -478,13 +490,22 @@ async def exec_shell(
         )
         stdout_parts = []
         stderr_parts = []
+        captured_bytes = 0
+        truncated = False
 
         async def read_pipe(pipe, parts, is_stderr=False):
+            nonlocal captured_bytes, truncated
             while True:
                 chunk = await pipe.read(4096)
                 if not chunk:
                     break
-                parts.append(chunk)
+                # Cap in-memory accumulation at the server ceiling, but keep
+                # draining so the child never blocks on a full pipe buffer.
+                if captured_bytes < output_ceiling:
+                    parts.append(chunk)
+                    captured_bytes += len(chunk)
+                else:
+                    truncated = True
                 await pty_session.append_terminal_transcript(x_agent_id, chunk)
 
         await asyncio.wait_for(asyncio.gather(
@@ -499,12 +520,10 @@ async def exec_shell(
         output = stdout
         if stderr:
             output += f"\n[stderr] {stderr}"
+        if truncated:
+            output += "\n[output truncated: 32 MiB server-side cap reached]"
         if proc.returncode != 0:
             output += f"\n[exit code: {proc.returncode}]"
-        # Clamp the caller-requested output cap to a 32 MiB server-side
-        # ceiling. This covers a 20 MB attachment after base64 inflation
-        # (~33%) while still bounding worst-case memory use.
-        max_out = max(1, min(request.max_output, 32 * 1024 * 1024))
         if proc.returncode != 0:
             return ExecutionResponse(
                 status="error",
@@ -713,6 +732,14 @@ async def openai_chat_completions(
             logger.error(f"{BACKEND.name} CLI subprocess failed: {e}")
             error_msg = f"Agent subprocess failed to start: {e}"
             yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]})}\n\n"
+        except Exception as e:
+            # Surface backend failures as a content delta and fall through to
+            # the finish chunk + [DONE] so the consumer never sees a truncated
+            # stream with no error text. CancelledError (client disconnect) is
+            # a BaseException and still propagates.
+            logger.exception(f"{BACKEND.name} stream failed mid-response")
+            error_msg = f"Agent stream failed: {type(e).__name__}: {e}"
+            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
 
         finish_chunk = {
             "id": completion_id, "object": "chat.completion.chunk",
@@ -791,25 +818,32 @@ async def openai_completions(
         input_tokens = 0
         output_tokens_val = 0
         cost_usd = 0
-        async for event in BACKEND.stream_events(request.prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
-            event_type = event.get("type", "")
+        try:
+            async for event in BACKEND.stream_events(request.prompt, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id, task_id=x_task_id):
+                event_type = event.get("type", "")
 
-            if event_type == "text":
-                content = event["content"]
-                for piece in chunk_text(content):
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': piece, 'finish_reason': None}]})}\n\n"
-                has_streamed_text = True
-            elif event_type == "result":
-                cost_usd = event.get("cost_usd", 0) or 0
-                total_tokens = event.get("total_tokens", 0) or 0
-                input_tokens = event.get("input_tokens", 0) or 0
-                output_tokens_val = event.get("output_tokens", 0) or 0
-                if not has_streamed_text:
+                if event_type == "text":
                     content = event["content"]
                     for piece in chunk_text(content):
                         yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': piece, 'finish_reason': None}]})}\n\n"
-            elif event_type == "error":
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': event['content'], 'finish_reason': None}]})}\n\n"
+                    has_streamed_text = True
+                elif event_type == "result":
+                    cost_usd = event.get("cost_usd", 0) or 0
+                    total_tokens = event.get("total_tokens", 0) or 0
+                    input_tokens = event.get("input_tokens", 0) or 0
+                    output_tokens_val = event.get("output_tokens", 0) or 0
+                    if not has_streamed_text:
+                        content = event["content"]
+                        for piece in chunk_text(content):
+                            yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': piece, 'finish_reason': None}]})}\n\n"
+                elif event_type == "error":
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': event['content'], 'finish_reason': None}]})}\n\n"
+        except Exception as e:
+            # Same contract as stream_openai_response: emit the failure as a
+            # text chunk and still send the finish chunk + [DONE].
+            logger.exception(f"{BACKEND.name} stream failed mid-response")
+            error_msg = f"Agent stream failed: {type(e).__name__}: {e}"
+            yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': error_msg, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
 
         finish_chunk = {
             "id": completion_id, "object": "text_completion",

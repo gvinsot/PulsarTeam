@@ -34,7 +34,7 @@ from typing import Optional
 from config import logger
 from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
-from .claude_token_store import get_subprocess_kwargs
+from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_mcp_config import configure_openclaw_mcp
 from .runner_instructions_config import configure_openclaw_instructions
 
@@ -235,8 +235,9 @@ class OpenClawBackend(CliBackend):
         """Spawn OpenClaw's TUI for the shared PTY."""
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        self._configure_mcp(effective_user, agent_id)
-        self._configure_instructions(effective_user, agent_id)
+        # Off-loop: both helpers do blocking team-api fetches.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
         configure_openclaw_permissions(
             effective_user or agent_user,
             agent_id,
@@ -252,8 +253,9 @@ class OpenClawBackend(CliBackend):
         # Pass agent_id so the selected model's provider credentials + endpoint
         # are injected (previously omitted, so local/custom models silently fell
         # back to OpenClaw's built-in default with no auth/endpoint). The
-        # overridden `_agent_env` also layers the model env on top.
-        env = self._agent_env(effective_user, agent_id)
+        # overridden `_agent_env` also layers the model env on top. Off-loop:
+        # _get_llm_config may fetch from team-api on a cache miss.
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
         model = _resolve_openclaw_model(self._get_llm_config(agent_id))
         self._verify_model_config(agent_id, model=model, env=env)
 

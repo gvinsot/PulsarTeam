@@ -167,11 +167,15 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
       }
     }
 
-    // Update position for each task in the given order
-    const promises = orderedIds.map((taskId, index) =>
-      pool.query('UPDATE tasks SET position = $1, updated_at = NOW() WHERE id = $2', [index, taskId])
+    // Update all positions in a single atomic statement so a mid-flight
+    // failure can't leave the board half-reordered.
+    const positions = orderedIds.map((_, index) => index);
+    await pool.query(
+      `UPDATE tasks SET position = u.pos, updated_at = NOW()
+       FROM unnest($1::uuid[], $2::bigint[]) AS u(id, pos)
+       WHERE tasks.id = u.id`,
+      [orderedIds, positions]
     );
-    await Promise.all(promises);
 
     // Also update in-memory positions
     for (let i = 0; i < orderedIds.length; i++) {
@@ -443,7 +447,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
         fields: ['boardId', 'status'], bulk: true,
       });
 
-      mgr.saveTaskDirectly(task);
+      await mgr.saveTaskDirectly(task);
 
       // Sync execution state in memory and trigger workflow if status changed
       if (oldStatus !== targetColumn) {

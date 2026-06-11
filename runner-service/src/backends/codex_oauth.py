@@ -23,6 +23,7 @@ import httpx
 
 from config import logger
 from agent_user import ensure_agent_user
+from .claude_token_store import run_blocking
 from .codex_token_store import (
     save_owner_blob, write_local_auth, read_local_auth,
 )
@@ -44,7 +45,20 @@ _agent_oauth_flows: dict[str, dict] = {}
 _owner_oauth_flows: dict[str, dict] = {}
 
 
+# Candidate shape for a pasted line: bare code, `code#state`, or a dotted
+# token. Deliberately broad — _matches_pending_flow does the real gating so
+# a git SHA / UUID / token in a normal chat message is never consumed as a
+# verification code.
 _CODE_RE = re.compile(r'^[A-Za-z0-9_#\-\.]{20,}$')
+
+# Strict shape for a bare code pasted WITHOUT its state (manually extracted
+# from the localhost:1455 callback URL): base64url-ish, and NOT a hex digest
+# (git SHA) or UUID — the strings most likely to stand alone in normal chat.
+_BARE_CODE_RE = re.compile(r'^[A-Za-z0-9_\-]{20,}$')
+_HEX_RE = re.compile(r'^[0-9a-fA-F]{7,64}$')
+_UUID_RE = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+)
 
 
 def _generate_pkce() -> tuple[str, str]:
@@ -344,7 +358,7 @@ async def exchange_owner_code(owner_id: str, code_or_url: str) -> dict:
     refresh_token = resp.get("refresh_token") or ""
     id_token = resp.get("id_token") or ""
     blob = build_blob(access_token, refresh_token, id_token)
-    persisted = save_owner_blob(owner_id, blob)
+    persisted = await run_blocking(save_owner_blob, owner_id, blob)
     _owner_oauth_flows.pop(owner_id, None)
     if not persisted:
         return {"status": "error", "message": "OAuth succeeded but token persistence failed (team-api unreachable)."}
@@ -384,7 +398,7 @@ async def exchange_agent_code(agent_id: str, code_or_url: str,
         # If the agent belongs to an owner, also share via the owner store so
         # every agent for that owner picks it up.
         if owner_id:
-            save_owner_blob(owner_id, blob)
+            await run_blocking(save_owner_blob, owner_id, blob)
     _agent_oauth_flows.pop(agent_id, None)
     if not persisted:
         return {"status": "error", "message": "OAuth succeeded but token persistence failed."}
@@ -397,29 +411,50 @@ async def exchange_agent_code(agent_id: str, code_or_url: str,
 # --- In-chat code exchange ----------------------------------------------------
 
 def _extract_code_from_prompt(prompt: str) -> Optional[str]:
-    """Pull a verification code out of the most recent user turn. Accepts
-    either a bare code or the full localhost:1455 callback URL."""
+    """Pull a candidate verification code out of the most recent user turn.
+    Accepts a bare code, `code#state`, or the full localhost:1455 callback
+    URL. The caller still has to match the candidate against a pending flow."""
     last_user_msg = prompt.strip()
     for line in reversed(prompt.strip().split("\n")):
         line = line.strip()
         if line.startswith("User: "):
             last_user_msg = line[6:].strip()
             break
-    if last_user_msg.startswith("http://localhost:1455"):
+    if last_user_msg.startswith(("http://localhost:1455", "https://localhost:1455")):
         return last_user_msg
     if _CODE_RE.match(last_user_msg):
         return last_user_msg
     return None
 
 
+def _matches_pending_flow(candidate: str, flow: Optional[dict]) -> bool:
+    """True when `candidate` is plausibly THIS flow's verification code.
+
+    The OpenAI authorize URL always carries our `state`, so the callback URL
+    and `code#state` paste forms embed it — those must match the pending
+    flow's state exactly. A bare code (state lost in manual extraction) must
+    pass the strict shape allowlist so ordinary chat content passes through
+    instead of being consumed and killing the pending login flow."""
+    if not flow:
+        return False
+    code, state = _normalize_code(candidate)
+    if not code:
+        return False
+    if state:
+        return state == flow.get("state")
+    if not _BARE_CODE_RE.match(code):
+        return False
+    return not (_HEX_RE.match(code) or _UUID_RE.match(code))
+
+
 async def try_exchange_code_from_prompt(prompt: str,
                                         agent_id: Optional[str] = None,
                                         owner_id: Optional[str] = None) -> Optional[dict]:
-    code = _extract_code_from_prompt(prompt)
-    if not code:
+    candidate = _extract_code_from_prompt(prompt)
+    if not candidate:
         return None
-    if owner_id and owner_id in _owner_oauth_flows:
-        return await exchange_owner_code(owner_id, code)
-    if agent_id and agent_id in _agent_oauth_flows:
-        return await exchange_agent_code(agent_id, code, owner_id=owner_id)
+    if owner_id and _matches_pending_flow(candidate, _owner_oauth_flows.get(owner_id)):
+        return await exchange_owner_code(owner_id, candidate)
+    if agent_id and _matches_pending_flow(candidate, _agent_oauth_flows.get(agent_id)):
+        return await exchange_agent_code(agent_id, candidate, owner_id=owner_id)
     return None

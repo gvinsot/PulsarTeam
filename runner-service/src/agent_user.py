@@ -87,6 +87,31 @@ def _sanitize_agent_id(agent_id: str) -> str:
     return f"agent_{sanitized}" if sanitized else "agent_default"
 
 
+def _chown_home_walk(home_dir: str, agent_uid: int, agent_gid: int) -> None:
+    """Recursive chown/chmod of an agent HOME. Walks the whole tree, so it can
+    take seconds on a large HOME — callers must run it off the event loop
+    (asyncio.to_thread)."""
+    for walk_root, dirs, files in os.walk(home_dir):
+        for name in dirs:
+            dpath = os.path.join(walk_root, name)
+            try:
+                os.lchown(dpath, agent_uid, agent_gid)
+                os.chmod(dpath, 0o700)
+            except OSError as ce:
+                logger.debug(f"[Agent User] skip chown {dpath}: {ce}")
+        for name in files:
+            fpath = os.path.join(walk_root, name)
+            try:
+                os.lchown(fpath, agent_uid, agent_gid)
+            except OSError as ce:
+                logger.debug(f"[Agent User] skip chown {fpath}: {ce}")
+                continue
+            try:
+                os.chmod(fpath, 0o600)
+            except OSError:
+                pass
+
+
 # --- Agent user management ----------------------------------------------------
 
 async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
@@ -193,25 +218,9 @@ async def ensure_agent_user(agent_id: str, owner_id: str = None) -> dict:
                         f"at {home_dir} (uid={agent_uid}) — skipped recursive chown"
                     )
                 else:
-                    for walk_root, dirs, files in os.walk(home_dir):
-                        for name in dirs:
-                            dpath = os.path.join(walk_root, name)
-                            try:
-                                os.lchown(dpath, agent_uid, agent_gid)
-                                os.chmod(dpath, 0o700)
-                            except OSError as ce:
-                                logger.debug(f"[Agent User] skip chown {dpath}: {ce}")
-                        for name in files:
-                            fpath = os.path.join(walk_root, name)
-                            try:
-                                os.lchown(fpath, agent_uid, agent_gid)
-                            except OSError as ce:
-                                logger.debug(f"[Agent User] skip chown {fpath}: {ce}")
-                                continue
-                            try:
-                                os.chmod(fpath, 0o600)
-                            except OSError:
-                                pass
+                    # Walking tens of thousands of files would freeze every
+                    # coroutine (terminals, /health) — run it in a worker thread.
+                    await asyncio.to_thread(_chown_home_walk, home_dir, agent_uid, agent_gid)
             user_info = {"username": username, "uid": agent_uid, "gid": agent_gid, "home": home_dir, "owner_id": owner_id}
             _agent_users[agent_id] = user_info
             logger.info(f"[Agent User] Created isolated home for agent {agent_id[:12]} at {home_dir} (uid={agent_uid}, owner={owner_id})")
@@ -715,7 +724,7 @@ async def _ensure_agent_project_locked(
             # fetch/reset ran as parent UID; new files inherit parent ownership.
             # Re-hand the tree to the agent UID even after timeout/errors so
             # partially updated files remain readable by the dropped CLI.
-            _chown_recursive(project_dir, agent_uid, agent_gid)
+            await asyncio.to_thread(_chown_recursive, project_dir, agent_uid, agent_gid)
         return project_dir
 
     os.makedirs(projects_base, exist_ok=True)
@@ -738,10 +747,12 @@ async def _ensure_agent_project_locked(
     # be picked up by the filesystem fallback in `get_agent_project_dir` (which
     # scans `projects/` and returns the first `.git` it finds) — otherwise a
     # repo switch could leave the agent running in the old repo's cwd.
-    _prune_stale_project_dirs(projects_base, project_dir)
+    await asyncio.to_thread(_prune_stale_project_dirs, projects_base, project_dir)
 
     if os.path.exists(project_dir):
-        shutil.rmtree(project_dir, ignore_errors=True)
+        # Must complete before the clone below — the target dir may not exist
+        # when `git clone` starts.
+        await asyncio.to_thread(shutil.rmtree, project_dir, ignore_errors=True)
 
     ssh_cmd = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
     env = {**os.environ, "GIT_SSH_COMMAND": ssh_cmd, "GIT_TERMINAL_PROMPT": "0"}
@@ -795,7 +806,7 @@ async def _ensure_agent_project_locked(
 
     # Hand the freshly cloned tree over to the agent's UID so the CLI
     # subprocess (which runs under that UID) can read/write it.
-    _chown_recursive(project_dir, agent_uid, agent_gid)
+    await asyncio.to_thread(_chown_recursive, project_dir, agent_uid, agent_gid)
 
     _agent_projects[agent_id] = {"project": project, "path": project_dir, "updated_at": time.monotonic()}
     logger.info(f"[Project] Cloned {project} for agent {agent_id[:12]} at {project_dir}")

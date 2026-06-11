@@ -286,6 +286,9 @@ export async function countUsers() {
     const result = await pool.query('SELECT COUNT(*) as count FROM users');
     return parseInt(result.rows[0].count, 10);
   } catch (err) {
-    return 0;
+    // Rethrow rather than return 0: callers use `countUsers() === 0` to grant
+    // the first user the admin role, so a transient DB error must fail closed.
+    console.error('Failed to count users:', err.message);
+    throw err;
   }
 }

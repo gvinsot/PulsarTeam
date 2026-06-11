@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
+import { safeGet, safeSet, safeRemove } from '../lib/safeStorage';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
 import BatchAgentCard from './BatchAgentCard';
@@ -47,22 +48,23 @@ export default function Dashboard({
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [boards, setBoards] = useState([]);
-  const [boardFilter, setBoardFilterRaw] = useState(() => localStorage.getItem('activeBoardId') || '');
+  const [boardFilter, setBoardFilterRaw] = useState(() => safeGet('activeBoardId') || '');
   const setBoardFilter = useCallback((val) => {
     setBoardFilterRaw(val);
-    if (val) localStorage.setItem('activeBoardId', val);
-    else localStorage.removeItem('activeBoardId');
+    if (val) safeSet('activeBoardId', val);
+    else safeRemove('activeBoardId');
   }, []);
   const [dbProjects, setDbProjects] = useState([]);
-  const [projectFilter, setProjectFilterRaw] = useState(() => localStorage.getItem('activeProjectId') || '');
+  const [projectFilter, setProjectFilterRaw] = useState(() => safeGet('activeProjectId') || '');
   const setProjectFilter = useCallback((val) => {
     setProjectFilterRaw(val);
-    if (val) localStorage.setItem('activeProjectId', val);
-    else localStorage.removeItem('activeProjectId');
+    if (val) safeSet('activeProjectId', val);
+    else safeRemove('activeProjectId');
   }, []);
   const mobileMenuRef = useRef(null);
   const userMenuRef = useRef(null);
-  const { theme, toggleTheme } = useTheme();
+  // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
+  const { theme, toggleTheme } = useTheme() as { theme: string; toggleTheme: () => void };
   const isAdmin = user?.role === 'admin';
   const isBasic = user?.role === 'basic';
 

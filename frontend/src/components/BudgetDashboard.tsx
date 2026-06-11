@@ -7,6 +7,7 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, LineElement,
   PointElement, ArcElement, Title, Tooltip, Legend, Filler
 } from 'chart.js';
+import type { ChartOptions } from 'chart.js';
 import { Bar, Line, Doughnut } from 'react-chartjs-2';
 import { useTheme } from '../contexts/ThemeContext';
 
@@ -20,7 +21,8 @@ function getChartColors(theme) {
 const COLORS = ['#6366f1','#22d3ee','#f59e0b','#ef4444','#10b981','#8b5cf6','#f97316','#ec4899','#14b8a6','#a855f7'];
 
 export default function BudgetDashboard({ agents = [] }) {
-  const { theme } = useTheme();
+  // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
+  const { theme } = useTheme() as { theme: string };
   const [summary, setSummary] = useState(null);
   const [byAgent, setByAgent] = useState([]);
   const [timeline, setTimeline] = useState([]);
@@ -32,6 +34,7 @@ export default function BudgetDashboard({ agents = [] }) {
   const [showSettings, setShowSettings] = useState(false);
   const [editConfig, setEditConfig] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
   const [currency, setCurrency] = useState('$');
 
   const loadData = useCallback(async () => {
@@ -54,8 +57,9 @@ export default function BudgetDashboard({ agents = [] }) {
 
   const handleSaveConfig = async () => {
     setSaving(true);
+    setSaveError(null);
     try { await updateBudgetConfig(editConfig); setConfig(editConfig); setShowSettings(false); loadData(); }
-    catch (err) { console.error('Save config error:', err); }
+    catch (err) { console.error('Save config error:', err); setSaveError(err.message || 'Failed to save settings'); }
     finally { setSaving(false); }
   };
 
@@ -103,7 +107,7 @@ export default function BudgetDashboard({ agents = [] }) {
     plugins: { legend: { labels: { color: cc.legend, font: { size: 11 } } } },
     scales: { x: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid } }, y: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid } } },
   };
-  const doughnutOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: cc.legend, font: { size: 11 }, padding: 12 } } } };
+  const doughnutOpts: ChartOptions<'doughnut'> = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: cc.legend, font: { size: 11 }, padding: 12 } } } };
 
   if (loading && !summary) return <div className="p-6 text-dark-400">Loading budget data...</div>;
 
@@ -119,7 +123,7 @@ export default function BudgetDashboard({ agents = [] }) {
           <select value={timeRange} onChange={e => setTimeRange(Number(e.target.value))} className="bg-dark-800 border border-dark-600 text-dark-200 rounded px-3 py-1.5 text-sm">
             <option value={1}>Last 24h</option><option value={7}>Last 7 days</option><option value={14}>Last 14 days</option><option value={30}>Last 30 days</option>
           </select>
-          <button onClick={() => { setEditConfig({ ...config }); setShowSettings(true); }} className="bg-dark-700 hover:bg-dark-600 text-dark-200 px-3 py-1.5 rounded text-sm">⚙️ Settings</button>
+          <button onClick={() => { setEditConfig({ ...config }); setSaveError(null); setShowSettings(true); }} className="bg-dark-700 hover:bg-dark-600 text-dark-200 px-3 py-1.5 rounded text-sm">⚙️ Settings</button>
           <button onClick={loadData} className="bg-dark-700 hover:bg-dark-600 text-dark-200 px-3 py-1.5 rounded text-sm">🔄</button>
         </div>
       </div>
@@ -251,6 +255,11 @@ export default function BudgetDashboard({ agents = [] }) {
               <p className="text-xs text-dark-500 mt-1">Alert when daily spend exceeds this % of budget</p>
             </div>
             <p className="text-xs text-dark-500">Token costs are managed via LLM configurations in Admin Settings.</p>
+            {saveError && (
+              <div className="px-4 py-3 rounded-lg text-sm font-medium bg-red-900/40 text-red-300 border border-red-800">
+                🚨 {saveError}
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={() => setShowSettings(false)} className="px-4 py-2 bg-dark-700 text-dark-300 rounded text-sm">Cancel</button>
               <button onClick={handleSaveConfig} disabled={saving} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm disabled:opacity-50">{saving ? 'Saving...' : 'Save'}</button>

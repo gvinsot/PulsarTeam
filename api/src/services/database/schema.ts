@@ -116,9 +116,6 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       `);
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_agent ON token_usage_log(agent_id)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage_log(recorded_at)').catch(() => {});
-      // Add user_id column for per-user budget tracking (nullable for backwards compat)
-      await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL`).catch(() => {});
-      await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_log(user_id)').catch(() => {});
       // Add context_tokens column for tracking context window utilization
       await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS context_tokens INTEGER DEFAULT 0`).catch(() => {});
       console.log('✅ Token usage table ready');
@@ -162,16 +159,17 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
       console.log('✅ Users table ready');
 
+      // Add user_id column to token_usage_log for per-user budget tracking
+      // (nullable for backwards compat). Runs here — after the users table is
+      // created — because the FK fails with 42P01 on a fresh database otherwise.
+      await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL`)
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN token_usage_log.user_id failed:', e.message));
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_log(user_id)').catch(() => {});
+
       // Add owner_id column to agents table (legacy — kept for migration)
       await pool.query(`
         ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL
       `).catch(() => {});
-
-      // Add board_id column to agents table — agents are now scoped to boards
-      await pool.query(`
-        ALTER TABLE agents ADD COLUMN IF NOT EXISTS board_id UUID REFERENCES boards(id) ON DELETE SET NULL
-      `).catch(() => {});
-      await pool.query('CREATE INDEX IF NOT EXISTS idx_agents_board ON agents(board_id)').catch(() => {});
 
       // ── LLM Configs table ─────────────────────────────────────────────────
       await pool.query(`
@@ -226,6 +224,8 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_from_status TEXT').catch(() => {});
       // Action running mode (e.g. execute, refine, title) for restart recovery
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_mode TEXT').catch(() => {});
+      // Deferred on_enter retry flag — durable so interrupted chains resume after restart
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pending_on_enter TEXT').catch(() => {});
       // Manual task flag (skips automatic agent processing)
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE').catch(() => {});
       // Position column for manual ordering within columns
@@ -279,9 +279,27 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       // Migration: make user_id nullable & add is_default column for existing installs
       await pool.query('ALTER TABLE boards ALTER COLUMN user_id DROP NOT NULL').catch(() => {});
       await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE').catch(() => {});
+      // Demote any duplicate default boards (oldest wins) before adding the
+      // unique guard — CREATE UNIQUE INDEX would fail on a DB that already has
+      // duplicates. No .catch: if either statement fails the retry loop must
+      // see it, otherwise concurrently booting replicas can each insert their
+      // own default board.
+      await pool.query(`
+        UPDATE boards SET is_default = FALSE
+        WHERE is_default AND id NOT IN (SELECT id FROM boards WHERE is_default ORDER BY created_at LIMIT 1)
+      `);
+      await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_boards_default ON boards (is_default) WHERE is_default');
       // Ensure a single default board exists
       await ensureDefaultBoard(pool);
       console.log('✅ Boards table ready');
+
+      // Add board_id column to agents table — agents are now scoped to boards.
+      // Runs here — after the boards table is created — because the FK fails
+      // with 42P01 on a fresh database otherwise.
+      await pool.query(`
+        ALTER TABLE agents ADD COLUMN IF NOT EXISTS board_id UUID REFERENCES boards(id) ON DELETE SET NULL
+      `).catch((e: any) => console.error('[initDatabase] ADD COLUMN agents.board_id failed:', e.message));
+      await pool.query('CREATE INDEX IF NOT EXISTS idx_agents_board ON agents(board_id)').catch(() => {});
 
       // ── Board Shares table ────────────────────────────────────────────────
       await pool.query(`

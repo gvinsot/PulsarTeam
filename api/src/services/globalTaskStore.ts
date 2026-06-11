@@ -41,7 +41,19 @@ class GlobalTaskStore {
   _load(): void {
     try {
       if (fs.existsSync(TASKS_FILE)) {
-        const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
+        const raw = fs.readFileSync(TASKS_FILE, 'utf8');
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch (parseErr: any) {
+          // The file was readable but its content is corrupt (e.g. truncated
+          // by a crash mid-write). Move it aside instead of letting the next
+          // _save() silently overwrite it with an empty store.
+          const backup = `${TASKS_FILE}.corrupt-${Date.now()}`;
+          fs.renameSync(TASKS_FILE, backup);
+          console.error(`Failed to parse global tasks (${parseErr.message}) — corrupt file backed up to ${backup}`);
+          return;
+        }
         if (Array.isArray(data)) {
           for (const t of data) {
             // Backfill: ensure type and history exist
@@ -59,7 +71,11 @@ class GlobalTaskStore {
   _save(): void {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(TASKS_FILE, JSON.stringify(Array.from(this.tasks.values()), null, 2));
+      // Atomic write: a crash or full disk mid-write must not leave a
+      // truncated tasks file behind (rename replaces the target atomically).
+      const tmp = `${TASKS_FILE}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(Array.from(this.tasks.values()), null, 2));
+      fs.renameSync(tmp, TASKS_FILE);
     } catch (err: any) {
       console.error('Failed to save global tasks:', err.message);
     }

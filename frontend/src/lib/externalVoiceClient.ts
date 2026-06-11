@@ -82,6 +82,7 @@ export class SttSession {
   private sourceNode: MediaStreamAudioSourceNode | null = null;
   private vad = { speechStartedAt: 0, lastSpeechAt: 0, ended: false };
   private stopped = false;
+  private finalizeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private config: SttConfig, private cb: SttCallbacks) {}
 
@@ -139,7 +140,17 @@ export class SttSession {
       };
       stt.onerror = () => this.cb.onError?.('STT WebSocket error');
       stt.onclose = () => {
-        if (this.socket === stt) this.socket = null;
+        // On the normal final/error paths cleanup() nulls this.socket before
+        // the close event fires, so this only handles the service dropping
+        // the connection mid-utterance.
+        if (this.socket !== stt) return;
+        this.socket = null;
+        if (!this.stopped) {
+          this.stopped = true;
+          this.cleanup();
+          this.cb.onError?.('STT connection closed before transcript');
+          this.cb.onStateChange?.('idle');
+        }
       };
     } catch (err: any) {
       this.cb.onError?.(err?.message || 'Could not start microphone');
@@ -158,9 +169,22 @@ export class SttSession {
       this.vad.ended = true;
       this.cb.onStateChange?.('finalizing');
       try { ws.send(JSON.stringify({ type: 'session.end' })); } catch { /* ignore */ }
+      this.armFinalizeTimeout();
     } else {
       this.stop();
     }
+  }
+
+  // The service may never answer session.end (restart, wedged connection) —
+  // bail out of 'finalizing' instead of leaving the mic recording forever.
+  private armFinalizeTimeout(): void {
+    if (this.finalizeTimer) clearTimeout(this.finalizeTimer);
+    this.finalizeTimer = setTimeout(() => {
+      this.finalizeTimer = null;
+      if (this.stopped) return;
+      this.cb.onError?.('STT service did not return a transcript');
+      this.stop();
+    }, 10000);
   }
 
   stop(): void {
@@ -171,6 +195,10 @@ export class SttSession {
   }
 
   private cleanup(): void {
+    if (this.finalizeTimer) {
+      clearTimeout(this.finalizeTimer);
+      this.finalizeTimer = null;
+    }
     try { this.socket?.close(); } catch { /* ignore */ }
     this.socket = null;
     try { this.workletNode?.disconnect(); } catch { /* ignore */ }
@@ -205,6 +233,7 @@ export class SttSession {
         vad.ended = true;
         this.cb.onStateChange?.('finalizing');
         try { ws.send(JSON.stringify({ type: 'session.end' })); } catch { /* ignore */ }
+        this.armFinalizeTimeout();
       }
     }
   }
@@ -266,6 +295,13 @@ export class TtsPlayer {
     ws.onclose = () => {
       this.playbackQueue = this.playbackQueue.then(() => {
         this.socket = null;
+        // Close the AudioContext once the queue drains — stop() handles the
+        // cancelled path, but the normal completion path would leak one live
+        // context (and its audio thread) per spoken message otherwise.
+        if (this.playCtx) {
+          this.playCtx.close().catch(() => {});
+          this.playCtx = null;
+        }
         if (!this.cancelled) this.cb.onEnd?.();
       });
     };

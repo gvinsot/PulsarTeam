@@ -350,7 +350,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
     e.preventDefault();
     if (!editingUser) return;
     try {
-      const updates = {};
+      const updates: { username?: string; role?: string; displayName?: string; password?: string } = {};
       if (editForm.username && editForm.username !== editingUser.username) updates.username = editForm.username;
       if (editForm.role && editForm.role !== editingUser.role) updates.role = editForm.role;
       if (editForm.displayName !== undefined) updates.displayName = editForm.displayName;

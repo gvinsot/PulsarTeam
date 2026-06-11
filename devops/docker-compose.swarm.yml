@@ -10,6 +10,9 @@ services:
       # to Docker secrets by the deployment system (mounted at /run/secrets/<NAME>).
       # App code reads them via api/src/secrets.ts (file first, env fallback).
       - NODE_ENV=production
+      # Keep the V8 heap below the 4G cgroup limit so Node GCs under pressure
+      # instead of being OOM-killed mid-request.
+      - NODE_OPTIONS=--max-old-space-size=3072
       - PORT=${PORT}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - ADMIN_USERNAME=${ADMIN_USERNAME}
@@ -88,6 +91,13 @@ services:
       placement:
         constraints:
           - node.hostname == server-b
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
       restart_policy:
         condition: on-failure
       update_config:
@@ -232,6 +242,7 @@ services:
       # (no-owner) token, if used, must be supplied via the CLAUDE_CODE_OAUTH_TOKEN
       # secret above. Only the large, owner-agnostic Android SDK cache is kept.
       - claudecode-android-cache:/opt/android-sdk
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -259,7 +270,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         order: start-first
         delay: 10s
@@ -305,6 +315,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - sandbox-data:/app/data
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -322,6 +333,13 @@ services:
       placement:
         constraints:
           - node.hostname == server-b
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
       restart_policy:
         condition: on-failure
       update_config:
@@ -359,6 +377,7 @@ services:
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -386,7 +405,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         order: start-first
         delay: 10s
@@ -429,6 +447,7 @@ services:
       - PGID=${CODER_PGID:-1000}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -456,7 +475,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         order: start-first
         delay: 10s
@@ -508,6 +526,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -535,7 +554,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         order: start-first
         delay: 10s
@@ -582,6 +600,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -609,7 +628,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         order: start-first
         delay: 10s
@@ -654,6 +672,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -681,7 +700,6 @@ services:
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         order: start-first
         delay: 10s
@@ -720,10 +738,16 @@ services:
       placement:
         constraints:
           - node.labels.gpu == none
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         delay: 10s
         failure_action: rollback
@@ -739,6 +763,7 @@ services:
       context: ..
       dockerfile: mcp-browser/Dockerfile
     image: registry.methodinfo.fr/mcp-browser:latest
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -767,10 +792,16 @@ services:
       placement:
         constraints:
           - node.labels.gpu == none
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
       restart_policy:
         condition: on-failure
         delay: 5s
-        max_attempts: 3
       update_config:
         delay: 10s
         failure_action: rollback

@@ -39,7 +39,7 @@ from typing import Optional
 from config import logger
 from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
-from .claude_token_store import get_subprocess_kwargs
+from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_instructions_config import configure_aider_instructions
 
 
@@ -144,11 +144,13 @@ class AiderBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         permissions = self._get_permissions(agent_id)
-        self._configure_instructions(effective_user, agent_id)
+        # Off-loop: the helpers below do blocking team-api fetches. Resolving
+        # the env first also warms the per-agent LLM config cache for
+        # _base_args below.
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
 
         cmd = [self.cli_command] + self._base_args(agent_id, permissions)
-
-        env = self._agent_env(effective_user, agent_id)
         model = _resolve_aider_model(self._get_llm_config(agent_id))
         self._verify_model_config(agent_id, model=model, env=env)
 

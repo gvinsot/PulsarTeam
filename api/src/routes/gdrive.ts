@@ -55,12 +55,19 @@ async function refreshGdriveToken(record: OAuthTokenRecord): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    await deleteOAuthToken('gdrive', record.scopeType, record.scopeId);
-    throw new Error(data.error_description || 'Token refresh failed');
+    // Only invalid_grant means the refresh token itself is revoked/expired.
+    // Transient failures (429, 5xx) must keep the token so the next call retries.
+    if (data.error === 'invalid_grant') {
+      await deleteOAuthToken('gdrive', record.scopeType, record.scopeId);
+    } else {
+      console.warn(`⚠️ [Gdrive] Token refresh failed (HTTP ${response.status}) for ${record.scopeType}:${record.scopeId} — keeping token for retry:`, data.error || 'no error body');
+    }
+    throw new Error(data.error_description || data.error || `Token refresh failed (HTTP ${response.status})`);
   }
 
   await storeOAuthToken({
@@ -92,7 +99,9 @@ export function gdriveRoutes() {
 
     const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
     const token = getOAuthToken('gdrive', scopeType, scopeId);
-    const connected = !!(token && (!token.expiresAt || token.expiresAt > Date.now()));
+    // hasOAuthToken treats expired-but-refreshable tokens as connected — the
+    // access token only lasts ~1h but resolveAccessToken refreshes transparently.
+    const connected = hasOAuthToken('gdrive', scopeType, scopeId);
 
     res.json({
       configured: !!config,

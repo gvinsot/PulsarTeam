@@ -7,6 +7,13 @@ import {
 } from 'lucide-react';
 import api from '../api';
 
+// BUG (pre-existing): the api client exposes no generic `get` method, and the backend
+// has no `/api/projects/:name/agents|tasks|branches|commits` endpoints (routes/projects.ts
+// only exposes uuid-based `/api/projects/:id` routes). This component is not imported or
+// routed anywhere; at runtime each call below throws and lands in fetchAll's catch block,
+// rendering the error state. A real fix needs dedicated api.ts methods + backend routes.
+const legacyGet = (path: string): Promise<{ data?: any }> => (api as any).get(path);
+
 export default function ProjectDetailView() {
   const { name } = useParams();
   const navigate = useNavigate();
@@ -25,11 +32,11 @@ export default function ProjectDetailView() {
       setError(null);
       try {
         const [projRes, agentsRes, tasksRes, branchesRes, commitsRes] = await Promise.all([
-          api.get(`/api/projects/${encodeURIComponent(name)}`),
-          api.get(`/api/projects/${encodeURIComponent(name)}/agents`),
-          api.get(`/api/projects/${encodeURIComponent(name)}/tasks`),
-          api.get(`/api/projects/${encodeURIComponent(name)}/branches`),
-          api.get(`/api/projects/${encodeURIComponent(name)}/commits`),
+          legacyGet(`/api/projects/${encodeURIComponent(name)}`),
+          legacyGet(`/api/projects/${encodeURIComponent(name)}/agents`),
+          legacyGet(`/api/projects/${encodeURIComponent(name)}/tasks`),
+          legacyGet(`/api/projects/${encodeURIComponent(name)}/branches`),
+          legacyGet(`/api/projects/${encodeURIComponent(name)}/commits`),
         ]);
         setProject(projRes.data?.project || null);
         setAgents(agentsRes.data?.agents || []);
@@ -100,7 +107,7 @@ export default function ProjectDetailView() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard icon={<CheckCircle size={18} />} label="Completed" value={taskStats.done} color="text-green-400" />
         <StatCard icon={<Activity size={18} />} label="Active" value={taskStats.active} color="text-blue-400" />
-        <StatCard icon={<Clock size={18} />} label="Pending" value={taskStats.pending} color="text-yellow-400" />
+        <StatCard icon={<Clock size={18} />} label="Pending" value={taskStats.waiting} color="text-yellow-400" />
         <StatCard icon={<Users size={18} />} label="Agents" value={agents.length} color="text-purple-400" />
       </div>
 
@@ -168,7 +175,7 @@ export default function ProjectDetailView() {
                   <div className="flex items-center gap-2">
                     <GitBranch size={14} className="text-dark-400" />
                     <span className="text-sm text-dark-100 font-mono">{branch.name}</span>
-                    {branch.protected && <Shield size={12} className="text-yellow-400" title="Protected" />}
+                    {branch.protected && <span title="Protected" className="inline-flex"><Shield size={12} className="text-yellow-400" /></span>}
                   </div>
                   <span className="text-xs text-dark-500 font-mono">{branch.sha?.slice(0, 7)}</span>
                 </div>

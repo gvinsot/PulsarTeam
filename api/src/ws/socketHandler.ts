@@ -1,4 +1,4 @@
-import { getBoardsByUser, updateLastSeen } from '../services/database.js';
+import { getBoardsByUser, updateLastSeen, getPool } from '../services/database.js';
 import { WsEvents } from './events.js';
 
 const connectedUserIds = new Set<string>();
@@ -40,23 +40,37 @@ export function setupSocketHandlers(io, agentManager) {
     // ── Per-user & per-board rooms for isolation ─────────────────────
     const userId = socket.user?.userId;
     const userRole = socket.user?.role;
+
+    let userBoardIds = new Set<string>();
+    if (userId) {
+      let boards = await getBoardsByUser(userId);
+      // getBoardsByUser swallows query errors and returns []. An empty list
+      // caused by a transient DB failure would lock this socket out of every
+      // board-scoped agent for its whole lifetime — probe the DB to tell a
+      // genuinely board-less user apart from a blip, and retry once.
+      if (boards.length === 0 && getPool()) {
+        try {
+          await getPool().query('SELECT 1');
+          boards = await getBoardsByUser(userId);
+        } catch {
+          console.error(`⚠️ Board lookup failed at connect for user ${userId} — disconnecting socket`);
+          socket.emit(WsEvents.ERROR, { message: 'Failed to load boards, please reconnect' });
+          socket.disconnect(true);
+          return;
+        }
+      }
+      for (const board of boards) {
+        socket.join(`board:${board.id}`);
+        userBoardIds.add(board.id);
+      }
+    }
+
     if (userId) {
       socket.join(`user:${userId}`);
       connectedUserIds.add(userId);
       updateLastSeen(userId).catch(() => {});
     }
     if (userRole === 'admin') socket.join('role:admin');
-
-    let userBoardIds = new Set<string>();
-    if (userId) {
-      try {
-        const boards = await getBoardsByUser(userId);
-        for (const board of boards) {
-          socket.join(`board:${board.id}`);
-          userBoardIds.add(board.id);
-        }
-      } catch { /* no boards available */ }
-    }
 
     const ws = agentManager.wsEmitter;
 
@@ -169,7 +183,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Broadcast to all agents (tmux) ────────────────────────────────
     socket.on(WsEvents.REQ_BROADCAST, async (data) => {
-      const { message } = data;
+      const { message } = data || {};
       if (!message) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.ERROR, { message: 'Rate limit exceeded. Please wait before sending more messages.' });
@@ -200,7 +214,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Handoff ───────────────────────────────────────────────────────
     socket.on(WsEvents.REQ_HANDOFF, async (data) => {
-      const { fromId, toId, context } = data;
+      const { fromId, toId, context } = data || {};
       if (!fromId || !toId || !context) return;
       if (!canAccessAgent(fromId) || !canAccessAgent(toId)) {
         socket.emit(WsEvents.HANDOFF_ERROR, { error: 'Access denied' });
@@ -271,7 +285,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Stop agent ────────────────────────────────────────────────────
     socket.on(WsEvents.REQ_STOP, (data) => {
-      const { agentId } = data;
+      const { agentId } = data || {};
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
@@ -284,7 +298,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Execute single task ─────────────────────────────────────────
     socket.on(WsEvents.REQ_TASK_EXECUTE, async (data) => {
-      const { agentId, taskId } = data;
+      const { agentId, taskId } = data || {};
       if (!agentId || !taskId) return;
       if (!canAccessAgent(agentId)) return;
 
@@ -307,7 +321,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Execute all pending tasks ─────────────────────────────────────
     socket.on(WsEvents.REQ_TASK_EXECUTE_ALL, async (data) => {
-      const { agentId } = data;
+      const { agentId } = data || {};
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
@@ -330,7 +344,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Voice delegation (Realtime API function call relay) ──────────
     socket.on(WsEvents.REQ_VOICE_DELEGATE, async (data) => {
-      const { agentId, targetAgentName, task } = data;
+      const { agentId, targetAgentName, task } = data || {};
       if (!agentId || !targetAgentName || !task) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.VOICE_DELEGATE_RESULT, { agentId, targetAgentName, error: 'Rate limit exceeded', result: null });
@@ -390,7 +404,7 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Voice ask (lightweight question to another agent) ────────────
     socket.on(WsEvents.REQ_VOICE_ASK, async (data) => {
-      const { agentId, targetAgentName, question } = data;
+      const { agentId, targetAgentName, question } = data || {};
       if (!agentId || !targetAgentName || !question) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.VOICE_ASK_RESULT, { agentId, targetAgentName, error: 'Rate limit exceeded', result: null });
@@ -439,7 +453,8 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Voice management tools (quick sync operations) ────────────────
     socket.on(WsEvents.REQ_VOICE_MANAGEMENT, async (data) => {
-      const { agentId, functionName, args } = data;
+      const { agentId, functionName, args: rawArgs } = data || {};
+      const args = rawArgs || {};
       if (!agentId || !functionName) return;
       if (!canAccessAgent(agentId)) {
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, { agentId, functionName, error: 'Access denied', result: null });

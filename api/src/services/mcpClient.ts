@@ -2,6 +2,15 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
+// Tool-call timeout. The SDK default is 60s, which is too short for tools like
+// gmail send_email with attachments, code-index index_folder, or multi-page
+// crawls — the call would fail client-side while the server keeps executing
+// (duplicate side effects on retry). Configurable via MCP_TOOL_TIMEOUT_MS.
+const DEFAULT_TOOL_TIMEOUT_MS = (() => {
+  const fromEnv = Number(process.env.MCP_TOOL_TIMEOUT_MS);
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 10 * 60_000;
+})();
+
 /**
  * Low-level MCP client wrapping the official SDK.
  * Handles connect (Streamable HTTP with SSE fallback), tool discovery, and tool calls.
@@ -11,12 +20,14 @@ export class MCPClient {
   client: Client | null;
   transport: StreamableHTTPClientTransport | SSEClientTransport | null;
   tools: any[];
+  toolTimeoutMs: number;
 
-  constructor(name: string = 'PulsarTeam') {
+  constructor(name: string = 'PulsarTeam', { toolTimeoutMs = DEFAULT_TOOL_TIMEOUT_MS }: { toolTimeoutMs?: number } = {}) {
     this.clientName = name;
     this.client = null;
     this.transport = null;
     this.tools = [];
+    this.toolTimeoutMs = toolTimeoutMs;
   }
 
   /**
@@ -83,10 +94,16 @@ export class MCPClient {
    * @param {object} args — tool arguments
    * @returns {{ content: Array, isError: boolean }}
    */
-  async callTool(name: string, args: Record<string, any> = {}): Promise<{ content: any[]; isError: boolean }> {
+  async callTool(name: string, args: Record<string, any> = {}, { timeoutMs }: { timeoutMs?: number } = {}): Promise<{ content: any[]; isError: boolean }> {
     if (!this.client) throw new Error('Not connected');
 
-    const result = await this.client.callTool({ name, arguments: args });
+    // onprogress is required for resetTimeoutOnProgress to work: the SDK only
+    // attaches a progressToken to the request when a callback is provided.
+    const result = await this.client.callTool({ name, arguments: args }, undefined, {
+      timeout: timeoutMs || this.toolTimeoutMs,
+      resetTimeoutOnProgress: true,
+      onprogress: () => {},
+    });
     return {
       content: (result.content as any[]) || [],
       isError: (result.isError as boolean) || false

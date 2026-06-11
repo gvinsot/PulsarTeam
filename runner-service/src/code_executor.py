@@ -3,11 +3,10 @@ Runner Service — Direct code execution (bypass any LLM agent).
 Includes sandboxing for Python exec and command validation for shell.
 """
 
-import io
 import os
+import sys
 import subprocess
 import traceback
-from contextlib import redirect_stdout, redirect_stderr
 
 from config import PROJECTS_DIR
 from command_security import validate_command, sanitize_env
@@ -19,47 +18,76 @@ MAX_COMMAND_LENGTH = 16_384
 
 # Restricted builtins for Python exec — blocks dangerous functions
 _BLOCKED_BUILTINS = {"__import__", "exec", "eval", "compile", "open", "breakpoint", "input", "memoryview"}
+# Modules the restricted __import__ allows inside the sandbox
+_SAFE_MODULES = {
+    "math", "random", "datetime", "json", "re", "string", "collections",
+    "itertools", "functools", "operator", "decimal", "fractions",
+    "statistics", "textwrap", "unicodedata", "hashlib", "base64",
+    "copy", "pprint", "enum", "dataclasses", "typing", "abc",
+    "csv", "io", "pathlib", "urllib.parse",
+}
 
-def _make_safe_builtins():
-    import builtins as _builtins
-    safe = {}
-    for name in dir(_builtins):
-        if name in _BLOCKED_BUILTINS:
-            continue
-        safe[name] = getattr(_builtins, name)
-    # Replace __import__ with a restricted version that only allows safe modules
-    _SAFE_MODULES = {
-        "math", "random", "datetime", "json", "re", "string", "collections",
-        "itertools", "functools", "operator", "decimal", "fractions",
-        "statistics", "textwrap", "unicodedata", "hashlib", "base64",
-        "copy", "pprint", "enum", "dataclasses", "typing", "abc",
-        "csv", "io", "pathlib", "urllib.parse",
-    }
-    def safe_import(name, *args, **kwargs):
-        top_level = name.split(".")[0]
-        if top_level not in _SAFE_MODULES:
-            raise ImportError(f"Import of '{name}' is not allowed in sandboxed execution. Allowed: {sorted(_SAFE_MODULES)}")
-        return _builtins.__import__(name, *args, **kwargs)
-    safe["__import__"] = safe_import
-    return safe
+# Bootstrap executed in a killable child interpreter. It re-imposes the
+# restricted builtins/imports, then runs the user payload (read from stdin —
+# never string-interpolated, so payload content cannot escape the wrapper).
+# On any payload exception it prints the traceback to stderr and exits 1.
+_SANDBOX_BOOTSTRAP = f"""
+import sys, traceback
+import builtins as _builtins
 
-_SAFE_BUILTINS = _make_safe_builtins()
+_BLOCKED_BUILTINS = {_BLOCKED_BUILTINS!r}
+_SAFE_MODULES = {_SAFE_MODULES!r}
+
+def _safe_import(name, *args, **kwargs):
+    top_level = name.split(".")[0]
+    if top_level not in _SAFE_MODULES:
+        raise ImportError(
+            "Import of '%s' is not allowed in sandboxed execution. Allowed: %s"
+            % (name, sorted(_SAFE_MODULES))
+        )
+    return _builtins.__import__(name, *args, **kwargs)
+
+_safe = {{
+    name: getattr(_builtins, name)
+    for name in dir(_builtins)
+    if name not in _BLOCKED_BUILTINS
+}}
+_safe["__import__"] = _safe_import
+_code = sys.stdin.read()
+try:
+    exec(_code, {{"__builtins__": _safe}})
+except BaseException:
+    sys.stderr.write(traceback.format_exc())
+    sys.exit(1)
+"""
 
 
 def execute_python(code: str) -> str:
-    stdout_buf = io.StringIO()
-    stderr_buf = io.StringIO()
+    # Run the payload in a subprocess so a runaway script (`while True:`,
+    # long sleeps) can be killed via timeout instead of wedging the caller.
+    # sanitize_env keeps runner secrets out of the child's environment.
     try:
-        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
-            exec(code, {"__builtins__": _SAFE_BUILTINS})
-        out = stdout_buf.getvalue()
-        err = stderr_buf.getvalue()
-        result = out
-        if err:
-            result += f"\n[stderr] {err}"
-        return result[:MAX_OUTPUT] if result else "(no output)"
+        result = subprocess.run(
+            [sys.executable, "-c", _SANDBOX_BOOTSTRAP],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=sanitize_env(os.environ),
+        )
+    except subprocess.TimeoutExpired:
+        return "[error] Code timed out after 60s"
     except Exception:
         return traceback.format_exc()[:MAX_OUTPUT]
+    if result.returncode != 0:
+        err = result.stderr or f"[error] exited with code {result.returncode}"
+        return err[:MAX_OUTPUT]
+    out = result.stdout
+    err = result.stderr
+    output = out
+    if err:
+        output += f"\n[stderr] {err}"
+    return output[:MAX_OUTPUT] if output else "(no output)"
 
 
 def execute_shell(code: str) -> str:

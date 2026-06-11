@@ -63,7 +63,7 @@ async function wpFetch(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { signal: AbortSignal.timeout(60_000), ...options, headers });
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -437,6 +437,7 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       const encoded = Buffer.from(`${creds.username}:${creds.applicationPassword}`).toString('base64');
 
       const uploadRes = await fetch(`${creds.siteUrl}/wp-json/wp/v2/media`, {
+        signal: AbortSignal.timeout(120_000),
         method: 'POST',
         headers: {
           Authorization: `Basic ${encoded}`,

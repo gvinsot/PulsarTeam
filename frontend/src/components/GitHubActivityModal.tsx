@@ -66,7 +66,7 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
     const now = new Date();
-    const diffMs = now - d;
+    const diffMs = now.getTime() - d.getTime();
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     if (diffHours < 1) return 'just now';
     if (diffHours < 24) return `${diffHours}h ago`;
@@ -525,7 +525,7 @@ function RepoExplorer({ owner, repo, boardId }) {
 
 const mdComponents = {
   pre: ({ children }) => <pre className="bg-dark-900 rounded-lg p-3 overflow-x-auto my-2 border border-dark-600">{children}</pre>,
-  code: ({ inline, children }) => inline
+  code: ({ children }) => !String(children).includes('\n')
     ? <code className="bg-dark-700 px-1.5 py-0.5 rounded text-purple-300 text-xs">{children}</code>
     : <code className="text-green-300 text-xs">{children}</code>,
   a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">{children}</a>,

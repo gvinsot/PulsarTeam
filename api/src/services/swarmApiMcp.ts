@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
 import { getAllBoards, getBoardById, searchTasks } from './database.js';
+import { getTaskById } from './database/tasks.js';
 import { getReposForBoard } from './database/boardRepos.js';
 
 // Format of "owner/repo" — same regex used by the REST endpoint.
@@ -323,14 +324,35 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
           if (t) { agent = a; break; }
         }
       }
-      if (!agent) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: 'Agent not found' }) }],
-          isError: true,
-        };
-      }
 
-      const task = agentManager._getAgentTasks(agent.id).find((t: any) => t.id === task_id);
+      let task: any = agent
+        ? agentManager._getAgentTasks(agent.id).find((t: any) => t.id === task_id)
+        : null;
+
+      // Unassigned tasks (the kind add_task creates) live only in the DB,
+      // never in the agentId-keyed in-memory store — fall back to a direct
+      // lookup so they stay updatable.
+      let boardLevel = false;
+      if (!task) {
+        const dbTask = await getTaskById(task_id);
+        if (dbTask?.agentId) {
+          // The task has an owner missing from memory — rehydrate and retry
+          // the normal in-memory path under the owning agent.
+          await agentManager._ensureTaskInMemory(dbTask.agentId, task_id);
+          const owner = agentManager.agents.get(dbTask.agentId);
+          if (owner) {
+            agent = owner;
+            task = agentManager._getAgentTasks(owner.id).find((t: any) => t.id === task_id) || null;
+          }
+          if (!task) {
+            task = dbTask;
+            boardLevel = true;
+          }
+        } else if (dbTask) {
+          task = dbTask;
+          boardLevel = true;
+        }
+      }
       if (!task) {
         return {
           content: [{ type: 'text', text: JSON.stringify({ error: `Task not found: ${task_id}` }) }],
@@ -424,14 +446,55 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // Apply updates in a fixed order so the final task object reflects all
       // mutations regardless of which fields were provided.
       let updated: any = task;
-      if (repoUpdate) {
-        updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
-      }
-      if (storageUpdate) {
-        updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
-      }
-      if (status !== undefined) {
-        updated = agentManager.setTaskStatus(agent.id, task_id, status) || updated;
+      if (boardLevel) {
+        // Unassigned/board-only task: the agentManager helpers all require an
+        // in-memory owner, so mutate the DB copy directly and persist it —
+        // mirroring what PUT /tasks/:id does for these tasks.
+        const now = new Date().toISOString();
+        if (!task.history) task.history = [];
+        if (repoUpdate) {
+          task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'repoFullName', oldValue: task.repoFullName || null, newValue: repoUpdate.value });
+          task.repoFullName = repoUpdate.value;
+          task.repoProvider = repoUpdate.value ? repoUpdate.provider : null;
+        }
+        if (storageUpdate) {
+          task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'storagePath', oldValue: task.storagePath || null, newValue: storageUpdate.value });
+          task.storagePath = storageUpdate.value;
+          task.storageProvider = storageUpdate.value ? storageUpdate.provider : null;
+        }
+        const statusChanged = status !== undefined && status !== task.status;
+        if (statusChanged) {
+          task.history.push({ from: task.status, status, at: now, by: 'mcp' });
+          task.status = status;
+          // Clear execution state so the workflow engine starts fresh in the
+          // new column (mirrors setTaskStatus / PUT /tasks/:id).
+          task.startedAt = null;
+          task.executionStatus = null;
+          task.actionRunning = false;
+          delete task.actionRunningAgentId;
+          delete task.actionRunningMode;
+          if (status === 'done') task.completedAt = now;
+        }
+        task.updatedAt = now;
+        await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
+        agentManager._emit('task:updated', { agentId: task.agentId || null, task });
+        // Column-entry workflow actions (auto-assign / run_agent) only fire
+        // through this hook — no loop ever rescans unassigned tasks, so
+        // skipping it would leave the moved task inert in its new column.
+        if (statusChanged && task.status !== 'error') {
+          agentManager._checkAutoRefine({ ...task }, { by: 'mcp' });
+        }
+        updated = task;
+      } else {
+        if (repoUpdate) {
+          updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
+        }
+        if (storageUpdate) {
+          updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
+        }
+        if (status !== undefined) {
+          updated = agentManager.setTaskStatus(agent.id, task_id, status) || updated;
+        }
       }
 
       return {
@@ -440,7 +503,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
           text: JSON.stringify({
             success: true,
             task: updated,
-            agent: { id: agent.id, name: agent.name },
+            agent: boardLevel ? null : { id: agent.id, name: agent.name },
           }, null, 2),
         }],
       };

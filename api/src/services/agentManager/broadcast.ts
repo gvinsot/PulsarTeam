@@ -44,8 +44,13 @@ export const broadcastMethods = {
     });
 
     const fileTransferResult = await transferUserFiles(fromId, toId);
+    let fullMessage = handoffMessage;
+    if (!fileTransferResult.success) {
+      console.warn(`⚠️ [Handoff] File transfer from ${fromAgent.name} to ${toAgent.name} failed: ${fileTransferResult.message}`);
+      fullMessage += `\n\n[WARNING] File transfer failed: ${fileTransferResult.message}`;
+    }
 
-    const response = await this.sendMessage(toId, handoffMessage, streamCallback);
+    const response = await this.sendMessage(toId, fullMessage, streamCallback);
 
     return {
       ...response,

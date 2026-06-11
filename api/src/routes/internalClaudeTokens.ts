@@ -4,6 +4,8 @@ import {
   fetchOAuthTokenWithDbFallback,
   deleteOAuthToken,
 } from '../services/database/oauthTokens.js';
+import { getPool } from '../services/database/connection.js';
+import { tryDecrypt } from '../lib/crypto.js';
 
 const router = express.Router();
 const PROVIDER = 'claude_code';
@@ -49,6 +51,28 @@ router.post('/:ownerId', async (req, res) => {
     refreshToken: typeof refreshToken === 'string' && refreshToken ? refreshToken : null,
     expiresAt: expiresAtMs,
   });
+
+  // storeOAuthToken swallows DB write errors (the in-memory cache always
+  // holds the new token). Claude refresh tokens rotate, so the runner must
+  // learn when the rotated token was NOT durably persisted and retry —
+  // otherwise it is lost on the next API restart. Read back to verify.
+  // No pool means a deliberately DB-less deployment: memory IS the store.
+  const pool = getPool();
+  if (pool) {
+    let persisted = false;
+    try {
+      const result = await pool.query(
+        'SELECT access_token FROM oauth_tokens WHERE provider = $1 AND scope_type = $2 AND scope_id = $3',
+        [PROVIDER, SCOPE_TYPE, ownerId]
+      );
+      persisted = result.rows.length > 0 && tryDecrypt(result.rows[0].access_token) === accessToken;
+    } catch {
+      persisted = false;
+    }
+    if (!persisted) {
+      return res.status(500).json({ error: 'failed to persist token' });
+    }
+  }
 
   res.json({ ok: true });
 });

@@ -11,24 +11,30 @@ import { api } from '../api';
  *   onStatusChange — (optional) callback when connection status changes
  */
 export default function GmailConnect({ agentId, boardId, onStatusChange }) {
-  const [status, setStatus] = useState({ configured: false, connected: false });
+  const [status, setStatus] = useState<{ configured: boolean; connected: boolean; email?: string | null }>({ configured: false, connected: false });
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState(null);
+  const [statusError, setStatusError] = useState(null);
 
   // Use a ref for the callback to avoid re-triggering the effect when the
   // parent passes a new inline function reference on every render.
   const onStatusChangeRef = useRef(onStatusChange);
   useEffect(() => { onStatusChangeRef.current = onStatusChange; }, [onStatusChange]);
 
+  const pollRef = useRef(null);
+  useEffect(() => () => clearInterval(pollRef.current), []);
+
   const fetchStatus = useCallback(async () => {
+    setStatusError(null);
     try {
       const data = await api.getGmailStatus(agentId || undefined, boardId || undefined);
       setStatus(data);
       onStatusChangeRef.current?.(data);
     } catch (err) {
       console.error('Gmail status check failed:', err);
+      setStatusError(err.message || 'Status check failed');
     } finally {
       setLoading(false);
     }
@@ -99,9 +105,11 @@ export default function GmailConnect({ agentId, boardId, onStatusChange }) {
 
       // Poll only for popup closure detection
       // The callback page (gmail-callback.html) handles sending the code via postMessage
-      const pollInterval = setInterval(() => {
+      clearInterval(pollRef.current);
+      pollRef.current = setInterval(() => {
         if (popup.closed) {
-          clearInterval(pollInterval);
+          clearInterval(pollRef.current);
+          pollRef.current = null;
           setConnecting(false);
         }
       }, 500);
@@ -129,6 +137,30 @@ export default function GmailConnect({ agentId, boardId, onStatusChange }) {
       <div className="flex items-center gap-2 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30">
         <Loader2 className="w-4 h-4 text-dark-400 animate-spin" />
         <span className="text-xs text-dark-400">Checking Gmail status...</span>
+      </div>
+    );
+  }
+
+  if (statusError) {
+    return (
+      <div className="p-3 bg-dark-800/30 rounded-lg border border-dark-700/30">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MailX className="w-4 h-4 text-dark-500" />
+            <span className="text-sm font-medium text-dark-300">Gmail</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">status check failed</span>
+          </div>
+          <button
+            onClick={() => { setLoading(true); fetchStatus(); }}
+            className="px-2.5 py-1 text-xs text-dark-400 hover:text-dark-200 hover:bg-dark-700 rounded-lg transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+        <div className="mt-2 flex items-start gap-1.5 text-xs text-red-400">
+          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>{statusError}</span>
+        </div>
       </div>
     );
   }

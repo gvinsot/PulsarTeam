@@ -43,7 +43,8 @@ export async function getSettings() {
       settings[row.key] = row.value;
     }
     return settings;
-  } catch {
+  } catch (err) {
+    console.error('[ConfigManager] settings read failed, serving defaults:', err?.message);
     return { ...DEFAULTS };
   }
 }
@@ -55,12 +56,26 @@ export async function updateSettings(patch) {
   const allowed = Object.keys(DEFAULTS);
   const entries = Object.entries(patch).filter(([k]) => allowed.includes(k));
 
-  for (const [key, value] of entries) {
-    await pool.query(
-      `INSERT INTO settings (key, value) VALUES ($1, $2)
-       ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
-      [key, String(value)]
-    );
+  if (entries.length > 0) {
+    // Apply the whole patch in one transaction on a dedicated client so a
+    // mid-loop failure can't leave the settings half-applied.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [key, value] of entries) {
+        await client.query(
+          `INSERT INTO settings (key, value) VALUES ($1, $2)
+           ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()`,
+          [key, String(value)]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   return getSettings();

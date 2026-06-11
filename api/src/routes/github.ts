@@ -12,22 +12,61 @@ import { readSecret } from '../secrets.js';
  * Resolution: agent → board → user → error
  */
 
-const stateStore = new Map();
 const STATE_TTL_MS = 10 * 60 * 1000;
+
+// States are HMAC-signed and stateless so an API restart/redeploy between
+// /auth-url and the provider redirect does not invalidate in-flight consent
+// popups. The consumed set below only guards against replay within this
+// process; after a restart a state could be replayed until its TTL expires,
+// which is acceptable because the authorization code is single-use at GitHub.
+const consumedStates = new Map<string, number>();
+
+let fallbackStateSecret: Buffer | null = null;
+function getStateSecret(): Buffer {
+  const jwt = readSecret('JWT_SECRET', '');
+  if (jwt) {
+    // Domain-separate from JWT signing and from the other providers' states.
+    return Buffer.from(
+      crypto.hkdfSync('sha256', Buffer.from(jwt, 'utf-8'), Buffer.alloc(0), Buffer.from('pulsarteam:oauth-state:github:v1', 'utf-8'), 32)
+    );
+  }
+  // Dev fallback without JWT_SECRET: per-process key (states then only
+  // survive within this process, as with the previous in-memory store).
+  if (!fallbackStateSecret) fallbackStateSecret = crypto.randomBytes(32);
+  return fallbackStateSecret;
+}
+
+function signStatePayload(payload: string): string {
+  return crypto.createHmac('sha256', getStateSecret()).update(payload).digest('base64url');
+}
 
 function generateOAuthState(username, agentId = null, boardId = null) {
   const now = Date.now();
-  for (const [k, v] of stateStore) { if (v.expiresAt < now) stateStore.delete(k); }
-  const state = crypto.randomBytes(32).toString('hex');
-  stateStore.set(state, { username, agentId, boardId, expiresAt: now + STATE_TTL_MS });
-  return state;
+  for (const [k, exp] of consumedStates) { if (exp < now) consumedStates.delete(k); }
+  const payload = Buffer.from(
+    JSON.stringify({ username, agentId, boardId, expiresAt: now + STATE_TTL_MS, nonce: crypto.randomBytes(8).toString('hex') }),
+    'utf-8',
+  ).toString('base64url');
+  return `${payload}.${signStatePayload(payload)}`;
 }
 
 function consumeOAuthState(state) {
-  const entry = stateStore.get(state);
-  if (!entry) return null;
-  stateStore.delete(state);
-  if (entry.expiresAt < Date.now()) return null;
+  const dot = state.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const payload = state.slice(0, dot);
+  const signature = Buffer.from(state.slice(dot + 1));
+  const expected = Buffer.from(signStatePayload(payload));
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(signature, expected)) return null;
+
+  let entry;
+  try {
+    entry = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+  } catch {
+    return null;
+  }
+  if (!entry || typeof entry.expiresAt !== 'number' || entry.expiresAt < Date.now()) return null;
+  if (consumedStates.has(state)) return null;
+  consumedStates.set(state, entry.expiresAt);
   return { username: entry.username, agentId: entry.agentId || null, boardId: entry.boardId || null };
 }
 
@@ -69,11 +108,14 @@ async function fetchWithRetry(
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
-      return await fetch(url, init);
+      // Per-attempt timeout so a blackholed endpoint fails fast instead of
+      // hanging the OAuth popup for undici's default ~300s.
+      return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000) });
     } catch (err: any) {
       lastErr = err;
       const cause = err?.cause?.code || err?.cause?.message || err?.code || err?.message || '';
-      const transient = /terminated|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET/i.test(String(cause));
+      const transient = err?.name === 'TimeoutError'
+        || /terminated|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET/i.test(String(cause));
       if (!transient || i === attempts - 1) throw err;
       const delay = baseDelayMs * Math.pow(2, i);
       console.warn(`[GitHub] fetch ${url} failed with "${cause}", retrying in ${delay}ms (attempt ${i + 2}/${attempts})`);
@@ -170,9 +212,9 @@ async function handleOAuthRedirect(req, res) {
     });
 
     const data = await response.json();
-    if (data.error) {
+    if (!response.ok || data.error || !data.access_token) {
       console.error('[GitHub] Token exchange failed:', data);
-      return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, data.error_description || 'Token exchange failed');
+      return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, data.error_description || data.error || data.message || `Token exchange failed (HTTP ${response.status})`);
     }
 
     let login = null;
@@ -196,7 +238,7 @@ async function handleOAuthRedirect(req, res) {
       scopeId,
       accessToken: data.access_token,
       meta: { scope: data.scope, tokenType: data.token_type, login },
-    });
+    }, { throwOnPersistError: true });
 
     console.log(`✅ [GitHub] OAuth token stored for ${scopeType}:${scopeId} (${login || 'unknown'}) via redirect`);
     return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', true, null, { login });
@@ -279,9 +321,9 @@ export function githubRoutes() {
       });
 
       const data = await response.json();
-      if (data.error) {
+      if (!response.ok || data.error || !data.access_token) {
         console.error('[GitHub] Token exchange failed:', data);
-        return res.status(400).json({ error: data.error_description || 'Token exchange failed' });
+        return res.status(400).json({ error: data.error_description || data.error || data.message || `Token exchange failed (HTTP ${response.status})` });
       }
 
       let login = null;
@@ -305,7 +347,7 @@ export function githubRoutes() {
         scopeId,
         accessToken: data.access_token,
         meta: { scope: data.scope, tokenType: data.token_type, login },
-      });
+      }, { throwOnPersistError: true });
 
       console.log(`✅ [GitHub] OAuth token stored for ${scopeType}:${scopeId} (${login || 'unknown'})`);
       res.json({ success: true, agentId: stateData.agentId, boardId: stateData.boardId, login });

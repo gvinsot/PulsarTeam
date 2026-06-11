@@ -24,7 +24,7 @@ const FIELD_LABELS: Record<string, string> = {
 
 const mdComponents = {
   pre: ({ children }: any) => <pre className="bg-dark-900 rounded-lg p-2 overflow-x-auto my-1 border border-dark-600 text-[11px]">{children}</pre>,
-  code: ({ inline, children }: any) => inline
+  code: ({ children }: any) => !String(children).includes('\n')
     ? <code className="bg-dark-700 px-1 py-0.5 rounded text-purple-300 text-[11px]">{children}</code>
     : <code className="text-green-300 text-[11px]">{children}</code>,
   p: ({ children }: any) => <p className="my-0.5">{children}</p>,

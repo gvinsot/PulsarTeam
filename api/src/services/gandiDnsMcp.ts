@@ -13,6 +13,7 @@ const GANDI_API = 'https://api.gandi.net/v5/livedns';
 async function gandiRequest(pat: string, path: string, options: Record<string, any> = {}) {
   const url = `${GANDI_API}${path}`;
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(60_000),
     ...options,
     headers: {
       Authorization: `Bearer ${pat}`,

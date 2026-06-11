@@ -54,12 +54,19 @@ async function refreshGmailToken(record: OAuthTokenRecord): Promise<string> {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    await deleteOAuthToken('gmail', record.scopeType, record.scopeId);
-    throw new Error(data.error_description || 'Token refresh failed');
+    // Only invalid_grant means the refresh token itself is revoked/expired.
+    // Transient failures (429, 5xx) must keep the token so the next call retries.
+    if (data.error === 'invalid_grant') {
+      await deleteOAuthToken('gmail', record.scopeType, record.scopeId);
+    } else {
+      console.warn(`⚠️ [Gmail] Token refresh failed (HTTP ${response.status}) for ${record.scopeType}:${record.scopeId} — keeping token for retry:`, data.error || 'no error body');
+    }
+    throw new Error(data.error_description || data.error || `Token refresh failed (HTTP ${response.status})`);
   }
 
   await storeOAuthToken({
@@ -91,7 +98,9 @@ export function gmailRoutes() {
 
     const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
     const token = getOAuthToken('gmail', scopeType, scopeId);
-    const connected = !!(token && (!token.expiresAt || token.expiresAt > Date.now()));
+    // hasOAuthToken treats expired-but-refreshable tokens as connected — the
+    // access token only lasts ~1h but resolveAccessToken refreshes transparently.
+    const connected = hasOAuthToken('gmail', scopeType, scopeId);
 
     res.json({
       configured: !!config,
@@ -167,6 +176,7 @@ export function gmailRoutes() {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
+        signal: AbortSignal.timeout(15_000),
       });
 
       const data = await response.json();
@@ -179,6 +189,7 @@ export function gmailRoutes() {
       try {
         const profileRes = await fetch('https://www.googleapis.com/gmail/v1/users/me/profile', {
           headers: { Authorization: `Bearer ${data.access_token}` },
+          signal: AbortSignal.timeout(15_000),
         });
         if (profileRes.ok) {
           const profile = await profileRes.json();
@@ -198,7 +209,7 @@ export function gmailRoutes() {
         refreshToken: data.refresh_token,
         expiresAt: Date.now() + (data.expires_in - 60) * 1000,
         meta: { email },
-      });
+      }, { throwOnPersistError: true });
 
       console.log(`✅ [Gmail] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'})`);
       res.json({ success: true, expiresIn: data.expires_in, agentId: stateData.agentId, boardId: stateData.boardId, email });

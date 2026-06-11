@@ -33,7 +33,7 @@ from typing import Optional
 from config import logger
 from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend
-from .claude_token_store import get_subprocess_kwargs
+from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_mcp_config import configure_hermes_mcp, configure_hermes_local_providers
 from .runner_instructions_config import configure_hermes_instructions
 from .runner_config_store import fetch_runner_config, save_runner_config
@@ -71,6 +71,16 @@ class HermesBackend(CliBackend):
         the stateless restart (no more `hermes setup` wizard, no wrong model)."""
         if not agent_id:
             return
+        # Don't clobber a live terminal session's config: the user may have
+        # just edited ~/.hermes inside the PTY, and the fetch below is cached
+        # (15s) so it could overwrite the fresh file with stale content —
+        # which the session's live-sync would then persist back to team-api.
+        try:
+            from pty_session import get_session
+            if get_session(agent_id) is not None:
+                return
+        except ImportError:
+            pass
         files = fetch_runner_config("hermes", agent_id)
         if not files:
             return
@@ -106,6 +116,13 @@ class HermesBackend(CliBackend):
             logger.info(f"[Hermes] restored {written} config file(s) for agent {(agent_id or '?')[:12]}")
 
     def _configure_mcp(self, agent_user, agent_id) -> None:
+        # Restore the persisted ~/.hermes config FIRST so the MCP wiring below
+        # merges on top of the user's restored setup (not a blank file). This
+        # runs on EVERY spawn — headless run_sync/stream_events included — so a
+        # stateless restart can't leave a headless hermes with an empty config
+        # that re-runs its setup wizard. fetch_runner_config caches for 15s, so
+        # back-to-back spawns don't double-fetch.
+        self._restore_config(agent_user, agent_id)
         # Writes mcp_servers into ~/.hermes/config.yaml and records whether any
         # MCP server is present so _common_chat_args can decide on
         # --ignore-user-config. A return of -1 means the fetch failed and the
@@ -146,15 +163,15 @@ class HermesBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         permissions = self._get_permissions(agent_id)
-        # Restore the persisted ~/.hermes config FIRST so configure_mcp merges
-        # its MCP wiring on top of the user's restored setup (not a blank file).
-        self._restore_config(effective_user, agent_id)
-        self._configure_mcp(effective_user, agent_id)
-        self._configure_instructions(effective_user, agent_id)
+        # _configure_mcp restores the persisted ~/.hermes config before merging
+        # its MCP wiring on top of the user's setup. Off-loop: both steps do
+        # blocking team-api fetches.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
 
         cmd = [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
 
-        env = self._agent_env(effective_user, agent_id)
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
 
         # Live-sync: persist ~/.hermes/{config.yaml,.env} to team-api whenever
         # the user runs `hermes setup` / edits config inside the terminal, so it
@@ -164,7 +181,10 @@ class HermesBackend(CliBackend):
         captured_agent_id = agent_id
 
         def _persist_hermes_config(files: dict) -> None:
-            save_runner_config("hermes", captured_agent_id, files)
+            # Raise on failure so PtySession._maybe_sync_files does NOT advance
+            # its signature and retries the sync on the next poll tick.
+            if not save_runner_config("hermes", captured_agent_id, files):
+                raise RuntimeError(f"save_runner_config failed for agent {captured_agent_id}")
 
         kwargs = get_subprocess_kwargs(effective_user) or {}
         return {

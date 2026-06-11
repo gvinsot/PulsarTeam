@@ -245,13 +245,20 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
     if not code:
         return None
 
-    if "#" in code:
-        auth_code, state = code.split("#", 1)
-    else:
-        auth_code = code
-        state = ""
+    # Anthropic's `code=true` display flow yields `code#state`. Require that
+    # form and only treat the message as a verification code when its embedded
+    # state matches the pending flow's state — otherwise any 20+ char
+    # single-line message (a git SHA, a UUID, a token) sent while a login flow
+    # lingers would be consumed as a code, fail the exchange, drop the user's
+    # message AND invalidate the pending login flow.
+    if "#" not in code:
+        return None
+    auth_code, state = code.split("#", 1)
+    if not auth_code or not state:
+        return None
 
-    if owner_id and owner_id in _owner_oauth_flows:
+    if owner_id and owner_id in _owner_oauth_flows \
+            and state == _owner_oauth_flows[owner_id].get("state"):
         flow = _owner_oauth_flows[owner_id]
         payload = {
             "grant_type": "authorization_code",
@@ -296,7 +303,8 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
             _owner_oauth_flows.pop(owner_id, None)
             return {"status": "error", "message": f"Token exchange failed: {e}"}
 
-    if agent_id and agent_id in _agent_oauth_flows:
+    if agent_id and agent_id in _agent_oauth_flows \
+            and state == _agent_oauth_flows[agent_id].get("state"):
         flow = _agent_oauth_flows[agent_id]
         payload = {
             "grant_type": "authorization_code",
@@ -345,7 +353,7 @@ async def try_exchange_code_from_prompt(prompt: str, agent_id: Optional[str] = N
             return {"status": "error", "message": f"Token exchange failed: {e}"}
 
     global _oauth_code_verifier
-    if _oauth_code_verifier:
+    if _oauth_code_verifier and state == _oauth_state:
         return await exchange_auth_code(code)
 
     return None

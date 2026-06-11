@@ -115,6 +115,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
             username: effective.username || effective.login || null,
           },
         }),
+        signal: AbortSignal.timeout(60_000),
       });
       const data: any = await res.json().catch(() => ({}));
       if (data?.status === 'error') {
@@ -205,7 +206,14 @@ export class RunnerExecutionProvider extends ExecutionProvider {
         method: 'POST',
         headers: this._headers(agentId),
         body: JSON.stringify(body),
+        // Generous bound: the runner's first clone of a large repo (its own
+        // 120s git timeout + per-agent lock waits + chown) can take minutes.
+        signal: AbortSignal.timeout(300_000),
       });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        throw new Error(`projects/ensure failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`);
+      }
       const data: any = await res.json();
       if (data.status === 'error') {
         throw new Error(data.error || 'Project ensure failed');
@@ -454,7 +462,14 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       method: 'POST',
       headers: this._headers(agentId),
       body: JSON.stringify(body),
+      // Floor of 120s: a first /exec-shell after a runner restart also pays
+      // for the agent HOME setup (recursive chown) before the command runs.
+      signal: AbortSignal.timeout(Math.max((timeoutSecs + 60) * 1000, 120_000)),
     });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`exec-shell failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`);
+    }
     const data: any = await res.json();
     if (data.status !== 'success') {
       const err: any = new Error(data.error || 'Command failed');

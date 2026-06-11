@@ -2,11 +2,19 @@ import express from 'express';
 import {
   recordTokenUsage, getTokenUsageByAgent, getTokenUsageTimeline,
   getTokenUsageSummary, getTokenUsageSummaryAsync, getDailyTokenUsage, getSetting, setSetting,
-  getAllLlmConfigs
+  getAllLlmConfigs, getPool
 } from '../services/database.js';
 import { requireRole } from '../middleware/auth.js';
+import { validateBody, z } from '../lib/validate.js';
 
 const router = express.Router();
+
+// /alerts does arithmetic + .toFixed() on these fields, so a malformed PUT
+// would otherwise break every subsequent /alerts poll until re-PUT correctly.
+const budgetConfigSchema = z.object({
+  dailyBudget: z.coerce.number().min(0).default(0),
+  alertThreshold: z.coerce.number().min(0).max(100).default(80),
+}).passthrough();
 
 /**
  * Build a map from raw (provider, model) pairs to human-friendly config names.
@@ -91,9 +99,14 @@ router.get('/config', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/config', requireRole('admin'), (req, res) => {
+router.put('/config', requireRole('admin'), validateBody(budgetConfigSchema), async (req, res) => {
   try {
-    setSetting('budget_config', req.body);
+    await setSetting('budget_config', req.body);
+    // setSetting swallows DB errors and only updates its cache after a
+    // successful write, so a stale read-back means nothing was persisted.
+    if (getPool() && getSetting('budget_config') !== req.body) {
+      return res.status(500).json({ error: 'Failed to persist budget config' });
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

@@ -97,6 +97,9 @@ export function wordpressRoutes() {
     try {
       const testRes = await fetch(`${cleanUrl}/wp-json/wp/v2/users/me?context=edit`, {
         headers: { Authorization: `Basic ${encoded}`, Accept: 'application/json' },
+        // Bound the probe — the URL is user-supplied and a blackholed host
+        // would otherwise pin this handler for undici's 300s default.
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!testRes.ok) {
@@ -113,13 +116,16 @@ export function wordpressRoutes() {
         scopeId: scope.scopeId,
         accessToken: encoded,
         meta: { siteUrl: cleanUrl, username, applicationPassword: cleanPassword },
-      });
+      }, { throwOnPersistError: true });
 
       const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
       console.log(`✅ [WordPress] Credentials stored for ${target} → ${cleanUrl} (${me.name || username})`);
       res.json({ success: true, agentId, boardId, displayName: me.name, siteUrl: cleanUrl });
     } catch (err: any) {
       console.error('[WordPress] Connection test failed:', err);
+      if (err?.name === 'TimeoutError') {
+        return res.status(504).json({ error: 'WordPress site did not respond within 15s — check the site URL' });
+      }
       res.status(500).json({ error: `Connection failed: ${err.message}` });
     }
   });

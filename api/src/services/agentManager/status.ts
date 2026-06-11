@@ -1,6 +1,6 @@
 // ─── Agent Status: getAgentStatus, swarm status, setStatus, stopAgent ───────
 import { saveAgent, clearActionRunningForAgent, saveTaskToDb } from '../database.js';
-import { setTaskSignal } from './tasks.js';
+import { getTaskSignal, setTaskSignal } from './tasks.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const statusMethods = {
@@ -266,7 +266,6 @@ export const statusMethods = {
     const stopTimestamp = new Date().toISOString();
     for (const t of this._getAgentTasks(id)) {
       if (this._isActiveTaskStatus(t.status)) {
-        t._executionStopped = true;
         t.executionStatus = 'stopped';
         t.startedAt = null;
         if (!t.history) t.history = [];
@@ -277,6 +276,9 @@ export const statusMethods = {
           type: 'stopped',
         });
         saveTaskToDb({ ...t, agentId: id });
+        // Signal any pending _waitForExecutionComplete loop so it exits
+        // instead of keeping the reminder cycle alive for a stopped agent.
+        setTaskSignal(t.id, 'stopped', true);
         this._emit('task:updated', { agentId: id, task: { ...t, agentId: id } });
       }
     }
@@ -296,7 +298,6 @@ export const statusMethods = {
           // started_at intact, so the next 5-second tick of
           // _processNextPendingTasks resumes the task immediately.
           if (this._isActiveTaskStatus(t.status)) {
-            t._executionStopped = true;
             t.executionStatus = 'stopped';
             t.startedAt = null;
             if (!t.history) t.history = [];
@@ -313,6 +314,33 @@ export const statusMethods = {
           setTaskSignal(t.id, 'stopped', true);
           this._emit('task:updated', { agentId: (creatorAgent as any).id, task: t });
         }
+      }
+    }
+
+    // Tasks owned by another agent but assigned to this one: the task loop
+    // resumes via executorId = task.assignee || task.agentId, so a stop must
+    // also halt these or their reminder loops keep prompting the stopped agent.
+    // Only in-flight tasks (started or actively watched) — an assigned task
+    // that never started must stay eligible for normal workflow entry.
+    for (const [creatorId] of this.agents) {
+      if (creatorId === id) continue;
+      for (const t of this._getAgentTasks(creatorId)) {
+        if (t.assignee !== id || !this._isActiveTaskStatus(t.status)) continue;
+        if (!t.startedAt && !getTaskSignal(t.id, 'watching')) continue;
+        if (t.executionStatus !== 'stopped') {
+          t.executionStatus = 'stopped';
+          t.startedAt = null;
+          if (!t.history) t.history = [];
+          t.history.push({
+            status: t.status,
+            at: stopTimestamp,
+            by: 'user',
+            type: 'stopped',
+          });
+          saveTaskToDb({ ...t, agentId: creatorId });
+        }
+        setTaskSignal(t.id, 'stopped', true);
+        this._emit('task:updated', { agentId: creatorId, task: { ...t, agentId: creatorId } });
       }
     }
 

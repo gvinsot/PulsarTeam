@@ -15,6 +15,7 @@ async function jiraFetch(agentId: string | null, boardId: string | null, path: s
   const encoded = Buffer.from(`${creds.email}:${creds.apiToken}`).toString('base64');
 
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(60_000),
     ...options,
     headers: {
       Authorization: `Basic ${encoded}`,

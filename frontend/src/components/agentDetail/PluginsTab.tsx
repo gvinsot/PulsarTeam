@@ -49,22 +49,27 @@ function pluginNeedsCredentials(plugin: any): boolean {
 
 export default function PluginsTab({ agent, plugins, onRefresh }) {
   const [categoryFilter, setCategoryFilter] = useState('all');
+  // Surfaced when an assign/remove API call fails — otherwise the click
+  // silently does nothing and the user believes the plugin was attached.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Activation modal state: the plugin being activated and the editable form.
   const [activatingPlugin, setActivatingPlugin] = useState<any | null>(null);
   const [activationForm, setActivationForm] = useState<any>(null);
   const [activationSaving, setActivationSaving] = useState(false);
+  const [activationError, setActivationError] = useState<string | null>(null);
 
   const agentPluginIds = agent.skills || [];
   const assignedPlugins = plugins.filter(s => agentPluginIds.includes(s.id));
   const availablePlugins = plugins.filter(s => !agentPluginIds.includes(s.id));
 
-  const categories = ['all', ...new Set(plugins.map(s => s.category).filter(Boolean))];
+  const categories = ['all', ...new Set<string>(plugins.map(s => s.category).filter(Boolean))];
   const filteredAvailable = categoryFilter === 'all'
     ? availablePlugins
     : availablePlugins.filter(s => s.category === categoryFilter);
 
   const startActivation = (plugin) => {
+    setActivationError(null);
     setActivatingPlugin(plugin);
     setActivationForm({
       name: plugin.name,
@@ -86,6 +91,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
   const confirmActivation = async () => {
     if (!activatingPlugin) return;
     setActivationSaving(true);
+    setActivationError(null);
     try {
       // 1. Push credential updates first (only userConfig + mcps[].apiKey/authMode/enabled).
       const credentialPayload = {
@@ -99,6 +105,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
       onRefresh();
     } catch (err) {
       console.error('Failed to activate plugin:', err);
+      setActivationError(err?.message || "Échec de l'activation du plugin");
     } finally {
       setActivationSaving(false);
     }
@@ -111,13 +118,25 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
       return;
     }
     // Otherwise assign directly — no creds needed.
-    await api.assignPlugin(agent.id, plugin.id);
-    onRefresh();
+    setActionError(null);
+    try {
+      await api.assignPlugin(agent.id, plugin.id);
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to assign plugin:', err);
+      setActionError(err?.message || "Échec de l'ajout du plugin");
+    }
   };
 
   const handleRemove = async (pluginId) => {
-    await api.removePlugin(agent.id, pluginId);
-    onRefresh();
+    setActionError(null);
+    try {
+      await api.removePlugin(agent.id, pluginId);
+      onRefresh();
+    } catch (err) {
+      console.error('Failed to remove plugin:', err);
+      setActionError(err?.message || 'Échec du retrait du plugin');
+    }
   };
 
   const categoryColors = {
@@ -133,6 +152,11 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
 
   return (
     <div className="p-4 space-y-5 overflow-auto">
+      {actionError && (
+        <p className="text-xs text-red-400 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+          {actionError}
+        </p>
+      )}
       <div>
         <h3 className="font-medium text-dark-200 text-sm mb-3">
           Assigned Plugins
@@ -299,6 +323,11 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
               </button>
             </div>
             <div className="flex-1 overflow-auto p-4">
+              {activationError && (
+                <p className="mb-3 text-xs text-red-400 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg">
+                  {activationError}
+                </p>
+              )}
               <PluginEditor
                 value={activationForm}
                 onChange={setActivationForm}

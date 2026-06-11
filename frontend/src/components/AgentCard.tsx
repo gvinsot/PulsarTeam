@@ -1,4 +1,9 @@
-import { MessageSquare, Clock, Cpu, Zap, FolderOpen, Crown, StopCircle } from 'lucide-react';
+import { MessageSquare, Clock, Cpu, Zap, FolderOpen, Crown as CrownIcon, StopCircle } from 'lucide-react';
+import type { ComponentProps, ComponentType } from 'react';
+
+// lucide-react's prop types don't declare `title`, but at runtime extra props are
+// spread onto the rendered <svg>. Widen the type locally to keep `title="Leader"`.
+const Crown = CrownIcon as ComponentType<ComponentProps<typeof CrownIcon> & { title?: string }>;
 
 const STATUS_STYLES = {
   idle: { dot: 'bg-emerald-500', label: 'Idle', textColor: 'text-emerald-400' },

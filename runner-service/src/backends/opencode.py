@@ -31,7 +31,7 @@ import os
 
 from agent_user import ensure_agent_user, _agent_users
 from .cli_backend import CliBackend
-from .claude_token_store import get_subprocess_kwargs
+from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_mcp_config import configure_opencode_mcp
 from .runner_instructions_config import configure_opencode_instructions
 from .runner_local_models import fetch_local_models
@@ -426,8 +426,12 @@ class OpenCodeBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         self._ensure_config_dir(agent_user, agent_id)
-        self._configure_mcp(effective_user, agent_id)
-        self._configure_instructions(effective_user, agent_id)
+        # Off-loop: both helpers do blocking team-api fetches. Resolving the
+        # env next also warms the per-agent LLM config cache for the
+        # _get_llm_config call below.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
 
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
@@ -443,7 +447,6 @@ class OpenCodeBackend(CliBackend):
         )
 
         kwargs = get_subprocess_kwargs(effective_user) or {}
-        env = self._agent_env(effective_user, agent_id)
         self._verify_model_config(agent_id, model=model, env=env)
         return {
             "cmd": cmd,

@@ -19,7 +19,7 @@ from config import (
 )
 from agent_user import get_agent_project_dir, ensure_agent_user
 from .base import RunnerBackend
-from .claude_token_store import get_subprocess_kwargs
+from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_llm_config import fetch_agent_llm_config
 from usage_reporter import report_usage
 
@@ -478,17 +478,22 @@ class CliBackend(RunnerBackend):
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         # Materialize MCP tools into the CLI's native config BEFORE building the
         # command (some backends, e.g. hermes, branch their argv on whether MCP
-        # is present).
-        self._configure_mcp(effective_user, agent_id)
+        # is present). Off-loop: these helpers do blocking team-api fetches.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
         # Materialize the agent's base instructions into the CLI's native global
         # instructions file (CLAUDE.md / AGENTS.md) so they're in context even
         # for backends that don't consume system_prompt in _build_command.
-        self._configure_instructions(effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
+        # Resolve the spawn env off-loop too (_get_llm_config may fetch from
+        # team-api on a cache miss); this also warms the per-agent LLM config
+        # cache for _build_command below.
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=False, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)
         logger.info(f"Executing {self.cli_command}: {prompt[:100]}...")
         logger.debug(f"Command: {' '.join(cmd)} (cwd={cwd})")
 
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -496,7 +501,7 @@ class CliBackend(RunnerBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
-                env=self._agent_env(effective_user, agent_id),
+                env=env,
                 **get_subprocess_kwargs(effective_user),
             )
             stdin_input = prompt.encode("utf-8") if self.pass_prompt_via_stdin else None
@@ -510,7 +515,27 @@ class CliBackend(RunnerBackend):
                 timeout=TIMEOUT,
             )
         except asyncio.TimeoutError:
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                except (ProcessLookupError, PermissionError):
+                    pass
+                else:
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except (ProcessLookupError, PermissionError):
+                            pass
             return {"status": "timeout", "output": "", "error": f"Execution timeout after {TIMEOUT}s"}
+        except asyncio.CancelledError:
+            if proc and proc.returncode is None:
+                try:
+                    proc.terminate()
+                except (ProcessLookupError, PermissionError):
+                    pass
+            raise
 
         stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
@@ -538,9 +563,11 @@ class CliBackend(RunnerBackend):
         cwd = self._resolve_cwd(agent_id)
         permissions = self._get_permissions(agent_id)
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        # See run_sync: write MCP config + base instructions before building argv.
-        self._configure_mcp(effective_user, agent_id)
-        self._configure_instructions(effective_user, agent_id)
+        # See run_sync: write MCP config + base instructions before building
+        # argv, and resolve everything that hits team-api off-loop.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
 
         cmd = self._build_command(prompt, stream=True, system_prompt=system_prompt, agent_id=agent_id, task_id=task_id, permissions=permissions)
         logger.info(f"Streaming {self.cli_command}: {prompt[:100]}...")
@@ -551,28 +578,46 @@ class CliBackend(RunnerBackend):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env=self._agent_env(effective_user, agent_id),
+            env=env,
             limit=10 * 1024 * 1024,
             **get_subprocess_kwargs(effective_user),
         )
-        if self.pass_prompt_via_stdin:
-            if CLI_PREP_DELAY_S > 0:
-                # See module-level CLI_PREP_DELAY_S comment — let the CLI's
-                # auto-dismissed startup screens settle before feeding stdin.
-                await asyncio.sleep(CLI_PREP_DELAY_S)
-            try:
-                proc.stdin.write(prompt.encode("utf-8"))
-                await proc.stdin.drain()
-                proc.stdin.close()
-            except BrokenPipeError:
-                pass
-
+        # Drain stderr concurrently so a CLI that logs heavily to stderr
+        # (e.g. codex's progress log) can't fill the pipe and stall mid-run.
+        # The collected bytes are consumed after the stdout loop.
+        stderr_task = asyncio.create_task(proc.stderr.read())
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + TIMEOUT
+        timed_out = False
         try:
-            async for line in proc.stdout:
+            if self.pass_prompt_via_stdin:
+                if CLI_PREP_DELAY_S > 0:
+                    # See module-level CLI_PREP_DELAY_S comment — let the CLI's
+                    # auto-dismissed startup screens settle before feeding stdin.
+                    await asyncio.sleep(CLI_PREP_DELAY_S)
+                try:
+                    proc.stdin.write(prompt.encode("utf-8"))
+                    await proc.stdin.drain()
+                    proc.stdin.close()
+                except BrokenPipeError:
+                    pass
+
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    break
+                if not raw_line:
+                    break  # EOF
                 # Preserve internal whitespace; only strip the line terminator
                 # so that plain-text fallbacks emitted by the CLI keep their
                 # spacing when concatenated downstream.
-                line = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
                 if not line or not line.strip():
                     continue
                 event = self._parse_stream_event(line)
@@ -594,14 +639,37 @@ class CliBackend(RunnerBackend):
                     if event.get("type") == "result":
                         await self._report_usage_for_agent(agent_id, event)
                     yield event
+            if timed_out:
+                # Kill before the finally's wait so cleanup can't block on
+                # the stalled CLI.
+                try:
+                    proc.kill()
+                except (ProcessLookupError, PermissionError):
+                    pass
+        except asyncio.CancelledError:
+            # Client disconnected — signal the CLI before any await so it
+            # doesn't keep running (and writing) headless forever.
+            stderr_task.cancel()
+            try:
+                proc.terminate()
+            except (ProcessLookupError, PermissionError):
+                pass
+            raise
         finally:
             try:
                 await proc.wait()
             except asyncio.CancelledError:
                 pass
 
+        if timed_out:
+            stderr_task.cancel()
+            yield {"type": "error", "content": f"Execution timeout after {TIMEOUT}s"}
+            return
+
         if proc.returncode != 0:
-            stderr_bytes = await proc.stderr.read()
+            stderr_bytes = await stderr_task
             stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
             if stderr_text:
                 yield {"type": "error", "content": stderr_text}
+        else:
+            stderr_task.cancel()

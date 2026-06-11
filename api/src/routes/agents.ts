@@ -284,6 +284,7 @@ export function agentRoutes(agentManager) {
   // Get conversation history
   router.get('/:id/history', requireAgentAccess, (req, res) => {
     const agent = agentManager.agents.get(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
     res.json(agent.conversationHistory);
   });
 
@@ -539,9 +540,12 @@ export function agentRoutes(agentManager) {
       console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
       try {
         agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
-        const errorAgent = agentManager.agents.get(req.params.id);
         const errorTask = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
-        if (errorTask) errorTask.error = err.message;
+        if (errorTask) {
+          errorTask.error = err.message;
+          await saveTaskToDb({ ...errorTask, agentId: req.params.id });
+          agentManager._emit('task:updated', { agentId: req.params.id, task: { ...errorTask, agentId: req.params.id } });
+        }
       } catch (_) { /* best effort */ }
       res.status(500).json({ error: err.message });
     }

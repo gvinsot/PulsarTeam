@@ -61,6 +61,7 @@ from config import (
     logger,
 )
 from backends.fallback_llm_resolver import resolve_fallback_llm
+from backends.claude_token_store import run_blocking
 
 
 # Fixed PTY size for the Claude Code TUI. Wider than typical terminals so
@@ -154,6 +155,50 @@ def _terminate_proc(master_fd: int, proc: "subprocess.Popen") -> None:
         proc.wait(timeout=2)
     except subprocess.TimeoutExpired:
         pass
+
+
+def _drain_stderr(proc: "subprocess.Popen", deadline_s: float = 2.0) -> str:
+    """Drain whatever the child wrote to stderr without ever blocking the
+    executor thread indefinitely.
+
+    A plain `proc.stderr.read()` blocks until EOF, which may never come: the
+    CLI can survive termination (signalling it can EPERM — see
+    _terminate_proc) and its descendants (MCP servers, shell tools) inherit
+    fd 2 and can keep the pipe open even after the CLI itself exits. Switch
+    the fd non-blocking and pull already-buffered data within a short bounded
+    window instead — the buffered content (e.g. the resume-miss sentinel) is
+    still captured for the callers that inspect it.
+    """
+    if proc.stderr is None:
+        return ""
+    try:
+        fd = proc.stderr.fileno()
+        os.set_blocking(fd, False)
+    except (OSError, ValueError):
+        return ""
+    import time as _time
+    end = _time.monotonic() + deadline_s
+    chunks: list[bytes] = []
+    try:
+        while True:
+            try:
+                data = os.read(fd, 65536)
+            except (BlockingIOError, InterruptedError):
+                data = None
+            except OSError:
+                break
+            if data:
+                chunks.append(data)
+                continue
+            if data == b"":
+                break  # EOF — every writer closed its end
+            remaining = end - _time.monotonic()
+            if remaining <= 0 or proc.poll() is not None:
+                break
+            select.select([fd], [], [], min(0.2, remaining))
+    except Exception:
+        pass
+    return b"".join(chunks).decode("utf-8", "replace")
 
 
 def _strip_ansi(text: str) -> str:
@@ -262,7 +307,9 @@ async def _ask_fallback_llm(question: str, kind: str) -> Optional[str]:
                       so we don't deadlock on a screen we don't have a regex
                       pattern for yet.
     """
-    cfg = resolve_fallback_llm()
+    # resolve_fallback_llm does a blocking httpx call on a cache miss — keep
+    # it off the event loop.
+    cfg = await run_blocking(resolve_fallback_llm)
     if not cfg:
         return None
 
@@ -760,7 +807,16 @@ def _drive_pty_blocking(
             if time.monotonic() > deadline:
                 logger.warning("[Interactive] Hard timeout reached, killing CLI")
                 _terminate_proc(master_fd, proc)
-                stderr_out = proc.stderr.read().decode("utf-8", "replace") if proc.stderr else ""
+                # Close the master end before draining stderr so a child that
+                # survived _terminate_proc (EPERM case) at least sees EOF on
+                # its stdin and gets a chance to exit on its own. The finally
+                # below tolerates the double close.
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+                master_fd = -1
+                stderr_out = _drain_stderr(proc)
                 return {
                     "status": "timeout",
                     "output": _strip_ansi(visible_buf),
@@ -879,12 +935,7 @@ def _drive_pty_blocking(
         except OSError:
             pass
 
-    stderr_out = ""
-    try:
-        if proc.stderr:
-            stderr_out = proc.stderr.read().decode("utf-8", "replace")
-    except Exception:
-        pass
+    stderr_out = _drain_stderr(proc)
 
     visible = _strip_ansi(raw_buf.decode("utf-8", "replace"))
     # Prefer the pyte-reconstructed screen when available — it gives us the

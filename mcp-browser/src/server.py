@@ -7,6 +7,7 @@ OpenAPI-compatible client) can discover and call them automatically.
 
 import os
 import json
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from urllib.parse import quote_plus
@@ -39,15 +40,90 @@ logger = logging.getLogger("mcp-browser")
 # ---------------------------------------------------------------------------
 _browser_config = BrowserConfig(headless=True, verbose=False)
 _crawler: Optional[AsyncWebCrawler] = None
+_crawler_lock = asyncio.Lock()
+
+# Signatures of browser-process death (Playwright/CDP). Ordinary page errors
+# (timeouts, DNS, HTTP status) must NOT match, or every transient failure
+# would pay a full Chromium relaunch.
+_BROWSER_FATAL_SIGNATURES = (
+    "has been closed",
+    "target closed",
+    "browser is not available",
+    "browser has disconnected",
+    "browser closed",
+)
+
+
+def _is_browser_fatal(message) -> bool:
+    msg = str(message or "").lower()
+    return any(sig in msg for sig in _BROWSER_FATAL_SIGNATURES)
 
 
 async def get_crawler() -> AsyncWebCrawler:
     global _crawler
-    if _crawler is None:
-        _crawler = AsyncWebCrawler(config=_browser_config)
-        await _crawler.__aenter__()
-        logger.info("AsyncWebCrawler initialised")
-    return _crawler
+    if _crawler is not None:
+        return _crawler
+    async with _crawler_lock:
+        if _crawler is None:
+            crawler = AsyncWebCrawler(config=_browser_config)
+            await crawler.__aenter__()
+            # Publish only after the browser is fully started so concurrent
+            # requests never see a half-initialised crawler.
+            _crawler = crawler
+            logger.info("AsyncWebCrawler initialised")
+        return _crawler
+
+
+async def _reset_crawler(crawler: AsyncWebCrawler) -> None:
+    """Discard a crawler whose browser died so the next call relaunches one."""
+    global _crawler
+    async with _crawler_lock:
+        if _crawler is not crawler:
+            return
+        _crawler = None
+    try:
+        # Closing a wedged browser can hang; never let it block the request.
+        await asyncio.wait_for(crawler.__aexit__(None, None, None), timeout=10)
+    except Exception as e:
+        logger.warning("Error closing dead crawler: %s", e)
+    logger.warning("AsyncWebCrawler discarded after browser failure; will relaunch")
+
+
+async def _arun_with_recovery(url: str, config: CrawlerRunConfig):
+    crawler = await get_crawler()
+    try:
+        result = await crawler.arun(url=url, config=config)
+    except Exception as e:
+        if not _is_browser_fatal(e):
+            raise
+        await _reset_crawler(crawler)
+        crawler = await get_crawler()
+        return await crawler.arun(url=url, config=config)
+    if not result.success and _is_browser_fatal(getattr(result, "error_message", None)):
+        await _reset_crawler(crawler)
+        crawler = await get_crawler()
+        return await crawler.arun(url=url, config=config)
+    return result
+
+
+async def _arun_many_with_recovery(urls: list[str], config: CrawlerRunConfig):
+    crawler = await get_crawler()
+    try:
+        results = await crawler.arun_many(urls=urls, config=config)
+    except Exception as e:
+        if not _is_browser_fatal(e):
+            raise
+        await _reset_crawler(crawler)
+        crawler = await get_crawler()
+        return await crawler.arun_many(urls=urls, config=config)
+    if any(
+        not r.success and _is_browser_fatal(getattr(r, "error_message", None))
+        for r in results
+    ):
+        await _reset_crawler(crawler)
+        crawler = await get_crawler()
+        return await crawler.arun_many(urls=urls, config=config)
+    return results
 
 
 def create_clean_markdown_generator(
@@ -147,8 +223,6 @@ async def health():
     "Uses content filtering to remove boilerplate, ads, and navigation elements.",
 )
 async def crawl(req: CrawlRequest):
-    crawler = await get_crawler()
-    
     # Create markdown generator with content filtering
     md_generator = create_clean_markdown_generator(
         word_count_threshold=req.word_count_threshold
@@ -166,7 +240,7 @@ async def crawl(req: CrawlRequest):
         page_timeout=30000,
     )
     
-    result = await crawler.arun(url=req.url, config=config)
+    result = await _arun_with_recovery(url=req.url, config=config)
     if result.success:
         # crawl4ai retourne déjà du markdown dans result.markdown
         # Préférer fit_markdown (filtré) si disponible, sinon raw_markdown
@@ -189,8 +263,6 @@ async def crawl(req: CrawlRequest):
     "Uses content filtering to remove boilerplate and improve quality.",
 )
 async def crawl_many(req: CrawlManyRequest):
-    crawler = await get_crawler()
-    
     # Create markdown generator with content filtering
     md_generator = create_clean_markdown_generator(
         word_count_threshold=req.word_count_threshold
@@ -205,7 +277,7 @@ async def crawl_many(req: CrawlManyRequest):
         page_timeout=30000,
     )
     
-    results = await crawler.arun_many(urls=req.urls, config=config)
+    results = await _arun_many_with_recovery(urls=req.urls, config=config)
     pages = []
     for r in results:
         if r.success:
@@ -231,14 +303,13 @@ async def crawl_many(req: CrawlManyRequest):
     "Excludes links from boilerplate sections like navigation and footers.",
 )
 async def get_links(req: GetLinksRequest):
-    crawler = await get_crawler()
     config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
         remove_overlay_elements=True,
         page_timeout=30000,
     )
-    result = await crawler.arun(url=req.url, config=config)
+    result = await _arun_with_recovery(url=req.url, config=config)
     if result.success:
         return {"links": result.links}
     return {"error": result.error_message}
@@ -267,25 +338,31 @@ async def extract(req: ExtractRequest):
     }
 
     if req.schema_json:
-        extraction_kwargs["schema"] = json.loads(req.schema_json)
+        try:
+            extraction_kwargs["schema"] = json.loads(req.schema_json)
+        except json.JSONDecodeError as e:
+            return {"error": f"invalid schema_json: {e}"}
         extraction_kwargs["extraction_type"] = "schema"
     else:
         extraction_kwargs["extraction_type"] = "block"
 
-    strategy = LLMExtractionStrategy(**extraction_kwargs)
+    try:
+        strategy = LLMExtractionStrategy(**extraction_kwargs)
 
-    crawler = await get_crawler()
-    config = CrawlerRunConfig(
-        extraction_strategy=strategy,
-        cache_mode=CacheMode.BYPASS,
-        excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
-        remove_overlay_elements=True,
-        page_timeout=30000,
-    )
-    result = await crawler.arun(url=req.url, config=config)
-    if result.success:
-        return {"content": result.extracted_content or "No content extracted."}
-    return {"error": result.error_message}
+        config = CrawlerRunConfig(
+            extraction_strategy=strategy,
+            cache_mode=CacheMode.BYPASS,
+            excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
+            remove_overlay_elements=True,
+            page_timeout=30000,
+        )
+        result = await _arun_with_recovery(url=req.url, config=config)
+        if result.success:
+            return {"content": result.extracted_content or "No content extracted."}
+        return {"error": result.error_message}
+    except Exception as e:
+        logger.error(f"Error in extract: {e}")
+        return {"error": f"Unexpected error: {str(e)}"}
 
 
 @app.post(
@@ -302,8 +379,6 @@ async def search_web(req: SearchRequest):
         search_url = f"https://html.duckduckgo.com/html/?q={quote_plus(req.query)}"
         logger.info(f"Searching DuckDuckGo for: {req.query}")
         
-        crawler = await get_crawler()
-        
         # Create markdown generator with content filtering
         md_generator = create_clean_markdown_generator(
             word_count_threshold=10,
@@ -319,7 +394,7 @@ async def search_web(req: SearchRequest):
             page_timeout=30000,
         )
         
-        result = await crawler.arun(url=search_url, config=config)
+        result = await _arun_with_recovery(url=search_url, config=config)
         
         if result.success:
             # Get markdown content from crawled page

@@ -73,6 +73,7 @@ export function jiraRoutes() {
     try {
       const testRes = await fetch(`${baseUrl}/rest/api/3/myself`, {
         headers: { Authorization: `Basic ${encoded}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!testRes.ok) {
@@ -90,7 +91,7 @@ export function jiraRoutes() {
         scopeId: scope.scopeId,
         accessToken: encoded,
         meta: { domain: cleanDomain, email, apiToken },
-      });
+      }, { throwOnPersistError: true });
 
       const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
       console.log(`✅ [Jira] Credentials stored for ${target} → ${cleanDomain} (${myself.displayName || email})`);

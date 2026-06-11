@@ -24,6 +24,31 @@ const _treeCache = new Map<string, { data: any; time: number }>();
 const _fileCache = new Map<string, { data: any; time: number }>();
 const _codeGraphCache = new Map<string, { data: any; time: number }>();
 
+// Entries are only TTL-checked on read, so without bounds the caches grow
+// monotonically until OOM. Expired entries are kept for a while past their
+// TTL because the handlers serve them as a stale fallback when GitHub is
+// unreachable; the size cap (FIFO via Map insertion order) is the hard bound.
+const CACHE_STALE_FALLBACK_FACTOR = 10;
+function cacheSet(
+  cache: Map<string, { data: any; time: number }>,
+  key: string,
+  data: any,
+  ttl: number,
+  maxEntries: number,
+): void {
+  const cutoff = Date.now() - ttl * CACHE_STALE_FALLBACK_FACTOR;
+  for (const [k, v] of cache) {
+    if (v.time < cutoff) cache.delete(k);
+  }
+  cache.delete(key);
+  cache.set(key, { data, time: Date.now() });
+  while (cache.size > maxEntries) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
+
 // Guard for routes whose `:id` must be a UUID — falls through to the next
 // matching route when the path segment is a literal (e.g. `available-repos`).
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -380,7 +405,7 @@ export function projectRoutes() {
       }
 
       const data = { commits, tags, fetchedAt: new Date().toISOString() };
-      _activityCache.set(cacheKey, { data, time: Date.now() });
+      cacheSet(_activityCache, cacheKey, data, ACTIVITY_CACHE_TTL, 500);
       res.json(data);
     } catch (err: any) {
       console.error(`Failed to fetch GitHub activity for ${owner}/${repo}:`, err.message);
@@ -403,7 +428,7 @@ export function projectRoutes() {
       if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
       const data = await ghRes.json();
       const branches = data.map((b: any) => ({ name: b.name, sha: b.commit.sha }));
-      _branchesCache.set(cacheKey, { data: branches, time: Date.now() });
+      cacheSet(_branchesCache, cacheKey, branches, BRANCHES_CACHE_TTL, 500);
       res.json(branches);
     } catch (err: any) {
       console.error(`Failed to fetch branches for ${owner}/${repo}:`, err.message);
@@ -432,7 +457,7 @@ export function projectRoutes() {
         sha: item.sha,
       }));
       const result = { tree, truncated: !!data.truncated };
-      _treeCache.set(cacheKey, { data: result, time: Date.now() });
+      cacheSet(_treeCache, cacheKey, result, TREE_CACHE_TTL, 100);
       res.json(result);
     } catch (err: any) {
       console.error(`Failed to fetch tree for ${owner}/${repo}@${ref}:`, err.message);
@@ -483,7 +508,7 @@ export function projectRoutes() {
         htmlUrl: data.html_url,
         downloadUrl: data.download_url,
       };
-      _fileCache.set(cacheKey, { data: result, time: Date.now() });
+      cacheSet(_fileCache, cacheKey, result, FILE_CACHE_TTL, 1000);
       res.json(result);
     } catch (err: any) {
       console.error(`Failed to fetch file ${filePath} for ${owner}/${repo}@${ref}:`, err.message);
@@ -535,14 +560,14 @@ export function projectRoutes() {
         if (c && Date.now() - c.time < FILE_CACHE_TTL) return c.data;
         const ghRes = await fetch(
           `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURI(filePath)}?ref=${encodeURIComponent(ref)}`,
-          { headers: auth.headers },
+          { headers: auth.headers, signal: AbortSignal.timeout(15_000) },
         );
         if (!ghRes.ok) return null;
         const data = await ghRes.json();
         if (data.encoding === 'base64' && data.content) {
           try {
             const content = Buffer.from(data.content, 'base64').toString('utf-8');
-            _fileCache.set(fileKey, { data: content, time: Date.now() });
+            cacheSet(_fileCache, fileKey, content, FILE_CACHE_TTL, 1000);
             return content;
           } catch {
             return null;
@@ -568,7 +593,7 @@ export function projectRoutes() {
       });
 
       const result = { ...graph, fetchedAt: new Date().toISOString(), ref };
-      _codeGraphCache.set(cacheKey, { data: result, time: Date.now() });
+      cacheSet(_codeGraphCache, cacheKey, result, CODE_GRAPH_CACHE_TTL, 50);
       res.json(result);
     } catch (err: any) {
       console.error(`[CodeGraph] analysis failed for ${owner}/${repo}:`, err.message);

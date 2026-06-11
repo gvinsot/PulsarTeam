@@ -28,7 +28,7 @@ import { BUILTIN_SKILLS } from './data/skills.js';
 import { readSecret, validateProductionSecrets } from './secrets.js';
 import { buildCorsOptions, getCorsOrigins, isOriginAllowed, logRejectedOrigin, validateCorsConfig } from './middleware/corsConfig.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
-import { initDatabase, isDatabaseConnected } from './services/database.js';
+import { initDatabase, isDatabaseConnected, getPool } from './services/database.js';
 import { onedriveRoutes } from './routes/onedrive.js';
 import { microsoftOAuthRedirectRouter } from './routes/microsoftOAuth.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
@@ -384,11 +384,35 @@ async function start() {
   await mcpManager.connectAll();
 }
 
+let shuttingDown = false;
 async function shutdown() {
+  if (shuttingDown) {
+    // Second signal (e.g. Ctrl+C twice): give up on graceful cleanup.
+    process.exit(1);
+  }
+  shuttingDown = true;
   console.log('\\n🛑 Shutting down — disconnecting MCP servers, destroying sandbox containers...');
+  // Failsafe: exit before Docker's 10s stop-grace SIGKILL even if cleanup hangs.
+  setTimeout(() => process.exit(1), 8_000).unref();
   agentManager.stopTaskLoop();
-  await mcpManager.disconnectAll();
-  await executionManager.destroyAll();
+  // io.close() also closes the attached httpServer — stop accepting new work.
+  io.close();
+  try {
+    await mcpManager.disconnectAll();
+  } catch (err) {
+    console.error('⚠️ MCP disconnect failed during shutdown:', err);
+  }
+  try {
+    await executionManager.destroyAll();
+  } catch (err) {
+    console.error('⚠️ Execution cleanup failed during shutdown:', err);
+  }
+  // End the pg pool last so in-flight handlers aren't cut off mid-query.
+  try {
+    await getPool()?.end();
+  } catch (err) {
+    console.error('⚠️ DB pool close failed during shutdown:', err);
+  }
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

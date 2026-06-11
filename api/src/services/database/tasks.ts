@@ -48,6 +48,7 @@ export function rowToTask(row) {
     deletedBy: row.deleted_by || undefined,
     executionStatus: row.execution_status || undefined,
     completedActionIdx: row.completed_action_idx != null ? row.completed_action_idx : undefined,
+    _pendingOnEnter: row.pending_on_enter || undefined,
     actionRunning: row.action_running || false,
     actionRunningAgentId: row.action_running_agent_id || undefined,
     actionRunningMode: row.action_running_mode || undefined,
@@ -111,11 +112,20 @@ export async function saveTaskToDb(task) {
   // Chain this save after the previous one for the same task.
   // This guarantees that even fire-and-forget calls execute in order.
   const prev = _taskWriteQueue.get(taskId) || Promise.resolve();
-  const current = prev.then(() => _doSaveTask(task)).catch(() => {});
-  _taskWriteQueue.set(taskId, current);
+  const chained = prev.then(() => _doSaveTask(task));
+  // The queue tail swallows rejections so a failed save can't poison the chain
+  // for subsequent saves of the same task; the unsuppressed promise is returned
+  // so awaiting callers still observe persistence failures.
+  const tail = chained.catch(() => {});
+  _taskWriteQueue.set(taskId, tail);
+  // Evict the entry once settled (unless a newer save already replaced it) so
+  // the Map doesn't grow with every task ID ever saved.
+  tail.finally(() => {
+    if (_taskWriteQueue.get(taskId) === tail) _taskWriteQueue.delete(taskId);
+  });
 
   // Await our own turn so callers who `await saveTaskToDb()` get the guarantee
-  return current;
+  return chained;
 }
 
 // Live deployments may be missing the `environment` column if the
@@ -146,8 +156,9 @@ async function _doSaveTask(task, _isRetry = false) {
                           task_type, priority, due_date, source, recurrence, commits, history,
                           error, created_at, updated_at, completed_at, started_at,
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
-                          action_running_mode, error_from_status, is_manual, position, environment)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
+                          action_running_mode, error_from_status, is_manual, position, environment,
+                          pending_on_enter)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, repo_provider = $6, repo_full_name = $7,
          storage_provider = $8, storage_path = $9,
@@ -157,7 +168,8 @@ async function _doSaveTask(task, _isRetry = false) {
          completed_at = $21, started_at = $22,
          execution_status = $23, completed_action_idx = $24, action_running = $25, action_running_agent_id = $26,
          action_running_mode = $27, error_from_status = $28, is_manual = $29, position = $30,
-         environment = COALESCE(tasks.environment, $31)`,
+         environment = COALESCE(tasks.environment, $31),
+         pending_on_enter = $32`,
       [
         task.id,
         task.agentId,
@@ -190,6 +202,7 @@ async function _doSaveTask(task, _isRetry = false) {
         task.isManual || false,
         task.position ?? 0,
         task.environment || null,
+        task._pendingOnEnter || null,
       ]
     );
     // Fast path succeeded — flip the cached flag so we skip the probe forever.
@@ -207,7 +220,8 @@ async function _doSaveTask(task, _isRetry = false) {
         return;
       }
     }
-    console.error('Failed to save task:', err.message);
+    console.error(`Failed to save task ${task.id}:`, err.message);
+    throw err;
   }
 }
 
@@ -353,6 +367,7 @@ export async function clearTaskExecutionFlags(agentId) {
         execution_status = NULL,
         started_at = NULL,
         completed_action_idx = NULL,
+        pending_on_enter = NULL,
         action_running = FALSE,
         action_running_agent_id = NULL,
         action_running_mode = NULL,
@@ -405,7 +420,10 @@ export async function clearActionRunningForAgent(agentId) {
 
 /**
  * Clear action_running flags for tasks on startup (service restart recovery).
- * After a crash, no actions are actually running — the flags are stale.
+ * After a crash, no actions are actually running — the flags are stale. The
+ * same goes for execution_status='watching': the watch loop that set it died
+ * with the process, and leaving it behind would block both the resume loop
+ * and the workflow re-arm forever.
  *
  * When `environment` is provided, only tasks tagged for that environment are
  * cleared, so a sibling replica's locks aren't wiped on restart. NULL env is
@@ -427,8 +445,9 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
       UPDATE tasks SET
         action_running = FALSE,
         action_running_agent_id = NULL,
+        execution_status = CASE WHEN execution_status = 'watching' THEN NULL ELSE execution_status END,
         updated_at = NOW()
-      WHERE action_running = TRUE AND deleted_at IS NULL
+      WHERE (action_running = TRUE OR execution_status = 'watching') AND deleted_at IS NULL
       ${envFilter}
     `, params);
     return result.rowCount || 0;

@@ -1,5 +1,5 @@
 import express from 'express';
-import { recordTokenUsage } from '../services/database.js';
+import { recordTokenUsage, getPool } from '../services/database.js';
 
 /**
  * Internal endpoint that the runner-service uses to report token usage
@@ -34,7 +34,7 @@ export function internalTokenUsageRoutes(agentManager) {
       const model = (body.model || agent.model || 'unknown').toString();
       const userId = agent.ownerId || null;
 
-      await recordTokenUsage(
+      const recorded = await recordTokenUsage(
         agent.id,
         agent.name,
         provider,
@@ -45,6 +45,14 @@ export function internalTokenUsageRoutes(agentManager) {
         userId,
         contextTokens,
       );
+
+      // recordTokenUsage never throws; when a pool is configured but the
+      // insert failed, answer 500 so the runner can retry instead of a
+      // false {recorded:true} that silently drops the spend. Without a
+      // pool (DB-less mode) recording is a no-op and still succeeds.
+      if (!recorded && getPool()) {
+        return res.status(500).json({ error: 'failed to record token usage' });
+      }
 
       // Mirror onto the agent's running metrics so the dashboard reflects it
       // immediately, not just on the next budget cache refresh.

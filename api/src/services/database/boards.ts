@@ -41,12 +41,16 @@ export async function ensureDefaultBoard(p) {
       }
     } catch { /* workflows table may not exist */ }
 
-    await p.query(
+    // ON CONFLICT DO NOTHING: a concurrently booting replica may have inserted
+    // the default board between our SELECT and this INSERT — the partial
+    // unique index on is_default turns that race into a no-op.
+    const inserted = await p.query(
       `INSERT INTO boards (name, workflow, filters, position, is_default)
-       VALUES ('Default', $1::jsonb, '{}'::jsonb, 0, TRUE)`,
+       VALUES ('Default', $1::jsonb, '{}'::jsonb, 0, TRUE)
+       ON CONFLICT DO NOTHING`,
       [JSON.stringify(workflow)]
     );
-    console.log('✅ Default board created');
+    if (inserted.rowCount > 0) console.log('✅ Default board created');
   } catch (err) {
     console.error('Failed to ensure default board:', err.message);
   }
@@ -57,7 +61,7 @@ export async function getDefaultBoard() {
   if (!pool) return null;
   try {
     const result = await pool.query(
-      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE is_default = TRUE LIMIT 1'
+      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE is_default = TRUE ORDER BY created_at LIMIT 1'
     );
     return result.rows[0] || null;
   } catch (err) {

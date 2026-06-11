@@ -4,6 +4,7 @@ import { storeOAuthToken } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
 import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
 import { sendOAuthResult } from './oauthHelper.js';
+import { readSecret } from '../secrets.js';
 
 /**
  * Unified Google OAuth callback handler.
@@ -33,8 +34,33 @@ interface StateEntry {
   expiresAt: number;
 }
 
-const stateStore = new Map<string, StateEntry>();
 const STATE_TTL_MS = 10 * 60 * 1000;
+
+// States are HMAC-signed and stateless so an API restart/redeploy between
+// /auth-url and the provider redirect does not invalidate in-flight consent
+// popups. The consumed set below only guards against replay within this
+// process; after a restart a state could be replayed until its TTL expires,
+// which is acceptable because the authorization code is single-use at Google.
+const consumedStates = new Map<string, number>();
+
+let fallbackStateSecret: Buffer | null = null;
+function getStateSecret(): Buffer {
+  const jwt = readSecret('JWT_SECRET', '');
+  if (jwt) {
+    // Domain-separate from JWT signing and from the other providers' states.
+    return Buffer.from(
+      crypto.hkdfSync('sha256', Buffer.from(jwt, 'utf-8'), Buffer.alloc(0), Buffer.from('pulsarteam:oauth-state:google:v1', 'utf-8'), 32)
+    );
+  }
+  // Dev fallback without JWT_SECRET: per-process key (states then only
+  // survive within this process, as with the previous in-memory store).
+  if (!fallbackStateSecret) fallbackStateSecret = crypto.randomBytes(32);
+  return fallbackStateSecret;
+}
+
+function signStatePayload(payload: string): string {
+  return crypto.createHmac('sha256', getStateSecret()).update(payload).digest('base64url');
+}
 
 export function generateGoogleOAuthState(
   service: GoogleService,
@@ -43,24 +69,39 @@ export function generateGoogleOAuthState(
   boardId: string | null = null,
 ): string {
   const now = Date.now();
-  for (const [k, v] of stateStore) {
-    if (v.expiresAt < now) stateStore.delete(k);
+  for (const [k, exp] of consumedStates) {
+    if (exp < now) consumedStates.delete(k);
   }
-  const state = crypto.randomBytes(32).toString('hex');
-  stateStore.set(state, { service, username, agentId, boardId, expiresAt: now + STATE_TTL_MS });
-  return state;
+  const entry: StateEntry = { service, username, agentId, boardId, expiresAt: now + STATE_TTL_MS };
+  const payload = Buffer.from(
+    JSON.stringify({ ...entry, nonce: crypto.randomBytes(8).toString('hex') }),
+    'utf-8',
+  ).toString('base64url');
+  return `${payload}.${signStatePayload(payload)}`;
 }
 
 export function consumeGoogleOAuthState(state: string): Omit<StateEntry, 'expiresAt'> | null {
-  const entry = stateStore.get(state);
-  if (!entry) return null;
-  stateStore.delete(state);
-  if (entry.expiresAt < Date.now()) return null;
+  const dot = state.lastIndexOf('.');
+  if (dot <= 0) return null;
+  const payload = state.slice(0, dot);
+  const signature = Buffer.from(state.slice(dot + 1));
+  const expected = Buffer.from(signStatePayload(payload));
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(signature, expected)) return null;
+
+  let entry: StateEntry;
+  try {
+    entry = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+  } catch {
+    return null;
+  }
+  if (!entry || typeof entry.expiresAt !== 'number' || entry.expiresAt < Date.now()) return null;
+  if (consumedStates.has(state)) return null;
+  consumedStates.set(state, entry.expiresAt);
   return {
     service: entry.service,
     username: entry.username,
-    agentId: entry.agentId,
-    boardId: entry.boardId,
+    agentId: entry.agentId || null,
+    boardId: entry.boardId || null,
   };
 }
 
@@ -78,6 +119,7 @@ async function fetchUserEmail(service: GoogleService, accessToken: string): Prom
   try {
     const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(15_000),
     });
     if (res.ok) {
       const profile = await res.json();
@@ -156,6 +198,7 @@ export async function handleGoogleOAuthCallback(req: express.Request, res: expre
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
+      signal: AbortSignal.timeout(15_000),
     });
 
     const data = await response.json();
@@ -180,7 +223,7 @@ export async function handleGoogleOAuthCallback(req: express.Request, res: expre
       refreshToken: data.refresh_token,
       expiresAt: Date.now() + (data.expires_in - 60) * 1000,
       meta: { email },
-    });
+    }, { throwOnPersistError: true });
 
     console.log(`✅ [${stateData.service}] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`);
     return googleOAuthResult(res, stateData.service, true, null, email);

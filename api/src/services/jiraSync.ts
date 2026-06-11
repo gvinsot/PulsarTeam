@@ -136,6 +136,17 @@ async function executeTransitionActions(trigger, task, agentId, agentManager) {
   const actions = trigger.actions || [];
   if (actions.length === 0) return;
 
+  // Resolve the board's real workflow so run_agent prompts get valid column
+  // IDs and markTaskError can validate the originating column. Without it,
+  // decide-mode agents see an empty status list and cannot decide.
+  let workflow = null;
+  try {
+    workflow = await getWorkflowForBoard(task.boardId);
+  } catch (err) {
+    console.error(`[Jira] Failed to load workflow for board "${task.boardId}":`, err.message);
+  }
+  const ownerId = workflow?.userId || null;
+
   for (const action of actions) {
     if (action.type === 'change_status' && action.target) {
       agentManager.setTaskStatus(agentId, task.id, action.target, { skipAutoRefine: false, by: 'jira-sync' });
@@ -143,11 +154,15 @@ async function executeTransitionActions(trigger, task, agentId, agentManager) {
     } else if (action.type === 'assign_agent' && action.role) {
       // Handled by _checkAutoRefine via autoAssignRole on the target column
     } else if (action.type === 'run_agent') {
+      // Note: unlike on_enter chains, jira_ticket triggers have no
+      // _pendingOnEnter/recheck retry machinery — a skipped action (e.g. no
+      // idle agent) is dropped. Prefer a change_status action into a column
+      // whose on_enter transition runs the agent, which has full retries.
       executeAction(action, { ...task, agentId }, {
         agentManager,
         io: _io,
-        ownerId: null,
-        workflow: null,
+        ownerId,
+        workflow,
       }).catch(err =>
         console.error(`[Jira] Action run_agent error:`, err.message)
       );

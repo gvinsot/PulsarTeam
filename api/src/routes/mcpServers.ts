@@ -113,15 +113,28 @@ export function mcpServerRoutes(mcpManager) {
         connectOpts.headers = { ...(connectOpts.headers || {}), ...internalConfig.headers };
       }
 
-      const { tools } = await client.connect(connectUrl, connectOpts);
-      await client.close();
-
-      res.json({
-        success: true,
-        name: server.name,
-        toolCount: tools.length,
-        tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('MCP connection test timed out after 15s')), 15_000);
       });
+      const connectPromise = client.connect(connectUrl, connectOpts);
+      // connect()'s SSE fallback can install a fresh transport after a
+      // mid-flight close(), so always chain a final close onto the connect
+      // promise itself — the finally below only covers the current transport.
+      const closeQuietly = () => { client.close().catch(() => {}); };
+      connectPromise.then(closeQuietly, closeQuietly);
+      try {
+        const { tools } = await Promise.race([connectPromise, timeout]);
+        res.json({
+          success: true,
+          name: server.name,
+          toolCount: tools.length,
+          tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
+        });
+      } finally {
+        clearTimeout(timer);
+        await client.close().catch(() => {});
+      }
     } catch (err) {
       res.status(200).json({ success: false, error: err.message });
     }

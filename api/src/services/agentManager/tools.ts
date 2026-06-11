@@ -457,9 +457,9 @@ export const toolsMethods = {
 
     if (this.executionManager) {
       try {
-        // Bind agent to the correct execution provider based on LLM config
+        // Bind agent to the correct execution provider based on runner field or LLM config
         const llmCfg = this.resolveLlmConfig(agent);
-        const providerType = llmCfg.managesContext ? 'claudecode' : 'sandbox';
+        const providerType = agent.runner || (llmCfg.managesContext ? 'claudecode' : 'sandbox');
         const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
         const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
         const llmConfigForRunner = agent.llmConfigId ? llmCfg : null;
@@ -701,7 +701,12 @@ export const toolsMethods = {
         }
         if (!task.history) task.history = [];
         task.history.push({ status: task.status, at: new Date().toISOString(), by: agent.name, type: 'board_move', oldBoardId, newBoardId: targetBoardId });
-        await saveTaskToDb({ ...task, agentId: taskAgentId });
+        try {
+          await saveTaskToDb({ ...task, agentId: taskAgentId });
+        } catch (err: any) {
+          results.push({ tool: 'move_task_to_board', args: call.args, success: false, error: `Failed to persist board move: ${err?.message || err}` });
+          continue;
+        }
         const ownerAgent = this.agents.get(taskAgentId);
         if (ownerAgent) {
           saveAgent(ownerAgent);

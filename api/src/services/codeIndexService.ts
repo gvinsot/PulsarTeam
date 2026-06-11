@@ -5,11 +5,20 @@ import { createHashedEmbedding, EMBEDDING_DIMENSION, normalizeText } from './cod
 import { extractSymbolsFromContent } from './codeSearch/symbolExtractor.js';
 import { createVectorStore } from './codeSearch/vectorStore.js';
 
-const DEFAULT_MAX_FILES = Number.parseInt(process.env.CODE_SEARCH_MAX_FILES || '5000', 10);
-const DEFAULT_MAX_FILE_SIZE = Number.parseInt(process.env.CODE_SEARCH_MAX_FILE_SIZE || String(512 * 1024), 10);
+function parsePositiveInt(rawValue, fallback) {
+  if (rawValue == null || rawValue === '') return fallback;
+  const parsed = Number.parseInt(rawValue, 10);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  console.warn(`Code index: ignoring invalid limit "${rawValue}", using default ${fallback}`);
+  return fallback;
+}
+
+const DEFAULT_MAX_FILES = parsePositiveInt(process.env.CODE_SEARCH_MAX_FILES, 5000);
+const DEFAULT_MAX_FILE_SIZE = parsePositiveInt(process.env.CODE_SEARCH_MAX_FILE_SIZE, 512 * 1024);
 const DEFAULT_STORAGE_ROOT = path.resolve(process.cwd(), '.data', 'code-index');
 const REPO_CACHE_TTL_MS = 60_000;
 const FILE_IO_CONCURRENCY = 32;
+const MAX_STORED_SOURCE_LENGTH = 16384;
 const DEFAULT_ALLOWED_EXTENSIONS = new Set([
   '.js', '.jsx', '.mjs', '.cjs',
   '.ts', '.tsx',
@@ -136,6 +145,8 @@ export class CodeIndexService {
   vectorStoreFactory: () => any;
   vectorStorePromise: Promise<any> | null;
   _repoCache: Map<string, any>;
+  _repoLocks: Map<string, Promise<any>>;
+  _memoryVectorRebuilds: Map<string, Promise<void>>;
 
   constructor({
     storageRoot = process.env.CODE_SEARCH_INDEX_ROOT || DEFAULT_STORAGE_ROOT,
@@ -169,6 +180,19 @@ export class CodeIndexService {
     }));
     this.vectorStorePromise = null;
     this._repoCache = new Map();
+    this._repoLocks = new Map();
+    this._memoryVectorRebuilds = new Map();
+  }
+
+  _withRepoLock(repoId, task) {
+    const previous = this._repoLocks.get(repoId) || Promise.resolve();
+    const run = previous.then(() => task());
+    const tail = run.catch(() => {});
+    this._repoLocks.set(repoId, tail);
+    tail.then(() => {
+      if (this._repoLocks.get(repoId) === tail) this._repoLocks.delete(repoId);
+    });
+    return run;
   }
 
   _getCachedRepo(repoId) {
@@ -180,6 +204,11 @@ export class CodeIndexService {
 
   _setCachedRepo(repoId, data) {
     this._repoCache.set(repoId, { data, ts: Date.now() });
+    const timer = setTimeout(() => {
+      const entry = this._repoCache.get(repoId);
+      if (entry && Date.now() - entry.ts >= REPO_CACHE_TTL_MS) this._repoCache.delete(repoId);
+    }, REPO_CACHE_TTL_MS + 1000);
+    timer.unref?.();
   }
 
   _invalidateCache(repoId) {
@@ -239,7 +268,13 @@ export class CodeIndexService {
     if (cached) return cached;
     const filePath = this.repoIndexPath(repoId);
     const raw = await fs.readFile(filePath, 'utf8');
-    const repo = JSON.parse(raw);
+    let repo;
+    try {
+      repo = JSON.parse(raw);
+    } catch (error) {
+      console.error(`Code index: corrupt index file for repo "${repoId}" at ${filePath}: ${error.message}`);
+      throw error;
+    }
     this._setCachedRepo(repoId, repo);
     return repo;
   }
@@ -247,7 +282,15 @@ export class CodeIndexService {
   async saveRepo(repo) {
     const repoDirectory = this.repoDir(repo.repo.id);
     await fs.mkdir(repoDirectory, { recursive: true });
-    await fs.writeFile(this.repoIndexPath(repo.repo.id), JSON.stringify(repo, null, 2));
+    const indexPath = this.repoIndexPath(repo.repo.id);
+    const tempPath = `${indexPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+    try {
+      await fs.writeFile(tempPath, JSON.stringify(repo));
+      await fs.rename(tempPath, indexPath);
+    } catch (error) {
+      await fs.rm(tempPath, { force: true }).catch(() => {});
+      throw error;
+    }
   }
 
   async discoverFiles(rootPath, { maxFiles = this.maxFiles, maxFileSize = this.maxFileSize } = {}) {
@@ -257,13 +300,19 @@ export class CodeIndexService {
       unsupportedExtension: 0,
       tooLarge: 0,
       symlink: 0,
+      unreadableDirectory: 0,
     };
     const queue = [rootPath];
     let truncated = false;
 
     while (queue.length > 0 && !truncated) {
       const current = queue.pop();
-      const entries = await fs.readdir(current, { withFileTypes: true });
+      const entries = await fs.readdir(current, { withFileTypes: true }).catch((error) => {
+        // An unreadable root would otherwise produce an empty index that replaces a good one
+        if (current === rootPath) throw error;
+        skipped.unreadableDirectory += 1;
+        return [];
+      });
 
       const fileCandidates = [];
       for (const entry of entries) {
@@ -332,7 +381,9 @@ export class CodeIndexService {
 
   buildSymbolRecord(fileRecord, symbol) {
     const id = `${fileRecord.path}::${symbol.qualifiedName}#${symbol.kind}`;
+    // Hash the full source so drift verification stays correct even when storage is truncated
     const sourceHash = hashContent(symbol.source);
+    const sourceTruncated = symbol.source.length > MAX_STORED_SOURCE_LENGTH;
 
     return {
       id,
@@ -347,8 +398,9 @@ export class CodeIndexService {
       startLine: symbol.startLine,
       endLine: symbol.endLine,
       lineCount: symbol.endLine - symbol.startLine + 1,
-      source: symbol.source,
+      source: sourceTruncated ? symbol.source.slice(0, MAX_STORED_SOURCE_LENGTH) : symbol.source,
       sourceHash,
+      sourceTruncated,
     };
   }
 
@@ -385,10 +437,17 @@ export class CodeIndexService {
 
     const safeRepoName = repoName || path.basename(absoluteRoot);
     const repoId = createRepoId(safeRepoName, absoluteRoot);
-    const repoDirectory = this.repoDir(repoId);
 
-    await fs.rm(repoDirectory, { recursive: true, force: true });
+    return this._withRepoLock(repoId, () => this._indexFolderLocked({
+      absoluteRoot,
+      safeRepoName,
+      repoId,
+      maxFiles,
+      maxFileSize,
+    }));
+  }
 
+  async _indexFolderLocked({ absoluteRoot, safeRepoName, repoId, maxFiles, maxFileSize }) {
     const discovery = await this.discoverFiles(absoluteRoot, { maxFiles, maxFileSize });
     const symbols = [];
     const files = [];
@@ -431,6 +490,9 @@ export class CodeIndexService {
 
         files.push(fileRecord);
       }
+
+      // Let the event loop breathe between parse batches — extraction is CPU-bound
+      await new Promise((resolve) => setImmediate(resolve));
     }
 
     const vectorStore = await this.getVectorStore();
@@ -461,6 +523,7 @@ export class CodeIndexService {
     await this.saveRepo(repo);
     this._invalidateCache(repoId);
     this._setCachedRepo(repoId, repo);
+    this._memoryVectorRebuilds.delete(repoId);
     return repo.repo;
   }
 
@@ -572,7 +635,7 @@ export class CodeIndexService {
       driftDetected: false,
     };
 
-    if (!verify && contextLines === 0) {
+    if (!verify && contextLines === 0 && !symbol.sourceTruncated) {
       return response;
     }
 
@@ -588,6 +651,11 @@ export class CodeIndexService {
     const endLine = Math.min(lines.length, symbol.endLine + contextLines);
     const currentSource = lines.slice(startLine - 1, endLine).join('\n').trimEnd();
     const exactCurrentSource = lines.slice(symbol.startLine - 1, symbol.endLine).join('\n').trimEnd();
+
+    if (symbol.sourceTruncated && hashContent(exactCurrentSource) === symbol.sourceHash) {
+      response.source = exactCurrentSource;
+      response.sourceTruncated = false;
+    }
 
     response.liveSourceAvailable = true;
     response.currentSource = currentSource;
@@ -649,11 +717,40 @@ export class CodeIndexService {
       }));
   }
 
+  // The in-memory vector backend loses its collections on restart while index.json
+  // persists — rebuild the collection from stored symbols when it falls out of sync.
+  async _ensureMemoryVectors(repoId, repo, vectorStore) {
+    if (typeof vectorStore.backend !== 'string' || !vectorStore.backend.startsWith('memory')) return;
+    if (!Array.isArray(repo.symbols) || repo.symbols.length === 0) return;
+    const collectionSize = vectorStore.collections?.get(repoId)?.size ?? 0;
+    if (collectionSize >= repo.symbols.length) return;
+
+    let rebuild = this._memoryVectorRebuilds.get(repoId);
+    if (!rebuild) {
+      rebuild = (async () => {
+        console.info(`Code index: rebuilding in-memory vectors for repo "${repoId}" (${repo.symbols.length} symbols)`);
+        const docs = repo.symbols.map((symbol) => ({
+          id: symbol.id,
+          vector: createHashedEmbedding(this.createEmbeddingText(symbol), this.embeddingDimension),
+          fields: {
+            kind: symbol.kind,
+            filePath: symbol.filePath,
+          },
+        }));
+        await vectorStore.upsert(repoId, docs);
+      })();
+      this._memoryVectorRebuilds.set(repoId, rebuild);
+      rebuild.catch(() => this._memoryVectorRebuilds.delete(repoId));
+    }
+    await rebuild;
+  }
+
   async searchSemantic(repoId: string, { query, topK = 10 }: { query: string; topK?: number } = { query: '' }) {
     const [repo, vectorStore] = await Promise.all([
       this.loadRepo(repoId),
       this.getVectorStore(),
     ]);
+    await this._ensureMemoryVectors(repoId, repo, vectorStore);
     const queryVector = createHashedEmbedding(query, this.embeddingDimension);
     const vectorMatches = await vectorStore.query(repoId, queryVector, topK * 3);
 
@@ -696,6 +793,20 @@ export class CodeIndexService {
    * @returns {{ updated: number, removed: number, added: number }}
    */
   async updateFiles(repoId, fileEntries) {
+    return this._withRepoLock(repoId, () => this._updateFilesLocked(repoId, fileEntries));
+  }
+
+  async _updateFilesLocked(repoId, fileEntries) {
+    try {
+      return await this._applyFileUpdates(repoId, fileEntries);
+    } catch (error) {
+      // The cached repo object may hold half-applied mutations — force a reload from disk
+      this._invalidateCache(repoId);
+      throw error;
+    }
+  }
+
+  async _applyFileUpdates(repoId, fileEntries) {
     const repo = await this.loadRepo(repoId);
     const rootPath = repo.repo.rootPath;
     const vectorStore = await this.getVectorStore();
@@ -806,10 +917,13 @@ export class CodeIndexService {
   }
 
   async invalidate(repoId) {
-    this._invalidateCache(repoId);
-    const vectorStore = await this.getVectorStore();
-    await vectorStore.resetCollection(repoId);
-    await fs.rm(this.repoDir(repoId), { recursive: true, force: true });
-    return { success: true };
+    return this._withRepoLock(repoId, async () => {
+      this._invalidateCache(repoId);
+      this._memoryVectorRebuilds.delete(repoId);
+      const vectorStore = await this.getVectorStore();
+      await vectorStore.resetCollection(repoId);
+      await fs.rm(this.repoDir(repoId), { recursive: true, force: true });
+      return { success: true };
+    });
   }
 }

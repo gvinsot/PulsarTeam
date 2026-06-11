@@ -36,7 +36,7 @@ async function driveFetch(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(url, { ...options, headers });
+  const res = await fetch(url, { signal: AbortSignal.timeout(options.raw ? 120_000 : 60_000), ...options, headers });
 
   if (!res.ok) {
     const text = await res.text();
@@ -505,6 +505,7 @@ export function createGdriveMcpServer(
 
       const token = await getGdriveAccessTokenForAgent(agentId, boardId);
       const res = await fetch(`${UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,parents`, {
+        signal: AbortSignal.timeout(120_000),
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,

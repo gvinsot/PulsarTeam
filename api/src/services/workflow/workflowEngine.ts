@@ -29,7 +29,7 @@ import {
   columnExists,
   Trigger,
 } from './taskStateMachine.js';
-import { findAgentForAssignment } from './agentSelector.js';
+import { findAgentForAssignment, hasLockForTask } from './agentSelector.js';
 
 // ── Progressive cooldown for on_enter retries ──────────────────────────────
 // Starts at 200ms and doubles each retry up to a 2s cap: 200ms, 400ms, 800ms, 1.6s, 2s…
@@ -43,6 +43,9 @@ const ON_ENTER_RETRY_MAX_MS     = 2_000;
 // happen when executeChangeStatus triggers a nested _checkAutoRefine call
 // while the parent chain is still running.
 const _processingTasks = new Map(); // taskId → status being processed
+
+// One-shot guard for the post-restart re-arm in recheckPendingTransitions.
+let _startupReArmDone = false;
 
 /**
  * Process all transitions triggered when a task enters a column.
@@ -193,8 +196,29 @@ export async function recheckPendingTransitions(agentManager) {
     const now = Date.now();
     for (const [key, timestamp] of agentManager._conditionProcessing) {
       if (now - timestamp > LOCK_TTL_MS) {
+        // A legitimately long chain (e.g. a CLI coding run) can exceed the TTL
+        // while its run_agent action still holds a fresh execution lock —
+        // evicting then would re-fire the chain every tick and corrupt the
+        // live chain's resume bookkeeping. Only evict truly wedged locks.
+        if (hasLockForTask(`${key}:`)) continue;
         console.warn(`[WorkflowEngine] Evicting stale condition lock: ${key}`);
         agentManager._conditionProcessing.delete(key);
+      }
+    }
+  }
+
+  // Sweep stale on_enter retry bookkeeping. Entries are only cleaned up when a
+  // chain action later succeeds, so tasks that get deleted, errored, stopped or
+  // moved while pending would leak their entries forever. A live retry refreshes
+  // its timestamp on every attempt; anything older than the TTL is abandoned
+  // (worst case for a false positive: the 200ms-2s backoff resets to 200ms).
+  if (agentManager._onEnterRetryTimestamps) {
+    const RETRY_TTL_MS = 15 * 60 * 1000;
+    const now = Date.now();
+    for (const [key, ts] of agentManager._onEnterRetryTimestamps) {
+      if (now - ts > RETRY_TTL_MS) {
+        agentManager._onEnterRetryTimestamps.delete(key);
+        agentManager._onEnterRetryCounts?.delete(key);
       }
     }
   }
@@ -231,6 +255,38 @@ export async function recheckPendingTransitions(agentManager) {
   // the DB. NULL environment is treated as "prod" so legacy tasks keep
   // running on the prod replica.
   const ownEnv = getCurrentEnvironment();
+
+  // One-shot post-restart recovery: a redeploy/crash mid-chain would leave the
+  // on_enter filter below never re-firing while the task loop skips
+  // workflow-managed columns, freezing the task forever. Tasks whose deferred
+  // retry was persisted (pending_on_enter, restored into _pendingOnEnter at
+  // boot) are already armed and skipped here. For rows saved before that
+  // column existed, fall back to the durable interruption markers: a stale
+  // actionRunning flag (crashed mid-run_agent) or a numeric completedActionIdx
+  // (chain was saved mid-way / an action was skipped and never resumed).
+  // Chains that completed cleanly reset all markers, so they are not re-run.
+  if (!_startupReArmDone) {
+    _startupReArmDone = true;
+    for (const [agentId] of agentManager.agents) {
+      for (const task of agentManager._getAgentTasks(agentId)) {
+        if (_processingTasks.has(task.id)) continue;
+        if (task.status === 'error' || task.isManual) continue;
+        if (task.executionStatus === 'stopped') continue;
+        if (agentManager._isActiveTaskStatus && !agentManager._isActiveTaskStatus(task.status)) continue;
+        if ((task.environment || 'prod') !== ownEnv) continue;
+        // A crash during the watch phase persists executionStatus='watching'.
+        // The startup sweep (clearAllStaleActionRunning) already reset it in
+        // the DB; mirror that on the in-memory copy loaded at boot so a later
+        // save can't re-persist the stale flag and the re-arm can proceed.
+        if (task.executionStatus === 'watching') task.executionStatus = null;
+        if (task._pendingOnEnter === task.status) continue;
+        const idx = task.completedActionIdx ?? task._completedActionIdx;
+        if (task.actionRunning !== true && typeof idx !== 'number') continue;
+        console.log(`[WorkflowEngine] Re-arming interrupted chain after restart: task="${task.id}" status="${task.status}"`);
+        task._pendingOnEnter = task.status;
+      }
+    }
+  }
 
   // Iterate all tasks across all agents
   for (const [agentId, agent] of agentManager.agents) {
@@ -314,13 +370,22 @@ export async function recheckPendingTransitions(agentManager) {
           break;
         }
 
-        // Conditional transition: execute the action chain
+        // Conditional transition: execute the action chain.
+        // Register the task in _processingTasks (like processColumnEntry does)
+        // so a nested processColumnEntry fired by a change_status action is
+        // deferred instead of running concurrently with the chain's tail —
+        // and skip if another chain already holds the task.
+        if (_processingTasks.has(task.id)) {
+          agentManager._conditionProcessing.delete(lockKey);
+          break;
+        }
         console.log(`[WorkflowEngine] Condition met for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
 
         const wf = boardWorkflowMap.get(task.boardId)
           || (boardWorkflowMap.size === 1 ? [...boardWorkflowMap.values()][0] : null);
         const ownerId = wf?.userId || agent.ownerId || null;
 
+        _processingTasks.set(task.id, task.status);
         _executeActionChain(transition.actions || [], { ...task, agentId }, {
           agentManager,
           io,
@@ -329,7 +394,10 @@ export async function recheckPendingTransitions(agentManager) {
           originalStatus: task.status,
         })
           .catch(err => console.error(`[WorkflowEngine] Condition action error:`, err.message))
-          .finally(() => agentManager._conditionProcessing.delete(lockKey));
+          .finally(() => {
+            _processingTasks.delete(task.id);
+            agentManager._conditionProcessing.delete(lockKey);
+          });
 
         break; // only process the first matching transition per task
       }
@@ -401,8 +469,12 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
       const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
       if (actualTask) {
         actualTask._pendingOnEnter = actualTask.status;
-        actualTask._completedActionIdx = i > 0 ? i - 1 : undefined;
-        actualTask.completedActionIdx = i > 0 ? i - 1 : undefined;
+        // Persist the resume index even when the FIRST action is skipped
+        // (-1 → resume from 0): together with pending_on_enter (saved from
+        // _pendingOnEnter below) it survives a restart and lets
+        // recheckPendingTransitions resume the interrupted chain.
+        actualTask._completedActionIdx = i - 1;
+        actualTask.completedActionIdx = i - 1;
         console.log(`[WorkflowEngine] Action ${i} skipped (${result.reason}) — flagged for retry`);
         await saveTaskToDb({ ...actualTask, agentId: task.agentId });
       }

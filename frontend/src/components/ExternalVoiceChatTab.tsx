@@ -96,6 +96,7 @@ export default function ExternalVoiceChatTab({ agent }) {
   const speakerOffRef = useRef(false);
   const configRef = useRef<any>(null);
   const sessionActiveRef = useRef(false);
+  const sttRetryRef = useRef(0);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
 
   // Voice-activity-detection state for the current utterance.
@@ -204,6 +205,7 @@ export default function ExternalVoiceChatTab({ agent }) {
       console.error('[ExternalVoice] chat error', err);
       setError(err.message || 'Chat call failed');
       setStatus('error');
+      cleanup();
     }
     // openStt/speak hoisted below — see closures resolved at call time
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -265,6 +267,7 @@ export default function ExternalVoiceChatTab({ agent }) {
     sttSocketRef.current = stt;
 
     stt.onopen = () => {
+      sttRetryRef.current = 0;
       stt.send(JSON.stringify({ type: 'session.start', config: { language: 'fr' } }));
       setStatus('listening');
     };
@@ -279,6 +282,8 @@ export default function ExternalVoiceChatTab({ agent }) {
         } else if (msg.type === 'transcript.final') {
           const finalText = (msg.text || '').trim();
           setPartial('');
+          // Null the ref before closing so onclose treats this as intentional.
+          sttSocketRef.current = null;
           try { stt.close(); } catch { /* ignore */ }
           handleTranscript(finalText);
         } else if (msg.type === 'error') {
@@ -290,7 +295,20 @@ export default function ExternalVoiceChatTab({ agent }) {
     };
     stt.onerror = () => setError('STT WebSocket error');
     stt.onclose = () => {
-      if (sttSocketRef.current === stt) sttSocketRef.current = null;
+      // Intentional closes null the ref first; only genuine drops reach here.
+      if (sttSocketRef.current !== stt) return;
+      sttSocketRef.current = null;
+      if (!sessionActiveRef.current) return;
+      if (sttRetryRef.current >= 3) {
+        setError('STT connection lost');
+        setStatus('error');
+        cleanup();
+        return;
+      }
+      sttRetryRef.current += 1;
+      setTimeout(() => {
+        if (sessionActiveRef.current && !sttSocketRef.current) openStt();
+      }, 500 * sttRetryRef.current);
     };
   }
 
@@ -319,8 +337,11 @@ export default function ExternalVoiceChatTab({ agent }) {
   }
 
   const connect = useCallback(async () => {
+    // Release any mic/contexts left over from a previous (errored) session.
+    cleanup();
     setError(null);
     setStatus('connecting');
+    sttRetryRef.current = 0;
     try {
       const cfg = await api.getExternalVoiceConfig(agent.id);
       configRef.current = cfg;

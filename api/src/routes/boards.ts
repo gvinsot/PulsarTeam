@@ -55,7 +55,9 @@ export function boardRoutes(agentManager) {
   router.get('/tasks/by-assignee/:agentId', async (req, res) => {
     try {
       const targetAgentId = req.params.agentId;
-      const allAgents = agentManager.getAllForUser(req.user.userId, req.user.role);
+      const boards = await getBoardsByUser(req.user.userId);
+      const userBoardIds = new Set(boards.map(b => b.id));
+      const allAgents = agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds);
       const tasks = [];
       for (const agent of allAgents) {
         for (const task of agentManager._getAgentTasks(agent.id)) {

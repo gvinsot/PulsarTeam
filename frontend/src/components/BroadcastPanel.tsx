@@ -115,12 +115,25 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
       setSending(false);
     };
 
+    // Rate-limit rejections arrive as a generic error event, and a dropped
+    // connection loses the completion event entirely — both must unstick the UI.
+    const handleGenericError = (data) => {
+      console.error('Global error:', data?.error || data?.message);
+      setSending(false);
+    };
+
+    const handleDisconnect = () => setSending(false);
+
     socket.on(WsEvents.BROADCAST_COMPLETE, handleComplete);
     socket.on(WsEvents.BROADCAST_ERROR, handleError);
+    socket.on(WsEvents.ERROR, handleGenericError);
+    socket.on('disconnect', handleDisconnect);
 
     return () => {
       socket.off(WsEvents.BROADCAST_COMPLETE, handleComplete);
       socket.off(WsEvents.BROADCAST_ERROR, handleError);
+      socket.off(WsEvents.ERROR, handleGenericError);
+      socket.off('disconnect', handleDisconnect);
     };
   }, [socket]);
 

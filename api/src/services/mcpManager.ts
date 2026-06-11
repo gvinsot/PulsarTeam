@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import type { SignOptions } from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { getJwtSecret } from '../middleware/auth.js';
 import { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database.js';
@@ -19,7 +20,8 @@ function extractMcpResult(content: any[]) {
 export function resolveInternalMcpConfig(serverUrl: string, {
   port = process.env.PORT || 3001,
   jwtSecret = null,
-}: { port?: string | number; jwtSecret?: string | null } = {}) {
+  expiresIn = '1h',
+}: { port?: string | number; jwtSecret?: string | null; expiresIn?: SignOptions['expiresIn'] } = {}) {
   const mappings = {
     '__internal__onedrive': `http://localhost:${port}/api/onedrive/mcp`,
     '__internal__code_index': `http://localhost:${port}/api/code-index/mcp`,
@@ -45,7 +47,7 @@ export function resolveInternalMcpConfig(serverUrl: string, {
   const token = jwt.sign(
     { username: 'internal-mcp', role: 'admin', internal: true },
     jwtSecret || getJwtSecret(),
-    { expiresIn: '1h' }
+    { expiresIn }
   );
 
   return {
@@ -92,11 +94,43 @@ export class MCPManager {
   servers: Map<string, any>;
   clients: Map<string, any>;
   agentClients: Map<string, any>;
+  _inflightConnects: Map<string, Promise<any>>;
 
   constructor() {
     this.servers = new Map();   // id -> server config (with tools[], status, etc.)
     this.clients = new Map();   // id -> MCPClient instance (global/test connections)
     this.agentClients = new Map(); // "agentId:serverId" -> MCPClient (per-agent connections)
+    this._inflightConnects = new Map(); // dedup key -> in-flight connect promise
+  }
+
+  /**
+   * Deduplicate concurrent connect attempts for the same key: callers racing
+   * on the same server/agent share one connect instead of each opening a
+   * connection and leaking all but the last one cached.
+   */
+  _dedupedConnect(key: string, factory: () => Promise<any>): Promise<any> {
+    let pending = this._inflightConnects.get(key);
+    if (!pending) {
+      pending = factory().finally(() => this._inflightConnects.delete(key));
+      this._inflightConnects.set(key, pending);
+    }
+    return pending;
+  }
+
+  /**
+   * Create, connect, and cache a per-agent MCP client (deduped per cacheKey).
+   * Internal headers take precedence over extraHeaders on key collisions.
+   */
+  _connectAgentClient(cacheKey: string, server: any, extraHeaders: Record<string, string>): Promise<any> {
+    return this._dedupedConnect(cacheKey, async () => {
+      console.log(`🔌 [MCP] Creating per-agent connection key=${cacheKey.slice(0, 8)}… server="${server.name}"`);
+      const client = new MCPClient('PulsarTeam');
+      const internalConfig = resolveInternalMcpConfig(server.url);
+      const connectOpts = { headers: { ...extraHeaders, ...internalConfig.headers } };
+      await client.connect(internalConfig.url || server.url, connectOpts);
+      this.agentClients.set(cacheKey, client);
+      return client;
+    });
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────
@@ -338,7 +372,11 @@ export class MCPManager {
 
   // ── Connection Management ───────────────────────────────────────────
 
-  async connect(id) {
+  connect(id) {
+    return this._dedupedConnect(`global:${id}`, () => this._connectServer(id));
+  }
+
+  async _connectServer(id) {
     let server = this.servers.get(id);
     if (!server) {
       server = await this.ensureBuiltinServerRegistered(id);
@@ -408,9 +446,22 @@ export class MCPManager {
   // ── Tool Execution ──────────────────────────────────────────────────
 
   async callTool(serverId, toolName, args = {}) {
-    const client = this.clients.get(serverId);
+    let client = this.clients.get(serverId);
     const server = this.servers.get(serverId);
-    if (!client || !server) throw new Error(`MCP server not connected: ${serverId}`);
+    if (!server) throw new Error(`MCP server not connected: ${serverId}`);
+    if (!client) {
+      // No global client (e.g. tools were discovered via a per-agent
+      // connection). Only attempt a global connect when global auth exists —
+      // an unauthenticated connect would fail and wipe the discovered tools.
+      const internal = resolveInternalMcpConfig(server.url);
+      if (server.apiKey || Object.keys(internal.headers).length > 0) {
+        await this.connect(serverId);
+        client = this.clients.get(serverId);
+      }
+      if (!client) {
+        throw new Error(`MCP server "${server.name}" requires a per-agent API key — set it in the agent's Plugins tab`);
+      }
+    }
 
     try {
       const result = await client.callTool(toolName, args);
@@ -519,15 +570,7 @@ export class MCPManager {
 
     // Connect if no cached client or previous connection is dead
     if (!client || !client.isConnected) {
-      console.log(`🔌 [MCP] Creating per-agent connection for agent=${agentId.slice(0, 8)} server="${server.name}"`);
-      client = new MCPClient('PulsarTeam');
-      const connectOpts = { headers: { Authorization: `Bearer ${apiKey}` } };
-      const internalConfig = resolveInternalMcpConfig(server.url);
-      if (Object.keys(internalConfig.headers).length > 0) {
-        connectOpts.headers = { ...connectOpts.headers, ...internalConfig.headers };
-      }
-      await client.connect(internalConfig.url, connectOpts);
-      this.agentClients.set(cacheKey, client);
+      client = await this._connectAgentClient(cacheKey, server, { Authorization: `Bearer ${apiKey}` });
     }
 
     try {
@@ -543,14 +586,16 @@ export class MCPManager {
       // Session expired — reconnect and retry once
       if (err.message?.includes('404') || err.message?.includes('session') || err.message?.includes('Invalid token') || err.message?.includes('token') || err.message?.includes('401')) {
         console.log(`🔌 [MCP] Agent session/token expired for "${server.name}", reconnecting...`);
-        const newClient = new MCPClient('PulsarTeam');
-        const connectOpts = { headers: { Authorization: `Bearer ${apiKey}` } };
-        const internalConfig = resolveInternalMcpConfig(server.url);
-        if (Object.keys(internalConfig.headers).length > 0) {
-          connectOpts.headers = { ...connectOpts.headers, ...internalConfig.headers };
+        // Drop and close the broken client before reconnecting so its
+        // socket/session is not leaked when the cache entry is replaced.
+        if (this.agentClients.get(cacheKey) === client) this.agentClients.delete(cacheKey);
+        await client.close().catch(() => {});
+        // A concurrent caller may already have reconnected — reuse its client
+        // instead of opening (and leaking) another one.
+        let newClient = this.agentClients.get(cacheKey);
+        if (!newClient || !newClient.isConnected) {
+          newClient = await this._connectAgentClient(cacheKey, server, { Authorization: `Bearer ${apiKey}` });
         }
-        await newClient.connect(internalConfig.url, connectOpts);
-        this.agentClients.set(cacheKey, newClient);
         const result = await newClient.callTool(toolName, args);
         const extracted = extractMcpResult(result.content);
         return {
@@ -571,22 +616,15 @@ export class MCPManager {
    */
   async _callToolWithAgentContext(server, toolName, args, agentId, boardId = null) {
     const cacheKey = `${agentId}:${server.id}${boardId ? `:${boardId}` : ''}`;
+    const contextHeaders = {
+      'X-Agent-Id': agentId,
+      ...(boardId ? { 'X-Board-Id': boardId } : {}),
+    };
     let client = this.agentClients.get(cacheKey);
 
     // Connect if no cached client or previous connection is dead
     if (!client || !client.isConnected) {
-      console.log(`🔌 [MCP] Creating per-agent context connection for agent=${agentId.slice(0, 8)} server="${server.name}"${boardId ? ` board=${boardId.slice(0, 8)}` : ''}`);
-      client = new MCPClient('PulsarTeam');
-      const internalConfig = resolveInternalMcpConfig(server.url);
-      const connectOpts = {
-        headers: {
-          ...internalConfig.headers,
-          'X-Agent-Id': agentId,
-          ...(boardId ? { 'X-Board-Id': boardId } : {}),
-        },
-      };
-      await client.connect(internalConfig.url, connectOpts);
-      this.agentClients.set(cacheKey, client);
+      client = await this._connectAgentClient(cacheKey, server, contextHeaders);
     }
 
     try {
@@ -602,17 +640,16 @@ export class MCPManager {
       // Session expired — reconnect and retry once
       if (err.message?.includes('404') || err.message?.includes('session') || err.message?.includes('Invalid token') || err.message?.includes('token') || err.message?.includes('401')) {
         console.log(`🔌 [MCP] Agent context session expired for "${server.name}", reconnecting...`);
-        const newClient = new MCPClient('PulsarTeam');
-        const internalConfig = resolveInternalMcpConfig(server.url);
-        const connectOpts = {
-          headers: {
-            ...internalConfig.headers,
-            'X-Agent-Id': agentId,
-            ...(boardId ? { 'X-Board-Id': boardId } : {}),
-          },
-        };
-        await newClient.connect(internalConfig.url, connectOpts);
-        this.agentClients.set(cacheKey, newClient);
+        // Drop and close the broken client before reconnecting so its
+        // socket/session is not leaked when the cache entry is replaced.
+        if (this.agentClients.get(cacheKey) === client) this.agentClients.delete(cacheKey);
+        await client.close().catch(() => {});
+        // A concurrent caller may already have reconnected — reuse its client
+        // instead of opening (and leaking) another one.
+        let newClient = this.agentClients.get(cacheKey);
+        if (!newClient || !newClient.isConnected) {
+          newClient = await this._connectAgentClient(cacheKey, server, contextHeaders);
+        }
         const result = await newClient.callTool(toolName, args);
         const extracted = extractMcpResult(result.content);
         return {
@@ -720,7 +757,12 @@ export class MCPManager {
       const server = this.getById(serverId);
       if (!server || server.enabled === false || !server.url) return;
 
-      const internal = resolveInternalMcpConfig(server.url);
+      // This config is written into the CLI runner's config file at spawn and
+      // the CLI holds the Authorization header in memory for its whole session,
+      // so the internal token must outlive long coding sessions — with the 1h
+      // default, every internal MCP call (including task_execution_complete)
+      // starts failing with 401 after an hour.
+      const internal = resolveInternalMcpConfig(server.url, { expiresIn: '24h' });
       const headers = {
         ...(internal.headers || {}),
       };
@@ -791,27 +833,21 @@ export class MCPManager {
    */
   async _discoverToolsWithAgentAuth(server, agentId, apiKey) {
     const cacheKey = `${agentId}:${server.id}`;
-    let client = this.agentClients.get(cacheKey);
+    const cached = this.agentClients.get(cacheKey);
+    if (cached && cached.isConnected) return;
 
-    if (!client || !client.isConnected) {
-      console.log(`🔌 [MCP] Discovering tools for "${server.name}" via agent ${agentId.slice(0, 8)} auth`);
-      client = new MCPClient('PulsarTeam');
-      const connectOpts = { headers: { Authorization: `Bearer ${apiKey}` } };
-      const internalConfig = resolveInternalMcpConfig(server.url);
-      if (Object.keys(internalConfig.headers).length > 0) {
-        connectOpts.headers = { ...connectOpts.headers, ...internalConfig.headers };
-      }
-      const { tools } = await client.connect(internalConfig.url || server.url, connectOpts);
-      this.agentClients.set(cacheKey, client);
+    console.log(`🔌 [MCP] Discovering tools for "${server.name}" via agent ${agentId.slice(0, 8)} auth`);
+    const client = await this._connectAgentClient(cacheKey, server, { Authorization: `Bearer ${apiKey}` });
 
-      // Store discovered tools on the server entry
-      server.tools = tools.map(t => ({
-        name: t.name,
-        description: t.description || '',
-        inputSchema: t.inputSchema || {}
-      }));
-      server.status = 'connected';
-      server.error = null;
-    }
+    // Store discovered tools on the server entry so they appear in the agent
+    // prompt. Deliberately leave server.status untouched: only a per-agent
+    // client exists here, and marking the server globally 'connected' makes
+    // global-path calls skip reconnect and fail with 'MCP server not connected'.
+    server.tools = (client.tools || []).map(t => ({
+      name: t.name,
+      description: t.description || '',
+      inputSchema: t.inputSchema || {}
+    }));
+    server.error = null;
   }
 }

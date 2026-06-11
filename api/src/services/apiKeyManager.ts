@@ -117,18 +117,41 @@ export async function generateNewApiKey() {
   const pool = getPool();
   if (!pool) throw new Error('Database not available');
 
-  // Singleton: replace any existing key.
-  await pool.query(`DELETE FROM ${TABLE}`);
-
+  // Compute everything that can throw (e.g. getHmacSecret with no secret
+  // configured) before the old key is deleted.
   const key = generateApiKey();
   const id = crypto.randomUUID();
   const prefix = key.slice(0, 12) + '...' + key.slice(-4);
+  const keyHash = hmacKey(key);
 
-  await pool.query(
-    `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version)
-     VALUES ($1, $2, $3, NOW(), $4)`,
-    [id, hmacKey(key), prefix, CURRENT_HASH_VERSION]
-  );
+  // Singleton: replace any existing key. DELETE+INSERT must be atomic — if the
+  // INSERT fails after a committed DELETE, every external caller is locked out
+  // until an admin mints and redistributes a new key.
+  const replaceKey = async (q: { query: (sql: string, params?: unknown[]) => Promise<unknown> }) => {
+    await q.query(`DELETE FROM ${TABLE}`);
+    await q.query(
+      `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version)
+       VALUES ($1, $2, $3, NOW(), $4)`,
+      [id, keyHash, prefix, CURRENT_HASH_VERSION]
+    );
+  };
+
+  if (typeof pool.connect === 'function') {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await replaceKey(client);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  } else {
+    // Minimal pool implementations (test doubles) only expose query().
+    await replaceKey(pool);
+  }
 
   return { id, key, prefix };
 }

@@ -1,6 +1,8 @@
-const API_BASE = process.env.REACT_APP_API_URL || '';
+// Guarded lookup: `process` does not exist in the browser (Vite does not
+// shim it), so a bare `process.env` reference would throw at module load.
+const API_BASE = (globalThis as any).process?.env?.REACT_APP_API_URL || '';
 
-async function request(path, options = {}) {
+async function request(path, options: RequestInit = {}) {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: {
       'Content-Type': 'application/json',

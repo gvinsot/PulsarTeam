@@ -10,9 +10,14 @@ export async function authenticateApiKey(req, res, next) {
     return res.status(401).json({ error: 'API key required. Use Authorization: Bearer <api-key>' });
   }
   const key = authHeader.slice(7);
-  const valid = await validateApiKey(key);
-  if (!valid) {
-    return res.status(403).json({ error: 'Invalid API key' });
+  try {
+    const valid = await validateApiKey(key);
+    if (!valid) {
+      return res.status(403).json({ error: 'Invalid API key' });
+    }
+  } catch (err) {
+    console.error('API key validation failed:', err.message);
+    return res.status(503).json({ error: 'Auth backend unavailable' });
   }
   next();
 }

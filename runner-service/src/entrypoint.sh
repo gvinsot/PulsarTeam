@@ -49,16 +49,28 @@ if [ "${RUNNER_TYPE:-claude-code}" = "claude-code" ]; then
         echo "WARNING: No auth configured for claude-code backend!"
     fi
 
-    # Configure Claude Code MCP servers
+    # Configure Claude Code MCP servers. The JWT secret is read file-first
+    # with an env-var fallback (same order as swarm_secrets.py) so plain
+    # docker compose deployments — which pass JWT_SECRET as env only, with
+    # no /run/secrets mount — still get the baseline MCP config.
     JWT_SECRET_FILE=/run/secrets/JWT_SECRET
-    if [ -n "$SWARM_API_BASE_URL" ] && [ -r "$JWT_SECRET_FILE" ]; then
+    if [ -n "$SWARM_API_BASE_URL" ] && { [ -r "$JWT_SECRET_FILE" ] || [ -n "$JWT_SECRET" ]; }; then
         echo "Configuring Claude Code MCP servers..."
 
+        # The `|| { ...; }` keeps a python failure (unreadable/non-UTF-8 secret,
+        # interpreter error) from killing the entrypoint under `set -e`, and
+        # stderr is NOT suppressed so the traceback lands in container logs.
         SERVICE_TOKEN=$(JWT_SECRET_FILE="$JWT_SECRET_FILE" python3 -c "
 import os, json, hmac, hashlib, base64, time
 
-with open(os.environ['JWT_SECRET_FILE']) as f:
-    secret = f.read().rstrip('\n').encode()
+secret = b''
+try:
+    with open(os.environ['JWT_SECRET_FILE']) as f:
+        secret = f.read().rstrip('\n').encode()
+except OSError:
+    secret = (os.environ.get('JWT_SECRET') or '').rstrip('\n').encode()
+if not secret:
+    raise SystemExit('no JWT secret available (secret file unreadable and JWT_SECRET env empty)')
 
 def b64url(data):
     if isinstance(data, (dict, list)):
@@ -72,22 +84,31 @@ payload = b64url({'username': 'runner-service', 'role': 'service', 'iat': int(ti
 signing_input = f'{header}.{payload}'
 sig = hmac.new(secret, signing_input.encode(), hashlib.sha256).digest()
 print(f'{signing_input}.{b64url(sig)}', end='')
-" 2>/dev/null)
+") || { echo "WARNING: service-token mint failed — skipping baseline MCP config (see error above)" >&2; SERVICE_TOKEN=""; }
 
         if [ -n "$SERVICE_TOKEN" ]; then
-            MCP_SWARM_URL="${MCP_ENDPOINT:-http://swarm-manager:8000/ai/mcp}"
             CLAUDE_SETTINGS_DIR="$REF_HOME/.claude"
             mkdir -p "$CLAUDE_SETTINGS_DIR"
             chmod 0700 "$CLAUDE_SETTINGS_DIR"
 
+            # The swarm-manager entry is only emitted when MCP_ENDPOINT is set
+            # (the Swarm stack always sets it): plain compose defines no
+            # swarm-manager service, and a hard-coded default would give every
+            # agent an MCP server on an unresolvable host.
+            if [ -n "$MCP_ENDPOINT" ]; then
+                SWARM_MANAGER_ENTRY="\"swarm-manager\": {
+      \"type\": \"http\",
+      \"url\": \"${MCP_ENDPOINT}\"
+    },
+    "
+            else
+                SWARM_MANAGER_ENTRY=""
+            fi
+
             cat > "$CLAUDE_SETTINGS_DIR/settings.json" << SETTINGS_EOF
 {
   "mcpServers": {
-    "swarm-manager": {
-      "type": "http",
-      "url": "${MCP_SWARM_URL}"
-    },
-    "code-index": {
+    ${SWARM_MANAGER_ENTRY}"code-index": {
       "type": "http",
       "url": "${SWARM_API_BASE_URL}/api/code-index/mcp",
       "headers": {
@@ -107,6 +128,8 @@ SETTINGS_EOF
             chmod 0600 "$CLAUDE_SETTINGS_DIR/settings.json"
             echo "Claude Code MCP servers configured"
         fi
+    else
+        echo "WARNING: baseline Claude MCP config skipped — SWARM_API_BASE_URL unset, or no JWT secret available (neither $JWT_SECRET_FILE nor JWT_SECRET env)" >&2
     fi
 fi
 

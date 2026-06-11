@@ -103,13 +103,29 @@ export async function fetchOAuthTokenWithDbFallback(
   return await loadOAuthTokenFromDb(provider, scopeType, scopeId);
 }
 
-/** Store (upsert) an OAuth token. */
-export async function storeOAuthToken(record: OAuthTokenRecord): Promise<void> {
+/**
+ * Store (upsert) an OAuth token.
+ *
+ * The in-memory cache is always updated. DB persistence failures are logged
+ * and swallowed by default (token-refresh hot paths must keep serving from
+ * the just-updated cache); pass `throwOnPersistError: true` in user-facing
+ * connect/callback flows so the user is told the connection will not survive
+ * a restart instead of getting a false success.
+ */
+export async function storeOAuthToken(
+  record: OAuthTokenRecord,
+  opts: { throwOnPersistError?: boolean } = {}
+): Promise<void> {
   const key = cacheKey(record.provider, record.scopeType, record.scopeId);
   tokenCache.set(key, record);
 
   const pool = getPool();
-  if (!pool) return;
+  if (!pool) {
+    if (opts.throwOnPersistError) {
+      throw new Error(`OAuth token (${key}) not persisted: database not connected`);
+    }
+    return;
+  }
 
   try {
     await pool.query(
@@ -132,6 +148,7 @@ export async function storeOAuthToken(record: OAuthTokenRecord): Promise<void> {
     await notifyTokenChange(record.provider, record.scopeType, record.scopeId, 'upsert');
   } catch (err) {
     console.error(`[OAuthStore] Failed to persist token (${key}):`, (err as Error).message);
+    if (opts.throwOnPersistError) throw err;
   }
 }
 
@@ -298,18 +315,29 @@ export async function loadOAuthTokens(): Promise<void> {
     );
 
     tokenCache.clear();
+    let skipped = 0;
     for (const row of result.rows) {
-      const record: OAuthTokenRecord = {
-        provider: row.provider,
-        scopeType: row.scope_type,
-        scopeId: row.scope_id,
-        accessToken: tryDecrypt(row.access_token),
-        refreshToken: tryDecrypt(row.refresh_token),
-        expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
-        meta: row.meta || {},
-      };
-      const key = cacheKey(record.provider, record.scopeType, record.scopeId);
-      tokenCache.set(key, record);
+      // Per-row guard: one undecryptable row (e.g. written with a different
+      // ENCRYPTION_KEY by a sibling deployment) must not abort the whole load.
+      try {
+        const record: OAuthTokenRecord = {
+          provider: row.provider,
+          scopeType: row.scope_type,
+          scopeId: row.scope_id,
+          accessToken: tryDecrypt(row.access_token),
+          refreshToken: tryDecrypt(row.refresh_token),
+          expiresAt: row.expires_at ? new Date(row.expires_at).getTime() : null,
+          meta: row.meta || {},
+        };
+        const key = cacheKey(record.provider, record.scopeType, record.scopeId);
+        tokenCache.set(key, record);
+      } catch (err) {
+        skipped++;
+        console.error(`[OAuthStore] Skipping token ${row.provider}:${row.scope_type}:${row.scope_id}:`, (err as Error).message);
+      }
+    }
+    if (skipped > 0) {
+      console.warn(`[OAuthStore] ${skipped} token(s) skipped: undecryptable with the current ENCRYPTION_KEY`);
     }
 
     if (tokenCache.size > 0) {
@@ -371,6 +399,10 @@ async function startOAuthTokenListener(): Promise<void> {
     console.log(`[OAuthStore] LISTEN ${NOTIFY_CHANNEL} active (cross-replica cache sync)`);
   } catch (err) {
     console.error('[OAuthStore] Failed to start LISTEN:', (err as Error).message);
+    // Return the checked-out client to the pool (destructively) — without this
+    // every failed attempt leaks a client until the pool is exhausted. The
+    // try/catch absorbs a double release when the 'error' handler already ran.
+    try { _listenerClient?.release(true); } catch { /* ignore */ }
     _listenerClient = null;
     scheduleListenerReconnect();
   }

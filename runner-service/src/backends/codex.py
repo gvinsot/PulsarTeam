@@ -68,6 +68,7 @@ from .codex_oauth import (
     try_exchange_code_from_prompt,
 )
 from agent_user import ensure_agent_user
+from .claude_token_store import run_blocking
 from .runner_mcp_config import configure_codex_mcp
 from .runner_instructions_config import configure_codex_instructions
 
@@ -103,6 +104,14 @@ class CodexBackend(CliBackend):
     supports_token_set = True      # accepts a full auth.json blob via /auth/token
     supports_interactive_terminal = True  # `codex` (no `exec` subcommand) is a real TUI
 
+    def __init__(self):
+        super().__init__()
+        # Per-run token counts keyed by the JSONL submission id (the top-level
+        # "id" shared by token_count and task_complete within a run). The
+        # backend instance is a process-wide singleton serving every agent, so
+        # unkeyed state would cross-contaminate concurrent streams.
+        self._pending_tokens: dict[str, dict] = {}
+
     def _configure_mcp(self, agent_user, agent_id) -> None:
         # Writes [mcp_servers.*] tables into ~/.codex/config.toml. NOTE: HTTP
         # MCP support in codex is version-dependent — see configure_codex_mcp.
@@ -127,8 +136,9 @@ class CodexBackend(CliBackend):
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user) \
             if hasattr(self, "_resolve_effective_user") else agent_user
-        self._configure_mcp(effective_user, agent_id)
-        self._configure_instructions(effective_user, agent_id)
+        # Off-loop: both helpers do blocking team-api fetches.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
 
         # cwd: the agent's project workspace when available, else the
         # generic CLI cwd. Same resolution as cli_backend uses.
@@ -302,7 +312,7 @@ class CodexBackend(CliBackend):
                 except OSError as e:
                     logger.warning(f"[Codex Auth] refresh ok but write_local_auth failed: {e}")
                 if owner_id:
-                    save_owner_blob(owner_id, new_blob)
+                    await run_blocking(save_owner_blob, owner_id, new_blob)
                 logger.info("[Codex Auth] Refreshed access_token via refresh_token grant")
             else:
                 logger.warning("[Codex Auth] Token expired and refresh failed — codex may prompt for re-login")
@@ -419,7 +429,7 @@ class CodexBackend(CliBackend):
         if mtype == "token_count":
             # Hold onto last seen counts so the final `result` event can
             # report them. Codex emits this multiple times during a run.
-            self._pending_tokens = {
+            self._pending_tokens[str(event.get("id"))] = {
                 "input_tokens": int(msg.get("input_tokens") or 0),
                 "output_tokens": int(msg.get("output_tokens") or 0),
                 "total_tokens": int(msg.get("total_tokens") or 0)
@@ -429,7 +439,7 @@ class CodexBackend(CliBackend):
             return None
 
         if mtype == "task_complete":
-            tokens = getattr(self, "_pending_tokens", {}) or {}
+            tokens = self._pending_tokens.pop(str(event.get("id")), {}) or {}
             final = msg.get("last_agent_message", "") or ""
             return {
                 "type": "result",

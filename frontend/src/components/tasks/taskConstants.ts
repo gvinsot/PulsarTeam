@@ -142,14 +142,14 @@ export function sortTasks(tasks, sortBy) {
       return sorted.sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     case 'date_asc':
     case 'created_asc':
-      return sorted.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+      return sorted.sort((a, b) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
     case 'date_desc':
     case 'created_desc':
-      return sorted.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      return sorted.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     case 'updated_asc':
-      return sorted.sort((a, b) => new Date(a.updatedAt || a.createdAt || 0) - new Date(b.updatedAt || b.createdAt || 0));
+      return sorted.sort((a, b) => new Date(a.updatedAt || a.createdAt || 0).getTime() - new Date(b.updatedAt || b.createdAt || 0).getTime());
     case 'updated_desc':
-      return sorted.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+      return sorted.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime());
     case 'priority_asc': {
       const order = (t) => PRIORITY_MAP[t.priority]?.sortOrder ?? 99;
       return sorted.sort((a, b) => order(a) - order(b));

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, LineElement,
   PointElement, Title, Tooltip, Legend, Filler
@@ -40,13 +41,24 @@ function formatDuration(ms) {
   return `${days}d ${remainHours}h`;
 }
 
+// Shape of GET /api/agents/tasks/stats (see api/src/services/agentManager/taskStats.ts)
+interface DurationStats { avg: number; median: number; count: number }
+interface ProjectTaskStats {
+  total: number;
+  byType: Record<string, number>;
+  byStatus: Record<string, number>;
+  resolution: DurationStats;
+  resolutionByType: Record<string, DurationStats>;
+  avgStateDurations: Record<string, DurationStats>;
+}
+
 export default function ProjectStats({ projectName, onClose, embedded = false }) {
-  const { theme } = useTheme();
+  const { theme } = useTheme() as { theme: string };
   const cc = getChartColors(theme);
   const chartOpts = {
     responsive: true,
     maintainAspectRatio: false,
-    interaction: { mode: 'index', intersect: false },
+    interaction: { mode: 'index' as const, intersect: false },
     plugins: {
       legend: { labels: { color: cc.legend, font: { size: 11 } } },
     },
@@ -55,7 +67,7 @@ export default function ProjectStats({ projectName, onClose, embedded = false })
       y: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid }, beginAtZero: true },
     },
   };
-  const [stats, setStats] = useState(null);
+  const [stats, setStats] = useState<ProjectTaskStats | null>(null);
   const [timeseries, setTimeseries] = useState(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
@@ -292,7 +304,7 @@ export default function ProjectStats({ projectName, onClose, embedded = false })
   );
 }
 
-function MiniCard({ label, value, icon }) {
+function MiniCard({ label, value, icon }: { label: ReactNode; value: ReactNode; icon?: ReactNode }) {
   return (
     <div className="bg-dark-700/50 rounded-lg px-3 py-2">
       <div className="text-xs text-dark-400 flex items-center gap-1 mb-0.5">

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { getAccessTokenForAgent } from '../routes/onedrive.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+const MAX_READ_BYTES = 5 * 1024 * 1024;
 
 /**
  * Encode a OneDrive path for use in Graph API URLs.
@@ -23,6 +24,7 @@ async function graphFetch(path: string, agentId: string | null = null, boardId: 
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
 
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(120_000),
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -151,9 +153,15 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const textTypes = ['text/', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/x-yaml', 'application/x-sh'];
       const isText = textTypes.some(t => mimeType.startsWith(t)) || mimeType === '';
 
-      if (!isText && meta.size > 5 * 1024 * 1024) {
+      if (!meta.folder && meta.size > MAX_READ_BYTES) {
+        const dest = meta['@microsoft.graph.downloadUrl'] || meta.webUrl;
+        if (!isText) {
+          return {
+            content: [{ type: 'text', text: `File "${meta.name}" is a binary file (${mimeType}, ${(meta.size / 1024).toFixed(1)} KB). Download URL: ${dest}` }],
+          };
+        }
         return {
-          content: [{ type: 'text', text: `File "${meta.name}" is a binary file (${mimeType}, ${(meta.size / 1024).toFixed(1)} KB). Download URL: ${meta['@microsoft.graph.downloadUrl'] || meta.webUrl}` }],
+          content: [{ type: 'text', text: `File "${meta.name}" is too large to read directly (${(meta.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_READ_BYTES / 1024 / 1024} MB). Use the download URL instead: ${dest}` }],
         };
       }
 
@@ -165,8 +173,39 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         };
       }
 
-      const response = await fetch(downloadUrl);
-      const content = await response.text();
+      const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(120_000) });
+      if (!response.ok) {
+        const errText = await response.text().catch(() => '');
+        throw new Error(`Download failed ${response.status}: ${errText.slice(0, 300)}`);
+      }
+
+      // Stream with a byte cap as a backstop — meta.size can be stale or
+      // absent, and an unbounded read of a huge file would blow up the heap.
+      let content: string;
+      const reader = response.body?.getReader();
+      if (!reader) {
+        const buf = Buffer.from(await response.arrayBuffer());
+        if (buf.length > MAX_READ_BYTES) {
+          throw new Error(`File too large to read (${(buf.length / 1024 / 1024).toFixed(1)} MB; max ${MAX_READ_BYTES / 1024 / 1024} MB).`);
+        }
+        content = buf.toString('utf8');
+      } else {
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            total += value.length;
+            if (total > MAX_READ_BYTES) {
+              try { await reader.cancel(); } catch { /* ignore */ }
+              throw new Error(`File too large to read (>${MAX_READ_BYTES / 1024 / 1024} MB).`);
+            }
+            chunks.push(value);
+          }
+        }
+        content = Buffer.concat(chunks).toString('utf8');
+      }
 
       return {
         content: [{ type: 'text', text: `File: ${meta.name}\nSize: ${(meta.size / 1024).toFixed(1)} KB\nType: ${mimeType}\nModified: ${meta.lastModifiedDateTime}\n\n--- Content ---\n${content}` }],
@@ -231,7 +270,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       content: z.string().describe('Text content to write into the file'),
     },
     async ({ path, content }) => {
-      const token = await getAccessTokenForAgent(agentId);
+      const token = await getAccessTokenForAgent(agentId, boardId);
 
       const url = `${GRAPH_BASE}/me/drive/root:/${encodePath(path)}:/content`;
       const res = await fetch(url, {
@@ -241,6 +280,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
           'Content-Type': 'text/plain',
         },
         body: content,
+        signal: AbortSignal.timeout(120_000),
       });
 
       if (!res.ok) {
@@ -263,12 +303,13 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       path: z.string().describe('Path of the file or folder to delete'),
     },
     async ({ path }) => {
-      const token = await getAccessTokenForAgent(agentId);
+      const token = await getAccessTokenForAgent(agentId, boardId);
 
       const url = `${GRAPH_BASE}/me/drive/root:/${encodePath(path)}`;
       const res = await fetch(url, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(60_000),
       });
 
       if (!res.ok && res.status !== 204) {

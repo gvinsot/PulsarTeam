@@ -5,15 +5,19 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
   const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
   const [label, setLabel] = useState(columnLabel || '');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
-  const roles = useMemo(() => [...new Set((agents || []).filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
+  const roles = useMemo(() => [...new Set<string>((agents || []).filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
 
   const updateField = (idx, field, value) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave(items, label);
+    } catch (err) {
+      setSaveError(err?.message || 'Failed to save instructions');
     } finally {
       setSaving(false);
     }
@@ -65,6 +69,9 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
           ))}
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-dark-700">
+          {saveError && (
+            <span className="text-xs text-red-400 max-w-[40vw] truncate" title={saveError}>{saveError}</span>
+          )}
           <button onClick={onClose}
             className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 transition-colors">
             Cancel

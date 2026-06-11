@@ -45,6 +45,11 @@ const DEFAULT_TURN_DETECTION = Object.freeze({
   interrupt_response: true,
 });
 
+// Delegate/ask run a full agent task server-side, which can legitimately take
+// minutes — keep this generous so we don't drop a genuine late result.
+const DELEGATE_RESULT_TIMEOUT_MS = 10 * 60 * 1000;
+const MANAGEMENT_RESULT_TIMEOUT_MS = 2 * 60 * 1000;
+
 const VoiceSessionContext = createContext(null);
 
 function pushEvent(list, type, text) {
@@ -109,6 +114,8 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   const activeAgentIdRef = useRef(activeAgentId);
   const responseBufferRef = useRef('');
   const transcriptBufferRef = useRef('');
+  const pendingResultsRef = useRef(new Set());
+  const connectSeqRef = useRef(0);
 
   useEffect(() => {
     socketRef.current = socket;
@@ -129,6 +136,14 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   }, []);
 
   const cleanupConnection = useCallback(() => {
+    connectSeqRef.current += 1;
+
+    pendingResultsRef.current.forEach(({ sock, event, handler, timer }) => {
+      clearTimeout(timer);
+      sock.off(event, handler);
+    });
+    pendingResultsRef.current.clear();
+
     const dc = dcRef.current;
     dcRef.current = null;
     if (dc) {
@@ -251,6 +266,13 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   }, []);
 
   const handleDelegation = useCallback((callId, agentName, task) => {
+    if (!agentName || !task) {
+      // The server silently ignores requests with missing fields — answer the
+      // model directly instead of waiting on a result that will never come.
+      sendFunctionOutput(callId, 'Missing agent_name or task for delegate.');
+      return;
+    }
+
     setStatus(STATUS.DELEGATING);
     setDelegationTarget(agentName);
     setCurrentFunction(`Delegating to ${agentName}...`);
@@ -263,12 +285,19 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       return;
     }
 
+    const pending = { sock, event: WsEvents.VOICE_DELEGATE_RESULT, handler: null, timer: null };
+    const settle = () => {
+      clearTimeout(pending.timer);
+      sock.off(pending.event, pending.handler);
+      pendingResultsRef.current.delete(pending);
+    };
+
     const handler = (data) => {
       if (data.agentId !== agentId) {
         return;
       }
 
-      sock.off('voice:delegate:result', handler);
+      settle();
       setDelegationTarget(null);
       setStatus(STATUS.CONNECTED);
 
@@ -280,11 +309,33 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       sendFunctionOutput(callId, resultText);
     };
 
+    pending.handler = handler;
+    pending.timer = setTimeout(() => {
+      settle();
+      if (activeAgentIdRef.current !== agentId) {
+        return;
+      }
+
+      setDelegationTarget(null);
+      setStatus((prev) => (prev === STATUS.DELEGATING ? STATUS.CONNECTED : prev));
+      setCurrentFunction(`delegate to ${agentName} timed out`);
+      addEvent('error', `Timed out waiting for delegate result from ${agentName}`);
+      sendFunctionOutput(callId, `Timed out waiting for ${agentName} to report a result.`);
+    }, DELEGATE_RESULT_TIMEOUT_MS);
+    pendingResultsRef.current.add(pending);
+
     sock.on(WsEvents.VOICE_DELEGATE_RESULT, handler);
     sock.emit(WsEvents.REQ_VOICE_DELEGATE, { agentId, targetAgentName: agentName, task });
   }, [addEvent, sendFunctionOutput]);
 
   const handleAsk = useCallback((callId, agentName, question) => {
+    if (!agentName || !question) {
+      // The server silently ignores requests with missing fields — answer the
+      // model directly instead of waiting on a result that will never come.
+      sendFunctionOutput(callId, 'Missing agent_name or question for ask.');
+      return;
+    }
+
     setStatus(STATUS.DELEGATING);
     setDelegationTarget(agentName);
     setCurrentFunction(`Asking ${agentName}...`);
@@ -297,12 +348,19 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       return;
     }
 
+    const pending = { sock, event: WsEvents.VOICE_ASK_RESULT, handler: null, timer: null };
+    const settle = () => {
+      clearTimeout(pending.timer);
+      sock.off(pending.event, pending.handler);
+      pendingResultsRef.current.delete(pending);
+    };
+
     const handler = (data) => {
       if (data.agentId !== agentId) {
         return;
       }
 
-      sock.off(WsEvents.VOICE_ASK_RESULT, handler);
+      settle();
       setDelegationTarget(null);
       setStatus(STATUS.CONNECTED);
 
@@ -313,6 +371,21 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       addEvent(data.error ? 'error' : 'delegation-result', `${agentName}: ${resultText.slice(0, 200)}`);
       sendFunctionOutput(callId, resultText);
     };
+
+    pending.handler = handler;
+    pending.timer = setTimeout(() => {
+      settle();
+      if (activeAgentIdRef.current !== agentId) {
+        return;
+      }
+
+      setDelegationTarget(null);
+      setStatus((prev) => (prev === STATUS.DELEGATING ? STATUS.CONNECTED : prev));
+      setCurrentFunction(`ask ${agentName} timed out`);
+      addEvent('error', `Timed out waiting for answer from ${agentName}`);
+      sendFunctionOutput(callId, `Timed out waiting for ${agentName} to answer.`);
+    }, DELEGATE_RESULT_TIMEOUT_MS);
+    pendingResultsRef.current.add(pending);
 
     sock.on(WsEvents.VOICE_ASK_RESULT, handler);
     sock.emit(WsEvents.REQ_VOICE_ASK, { agentId, targetAgentName: agentName, question });
@@ -329,12 +402,19 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       return;
     }
 
+    const pending = { sock, event: WsEvents.VOICE_MANAGEMENT_RESULT, handler: null, timer: null };
+    const settle = () => {
+      clearTimeout(pending.timer);
+      sock.off(pending.event, pending.handler);
+      pendingResultsRef.current.delete(pending);
+    };
+
     const handler = (data) => {
       if (data.agentId !== agentId || data.functionName !== functionName) {
         return;
       }
 
-      sock.off(WsEvents.VOICE_MANAGEMENT_RESULT, handler);
+      settle();
 
       const resultText = data.error
         ? `Error: ${data.error}`
@@ -344,12 +424,25 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       sendFunctionOutput(callId, resultText);
     };
 
+    pending.handler = handler;
+    pending.timer = setTimeout(() => {
+      settle();
+      if (activeAgentIdRef.current !== agentId) {
+        return;
+      }
+
+      setCurrentFunction(`${functionName} timed out`);
+      addEvent('error', `Timed out waiting for ${functionName} result`);
+      sendFunctionOutput(callId, `Timed out waiting for ${functionName} result.`);
+    }, MANAGEMENT_RESULT_TIMEOUT_MS);
+    pendingResultsRef.current.add(pending);
+
     sock.on(WsEvents.VOICE_MANAGEMENT_RESULT, handler);
     sock.emit(WsEvents.REQ_VOICE_MANAGEMENT, { agentId, functionName, args });
   }, [addEvent, sendFunctionOutput]);
 
   const handleToolCall = useCallback((event) => {
-    let args = {};
+    let args: Record<string, any> = {};
     try {
       args = JSON.parse(event.arguments || '{}');
     } catch (err) {
@@ -459,6 +552,11 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     }
 
     cleanupConnection();
+    // Invalidated by any later connect()/cleanupConnection() — a stale
+    // in-flight connect must not assign refs or mutate session state.
+    const seq = ++connectSeqRef.current;
+    const isStale = () => connectSeqRef.current !== seq;
+
     setEvents([]);
     setError(null);
     setDelegationTarget(null);
@@ -480,6 +578,11 @@ export function VoiceSessionProvider({ socket, agents, children }) {
             ? 'Microphone access denied. Please allow microphone permission in your browser settings and try again.'
             : micErr.message;
         throw new Error(message);
+      }
+
+      if (isStale()) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
 
       localStreamRef.current = stream;
@@ -506,6 +609,10 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         transcriptionModel = DEFAULT_TRANSCRIPTION_MODEL,
         session: sessionConfig,
       } = await api.getRealtimeToken(agentId);
+
+      if (isStale()) {
+        return;
+      }
 
       if (!token) {
         throw new Error('Realtime token was not returned by the server.');
@@ -644,6 +751,10 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       const offer = await pc.createOffer({ offerToReceiveAudio: true });
       await pc.setLocalDescription(offer);
 
+      if (isStale()) {
+        return;
+      }
+
       const realtimeBaseUrl =
         import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime/calls';
       const fd = new FormData();
@@ -655,7 +766,12 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         headers: {
           Authorization: `Bearer ${token}`,
         },
+        signal: AbortSignal.timeout(30000),
       });
+
+      if (isStale()) {
+        return;
+      }
 
       if (!sdpResponse.ok) {
         const errorBody = await sdpResponse.text().catch(() => '');
@@ -666,11 +782,19 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       const answerSdp = await sdpResponse.text();
       await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
 
+      if (isStale()) {
+        return;
+      }
+
       if (dc.readyState === 'open') {
         applySessionUpdate();
       }
     } catch (err) {
       console.error('Voice connection error:', err);
+      if (isStale()) {
+        return;
+      }
+
       cleanupConnection();
       setStatus(STATUS.ERROR);
       setError(err.message || 'Voice connection failed.');

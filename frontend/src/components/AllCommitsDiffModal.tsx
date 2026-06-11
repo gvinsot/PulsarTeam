@@ -216,10 +216,29 @@ function RevertConfirmModal({ selectedCommits, commits, onConfirm, onCancel, rev
 // ═════════════════════════════════════════════════════════════════════════════
 // All Commits Diff Modal
 // ═════════════════════════════════════════════════════════════════════════════
+
+// Shape of GET /api/tasks/:id/commits/:hash/diff (see api/src/routes/tasks.ts)
+interface CommitDiffFile {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes?: number;
+  patch?: string;
+}
+interface CommitDiff {
+  sha?: string;
+  message?: string;
+  author?: string;
+  date?: string;
+  stats?: { additions: number; deletions: number; total?: number };
+  files?: CommitDiffFile[];
+}
+
 export default function AllCommitsDiffModal({ taskId, commits, onClose, initialHash, agentId, project }) {
-  const [diffs, setDiffs] = useState({});      // hash -> diff data
-  const [loading, setLoading] = useState({});   // hash -> boolean
-  const [errors, setErrors] = useState({});     // hash -> error string
+  const [diffs, setDiffs] = useState<Record<string, CommitDiff>>({});      // hash -> diff data
+  const [loading, setLoading] = useState<Record<string, boolean>>({});   // hash -> boolean
+  const [errors, setErrors] = useState<Record<string, string>>({});     // hash -> error string
   const [revertMode, setRevertMode] = useState(false);
   const [selectedCommits, setSelectedCommits] = useState(new Set());
   const [showConfirm, setShowConfirm] = useState(false);
@@ -232,7 +251,7 @@ export default function AllCommitsDiffModal({ taskId, commits, onClose, initialH
   useEffect(() => {
     if (!commits?.length) return;
 
-    const initLoading = {};
+    const initLoading: Record<string, boolean> = {};
     commits.forEach(c => { initLoading[c.hash] = true; });
     setLoading(initLoading);
 
@@ -302,7 +321,10 @@ export default function AllCommitsDiffModal({ taskId, commits, onClose, initialH
       const selected = commits.filter(c => selectedCommits.has(c.hash));
       const hashList = selected.map(c => `${c.hash.slice(0, 7)} (${c.message || 'no message'})`).join('\n- ');
       const taskText = `[REVERT] Revert the following commit${selected.length > 1 ? 's' : ''} using \`git revert --no-edit\`:\n- ${hashList}\n\nFull commit hashes: ${selected.map(c => c.hash).join(', ')}\n\nAfter reverting, push the changes to the remote repository.`;
-      const result = await api.addTask(agentId, taskText);
+      // api.addTask declares status/boardId/repoFullName/recurrence/taskType/isManual as
+      // required params, but all are falsy-guarded in api.ts — passing undefined is
+      // runtime-identical to omitting them.
+      const result = await api.addTask(agentId, taskText, undefined, undefined, undefined, undefined, undefined, undefined);
       setRevertSuccess({ taskId: result.id || result.taskId });
       setShowConfirm(false);
     } catch (err) {

@@ -20,14 +20,17 @@ async function slackApi(method: string, agentId: string | null = null, boardId: 
       if (v !== undefined && v !== null) qs.set(k, String(v));
     }
     res = await fetch(`${SLACK_BASE}/${method}?${qs}`, {
+      signal: AbortSignal.timeout(60_000),
       headers: { Authorization: `Bearer ${token}` },
     });
   } else if (isGet) {
     res = await fetch(`${SLACK_BASE}/${method}`, {
+      signal: AbortSignal.timeout(60_000),
       headers: { Authorization: `Bearer ${token}` },
     });
   } else {
     res = await fetch(`${SLACK_BASE}/${method}`, {
+      signal: AbortSignal.timeout(60_000),
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,

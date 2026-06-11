@@ -58,6 +58,10 @@ except Exception:
 # can override via env if a deployment ever needs to.
 SCROLLBACK_BYTES = int(os.getenv("TERMINAL_SCROLLBACK_BYTES", str(256 * 1024)))  # 256 KB
 IDLE_TIMEOUT_SEC = int(os.getenv("TERMINAL_IDLE_TIMEOUT_SEC", str(60 * 60)))     # 1 h
+# Per-client send budget: a black-holed TCP connection (phone leaves WiFi, no
+# RST) blocks send_bytes on flow-control drain; without a bound, one such
+# client stalls PTY fan-out for everyone and back-pressures the CLI.
+CLIENT_SEND_TIMEOUT_SEC = float(os.getenv("TERMINAL_CLIENT_SEND_TIMEOUT_SEC", "5"))
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 40
 READ_CHUNK = 4096
@@ -242,6 +246,13 @@ class PtySession:
     _closed: bool = False
     exit_code: Optional[int] = None
     _auto_answer_buf: bytearray = field(default_factory=bytearray)
+    # Monotonic count of bytes ever fed into _auto_answer_buf. The buffer is
+    # trimmed to its last 8 KB, so byte offsets shift — this counter lets
+    # wait_until_input_ready scope its scan to bytes fed after it was called.
+    _auto_answer_total: int = 0
+    # Last time the PTY produced output — the idle reaper uses it to spare
+    # headless sessions whose CLI is still mid-task.
+    _last_output_at: float = 0.0
     _auto_answered: set[str] = field(default_factory=set)
     _last_auto_answer_at: float = 0.0
     _screen: Optional[object] = None
@@ -450,7 +461,9 @@ class PtySession:
         self._use_tmux = _tmux_available()
         if self._use_tmux:
             try:
-                self._ensure_tmux_session()
+                # Blocking tmux subcommands (new-session can take up to 15 s on
+                # a wedged server) must not run on the event loop.
+                await asyncio.to_thread(self._ensure_tmux_session)
             except Exception as e:
                 logger.warning(
                     f"[Terminal] tmux unavailable for agent {self.agent_id} ({e}); "
@@ -519,6 +532,12 @@ class PtySession:
         if self.files_watch_paths and self.files_on_change:
             self._capture_files_baseline()
             self._files_sync_task = loop.create_task(self._files_sync_loop())
+        # A session spawned headlessly (POST /input, no WS viewer ever) must
+        # still be idle-reaped — arm the timer now; attach() cancels it on the
+        # first real viewer, and the reaper spares sessions with recent output.
+        self._last_output_at = time.monotonic()
+        if not self._clients:
+            self._schedule_idle_timer()
 
     def _capture_creds_baseline(self) -> None:
         try:
@@ -716,6 +735,7 @@ class PtySession:
                 self.render_mode = "raw"
 
     async def _handle_output(self, data: bytes) -> None:
+        self._last_output_at = time.monotonic()
         if self._snapshot_enabled():
             # Snapshot mode is self-healing (each broadcast is a full repaint),
             # so a missed frame can't leave a persistently blank screen.
@@ -742,17 +762,19 @@ class PtySession:
 
         if not targets:
             return
-        dead: list[int] = []
+        dead: list[tuple[int, _Client]] = []
         for client_id, client in targets:
             try:
-                await client.on_output(data)
+                await asyncio.wait_for(client.on_output(data), timeout=CLIENT_SEND_TIMEOUT_SEC)
             except Exception as e:
                 logger.debug(f"[Terminal] Client {client_id} broadcast failed: {e}")
-                dead.append(client_id)
+                dead.append((client_id, client))
         if dead:
             async with self._lock:
-                for client_id in dead:
-                    self._clients.pop(client_id, None)
+                for client_id, _ in dead:
+                    self._evict_client(client_id)
+            for _, client in dead:
+                self._kick_client(client)
 
     def _maybe_detect_auth_error(self, data: bytes) -> None:
         """Latch the first auth-failure sentinel seen in the PTY output.
@@ -797,14 +819,41 @@ class PtySession:
         instead of into a startup confirmation screen (trust folder / bypass
         permissions), which would swallow or mangle the instructions. Returns
         True if input-ready was observed, False on timeout / dead session.
-        The reader loop keeps auto-answering trust/bypass concurrently."""
+        The reader loop keeps auto-answering trust/bypass concurrently.
+
+        Only hints rendered AFTER this call counts as ready: the rolling
+        buffer persists across turns, so the previous idle screen's caret
+        would otherwise signal "ready" while the CLI is mid-turn and let
+        back-to-back workflow prompts interleave. An idle (quiescent) TUI
+        emits no new bytes on its own — the tmux repaint below re-emits the
+        current screen so a genuinely idle prompt is still seen immediately;
+        in snapshot mode the live pyte screen is consulted directly."""
+        start_total = self._auto_answer_total
+        # Ask tmux to repaint the authoritative current screen (no-op without
+        # tmux): an idle input box re-renders its caret as fresh bytes.
+        await self.request_repaint()
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
             if self._closed or not self.is_alive():
                 return False
-            tail = _strip_ansi(self._auto_answer_buf.decode("utf-8", errors="replace"))[-4096:]
-            if any(h in tail for h in _INPUT_READY_HINTS):
-                return True
+            if self._snapshot_enabled():
+                try:
+                    display = "\n".join(self._screen.display)
+                except Exception:
+                    display = ""
+                if any(h in display for h in _INPUT_READY_HINTS):
+                    return True
+            fed_since = self._auto_answer_total - start_total
+            if fed_since > 0:
+                # Slice by bytes-fed (the buffer is trimmed, so offsets shift),
+                # with a small overlap so a hint/ANSI sequence straddling the
+                # entry point isn't corrupted.
+                window = min(len(self._auto_answer_buf), fed_since + 32)
+                tail = _strip_ansi(
+                    self._auto_answer_buf[-window:].decode("utf-8", errors="replace")
+                )[-4096:]
+                if any(h in tail for h in _INPUT_READY_HINTS):
+                    return True
             await asyncio.sleep(0.2)
         return False
 
@@ -939,6 +988,7 @@ class PtySession:
         """
         if data:
             self._auto_answer_buf.extend(data)
+            self._auto_answer_total += len(data)
             if len(self._auto_answer_buf) > 8192:
                 del self._auto_answer_buf[:-8192]
 
@@ -1014,13 +1064,34 @@ class PtySession:
         snapshot = list(self._clients.items())
         for client_id, client in snapshot:
             try:
-                await client.on_output(data)
+                await asyncio.wait_for(client.on_output(data), timeout=CLIENT_SEND_TIMEOUT_SEC)
             except Exception as e:
                 logger.debug(f"[Terminal] Client {client_id} broadcast failed: {e}")
                 # Drop the dead client — the WS handler's finally block
                 # will also try to detach, but doing it eagerly here keeps
                 # the snapshot list short on bursty output.
-                self._clients.pop(client_id, None)
+                self._evict_client(client_id)
+                self._kick_client(client)
+
+    def _evict_client(self, client_id: int) -> None:
+        """Remove a client and arm the idle timer when the last one is gone —
+        every removal path must go through here (or detach()) or a session
+        whose last client dies eagerly escapes idle reaping."""
+        removed = self._clients.pop(client_id, None)
+        if removed is not None and not self._clients:
+            self._schedule_idle_timer()
+
+    def _kick_client(self, client: _Client) -> None:
+        """Force-close an evicted client's socket from a detached task. A
+        timed-out (but still open) WebSocket would otherwise sit parked in
+        receive() while no longer getting any output; the b"" sentinel makes
+        its handler close the socket so the browser can reconnect."""
+        async def _close() -> None:
+            try:
+                await asyncio.wait_for(client.on_output(b""), timeout=CLIENT_SEND_TIMEOUT_SEC)
+            except Exception:
+                pass
+        asyncio.create_task(_close())
 
     async def attach(self, on_output: ClientCallback, label: str = "?") -> int:
         """Register a new client. Replays the current scrollback synchronously
@@ -1051,29 +1122,40 @@ class PtySession:
         # Replay the captured screen state directly to the socket (this path
         # bypasses client.pending). Live bytes arriving meanwhile accumulate in
         # client.pending and are flushed below, preserving order.
-        for chunk in replay_chunks:
-            await on_output(chunk)
-        if snapshot:
-            await on_output(snapshot)
-
-        # Flush anything buffered during replay, then switch to live delivery.
-        # The flip to replaying=False happens under the lock while pending is
-        # empty, so no chunk can slip past between the last drain and going live.
-        while True:
-            async with self._lock:
-                if not client.pending:
-                    client.replaying = False
-                    break
-                batch = list(client.pending)
-                client.pending.clear()
-            for chunk in batch:
+        #
+        # A client that disconnects (or is cancelled) mid-replay must be
+        # unregistered here — the WS handler's finally-detach only runs once
+        # attach() has returned, so a propagating exception would otherwise
+        # leak the client in _clients with replaying=True forever (unbounded
+        # pending growth + the session never idle-reaped). BaseException so
+        # CancelledError is covered too.
+        try:
+            for chunk in replay_chunks:
                 await on_output(chunk)
+            if snapshot:
+                await on_output(snapshot)
 
-        # tmux repaints the authoritative screen to the broker's client, which
-        # the reader loop then fans out to every attached client (this one
-        # included) — replacing the corrupt raw-scrollback replay.
-        if self._use_tmux:
-            await self.request_repaint()
+            # Flush anything buffered during replay, then switch to live delivery.
+            # The flip to replaying=False happens under the lock while pending is
+            # empty, so no chunk can slip past between the last drain and going live.
+            while True:
+                async with self._lock:
+                    if not client.pending:
+                        client.replaying = False
+                        break
+                    batch = list(client.pending)
+                    client.pending.clear()
+                for chunk in batch:
+                    await on_output(chunk)
+
+            # tmux repaints the authoritative screen to the broker's client, which
+            # the reader loop then fans out to every attached client (this one
+            # included) — replacing the corrupt raw-scrollback replay.
+            if self._use_tmux:
+                await self.request_repaint()
+        except BaseException:
+            await self.detach(client_id)
+            raise
 
         return client_id
 
@@ -1101,6 +1183,12 @@ class PtySession:
             os.write(self.master_fd, data)
         except OSError as e:
             logger.warning(f"[Terminal] write to {self.agent_id} failed: {e}")
+            return
+        # A headless write (workflow prompt injection with no attached viewer)
+        # restarts the idle countdown so the freshly started task isn't reaped
+        # at a timer that began ticking at spawn.
+        if not self._clients:
+            self._schedule_idle_timer()
 
     async def resize(self, cols: int, rows: int) -> None:
         """Apply a new geometry. When multiple clients have different
@@ -1187,7 +1275,7 @@ class PtySession:
         rc = self.proc.poll() if self.proc else None
         if rc is None and self.proc is not None:
             try:
-                rc = self.proc.wait(timeout=0.05)
+                rc = await asyncio.to_thread(self.proc.wait, 0.05)
             except subprocess.TimeoutExpired:
                 rc = None
         self.exit_code = rc
@@ -1217,16 +1305,27 @@ class PtySession:
         self._cancel_idle_timer()
 
         async def _reap_after_idle() -> None:
-            try:
-                await asyncio.sleep(IDLE_TIMEOUT_SEC)
-            except asyncio.CancelledError:
-                return
-            if not self._clients and self.is_alive():
+            delay = IDLE_TIMEOUT_SEC
+            while True:
+                try:
+                    await asyncio.sleep(delay)
+                except asyncio.CancelledError:
+                    return
+                if self._clients or not self.is_alive():
+                    return
+                # Pure elapsed time is not idleness: a headless session (no
+                # viewer to cancel the timer) may have a workflow task mid-
+                # flight. Spare it while the CLI keeps producing output.
+                idle_for = time.monotonic() - self._last_output_at
+                if idle_for < IDLE_TIMEOUT_SEC:
+                    delay = IDLE_TIMEOUT_SEC - idle_for
+                    continue
                 logger.info(
                     f"[Terminal] Idle timeout reached for agent {self.agent_id} "
                     f"after {IDLE_TIMEOUT_SEC}s with no clients — reaping"
                 )
                 await self.close()
+                return
 
         self._idle_timer = asyncio.create_task(_reap_after_idle())
 
@@ -1260,7 +1359,9 @@ class PtySession:
         # ends the CLI and makes the attach client exit cleanly.
         if self._use_tmux and self._tmux_session:
             try:
-                self._tmux_run(["kill-session", "-t", self._tmux_session])
+                await asyncio.to_thread(
+                    self._tmux_run, ["kill-session", "-t", self._tmux_session]
+                )
             except Exception as e:
                 logger.debug(f"[Terminal] tmux kill-session failed for {self.agent_id}: {e}")
 
@@ -1275,7 +1376,7 @@ class PtySession:
             except OSError:
                 pass
             try:
-                self.proc.wait(timeout=2)
+                await asyncio.to_thread(self.proc.wait, 2)
             except subprocess.TimeoutExpired:
                 pass
             for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -1283,7 +1384,7 @@ class PtySession:
                     break
                 try:
                     self.proc.send_signal(sig)
-                    self.proc.wait(timeout=2)
+                    await asyncio.to_thread(self.proc.wait, 2)
                 except (subprocess.TimeoutExpired, PermissionError, ProcessLookupError, OSError):
                     pass
 
@@ -1315,7 +1416,13 @@ class PtySession:
 # work), so a plain dict + asyncio.Lock around create-or-attach is enough.
 
 _SESSIONS: dict[str, PtySession] = {}
-_REGISTRY_LOCK = asyncio.Lock()
+# Per-agent locks: one slow spawn (token hydration, HOME provisioning, tmux
+# new-session) must not queue every other agent's attach/input behind it.
+# setdefault is atomic enough in single-threaded asyncio (no await between
+# lookup and insert). Entries are tiny and keyed by agent_id, so they are
+# deliberately never pruned — popping a lock while a waiter still holds it
+# would let two spawns for the same agent race.
+_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
 _TRANSCRIPTS: dict[str, deque] = {}
 _TRANSCRIPT_SIZES: dict[str, int] = {}
 
@@ -1380,7 +1487,7 @@ async def get_or_create_session(
     token hydration, etc.) in a callback avoids doing that work needlessly
     when the session already exists.
     """
-    async with _REGISTRY_LOCK:
+    async with _SESSION_LOCKS.setdefault(agent_id, asyncio.Lock()):
         existing = _SESSIONS.get(agent_id)
         if (
             existing is not None

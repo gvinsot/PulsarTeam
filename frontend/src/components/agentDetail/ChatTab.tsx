@@ -71,6 +71,12 @@ export default function ChatTab({
   // we only speak replies that arrive AFTER the current turn — not stale
   // ones already in history when the chat tab opens.
   const turnBaselineRef = useRef<number>(-1);
+  // Mirror volatile props into refs so STT callbacks (captured at mic-click
+  // time) read the latest values instead of stale closures.
+  const messageRef = useRef(message);
+  messageRef.current = message;
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
 
   const ttsEnabled = !!agent?.ttsEnabled && !!voiceServices?.tts?.available;
   const sttAvailable = !!voiceServices?.stt?.available;
@@ -177,9 +183,13 @@ export default function ChatTab({
           turnBaselineRef.current = (history ? history.length : 0) + 1;
           // Append (rather than replace) so the user can chain dictation
           // onto whatever is already in the textarea.
-          setMessage((prev) => (prev && prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
-          // Auto-send on a microtask so React commits the textarea update.
-          setTimeout(() => { onSend?.(); }, 0);
+          const base = (messageRef.current || '').trim();
+          const full = base ? `${base} ${trimmed}` : trimmed;
+          setMessage(full);
+          // Auto-send after React commits the textarea update so the fresh
+          // handler (with the new message state) is the one invoked; the full
+          // text is also passed explicitly for handlers that accept it.
+          setTimeout(() => { onSendRef.current?.(full); }, 0);
         },
       },
     );
@@ -226,7 +236,7 @@ export default function ChatTab({
     : history;
 
   const handleFileSelect = (e) => {
-    const files = Array.from(e.target.files || []);
+    const files = Array.from<File>(e.target.files || []);
     if (files.length === 0) return;
 
     for (const file of files) {
@@ -236,6 +246,8 @@ export default function ChatTab({
       const reader = new FileReader();
       reader.onload = (ev) => {
         const dataUrl = ev.target.result;
+        // readAsDataURL always yields a string; guard narrows the type.
+        if (typeof dataUrl !== 'string') return;
         // Extract base64 data and media type from data URL
         const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
         if (match) {
@@ -475,6 +487,8 @@ export default function ChatTab({
                   const reader = new FileReader();
                   reader.onload = (ev) => {
                     const dataUrl = ev.target.result;
+                    // readAsDataURL always yields a string; guard narrows the type.
+                    if (typeof dataUrl !== 'string') return;
                     const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
                     if (match) {
                       onAddImages?.([{ mediaType: match[1], data: match[2], preview: dataUrl }]);

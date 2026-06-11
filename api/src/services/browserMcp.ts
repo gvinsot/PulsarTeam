@@ -6,10 +6,14 @@ const BROWSER_SERVICE_URL = process.env.BROWSER_SERVICE_URL || 'http://mcp-brows
 
 async function browserRequest(path: string, body: any) {
   const url = `${BROWSER_SERVICE_URL}${path}`;
+  // Generous budget: mcp-browser uses 30s per-page timeouts and crawl_many /
+  // extract fan out over multiple pages. Without an abort signal a wedged
+  // upstream pins this handler for undici's ~300s defaults.
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(180_000),
   });
   const text = await res.text();
   if (!res.ok) {

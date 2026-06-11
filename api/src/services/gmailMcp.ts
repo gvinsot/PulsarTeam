@@ -84,6 +84,7 @@ async function gmailFetch(path: string, agentId: string | null = null, boardId: 
   const url = path.startsWith('http') ? path : `${GMAIL_BASE}${path}`;
 
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(60_000),
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,

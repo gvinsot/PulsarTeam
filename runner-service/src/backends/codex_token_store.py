@@ -10,13 +10,13 @@ stores it encrypted at rest.
 import os
 import json
 import time
-import asyncio
 from typing import Optional, Tuple
 
 import httpx
 
 from config import logger
 from swarm_secrets import read as read_secret
+from .claude_token_store import run_blocking
 
 
 _API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
@@ -195,14 +195,14 @@ def write_local_auth(agent_user: Optional[dict], blob: dict) -> Optional[float]:
 async def hydrate_agent_auth(agent_user: Optional[dict], owner_id: Optional[str]) -> bool:
     if not owner_id:
         return os.path.isfile(auth_file_path(agent_user))
-    blob = load_owner_blob(owner_id)
+    blob = await run_blocking(load_owner_blob, owner_id)
     if not blob:
         return os.path.isfile(auth_file_path(agent_user))
     current, _ = read_local_auth(agent_user)
     if current == blob:
         return True
     try:
-        await asyncio.get_event_loop().run_in_executor(None, write_local_auth, agent_user, blob)
+        await run_blocking(write_local_auth, agent_user, blob)
         logger.info(f"[Codex Auth] Hydrated auth.json for owner {owner_id}")
         return True
     except OSError as e:
@@ -218,7 +218,7 @@ async def push_agent_auth_if_changed(agent_user: Optional[dict], owner_id: Optio
         return False
     if baseline_mtime is not None and mtime <= baseline_mtime:
         return False
-    return await asyncio.get_event_loop().run_in_executor(None, save_owner_blob, owner_id, current)
+    return await run_blocking(save_owner_blob, owner_id, current)
 
 
 # --- Auth status helpers (used by the backend's auth_status endpoints) -------
@@ -251,5 +251,5 @@ def global_auth_method() -> str:
 async def hydrate_owner_blob_async(owner_id: str) -> Optional[dict]:
     """Async wrapper over `load_owner_blob` so route handlers don't block
     on the team-api HTTP call."""
-    return await asyncio.get_event_loop().run_in_executor(None, load_owner_blob, owner_id)
+    return await run_blocking(load_owner_blob, owner_id)
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { connectSocket, disconnectSocket, getSocket } from './socket';
 import { api } from './api';
+import { safeGet, safeSet, safeRemove } from './lib/safeStorage';
 import { WsEvents } from './socketEvents';
 import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
@@ -358,7 +359,7 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const token = localStorage.getItem('token');
+    const token = safeGet('token');
     if (token) {
       api.verify()
         .then(async (data) => {
@@ -378,8 +379,14 @@ export default function App() {
           initSocket(token);
           checkDbHealth();
         })
-        .catch(() => {
-          if (!cancelled) localStorage.removeItem('token');
+        .catch((err) => {
+          if (cancelled) return;
+          // A transient backend stall (request timeout/abort) must not
+          // silently log the user out — only drop the token when the
+          // server actually rejected it.
+          if (err?.name !== 'TimeoutError' && err?.name !== 'AbortError') {
+            safeRemove('token');
+          }
         })
         .finally(() => { if (!cancelled) setLoading(false); });
     } else {
@@ -434,7 +441,7 @@ export default function App() {
     if (apiCall) {
       apiCall
         .then(async (data) => {
-          localStorage.setItem('token', data.token);
+          safeSet('token', data.token);
           setUser({
             username: data.username,
             role: data.role,
@@ -460,7 +467,7 @@ export default function App() {
 
   const handleLogin = async (username, password) => {
     const data = await api.login(username, password);
-    localStorage.setItem('token', data.token);
+    safeSet('token', data.token);
     setUser({
       username: data.username,
       role: data.role,
@@ -475,18 +482,39 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('originalToken');
+    safeRemove('token');
+    safeRemove('originalToken');
     disconnectSocket();
     setUser(null);
     setAgents([]);
   };
 
+  // socket.ts signals a definitively rejected handshake via window events:
+  // an auth rejection means the token is dead, so force a re-login; other
+  // rejections (e.g. CORS) are surfaced as a toast for visibility.
+  useEffect(() => {
+    const onAuthError = () => {
+      showToastRef.current('Session expired — please sign in again.', 'error', 8000);
+      handleLogout();
+    };
+    const onConnectError = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      console.error('WebSocket connection rejected:', detail);
+      showToastRef.current(`Realtime connection failed: ${detail || 'unknown error'}`, 'error', 8000);
+    };
+    window.addEventListener('socket:auth-error', onAuthError);
+    window.addEventListener('socket:connect-error', onConnectError);
+    return () => {
+      window.removeEventListener('socket:auth-error', onAuthError);
+      window.removeEventListener('socket:connect-error', onConnectError);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleImpersonate = (data) => {
     // Save original token so we can return
-    const currentToken = localStorage.getItem('token');
-    localStorage.setItem('originalToken', currentToken);
-    localStorage.setItem('token', data.token);
+    const currentToken = safeGet('token');
+    safeSet('originalToken', currentToken);
+    safeSet('token', data.token);
     setUser({
       username: data.username,
       role: data.role,
@@ -500,10 +528,10 @@ export default function App() {
   };
 
   const handleStopImpersonation = () => {
-    const originalToken = localStorage.getItem('originalToken');
+    const originalToken = safeGet('originalToken');
     if (!originalToken) return;
-    localStorage.setItem('token', originalToken);
-    localStorage.removeItem('originalToken');
+    safeSet('token', originalToken);
+    safeRemove('originalToken');
     // Re-verify to get original user info
     api.verify().then((verifyData) => {
       setUser(verifyData.user);
@@ -530,8 +558,41 @@ export default function App() {
     );
   }
 
+  // Rendered on both the login page and the app so notices fired around a
+  // forced logout (e.g. expired socket auth) stay visible.
+  const toastContainer = (
+    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-md">
+      {toasts.map(toast => (
+        <div
+          key={toast.id}
+          className={`flex items-start gap-3 p-4 rounded-lg shadow-lg border backdrop-blur-sm animate-slide-in-right ${
+            toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
+            toast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
+            'bg-blue-500/10 border-blue-500/30 text-blue-400'
+          }`}
+        >
+          {toast.type === 'error' ? <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
+           toast.type === 'success' ? <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
+           <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />}
+          <p className="text-sm flex-1">{toast.message}</p>
+          <button
+            onClick={() => dismissToast(toast.id)}
+            className="opacity-60 hover:opacity-100 transition-opacity"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
   if (!user) {
-    return <Suspense fallback={null}><LoginPage onLogin={handleLogin} googleLoading={googleLoading} /></Suspense>;
+    return (
+      <>
+        <Suspense fallback={null}><LoginPage onLogin={handleLogin} googleLoading={googleLoading} /></Suspense>
+        {toastContainer}
+      </>
+    );
   }
 
   return (
@@ -585,29 +646,7 @@ export default function App() {
         </Suspense>
       )}
 
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-md">
-        {toasts.map(toast => (
-          <div
-            key={toast.id}
-            className={`flex items-start gap-3 p-4 rounded-lg shadow-lg border backdrop-blur-sm animate-slide-in-right ${
-              toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
-              toast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-              'bg-blue-500/10 border-blue-500/30 text-blue-400'
-            }`}
-          >
-            {toast.type === 'error' ? <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
-             toast.type === 'success' ? <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
-             <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />}
-            <p className="text-sm flex-1">{toast.message}</p>
-            <button
-              onClick={() => dismissToast(toast.id)}
-              className="opacity-60 hover:opacity-100 transition-opacity"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        ))}
-      </div>
+      {toastContainer}
     </VoiceSessionProvider>
   );
 }

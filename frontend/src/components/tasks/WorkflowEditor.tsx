@@ -98,6 +98,12 @@ function ColorPicker({ value, onChange }) {
 
 // ── WorkflowEditor ──────────────────────────────────────────────────────────
 
+interface JiraColumn {
+  name: string;
+  statusIds: string[];
+  statusNames?: string[];
+}
+
 export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, onSave }) {
   const [cols, setCols] = useState(() => JSON.parse(JSON.stringify(workflow.columns)));
   const [transitions, setTransitions] = useState(() => {
@@ -105,57 +111,61 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
     return raw.filter(validTransition);
   });
   const [saving, setSaving] = useState(false);
-  const [jiraColumns, setJiraColumns] = useState([]);
+  const [saveError, setSaveError] = useState(null);
+  const [jiraColumns, setJiraColumns] = useState<JiraColumn[]>([]);
   const [showJson, setShowJson] = useState(false);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState(null);
 
   const jiraEnabled = jiraStatus?.enabled || false;
 
-  // Fetch Jira columns for dropdowns
+  // Fetch Jira columns for dropdowns.
+  // NOTE: `getJiraColumns` was removed from the API client when the Jira
+  // integration moved to per-agent MCP plugins (commit 96e4e33), so guard the
+  // call — invoking the missing method would throw a TypeError and crash the
+  // editor whenever Jira is reported enabled.
   useEffect(() => {
-    if (jiraEnabled) {
-      api.getJiraColumns().then(setJiraColumns).catch(() => {});
+    if (!jiraEnabled) return;
+    const getJiraColumns = (api as Record<string, unknown>).getJiraColumns;
+    if (typeof getJiraColumns === 'function') {
+      Promise.resolve(getJiraColumns()).then(setJiraColumns).catch(() => {});
     }
   }, [jiraEnabled]);
 
   const enabledAgents = (agents || []).filter(a => a.enabled !== false);
-  const availableRoles = [...new Set(enabledAgents.map(a => a.role).filter(Boolean))].sort();
+  const availableRoles = [...new Set<string>(enabledAgents.map(a => a.role).filter(Boolean))].sort();
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave({ columns: cols, transitions, version: workflow.version });
       onClose();
+    } catch (err) {
+      setSaveError(err?.message || 'Failed to save workflow');
     } finally {
       setSaving(false);
     }
   };
 
   // ── Column helpers ──
-  const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'step';
-  const updateCol = (idx, patch) => setCols(prev => prev.map((c, i) => {
-    if (i !== idx) return c;
-    const updated = { ...c, ...patch };
-    // Sync id with label when label changes
-    if (patch.label !== undefined) {
-      const newId = slugify(patch.label);
-      const oldId = c.id;
-      if (newId && newId !== oldId) {
-        updated.id = newId;
-        // Update transitions that reference the old id
-        setTransitions(ts => ts.map(t => t.from === oldId ? { ...t, from: newId } : t));
-      }
-    }
-    return updated;
-  }));
+  // The column id stays stable on rename (only the label changes): existing
+  // task statuses and change_status targets reference the id, so re-deriving
+  // it from the label would strand them on a nonexistent column.
+  const updateCol = (idx, patch) => setCols(prev => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
   const removeCol = (idx) => {
     const removed = cols[idx];
     setCols(prev => prev.filter((_, i) => i !== idx));
     setTransitions(prev => prev.filter(t => t.from !== removed.id));
   };
   const addCol = () => {
-    setCols(prev => [...prev, { id: 'new_step', label: 'New Step', color: '#6b7280' }]);
+    setCols(prev => {
+      const ids = new Set(prev.map(c => c.id));
+      let id = 'new_step';
+      let n = 2;
+      while (ids.has(id)) id = `new_step_${n++}`;
+      return [...prev, { id, label: 'New Step', color: '#6b7280' }];
+    });
   };
   // ── Column reorder helper ──
   const moveCol = (idx: number, direction: -1 | 1) => {
@@ -316,7 +326,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                             </div>
                     <select value={t.trigger || 'on_enter'}
                       onChange={e => {
-                        const patch = { trigger: e.target.value };
+                        const patch: { trigger: string; jiraStatusIds?: string[]; jiraStatusNames?: string[] } = { trigger: e.target.value };
                         if (e.target.value === 'jira_ticket') { patch.jiraStatusIds = []; patch.jiraStatusNames = []; }
                         updateTransition(idx, patch);
                       }}
@@ -461,7 +471,7 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
                                 onChange={e => updateAction(idx, ai, { role: e.target.value })}
                                 className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
                                 <option value="">Any agent...</option>
-                                {[...new Set((agents || []).map(a => a.role).filter(Boolean))].map(r => (
+                                {[...new Set<string>((agents || []).map(a => a.role).filter(Boolean))].map(r => (
                                   <option key={r} value={r}>{r}</option>
                                 ))}
                               </select>
@@ -539,7 +549,10 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
           >
             <Code className="w-4 h-4" />
           </button>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {saveError && (
+              <span className="text-xs text-red-400 max-w-[40vw] truncate" title={saveError}>{saveError}</span>
+            )}
             <button
               onClick={onClose}
               className="px-3 py-1.5 text-xs text-dark-300 hover:text-dark-100 bg-dark-800 hover:bg-dark-700 rounded-lg transition-colors"

@@ -14,9 +14,15 @@ function MessageContent({ content }) {
       className="prose prose-invert prose-xs max-w-none break-words"
       components={{
         pre: ({ children }) => <pre className="bg-dark-900 rounded-lg p-2 overflow-x-auto my-1 border border-dark-600 text-[11px]">{children}</pre>,
-        code: ({ inline, children }) => inline
-          ? <code className="bg-dark-700 px-1 py-0.5 rounded text-purple-300 text-[11px]">{children}</code>
-          : <code className="text-green-300 text-[11px]">{children}</code>,
+        code: ({ children }) => {
+          // react-markdown v9 removed the `inline` prop. Block code content always
+          // ends with a newline (added by mdast-util-to-hast), while inline code
+          // spans can never contain one — use that to tell them apart.
+          const isInline = !String(children).includes('\n');
+          return isInline
+            ? <code className="bg-dark-700 px-1 py-0.5 rounded text-purple-300 text-[11px]">{children}</code>
+            : <code className="text-green-300 text-[11px]">{children}</code>;
+        },
         p: ({ children }) => <p className="my-0.5 text-xs leading-relaxed">{children}</p>,
         ul: ({ children }) => <ul className="list-disc list-inside space-y-0.5 text-xs">{children}</ul>,
         ol: ({ children }) => <ol className="list-decimal list-inside space-y-0.5 text-xs">{children}</ol>,
@@ -42,7 +48,7 @@ function FullScreenLogModal({ entry, onClose }) {
   const modeKey = entry.mode || 'execute';
   const modeLabel = MODE_LABELS[modeKey] || 'Execution';
   const duration = entry.startedAt && entry.at
-    ? Math.round((new Date(entry.at) - new Date(entry.startedAt)) / 1000)
+    ? Math.round((new Date(entry.at).getTime() - new Date(entry.startedAt).getTime()) / 1000)
     : null;
   const durationLabel = duration != null
     ? duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m${duration % 60}s`
@@ -117,7 +123,7 @@ export default function ExecutionLogEntry({ entry, index }) {
   const [fullScreen, setFullScreen] = useState(false);
   const messages = entry.messages || [];
   const duration = entry.startedAt && entry.at
-    ? Math.round((new Date(entry.at) - new Date(entry.startedAt)) / 1000)
+    ? Math.round((new Date(entry.at).getTime() - new Date(entry.startedAt).getTime()) / 1000)
     : null;
   const durationLabel = duration != null
     ? duration < 60 ? `${duration}s` : `${Math.floor(duration / 60)}m${duration % 60}s`

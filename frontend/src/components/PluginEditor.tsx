@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff, Zap, CheckCircle, XCircle, Loader, Globe, Lock, KeyRound, Info } from 'lucide-react';
 import { api } from '../api';
 
@@ -16,7 +16,7 @@ function createEmptyMcp() {
 }
 
 function parseKeyValueText(text) {
-  const lines = text.split('\\n');
+  const lines = text.split(/\r?\n/);
   const obj = {};
   for (const line of lines) {
     const trimmed = line.trim();
@@ -32,7 +32,7 @@ function parseKeyValueText(text) {
 }
 
 function stringifyKeyValue(obj) {
-  return Object.entries(obj || {}).map(([k, v]) => `${k}=${v ?? ''}`).join('\\n');
+  return Object.entries(obj || {}).map(([k, v]) => `${k}=${v ?? ''}`).join('\n');
 }
 
 /**
@@ -66,7 +66,13 @@ export default function PluginEditor({
   const [expandedMcps, setExpandedMcps] = useState(() => new Set((value.mcps || []).map((_, i) => i)));
   const [testResults, setTestResults] = useState({});
   const [testing, setTesting] = useState({});
-  const userConfigText = useMemo(() => stringifyKeyValue(value.userConfig || {}), [value.userConfig]);
+  // Keep the raw textarea text in local state so typed newlines survive;
+  // only reset it when the config changes from outside (e.g. another plugin).
+  const [userConfigText, setUserConfigText] = useState(() => stringifyKeyValue(value.userConfig || {}));
+  useEffect(() => {
+    const canonical = stringifyKeyValue(value.userConfig || {});
+    setUserConfigText(prev => (stringifyKeyValue(parseKeyValueText(prev)) === canonical ? prev : canonical));
+  }, [value.userConfig]);
 
   const update = (patch) => onChange({ ...value, ...patch });
 
@@ -330,7 +336,10 @@ export default function PluginEditor({
         <label className="block text-xs text-dark-400 mb-1.5">User-specific configuration</label>
         <textarea
           value={userConfigText}
-          onChange={(e) => update({ userConfig: parseKeyValueText(e.target.value) })}
+          onChange={(e) => {
+            setUserConfigText(e.target.value);
+            update({ userConfig: parseKeyValueText(e.target.value) });
+          }}
           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono resize-none"
           placeholder={'oauth_client_id=...\noauth_scopes=...\ntenant=...'}
           rows={4}

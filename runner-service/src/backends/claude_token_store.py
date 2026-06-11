@@ -8,7 +8,9 @@ import json
 import stat
 import time
 import asyncio
+import functools
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from config import (
@@ -19,6 +21,26 @@ from config import (
 )
 from swarm_secrets import read as read_secret
 from .crypto import encrypt_text, decrypt_text, is_envelope
+
+
+# --- Off-loop execution helper --------------------------------------------------
+#
+# Several helpers in this module (and the sibling runner_* config modules) make
+# blocking httpx calls to team-api, with retry sleeps. They stay synchronous
+# because threaded callers (e.g. PtySession's creds_on_change) invoke them
+# directly — async code must instead run them off the event loop via
+# run_blocking, otherwise every other agent's stream stalls while team-api is
+# slow. A dedicated pool is used (not the default executor) because the default
+# one is parked by long-lived PTY driver threads (run_interactive holds one
+# thread per interactive session for its whole duration).
+
+_io_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="runner-io")
+
+
+async def run_blocking(func, *args, **kwargs):
+    """Run a short blocking helper on the dedicated I/O thread pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_io_executor, functools.partial(func, *args, **kwargs))
 
 
 # --- Filesystem helpers -------------------------------------------------------
@@ -75,13 +97,22 @@ def _atomic_write_secret(path: str, content: str, encrypt: bool = True):
 
 def _read_secret(path: str) -> Optional[str]:
     """Read `path`, transparently decrypting if it's an AES-GCM envelope.
-    Returns the plaintext content, or None if the file doesn't exist."""
+    Returns the plaintext content, or None if the file doesn't exist or
+    cannot be decrypted (rotated/unmounted ENCRYPTION_KEY, corrupted file)."""
     try:
         with open(path) as f:
             raw = f.read()
     except (OSError, FileNotFoundError):
         return None
-    return decrypt_text(raw)
+    try:
+        return decrypt_text(raw)
+    except Exception as e:
+        # Treat an undecryptable file as a missing token so callers fall back
+        # to the re-auth flow instead of crashing the runner. If ENCRYPTION_KEY
+        # is merely unmounted, remount it rather than re-logging-in (a re-login
+        # while the key is absent rewrites tokens in plaintext).
+        logger.error(f"[Crypto] Cannot decrypt {path} — treating as missing: {e}")
+        return None
 
 
 def _read_secret_json(path: str) -> Optional[dict]:
@@ -235,6 +266,8 @@ _PERSIST_MAX_ATTEMPTS = 3
 _PERSIST_BACKOFF = (0.5, 1.0)  # delays AFTER attempts 1 and 2
 
 # Short-lived cache so repeated calls within one exec don't all hit the api.
+# Accessed from both the event loop and run_blocking's executor threads —
+# restricted to single dict get/set/pop operations, which are GIL-atomic.
 _owner_token_cache: dict = {}
 _OWNER_TOKEN_CACHE_TTL = 30  # seconds
 
@@ -629,12 +662,15 @@ async def token_http_request(payload: dict, description: str, agent_user: dict =
 
         if not is_code_exchange:
             if agent_user and agent_user.get("_owner_id"):
-                token_expired = is_owner_token_expired(agent_user["_owner_id"])
+                token_expired = await run_blocking(is_owner_token_expired, agent_user["_owner_id"])
             elif agent_user:
                 owner_id = agent_user.get("owner_id")
-                token_expired = is_owner_token_expired(owner_id) if owner_id else is_agent_token_expired(agent_user)
+                if owner_id:
+                    token_expired = await run_blocking(is_owner_token_expired, owner_id)
+                else:
+                    token_expired = await run_blocking(is_agent_token_expired, agent_user)
             else:
-                token_expired = is_token_expired()
+                token_expired = await run_blocking(is_token_expired)
             if not token_expired:
                 logger.info("Token already valid (refreshed by another request)")
                 return {"_already_valid": True}
@@ -742,7 +778,7 @@ async def refresh_oauth_token() -> bool:
 
 async def refresh_owner_token(owner_id: str) -> bool:
     global _token_cooldown_until
-    refresh_token = get_owner_refresh_token(owner_id)
+    refresh_token = await run_blocking(get_owner_refresh_token, owner_id)
     if not refresh_token:
         logger.warning(f"[Owner Auth] No refresh token for owner {owner_id}")
         return False
@@ -757,7 +793,7 @@ async def refresh_owner_token(owner_id: str) -> bool:
         return bool(result)
     if result.get("_invalid_grant"):
         logger.error(f"[Owner Auth] Refresh token for owner {owner_id} is permanently invalid — clearing stored tokens")
-        invalidate_owner_token(owner_id)
+        await run_blocking(invalidate_owner_token, owner_id)
         _token_cooldown_until = time.time() + 60
         return False
     access_token = result.get("access_token")
@@ -766,7 +802,7 @@ async def refresh_owner_token(owner_id: str) -> bool:
         return False
     new_refresh = result.get("refresh_token", refresh_token)
     expires_in = result.get("expires_in", 28800)
-    if not save_owner_token(owner_id, access_token, refresh_token=new_refresh, expires_in=expires_in):
+    if not await run_blocking(save_owner_token, owner_id, access_token, refresh_token=new_refresh, expires_in=expires_in):
         logger.error(f"[Owner Auth] Refreshed token for owner {owner_id} could not be persisted — caller will treat as failed refresh")
         return False
     logger.info(f"[Owner Auth] Token refreshed for owner {owner_id}")

@@ -90,6 +90,7 @@ async function graphFetch(
   const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
 
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(60_000),
     ...options,
     headers: {
       Authorization: `Bearer ${token}`,

@@ -21,6 +21,7 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
   // than N days at each reset.
   const [historyRetentionDays, setHistoryRetentionDays] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
   const textareaRef = useRef(null);
 
   // Repos accessible via the board's GitHub plugin — task targets one of them
@@ -88,6 +89,7 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
     const trimmed = text.trim();
     if (!trimmed || !defaultAgentId) return;
     setSaving(true);
+    setError(null);
     try {
       const recurrence = recurring ? {
         enabled: true,
@@ -106,6 +108,9 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
       // INSERT hasn't committed yet).
       await onCreated({ ...created, agentId: defaultAgentId });
       onClose();
+    } catch (err) {
+      // Keep the modal open so the (possibly long) description isn't lost.
+      setError(err?.message || 'Failed to create task');
     } finally {
       setSaving(false);
     }
@@ -315,6 +320,12 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
               </div>
             )}
           </div>
+
+          {error && (
+            <p className="text-xs text-amber-300 italic px-3 py-2 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+              {error}
+            </p>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-1">

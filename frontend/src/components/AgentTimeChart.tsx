@@ -3,6 +3,7 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale, LineElement,
   PointElement, Title, Tooltip, Legend, Filler
 } from 'chart.js';
+import type { ChartOptions } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import { api } from '../api';
 import { Clock, Users, TrendingUp, RefreshCw } from 'lucide-react';
@@ -34,7 +35,8 @@ function getChartColors(theme) {
 }
 
 export default function AgentTimeChart({ projectName, days = 30 }) {
-  const { theme } = useTheme();
+  // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
+  const { theme } = useTheme() as { theme: string };
   const cc = getChartColors(theme);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -94,7 +96,7 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
     })),
   };
 
-  const chartOpts = {
+  const chartOpts: ChartOptions<'line'> = {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { mode: 'index', intersect: false },
@@ -131,7 +133,7 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
         ticks: {
           color: cc.tick,
           font: { size: 10 },
-          callback: (val) => formatDuration(val * 60000),
+          callback: (val) => formatDuration(Number(val) * 60000),
         },
         grid: { color: cc.grid },
         beginAtZero: true,

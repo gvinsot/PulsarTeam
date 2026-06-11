@@ -5,7 +5,7 @@
  * logic is reusable, testable, and decoupled from execution.
  */
 
-// Lock to prevent concurrent execution of the same task (lockKey → timestamp)
+// Lock to prevent concurrent execution of the same task (lockKey → { ts, token })
 const _executionLocks = new Map();
 // Tracks which agents are currently running a transition (agentId → timestamp)
 const _busyAgents = new Map();
@@ -15,9 +15,9 @@ const LOCK_TTL_MS = 15 * 60 * 1000; // 15 min
 
 function _evictStaleLocks() {
   const now = Date.now();
-  for (const [key, ts] of _executionLocks) {
-    if (now - ts > LOCK_TTL_MS) {
-      console.warn(`[AgentSelector] Evicting stale execution lock: ${key} (age: ${Math.round((now - ts) / 1000)}s)`);
+  for (const [key, entry] of _executionLocks) {
+    if (now - entry.ts > LOCK_TTL_MS) {
+      console.warn(`[AgentSelector] Evicting stale execution lock: ${key} (age: ${Math.round((now - entry.ts) / 1000)}s)`);
       _executionLocks.delete(key);
     }
   }
@@ -31,20 +31,51 @@ function _evictStaleLocks() {
 
 /**
  * Try to acquire an execution lock for a task+mode combination.
- * Returns true if acquired, false if already held.
+ * Returns an owner token (truthy) if acquired, null if already held. Passing
+ * the token back to releaseLock/refreshLock guarantees a stale invocation
+ * cannot release or refresh a lock that was re-acquired by a successor.
  */
 export function acquireLock(lockKey: string) {
   _evictStaleLocks();
-  if (_executionLocks.has(lockKey)) return false;
-  _executionLocks.set(lockKey, Date.now());
-  return true;
+  if (_executionLocks.has(lockKey)) return null;
+  const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  _executionLocks.set(lockKey, { ts: Date.now(), token });
+  return token;
 }
 
 /**
- * Release an execution lock.
+ * Release an execution lock. When a token is provided, the lock is only
+ * released if it is still owned by that token.
  */
-export function releaseLock(lockKey: string) {
+export function releaseLock(lockKey: string, token: string | null = null) {
+  const entry = _executionLocks.get(lockKey);
+  if (!entry) return;
+  if (token && entry.token !== token) return;
   _executionLocks.delete(lockKey);
+}
+
+/**
+ * Refresh an execution lock's timestamp so a live long-running action is not
+ * evicted as stale. Only refreshes an existing entry (owned by `token` if given).
+ */
+export function refreshLock(lockKey: string, token: string | null = null) {
+  const entry = _executionLocks.get(lockKey);
+  if (!entry) return;
+  if (token && entry.token !== token) return;
+  entry.ts = Date.now();
+}
+
+/**
+ * Check whether any fresh execution lock exists for keys starting with the
+ * given prefix (e.g. `${agentId}:${taskId}:`) — i.e. an action is still live
+ * for that task.
+ */
+export function hasLockForTask(lockKeyPrefix: string) {
+  const now = Date.now();
+  for (const [key, entry] of _executionLocks) {
+    if (key.startsWith(lockKeyPrefix) && now - entry.ts <= LOCK_TTL_MS) return true;
+  }
+  return false;
 }
 
 /**
@@ -52,6 +83,14 @@ export function releaseLock(lockKey: string) {
  */
 export function markAgentBusy(agentId: string) {
   _busyAgents.set(agentId, Date.now());
+}
+
+/**
+ * Refresh the busy timestamp for an agent still mid-transition. No-op when the
+ * agent has no busy flag (e.g. resume paths that never marked it busy).
+ */
+export function touchAgentBusy(agentId: string) {
+  if (_busyAgents.has(agentId)) _busyAgents.set(agentId, Date.now());
 }
 
 /**

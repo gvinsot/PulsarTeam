@@ -27,6 +27,8 @@ _PATH = "/api/internal/runner-config"
 _HTTP_TIMEOUT = 4.0
 _SAVE_MAX_ATTEMPTS = 3
 _SAVE_BACKOFF = (0.5, 1.0)
+_FETCH_MAX_ATTEMPTS = 3
+_FETCH_BACKOFF = (0.5, 1.0)
 
 _cache: dict = {}
 _CACHE_TTL = 15.0  # seconds
@@ -39,7 +41,9 @@ def _headers() -> dict:
 def fetch_runner_config(runner: str, agent_id: str, force: bool = False) -> Optional[dict]:
     """Return {relative_path: content} for the agent, or None if none saved.
 
-    Cached briefly per (runner, agent_id). Never raises.
+    Cached briefly per (runner, agent_id). Transient failures (network, 5xx)
+    are retried with a short backoff and NOT cached, so the next call tries
+    again. Never raises.
     """
     if not runner or not agent_id or not _API_KEY:
         return None
@@ -48,28 +52,38 @@ def fetch_runner_config(runner: str, agent_id: str, force: bool = False) -> Opti
     if not force and cached and time.monotonic() - cached["fetched_at"] < _CACHE_TTL:
         return cached["value"]
     url = f"{_API_BASE}{_PATH}/{runner}/agents/{agent_id}"
-    value: Optional[dict] = None
-    try:
-        r = httpx.get(url, headers=_headers(), timeout=_HTTP_TIMEOUT)
-        if r.status_code == 404:
-            value = None
-        elif r.status_code >= 400:
-            logger.warning(f"[Runner Config] api {r.status_code} for {key}: {r.text[:200]}")
-            value = None
+    last_err = ""
+    for attempt in range(_FETCH_MAX_ATTEMPTS):
+        try:
+            r = httpx.get(url, headers=_headers(), timeout=_HTTP_TIMEOUT)
+        except httpx.HTTPError as e:
+            last_err = f"network: {e}"
         else:
-            data = r.json()
-            files = data.get("files") if isinstance(data, dict) else None
-            if isinstance(files, dict):
-                value = {k: v for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
+            if r.status_code >= 500:
+                last_err = f"http {r.status_code}: {r.text[:200]}"
             else:
-                value = None
-    except httpx.HTTPError as e:
-        logger.warning(f"[Runner Config] api unreachable for {key}: {e}")
-        value = None
-    except ValueError:
-        value = None
-    _cache[key] = {"fetched_at": time.monotonic(), "value": value}
-    return value
+                value: Optional[dict] = None
+                if r.status_code == 404:
+                    value = None
+                elif r.status_code >= 400:
+                    logger.warning(f"[Runner Config] api {r.status_code} for {key}: {r.text[:200]}")
+                    value = None
+                else:
+                    try:
+                        data = r.json()
+                    except ValueError:
+                        data = None
+                    files = data.get("files") if isinstance(data, dict) else None
+                    if isinstance(files, dict):
+                        value = {k: v for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
+                    else:
+                        value = None
+                _cache[key] = {"fetched_at": time.monotonic(), "value": value}
+                return value
+        if attempt < _FETCH_MAX_ATTEMPTS - 1:
+            time.sleep(_FETCH_BACKOFF[attempt])
+    logger.warning(f"[Runner Config] failed to fetch {key} after {_FETCH_MAX_ATTEMPTS} attempts: {last_err}")
+    return None
 
 
 def save_runner_config(runner: str, agent_id: str, files: dict) -> bool:

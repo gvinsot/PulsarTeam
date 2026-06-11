@@ -8,6 +8,7 @@ import GitHubActivityModal from './GitHubActivityModal';
 import ShareBoardModal from './ShareBoardModal';
 import { getSocket } from '../socket';
 import { WsEvents } from '../socketEvents';
+import { safeGet, safeSet } from '../lib/safeStorage';
 
 import { buildColumns, buildStatusOptions, sortTasks, SORT_OPTIONS } from './tasks/taskConstants';
 import CreateTaskModal from './tasks/CreateTaskModal';
@@ -22,10 +23,10 @@ import BoardPluginsTab from './tasks/BoardPluginsTab';
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
 export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, onBoardChange, projectFilter = '' }) {
-  const [repoFilter, setRepoFilter] = useState(() => localStorage.getItem('tasks_repoFilter') || '');
-  const [agentFilter, setAgentFilter] = useState(() => localStorage.getItem('tasks_agentFilter') || '');
-  const [search, setSearch] = useState(() => localStorage.getItem('tasks_search') || '');
-  const [sortBy, setSortBy] = useState(() => localStorage.getItem('tasks_sortBy') || 'manual');
+  const [repoFilter, setRepoFilter] = useState(() => safeGet('tasks_repoFilter') || '');
+  const [agentFilter, setAgentFilter] = useState(() => safeGet('tasks_agentFilter') || '');
+  const [search, setSearch] = useState(() => safeGet('tasks_search') || '');
+  const [sortBy, setSortBy] = useState(() => safeGet('tasks_sortBy') || 'manual');
   const [selectedTask, setSelectedTask] = useState(null);
   const [commitModalTask, setCommitModalTask] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -57,12 +58,12 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         if (boardList.length > 0) {
           setBoards(boardList);
           // Restore last active board from localStorage or use first
-          const lastBoardId = localStorage.getItem('activeBoardId');
+          const lastBoardId = safeGet('activeBoardId');
           const validBoard = boardList.find(b => b.id === lastBoardId);
           setActiveBoardId(validBoard ? validBoard.id : boardList[0].id);
         } else {
           // No boards yet — create with clean default (backend provides Todo/In Progress/Done)
-          const board = await api.createBoard('My Board');
+          const board = await api.createBoard('My Board', undefined, undefined);
           if (cancelled) return;
           setBoards([board]);
           setActiveBoardId(board.id);
@@ -85,16 +86,16 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // Persist active board selection and notify parent
   useEffect(() => {
     if (activeBoardId) {
-      localStorage.setItem('activeBoardId', activeBoardId);
+      safeSet('activeBoardId', activeBoardId);
       onBoardChange?.(activeBoardId);
     }
   }, [activeBoardId, onBoardChange]);
 
   // Persist filter state
-  useEffect(() => { localStorage.setItem('tasks_repoFilter', repoFilter); }, [repoFilter]);
-  useEffect(() => { localStorage.setItem('tasks_agentFilter', agentFilter); }, [agentFilter]);
-  useEffect(() => { localStorage.setItem('tasks_search', search); }, [search]);
-  useEffect(() => { localStorage.setItem('tasks_sortBy', sortBy); }, [sortBy]);
+  useEffect(() => { safeSet('tasks_repoFilter', repoFilter); }, [repoFilter]);
+  useEffect(() => { safeSet('tasks_agentFilter', agentFilter); }, [agentFilter]);
+  useEffect(() => { safeSet('tasks_search', search); }, [search]);
+  useEffect(() => { safeSet('tasks_sortBy', sortBy); }, [sortBy]);
 
   // When a global project filter is set, only show boards attached to that project
   const visibleBoards = useMemo(() => {
@@ -171,6 +172,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     if (!activeBoardId) return; // Wait until a board is selected
     try {
       const tasks = await api.getAllTasks({ board_id: activeBoardId });
+      // The user may have switched boards while this request was in flight —
+      // a stale response would replace the new board's tasks with the old
+      // board's list, so drop it.
+      if (activeBoardId !== activeBoardIdRef.current) return;
       setDbTasks(prev => {
         const prevById = new Map(prev.map(t => [t.id, t]));
         const serverIds = new Set(tasks.map(t => t.id));
@@ -240,8 +245,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // Handles both updates to existing tasks AND insertion of newly created tasks.
   // For existing tasks, we only accept the incoming data if its updatedAt >= local copy.
   useEffect(() => {
-    const sock = getSocket();
-    if (!sock) return;
     const handler = ({ task }) => {
       if (!task?.id) return;
       setDbTasks(prev => {
@@ -267,15 +270,31 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         return updated;
       });
     };
-    sock.on(WsEvents.TASK_UPDATED, handler);
-    return () => sock.off(WsEvents.TASK_UPDATED, handler);
+    // The socket may not exist yet at mount (it's created after login data
+    // loads) and gets REPLACED on impersonation/stop-impersonation, so track
+    // the instance for the component's whole lifetime and re-attach the
+    // handler whenever it changes.
+    let attached = null;
+    const sync = () => {
+      const sock = getSocket();
+      if (sock === attached) return;
+      if (attached) attached.off(WsEvents.TASK_UPDATED, handler);
+      attached = sock;
+      if (attached) attached.on(WsEvents.TASK_UPDATED, handler);
+    };
+    sync();
+    const interval = setInterval(sync, 1000);
+    return () => {
+      clearInterval(interval);
+      if (attached) attached.off(WsEvents.TASK_UPDATED, handler);
+    };
   }, []);
 
   // Wrap onRefresh to also reload tasks.
   // When called with a newly created task, optimistically insert it into
   // state so it appears immediately — even if the DB write hasn't committed
   // by the time the subsequent loadTasks() query runs.
-  const refreshAll = useCallback((newTask) => {
+  const refreshAll = useCallback((newTask?: { id?: string }) => {
     if (newTask?.id) {
       setDbTasks(prev => {
         if (prev.some(t => t.id === newTask.id)) return prev;
@@ -624,22 +643,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
 
   const activeFilters = [agentFilter, repoFilter, search].filter(Boolean).length;
 
-  const [copiedBoardId, setCopiedBoardId] = useState(false);
-  const handleCopyBoardId = (e) => {
-    e.stopPropagation();
-    if (selectedBoard) {
-      navigator.clipboard.writeText(selectedBoard).then(() => {
-        setCopiedBoardId(true);
-        setTimeout(() => setCopiedBoardId(false), 2000);
-      });
-    }
-  };
-
   // ── Board management handlers ──
   const handleCreateBoard = useCallback(async () => {
     try {
       // New boards always start with a clean 3-column workflow
-      const board = await api.createBoard(`Board ${boards.length + 1}`);
+      const board = await api.createBoard(`Board ${boards.length + 1}`, undefined, undefined);
       setBoards(prev => [...prev, board]);
       setActiveBoardId(board.id);
     } catch (err) {
@@ -740,7 +748,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       transitions: [...workflow.transitions, newTransition],
       version: workflow.version,
     };
-    await handleSaveWorkflow(updated);
+    try {
+      await handleSaveWorkflow(updated);
+    } catch (err) {
+      console.error('[TasksBoard] Add column failed:', err.message);
+    }
   }, [workflow, activeBoardId, handleSaveWorkflow]);
 
   if (!boardsLoaded) {
@@ -1058,6 +1070,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           taskId={commitModalTask.id}
           commits={commitModalTask.commits}
           onClose={() => setCommitModalTask(null)}
+          initialHash={null}
           agentId={commitModalTask.agentId}
           project={commitModalTask.project}
         />

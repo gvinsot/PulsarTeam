@@ -21,6 +21,10 @@ const LANGUAGE_BY_EXTENSION = new Map([
 ]);
 
 const JS_LIKE_LANGUAGES = new Set(['javascript', 'typescript']);
+// Brace counting is fooled by comments/regex literals; without these caps a single
+// unbalanced symbol triggers a synchronous scan to EOF for every following symbol.
+const MAX_BLOCK_SCAN_LINES = 2000;
+const MAX_BLOCK_SCAN_CHARS = 200_000;
 const RESERVED_METHOD_NAMES = new Set([
   'if',
   'for',
@@ -170,8 +174,10 @@ function extractPythonDocstring(lines, startLine, endLine) {
 function findBlockEndJs(lines, startIndex) {
   let depth = 0;
   let hasOpened = false;
+  let scannedChars = 0;
+  const maxIndex = Math.min(lines.length, startIndex + MAX_BLOCK_SCAN_LINES);
 
-  for (let index = startIndex; index < lines.length; index += 1) {
+  for (let index = startIndex; index < maxIndex; index += 1) {
     const { open, close } = countBraces(lines[index]);
 
     if (open > 0) {
@@ -186,6 +192,9 @@ function findBlockEndJs(lines, startIndex) {
     if (hasOpened && depth <= 0) {
       return index + 1;
     }
+
+    scannedChars += lines[index].length;
+    if (scannedChars > MAX_BLOCK_SCAN_CHARS) break;
   }
 
   return Math.min(lines.length, startIndex + 1);

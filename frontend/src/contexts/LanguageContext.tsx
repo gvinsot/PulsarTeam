@@ -10,9 +10,18 @@ interface LanguageContextValue {
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
 
+// localStorage can throw (cookies blocked for the site, sandboxed webviews) —
+// this provider wraps the whole app, so degrade instead of crashing the tree.
+const safeGet = (key: string): string | null => {
+  try { return localStorage.getItem(key); } catch { return null; }
+};
+const safeSet = (key: string, value: string): void => {
+  try { localStorage.setItem(key, value); } catch { /* storage blocked */ }
+};
+
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>(() => {
-    const saved = localStorage.getItem('pulsar_lang');
+    const saved = safeGet('pulsar_lang');
     if (saved === 'fr' || saved === 'en') return saved;
     // Auto-detect from browser
     const browserLang = navigator.language?.toLowerCase() || '';
@@ -21,13 +30,13 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
-    localStorage.setItem('pulsar_lang', l);
+    safeSet('pulsar_lang', l);
   }, []);
 
   const toggleLang = useCallback(() => {
     setLangState(prev => {
       const next = prev === 'en' ? 'fr' : 'en';
-      localStorage.setItem('pulsar_lang', next);
+      safeSet('pulsar_lang', next);
       return next;
     });
   }, []);

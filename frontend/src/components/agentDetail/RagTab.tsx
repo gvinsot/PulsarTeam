@@ -28,8 +28,11 @@ export default function RagTab({ agent, onRefresh }) {
 
     const reader = new FileReader();
     reader.onload = (ev) => {
+      const text = ev.target.result;
+      // readAsText always yields a string; guard narrows the type.
+      if (typeof text !== 'string') return;
       setDocName(file.name);
-      setDocContent(ev.target.result);
+      setDocContent(text);
       setShowAdd(true);
     };
     reader.readAsText(file);

@@ -82,7 +82,7 @@ export function s3Routes() {
         scopeId: scope.scopeId,
         accessToken: accessKeyId,
         meta: { accessKeyId, secretAccessKey, region: awsRegion, ...(endpoint ? { endpoint } : {}) },
-      });
+      }, { throwOnPersistError: true });
 
       const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
       console.log(`✅ [S3] Credentials stored for ${target} → ${awsRegion} (${bucketCount} buckets)`);

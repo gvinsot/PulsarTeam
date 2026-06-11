@@ -4,7 +4,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import TaskCard from './TaskCard';
 
 export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onResume, onClearStopped, onDrop, onOpen, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits, columns, onBatchMove, onBatchDelete, canReorderColumns, draggingColumnId, onColumnDragStart, onColumnDragEnd, onColumnReorder, isFirstColumn, isLastColumn }) {
-  const { theme } = useTheme();
+  const { theme } = useTheme() as { theme?: string };
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
   const [hovered, setHovered] = useState(false);
@@ -97,7 +97,8 @@ export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onR
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
       onDragOver={handleColumnDragOver}
       onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget)) setColumnDropSide(null);
+        const related = e.relatedTarget instanceof Node ? e.relatedTarget : null;
+        if (!e.currentTarget.contains(related)) setColumnDropSide(null);
       }}
       onDrop={handleColumnDrop}
     >
@@ -219,7 +220,8 @@ export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onR
           setDropIndex(computeDropIndex(e));
         }}
         onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget)) {
+          const related = e.relatedTarget instanceof Node ? e.relatedTarget : null;
+          if (!e.currentTarget.contains(related)) {
             setDragOver(false);
             setDropIndex(-1);
           }

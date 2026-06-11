@@ -82,7 +82,9 @@ export class RateLimiter {
   }
 
   /**
-   * Process queued requests one at a time, respecting the rate limit.
+   * Dequeue requests respecting the rate limit. Only request *starts* are
+   * rate-limited — calls run concurrently so one slow request doesn't block
+   * the rest of the queue.
    */
   async _processQueue(): Promise<void> {
     if (this.processing) return;
@@ -107,8 +109,7 @@ export class RateLimiter {
         this._recordRequest();
 
         try {
-          const result = await item.execute();
-          item.resolve(result);
+          item.execute().then(item.resolve, item.reject);
         } catch (error) {
           item.reject(error);
         }

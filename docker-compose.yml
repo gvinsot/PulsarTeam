@@ -164,6 +164,7 @@ services:
       # all re-injected at spawn. A global (no-owner) token must come from the
       # CLAUDE_CODE_OAUTH_TOKEN env. Only the Android SDK cache is kept.
       - claudecode-android-cache:/opt/android-sdk
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -219,6 +220,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -276,6 +278,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -339,6 +342,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -402,6 +406,7 @@ services:
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -455,6 +460,7 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -507,6 +513,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - sandbox-data:/app/data
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -523,6 +530,14 @@ services:
       - sandbox-net
     depends_on:
       - api
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
@@ -551,6 +566,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - mock-data:/app/data
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -594,6 +610,14 @@ services:
     networks:
       - sandbox-net
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')"]
       interval: 30s
@@ -612,6 +636,7 @@ services:
       - LOG_LEVEL=info
       - FLARESOLVERR_URL=http://flaresolverr:8191/v1
       - MAX_SEARCH_RESULT=5
+    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -628,6 +653,14 @@ services:
       - backend
     depends_on:
       - flaresolverr
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s

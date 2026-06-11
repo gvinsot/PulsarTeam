@@ -1,5 +1,6 @@
 // ─── Conversation: history management, context switching, voice ───────────────
 import { saveAgent, clearTaskExecutionFlags } from '../database.js';
+import { getTaskSignal, setTaskSignal } from './tasks.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
@@ -19,9 +20,11 @@ export const conversationMethods = {
     for (const [ownerId] of this.agents) {
       for (const task of this._getAgentTasks(ownerId)) {
         if (task.assignee === agentId || ownerId === agentId) {
-          if (task._executionWatching) {
-            task._executionStopped = true;
-            delete task._executionWatching;
+          // Only signal tasks a live _waitForExecutionComplete loop is
+          // watching — an unconsumed 'stopped' signal would silently
+          // suppress the task loop's auto-resume.
+          if (getTaskSignal(task.id, 'watching')) {
+            setTaskSignal(task.id, 'stopped', true);
           }
           delete task.startedAt;
           delete task._completedActionIdx;

@@ -30,7 +30,11 @@ router.post("/:ownerId", async (req, res) => {
   const hasTokens = !!(authJson?.tokens?.access_token || authJson?.tokens?.id_token);
   const hasApiKey = typeof authJson?.OPENAI_API_KEY === "string" && authJson.OPENAI_API_KEY.length > 0;
   if (!hasTokens && !hasApiKey) return res.status(400).json({ error: "Invalid auth.json" });
-  await storeOAuthToken({ provider: PROVIDER, scopeType: SCOPE_TYPE, scopeId: ownerId, accessToken: JSON.stringify(authJson), expiresAt: null });
+  try {
+    await storeOAuthToken({ provider: PROVIDER, scopeType: SCOPE_TYPE, scopeId: ownerId, accessToken: JSON.stringify(authJson), expiresAt: null }, { throwOnPersistError: true });
+  } catch {
+    return res.status(500).json({ error: "failed to persist token" });
+  }
   res.json({ ok: true });
 });
 router.delete("/:ownerId", async (req, res) => {
