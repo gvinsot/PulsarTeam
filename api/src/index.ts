@@ -57,7 +57,8 @@ import { internalRunnerInstructionsRoutes } from './routes/internalRunnerInstruc
 import { internalTokenUsageRoutes } from './routes/internalTokenUsage.js';
 import { codexAuthRoutes } from './routes/codexAuth.js';
 import { swarmApiRoutes } from './routes/swarmApi.js';
-import { jiraRoutes } from './routes/jira.js';
+import { jiraRoutes, jiraWebhookRoute } from './routes/jira.js';
+import { startJiraSync, registerWebhook } from './services/jiraSync.js';
 import { createJiraMcpHandler } from './services/jiraMcp.js';
 import { wordpressRoutes } from './routes/wordpress.js';
 import { createWordPressMcpHandler } from './services/wordpressMcp.js';
@@ -190,6 +191,9 @@ app.use('/api/onedrive', microsoftOAuthRedirectRouter()); // legacy alias
 app.get('/gmail-callback.html', handleGoogleOAuthCallback);
 app.get('/gdrive-callback.html', handleGoogleOAuthCallback);
 app.get('/google-callback.html', handleGoogleOAuthCallback);
+
+// Jira webhook — public endpoint, secured by shared secret header
+app.use('/api/jira/webhook', jiraWebhookRoute(agentManager));
 
 app.use('/api/agents', authenticateToken, agentRoutes(agentManager));
 app.use('/api/templates', authenticateToken, templateRoutes());
@@ -355,6 +359,8 @@ setupSocketHandlers(io, agentManager);
 
 const PORT = process.env.PORT || 3001;
 
+let jiraSyncInterval: ReturnType<typeof setInterval> | null = null;
+
 async function start() {
   validateProductionSecrets();
   validateCorsConfig();
@@ -368,6 +374,8 @@ async function start() {
   await skillManager.seedDefaults(BUILTIN_SKILLS);
   await agentManager.loadFromDatabase();
   agentManager.startTaskLoop();
+  jiraSyncInterval = startJiraSync(agentManager, io, 60000); // sync every 60s
+  registerWebhook().catch(() => {}); // auto-register Jira webhook
 
   await executionManager.cleanupOrphans();
 
@@ -395,6 +403,10 @@ async function shutdown() {
   // Failsafe: exit before Docker's 10s stop-grace SIGKILL even if cleanup hangs.
   setTimeout(() => process.exit(1), 8_000).unref();
   agentManager.stopTaskLoop();
+  if (jiraSyncInterval) {
+    clearInterval(jiraSyncInterval);
+    jiraSyncInterval = null;
+  }
   // io.close() also closes the attached httpServer — stop accepting new work.
   io.close();
   try {

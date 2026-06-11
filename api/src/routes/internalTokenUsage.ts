@@ -33,6 +33,7 @@ export function internalTokenUsageRoutes(agentManager) {
       const provider = (body.provider || agent.provider || agent.runner || 'cli').toString();
       const model = (body.model || agent.model || 'unknown').toString();
       const userId = agent.ownerId || null;
+      const idempotencyKey = (body.idempotencyKey || body.idempotency_key || '').toString().trim() || null;
 
       const recorded = await recordTokenUsage(
         agent.id,
@@ -44,6 +45,7 @@ export function internalTokenUsageRoutes(agentManager) {
         Number.isFinite(costUsd) ? costUsd : 0,
         userId,
         contextTokens,
+        idempotencyKey,
       );
 
       // recordTokenUsage never throws; when a pool is configured but the

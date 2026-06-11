@@ -461,11 +461,15 @@ async function refineWithLlm(graph: CodeGraph, llmConfigId: string) {
     apiKey: cfg.apiKey,
   });
 
+  // Abort the underlying HTTP request on timeout — the withTimeout race below
+  // stays as a safety net for providers that ignore the signal.
+  const signal = AbortSignal.timeout(LLM_REFINE_TIMEOUT_MS);
+
   const resp = await withTimeout<any>(
     provider.chat([
       { role: 'system', content: sys },
       { role: 'user', content: user },
-    ], { maxTokens: 4000, temperature: cfg.temperature ?? 0.1 }),
+    ], { maxTokens: 4000, temperature: cfg.temperature ?? 0.1, signal }),
     LLM_REFINE_TIMEOUT_MS,
     'LLM graph refinement',
   );

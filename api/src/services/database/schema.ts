@@ -111,6 +111,7 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           input_tokens INTEGER DEFAULT 0,
           output_tokens INTEGER DEFAULT 0,
           cost REAL DEFAULT 0,
+          idempotency_key TEXT,
           recorded_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
@@ -118,6 +119,12 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage_log(recorded_at)').catch(() => {});
       // Add context_tokens column for tracking context window utilization
       await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS context_tokens INTEGER DEFAULT 0`).catch(() => {});
+      // Idempotency key for runner-reported usage so retried reports never
+      // double-count. Partial unique index keeps legacy NULL rows unaffected.
+      await pool.query(`ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT`)
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN token_usage_log.idempotency_key failed:', e.message));
+      await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_token_usage_idempotency ON token_usage_log(idempotency_key) WHERE idempotency_key IS NOT NULL')
+        .catch((e: any) => console.error('[initDatabase] CREATE UNIQUE INDEX uniq_token_usage_idempotency failed:', e.message));
       console.log('✅ Token usage table ready');
 
       // ── Settings table ────────────────────────────────────────────────────

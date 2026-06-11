@@ -363,7 +363,10 @@ export class ClaudeProvider {
     };
     if (systemMsg) params.system = systemMsg.content;
 
-    const response = await this.rateLimiter.schedule(() => this.client.messages.create(params));
+    const requestOpts: any = {};
+    if (options.signal) requestOpts.signal = options.signal;
+
+    const response = await this.rateLimiter.schedule(() => this.client.messages.create(params, requestOpts));
 
     return {
       content: response.content.map((c: any) => c.text).join(''),
@@ -537,7 +540,10 @@ export class OpenAIProvider {
       params.temperature = options.temperature;
     }
 
-    const response = await this.client.chat.completions.create(params);
+    const requestOpts: any = {};
+    if (options.signal) requestOpts.signal = options.signal;
+
+    const response = await this.client.chat.completions.create(params, requestOpts);
 
     return {
       content: response.choices[0]?.message?.content || '',
@@ -568,7 +574,10 @@ export class OpenAIProvider {
       if (options.temperature != null) params.temperature = options.temperature;
     }
 
-    const response = await (this.client as any).responses.create(params);
+    const requestOpts: any = {};
+    if (options.signal) requestOpts.signal = options.signal;
+
+    const response = await (this.client as any).responses.create(params, requestOpts);
 
     return {
       content: response.output_text || '',
@@ -589,12 +598,15 @@ export class OpenAIProvider {
       return `Assistant: ${m.content}`;
     }).join('\\n\\n') + '\\n\\nAssistant:';
 
+    const requestOpts: any = {};
+    if (options.signal) requestOpts.signal = options.signal;
+
     const response = await this.client.completions.create({
       model: this.model,
       prompt,
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
-    });
+    }, requestOpts);
 
     return {
       content: response.choices[0]?.text?.trim() || '',
@@ -855,6 +867,7 @@ export class VLLMProvider {
     };
 
     const requestOpts: any = {};
+    if (options.signal) requestOpts.signal = options.signal;
     if (options.taskId) requestOpts.headers = { 'X-Task-Id': options.taskId };
 
     const response = await this.client.chat.completions.create(params, requestOpts);
@@ -983,7 +996,10 @@ export class MistralProvider {
       max_tokens: options.maxTokens || 4096,
     };
 
-    const response = await this.client.chat.completions.create(params);
+    const requestOpts: any = {};
+    if (options.signal) requestOpts.signal = options.signal;
+
+    const response = await this.client.chat.completions.create(params, requestOpts);
 
     return {
       content: response.choices[0]?.message?.content || '',

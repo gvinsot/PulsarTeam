@@ -79,7 +79,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       }
     }
     loadBoards();
-    api.getJiraStatus().then(setJiraStatus).catch(() => {});
+    api.getJiraSyncStatus().then(setJiraStatus).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 

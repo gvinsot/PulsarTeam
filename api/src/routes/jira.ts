@@ -3,6 +3,7 @@ import {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
+import { getJiraColumns, getJiraSyncStatus, handleWebhook, verifyWebhook } from '../services/jiraSync.js';
 
 /**
  * Jira per-agent/board authentication routes — unified token store.
@@ -60,6 +61,21 @@ export function jiraRoutes() {
     });
   });
 
+  // GET /jira/columns — Jira board columns (for workflow config dropdowns)
+  router.get('/columns', async (req, res) => {
+    try {
+      const columns = await getJiraColumns();
+      res.json(columns);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /jira/sync-status — board-sync status for UI
+  router.get('/sync-status', async (req, res) => {
+    res.json(await getJiraSyncStatus());
+  });
+
   router.post('/connect', async (req, res) => {
     const { agentId, boardId, domain, email, apiToken } = req.body;
     if ((!agentId && !boardId) || !domain || !email || !apiToken) {
@@ -113,6 +129,33 @@ export function jiraRoutes() {
     const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
     console.log(`🔌 [Jira] Disconnected ${target}`);
     res.json({ success: true });
+  });
+
+  return router;
+}
+
+/**
+ * Jira webhook endpoint — mounted WITHOUT JWT auth (Jira can't authenticate).
+ * Secured via X-Jira-Webhook-Secret header.
+ */
+export function jiraWebhookRoute(agentManager) {
+  const router = express.Router();
+
+  router.post('/', async (req, res) => {
+    console.log(`[Jira] Webhook received: ${req.headers['content-type']} | event=${req.body?.webhookEvent || 'unknown'} | issue=${req.body?.issue?.key || 'none'} | auth-header=${req.headers['x-automation-webhook-token'] ? 'present' : 'missing'}`);
+
+    if (!verifyWebhook(req)) {
+      console.warn('[Jira] Webhook rejected: invalid or missing secret');
+      return res.status(401).json({ error: 'Invalid webhook secret' });
+    }
+
+    try {
+      await handleWebhook(req.body, agentManager);
+      res.status(200).json({ ok: true });
+    } catch (err) {
+      console.error('[Jira] Webhook handler error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return router;

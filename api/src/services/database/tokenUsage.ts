@@ -15,10 +15,21 @@ function parseNumericFields(row) {
 // Token summary cache (refreshed periodically)
 const _tokenSummaryCache = {};
 
-export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null, contextTokens = 0) {
+export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null, contextTokens = 0, idempotencyKey = null) {
   const pool = getPool();
   if (!pool) return false;
   try {
+    if (idempotencyKey) {
+      // Idempotent insert: retried reports with the same key hit the partial
+      // unique index and are skipped — already recorded counts as success.
+      await pool.query(
+        `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+        [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId, contextTokens || 0, idempotencyKey]
+      );
+      return true;
+    }
     await pool.query(
       `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,

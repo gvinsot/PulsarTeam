@@ -120,16 +120,9 @@ export default function WorkflowEditor({ workflow, agents, jiraStatus, onClose, 
   const jiraEnabled = jiraStatus?.enabled || false;
 
   // Fetch Jira columns for dropdowns.
-  // NOTE: `getJiraColumns` was removed from the API client when the Jira
-  // integration moved to per-agent MCP plugins (commit 96e4e33), so guard the
-  // call — invoking the missing method would throw a TypeError and crash the
-  // editor whenever Jira is reported enabled.
   useEffect(() => {
     if (!jiraEnabled) return;
-    const getJiraColumns = (api as Record<string, unknown>).getJiraColumns;
-    if (typeof getJiraColumns === 'function') {
-      Promise.resolve(getJiraColumns()).then(setJiraColumns).catch(() => {});
-    }
+    api.getJiraColumns().then(setJiraColumns).catch(() => {});
   }, [jiraEnabled]);
 
   const enabledAgents = (agents || []).filter(a => a.enabled !== false);

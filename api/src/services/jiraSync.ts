@@ -61,6 +61,7 @@ function authHeaders(cfg) {
 async function jiraFetch(cfg: any, path: string, options: Record<string, any> = {}) {
   const url = `${cfg.baseUrl}${path}`;
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(30_000),
     ...options,
     headers: {
       'Content-Type': 'application/json',
