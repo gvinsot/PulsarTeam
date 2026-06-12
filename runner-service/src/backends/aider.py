@@ -37,9 +37,8 @@ import os
 from typing import Optional
 
 from config import logger
-from agent_user import ensure_agent_user, _agent_users
-from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
-from .claude_token_store import get_subprocess_kwargs, run_blocking
+from agent_user import resolve_agent_home
+from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS, resolve_model_spec
 from .runner_instructions_config import configure_aider_instructions
 
 
@@ -70,23 +69,10 @@ for _p in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
 
 
 def _resolve_aider_model(llm_config: Optional[dict]) -> str:
-    """Compute the `--model` value aider should use.
-
-    Return the per-agent LLM config when set (formatted as the litellm
-    `<provider>/<model>` spec). An empty value deliberately leaves model
-    selection to aider's own default.
-    """
-    if llm_config:
-        model = (llm_config.get("model") or "").strip()
-        provider = (llm_config.get("provider") or "").lower().strip()
-        if model and "/" in model:
-            return model  # caller already provided a provider-prefixed spec
-        ns = _PROVIDER_TO_AIDER.get(provider, provider)
-        if model and ns:
-            return f"{ns}/{model}"
-        if model:
-            return model
-    return ""
+    """Compute the `--model` value aider should use (thin wrapper over the
+    shared resolver, using the litellm `<provider>/<model>` namespace; an
+    empty value deliberately leaves model selection to aider's own default)."""
+    return resolve_model_spec(llm_config, _PROVIDER_TO_AIDER)
 
 
 class AiderBackend(CliBackend):
@@ -105,8 +91,7 @@ class AiderBackend(CliBackend):
         exists, so it can be passed to aider via --read."""
         if not agent_id:
             return None
-        home_user = _agent_users.get(agent_id)
-        home_dir = (home_user or {}).get("home")
+        home_dir, _, _ = resolve_agent_home(None, agent_id)
         if not home_dir:
             return None
         path = os.path.join(home_dir, ".aider", "AGENTS.md")
@@ -139,28 +124,13 @@ class AiderBackend(CliBackend):
             )
         return args
 
-    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
-        """Spawn aider in its interactive TUI for the shared PTY."""
-        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        permissions = self._get_permissions(agent_id)
-        # Off-loop: the helpers below do blocking team-api fetches. Resolving
-        # the env first also warms the per-agent LLM config cache for
-        # _base_args below.
-        await run_blocking(self._configure_instructions, effective_user, agent_id)
-        env = await run_blocking(self._agent_env, effective_user, agent_id)
+    # ── Interactive terminal hooks (see CliBackend.prepare_interactive) ──
 
-        cmd = [self.cli_command] + self._base_args(agent_id, permissions)
-        model = _resolve_aider_model(self._get_llm_config(agent_id))
-        self._verify_model_config(agent_id, model=model, env=env)
+    def _interactive_cmd(self, agent_id, permissions):
+        return [self.cli_command] + self._base_args(agent_id, permissions)
 
-        kwargs = get_subprocess_kwargs(effective_user) or {}
-        return {
-            "cmd": cmd,
-            "cwd": self._resolve_cwd(agent_id),
-            "env": env,
-            "preexec_fn": kwargs.get("preexec_fn"),
-        }
+    def _cli_model(self, agent_id):
+        return _resolve_aider_model(self._get_llm_config(agent_id))
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
         self._configure_instructions(None, agent_id)

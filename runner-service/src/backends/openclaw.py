@@ -32,9 +32,8 @@ import os
 from typing import Optional
 
 from config import logger
-from agent_user import ensure_agent_user, _agent_users
-from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS
-from .claude_token_store import get_subprocess_kwargs, run_blocking
+from agent_user import resolve_agent_home
+from .cli_backend import CliBackend, OPENAI_COMPATIBLE_LOCAL_PROVIDERS, resolve_model_spec
 from .runner_mcp_config import configure_openclaw_mcp
 from .runner_instructions_config import configure_openclaw_instructions
 
@@ -45,32 +44,15 @@ _PULSAR_PERMISSIONS_SIDECAR = ".pulsar-managed-permissions.json"
 
 
 def _resolve_openclaw_model(llm_config: Optional[dict]) -> str:
-    """Compute the model id OpenClaw should run with.
-
-    Prefers the per-agent LLM config. An empty result leaves OpenClaw on its
-    own built-in default model.
-    """
-    if llm_config:
-        model = (llm_config.get("model") or "").strip()
-        if model:
-            return model
-    return ""
+    """Compute the model id OpenClaw should run with (thin wrapper over the
+    shared resolver; an empty result leaves OpenClaw on its own built-in
+    default model)."""
+    return resolve_model_spec(llm_config)
 
 
 def _dangerous_skip_permissions(permissions: Optional[dict]) -> bool:
     exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
     return bool(exec_perms.get("dangerousSkipPermissions", True))
-
-
-def _resolve_openclaw_home(agent_user: Optional[dict], agent_id: Optional[str]) -> tuple[Optional[str], Optional[int], Optional[int]]:
-    home_user = agent_user
-    if (not home_user or not home_user.get("home")) and agent_id:
-        home_user = _agent_users.get(agent_id)
-    if not home_user or not home_user.get("home"):
-        return None, None, None
-    uid = home_user.get("uid")
-    gid = home_user.get("gid", uid)
-    return home_user["home"], uid, gid
 
 
 def _read_json_file(path: str) -> dict:
@@ -124,7 +106,7 @@ def configure_openclaw_permissions(agent_user: Optional[dict], agent_id: Optiona
     requested exec mode plus host-local approvals defaults in
     ~/.openclaw/exec-approvals.json.
     """
-    home, uid, gid = _resolve_openclaw_home(agent_user, agent_id)
+    home, uid, gid = resolve_agent_home(agent_user, agent_id)
     if not home:
         logger.warning("[OpenClaw Permissions] no HOME for agent %s — skipping", (agent_id or "?")[:12])
         return
@@ -231,47 +213,34 @@ class OpenClawBackend(CliBackend):
             env.setdefault("OPENAI_MODEL", model)
         return env
 
-    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
-        """Spawn OpenClaw's TUI for the shared PTY."""
-        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        # Off-loop: both helpers do blocking team-api fetches.
-        await run_blocking(self._configure_mcp, effective_user, agent_id)
-        await run_blocking(self._configure_instructions, effective_user, agent_id)
+    # ── Interactive terminal hooks (see CliBackend.prepare_interactive) ──
+
+    def _post_configure_interactive(self, agent_user, effective_user, agent_id) -> None:
+        # Kept out of _configure_mcp on purpose: the headless paths apply the
+        # same policy from _build_command (with agent_user=None), so folding it
+        # into _configure_mcp would double-write with different user args.
         configure_openclaw_permissions(
             effective_user or agent_user,
             agent_id,
             self._get_permissions(agent_id),
         )
 
+    def _interactive_cmd(self, agent_id, permissions):
         cmd = [self.cli_command, "tui"]
         if OPENCLAW_LOCAL:
             cmd.append("--local")
         if OPENCLAW_AGENT and OPENCLAW_AGENT != "default":
             cmd += ["--session", f"agent:{OPENCLAW_AGENT}:main"]
+        return cmd
 
-        # Pass agent_id so the selected model's provider credentials + endpoint
-        # are injected (previously omitted, so local/custom models silently fell
-        # back to OpenClaw's built-in default with no auth/endpoint). The
-        # overridden `_agent_env` also layers the model env on top. Off-loop:
-        # _get_llm_config may fetch from team-api on a cache miss.
-        env = await run_blocking(self._agent_env, effective_user, agent_id)
-        model = _resolve_openclaw_model(self._get_llm_config(agent_id))
-        self._verify_model_config(agent_id, model=model, env=env)
-
-        kwargs = get_subprocess_kwargs(effective_user) or {}
-        return {
-            "cmd": cmd,
-            "cwd": self._resolve_cwd(agent_id),
-            "env": env,
-            "preexec_fn": kwargs.get("preexec_fn"),
-        }
+    def _cli_model(self, agent_id):
+        return _resolve_openclaw_model(self._get_llm_config(agent_id))
 
     def _agent_env(self, agent_user, agent_id=None) -> dict:
         # Layer the model env on top of the base provider/credential env so the
         # headless (`agent --message`) path also carries the selected model.
         env = super()._agent_env(agent_user, agent_id)
-        home, _, _ = _resolve_openclaw_home(agent_user, agent_id)
+        home, _, _ = resolve_agent_home(agent_user, agent_id)
         if home:
             env["HOME"] = home
         return self._model_env(agent_id, env)

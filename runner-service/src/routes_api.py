@@ -545,6 +545,67 @@ async def exec_shell(
 
 
 # =============================================================================
+# SSE chunk builders (shared by the three streaming generators below)
+# =============================================================================
+
+# Omit-sentinel for _usage_block: the chat endpoints ALWAYS include
+# runner_session_id (possibly null) while the completions endpoints never do,
+# so presence can't be keyed on None.
+_OMIT = object()
+
+
+def _sse(obj, ensure_ascii: bool = True) -> str:
+    """Serialize one SSE data frame. `ensure_ascii` mirrors each call site's
+    historical json.dumps flag (the wire bytes differ for non-ASCII text)."""
+    return f"data: {json.dumps(obj, ensure_ascii=ensure_ascii)}\n\n"
+
+
+def _chat_chunk(cid: str, created: int, model: str, delta: dict,
+                finish_reason: Optional[str] = None, usage: Optional[dict] = None) -> dict:
+    """One chat.completion.chunk. `usage` is only attached to the finish
+    chunk — intermediate chunks must not carry a usage key at all."""
+    chunk = {
+        "id": cid, "object": "chat.completion.chunk",
+        "created": created, "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+    if usage is not None:
+        chunk["usage"] = usage
+    return chunk
+
+
+def _completion_chunk(cid: str, created: int, model: str, text: str,
+                      finish_reason: Optional[str] = None, usage: Optional[dict] = None) -> dict:
+    """One legacy text_completion chunk (the /v1/completions wire shape)."""
+    chunk = {
+        "id": cid, "object": "text_completion",
+        "created": created, "model": model,
+        "choices": [{"index": 0, "text": text, "finish_reason": finish_reason}],
+    }
+    if usage is not None:
+        chunk["usage"] = usage
+    return chunk
+
+
+def _usage_block(input_tokens, output_tokens, total_tokens, cost_usd,
+                 runner_session_id=_OMIT) -> dict:
+    """Token-usage block with the shared `or`-fallback totals formula.
+
+    Callers pass raw values (possibly None — propagated unchanged, exactly
+    as the inline dicts did). Pass `runner_session_id` (even None) on the
+    chat paths; leave it unset on the completions paths to omit the key."""
+    usage = {
+        "prompt_tokens": input_tokens or total_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": total_tokens or (input_tokens + output_tokens),
+        "cost_usd": cost_usd,
+    }
+    if runner_session_id is not _OMIT:
+        usage["runner_session_id"] = runner_session_id
+    return usage
+
+
+# =============================================================================
 # Streaming
 # =============================================================================
 
@@ -573,29 +634,39 @@ async def stream_execution(
     system_prompt = _append_context_file_note(request.system_prompt, context_paths)
 
     async def event_generator():
+        # Custom {'status', 'output'} schema (not OpenAI chunks) — only the
+        # _sse framing helper applies here.
         try:
-            yield f"data: {json.dumps({'status': 'starting', 'message': f'{BACKEND.name} execution started'})}\n\n"
+            yield _sse({"status": "starting", "message": f"{BACKEND.name} execution started"})
 
             has_streamed_text = False
             async for event in BACKEND.stream_events(request.content, system_prompt, agent_id=x_agent_id, owner_id=x_owner_id):
                 event_type = event.get("type", "")
 
                 if event_type == "thinking":
-                    yield f"data: {json.dumps({'status': 'thinking', 'output': event['content']}, ensure_ascii=False)}\n\n"
+                    yield _sse({"status": "thinking", "output": event["content"]}, ensure_ascii=False)
                 elif event_type == "status":
-                    yield f"data: {json.dumps({'status': 'working', 'output': event['content']}, ensure_ascii=False)}\n\n"
+                    yield _sse({"status": "working", "output": event["content"]}, ensure_ascii=False)
                 elif event_type == "text":
-                    yield f"data: {json.dumps({'status': 'streaming', 'output': event['content']}, ensure_ascii=False)}\n\n"
+                    yield _sse({"status": "streaming", "output": event["content"]}, ensure_ascii=False)
                     has_streamed_text = True
                 elif event_type == "result":
                     output = "" if has_streamed_text else event["content"]
-                    yield f"data: {json.dumps({'status': 'success', 'output': output, 'cost_usd': event.get('cost_usd'), 'duration_ms': event.get('duration_ms'), 'total_tokens': event.get('total_tokens'), 'input_tokens': event.get('input_tokens'), 'output_tokens': event.get('output_tokens')}, ensure_ascii=False)}\n\n"
+                    yield _sse({
+                        "status": "success",
+                        "output": output,
+                        "cost_usd": event.get("cost_usd"),
+                        "duration_ms": event.get("duration_ms"),
+                        "total_tokens": event.get("total_tokens"),
+                        "input_tokens": event.get("input_tokens"),
+                        "output_tokens": event.get("output_tokens"),
+                    }, ensure_ascii=False)
                 elif event_type == "error":
-                    yield f"data: {json.dumps({'status': 'error', 'error': event['content']}, ensure_ascii=False)}\n\n"
+                    yield _sse({"status": "error", "error": event["content"]}, ensure_ascii=False)
 
             yield "data: [DONE]\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'status': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+            yield _sse({"status": "error", "error": str(e)}, ensure_ascii=False)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -664,7 +735,7 @@ async def openai_chat_completions(
         completion_id = f"chatcmpl-{uuid.uuid4().hex}"
         created = int(time.time())
 
-        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]})}\n\n"
+        yield _sse(_chat_chunk(completion_id, created, model, {"role": "assistant"}))
 
         has_streamed_text = False
         total_tokens = 0
@@ -688,16 +759,17 @@ async def openai_chat_completions(
                     continue
 
                 if event_type == "thinking":
-                    content = event["content"]
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'reasoning_content': content}, 'finish_reason': None}]})}\n\n"
+                    yield _sse(_chat_chunk(completion_id, created, model,
+                                           {"reasoning_content": event["content"]}))
                 elif event_type == "text":
-                    content = event["content"]
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
+                    yield _sse(_chat_chunk(completion_id, created, model,
+                                           {"content": event["content"]}))
                     has_streamed_text = True
                 elif event_type == "status":
                     status_text = event.get("content", "")
                     if status_text:
-                        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'reasoning_content': status_text + chr(10)}, 'finish_reason': None}]})}\n\n"
+                        yield _sse(_chat_chunk(completion_id, created, model,
+                                               {"reasoning_content": status_text + "\n"}))
                 elif event_type == "result":
                     cost_usd = event.get("cost_usd", 0) or 0
                     total_tokens = event.get("total_tokens", 0) or 0
@@ -707,15 +779,16 @@ async def openai_chat_completions(
                         content = event.get("content", "")
                         if content:
                             for piece in chunk_text(content):
-                                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]})}\n\n"
+                                yield _sse(_chat_chunk(completion_id, created, model,
+                                                       {"content": piece}))
                             has_streamed_text = True
                 elif event_type == "error":
-                    content = event.get("content", "")
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]})}\n\n"
+                    yield _sse(_chat_chunk(completion_id, created, model,
+                                           {"content": event.get("content", "")}))
         except BrokenPipeError as e:
             logger.error(f"{BACKEND.name} CLI subprocess failed: {e}")
             error_msg = f"Agent subprocess failed to start: {e}"
-            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]})}\n\n"
+            yield _sse(_chat_chunk(completion_id, created, model, {"content": error_msg}))
         except Exception as e:
             # Surface backend failures as a content delta and fall through to
             # the finish chunk + [DONE] so the consumer never sees a truncated
@@ -723,21 +796,14 @@ async def openai_chat_completions(
             # a BaseException and still propagates.
             logger.exception(f"{BACKEND.name} stream failed mid-response")
             error_msg = f"Agent stream failed: {type(e).__name__}: {e}"
-            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model, 'choices': [{'index': 0, 'delta': {'content': error_msg}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+            yield _sse(_chat_chunk(completion_id, created, model, {"content": error_msg}),
+                       ensure_ascii=False)
 
-        finish_chunk = {
-            "id": completion_id, "object": "chat.completion.chunk",
-            "created": created, "model": model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": input_tokens or total_tokens,
-                "completion_tokens": output_tokens_val,
-                "total_tokens": total_tokens or (input_tokens + output_tokens_val),
-                "cost_usd": cost_usd,
-                "runner_session_id": runner_session_id_used,
-            },
-        }
-        yield f"data: {json.dumps(finish_chunk)}\n\n"
+        yield _sse(_chat_chunk(
+            completion_id, created, model, {}, finish_reason="stop",
+            usage=_usage_block(input_tokens, output_tokens_val, total_tokens, cost_usd,
+                               runner_session_id=runner_session_id_used),
+        ))
         yield "data: [DONE]\n\n"
 
     if request.stream:
@@ -756,13 +822,13 @@ async def openai_chat_completions(
         "created": int(time.time()),
         "model": model,
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-        "usage": {
-            "prompt_tokens": result.get("input_tokens", 0) or result.get("total_tokens", 0),
-            "completion_tokens": result.get("output_tokens", 0),
-            "total_tokens": result.get("total_tokens", 0) or (result.get("input_tokens", 0) + result.get("output_tokens", 0)),
-            "cost_usd": result.get("cost_usd", 0),
-            "runner_session_id": result.get("session_id") or session_id_hint,
-        },
+        "usage": _usage_block(
+            result.get("input_tokens", 0),
+            result.get("output_tokens", 0),
+            result.get("total_tokens", 0),
+            result.get("cost_usd", 0),
+            runner_session_id=result.get("session_id") or session_id_hint,
+        ),
     }
 
 
@@ -807,9 +873,8 @@ async def openai_completions(
                 event_type = event.get("type", "")
 
                 if event_type == "text":
-                    content = event["content"]
-                    for piece in chunk_text(content):
-                        yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': piece, 'finish_reason': None}]})}\n\n"
+                    for piece in chunk_text(event["content"]):
+                        yield _sse(_completion_chunk(completion_id, created, model, piece))
                     has_streamed_text = True
                 elif event_type == "result":
                     cost_usd = event.get("cost_usd", 0) or 0
@@ -817,30 +882,22 @@ async def openai_completions(
                     input_tokens = event.get("input_tokens", 0) or 0
                     output_tokens_val = event.get("output_tokens", 0) or 0
                     if not has_streamed_text:
-                        content = event["content"]
-                        for piece in chunk_text(content):
-                            yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': piece, 'finish_reason': None}]})}\n\n"
+                        for piece in chunk_text(event["content"]):
+                            yield _sse(_completion_chunk(completion_id, created, model, piece))
                 elif event_type == "error":
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': event['content'], 'finish_reason': None}]})}\n\n"
+                    yield _sse(_completion_chunk(completion_id, created, model, event["content"]))
         except Exception as e:
             # Same contract as stream_openai_response: emit the failure as a
             # text chunk and still send the finish chunk + [DONE].
             logger.exception(f"{BACKEND.name} stream failed mid-response")
             error_msg = f"Agent stream failed: {type(e).__name__}: {e}"
-            yield f"data: {json.dumps({'id': completion_id, 'object': 'text_completion', 'created': created, 'model': model, 'choices': [{'index': 0, 'text': error_msg, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+            yield _sse(_completion_chunk(completion_id, created, model, error_msg),
+                       ensure_ascii=False)
 
-        finish_chunk = {
-            "id": completion_id, "object": "text_completion",
-            "created": created, "model": model,
-            "choices": [{"index": 0, "text": "", "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": input_tokens or total_tokens,
-                "completion_tokens": output_tokens_val,
-                "total_tokens": total_tokens or (input_tokens + output_tokens_val),
-                "cost_usd": cost_usd,
-            },
-        }
-        yield f"data: {json.dumps(finish_chunk)}\n\n"
+        yield _sse(_completion_chunk(
+            completion_id, created, model, "", finish_reason="stop",
+            usage=_usage_block(input_tokens, output_tokens_val, total_tokens, cost_usd),
+        ))
         yield "data: [DONE]\n\n"
 
     if request.stream:
@@ -855,10 +912,10 @@ async def openai_completions(
         "created": int(time.time()),
         "model": model,
         "choices": [{"index": 0, "text": content, "finish_reason": "stop"}],
-        "usage": {
-            "prompt_tokens": result.get("input_tokens", 0) or result.get("total_tokens", 0),
-            "completion_tokens": result.get("output_tokens", 0),
-            "total_tokens": result.get("total_tokens", 0) or (result.get("input_tokens", 0) + result.get("output_tokens", 0)),
-            "cost_usd": result.get("cost_usd", 0),
-        },
+        "usage": _usage_block(
+            result.get("input_tokens", 0),
+            result.get("output_tokens", 0),
+            result.get("total_tokens", 0),
+            result.get("cost_usd", 0),
+        ),
     }
