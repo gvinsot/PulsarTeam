@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
+  storeOAuthToken, getOAuthToken, deleteOAuthToken, resolveAccessToken,
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
 
@@ -14,16 +14,6 @@ function resolveScope(agentId, boardId): { scopeType: ScopeType; scopeId: string
   if (agentId) return { scopeType: 'agent', scopeId: agentId };
   if (boardId) return { scopeType: 'board', scopeId: boardId };
   return null;
-}
-
-export function hasJiraCredentialsForAgent(agentId: string): boolean {
-  if (!agentId) return false;
-  return hasOAuthToken('jira', 'agent', agentId);
-}
-
-export function hasJiraCredentialsForBoard(boardId: string): boolean {
-  if (!boardId) return false;
-  return hasOAuthToken('jira', 'board', boardId);
 }
 
 export function getJiraCredentialsForAgent(agentId: string | null, boardId: string | null = null) {

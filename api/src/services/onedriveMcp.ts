@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { getAccessTokenForAgent } from '../routes/onedrive.js';
+import { getOnedriveAccessTokenForAgent } from '../routes/onedrive.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const MAX_READ_BYTES = 5 * 1024 * 1024;
@@ -20,7 +20,7 @@ function encodePath(path) {
  * Uses agent-specific tokens when agentId is provided.
  */
 async function graphFetch(path: string, agentId: string | null = null, boardId: string | null = null, options: Record<string, any> = {}) {
-  const token = await getAccessTokenForAgent(agentId, boardId);
+  const token = await getOnedriveAccessTokenForAgent(agentId, boardId);
   const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
 
   const res = await fetch(url, {
@@ -270,7 +270,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       content: z.string().describe('Text content to write into the file'),
     },
     async ({ path, content }) => {
-      const token = await getAccessTokenForAgent(agentId, boardId);
+      const token = await getOnedriveAccessTokenForAgent(agentId, boardId);
 
       const url = `${GRAPH_BASE}/me/drive/root:/${encodePath(path)}:/content`;
       const res = await fetch(url, {
@@ -303,7 +303,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       path: z.string().describe('Path of the file or folder to delete'),
     },
     async ({ path }) => {
-      const token = await getAccessTokenForAgent(agentId, boardId);
+      const token = await getOnedriveAccessTokenForAgent(agentId, boardId);
 
       const url = `${GRAPH_BASE}/me/drive/root:/${encodePath(path)}`;
       const res = await fetch(url, {

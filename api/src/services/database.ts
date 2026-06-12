@@ -46,7 +46,7 @@ export {
 export {
   storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken,
   deleteOAuthTokensByScope, getOAuthTokensByScope, resolveAccessToken,
-  loadOAuthTokens, getOAuthTokenCache,
+  resolveOAuthTokenRecord, loadOAuthTokens, getOAuthTokenCache,
 } from './database/oauthTokens.js';
 export type { OAuthProvider, ScopeType, OAuthTokenRecord } from './database/oauthTokens.js';
 export {

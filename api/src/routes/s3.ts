@@ -1,7 +1,7 @@
 import express from 'express';
 import { S3Client, ListBucketsCommand } from '@aws-sdk/client-s3';
 import {
-  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken,
+  storeOAuthToken, getOAuthToken, deleteOAuthToken,
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
 
@@ -9,16 +9,6 @@ function resolveScope(agentId, boardId): { scopeType: ScopeType; scopeId: string
   if (agentId) return { scopeType: 'agent', scopeId: agentId };
   if (boardId) return { scopeType: 'board', scopeId: boardId };
   return null;
-}
-
-export function hasS3CredentialsForAgent(agentId: string): boolean {
-  if (!agentId) return false;
-  return hasOAuthToken('s3', 'agent', agentId);
-}
-
-export function hasS3CredentialsForBoard(boardId: string): boolean {
-  if (!boardId) return false;
-  return hasOAuthToken('s3', 'board', boardId);
 }
 
 export function getS3CredentialsForAgent(agentId: string | null, boardId: string | null = null) {
