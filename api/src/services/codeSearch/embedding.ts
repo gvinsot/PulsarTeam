@@ -13,7 +13,7 @@ export function normalizeText(value = '') {
     .trim();
 }
 
-export function tokenizeForEmbedding(value = '') {
+function tokenizeForEmbedding(value = '') {
   const normalized = normalizeText(value).slice(0, 8000);
   if (!normalized) return [];
 
@@ -57,7 +57,7 @@ function hashToken(token, dimension) {
   return { index, sign, weight };
 }
 
-export function normalizeVector(vector) {
+function normalizeVector(vector) {
   let norm = 0;
   for (const value of vector) {
     norm += value * value;

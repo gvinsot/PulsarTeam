@@ -101,14 +101,12 @@ export async function analyzeRepoCallGraph(opts: AnalyzeOptions): Promise<CodeGr
   // Map api-client method names → backend routes by name similarity.
   const linked = linkClientToRoute(apiClientCalls, routes);
 
-  const graph = buildGraph(direction, apiClientCalls, routes, linked);
-
-  graph.stats = {
+  const graph = buildGraph(direction, apiClientCalls, routes, linked, {
     filesScanned: uiContents.length + serviceContents.length,
     uiFiles: uiContents.length,
     serviceFiles: serviceContents.length,
     truncated,
-  };
+  });
 
   if (llmConfigId) {
     const refined = await refineWithLlm(graph, llmConfigId).catch(err => {
@@ -187,7 +185,7 @@ function extractApiClientCalls(uiFiles: { path: string; content: string }[]) {
   const fetchRe = /fetch\(\s*[`'"]([^`'"]+)[`'"]/g;
 
   for (const f of uiFiles) {
-    const feature = featureNameFromUiPath(f.path);
+    const feature = fileBaseName(f.path);
     const set = calls.get(feature) || new Set<string>();
 
     let m;
@@ -215,7 +213,7 @@ function extractRoutes(serviceFiles: { path: string; content: string }[]) {
   const fastapiRe = /@(?:app|router)\.(get|post|put|patch|delete)\s*\(\s*[`'"]([^`'"]+)[`'"]/g;
 
   for (const f of serviceFiles) {
-    const service = featureNameFromServicePath(f.path);
+    const service = fileBaseName(f.path);
     let m;
     while ((m = expressRe.exec(f.content))) {
       routes.push({ method: m[1].toUpperCase(), path: m[2], file: f.path, service });
@@ -262,12 +260,15 @@ function buildGraph(
   apiCalls: Map<string, Set<string>>,
   routes: ReturnType<typeof extractRoutes>,
   links: ReturnType<typeof linkClientToRoute>,
+  stats: CodeGraph['stats'],
 ): CodeGraph {
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
   const addNode = (id: string, label: string, layer: GraphNode['layer'], file?: string) => {
     if (!nodes.has(id)) nodes.set(id, { id, label, layer, file });
   };
+  const pushEdge = (a: string, b: string) =>
+    edges.push(direction === 'ui-to-service' ? { from: a, to: b } : { from: b, to: a });
 
   // UI features → api-client methods → routes
   for (const [feature, methods] of apiCalls) {
@@ -276,8 +277,7 @@ function buildGraph(
     for (const method of methods) {
       const apiId = `api:${method}`;
       addNode(apiId, method, 'api-client');
-      if (direction === 'ui-to-service') edges.push({ from: uiId, to: apiId });
-      else edges.push({ from: apiId, to: uiId });
+      pushEdge(uiId, apiId);
     }
   }
 
@@ -285,24 +285,21 @@ function buildGraph(
     const apiId = `api:${link.method}`;
     const routeId = `route:${link.route.method} ${link.route.path}`;
     addNode(routeId, `${link.route.method} ${link.route.path}`, 'route', link.route.file);
-    if (direction === 'ui-to-service') edges.push({ from: apiId, to: routeId });
-    else edges.push({ from: routeId, to: apiId });
+    pushEdge(apiId, routeId);
 
     const svcId = `svc:${link.route.service}`;
     addNode(svcId, link.route.service, 'service', link.route.file);
-    if (direction === 'ui-to-service') edges.push({ from: routeId, to: svcId });
-    else edges.push({ from: svcId, to: routeId });
+    pushEdge(routeId, svcId);
   }
 
-  // Routes that no client method linked to — still surface them in service-to-ui mode
+  // Routes that no client method linked to — surface them in both directions
   for (const r of routes) {
     const routeId = `route:${r.method} ${r.path}`;
     if (!nodes.has(routeId)) {
       addNode(routeId, `${r.method} ${r.path}`, 'route', r.file);
       const svcId = `svc:${r.service}`;
       addNode(svcId, r.service, 'service', r.file);
-      if (direction === 'ui-to-service') edges.push({ from: routeId, to: svcId });
-      else edges.push({ from: svcId, to: routeId });
+      pushEdge(routeId, svcId);
     }
   }
 
@@ -313,7 +310,7 @@ function buildGraph(
     nodes: nodeArr,
     edges: dedupedEdges,
     mermaid: toMermaid(direction, nodeArr, dedupedEdges),
-    stats: { filesScanned: 0, uiFiles: 0, serviceFiles: 0, truncated: false },
+    stats,
     llm: null,
   };
 }
@@ -332,6 +329,15 @@ function dedupEdges(edges: GraphEdge[]): GraphEdge[] {
 
 // ── Mermaid rendering ───────────────────────────────────────────────────────
 
+// Label, css class, and color per layer — declared in the fixed ui/api-client/route/service
+// order that the classDef/class sections emit regardless of direction.
+const LAYER_STYLE: Record<GraphNode['layer'], { label: string; cls: string; def: string }> = {
+  ui: { label: 'UI Features', cls: 'ui', def: 'fill:#7c3aed22,stroke:#7c3aed,color:#e9d5ff' },
+  'api-client': { label: 'API Client', cls: 'apiclient', def: 'fill:#0ea5e922,stroke:#0ea5e9,color:#bae6fd' },
+  route: { label: 'Backend Routes', cls: 'route', def: 'fill:#22c55e22,stroke:#22c55e,color:#bbf7d0' },
+  service: { label: 'Services', cls: 'service', def: 'fill:#f59e0b22,stroke:#f59e0b,color:#fde68a' },
+};
+
 function toMermaid(
   direction: 'ui-to-service' | 'service-to-ui',
   nodes: GraphNode[],
@@ -339,7 +345,7 @@ function toMermaid(
 ): string {
   const lines: string[] = ['flowchart LR'];
 
-  // Style per layer.
+  // Group nodes by layer once — drives both the subgraphs and the class assignments.
   const layers: Record<GraphNode['layer'], GraphNode[]> = {
     ui: [], 'api-client': [], route: [], service: [],
   };
@@ -352,7 +358,7 @@ function toMermaid(
 
   for (const layer of layerOrder) {
     if (layers[layer].length === 0) continue;
-    lines.push(`  subgraph ${safeId(layer)}["${layerLabel(layer)}"]`);
+    lines.push(`  subgraph ${safeId(layer)}["${LAYER_STYLE[layer].label}"]`);
     for (const n of layers[layer]) {
       lines.push(`    ${safeId(n.id)}["${escapeLabel(n.label)}"]`);
     }
@@ -364,23 +370,16 @@ function toMermaid(
   }
 
   // Color classes
-  lines.push('  classDef ui fill:#7c3aed22,stroke:#7c3aed,color:#e9d5ff;');
-  lines.push('  classDef apiclient fill:#0ea5e922,stroke:#0ea5e9,color:#bae6fd;');
-  lines.push('  classDef route fill:#22c55e22,stroke:#22c55e,color:#bbf7d0;');
-  lines.push('  classDef service fill:#f59e0b22,stroke:#f59e0b,color:#fde68a;');
-
-  const byLayer: Record<string, string[]> = { ui: [], 'api-client': [], route: [], service: [] };
-  for (const n of nodes) byLayer[n.layer].push(safeId(n.id));
-  if (byLayer.ui.length) lines.push(`  class ${byLayer.ui.join(',')} ui;`);
-  if (byLayer['api-client'].length) lines.push(`  class ${byLayer['api-client'].join(',')} apiclient;`);
-  if (byLayer.route.length) lines.push(`  class ${byLayer.route.join(',')} route;`);
-  if (byLayer.service.length) lines.push(`  class ${byLayer.service.join(',')} service;`);
+  for (const style of Object.values(LAYER_STYLE)) {
+    lines.push(`  classDef ${style.cls} ${style.def};`);
+  }
+  for (const [layer, style] of Object.entries(LAYER_STYLE)) {
+    if (layers[layer].length) {
+      lines.push(`  class ${layers[layer].map((n) => safeId(n.id)).join(',')} ${style.cls};`);
+    }
+  }
 
   return lines.join('\n');
-}
-
-function layerLabel(l: GraphNode['layer']): string {
-  return ({ ui: 'UI Features', 'api-client': 'API Client', route: 'Backend Routes', service: 'Services' } as const)[l];
 }
 
 function safeId(s: string): string {
@@ -413,14 +412,8 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return inter / (a.size + b.size - inter);
 }
 
-function featureNameFromUiPath(path: string): string {
-  // e.g. frontend/src/components/AgentDetail.tsx → AgentDetail
-  const base = path.split('/').pop() || path;
-  return base.replace(/\.(t|j)sx?$/, '');
-}
-
-function featureNameFromServicePath(path: string): string {
-  // e.g. api/src/routes/agents.ts → agents (or services/foo.ts → foo)
+function fileBaseName(path: string): string {
+  // e.g. frontend/src/components/AgentDetail.tsx → AgentDetail, api/src/routes/agents.ts → agents
   const base = path.split('/').pop() || path;
   return base.replace(/\.(t|j)sx?$|\.py$/, '');
 }
