@@ -5,7 +5,6 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
-import { safeGet } from '../lib/safeStorage';
 
 // How long the client waits for the server's ack before assuming the
 // REQ_CHAT message was lost (socket reconnecting, server crash, etc.).
@@ -163,12 +162,12 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
     }
   }, [agent?.status]);
 
-  const handleSend = async (msgOverride?: string) => {
+  const handleSend = async () => {
     const hasImages = pendingImages.length > 0;
-    if ((!(msgOverride ?? message).trim() && !hasImages) || sendingRef.current) return;
+    if ((!message.trim() && !hasImages) || sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
-    const msg = (msgOverride ?? message).trim() || (hasImages ? '(image)' : '');
+    const msg = message.trim() || (hasImages ? '(image)' : '');
     const imagesToSend = hasImages ? pendingImages.map(img => ({ data: img.data, mediaType: img.mediaType })) : null;
     const imagePreviewsForHistory = hasImages ? pendingImages.map(img => ({ data: img.data, mediaType: img.mediaType })) : undefined;
     setMessage('');
@@ -419,7 +418,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
           isCliRunner ? (
             // CLI runners (claudecode, codex, opencode, openclaw) drive a real
             // TUI in a shared PTY — bypassing the chat surface entirely.
-            <TerminalTab agent={agent} token={safeGet('token') || ''} />
+            <TerminalTab agent={agent} token={localStorage.getItem('token') || ''} />
           ) : agent.isVoice ? (
             agent.voiceMode === 'external'
               ? <ExternalVoiceChatTab agent={agent} />
