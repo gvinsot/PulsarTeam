@@ -5,16 +5,7 @@ import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 import PluginEditor from './PluginEditor';
-
-const categoryColors = {
-  coding: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-  devops: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-  writing: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-  security: 'bg-red-500/20 text-red-400 border-red-500/30',
-  analysis: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-  general: 'bg-dark-500/20 text-dark-300 border-dark-500/30',
-};
-const getCategoryClass = (cat) => categoryColors[cat] || categoryColors.general;
+import { getCategoryClass } from './plugins/pluginShared';
 
 const TABS = [
   { id: 'broadcast', label: 'Global', icon: Globe },

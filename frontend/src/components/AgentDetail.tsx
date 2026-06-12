@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
+import { useBoardRepos } from '../hooks/useBoardResources';
 
 // How long the client waits for the server's ack before assuming the
 // REQ_CHAT message was lost (socket reconnecting, server crash, etc.).
@@ -73,15 +74,7 @@ export default function AgentDetail({ agent, agents, projects, skills, thinking,
   // Repo list sourced from the agent's board GitHub plugin OAuth — same list
   // as CreateTaskModal uses, so the chat picker isn't artificially restricted
   // to repos already referenced by an existing task on the board.
-  const [boardRepos, setBoardRepos] = useState([]);
-  useEffect(() => {
-    if (!agent?.boardId) { setBoardRepos([]); return; }
-    let cancelled = false;
-    api.getBoardAvailableRepos(agent.boardId)
-      .then(repos => { if (!cancelled) setBoardRepos(Array.isArray(repos) ? repos : []); })
-      .catch(() => { if (!cancelled) setBoardRepos([]); });
-    return () => { cancelled = true; };
-  }, [agent?.boardId]);
+  const { repos: boardRepos } = useBoardRepos(agent?.boardId);
 
   // Merge the board's available repos with the global projects list as a
   // fallback. Always include the currently-selected project so the dropdown

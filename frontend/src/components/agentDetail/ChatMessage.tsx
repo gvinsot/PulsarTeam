@@ -8,6 +8,7 @@ import {
 const markdownRemarkPlugins = [remarkGfm];
 import { cleanToolSyntax } from './cleanToolSyntax';
 import ToolResultMessage from './ToolResultMessage';
+import { reconstructWrappedOAuthUrlsInText } from './claudeOAuthLinks';
 
 /**
  * Split text into interleaved text segments and @delegate() blocks.
@@ -107,50 +108,10 @@ function formatDuration(ms) {
   return `${minutes}m ${remSec}s`;
 }
 
-// Reconstruct Claude Code CLI OAuth URLs that get wrapped across multiple lines
-// in the terminal output. The CLI prints something like:
-//   https://claude.com/cai/oauth/authorize?code=
-//   abc123def
-//   ghi456jkl
-//
-// We join the URL prefix with the following non-empty trimmed lines until a
-// blank line is encountered, producing a single URL.
-function reconstructWrappedOAuthUrls(text) {
-  if (typeof text !== 'string') return text;
-  const marker = /https?:\/\/claude\.com\/cai\/oauth\/authorize\?code=\S*/g;
-  let result = '';
-  let lastIdx = 0;
-  let m;
-  while ((m = marker.exec(text)) !== null) {
-    result += text.slice(lastIdx, m.index);
-    let url = m[0];
-    let i = m.index + m[0].length;
-    // Continue consuming subsequent non-empty lines up to the next blank line.
-    // Claude Code may leave trailing spaces after `code=` or indent wrapped lines.
-    while (i < text.length) {
-      const leadingWhitespaceAndNewlineLength = text.slice(i).match(/^[^\S\n]*\n/)?.[0].length;
-      if (leadingWhitespaceAndNewlineLength === undefined) break;
-      const lineStart = i + leadingWhitespaceAndNewlineLength;
-      let j = lineStart;
-      while (j < text.length && text[j] !== '\n') j++;
-      const line = text.slice(lineStart, j);
-      const trimmed = line.trim();
-      if (trimmed === '') break;
-      url += trimmed;
-      i = j;
-    }
-    result += url;
-    lastIdx = i;
-    marker.lastIndex = i;
-  }
-  result += text.slice(lastIdx);
-  return result;
-}
-
 // Convert raw URLs to markdown links so ReactMarkdown renders them clickable
 function linkifyRawUrls(text) {
   if (typeof text !== 'string') return text;
-  const reconstructed = reconstructWrappedOAuthUrls(text);
+  const reconstructed = reconstructWrappedOAuthUrlsInText(text);
   return reconstructed.replace(/(https?:\/\/[^\s,)"']+)/g, (url) => `[${url}](${url})`);
 }
 
@@ -176,6 +137,23 @@ export function RichAssistantContent({ text }) {
   );
 }
 
+// "Restart from here" affordance shared by the three message branches.
+// Module scope (like DelegationCallBlock) to avoid per-render remounts; must
+// be rendered inside a `group relative` wrapper — the group-hover visibility
+// and absolute positioning depend on that ancestor.
+function TruncateButton({ isLast, onTruncate, index }) {
+  if (isLast || !onTruncate) return null;
+  return (
+    <button
+      onClick={() => onTruncate(index - 1)}
+      className="absolute -right-1 top-1 opacity-0 group-hover:opacity-100 p-1 bg-dark-700 hover:bg-red-500/20 text-dark-400 hover:text-red-400 rounded-md transition-all border border-dark-600 hover:border-red-500/30"
+      title="Restart from here"
+    >
+      <Scissors className="w-3 h-3" />
+    </button>
+  );
+}
+
 export default function ChatMessage({ message, index, isLast, onTruncate }) {
   const isUser = message.role === 'user';
   const isToolResult = message.type === 'tool-result';
@@ -192,15 +170,7 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
     return (
       <div className="group relative">
         <ToolResultMessage message={message} />
-        {!isLast && onTruncate && (
-          <button
-            onClick={() => onTruncate(index - 1)}
-            className="absolute -right-1 top-1 opacity-0 group-hover:opacity-100 p-1 bg-dark-700 hover:bg-red-500/20 text-dark-400 hover:text-red-400 rounded-md transition-all border border-dark-600 hover:border-red-500/30"
-            title="Restart from here"
-          >
-            <Scissors className="w-3 h-3" />
-          </button>
-        )}
+        <TruncateButton isLast={isLast} onTruncate={onTruncate} index={index} />
       </div>
     );
   }
@@ -229,15 +199,7 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
             </p>
           )}
         </div>
-        {!isLast && onTruncate && (
-          <button
-            onClick={() => onTruncate(index - 1)}
-            className="absolute -right-1 top-1 opacity-0 group-hover:opacity-100 p-1 bg-dark-700 hover:bg-red-500/20 text-dark-400 hover:text-red-400 rounded-md transition-all border border-dark-600 hover:border-red-500/30"
-            title="Restart from here"
-          >
-            <Scissors className="w-3 h-3" />
-          </button>
-        )}
+        <TruncateButton isLast={isLast} onTruncate={onTruncate} index={index} />
       </div>
     );
   }
@@ -309,15 +271,7 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
           </p>
         )}
       </div>
-      {!isLast && onTruncate && (
-        <button
-          onClick={() => onTruncate(index - 1)}
-          className="absolute -right-1 top-1 opacity-0 group-hover:opacity-100 p-1 bg-dark-700 hover:bg-red-500/20 text-dark-400 hover:text-red-400 rounded-md transition-all border border-dark-600 hover:border-red-500/30"
-          title="Restart from here"
-        >
-          <Scissors className="w-3 h-3" />
-        </button>
-      )}
+      <TruncateButton isLast={isLast} onTruncate={onTruncate} index={index} />
     </div>
   );
 }

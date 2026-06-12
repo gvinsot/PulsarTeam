@@ -321,10 +321,7 @@ export default function AllCommitsDiffModal({ taskId, commits, onClose, initialH
       const selected = commits.filter(c => selectedCommits.has(c.hash));
       const hashList = selected.map(c => `${c.hash.slice(0, 7)} (${c.message || 'no message'})`).join('\n- ');
       const taskText = `[REVERT] Revert the following commit${selected.length > 1 ? 's' : ''} using \`git revert --no-edit\`:\n- ${hashList}\n\nFull commit hashes: ${selected.map(c => c.hash).join(', ')}\n\nAfter reverting, push the changes to the remote repository.`;
-      // api.addTask declares status/boardId/repoFullName/recurrence/taskType/isManual as
-      // required params, but all are falsy-guarded in api.ts — passing undefined is
-      // runtime-identical to omitting them.
-      const result = await api.addTask(agentId, taskText, undefined, undefined, undefined, undefined, undefined, undefined);
+      const result = await api.addTask(agentId, taskText);
       setRevertSuccess({ taskId: result.id || result.taskId });
       setShowConfirm(false);
     } catch (err) {

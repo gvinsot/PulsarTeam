@@ -214,8 +214,19 @@ export const api = {
     post('/agents/broadcast/all', { message }, { long: true }),
 
   // Tasks
-  addTask: (agentId, text, status, boardId, repoFullName, recurrence, taskType, isManual, repoProvider = 'github', storagePath = null, storageProvider = 'onedrive') =>
-    post(`/agents/${agentId}/tasks`, {
+  addTask: (agentId, text, opts: {
+    status?: string;
+    boardId?: string;
+    repoFullName?: string;
+    repoProvider?: string;
+    recurrence?: any;
+    taskType?: string;
+    isManual?: boolean;
+    storagePath?: string | null;
+    storageProvider?: string;
+  } = {}) => {
+    const { status, boardId, repoFullName, recurrence, taskType, isManual, repoProvider = 'github', storagePath = null, storageProvider = 'onedrive' } = opts;
+    return post(`/agents/${agentId}/tasks`, {
       text,
       ...(status && { status }),
       ...(boardId && { boardId }),
@@ -224,7 +235,8 @@ export const api = {
       ...(recurrence && { recurrence }),
       ...(taskType && { taskType }),
       ...(isManual && { isManual }),
-    }),
+    });
+  },
 
   setTaskAssignee: (agentId, taskId, assigneeId) =>
     patch(`/agents/${agentId}/tasks/${taskId}/assignee`, { assigneeId }),

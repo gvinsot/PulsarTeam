@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 
-export default function TaskCard({ task, agents, onDelete, onStop, onResume, onClearStopped, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
+export default function TaskCard({ task, onDelete, onStop, onResume, onClearStopped, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
   const today = isToday(task.createdAt);

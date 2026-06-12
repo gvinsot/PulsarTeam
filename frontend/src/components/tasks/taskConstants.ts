@@ -93,6 +93,10 @@ export const TASK_TYPES = [
 
 export const TASK_TYPE_MAP = Object.fromEntries(TASK_TYPES.map(t => [t.value, t]));
 
+// ── Execution mode labels (history entries) ─────────────────────────────────
+
+export const MODE_LABELS: Record<string, string> = { execute: 'Execution', refine: 'Refine', decide: 'Decide', title: 'Title', set_type: 'Set Type' };
+
 // ── Recurrence periods ────────────────────────────────────────────────────────
 
 export const RECURRENCE_PERIODS = [
@@ -102,6 +106,27 @@ export const RECURRENCE_PERIODS = [
   { value: 'monthly', label: 'Every month',    minutes: 43200 },
   { value: 'custom',  label: 'Custom interval', minutes: null },
 ];
+
+// Recurrence payload sent to the API when recurrence is enabled. Call sites
+// keep their own disabled branch ({ enabled: false } on update vs undefined
+// on create) because the wire formats differ deliberately.
+export function buildRecurrence(period, customMinutes, retentionDays) {
+  return {
+    enabled: true,
+    period,
+    intervalMinutes: period === 'custom'
+      ? customMinutes
+      : RECURRENCE_PERIODS.find(p => p.value === period)?.minutes || 1440,
+    historyRetentionDays: retentionDays > 0 ? retentionDays : null,
+  };
+}
+
+// Display label for a stored recurrence (custom intervals are spelled out,
+// so the table's 'Custom interval' label is never shown).
+export function recurrenceLabel(rec) {
+  if (rec.period === 'custom') return `Every ${rec.intervalMinutes} min`;
+  return RECURRENCE_PERIODS.find(p => p.value === rec.period)?.label || rec.period;
+}
 
 // ── Priority definitions ──────────────────────────────────────────────────────
 
