@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { connectSocket, disconnectSocket, getSocket } from './socket';
+import { disconnectSocket, getSocket } from './socket';
 import { api } from './api';
 import { safeGet, safeSet, safeRemove } from './lib/safeStorage';
-import { WsEvents } from './socketEvents';
+import { useAgentsSocket } from './hooks/useAgentsSocket';
 import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
@@ -12,25 +12,37 @@ const TermsPage = lazy(() => import('./components/TermsPage'));
 const PrivacyPage = lazy(() => import('./components/PrivacyPage'));
 const WelcomeTutorialModal = lazy(() => import('./components/WelcomeTutorialModal'));
 
+// Normalizes the user object from any auth payload (verify, OAuth callback,
+// password login, impersonation) — the field names are identical across all
+// backend responses. Absent fields normalize to null.
+const toUser = (d) => ({
+  username: d.username,
+  role: d.role,
+  userId: d.userId,
+  displayName: d.displayName,
+  termsAcceptedAt: d.termsAcceptedAt || null,
+  tutorialCompletedAt: d.tutorialCompletedAt || null,
+  ...(d.impersonatedBy ? { impersonatedBy: d.impersonatedBy } : {}),
+});
+
+// OAuth callback routes → token-exchange endpoints. Adding a login provider
+// is a one-line entry here (plus its api wrapper).
+const OAUTH_CALLBACKS = {
+  '/auth/google/callback': api.googleCallback,
+  '/auth/microsoft/callback': api.microsoftCallback,
+  '/auth/github/callback': api.githubAuthCallback,
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dbUnavailable, setDbUnavailable] = useState(false);
-  const [agents, setAgents] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [projects, setProjects] = useState([]);
   const [skills, setSkills] = useState([]);
   const [mcpServers, setMcpServers] = useState([]);
-  const [thinkingMap, setThinkingMap] = useState({});
-  const [streamBuffers, setStreamBuffers] = useState({});
-  const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
-  // Agents currently streaming on the server (from STREAM_START/STREAM_RESUME).
-  // Used as the source of truth for whether to keep a streamBuffer alive,
-  // so we don't race against agent.status updates arriving out of order.
-  const activeStreamAgents = useRef(new Set());
-  const lastAgentJson = useRef(new Map());    // Dedup: last JSON per agentId
   const [toasts, setToasts] = useState([]);
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
 
   const showToast = useCallback((message, type = 'error', duration = 5000) => {
     const id = Date.now() + Math.random();
@@ -54,6 +66,14 @@ export default function App() {
   const dismissToast = useCallback((id) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
+
+  // Use a ref to hold showToast so socket handlers always call the latest version
+  const showToastRef = useRef(showToast);
+  useEffect(() => { showToastRef.current = showToast; }, [showToast]);
+
+  // Agents list + thinking/stream-buffer state and the whole agents/stream
+  // socket protocol live in the hook; App only triggers initSocket/teardown.
+  const { agents, setAgents, thinkingMap, streamBuffers, initSocket, teardown } = useAgentsSocket(showToastRef);
 
   const loadedRef = useRef({ templates: false, projects: false, skills: false, mcpServers: false });
 
@@ -153,210 +173,6 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [loadData, user]);
 
-  // Safety: clear stale thinking state for agents that are no longer busy.
-  // Handles edge cases where socket events (STREAM_END) were lost due to
-  // reconnection.
-  //
-  // IMPORTANT: streamBuffers is NOT cleared based on agent.status here.
-  // STREAM_START arrives BEFORE the agent:status='busy' event in many flows,
-  // and any stale `agent:updated` (with status='idle') that fires between
-  // them would prematurely wipe the buffer — that's the bug that caused
-  // "I need to refresh to see the stream". streamBuffers is now owned
-  // exclusively by the STREAM_* handlers below.
-  useEffect(() => {
-    const busyIds = new Set(agents.filter(a => a.status === 'busy').map(a => a.id));
-    setThinkingMap(prev => {
-      let changed = false;
-      const copy = { ...prev };
-      for (const agentId of Object.keys(copy)) {
-        if (!busyIds.has(agentId)) {
-          delete copy[agentId];
-          changed = true;
-        }
-      }
-      return changed ? copy : prev;
-    });
-  }, [agents]);
-
-  // Use a ref to hold showToast so socket handlers always call the latest version
-  const showToastRef = useRef(showToast);
-  useEffect(() => { showToastRef.current = showToast; }, [showToast]);
-
-  const SOCKET_EVENTS = [
-    WsEvents.AGENTS_LIST, WsEvents.AGENT_CREATED, WsEvents.AGENT_UPDATED, WsEvents.AGENT_DELETED,
-    WsEvents.AGENT_STATUS, WsEvents.AGENT_THINKING, WsEvents.STREAM_START, WsEvents.STREAM_CHUNK,
-    WsEvents.STREAM_END, WsEvents.STREAM_ERROR, WsEvents.STREAM_RESUME,
-    WsEvents.AGENT_ERROR_REPORT, WsEvents.AGENT_HANDOFF
-  ];
-
-  const initSocket = useCallback((token) => {
-    const sock = connectSocket(token);
-
-    // Remove any previously registered listeners to prevent duplicates
-    SOCKET_EVENTS.forEach(ev => sock.off(ev));
-
-    sock.on(WsEvents.AGENTS_LIST, (list) => setAgents(list));
-    sock.on(WsEvents.AGENT_CREATED, (agent) => setAgents(prev =>
-      prev.some(a => a.id === agent.id) ? prev.map(a => a.id === agent.id ? agent : a) : [...prev, agent]
-    ));
-    sock.on(WsEvents.AGENT_UPDATED, (agent) => {
-      // Dedup: skip if the payload is identical to the last one for this agent
-      const json = JSON.stringify(agent);
-      if (lastAgentJson.current.get(agent.id) === json) return;
-      lastAgentJson.current.set(agent.id, json);
-
-      setAgents(prev => prev.map(a => a.id === agent.id ? agent : a));
-      // Safety net: clear thinking when agent data shows it's no longer busy.
-      // This handles cases where agent:stream:end was missed (other clients,
-      // workflow-triggered executions, socket reconnections).
-      if (agent.status !== 'busy') {
-        setThinkingMap(prev => {
-          if (!(agent.id in prev)) return prev;
-          const copy = { ...prev };
-          delete copy[agent.id];
-          return copy;
-        });
-      }
-      // When an agent's stream just ended, clear its buffer atomically
-      // with the history update so the message never disappears.
-      if (streamEndedAgents.current.has(agent.id)) {
-        streamEndedAgents.current.delete(agent.id);
-        setStreamBuffers(prev => {
-          const copy = { ...prev };
-          delete copy[agent.id];
-          return copy;
-        });
-      }
-    });
-    sock.on(WsEvents.AGENT_DELETED, ({ id }) => setAgents(prev => prev.filter(a => a.id !== id)));
-    sock.on(WsEvents.AGENT_STATUS, ({ id, status }) => {
-      setAgents(prev => prev.map(a => a.id === id ? { ...a, status } : a));
-      // When agent goes idle or error, clear stale thinking state so the
-      // card doesn't keep showing "busy" after the agent has finished.
-      if (status !== 'busy') {
-        setThinkingMap(prev => {
-          if (!(id in prev)) return prev;
-          const copy = { ...prev };
-          delete copy[id];
-          return copy;
-        });
-      }
-    });
-
-    sock.on(WsEvents.AGENT_THINKING, ({ agentId, thinking }) => {
-      if (!thinking) {
-        setThinkingMap(prev => {
-          if (!(agentId in prev)) return prev;
-          const copy = { ...prev };
-          delete copy[agentId];
-          return copy;
-        });
-      } else {
-        setThinkingMap(prev => ({ ...prev, [agentId]: thinking }));
-      }
-    });
-
-    sock.on(WsEvents.STREAM_START, ({ agentId }) => {
-      activeStreamAgents.current.add(agentId);
-      setStreamBuffers(prev => ({ ...prev, [agentId]: '' }));
-    });
-
-    sock.on(WsEvents.STREAM_CHUNK, ({ agentId, chunk }) => {
-      activeStreamAgents.current.add(agentId);
-      setStreamBuffers(prev => ({
-        ...prev,
-        [agentId]: (prev[agentId] || '') + chunk
-      }));
-    });
-
-    // STREAM_RESUME is the server's response to REQ_STREAM_STATE on
-    // (re)connect. It carries the FULL list of active streams (possibly
-    // empty). We seed buffers for the active ones AND evict any local
-    // buffers whose agent isn't streaming anymore — that covers the case
-    // where the server crashed before sending STREAM_END.
-    sock.on(WsEvents.STREAM_RESUME, ({ streams }) => {
-      const list = Array.isArray(streams) ? streams : [];
-      const activeIds = new Set(list.map((s: any) => s.agentId));
-      activeStreamAgents.current = activeIds;
-      setStreamBuffers(prev => {
-        const next: Record<string, string> = {};
-        for (const s of list) next[s.agentId] = s.buffer || '';
-        // Drop any local buffer for an agent that's no longer active server-side.
-        for (const id of Object.keys(prev)) {
-          if (!activeIds.has(id) && !(id in next)) {
-            // intentionally omit — buffer gets evicted
-          }
-        }
-        return next;
-      });
-    });
-
-    sock.on(WsEvents.STREAM_END, ({ agentId }) => {
-      activeStreamAgents.current.delete(agentId);
-      setThinkingMap(prev => {
-        const copy = { ...prev };
-        delete copy[agentId];
-        return copy;
-      });
-      // Don't clear streamBuffer here — mark the agent so that the next
-      // agent:updated event clears it atomically with the history update.
-      // This prevents the flash where the message disappears then reappears.
-      streamEndedAgents.current.add(agentId);
-      // Safety net: if agent:updated doesn't arrive within 3s, clear anyway
-      setTimeout(() => {
-        if (streamEndedAgents.current.has(agentId)) {
-          streamEndedAgents.current.delete(agentId);
-          setStreamBuffers(prev => {
-            const copy = { ...prev };
-            delete copy[agentId];
-            return copy;
-          });
-        }
-      }, 3000);
-    });
-
-    sock.on(WsEvents.STREAM_ERROR, ({ agentId, error }) => {
-      console.error(`Stream error for ${agentId}:`, error);
-      activeStreamAgents.current.delete(agentId);
-      const errorLower = (error || '').toLowerCase();
-      const isModelError = [
-        'context length', 'context_length', 'num_ctx', 'context window',
-        'too long', 'maximum context', 'exceeds', 'out of memory', 'oom',
-        'kv cache', 'model error', 'ollama error'
-      ].some(kw => errorLower.includes(kw));
-      showToastRef.current(
-        error || 'An error occurred while streaming response',
-        'error',
-        isModelError ? 0 : 8000
-      );
-      setThinkingMap(prev => {
-        if (!(agentId in prev)) return prev;
-        const copy = { ...prev };
-        delete copy[agentId];
-        return copy;
-      });
-      setStreamBuffers(prev => {
-        const copy = { ...prev };
-        delete copy[agentId];
-        return copy;
-      });
-    });
-
-    // REQ_STREAM_STATE on (re)connect is wired in socket.ts so it runs once
-    // per socket instance — see connectSocket().
-
-    sock.on(WsEvents.AGENT_ERROR_REPORT, ({ agentName, description, isSystemError }) => {
-      const prefix = isSystemError ? '⚙️' : '🚨';
-      showToastRef.current(`${prefix} ${agentName}: ${description.slice(0, 200)}`, 'error', 12000);
-    });
-
-    sock.on(WsEvents.AGENT_HANDOFF, (data) => {
-      console.log('Handoff:', data);
-    });
-
-    return sock;
-  }, []); // No deps — uses refs for callbacks, setState is stable
-
   useEffect(() => {
     let cancelled = false;
     const token = safeGet('token');
@@ -364,16 +180,10 @@ export default function App() {
       api.verify()
         .then(async (data) => {
           if (cancelled) return;
-          const u = data.user;
-          setUser({
-            username: u.username,
-            role: u.role,
-            userId: u.userId,
-            displayName: u.displayName,
-            termsAcceptedAt: u.termsAcceptedAt || null,
-            tutorialCompletedAt: u.tutorialCompletedAt || null,
-            ...(u.impersonatedBy ? { impersonatedBy: u.impersonatedBy } : {}),
-          });
+          // Not completeLogin: this path needs the `cancelled` guard between
+          // loadData and initSocket (StrictMode/unmount), and must not
+          // rewrite the token it just verified.
+          setUser(toUser(data.user));
           await loadData();
           if (cancelled) return;
           initSocket(token);
@@ -395,10 +205,9 @@ export default function App() {
     return () => {
       cancelled = true;
       // Cleanup: remove all socket listeners when effect re-runs
-      const sock = getSocket();
-      if (sock) SOCKET_EVENTS.forEach(ev => sock.off(ev));
+      teardown();
     };
-  }, [initSocket, loadData]);
+  }, [initSocket, loadData, teardown]);
 
   const checkDbHealth = useCallback(async () => {
     try {
@@ -409,76 +218,46 @@ export default function App() {
     }
   }, []);
 
-  // Handle OAuth callback URLs (Google + Microsoft)
+  // Shared post-login sequence (OAuth callback + password login).
+  // `awaitHealth` reproduces the OAuth path's behavior of resolving only
+  // after the DB health probe returns; password login fires it and resolves.
+  const completeLogin = async (token, userData, { awaitHealth = false } = {}) => {
+    safeSet('token', token);
+    setUser(toUser(userData));
+    await loadData();
+    initSocket(token);
+    const health = checkDbHealth();
+    if (awaitHealth) await health;
+  };
+
+  // Handle OAuth callback URLs (Google / Microsoft / GitHub)
   useEffect(() => {
     const path = window.location.pathname;
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
-    if (!code) return;
+    const exchange = OAUTH_CALLBACKS[path];
+    if (!code || !exchange) return;
 
-    let apiCall: Promise<any> | null = null;
+    setOauthLoading(true);
+    const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}${path}`;
+    sessionStorage.removeItem('oauth_redirect_uri');
+    window.history.replaceState({}, '', '/');
 
-    if (path === '/auth/google/callback') {
-      setGoogleLoading(true);
-      const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}/auth/google/callback`;
-      sessionStorage.removeItem('oauth_redirect_uri');
-      window.history.replaceState({}, '', '/');
-      apiCall = api.googleCallback(code, redirectUri);
-    } else if (path === '/auth/microsoft/callback') {
-      setGoogleLoading(true);
-      const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}/auth/microsoft/callback`;
-      sessionStorage.removeItem('oauth_redirect_uri');
-      window.history.replaceState({}, '', '/');
-      apiCall = api.microsoftCallback(code, redirectUri);
-    } else if (path === '/auth/github/callback') {
-      setGoogleLoading(true);
-      const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}/auth/github/callback`;
-      sessionStorage.removeItem('oauth_redirect_uri');
-      window.history.replaceState({}, '', '/');
-      apiCall = api.githubAuthCallback(code, redirectUri);
-    }
-
-    if (apiCall) {
-      apiCall
-        .then(async (data) => {
-          safeSet('token', data.token);
-          setUser({
-            username: data.username,
-            role: data.role,
-            userId: data.userId,
-            displayName: data.displayName,
-            termsAcceptedAt: data.termsAcceptedAt || null,
-            tutorialCompletedAt: data.tutorialCompletedAt || null,
-          });
-          await loadData();
-          initSocket(data.token);
-          await checkDbHealth();
-        })
-        .catch((err) => {
-          console.error('OAuth login failed:', err);
-          showToast(err.message || 'Login failed', 'error');
-        })
-        .finally(() => {
-          setGoogleLoading(false);
-          setLoading(false);
-        });
-    }
+    exchange(code, redirectUri)
+      .then((data) => completeLogin(data.token, data, { awaitHealth: true }))
+      .catch((err) => {
+        console.error('OAuth login failed:', err);
+        showToast(err.message || 'Login failed', 'error');
+      })
+      .finally(() => {
+        setOauthLoading(false);
+        setLoading(false);
+      });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLogin = async (username, password) => {
     const data = await api.login(username, password);
-    safeSet('token', data.token);
-    setUser({
-      username: data.username,
-      role: data.role,
-      userId: data.userId,
-      displayName: data.displayName,
-      termsAcceptedAt: data.termsAcceptedAt || null,
-      tutorialCompletedAt: data.tutorialCompletedAt || null,
-    });
-    await loadData();
-    initSocket(data.token);
-    checkDbHealth();
+    await completeLogin(data.token, data);
   };
 
   const handleLogout = () => {
@@ -511,17 +290,12 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleImpersonate = (data) => {
-    // Save original token so we can return
+    // Save original token so we can return. Not completeLogin: impersonation
+    // recycles the socket, skips the DB health probe and doesn't await loadData.
     const currentToken = safeGet('token');
     safeSet('originalToken', currentToken);
     safeSet('token', data.token);
-    setUser({
-      username: data.username,
-      role: data.role,
-      userId: data.userId,
-      displayName: data.displayName,
-      impersonatedBy: data.impersonatedBy,
-    });
+    setUser(toUser(data));
     disconnectSocket();
     initSocket(data.token);
     loadData();
@@ -589,7 +363,7 @@ export default function App() {
   if (!user) {
     return (
       <>
-        <Suspense fallback={null}><LoginPage onLogin={handleLogin} googleLoading={googleLoading} /></Suspense>
+        <Suspense fallback={null}><LoginPage onLogin={handleLogin} oauthLoading={oauthLoading} /></Suspense>
         {toastContainer}
       </>
     );

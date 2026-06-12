@@ -1,3 +1,5 @@
+import { safeGet } from './lib/safeStorage';
+
 const API_BASE = '/api';
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -12,8 +14,7 @@ function apiFetch(url, opts = {}) {
 }
 
 function getHeaders() {
-  let token = null;
-  try { token = localStorage.getItem('token'); } catch { /* storage blocked */ }
+  const token = safeGet('token');
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {})
@@ -35,6 +36,84 @@ async function handleResponse(res) {
   return data;
 }
 
+// Verb helpers — every endpoint below reads as method + path (+ payload).
+// `long: true` swaps in the LONG_TIMEOUT_MS signal for LLM/Docker-bound calls;
+// `auth: false` marks a public endpoint (bare Content-Type, no Authorization).
+type RequestOpts = { long?: boolean; auth?: boolean };
+
+const request = (method: string) => (path: string, body?: unknown, opts: RequestOpts = {}) =>
+  apiFetch(`${API_BASE}${path}`, {
+    method,
+    headers: opts.auth === false ? { 'Content-Type': 'application/json' } : getHeaders(),
+    ...(body !== undefined && { body: JSON.stringify(body) }),
+    ...(opts.long && { signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
+  }).then(handleResponse);
+
+// For GETs `auth: false` sends no headers at all — the public
+// /auth/{provider}/status|url routes must stay header-free.
+const get = (path: string, opts: { auth?: boolean } = {}) =>
+  apiFetch(`${API_BASE}${path}`, opts.auth === false ? {} : { headers: getHeaders() }).then(handleResponse);
+
+const post = request('POST');
+const put = request('PUT');
+const patch = request('PATCH');
+const del = request('DELETE');
+
+// PATCH /agents/:agentId/tasks/:taskId — shared by the agent-scoped task
+// updaters below. Distinct from the standalone board-level `updateTask`
+// export, which PUTs /tasks/:taskId.
+const patchAgentTask = (agentId, taskId, fields) =>
+  patch(`/agents/${agentId}/tasks/${taskId}`, fields);
+
+// Shared agentId/boardId querystring + body builders for the per-agent /
+// per-board integration endpoints.
+const abQuery = (agentId?: string, boardId?: string) => {
+  const params = new URLSearchParams();
+  if (agentId) params.set('agentId', agentId);
+  if (boardId) params.set('boardId', boardId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+};
+
+const abBody = (agentId?: string, boardId?: string) =>
+  ({ ...(agentId && { agentId }), ...(boardId && { boardId }) });
+
+// status + disconnect pair common to every integration provider; connect
+// shapes differ per provider (Jira/WordPress/S3) and stay bespoke.
+const integration = (base: string) => ({
+  status: (agentId?: string, boardId?: string) => get(`/${base}/status${abQuery(agentId, boardId)}`),
+  disconnect: (agentId?: string, boardId?: string) => post(`/${base}/disconnect`, abBody(agentId, boardId)),
+});
+
+// OAuth-based integrations additionally expose an auth-url endpoint.
+const oauthIntegration = (base: string) => ({
+  ...integration(base),
+  authUrl: (agentId?: string, boardId?: string) => get(`/${base}/auth-url${abQuery(agentId, boardId)}`),
+});
+
+// Login OAuth (sign-in providers) — public routes: status/url send no
+// headers at all, callback sends only Content-Type (no Authorization).
+const loginProvider = (base: string) => ({
+  status: () => get(`/auth/${base}/status`, { auth: false }),
+  url: (redirectUri) => get(`/auth/${base}/url?redirect_uri=${encodeURIComponent(redirectUri)}`, { auth: false }),
+  callback: (code, redirectUri) => post(`/auth/${base}/callback`, { code, redirect_uri: redirectUri }, { auth: false }),
+});
+
+const googleLogin = loginProvider('google');
+const microsoftLogin = loginProvider('microsoft');
+const githubLogin = loginProvider('github');
+
+// OneDrive keeps a custom authUrl for its `consumer` flag.
+const onedrive = integration('onedrive');
+const gmail = oauthIntegration('gmail');
+const outlook = oauthIntegration('outlook');
+const gdrive = oauthIntegration('gdrive');
+const slack = oauthIntegration('slack');
+const github = oauthIntegration('github');
+const jira = integration('jira');
+const wordpress = integration('wordpress');
+const s3 = integration('s3');
+
 export const api = {
   // Health
   getHealth: () =>
@@ -42,456 +121,177 @@ export const api = {
 
   // Auth
   login: (username, password) =>
-    apiFetch(`${API_BASE}/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    }).then(handleResponse),
+    post('/auth/login', { username, password }, { auth: false }),
 
   verify: () =>
-    apiFetch(`${API_BASE}/auth/verify`, { headers: getHeaders() }).then(handleResponse),
+    get('/auth/verify'),
 
   acceptTerms: () =>
-    apiFetch(`${API_BASE}/auth/accept-terms`, { method: 'POST', headers: getHeaders() }).then(handleResponse),
+    post('/auth/accept-terms'),
 
   completeTutorial: () =>
-    apiFetch(`${API_BASE}/auth/complete-tutorial`, { method: 'POST', headers: getHeaders() }).then(handleResponse),
+    post('/auth/complete-tutorial'),
 
   // Google OAuth
-  googleStatus: () =>
-    apiFetch(`${API_BASE}/auth/google/status`).then(handleResponse),
-
-  googleAuthUrl: (redirectUri) =>
-    apiFetch(`${API_BASE}/auth/google/url?redirect_uri=${encodeURIComponent(redirectUri)}`).then(handleResponse),
-
-  googleCallback: (code, redirectUri) =>
-    apiFetch(`${API_BASE}/auth/google/callback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, redirect_uri: redirectUri })
-    }).then(handleResponse),
+  googleStatus: googleLogin.status,
+  googleAuthUrl: googleLogin.url,
+  googleCallback: googleLogin.callback,
 
   // Microsoft OAuth
-  microsoftStatus: () =>
-    apiFetch(`${API_BASE}/auth/microsoft/status`).then(handleResponse),
-
-  microsoftAuthUrl: (redirectUri) =>
-    apiFetch(`${API_BASE}/auth/microsoft/url?redirect_uri=${encodeURIComponent(redirectUri)}`).then(handleResponse),
-
-  microsoftCallback: (code, redirectUri) =>
-    apiFetch(`${API_BASE}/auth/microsoft/callback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, redirect_uri: redirectUri })
-    }).then(handleResponse),
+  microsoftStatus: microsoftLogin.status,
+  microsoftAuthUrl: microsoftLogin.url,
+  microsoftCallback: microsoftLogin.callback,
 
   // GitHub OAuth (login)
-  githubAuthStatus: () =>
-    apiFetch(`${API_BASE}/auth/github/status`).then(handleResponse),
-
-  githubAuthUrl: (redirectUri) =>
-    apiFetch(`${API_BASE}/auth/github/url?redirect_uri=${encodeURIComponent(redirectUri)}`).then(handleResponse),
-
-  githubAuthCallback: (code, redirectUri) =>
-    apiFetch(`${API_BASE}/auth/github/callback`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, redirect_uri: redirectUri })
-    }).then(handleResponse),
+  githubAuthUrl: githubLogin.url,
+  githubAuthCallback: githubLogin.callback,
 
   // Agents
   getAgents: () =>
-    apiFetch(`${API_BASE}/agents`, { headers: getHeaders() }).then(handleResponse),
+    get('/agents'),
 
   // Tasks (direct from tasks table)
   getAllTasks: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
-    return apiFetch(`${API_BASE}/tasks${qs ? '?' + qs : ''}`, { headers: getHeaders() }).then(handleResponse);
+    return get(`/tasks${qs ? '?' + qs : ''}`);
   },
 
   getProjectStats: (days = 30) =>
-    apiFetch(`${API_BASE}/tasks/project-stats?days=${days}`, { headers: getHeaders() }).then(handleResponse),
-
-  getAgent: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}`, { headers: getHeaders() }).then(handleResponse),
-
-  getAgentStatus: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/status`, { headers: getHeaders() }).then(handleResponse),
-
-  getSwarmStatus: () =>
-    apiFetch(`${API_BASE}/agents/swarm-status`, { headers: getHeaders() }).then(handleResponse),
-
-  getAgentStatuses: (project) => {
-    const params = project ? `?project=${encodeURIComponent(project)}` : '';
-    return apiFetch(`${API_BASE}/agents/statuses${params}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  getAgentsByProject: (project) =>
-    apiFetch(`${API_BASE}/agents/by-project/${encodeURIComponent(project)}`, { headers: getHeaders() }).then(handleResponse),
-
-  getProjectSummary: () =>
-    apiFetch(`${API_BASE}/agents/project-summary`, { headers: getHeaders() }).then(handleResponse),
+    get(`/tasks/project-stats?days=${days}`),
 
   createAgent: (config) =>
-    apiFetch(`${API_BASE}/agents`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(config),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post('/agents', config, { long: true }),
 
   updateAgent: (id, updates) =>
-    apiFetch(`${API_BASE}/agents/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(updates)
-    }).then(handleResponse),
+    put(`/agents/${id}`, updates),
 
   deleteAgent: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/agents/${id}`),
 
   stopAgent: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/stop`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/agents/${id}/stop`),
 
   // Task-level stop: clears the actionRunning flag on a task without
   // requiring the executor agent to still exist. Useful as a fallback when
   // the executor has been recycled and stopAgent returns 404.
   stopTask: (taskId) =>
-    apiFetch(`${API_BASE}/tasks/${taskId}/stop`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/tasks/${taskId}/stop`),
 
   chatAgent: (id, message) =>
-    apiFetch(`${API_BASE}/agents/${id}/chat`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ message }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post(`/agents/${id}/chat`, { message }, { long: true }),
 
   getHistory: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/history`, { headers: getHeaders() }).then(handleResponse),
+    get(`/agents/${id}/history`),
 
   reloadHistory: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/history/reload`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/agents/${id}/history/reload`),
 
   clearHistory: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/history`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/agents/${id}/history`),
 
   getCodexAuthStatus: (ownerId) =>
-    apiFetch(`${API_BASE}/codex-auth/${ownerId}/status`, { headers: getHeaders() }).then(handleResponse),
+    get(`/codex-auth/${ownerId}/status`),
 
   uploadCodexAuth: (ownerId, authJson) =>
-    apiFetch(`${API_BASE}/codex-auth/${ownerId}`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ authJson }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post(`/codex-auth/${ownerId}`, { authJson }, { long: true }),
 
   deleteCodexAuth: (ownerId) =>
-    apiFetch(`${API_BASE}/codex-auth/${ownerId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/codex-auth/${ownerId}`),
 
   reloadContext: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/reload-context`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/agents/${id}/reload-context`),
 
   restartRuntime: (id) =>
-    apiFetch(`${API_BASE}/agents/${id}/restart`, {
-      method: 'POST',
-      headers: getHeaders(),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post(`/agents/${id}/restart`, undefined, { long: true }),
 
   truncateHistory: (id, afterIndex) =>
-    apiFetch(`${API_BASE}/agents/${id}/history/after/${afterIndex}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/agents/${id}/history/after/${afterIndex}`),
 
   handoff: (fromId, targetAgentId, context) =>
-    apiFetch(`${API_BASE}/agents/${fromId}/handoff`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ targetAgentId, context }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post(`/agents/${fromId}/handoff`, { targetAgentId, context }, { long: true }),
 
   broadcast: (message) =>
-    apiFetch(`${API_BASE}/agents/broadcast/all`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ message }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
-
-  updateAllProjects: (project) =>
-    apiFetch(`${API_BASE}/agents/project/all`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify({ project })
-    }).then(handleResponse),
+    post('/agents/broadcast/all', { message }, { long: true }),
 
   // Tasks
   addTask: (agentId, text, status, boardId, repoFullName, recurrence, taskType, isManual, repoProvider = 'github', storagePath = null, storageProvider = 'onedrive') =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        text,
-        ...(status && { status }),
-        ...(boardId && { boardId }),
-        ...(repoFullName && { repoFullName, repoProvider }),
-        ...(storagePath && { storagePath, storageProvider }),
-        ...(recurrence && { recurrence }),
-        ...(taskType && { taskType }),
-        ...(isManual && { isManual }),
-      })
-    }).then(handleResponse),
-
-  toggleTask: (agentId, taskId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  deleteTask: (agentId, taskId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  clearTasks: (agentId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  transferTask: (fromAgentId, taskId, targetAgentId) =>
-    apiFetch(`${API_BASE}/agents/${fromAgentId}/tasks/${taskId}/transfer`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ targetAgentId })
-    }).then(handleResponse),
+    post(`/agents/${agentId}/tasks`, {
+      text,
+      ...(status && { status }),
+      ...(boardId && { boardId }),
+      ...(repoFullName && { repoFullName, repoProvider }),
+      ...(storagePath && { storagePath, storageProvider }),
+      ...(recurrence && { recurrence }),
+      ...(taskType && { taskType }),
+      ...(isManual && { isManual }),
+    }),
 
   setTaskAssignee: (agentId, taskId, assigneeId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}/assignee`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ assigneeId })
-    }).then(handleResponse),
+    patch(`/agents/${agentId}/tasks/${taskId}/assignee`, { assigneeId }),
 
   refineTask: (agentId, taskId, refineAgentId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}/refine`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ refineAgentId }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post(`/agents/${agentId}/tasks/${taskId}/refine`, { refineAgentId }, { long: true }),
 
   setTaskStatus: (agentId, taskId, status) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ status })
-    }).then(handleResponse),
-
-  updateTaskText: (agentId, taskId, text) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ text })
-    }).then(handleResponse),
+    patchAgentTask(agentId, taskId, { status }),
 
   updateTask: (agentId, taskId, fields) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify(fields)
-    }).then(handleResponse),
+    patchAgentTask(agentId, taskId, fields),
 
   updateTaskRepo: (agentId, taskId, repoFullName, repoProvider = 'github') =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ repoFullName: repoFullName || null, repoProvider: repoFullName ? repoProvider : null })
-    }).then(handleResponse),
+    patchAgentTask(agentId, taskId, { repoFullName: repoFullName || null, repoProvider: repoFullName ? repoProvider : null }),
 
   updateTaskStorage: (agentId, taskId, storagePath, storageProvider = 'onedrive') =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ storagePath: storagePath || null, storageProvider: storagePath ? storageProvider : null })
-    }).then(handleResponse),
-
-  addTaskCommit: (agentId, taskId, hash, message) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}/commits`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ hash, message })
-    }).then(handleResponse),
+    patchAgentTask(agentId, taskId, { storagePath: storagePath || null, storageProvider: storagePath ? storageProvider : null }),
 
   removeTaskCommit: (agentId, taskId, hash) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/tasks/${taskId}/commits/${hash}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  // Action Logs
-  clearActionLogs: (agentId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/action-logs`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/agents/${agentId}/tasks/${taskId}/commits/${hash}`),
 
   // RAG
   addRagDoc: (agentId, name, content) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/rag`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ name, content })
-    }).then(handleResponse),
+    post(`/agents/${agentId}/rag`, { name, content }),
 
   addRagUrl: (agentId, name, url) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/rag/url`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ name, url })
-    }).then(handleResponse),
+    post(`/agents/${agentId}/rag/url`, { name, url }),
 
   refreshRagDoc: (agentId, docId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/rag/${docId}/refresh`, {
-      method: 'POST',
-      headers: getHeaders(),
-    }).then(handleResponse),
+    post(`/agents/${agentId}/rag/${docId}/refresh`),
 
   deleteRagDoc: (agentId, docId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/rag/${docId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/agents/${agentId}/rag/${docId}`),
 
   // Plugins (unified skills + MCP)
   getPlugins: () =>
-    apiFetch(`${API_BASE}/plugins`, { headers: getHeaders() }).then(handleResponse),
+    get('/plugins'),
 
   createPlugin: (config) =>
-    apiFetch(`${API_BASE}/plugins`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(config)
-    }).then(handleResponse),
+    post('/plugins', config),
 
   updatePlugin: (id, updates) =>
-    apiFetch(`${API_BASE}/plugins/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(updates)
-    }).then(handleResponse),
+    put(`/plugins/${id}`, updates),
 
   deletePlugin: (id) =>
-    apiFetch(`${API_BASE}/plugins/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  setPluginShared: (id, shared) =>
-    apiFetch(`${API_BASE}/plugins/${id}/share`, {
-      method: 'PATCH',
-      headers: getHeaders(),
-      body: JSON.stringify({ shared })
-    }).then(handleResponse),
-
-  // Plugin MCP server associations
-  addPluginMcp: (pluginId, mcpId) =>
-    apiFetch(`${API_BASE}/plugins/${pluginId}/mcps/${mcpId}`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  removePluginMcp: (pluginId, mcpId) =>
-    apiFetch(`${API_BASE}/plugins/${pluginId}/mcps/${mcpId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/plugins/${id}`),
 
   // Agent plugin assignment
   assignPlugin: (agentId, pluginId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/plugins`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ pluginId })
-    }).then(handleResponse),
+    post(`/agents/${agentId}/plugins`, { pluginId }),
 
   removePlugin: (agentId, pluginId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/plugins/${pluginId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/agents/${agentId}/plugins/${pluginId}`),
 
-  // MCP Servers (CRUD)
+  // MCP Servers
   getMcpServers: () =>
-    apiFetch(`${API_BASE}/mcp-servers`, { headers: getHeaders() }).then(handleResponse),
-
-  createMcpServer: (config) =>
-    apiFetch(`${API_BASE}/mcp-servers`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(config)
-    }).then(handleResponse),
-
-  updateMcpServer: (id, updates) =>
-    apiFetch(`${API_BASE}/mcp-servers/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(updates)
-    }).then(handleResponse),
-
-  deleteMcpServer: (id) =>
-    apiFetch(`${API_BASE}/mcp-servers/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    get('/mcp-servers'),
 
   connectMcpServer: (id) =>
-    apiFetch(`${API_BASE}/mcp-servers/${id}/connect`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/mcp-servers/${id}/connect`),
 
   testMcpServer: (id, apiKey) =>
-    apiFetch(`${API_BASE}/mcp-servers/${id}/test`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: apiKey ? JSON.stringify({ apiKey }) : undefined,
-    }).then(handleResponse),
+    post(`/mcp-servers/${id}/test`, apiKey ? { apiKey } : undefined),
 
   // OneDrive OAuth (supports agentId or boardId)
-  getOnedriveStatus: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/onedrive/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
+  getOnedriveStatus: onedrive.status,
 
   getOnedriveAuthUrl: (agentId?, boardId?, opts?: { consumer?: boolean }) => {
     const params = new URLSearchParams();
@@ -499,635 +299,310 @@ export const api = {
     if (boardId) params.set('boardId', boardId);
     if (opts?.consumer) params.set('consumer', '1');
     const qs = params.toString();
-    return apiFetch(`${API_BASE}/onedrive/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
+    return get(`/onedrive/auth-url${qs ? `?${qs}` : ''}`);
   },
 
-  disconnectOnedrive: (agentId?, boardId?) =>
-    apiFetch(`${API_BASE}/onedrive/disconnect`, {
-      method: 'POST', headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
-    }).then(handleResponse),
+  disconnectOnedrive: onedrive.disconnect,
 
   // Gmail OAuth (supports agentId or boardId)
-  getGmailStatus: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/gmail/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  getGmailAuthUrl: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/gmail/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  disconnectGmail: (agentId?, boardId?) =>
-    apiFetch(`${API_BASE}/gmail/disconnect`, {
-      method: 'POST', headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
-    }).then(handleResponse),
+  getGmailStatus: gmail.status,
+  getGmailAuthUrl: gmail.authUrl,
+  disconnectGmail: gmail.disconnect,
 
   // Outlook OAuth (supports agentId or boardId) — shares Microsoft OAuth client with OneDrive
-  getOutlookStatus: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/outlook/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  getOutlookAuthUrl: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/outlook/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  disconnectOutlook: (agentId?, boardId?) =>
-    apiFetch(`${API_BASE}/outlook/disconnect`, {
-      method: 'POST', headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
-    }).then(handleResponse),
+  getOutlookStatus: outlook.status,
+  getOutlookAuthUrl: outlook.authUrl,
+  disconnectOutlook: outlook.disconnect,
 
   // Google Drive OAuth (supports agentId or boardId)
-  getGdriveStatus: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/gdrive/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  getGdriveAuthUrl: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/gdrive/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  disconnectGdrive: (agentId?, boardId?) =>
-    apiFetch(`${API_BASE}/gdrive/disconnect`, {
-      method: 'POST', headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
-    }).then(handleResponse),
+  getGdriveStatus: gdrive.status,
+  getGdriveAuthUrl: gdrive.authUrl,
+  disconnectGdrive: gdrive.disconnect,
 
   // Slack OAuth (supports agentId or boardId)
-  getSlackStatus: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/slack/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  getSlackAuthUrl: (agentId?, boardId?) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/slack/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  disconnectSlack: (agentId?, boardId?) =>
-    apiFetch(`${API_BASE}/slack/disconnect`, {
-      method: 'POST', headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) })
-    }).then(handleResponse),
+  getSlackStatus: slack.status,
+  getSlackAuthUrl: slack.authUrl,
+  disconnectSlack: slack.disconnect,
 
   // Realtime (Voice)
   getRealtimeToken: (agentId) =>
-    apiFetch(`${API_BASE}/realtime/token`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ agentId })
-    }).then(handleResponse),
+    post('/realtime/token', { agentId }),
 
   // External voice (STT + LLM + TTS pipeline) — returns WSS URLs for the browser
   getExternalVoiceConfig: (agentId) =>
-    apiFetch(`${API_BASE}/external-voice/config/${encodeURIComponent(agentId)}`, {
-      headers: getHeaders(),
-    }).then(handleResponse),
+    get(`/external-voice/config/${encodeURIComponent(agentId)}`),
 
   // Global STT/TTS availability + WS URLs for the regular text chat.
   // agentId is optional and is only used to resolve a per-agent ttsVoiceId.
   getExternalVoiceServices: (agentId) =>
-    apiFetch(`${API_BASE}/external-voice/services${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`, {
-      headers: getHeaders(),
-    }).then(handleResponse),
+    get(`/external-voice/services${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''}`),
 
   // Probes the configured STT or TTS WebSocket. service must be "stt" or "tts".
   // url + apiKey are optional — when omitted, the server uses the saved settings.
   testExternalVoiceService: (service: 'stt' | 'tts', url?: string, apiKey?: string) =>
-    apiFetch(`${API_BASE}/external-voice/test/${service}`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ ...(url ? { url } : {}), ...(apiKey !== undefined ? { apiKey } : {}) }),
-    }).then(handleResponse),
+    post(`/external-voice/test/${service}`, { ...(url ? { url } : {}), ...(apiKey !== undefined ? { apiKey } : {}) }),
 
   // Templates
   getTemplates: () =>
-    apiFetch(`${API_BASE}/templates`, { headers: getHeaders() }).then(handleResponse),
+    get('/templates'),
 
   // Admin: reset instructions by role
   resetInstructionsByRole: (role) =>
-    apiFetch(`${API_BASE}/agents/reset-instructions/${encodeURIComponent(role)}`, {
-      method: 'POST',
-      headers: getHeaders(),
-    }).then(handleResponse),
+    post(`/agents/reset-instructions/${encodeURIComponent(role)}`),
 
   // Projects (DB-backed)
   getProjects: () =>
-    apiFetch(`${API_BASE}/projects`, { headers: getHeaders() }).then(handleResponse),
+    get('/projects'),
 
   getProject: (id) =>
-    apiFetch(`${API_BASE}/projects/${id}`, { headers: getHeaders() }).then(handleResponse),
+    get(`/projects/${id}`),
 
   createProject: (name, description = '', rules = '') =>
-    apiFetch(`${API_BASE}/projects`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ name, description, rules })
-    }).then(handleResponse),
+    post('/projects', { name, description, rules }),
 
   updateProject: (id, fields) =>
-    apiFetch(`${API_BASE}/projects/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(fields)
-    }).then(handleResponse),
+    put(`/projects/${id}`, fields),
 
   deleteProject: (id) =>
-    apiFetch(`${API_BASE}/projects/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/projects/${id}`),
 
   // Project ↔ Board linking
   attachBoardToProject: (projectId, boardId) =>
-    apiFetch(`${API_BASE}/projects/${projectId}/boards/${boardId}`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/projects/${projectId}/boards/${boardId}`),
 
   detachBoardFromProject: (projectId, boardId) =>
-    apiFetch(`${API_BASE}/projects/${projectId}/boards/${boardId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
-
-  // Board repos — read-only; derived from tasks on the board
-  getBoardRepos: (boardId) =>
-    apiFetch(`${API_BASE}/projects/boards/${boardId}/repos`, { headers: getHeaders() }).then(handleResponse),
-
-  // Board storages — read-only; derived from tasks on the board
-  getBoardStorages: (boardId) =>
-    apiFetch(`${API_BASE}/projects/boards/${boardId}/storages`, { headers: getHeaders() }).then(handleResponse),
+    del(`/projects/${projectId}/boards/${boardId}`),
 
   // Storages accessible via the board's OneDrive plugin OAuth token (picker source)
   getBoardAvailableStorages: (boardId) =>
-    apiFetch(`${API_BASE}/projects/boards/${boardId}/available-storages`, { headers: getHeaders() }).then(handleResponse),
+    get(`/projects/boards/${boardId}/available-storages`),
 
   // Available repos from configured git connections (for the picker)
   getAvailableRepos: () =>
-    apiFetch(`${API_BASE}/projects/available-repos`, { headers: getHeaders() }).then(handleResponse),
+    get('/projects/available-repos'),
 
   // Available repos via the board's GitHub plugin OAuth token (for BoardReposPanel)
   getBoardAvailableRepos: (boardId) =>
-    apiFetch(`${API_BASE}/projects/boards/${boardId}/available-repos`, { headers: getHeaders() }).then(handleResponse),
+    get(`/projects/boards/${boardId}/available-repos`),
 
   // Code Index — auto-index project by name
   indexProject: (projectName) =>
-    apiFetch(`${API_BASE}/code-index/index-project`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ projectName }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS)
-    }).then(handleResponse),
+    post('/code-index/index-project', { projectName }, { long: true }),
 
   // GitHub explorer — all endpoints authenticate via the board's GitHub plugin OAuth.
   getGitHubActivity: (owner, repo, boardId, opts: { refresh?: boolean } = {}) => {
     const params = new URLSearchParams({ boardId });
     if (opts.refresh) params.set('refresh', '1');
-    return apiFetch(`${API_BASE}/projects/github-activity/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?${params}`, {
-      headers: getHeaders()
-    }).then(handleResponse);
+    return get(`/projects/github-activity/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?${params}`);
   },
 
   getGitHubBranches: (owner, repo, boardId) =>
-    apiFetch(`${API_BASE}/projects/github-branches/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`, {
-      headers: getHeaders()
-    }).then(handleResponse),
+    get(`/projects/github-branches/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`),
 
   getGitHubTree: (owner, repo, ref, boardId) =>
-    apiFetch(`${API_BASE}/projects/github-tree/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref)}?boardId=${encodeURIComponent(boardId)}`, {
-      headers: getHeaders()
-    }).then(handleResponse),
+    get(`/projects/github-tree/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref)}?boardId=${encodeURIComponent(boardId)}`),
 
   getGitHubFile: (owner, repo, ref, filePath, boardId) =>
-    apiFetch(`${API_BASE}/projects/github-file/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref)}/${filePath}?boardId=${encodeURIComponent(boardId)}`, {
-      headers: getHeaders()
-    }).then(handleResponse),
+    get(`/projects/github-file/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(ref)}/${filePath}?boardId=${encodeURIComponent(boardId)}`),
 
   // Code call-graph analysis (UI → services or services → UI), on-demand.
   analyzeCodeGraph: (owner, repo, boardId, { direction = 'ui-to-service', ref = 'main', refresh = false } = {}) =>
-    apiFetch(`${API_BASE}/projects/code-graph/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ direction, ref, refresh }),
-      signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
-    }).then(handleResponse),
+    post(`/projects/code-graph/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}?boardId=${encodeURIComponent(boardId)}`, { direction, ref, refresh }, { long: true }),
 
   // API Key (MCP)
   getApiKeyInfo: () =>
-    apiFetch(`${API_BASE}/settings/api-key`, { headers: getHeaders() }).then(handleResponse),
+    get('/settings/api-key'),
 
   generateApiKey: () =>
-    apiFetch(`${API_BASE}/settings/api-key`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post('/settings/api-key'),
 
   revokeApiKey: () =>
-    apiFetch(`${API_BASE}/settings/api-key`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del('/settings/api-key'),
 
   // General settings
   getSettings: () =>
-    apiFetch(`${API_BASE}/settings/general`, { headers: getHeaders() }).then(handleResponse),
+    get('/settings/general'),
 
   updateSettings: (patch) =>
-    apiFetch(`${API_BASE}/settings/general`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(patch)
-    }).then(handleResponse),
+    put('/settings/general', patch),
 
   // Reminder configuration
   getReminderConfig: () =>
-    apiFetch(`${API_BASE}/settings/general/reminders`, { headers: getHeaders() }).then(handleResponse),
+    get('/settings/general/reminders'),
 
   updateReminderConfig: (patch) =>
-    apiFetch(`${API_BASE}/settings/general/reminders`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(patch)
-    }).then(handleResponse),
+    put('/settings/general/reminders', patch),
 
   // Boards (per-user multi-board)
   getBoards: () =>
-    apiFetch(`${API_BASE}/boards`, { headers: getHeaders() }).then(handleResponse),
+    get('/boards'),
 
   getAllBoardsAdmin: () =>
-    apiFetch(`${API_BASE}/boards/all`, { headers: getHeaders() }).then(handleResponse),
-
-  getBoard: (id) =>
-    apiFetch(`${API_BASE}/boards/${id}`, { headers: getHeaders() }).then(handleResponse),
+    get('/boards/all'),
 
   createBoard: (name, workflow, filters) =>
-    apiFetch(`${API_BASE}/boards`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ name, workflow, filters })
-    }).then(handleResponse),
+    post('/boards', { name, workflow, filters }),
 
   updateBoard: (id, updates) =>
-    apiFetch(`${API_BASE}/boards/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(updates)
-    }).then(handleResponse),
+    put(`/boards/${id}`, updates),
 
   updateBoardWorkflow: (id, workflow) =>
-    apiFetch(`${API_BASE}/boards/${id}/workflow`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(workflow)
-    }).then(handleResponse),
+    put(`/boards/${id}/workflow`, workflow),
 
   deleteBoard: (id) =>
-    apiFetch(`${API_BASE}/boards/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/boards/${id}`),
 
   // Board plugins
   getBoardPlugins: (boardId) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/plugins`, { headers: getHeaders() }).then(handleResponse),
+    get(`/boards/${boardId}/plugins`),
 
   assignBoardPlugin: (boardId, pluginId) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/plugins/assign`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify({ pluginId })
-    }).then(handleResponse),
+    post(`/boards/${boardId}/plugins/assign`, { pluginId }),
 
   removeBoardPlugin: (boardId, pluginId) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/plugins/remove`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify({ pluginId })
-    }).then(handleResponse),
-
-  updateBoardMcpAuth: (boardId, mcpAuth) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/mcp-auth`, {
-      method: 'PUT', headers: getHeaders(), body: JSON.stringify(mcpAuth)
-    }).then(handleResponse),
+    post(`/boards/${boardId}/plugins/remove`, { pluginId }),
 
   // Board sharing
   getBoardShares: (boardId) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/shares`, { headers: getHeaders() }).then(handleResponse),
+    get(`/boards/${boardId}/shares`),
 
   shareBoardWith: (boardId, username, permission) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/shares`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ username, permission })
-    }).then(handleResponse),
+    post(`/boards/${boardId}/shares`, { username, permission }),
 
   updateBoardShare: (boardId, userId, permission) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/shares/${userId}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify({ permission })
-    }).then(handleResponse),
+    put(`/boards/${boardId}/shares/${userId}`, { permission }),
 
   removeBoardShare: (boardId, userId) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/shares/${userId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/boards/${boardId}/shares/${userId}`),
 
   getBoardUsers: () =>
-    apiFetch(`${API_BASE}/boards/users`, { headers: getHeaders() }).then(handleResponse),
-
-  getBoardAuditLogs: (boardId) =>
-    apiFetch(`${API_BASE}/boards/${boardId}/audit`, { headers: getHeaders() }).then(handleResponse),
-
-  getTasksByAssignee: (agentId) =>
-    apiFetch(`${API_BASE}/boards/tasks/by-assignee/${agentId}`, { headers: getHeaders() }).then(handleResponse),
+    get('/boards/users'),
 
   // Project task stats
   getProjectTaskStats: (project) =>
-    apiFetch(`${API_BASE}/agents/tasks/stats?project=${encodeURIComponent(project)}`, { headers: getHeaders() }).then(handleResponse),
+    get(`/agents/tasks/stats?project=${encodeURIComponent(project)}`),
 
   getProjectTimeSeries: (project, days = 30) =>
-    apiFetch(`${API_BASE}/agents/tasks/stats/timeseries?project=${encodeURIComponent(project)}&days=${days}`, { headers: getHeaders() }).then(handleResponse),
+    get(`/agents/tasks/stats/timeseries?project=${encodeURIComponent(project)}&days=${days}`),
 
   getProjectAgentTime: (project, days = 30) =>
-    apiFetch(`${API_BASE}/agents/tasks/stats/agent-time?project=${encodeURIComponent(project)}&days=${days}`, { headers: getHeaders() }).then(handleResponse),
+    get(`/agents/tasks/stats/agent-time?project=${encodeURIComponent(project)}&days=${days}`),
 
   getGlobalAgentTime: (days = 30) =>
-    apiFetch(`${API_BASE}/agents/tasks/stats/agent-time?days=${days}`, { headers: getHeaders() }).then(handleResponse),
+    get(`/agents/tasks/stats/agent-time?days=${days}`),
 
   // Jira (per-agent / per-board)
-  getJiraStatus: (agentId?: string, boardId?: string) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/jira/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
+  getJiraStatus: jira.status,
 
   connectJira: (agentId: string, domain: string, email: string, apiToken: string, boardId?: string) =>
-    apiFetch(`${API_BASE}/jira/connect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ agentId, domain, email, apiToken, ...(boardId && { boardId }) }),
-    }).then(handleResponse),
+    post('/jira/connect', { agentId, domain, email, apiToken, ...(boardId && { boardId }) }),
 
-  disconnectJira: (agentId?: string, boardId?: string) =>
-    apiFetch(`${API_BASE}/jira/disconnect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) }),
-    }).then(handleResponse),
+  disconnectJira: jira.disconnect,
 
   // WordPress (per-agent / per-board)
-  getWordPressStatus: (agentId?: string, boardId?: string) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/wordpress/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
+  getWordPressStatus: wordpress.status,
 
   connectWordPress: (agentId: string, siteUrl: string, username: string, applicationPassword: string, boardId?: string) =>
-    apiFetch(`${API_BASE}/wordpress/connect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ agentId, siteUrl, username, applicationPassword, ...(boardId && { boardId }) }),
-    }).then(handleResponse),
+    post('/wordpress/connect', { agentId, siteUrl, username, applicationPassword, ...(boardId && { boardId }) }),
 
-  disconnectWordPress: (agentId?: string, boardId?: string) =>
-    apiFetch(`${API_BASE}/wordpress/disconnect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) }),
-    }).then(handleResponse),
+  disconnectWordPress: wordpress.disconnect,
 
   // AWS S3 (per-agent / per-board)
-  getS3Status: (agentId?: string, boardId?: string) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/s3/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
+  getS3Status: s3.status,
 
   connectS3: (agentId: string, secretAccessKey: string, accessKeyId: string, region: string, boardId?: string, endpoint?: string) =>
-    apiFetch(`${API_BASE}/s3/connect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ agentId, accessKeyId, secretAccessKey, region, ...(boardId && { boardId }), ...(endpoint && { endpoint }) }),
-    }).then(handleResponse),
+    post('/s3/connect', { agentId, accessKeyId, secretAccessKey, region, ...(boardId && { boardId }), ...(endpoint && { endpoint }) }),
 
-  disconnectS3: (agentId?: string, boardId?: string) =>
-    apiFetch(`${API_BASE}/s3/disconnect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) }),
-    }).then(handleResponse),
+  disconnectS3: s3.disconnect,
 
   // GitHub OAuth (per-agent / per-board)
-  getGitHubStatus: (agentId?: string, boardId?: string) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/github/status${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  getGitHubAuthUrl: (agentId?: string, boardId?: string) => {
-    const params = new URLSearchParams();
-    if (agentId) params.set('agentId', agentId);
-    if (boardId) params.set('boardId', boardId);
-    const qs = params.toString();
-    return apiFetch(`${API_BASE}/github/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
-  },
-
-  disconnectGitHub: (agentId?: string, boardId?: string) =>
-    apiFetch(`${API_BASE}/github/disconnect`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ ...(agentId && { agentId }), ...(boardId && { boardId }) }),
-    }).then(handleResponse),
+  getGitHubStatus: github.status,
+  getGitHubAuthUrl: github.authUrl,
+  disconnectGitHub: github.disconnect,
 
   // Users (admin only)
   getUsers: () =>
-    apiFetch(`${API_BASE}/users`, { headers: getHeaders() }).then(handleResponse),
+    get('/users'),
 
   createUser: (data) =>
-    apiFetch(`${API_BASE}/users`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    }).then(handleResponse),
+    post('/users', data),
 
   updateUser: (id, updates) =>
-    apiFetch(`${API_BASE}/users/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(updates)
-    }).then(handleResponse),
+    put(`/users/${id}`, updates),
 
   deleteUser: (id) =>
-    apiFetch(`${API_BASE}/users/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/users/${id}`),
 
   // Impersonation (admin only)
   impersonate: (userId) =>
-    apiFetch(`${API_BASE}/auth/impersonate/${userId}`, {
-      method: 'POST',
-      headers: getHeaders()
-    }).then(handleResponse),
+    post(`/auth/impersonate/${userId}`),
 
   // LLM Configs (admin only)
   getLlmConfigs: () =>
-    apiFetch(`${API_BASE}/llm-configs`, { headers: getHeaders() }).then(handleResponse),
+    get('/llm-configs'),
 
   createLlmConfig: (data) =>
-    apiFetch(`${API_BASE}/llm-configs`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    }).then(handleResponse),
+    post('/llm-configs', data),
 
   updateLlmConfig: (id, data) =>
-    apiFetch(`${API_BASE}/llm-configs/${id}`, {
-      method: 'PUT',
-      headers: getHeaders(),
-      body: JSON.stringify(data)
-    }).then(handleResponse),
+    put(`/llm-configs/${id}`, data),
 
   deleteLlmConfig: (id) =>
-    apiFetch(`${API_BASE}/llm-configs/${id}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
+    del(`/llm-configs/${id}`),
 
   // Contact form (public — no auth)
   submitContact: (data: { email: string; phone: string; name?: string; company?: string; message?: string; type: 'contact' | 'support' }) =>
-    apiFetch(`${API_BASE}/contact`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    }).then(handleResponse),
+    post('/contact', data, { auth: false }),
 };
 
 // Budget
 export const fetchBudgetSummary = (days = 1) =>
-  apiFetch(`${API_BASE}/budget/summary?days=${days}`, { headers: getHeaders() }).then(handleResponse);
+  get(`/budget/summary?days=${days}`);
 
 export const fetchBudgetByAgent = (days = 30) =>
-  apiFetch(`${API_BASE}/budget/by-agent?days=${days}`, { headers: getHeaders() }).then(handleResponse);
+  get(`/budget/by-agent?days=${days}`);
 
 export const fetchBudgetTimeline = (days = 7, groupBy = 'day') =>
-  apiFetch(`${API_BASE}/budget/timeline?days=${days}&groupBy=${groupBy}`, { headers: getHeaders() }).then(handleResponse);
+  get(`/budget/timeline?days=${days}&groupBy=${groupBy}`);
 
 export const fetchBudgetDaily = (days = 30) =>
-  apiFetch(`${API_BASE}/budget/daily?days=${days}`, { headers: getHeaders() }).then(handleResponse);
+  get(`/budget/daily?days=${days}`);
 
 export const fetchBudgetConfig = () =>
-  apiFetch(`${API_BASE}/budget/config`, { headers: getHeaders() }).then(handleResponse);
+  get('/budget/config');
 
 export const updateBudgetConfig = (config) =>
-  apiFetch(`${API_BASE}/budget/config`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(config)
-  }).then(handleResponse);
+  put('/budget/config', config);
 
 export const fetchBudgetAlerts = () =>
-  apiFetch(`${API_BASE}/budget/alerts`, { headers: getHeaders() }).then(handleResponse);
+  get('/budget/alerts');
 
 export default api;
 
 /* ── Task CRUD (board-level, uses /api/tasks/:id) ─────────────────────────── */
 export const updateTask = (taskId, fields) =>
-  apiFetch(`${API_BASE}/tasks/${taskId}`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify(fields),
-  }).then(handleResponse);
+  put(`/tasks/${taskId}`, fields);
 
 export const deleteTask = (taskId) =>
-  apiFetch(`${API_BASE}/tasks/${taskId}`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  }).then(handleResponse);
+  del(`/tasks/${taskId}`);
 
 export const clearTaskStopped = (taskId) =>
-  apiFetch(`${API_BASE}/tasks/${taskId}/clear-stopped`, {
-    method: 'PATCH',
-    headers: getHeaders(),
-  }).then(handleResponse);
+  patch(`/tasks/${taskId}/clear-stopped`);
 
 /* ── Reorder tasks within a column ──────────────────────────────────── */
 export const reorderTasks = (orderedIds) =>
-  apiFetch(`${API_BASE}/tasks/reorder`, {
-    method: 'PUT',
-    headers: getHeaders(),
-    body: JSON.stringify({ orderedIds }),
-  }).then(handleResponse);
-
-/* ── Bulk move ─────────────────────────────────────────────────────────── */
-export const bulkMoveTasks = (taskIds, boardId, column) =>
-  apiFetch(`${API_BASE}/tasks/bulk-move`, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ taskIds, boardId, column }),
-  }).then(handleResponse);
+  put('/tasks/reorder', { orderedIds });
 
 /* ── Soft-delete management ──────────────────────────────────────────────── */
 export const getDeletedTasks = () =>
-  apiFetch(`${API_BASE}/tasks/deleted`, {
-    headers: getHeaders(),
-  }).then(handleResponse);
+  get('/tasks/deleted');
 
 export const restoreTask = (taskId) =>
-  apiFetch(`${API_BASE}/tasks/${taskId}/restore`, {
-    method: 'POST',
-    headers: getHeaders(),
-  }).then(handleResponse);
+  post(`/tasks/${taskId}/restore`);
 
 export const hardDeleteTask = (taskId) =>
-  apiFetch(`${API_BASE}/tasks/${taskId}/permanent`, {
-    method: 'DELETE',
-    headers: getHeaders(),
-  }).then(handleResponse);
-
-/* ── Boards (standalone export for TaskModal) ────────────────────────────── */
-export const getBoards = () =>
-  apiFetch(`${API_BASE}/boards`, { headers: getHeaders() }).then(handleResponse);
+  del(`/tasks/${taskId}/permanent`);
 
 /* ── Commit diff ──────────────────────────────────────────────────────────── */
 export const getCommitDiff = (taskId, hash) =>
-  apiFetch(`${API_BASE}/tasks/${taskId}/commits/${hash}/diff`, {
-    headers: getHeaders(),
-  }).then(handleResponse);
+  get(`/tasks/${taskId}/commits/${hash}/diff`);

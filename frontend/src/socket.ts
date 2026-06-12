@@ -1,5 +1,6 @@
 import { io } from 'socket.io-client';
 import { WsEvents } from './socketEvents';
+import { safeGet } from './lib/safeStorage';
 
 let socket = null;
 let socketToken = null;
@@ -25,9 +26,7 @@ export function connectSocket(token) {
     // Function form so every reconnect handshake reads the freshest token
     // (e.g., refreshed by a re-login) instead of the one captured here.
     auth: (cb) => {
-      let stored = null;
-      try { stored = localStorage.getItem('token'); } catch { /* storage blocked */ }
-      cb({ token: stored || socketToken });
+      cb({ token: safeGet('token') || socketToken });
     },
     transports: ['websocket', 'polling']
   });

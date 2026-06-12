@@ -550,10 +550,10 @@ function LanguageToggle() {
 
 /* ── Main landing page ── */
 
-export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
+export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
   onLogin: (u: string, p: string) => Promise<void>;
   onGoogleLogin?: any;
-  googleLoading?: boolean;
+  oauthLoading?: boolean;
 }) {
   const { t } = useLanguage();
   const [loginOpen, setLoginOpen] = useState(false);
@@ -855,7 +855,7 @@ export default function LoginPage({ onLogin, onGoogleLogin, googleLoading }: {
         onGoogleLogin={googleEnabled ? handleGoogleLogin : null}
         onMicrosoftLogin={microsoftEnabled ? handleMicrosoftLogin : null}
         onGitHubLogin={githubEnabled ? handleGitHubLogin : null}
-        oauthLoading={oauthBusy || googleLoading}
+        oauthLoading={oauthBusy || oauthLoading}
       />
 
       {/* ─── Contact / Support form modal ─── */}
