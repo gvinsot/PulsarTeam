@@ -129,16 +129,6 @@ services:
         - "traefik.http.routers.pulsarteam-api-http.entrypoints=web"
         - "traefik.http.routers.pulsarteam-api-http.middlewares=redirect-to-https@file"
         - "traefik.http.routers.pulsarteam-api-http.service=noop@internal"
-        - "traefik.http.routers.pulsarteam-oauth-cb.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && (Path(`/gmail-callback.html`) || Path(`/gdrive-callback.html`) || Path(`/google-callback.html`))"
-        - "traefik.http.routers.pulsarteam-oauth-cb.entrypoints=websecure"
-        - "traefik.http.routers.pulsarteam-oauth-cb.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.pulsarteam-oauth-cb.middlewares=pulsarteam-sec-headers"
-        - "traefik.http.routers.pulsarteam-oauth-cb.service=pulsarteam-api"
-        - "traefik.http.routers.pulsarteam-oauth-cb.priority=200"
-        - "traefik.http.routers.pulsarteam-oauth-cb-http.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && (Path(`/gmail-callback.html`) || Path(`/gdrive-callback.html`) || Path(`/google-callback.html`))"
-        - "traefik.http.routers.pulsarteam-oauth-cb-http.entrypoints=web"
-        - "traefik.http.routers.pulsarteam-oauth-cb-http.middlewares=redirect-to-https@file"
-        - "traefik.http.routers.pulsarteam-oauth-cb-http.service=noop@internal"
 
   frontend:
     image: registry.methodinfo.fr/pulsarteam-client:latest
@@ -210,9 +200,8 @@ services:
       - LOG_LEVEL=info
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - RUNNER_MODEL=${CLAUDE_MODEL:-}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-80}
-      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-80}
       - VERBOSE=${CODER_VERBOSE:-false}
       - TIMEOUT=600
       - PORT=8000
@@ -707,51 +696,6 @@ services:
       retries: 3
       start_period: 120s
 
-  flaresolverr:
-    image: 21hsmw/flaresolverr:nodriver
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - SETUID
-      - SETGID
-      - DAC_OVERRIDE
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp:size=128M,mode=1777
-    networks:
-      backend:
-        aliases:
-          - flaresolverr
-    environment:
-      - LOG_LEVEL=info
-      - TZ=UTC
-    deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.labels.gpu == none
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
-      restart_policy:
-        condition: on-failure
-        delay: 5s
-      update_config:
-        delay: 10s
-        failure_action: rollback
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
   mcp-browser:
     build:
       context: ..
@@ -777,10 +721,6 @@ services:
       - TZ=Europe/Paris
       - NODE_ENV=production
       - LOG_LEVEL=info
-      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
-      - MAX_SEARCH_RESULT=5
-    depends_on:
-      - flaresolverr
     deploy:
       replicas: 1
       placement:

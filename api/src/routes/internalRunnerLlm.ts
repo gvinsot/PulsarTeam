@@ -19,9 +19,8 @@ const LOCAL_PROVIDERS = new Set(['vllm', 'ollama']);
  *     runner can re-hydrate it after a restart. The per-agent LLM config is
  *     normally pushed via the X-LLM-Config header, but that only lives in the
  *     runner's in-memory cache — lost on restart. This lets the runner rebuild
- *     it (see runner-service runner_llm_config.py). Honors both a named
- *     llmConfigId and the legacy agent.provider/agent.model fields, because
- *     resolveLlmConfig falls back to the latter.
+ *     it (see runner-service runner_llm_config.py), resolving the agent's
+ *     named llmConfigId via resolveLlmConfig.
  *
  * The runner authenticates with the shared CODER_API_KEY.
  *
@@ -60,8 +59,8 @@ export function internalRunnerLlmRoutes(agentManager) {
 
       const cfg = agentManager.resolveLlmConfig(agent) || {};
       const model = (cfg.model || '').toString().trim();
-      // No model resolved (no named config and no legacy agent.model) → let the
-      // runner keep its RUNNER_MODEL default instead of pinning an empty model.
+      // No model resolved (no named config) → let the runner keep its
+      // RUNNER_MODEL default instead of pinning an empty model.
       if (!model) return res.json({ configured: false });
 
       res.json({

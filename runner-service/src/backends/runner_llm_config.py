@@ -10,9 +10,9 @@ to the static RUNNER_MODEL env — which is why hermes reverted to its default
 model after every restart.
 
 This module fetches the same resolved config the API forwards in the header,
-keyed by agent_id, so `_get_llm_config` can rebuild the cache on a miss. Because
-team-api resolves it via `agentManager.resolveLlmConfig`, the agent's legacy
-`provider`/`model` fields are honored too (not just a named `llmConfigId`).
+keyed by agent_id, so `_get_llm_config` can rebuild the cache on a miss.
+team-api resolves it from the agent's named `llmConfigId` via
+`agentManager.resolveLlmConfig`.
 
 Mirrors fallback_llm_resolver / runner_mcp_config: shared CODER_API_KEY, short
 TTL cache so we don't hit the api on every spawn. A `None` result means "no

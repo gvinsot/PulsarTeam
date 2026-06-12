@@ -4,7 +4,7 @@ import { api } from '../api';
 
 /**
  * OneDrive OAuth connection widget.
- * Handles the full OAuth flow: get auth URL → open popup → capture code+state → exchange tokens.
+ * Handles the full OAuth flow: get auth URL → open popup → server-side token exchange via redirect.
  *
  * Props:
  *   agentId       — (optional) when provided, authenticates OneDrive for this specific agent
@@ -50,9 +50,7 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
       if (event.data?.type !== 'microsoft-oauth-callback') return;
       // The unified Microsoft OAuth dispatcher includes a `service` field so
       // each widget (OneDrive, Outlook, ...) only reacts to its own callback.
-      // Tolerate legacy payloads with no service tag — they predate Outlook
-      // and should behave as before (treat as OneDrive).
-      if (event.data.service && event.data.service !== 'onedrive') return;
+      if (event.data.service !== 'onedrive') return;
       setConnecting(true);
       setError(null);
       try {
@@ -97,7 +95,7 @@ export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
       }
 
       // Poll only for popup closure detection
-      // The callback page (microsoft-callback.html) handles sending the code via postMessage
+      // The server-rendered oauth-redirect page reports the result via postMessage
       clearInterval(pollRef.current);
       pollRef.current = setInterval(() => {
         if (popup.closed) {

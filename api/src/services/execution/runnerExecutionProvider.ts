@@ -411,21 +411,6 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     return { stdout, stderr };
   }
 
-  // ── Backward compatibility aliases ────────────────────────────────────
-
-  /** @deprecated Use ensureProject() */
-  async ensureSandbox(agentId: string, project: string | null = null, gitUrl: string | null = null): Promise<void> {
-    return this.ensureProject(agentId, project, gitUrl);
-  }
-  /** @deprecated Use hasEnvironment() */
-  hasSandbox(agentId: string): boolean {
-    return this.hasEnvironment(agentId);
-  }
-  /** @deprecated Use getProject() */
-  getSandboxProject(agentId: string): string | null {
-    return this.getProject(agentId);
-  }
-
   // ── Private HTTP helpers ──────────────────────────────────────────────
 
   _headers(agentId: string | null, ownerId: string | null = null): Record<string, string> {

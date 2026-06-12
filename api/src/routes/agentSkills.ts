@@ -36,7 +36,7 @@ export function agentSkillRoutes() {
   // Search agent skills
   router.get('/search', async (req, res) => {
     try {
-      const query = req.query.q || req.query.query || '';
+      const query = req.query.q || '';
       if (!(query as string).trim()) {
         return res.status(400).json({ error: 'Query parameter "q" is required' });
       }

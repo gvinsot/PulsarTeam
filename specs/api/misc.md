@@ -33,9 +33,6 @@ Reminder configuration: `intervalMinutes`, `maxReminders`, `cooldownMinutes`.
 Update reminder configuration.
 - **Auth**: JWT + `admin`.
 
-### GET `/api/settings/general/workflow`
-Read-only default board workflow (used as a fallback when creating a board without a workflow).
-
 ---
 
 ## 3. API keys — `/api/settings/api-key/*`

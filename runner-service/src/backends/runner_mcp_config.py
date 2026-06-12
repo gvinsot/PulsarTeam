@@ -345,7 +345,6 @@ def _reconcile_json_mcp(
 # ~/.config/opencode/config.json, key `mcp`. Remote (HTTP) servers use
 # {type:"remote", url, headers, enabled:true}. See opencode.ai/docs config schema.
 _OPENCODE_MANAGED_SIDECAR = ".pulsar-managed-mcp.json"
-_PULSAR_MCP_UPDATED_AT_KEY = "_pulsarMcpUpdatedAt"
 
 def to_opencode_mcp(servers: Optional[dict]) -> dict:
     out: dict = {}
@@ -382,14 +381,9 @@ def configure_opencode_mcp(agent_user: Optional[dict], agent_id: Optional[str]) 
     except (OSError, json.JSONDecodeError):
         settings = {}
 
-    # OpenCode validates config.json with additionalProperties=false. Older
-    # Pulsar builds wrote bookkeeping keys into this file; migrate them into a
-    # sidecar so the config remains valid under OpenCode's strict schema.
-    legacy_managed = settings.pop(_MANAGED_KEY, []) or []
-    settings.pop(_PULSAR_MCP_UPDATED_AT_KEY, None)
-    previous = _read_managed_sidecar(sidecar) or [
-        name for name in legacy_managed if isinstance(name, str)
-    ]
+    # Managed-server bookkeeping lives in a sidecar, not in config.json —
+    # OpenCode validates config.json with additionalProperties=false.
+    previous = _read_managed_sidecar(sidecar)
 
     servers_map = settings.get("mcp")
     if not isinstance(servers_map, dict):

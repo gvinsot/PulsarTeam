@@ -1,5 +1,5 @@
 import express from 'express';
-import { getSettings, updateSettings, getWorkflow, getReminderConfig } from '../services/configManager.js';
+import { getSettings, updateSettings, getReminderConfig } from '../services/configManager.js';
 import { requireRole } from '../middleware/auth.js';
 
 export function settingsRoutes() {
@@ -56,17 +56,6 @@ export function settingsRoutes() {
       });
     } catch (err) {
       res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ── Workflow configuration ────────────────────────────────────────
-  // GET /workflow — get default board workflow (read-only)
-  router.get('/workflow', async (req, res) => {
-    try {
-      const workflow = await getWorkflow('_default');
-      res.json(workflow);
-    } catch {
-      res.status(500).json({ error: 'Internal server error' });
     }
   });
 

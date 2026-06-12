@@ -56,9 +56,6 @@ class GlobalTaskStore {
         }
         if (Array.isArray(data)) {
           for (const t of data) {
-            // Backfill: ensure type and history exist
-            if (!t.type) t.type = 'bug';
-            if (!t.history) t.history = [{ from: null, to: t.status || 'backlog', at: t.createdAt || new Date().toISOString(), by: null }];
             this.tasks.set(t.id, t);
           }
         }

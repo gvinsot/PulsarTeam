@@ -4,7 +4,7 @@ import { api } from '../api';
 
 /**
  * Gmail OAuth connection widget.
- * Handles the full OAuth flow: get auth URL → open popup → capture code+state → exchange tokens.
+ * Handles the full OAuth flow: get auth URL → open popup → server-side token exchange via redirect.
  *
  * Props:
  *   agentId       — (optional) when provided, authenticates Gmail for this specific agent
@@ -48,8 +48,6 @@ export default function GmailConnect({ agentId, boardId, onStatusChange }) {
   useEffect(() => {
     const handleMessage = async (event) => {
       if (event.data?.type !== 'gmail-oauth-callback') return;
-
-      // New server-side flow: tokens already exchanged, just refresh status
       if ('success' in event.data) {
         if (event.data.success) {
           await fetchStatus();
@@ -57,21 +55,6 @@ export default function GmailConnect({ agentId, boardId, onStatusChange }) {
           setError(event.data.error || 'OAuth failed');
         }
         setConnecting(false);
-        return;
-      }
-
-      // Legacy popup flow (gmail-callback.html): exchange code via API
-      if (event.data?.code) {
-        setConnecting(true);
-        setError(null);
-        try {
-          await api.gmailCallback(event.data.code, event.data.state);
-          await fetchStatus();
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setConnecting(false);
-        }
       }
     };
 
@@ -104,7 +87,7 @@ export default function GmailConnect({ agentId, boardId, onStatusChange }) {
       }
 
       // Poll only for popup closure detection
-      // The callback page (gmail-callback.html) handles sending the code via postMessage
+      // The server-rendered oauth-redirect page reports the result via postMessage
       clearInterval(pollRef.current);
       pollRef.current = setInterval(() => {
         if (popup.closed) {

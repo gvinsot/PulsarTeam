@@ -46,11 +46,7 @@ import subprocess
 from typing import Optional, Callable
 
 import httpx
-
-try:
-    import pyte  # type: ignore
-except ImportError:  # pragma: no cover — installed via requirements.txt
-    pyte = None  # falls back to the legacy strip-ANSI extractor
+import pyte
 
 from config import (
     CLAUDE_INTERACTIVE_IDLE_SECS,
@@ -493,18 +489,9 @@ def _drive_pty_blocking(
     # Pyte virtual terminal — feeds the raw bytes through a proper terminal
     # emulator so we get the final screen state (text laid out at absolute
     # positions, redraws collapsed) instead of the messy concatenation that
-    # `_strip_ansi` produces. None when pyte is unavailable (we fall back to
-    # the legacy extractor).
-    screen = None
-    stream = None
-    if pyte is not None:
-        try:
-            screen = pyte.HistoryScreen(_TERM_COLS, _TERM_ROWS, history=2000, ratio=0.5)
-            stream = pyte.ByteStream(screen)
-        except Exception as e:
-            logger.warning(f"[Interactive] pyte init failed, falling back: {e}")
-            screen = None
-            stream = None
+    # `_strip_ansi` produces.
+    screen = pyte.HistoryScreen(_TERM_COLS, _TERM_ROWS, history=2000, ratio=0.5)
+    stream = pyte.ByteStream(screen)
 
     import time
     deadline = time.monotonic() + total_timeout
@@ -611,25 +598,24 @@ def _drive_pty_blocking(
 
         # 1) Polished pyte delta
         pushed_clean = False
-        if screen is not None:
-            try:
-                current = _extract_assistant_reply_from_screen(screen)
-            except Exception as e:
-                logger.debug(f"[Interactive] streaming extract failed: {e}")
-                current = ""
-            if current and current != last_pushed and current.startswith(last_pushed):
-                delta = current[len(last_pushed):]
-                if delta.strip():
-                    try:
-                        on_event({"type": "thinking", "content": delta})
-                    except Exception as e:
-                        logger.debug(f"[Interactive] on_event failed: {e}")
-                    last_pushed = current
-                    last_push_at = now
-                    # Treat the raw stream as caught up too, otherwise we'd
-                    # double-emit the same characters.
-                    stream_raw_offset = len(raw_buf)
-                    pushed_clean = True
+        try:
+            current = _extract_assistant_reply_from_screen(screen)
+        except Exception as e:
+            logger.debug(f"[Interactive] streaming extract failed: {e}")
+            current = ""
+        if current and current != last_pushed and current.startswith(last_pushed):
+            delta = current[len(last_pushed):]
+            if delta.strip():
+                try:
+                    on_event({"type": "thinking", "content": delta})
+                except Exception as e:
+                    logger.debug(f"[Interactive] on_event failed: {e}")
+                last_pushed = current
+                last_push_at = now
+                # Treat the raw stream as caught up too, otherwise we'd
+                # double-emit the same characters.
+                stream_raw_offset = len(raw_buf)
+                pushed_clean = True
 
         # 2) Raw fallback — only when pyte didn't produce a usable delta.
         if not pushed_clean:
@@ -829,13 +815,12 @@ def _drive_pty_blocking(
                 chunk = _read_pty(master_fd)
                 if chunk:
                     raw_buf.extend(chunk)
-                    if stream is not None:
-                        try:
-                            stream.feed(chunk)
-                        except Exception as e:
-                            # A malformed escape sequence shouldn't kill the
-                            # whole session; fall back to text-only extraction.
-                            logger.debug(f"[Interactive] pyte feed error (ignored): {e}")
+                    try:
+                        stream.feed(chunk)
+                    except Exception as e:
+                        # A malformed escape sequence shouldn't kill the
+                        # whole session; fall back to text-only extraction.
+                        logger.debug(f"[Interactive] pyte feed error (ignored): {e}")
                     visible_buf = _strip_ansi(raw_buf.decode("utf-8", "replace"))
                     last_data_at = time.monotonic()
 
@@ -942,11 +927,10 @@ def _drive_pty_blocking(
     # TUI's true final state with absolute-cursor layout collapsed, so the
     # extractor only has to recognize `● ` bullet lines for Claude's reply.
     output_text = ""
-    if screen is not None:
-        try:
-            output_text = _extract_assistant_reply_from_screen(screen)
-        except Exception as e:
-            logger.warning(f"[Interactive] pyte extraction failed, falling back: {e}")
+    try:
+        output_text = _extract_assistant_reply_from_screen(screen)
+    except Exception as e:
+        logger.warning(f"[Interactive] pyte extraction failed, falling back: {e}")
     if not output_text:
         output_text = _extract_assistant_reply(visible, prompt)
 

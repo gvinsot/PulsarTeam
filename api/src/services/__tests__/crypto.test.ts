@@ -17,7 +17,6 @@ const {
   encryptString,
   decryptString,
   isEncrypted,
-  encryptIfPlain,
   tryDecrypt,
   encryptFields,
   decryptFields,
@@ -42,20 +41,14 @@ test('encryptString produces different ciphertext for the same plaintext (random
   assert.equal(decryptString(b), 'same-secret');
 });
 
-test('encryptIfPlain is idempotent — already-encrypted values pass through unchanged', () => {
+test('encryptString is idempotent — already-encrypted values pass through unchanged', () => {
   const ct = encryptString('plain');
-  const reEncrypted = encryptIfPlain(ct);
+  const reEncrypted = encryptString(ct);
   assert.equal(reEncrypted, ct);
 });
 
-test('encryptIfPlain leaves null/undefined/empty unchanged', () => {
-  assert.equal(encryptIfPlain(null), null);
-  assert.equal(encryptIfPlain(undefined), undefined);
-  assert.equal(encryptIfPlain(''), '');
-});
-
-test('tryDecrypt passes through plaintext unchanged', () => {
-  assert.equal(tryDecrypt('legacy-plain-value'), 'legacy-plain-value');
+test('tryDecrypt rejects plaintext values and passes through null/empty', () => {
+  assert.throws(() => tryDecrypt('plain-value'), /Failed to decrypt stored value/);
   assert.equal(tryDecrypt(null), null);
   assert.equal(tryDecrypt(''), '');
 });
@@ -108,10 +101,11 @@ test('encryptFields skips empty / already-encrypted / non-string values', () => 
   assert.equal(enc.num, 42);
 });
 
-test('decryptFields tolerates non-encrypted (legacy plaintext) values', () => {
-  const obj = { apiKey: 'legacy-plain' };
-  const out = decryptFields(obj, ['apiKey']);
-  assert.equal(out.apiKey, 'legacy-plain');
+test('decryptFields rejects non-encrypted string values, skips empty/non-string', () => {
+  assert.throws(() => decryptFields({ apiKey: 'plain-secret' }, ['apiKey']), /not in the expected encrypted format/);
+  const out = decryptFields({ apiKey: '', num: 42 } as any, ['apiKey', 'num']);
+  assert.equal(out.apiKey, '');
+  assert.equal(out.num, 42);
 });
 
 test('key rotation: resetCryptoKeyCache + new ENCRYPTION_KEY yields different output', () => {

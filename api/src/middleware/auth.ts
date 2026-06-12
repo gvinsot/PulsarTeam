@@ -123,9 +123,9 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
     const { username, password } = req.body;
 
     // Distinguish "DB unreachable" from "bad credentials". Without this, a
-    // misconfigured DATABASE_CONNECTION_STRING (or its legacy DATABASE_URL
-    // equivalent) on a replica causes getUserByUsername to silently return
-    // null, and every login attempt — including ones with valid credentials
+    // misconfigured DATABASE_CONNECTION_STRING on a replica causes
+    // getUserByUsername to silently return null, and every login attempt
+    // — including ones with valid credentials
     // that work on other replicas of the same DB — falls through to the
     // "Invalid credentials" branch. Surface the real cause so the operator
     // can fix it.

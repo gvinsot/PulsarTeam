@@ -37,14 +37,14 @@ import { createOutlookMcpHandler } from './services/outlookMcp.js';
 import { gmailRoutes } from './routes/gmail.js';
 import { createGmailMcpHandler } from './services/gmailMcp.js';
 import { gdriveRoutes } from './routes/gdrive.js';
-import { googleOAuthRedirectRouter, handleGoogleOAuthCallback } from './routes/googleOAuth.js';
+import { googleOAuthRedirectRouter } from './routes/googleOAuth.js';
 import { createGdriveMcpHandler } from './services/gdriveMcp.js';
 import { slackRoutes, slackOAuthRedirectRouter } from './routes/slack.js';
 import { createSlackMcpHandler } from './services/slackMcp.js';
 import { createAutoLearnMcpHandler } from './services/autoLearnMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
 import { settingsRoutes } from './routes/settings.js';
-import { createSwarmApiMcpHandler, createSwarmApiMcpSseHandlers } from './services/swarmApiMcp.js';
+import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { authenticateCoderApiKey } from './middleware/coderApiKeyAuth.js';
@@ -105,7 +105,7 @@ const io = new Server(httpServer, {
 const skillManager = new SkillManager();
 const executionManager = new ExecutionManager({
   claudecodeOptions: {
-    baseUrl: process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
+    baseUrl: process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
     apiKey: readSecret('CODER_API_KEY')
   }
 });
@@ -132,11 +132,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   // OAuth callback pages set their own CSP with a nonce for inline scripts
-  const isOAuthCallback =
-    req.path.endsWith('/oauth-redirect') ||
-    req.path === '/gmail-callback.html' ||
-    req.path === '/gdrive-callback.html' ||
-    req.path === '/google-callback.html';
+  const isOAuthCallback = req.path.endsWith('/oauth-redirect');
   if (!isOAuthCallback) {
     res.setHeader('Content-Security-Policy', contentSecurityPolicy);
   }
@@ -175,29 +171,20 @@ app.use('/api/contact', contactRoutes(agentManager));
 
 // Public OAuth redirect handlers — providers redirect here after consent (no auth needed)
 // Gmail and Drive share one OAuth client + one redirect URI; the service is
-// encoded in `state` so any of these paths invokes the same dispatcher.
+// encoded in `state` so one dispatcher routes the tokens to the right provider.
 app.use('/api/google', googleOAuthRedirectRouter());
-app.get('/api/gmail/oauth-redirect', handleGoogleOAuthCallback);   // backward compat
-app.get('/api/gdrive/oauth-redirect', handleGoogleOAuthCallback);  // backward compat
 app.use('/api/github', githubOAuthRedirectRouter());
 app.use('/api/slack', slackOAuthRedirectRouter());
 // Microsoft Graph OAuth shares one client across all Microsoft plugins
 // (OneDrive, Outlook; Teams/SharePoint in the future). The originating plugin
 // is encoded in `state` so a single redirect URI handles all of them.
 app.use('/api/microsoft', microsoftOAuthRedirectRouter());
-app.use('/api/onedrive', microsoftOAuthRedirectRouter()); // legacy alias
-// Legacy callback paths — Traefik routes these to the API to bypass global@file middleware
-app.get('/gmail-callback.html', handleGoogleOAuthCallback);
-app.get('/gdrive-callback.html', handleGoogleOAuthCallback);
-app.get('/google-callback.html', handleGoogleOAuthCallback);
 
 app.use('/api/agents', authenticateToken, agentRoutes(agentManager));
 app.use('/api/templates', authenticateToken, templateRoutes());
 app.use('/api/projects', authenticateToken, projectRoutes());
 app.use('/api/code-index', authenticateToken, codeIndexRoutes(codeIndexService));
 app.use('/api/plugins', authenticateToken, pluginRoutes(skillManager, mcpManager));
-// Backward compatibility
-app.use('/api/skills', authenticateToken, pluginRoutes(skillManager, mcpManager));
 app.use('/api/agent-skills', authenticateToken, agentSkillRoutes());
 app.use('/api/mcp-servers', authenticateToken, mcpServerRoutes(mcpManager));
 app.use('/api/onedrive', authenticateToken, onedriveRoutes());
@@ -283,10 +270,6 @@ app.all('/api/swarm-api/mcp', authenticateToken, (req, res) => swarmApiMcpIntern
 // External Swarm API — secured via API key (Bearer token)
 const swarmApiMcpHandler = createSwarmApiMcpHandler(agentManager);
 app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(req, res));
-// Legacy SSE transport for older MCP clients (GET /sse → stream, POST /messages → JSON-RPC)
-const { sseHandler, messagesHandler } = createSwarmApiMcpSseHandlers(agentManager);
-app.get('/api/swarm/mcp/sse', authenticateApiKey, (req, res) => sseHandler(req, res));
-app.post('/api/swarm/mcp/messages', authenticateApiKey, (req, res) => messagesHandler(req, res));
 app.use('/api/swarm', authenticateApiKey, swarmApiRoutes(agentManager));
 
 // Public liveness probe — returns minimal info for health checks
@@ -368,8 +351,6 @@ async function start() {
   await skillManager.seedDefaults(BUILTIN_SKILLS);
   await agentManager.loadFromDatabase();
   agentManager.startTaskLoop();
-
-  await executionManager.cleanupOrphans();
 
   await new Promise<void>((resolve) => {
     httpServer.listen(PORT, () => {

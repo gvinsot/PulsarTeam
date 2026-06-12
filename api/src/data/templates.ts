@@ -236,8 +236,6 @@ Product principles:
     role: 'Voice Swarm Leader',
     isLeader: true,
     isVoice: true,
-    provider: 'openai',
-    model: 'gpt-realtime-1.5',
     description: 'Voice-controlled leader that delegates tasks to agents via speech. Uses OpenAI Realtime API for speech-to-speech communication.',
     instructions: `You are a voice-controlled swarm leader. Users speak to you via microphone and you respond with speech.
 

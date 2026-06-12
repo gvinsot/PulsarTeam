@@ -20,7 +20,7 @@ from config import (
     logger,
 )
 from swarm_secrets import read as read_secret
-from .crypto import encrypt_text, decrypt_text, is_envelope
+from .crypto import encrypt_text, decrypt_text
 
 
 # --- Off-loop execution helper --------------------------------------------------
@@ -72,10 +72,10 @@ def _secure_makedirs(path: str):
 def _atomic_write_secret(path: str, content: str, encrypt: bool = True):
     """Write `content` to `path` atomically with mode 0600.
 
-    If `encrypt` is True (default) and ENCRYPTION_KEY is set, the content is
-    AES-GCM-encrypted before being written. Set `encrypt=False` for files that
-    are consumed by third-party tools (e.g. ~/.claude/.credentials.json read
-    directly by the Claude Code CLI), where the on-disk format is fixed.
+    If `encrypt` is True (default) the content is AES-GCM-encrypted before
+    being written. Set `encrypt=False` for files that are consumed by
+    third-party tools (e.g. ~/.claude/.credentials.json read directly by the
+    Claude Code CLI), where the on-disk format is fixed.
     """
     _secure_makedirs(os.path.dirname(path))
     payload = encrypt_text(content) if encrypt else content
@@ -96,9 +96,9 @@ def _atomic_write_secret(path: str, content: str, encrypt: bool = True):
 
 
 def _read_secret(path: str) -> Optional[str]:
-    """Read `path`, transparently decrypting if it's an AES-GCM envelope.
-    Returns the plaintext content, or None if the file doesn't exist or
-    cannot be decrypted (rotated/unmounted ENCRYPTION_KEY, corrupted file)."""
+    """Read and decrypt the AES-GCM envelope at `path`. Returns the plaintext
+    content, or None if the file doesn't exist or cannot be decrypted (not an
+    envelope, rotated/unmounted ENCRYPTION_KEY, corrupted file)."""
     try:
         with open(path) as f:
             raw = f.read()
@@ -125,24 +125,14 @@ def _read_secret_json(path: str) -> Optional[dict]:
         return None
 
 
-def _migrate_if_plaintext(path: str):
-    """If the file at `path` is legacy plaintext, rewrite it under the encryption envelope.
-    No-op if the file is missing, already encrypted, or encryption is disabled."""
+def _read_plain_json(path: str) -> Optional[dict]:
+    """Read a plaintext JSON file — one written with encrypt=False because it
+    is consumed directly by the Claude Code CLI (.credentials.json)."""
     try:
         with open(path) as f:
-            raw = f.read()
-    except (OSError, FileNotFoundError):
-        return
-    if not raw.strip() or is_envelope(raw):
-        return
-    from .crypto import is_enabled
-    if not is_enabled():
-        return
-    try:
-        _atomic_write_secret(path, raw)
-        logger.info(f"[Crypto] Migrated plaintext credentials to encrypted envelope: {path}")
-    except Exception as e:
-        logger.warning(f"[Crypto] Failed to migrate {path}: {e}")
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 # --- Rate limiting ------------------------------------------------------------
@@ -166,7 +156,7 @@ def set_token_cooldown_until(value: float):
 
 def _restore_credentials_file(oauth_data: dict):
     try:
-        creds = _read_secret_json(CREDENTIALS_FILE) or {}
+        creds = _read_plain_json(CREDENTIALS_FILE) or {}
         creds["claudeAiOauth"] = oauth_data
         # NOT encrypted: this file is consumed directly by the Claude Code CLI.
         _atomic_write_secret(CREDENTIALS_FILE, json.dumps(creds, indent=2), encrypt=False)
@@ -179,19 +169,16 @@ def load_saved_token() -> Optional[str]:
     token = read_secret("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
     if token:
         return token
-    _migrate_if_plaintext(TOKEN_JSON_FILE)
     oauth_data = _read_secret_json(TOKEN_JSON_FILE)
     if oauth_data:
         token = oauth_data.get("accessToken")
         if token:
             _restore_credentials_file(oauth_data)
             return token
-    _migrate_if_plaintext(TOKEN_FILE)
     raw = _read_secret(TOKEN_FILE)
     if raw and raw.strip():
         return raw.strip()
-    _migrate_if_plaintext(CREDENTIALS_FILE)
-    creds = _read_secret_json(CREDENTIALS_FILE)
+    creds = _read_plain_json(CREDENTIALS_FILE)
     if creds:
         token = creds.get("claudeAiOauth", {}).get("accessToken")
         if token:
@@ -211,7 +198,7 @@ def save_token(token: str, refresh_token: Optional[str] = None, expires_in: int 
     _atomic_write_secret(TOKEN_JSON_FILE, json.dumps(oauth_data, indent=2))
     os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
-    creds = _read_secret_json(CREDENTIALS_FILE) or {}
+    creds = _read_plain_json(CREDENTIALS_FILE) or {}
     creds["claudeAiOauth"] = oauth_data
     # NOT encrypted: this file is consumed directly by the Claude Code CLI.
     _atomic_write_secret(CREDENTIALS_FILE, json.dumps(creds, indent=2), encrypt=False)
@@ -413,7 +400,6 @@ def load_agent_token(agent_user: dict) -> Optional[str]:
             return token
     home = agent_user["home"]
     agent_token_json = os.path.join(home, "oauth_token.json")
-    _migrate_if_plaintext(agent_token_json)
     data = _read_secret_json(agent_token_json)
     if data:
         token = data.get("accessToken")
@@ -421,7 +407,7 @@ def load_agent_token(agent_user: dict) -> Optional[str]:
             return token
     # `.credentials.json` is consumed by the Claude Code CLI directly — leave it plaintext.
     agent_creds = os.path.join(home, ".claude", ".credentials.json")
-    creds = _read_secret_json(agent_creds)
+    creds = _read_plain_json(agent_creds)
     if creds:
         token = creds.get("claudeAiOauth", {}).get("accessToken")
         if token:
@@ -445,7 +431,7 @@ def save_agent_token(agent_user: dict, token: str, refresh_token: Optional[str] 
     }
     _atomic_write_secret(os.path.join(home, "oauth_token.json"), json.dumps(oauth_data, indent=2))
     agent_creds_file = os.path.join(home, ".claude", ".credentials.json")
-    creds = _read_secret_json(agent_creds_file) or {}
+    creds = _read_plain_json(agent_creds_file) or {}
     creds["claudeAiOauth"] = oauth_data
     # NOT encrypted: this file is consumed directly by the Claude Code CLI.
     _atomic_write_secret(agent_creds_file, json.dumps(creds, indent=2), encrypt=False)

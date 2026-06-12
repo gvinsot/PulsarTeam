@@ -6,11 +6,11 @@ import { AGENT_TEMPLATES } from '../../data/templates.js';
 const AGENT_UPDATE_FIELDS = [
   'name', 'role', 'description', 'instructions', 'temperature',
   'maxTokens', 'contextLength', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
-  'color', 'icon', 'provider', 'model', 'endpoint', 'apiKey', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'ttsEnabled', 'enabled',
+  'color', 'icon', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'ttsEnabled', 'enabled',
   'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId', 'boardId', 'permissions', 'credentials', 'runner', 'toolHooks'
 ];
 
-const LLM_FIELDS = ['provider', 'model', 'llmConfigId', 'endpoint'];
+const LLM_FIELDS = ['llmConfigId'];
 
 // Fields that define how a batch member runs. These are propagated to every
 // member in the same batch; runtime state (history, sessions, metrics, tasks)
@@ -33,10 +33,6 @@ export const crudMethods = {
       name: config.name || 'Unnamed Agent',
       role: config.role || 'general',
       description: config.description || '',
-      provider: config.provider,
-      model: config.model,
-      endpoint: config.endpoint || '',
-      apiKey: config.apiKey || (config.copyApiKeyFromAgent && this.agents.get(config.copyApiKeyFromAgent)?.apiKey) || '',
       instructions: config.instructions || 'You are a helpful AI assistant.',
       status: 'idle',
       currentTask: null,
@@ -83,7 +79,7 @@ export const crudMethods = {
     };
 
     this.agents.set(id, agent);
-    this._tasks.set(id, config.todoList || []);
+    this._tasks.set(id, []);
     await saveAgent(agent);
     if (config.ownerId) {
       await setAgentOwner(id, config.ownerId);
@@ -157,7 +153,6 @@ export const crudMethods = {
           target.name = `${batchBaseName} #${target.batchIndex ?? 1}`;
           continue;
         }
-        if (key === 'apiKey' && !effectiveUpdates[key] && target[key]) continue;
         if (key === 'ownerId' && effectiveUpdates[key] !== target[key]) {
           target[key] = effectiveUpdates[key];
           await setAgentOwner(target.id, effectiveUpdates[key]);

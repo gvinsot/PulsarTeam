@@ -36,6 +36,7 @@ function addTask(mgr: any, text: any, status: any, boardId = 'board-1', extra: a
     status,
     boardId,
     assignee: null,
+    environment: 'prod',
     ...extra,
   };
   mgr._addTaskToStore(firstAgentId, task);
@@ -50,6 +51,7 @@ function addTaskToAgent(mgr: any, agentId: any, text: any, status: any, boardId 
     status,
     boardId,
     assignee: null,
+    environment: 'prod',
     ...extra,
   };
   mgr._addTaskToStore(agentId, task);
@@ -511,19 +513,15 @@ test('executionStatus tracks watching/stopped lifecycle', async () => {
   assert.ok(!task.executionStatus, 'should start without executionStatus');
 
   task.executionStatus = 'watching';
-  task._executionWatching = true;
   assert.equal(task.executionStatus, 'watching');
 
   task.executionStatus = null;
-  delete task._executionWatching;
   assert.equal(task.executionStatus, null);
 
   task.executionStatus = 'stopped';
-  task._executionStopped = true;
   assert.equal(task.executionStatus, 'stopped');
 
   task.executionStatus = null;
-  delete task._executionStopped;
   assert.equal(task.executionStatus, null);
 });
 
@@ -534,7 +532,6 @@ test('_processNextPendingTasks skips tasks with executionStatus watching', async
   });
 
   task.executionStatus = 'watching';
-  task._executionWatching = true;
 
   const agent = mgr.agents.get(agentId);
   assert.equal(agent.status, 'idle');
@@ -548,7 +545,6 @@ test('_processNextPendingTasks skips tasks with executionStatus stopped', async 
   });
 
   task.executionStatus = 'stopped';
-  task._executionStopped = true;
 
   const agent = mgr.agents.get(agentId);
   assert.equal(agent.status, 'idle');
@@ -569,21 +565,6 @@ test('transition matching only applies to current task status', async () => {
   const matching = transitions.filter(t => t.from === taskStatus);
   assert.equal(matching.length, 1);
   assert.equal(matching[0].from, 'code');
-});
-
-test('transition matching ignores jira_ticket triggers in auto-refine', async () => {
-  const mgr = await setup([{ name: 'A', role: 'dev' }]);
-  const transitions = [
-    { from: 'code', trigger: 'on_enter', actions: [{ type: 'change_status', target: 'done' }] },
-    { from: 'code', trigger: 'jira_ticket', actions: [{ type: 'change_status', target: 'done' }] },
-  ];
-
-  // _checkAutoRefine skips jira_ticket triggers
-  const valid = transitions
-    .filter(t => mgr._validTransition(t))
-    .filter(t => t.trigger !== 'jira_ticket');
-  assert.equal(valid.length, 1);
-  assert.equal(valid[0].trigger, 'on_enter');
 });
 
 test('conditional transitions only fire when all conditions are met', async () => {

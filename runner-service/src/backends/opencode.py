@@ -38,7 +38,6 @@ from .runner_local_models import fetch_local_models
 
 logger = logging.getLogger("runner_service")
 
-_PULSAR_CONFIG_METADATA_KEYS = ("__pulsarManagedMcpServers", "_pulsarMcpUpdatedAt")
 _PULSAR_PERMISSION_SIDECAR = ".pulsar-managed-permission.json"
 
 
@@ -110,7 +109,7 @@ def _opencode_provider_config(llm_config: Optional[dict], model_spec: str) -> Op
     cfg = llm_config or {}
     raw_provider = (cfg.get("provider") or "").lower().strip()
     endpoint = (cfg.get("endpoint") or "").strip()
-    api_key = (cfg.get("apiKey") or cfg.get("api_key") or "").strip()
+    api_key = (cfg.get("apiKey") or "").strip()
 
     block: dict = {
         "models": {
@@ -197,17 +196,12 @@ def _merge_opencode_config(
     except (TypeError, json.JSONDecodeError):
         existing = {}
 
-    had_pulsar_metadata = any(key in existing for key in _PULSAR_CONFIG_METADATA_KEYS)
-    for key in _PULSAR_CONFIG_METADATA_KEYS:
-        existing.pop(key, None)
-
     if (
         clear_model
         and not managed
         and permission_override is None
         and not clear_permission
         and "model" not in existing
-        and not had_pulsar_metadata
     ):
         return existing_raw
 

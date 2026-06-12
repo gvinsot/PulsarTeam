@@ -17,9 +17,7 @@ import { readSecret } from '../secrets.js';
  *
  * Mirrors the Google OAuth pattern (api/src/routes/googleOAuth.ts).
  *
- * Mounted at:
- *   - /api/microsoft/oauth-redirect  (preferred)
- *   - /api/onedrive/oauth-redirect   (legacy alias)
+ * Mounted at /api/microsoft/oauth-redirect.
  */
 
 export type MicrosoftService = 'onedrive' | 'outlook';
@@ -139,17 +137,30 @@ const PROVIDER_LABEL: Record<MicrosoftService, string> = {
 
 const OAUTH_CALLBACK_MESSAGE_TYPE = 'microsoft-oauth-callback';
 
+// Best-effort service recovery for errors that arrive before state
+// verification, so the opener can route the message to the right widget.
+// Reads the (signed) state payload without requiring a valid flow.
+function peekServiceFromState(state: string | undefined): { service: MicrosoftService } | undefined {
+  if (!state) return undefined;
+  try {
+    const payload = state.slice(0, state.lastIndexOf('.'));
+    const entry = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
+    if (entry?.service === 'onedrive' || entry?.service === 'outlook') return { service: entry.service };
+  } catch { /* untaggable — the popup itself still displays the error */ }
+  return undefined;
+}
+
 export async function handleMicrosoftOAuthCallback(req: express.Request, res: express.Response) {
   const err = req.query.error as string | undefined;
+  const state = req.query.state as string | undefined;
   if (err) {
     const desc = (req.query.error_description as string | undefined) || err;
-    return sendOAuthResult(res, 'Microsoft', OAUTH_CALLBACK_MESSAGE_TYPE, false, String(desc));
+    return sendOAuthResult(res, 'Microsoft', OAUTH_CALLBACK_MESSAGE_TYPE, false, String(desc), peekServiceFromState(state));
   }
 
   const code = req.query.code as string | undefined;
-  const state = req.query.state as string | undefined;
   if (!code || !state) {
-    return sendOAuthResult(res, 'Microsoft', OAUTH_CALLBACK_MESSAGE_TYPE, false, 'Missing code or state parameter');
+    return sendOAuthResult(res, 'Microsoft', OAUTH_CALLBACK_MESSAGE_TYPE, false, 'Missing code or state parameter', peekServiceFromState(state));
   }
 
   const stateData = consumeMicrosoftOAuthState(state);

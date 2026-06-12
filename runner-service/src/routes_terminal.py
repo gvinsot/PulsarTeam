@@ -308,14 +308,12 @@ async def ws_terminal(
             if "bytes" in msg and msg["bytes"] is not None:
                 await session.write(msg["bytes"])
             elif "text" in msg and msg["text"] is not None:
-                # Control frames piggy-back on text messages (resize, paste-as-input,
-                # etc.). Anything that isn't recognised JSON is treated as raw input
-                # so a fallback xterm.js client without our addon still works.
-                text = msg["text"]
+                # Control frames (resize, refresh) piggy-back on text messages;
+                # keystrokes only ever arrive as binary frames. Unparseable
+                # text frames are ignored.
                 try:
-                    ctrl = json.loads(text)
+                    ctrl = json.loads(msg["text"])
                 except Exception:
-                    await session.write(text.encode("utf-8"))
                     continue
                 ctype = ctrl.get("type") if isinstance(ctrl, dict) else None
                 if ctype == "resize":
@@ -328,20 +326,8 @@ async def ws_terminal(
                 elif ctype == "refresh":
                     # Client asks for an immediate repaint of the current screen
                     # (e.g. it just attached and wants live state now, not on the
-                    # next output). Under tmux, ask tmux to re-emit the
-                    # authoritative screen; in snapshot mode, push the rendered
-                    # snapshot. Raw (non-tmux) clients already got a scrollback
-                    # replay on attach.
-                    if getattr(session, "_use_tmux", False):
-                        await session.request_repaint()
-                    else:
-                        snap = session.current_snapshot()
-                        if snap:
-                            await push_bytes_to_client(snap)
-                elif ctype == "input":
-                    raw = ctrl.get("data", "")
-                    if isinstance(raw, str):
-                        await session.write(raw.encode("utf-8"))
+                    # next output). tmux re-emits the authoritative screen.
+                    await session.request_repaint()
                 # Unknown control frames are ignored on purpose — keeps the
                 # protocol forward-compatible.
     except WebSocketDisconnect:

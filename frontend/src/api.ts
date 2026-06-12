@@ -447,21 +447,6 @@ export const api = {
       headers: getHeaders()
     }).then(handleResponse),
 
-  // Backward compat aliases
-  getSkills: () =>
-    apiFetch(`${API_BASE}/plugins`, { headers: getHeaders() }).then(handleResponse),
-  assignSkill: (agentId, skillId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/plugins`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ pluginId: skillId })
-    }).then(handleResponse),
-  removeSkill: (agentId, skillId) =>
-    apiFetch(`${API_BASE}/agents/${agentId}/plugins/${skillId}`, {
-      method: 'DELETE',
-      headers: getHeaders()
-    }).then(handleResponse),
-
   // MCP Servers (CRUD)
   getMcpServers: () =>
     apiFetch(`${API_BASE}/mcp-servers`, { headers: getHeaders() }).then(handleResponse),
@@ -517,11 +502,6 @@ export const api = {
     return apiFetch(`${API_BASE}/onedrive/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },
 
-  onedriveCallback: (code, state) =>
-    apiFetch(`${API_BASE}/onedrive/callback`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify({ code, state })
-    }).then(handleResponse),
-
   disconnectOnedrive: (agentId?, boardId?) =>
     apiFetch(`${API_BASE}/onedrive/disconnect`, {
       method: 'POST', headers: getHeaders(),
@@ -545,11 +525,6 @@ export const api = {
     return apiFetch(`${API_BASE}/gmail/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },
 
-  gmailCallback: (code, state) =>
-    apiFetch(`${API_BASE}/gmail/callback`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify({ code, state })
-    }).then(handleResponse),
-
   disconnectGmail: (agentId?, boardId?) =>
     apiFetch(`${API_BASE}/gmail/disconnect`, {
       method: 'POST', headers: getHeaders(),
@@ -572,11 +547,6 @@ export const api = {
     const qs = params.toString();
     return apiFetch(`${API_BASE}/outlook/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },
-
-  outlookCallback: (code, state) =>
-    apiFetch(`${API_BASE}/outlook/callback`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify({ code, state })
-    }).then(handleResponse),
 
   disconnectOutlook: (agentId?, boardId?) =>
     apiFetch(`${API_BASE}/outlook/disconnect`, {
@@ -623,11 +593,6 @@ export const api = {
     const qs = params.toString();
     return apiFetch(`${API_BASE}/slack/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },
-
-  slackCallback: (code, state) =>
-    apiFetch(`${API_BASE}/slack/callback`, {
-      method: 'POST', headers: getHeaders(), body: JSON.stringify({ code, state })
-    }).then(handleResponse),
 
   disconnectSlack: (agentId?, boardId?) =>
     apiFetch(`${API_BASE}/slack/disconnect`, {
@@ -816,10 +781,6 @@ export const api = {
       body: JSON.stringify(patch)
     }).then(handleResponse),
 
-  // Workflow (read-only — default board workflow)
-  getWorkflow: () =>
-    apiFetch(`${API_BASE}/settings/general/workflow`, { headers: getHeaders() }).then(handleResponse),
-
   // Boards (per-user multi-board)
   getBoards: () =>
     apiFetch(`${API_BASE}/boards`, { headers: getHeaders() }).then(handleResponse),
@@ -1007,13 +968,6 @@ export const api = {
     const qs = params.toString();
     return apiFetch(`${API_BASE}/github/auth-url${qs ? `?${qs}` : ''}`, { headers: getHeaders() }).then(handleResponse);
   },
-
-  githubCallback: (code: string, state: string) =>
-    apiFetch(`${API_BASE}/github/callback`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({ code, state })
-    }).then(handleResponse),
 
   disconnectGitHub: (agentId?: string, boardId?: string) =>
     apiFetch(`${API_BASE}/github/disconnect`, {

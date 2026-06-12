@@ -16,7 +16,7 @@ import { saveTaskToDb, updateTaskExecutionStatus } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 
-const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
+const CLI_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
 
 // Heartbeat for the execution lock + busy flag while a run_agent action is in
 // flight. Long CLI/coding runs routinely exceed the 15-min stale-lock TTL in
@@ -873,11 +873,10 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
 
     // Check if agent completed the task via @task_execution_complete
     const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+    const completion = agentManager._consumeTaskCompletion?.(task.id);
 
-    if (freshTask?._executionCompleted) {
-      const comment = freshTask._executionComment || '';
-      delete freshTask._executionCompleted;
-      delete freshTask._executionComment;
+    if (completion) {
+      const comment = completion.comment || '';
       console.log(`✅ [ActionExecutor] execute: completed immediately${hasInstructions ? ' (with instructions)' : ''}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
     } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
       console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);

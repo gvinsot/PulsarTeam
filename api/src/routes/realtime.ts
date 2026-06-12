@@ -213,9 +213,9 @@ export function realtimeRoutes(agentManager) {
       return res.status(400).json({ error: 'Agent is not a voice agent' });
     }
 
-    // Resolve API key from LLM config, falling back to agent-level apiKey field.
+    // Resolve API key from the agent's LLM config.
     const llmConfig = agentManager.resolveLlmConfig(agent);
-    const apiKey = llmConfig.apiKey || agent.apiKey;
+    const apiKey = llmConfig.apiKey;
     if (!apiKey) {
       return res.status(500).json({
         error: 'No OpenAI API key configured. Set an API key in the LLM Configuration assigned to this voice agent.',
@@ -226,7 +226,7 @@ export function realtimeRoutes(agentManager) {
       const instructions = agentManager.buildVoiceInstructions(agentId);
       const voice = agent.voice || process.env.OPENAI_REALTIME_VOICE || 'alloy';
       const DEFAULT_REALTIME_MODEL = 'gpt-realtime-1.5';
-      const candidateModel = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || agent.model || '';
+      const candidateModel = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || '';
       const model = candidateModel.includes('realtime') ? candidateModel : DEFAULT_REALTIME_MODEL;
       const transcriptionModel =
         process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;

@@ -55,7 +55,7 @@ export function rowToTask(row) {
     errorFromStatus: row.error_from_status || undefined,
     isManual: row.is_manual || false,
     position: parseInt(row.position, 10) || 0,
-    environment: row.environment || null,
+    environment: row.environment,
   };
 }
 
@@ -128,26 +128,7 @@ export async function saveTaskToDb(task) {
   return chained;
 }
 
-// Live deployments may be missing the `environment` column if the
-// initDatabase ALTER silently failed at boot (the migration's .catch
-// swallowed the error). When a save trips Postgres' 42703 undefined_column
-// for `environment`, run the ADD COLUMN ourselves and retry once. After the
-// first successful retry every subsequent save hits the fast path.
-let _envColumnEnsured = false;
-async function _ensureEnvironmentColumn(pool: any): Promise<boolean> {
-  if (_envColumnEnsured) return true;
-  try {
-    await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS environment TEXT');
-    _envColumnEnsured = true;
-    console.log('[saveTaskToDb] Self-healed: added missing `environment` column on tasks');
-    return true;
-  } catch (e: any) {
-    console.error('[saveTaskToDb] Self-heal ALTER TABLE failed:', e.message);
-    return false;
-  }
-}
-
-async function _doSaveTask(task, _isRetry = false) {
+async function _doSaveTask(task) {
   const pool = getPool();
   try {
     await pool.query(
@@ -168,7 +149,6 @@ async function _doSaveTask(task, _isRetry = false) {
          completed_at = $21, started_at = $22,
          execution_status = $23, completed_action_idx = $24, action_running = $25, action_running_agent_id = $26,
          action_running_mode = $27, error_from_status = $28, is_manual = $29, position = $30,
-         environment = COALESCE(tasks.environment, $31),
          pending_on_enter = $32`,
       [
         task.id,
@@ -201,25 +181,11 @@ async function _doSaveTask(task, _isRetry = false) {
         task.errorFromStatus || null,
         task.isManual || false,
         task.position ?? 0,
-        task.environment || null,
+        task.environment || 'prod',
         task._pendingOnEnter || null,
       ]
     );
-    // Fast path succeeded — flip the cached flag so we skip the probe forever.
-    if (!_envColumnEnsured) _envColumnEnsured = true;
   } catch (err: any) {
-    // Postgres SQLSTATE 42703 = undefined_column. Self-heal only on the
-    // 'environment' column to avoid masking unrelated schema drift.
-    const isMissingEnvCol =
-      !_isRetry &&
-      (err?.code === '42703' || /column "?environment"? .* does not exist/i.test(err?.message || ''));
-    if (isMissingEnvCol) {
-      const healed = await _ensureEnvironmentColumn(pool);
-      if (healed) {
-        await _doSaveTask(task, true);
-        return;
-      }
-    }
     console.error(`Failed to save task ${task.id}:`, err.message);
     throw err;
   }
@@ -312,8 +278,7 @@ export async function deleteTasksByAgent(agentId) {
  * with their assignee agent idle and enabled.
  *
  * When `environment` is provided, only tasks tagged with that environment are
- * returned. Tasks created before this column existed (environment IS NULL)
- * are processed by the "prod" instance so legacy behavior is preserved.
+ * returned.
  */
 export async function getTasksForResume(environment?: string | null) {
   const pool = getPool();
@@ -323,9 +288,7 @@ export async function getTasksForResume(environment?: string | null) {
     let envFilter = '';
     if (environment) {
       params.push(environment);
-      envFilter = environment === 'prod'
-        ? `AND (t.environment = $1 OR t.environment IS NULL)`
-        : `AND t.environment = $1`;
+      envFilter = `AND t.environment = $1`;
     }
     const result = await pool.query(`
       SELECT t.*,
@@ -426,8 +389,7 @@ export async function clearActionRunningForAgent(agentId) {
  * and the workflow re-arm forever.
  *
  * When `environment` is provided, only tasks tagged for that environment are
- * cleared, so a sibling replica's locks aren't wiped on restart. NULL env is
- * treated as "prod" so legacy tasks still recover on the prod replica.
+ * cleared, so a sibling replica's locks aren't wiped on restart.
  */
 export async function clearAllStaleActionRunning(environment?: string | null) {
   const pool = getPool();
@@ -437,9 +399,7 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
     let envFilter = '';
     if (environment) {
       params.push(environment);
-      envFilter = environment === 'prod'
-        ? `AND (environment = $1 OR environment IS NULL)`
-        : `AND environment = $1`;
+      envFilter = `AND environment = $1`;
     }
     const result = await pool.query(`
       UPDATE tasks SET
@@ -621,7 +581,7 @@ export async function countActiveTasksForAgent(agentId, excludeTaskId = null) {
 
 /**
  * Get all recurring tasks (any status). The reset scheduler decides whether
- * each task is due based on its own `recurrence.lastResetAt` (or fallbacks),
+ * each task is due based on its own `recurrence.lastResetAt`,
  * independently of the workflow status — so a task stuck in `error` or in a
  * mid-workflow column still gets re-armed on its next interval.
  */
@@ -782,24 +742,6 @@ export async function getTasksByStatusAndBoard(status = null, boardId = null) {
   } catch (err) {
     console.error('Failed to get tasks by status/board:', err.message);
     return [];
-  }
-}
-
-/**
- * Find a task by Jira key (stored in source JSONB).
- */
-export async function getTaskByJiraKey(jiraKey) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query(
-      `${TASK_SELECT} WHERE t.source->>'jiraKey' = $1 AND t.deleted_at IS NULL LIMIT 1`,
-      [jiraKey]
-    );
-    return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
-  } catch (err) {
-    console.error('Failed to get task by Jira key:', err.message);
-    return null;
   }
 }
 

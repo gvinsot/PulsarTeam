@@ -6,8 +6,8 @@
  *   - authTag:   16 bytes
  *   - ciphertext: variable length
  *
- * The `enc:v1:` prefix lets callers detect already-encrypted values, which is
- * required for idempotent migrations of legacy plaintext rows.
+ * The `enc:v1:` prefix lets callers detect already-encrypted values, keeping
+ * writes idempotent.
  *
  * The master key is derived from the `ENCRYPTION_KEY` secret (Docker secret or
  * env var) via HKDF-SHA256 → 32 bytes. Operators MUST set a strong value
@@ -112,13 +112,12 @@ export function decryptString(value: string): string {
 }
 
 /**
- * Decrypt a value if it is encrypted; pass through plaintext unchanged.
- * Used at read-time on tables that may still hold legacy plaintext rows.
- * Returns null/undefined inputs unchanged.
+ * Decrypt a stored value. Returns null/undefined/empty inputs unchanged
+ * (nullable columns); any other value must be in the wire format or this
+ * throws.
  */
 export function tryDecrypt<T extends string | null | undefined>(value: T): T {
   if (value == null || value === '') return value;
-  if (!isEncrypted(value as string)) return value;
   try {
     return decryptString(value as string) as T;
   } catch (err) {
@@ -126,16 +125,6 @@ export function tryDecrypt<T extends string | null | undefined>(value: T): T {
     // would otherwise hand an unusable token to upstream APIs.
     throw new Error(`Failed to decrypt stored value: ${(err as Error).message}`);
   }
-}
-
-/**
- * Encrypt only if the input is plaintext; pass through values that are already
- * encrypted or empty. Idempotent — safe to call on every write.
- */
-export function encryptIfPlain<T extends string | null | undefined>(value: T): T {
-  if (value == null || value === '') return value;
-  if (isEncrypted(value as string)) return value;
-  return encryptString(value as string) as T;
 }
 
 /**
@@ -157,19 +146,27 @@ export function encryptFields<T extends Record<string, any>>(obj: T, fields: rea
   return out as T;
 }
 
-/** Decrypt the named string fields of an object (returns a shallow clone). */
+/**
+ * Decrypt the named string fields of an object (returns a shallow clone).
+ * Non-string / empty fields are skipped (encryptFields skips them on write);
+ * non-empty strings must be in the wire format or this throws.
+ */
 export function decryptFields<T extends Record<string, any>>(obj: T, fields: readonly string[]): T {
   if (!obj || typeof obj !== 'object') return obj;
   const out: Record<string, any> = { ...obj };
   for (const f of fields) {
     const v = out[f];
-    if (typeof v === 'string' && isEncrypted(v)) {
-      try {
-        out[f] = decryptString(v);
-      } catch {
-        // Leave the encrypted value in place; downstream code will fail loudly
-        // when it tries to use it, which is preferable to silent fallthrough.
-      }
+    if (typeof v !== 'string' || v === '') continue;
+    if (!isEncrypted(v)) {
+      throw new Error(`Field "${f}" is not in the expected encrypted format`);
+    }
+    try {
+      out[f] = decryptString(v);
+    } catch {
+      // Leave the encrypted value in place; downstream code will fail loudly
+      // when it tries to use it, which is preferable to silent fallthrough.
+      // Tolerates rows written with a different ENCRYPTION_KEY by a sibling
+      // deployment sharing the same database.
     }
   }
   return out as T;

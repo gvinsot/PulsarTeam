@@ -44,9 +44,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   const [activeBoardId, setActiveBoardId] = useState(null);
   const [boardsLoaded, setBoardsLoaded] = useState(false);
 
-  // Fallback workflow for when no board exists yet (legacy compat)
-  const [fallbackWorkflow, setFallbackWorkflow] = useState(null);
-
   // Load boards on mount
   useEffect(() => {
     let cancelled = false;
@@ -67,12 +64,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           setBoards([board]);
           setActiveBoardId(board.id);
         }
-      } catch {
-        // Fallback to legacy single workflow
-        try {
-          const wf = await api.getWorkflow();
-          if (!cancelled) setFallbackWorkflow(wf);
-        } catch { /* no-op */ }
+      } catch (err) {
+        console.error('Failed to load boards:', err);
       } finally {
         if (!cancelled) setBoardsLoaded(true);
       }
@@ -123,11 +116,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   const isReadOnly = boardPermission === 'read';
   const canEdit = boardPermission === 'edit' || boardPermission === 'admin';
 
-  // Get workflow: from active board, or fallback
-  const workflow = useMemo(() => {
-    if (activeBoard?.workflow?.columns) return activeBoard.workflow;
-    return fallbackWorkflow;
-  }, [activeBoard, fallbackWorkflow]);
+  // Get workflow from the active board
+  const workflow = useMemo(
+    () => (activeBoard?.workflow?.columns ? activeBoard.workflow : null),
+    [activeBoard]
+  );
 
   const columns = useMemo(() => workflow ? buildColumns(workflow.columns) : [], [workflow]);
   const statusOptions = useMemo(() => workflow ? buildStatusOptions(workflow.columns) : [], [workflow]);

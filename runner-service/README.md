@@ -25,7 +25,6 @@ backend doesn't support return `501`.
 - `GET  /health`
 - `POST /execute`                — sync agent run
 - `POST /stream`                 — SSE stream
-- `POST /reset`                  — clear agent session
 - `POST /v1/chat/completions`    — OpenAI-compatible
 - `POST /v1/completions`
 - `GET  /v1/models`
@@ -70,16 +69,13 @@ runner-service/
         └── mock.py             canned-response LLM (testing)
 ```
 
-## Claude Code: interactive vs headless mode
+## Claude Code: interactive mode
 
 Anthropic announced that Claude Code's headless mode (`claude -p` /
 `--print`) is moving to API-rate pricing while the interactive TUI keeps
-subscription pricing. The runner now defaults to **interactive mode**:
-the CLI is spawned without `-p`, driven through a PTY, and the assistant's
-reply is captured by waiting for an idle window.
-
-Set `CLAUDE_USE_PRINT_MODE=true` to opt back into the old `-p` path
-(useful for shells with no PTY support or for diagnostic comparisons).
+subscription pricing. The runner runs in **interactive mode**: the CLI is
+spawned without `-p`, driven through a PTY, and the assistant's reply is
+captured by waiting for an idle window.
 
 Interactive mode has to answer any Y/N or numbered-choice prompts the TUI
 emits. The driver responds with safe defaults (`y` / first option). For

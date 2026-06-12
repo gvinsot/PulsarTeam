@@ -14,14 +14,9 @@ import { readSecret } from '../secrets.js';
  * parameter so the callback handler can route the resulting tokens to the
  * right provider in the oauth_tokens table.
  *
- * The handler is mounted at:
- *   - /api/google/oauth-redirect   (preferred)
- *   - /api/gmail/oauth-redirect    (backward compat, same handler)
- *   - /api/gdrive/oauth-redirect   (backward compat, same handler)
- *   - /gmail-callback.html         (legacy Traefik route, same handler)
- *
- * Only one URI needs to be registered in the Google Cloud Console — the URL
- * path is irrelevant to the dispatch logic, only state.service is.
+ * The handler is mounted at /api/google/oauth-redirect — the single URI
+ * registered in the Google Cloud Console. The URL path is irrelevant to the
+ * dispatch logic, only state.service is.
  */
 
 export type GoogleService = 'gmail' | 'gdrive';
@@ -151,8 +146,8 @@ function googleOAuthResult(
   email?: string | null,
 ) {
   const providerLabel = service ? PROVIDER_LABEL_BY_SERVICE[service] : 'Google';
-  // No service → no listener can claim the message, but we still try the gmail
-  // type so legacy callers see _something_. Errors at this stage are rare.
+  // No service → no listener can claim the message, but we still send the gmail
+  // type so the popup reports _something_. Errors at this stage are rare.
   const messageType = service ? MESSAGE_TYPE_BY_SERVICE[service] : 'gmail-oauth-callback';
   const extra: Record<string, any> = {};
   if (email) extra.email = email;

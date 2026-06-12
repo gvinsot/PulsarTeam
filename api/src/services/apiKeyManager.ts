@@ -5,7 +5,7 @@ import { readSecret } from '../secrets.js';
 const TABLE = 'api_keys';
 
 // Bump when the hashing scheme changes. Rows with an older version are
-// considered invalid and pruned at startup, forcing the admin to mint a new key.
+// ignored by all queries, forcing the admin to mint a new key.
 const CURRENT_HASH_VERSION = 2;
 
 /**
@@ -75,22 +75,10 @@ export async function ensureApiKeysTable() {
       id TEXT PRIMARY KEY,
       key_hash TEXT NOT NULL,
       prefix TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT NOW()
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      hash_version INTEGER NOT NULL
     )
   `);
-
-  // Upgrade migration: track which hashing scheme produced key_hash.
-  await pool.query(
-    `ALTER TABLE ${TABLE} ADD COLUMN IF NOT EXISTS hash_version INTEGER`
-  );
-
-  // Invalidate any rows hashed with an older scheme (e.g. plain SHA-256
-  // pre-v2). The plaintext is not recoverable, so re-hashing is impossible —
-  // the admin must mint a new key.
-  await pool.query(
-    `DELETE FROM ${TABLE} WHERE hash_version IS NULL OR hash_version < $1`,
-    [CURRENT_HASH_VERSION]
-  );
 }
 
 /**

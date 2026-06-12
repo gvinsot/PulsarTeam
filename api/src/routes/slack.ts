@@ -223,60 +223,6 @@ export function slackRoutes() {
     res.json({ authUrl: `https://slack.com/oauth/v2/authorize?${params}` });
   });
 
-  router.post('/callback', async (req, res) => {
-    const config = getConfig();
-    if (!config) return res.status(500).json({ error: 'Slack not configured' });
-
-    const { code, state } = req.body;
-    if (!code) return res.status(400).json({ error: 'Authorization code is required' });
-    if (!state) return res.status(400).json({ error: 'State parameter required' });
-
-    const stateData = consumeOAuthState(state);
-    if (!stateData) return res.status(400).json({ error: 'Invalid or expired state' });
-
-    try {
-      const body = new URLSearchParams({
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        code,
-        redirect_uri: config.redirectUri,
-      });
-
-      const response = await fetch('https://slack.com/api/oauth.v2.access', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-      });
-
-      const data = await response.json();
-      if (!data.ok) {
-        console.error('[Slack] Token exchange failed:', data);
-        return res.status(400).json({ error: `Token exchange failed: ${data.error}` });
-      }
-
-      const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
-
-      await storeOAuthToken({
-        provider: 'slack',
-        scopeType,
-        scopeId,
-        accessToken: data.access_token,
-        meta: {
-          teamId: data.team?.id,
-          teamName: data.team?.name,
-          botUserId: data.bot_user_id,
-          authedUser: data.authed_user,
-        },
-      }, { throwOnPersistError: true });
-
-      console.log(`✅ [Slack] OAuth tokens stored for ${scopeType}:${scopeId} (team: ${data.team?.name || 'unknown'})`);
-      res.json({ success: true, teamName: data.team?.name, agentId: stateData.agentId, boardId: stateData.boardId });
-    } catch (err) {
-      console.error('[Slack] Token exchange error:', err);
-      res.status(500).json({ error: 'Token exchange failed' });
-    }
-  });
-
   router.post('/disconnect', async (req, res) => {
     const agentId = req.body?.agentId || null;
     const boardId = req.body?.boardId || null;

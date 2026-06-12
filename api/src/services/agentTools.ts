@@ -298,15 +298,9 @@ async function toolReadFile(provider, agentId, filePath, startLineArg, endLineAr
     const content = await provider.readFile(agentId, filePath);
     const allLines = content.split('\n');
 
-    // Parse line range — handle both @read_file(path, 10, 25) and @read_file(path, "10, 25")
-    let startLine = parseInt(startLineArg, 10);
-    let endLine = parseInt(endLineArg, 10);
-    // If startLineArg contains a comma (e.g. "10, 25" from 2-arg parser), split it
-    if (isNaN(startLine) && typeof startLineArg === 'string' && startLineArg.includes(',')) {
-      const parts = startLineArg.split(',').map(s => parseInt(s.trim(), 10));
-      startLine = parts[0];
-      endLine = parts[1];
-    }
+    // Parse optional line range: (path, startLine[, endLine])
+    const startLine = parseInt(startLineArg, 10);
+    const endLine = parseInt(endLineArg, 10);
 
     if (!isNaN(startLine) && startLine > 0) {
       const start = Math.max(0, startLine - 1);
@@ -668,7 +662,7 @@ export function parseToolCalls(response) {
     .replace(/\[TOOL_CALLS?\]/gi, '');
 
   const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'list_my_tasks', 'list_projects', 'check_status', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'search_skill', 'delete_skill', 'delete_task', 'list_boards'];
-  const READ_FILE_TOOLS = ['read_file'];  // 1-arg or 3-arg (path, startLine, endLine)
+  const READ_FILE_TOOLS = ['read_file'];  // 1-arg, 2-arg (path, startLine) or 3-arg (path, startLine, endLine)
   const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'create_skill', 'update_skill', 'move_task_to_board', 'list_tasks'];
   const THREE_ARG_TOOLS = ['mcp_call', 'update_task', 'task_execution_complete'];
   const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...READ_FILE_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
@@ -708,7 +702,7 @@ export function parseToolCalls(response) {
           const third = rest.slice(secondComma + 1).trim();
           args = [sanitizeArg(first), sanitizeArg(second), sanitizeArg(third)];
         } else {
-          // @read_file(path, "10, 25") — legacy format
+          // @read_file(path, startLine) — read from startLine to end of file
           args = [sanitizeArg(first), sanitizeArg(rest)];
         }
       } else {

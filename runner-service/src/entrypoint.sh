@@ -137,7 +137,7 @@ echo "Configuration:"
 echo "  Backend: ${RUNNER_TYPE:-claude-code}"
 echo "  Server runs as: root (cap_drop=ALL + minimal cap_add — see compose)"
 echo "  Per-agent CLI subprocesses run under deterministic UIDs (20000+) from agent_user.py"
-echo "  Model: ${RUNNER_MODEL:-${CLAUDE_MODEL:-claude-sonnet-4-20250514}}"
+echo "  Model: ${RUNNER_MODEL:-claude-sonnet-4-20250514}"
 echo "  Projects dir: ${PROJECTS_DIR:-/projects}"
 
 # The server stays root so it can:

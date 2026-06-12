@@ -20,6 +20,7 @@ export const statusMethods = {
 
     const currentTaskEntry = todoList.find((t: any) => this._isActiveTaskStatus(t.status));
     const currentTask = agent.currentTask || (currentTaskEntry ? currentTaskEntry.text : null);
+    const resolvedLlm = this.resolveLlmConfig(agent);
 
     const activeTasks = todoList
       .filter((t: any) => t.status !== 'done')
@@ -41,8 +42,8 @@ export const statusMethods = {
       projectDurationMs,
       currentTask: currentTask,
       activeTasks,
-      provider: agent.provider || null,
-      model: agent.model || null,
+      provider: resolvedLlm.provider || null,
+      model: resolvedLlm.model || null,
       enabled: agent.enabled !== false,
       isLeader: agent.isLeader || false,
       runner: agent.runner || null,

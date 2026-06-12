@@ -1,5 +1,5 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, saveAgent, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, getTaskById } from '../database.js';
+import { getAllAgents, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, getTaskById } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
@@ -63,8 +63,6 @@ export interface AgentManager {
   deleteRagDocument(agentId: string, docId: string): boolean;
   assignSkill(agentId: string, skillId: string): string[] | null;
   removeSkill(agentId: string, skillId: string): boolean;
-  assignMcpServer(agentId: string, serverId: string): string[] | null;
-  removeMcpServer(agentId: string, serverId: string): boolean;
 
   // ── conversation.ts ──
   clearHistory(agentId: string): Promise<boolean>;
@@ -169,7 +167,6 @@ export class AgentManager {
   wsEmitter: WsEmitter;
   skillManager: any;
   executionManager: any;
-  sandboxManager: any;
   mcpManager: any;
   codeIndexService: any;
   _updateTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -200,8 +197,6 @@ export class AgentManager {
     this.io = io;
     this.skillManager = skillManager;
     this.executionManager = executionManager;
-    // Backward compatibility alias
-    this.sandboxManager = executionManager;
     this.mcpManager = mcpManager;
     this.codeIndexService = codeIndexService;
     this._updateTimers = new Map();
@@ -234,25 +229,11 @@ export class AgentManager {
         agent.ttsEnabled = agent.ttsEnabled || false;
         agent.projectContexts = agent.projectContexts || {};
         agent.runnerSessions = agent.runnerSessions || {};
-        let needsSave = false;
         if (agent.projectChangedAt === undefined) {
           agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;
         }
         // Load tasks from the dedicated tasks table into centralized store
         this._tasks.set(agent.id, await getTasksByAgent(agent.id));
-        if (agent.mcpServers.includes('mcp-swarm-manager')) {
-          agent.mcpServers = agent.mcpServers.filter((id: string) => id !== 'mcp-swarm-manager');
-          if (!agent.mcpServers.includes('mcp-pulsarcd-read')) agent.mcpServers.push('mcp-pulsarcd-read');
-          if (!agent.mcpServers.includes('mcp-pulsarcd-actions')) agent.mcpServers.push('mcp-pulsarcd-actions');
-          needsSave = true;
-        }
-        if (agent.skills.includes('skill-swarm-devops')) {
-          agent.skills = agent.skills.filter((id: string) => id !== 'skill-swarm-devops');
-          if (!agent.skills.includes('skill-swarm-reader')) agent.skills.push('skill-swarm-reader');
-          if (!agent.skills.includes('skill-swarm-actions')) agent.skills.push('skill-swarm-actions');
-          needsSave = true;
-        }
-        if (needsSave) await saveAgent(agent);
         this.agents.set(agent.id, agent);
       }
       console.log(`📂 Loaded ${agents.length} agents from database`);
@@ -279,26 +260,26 @@ export class AgentManager {
         return {
           provider: config.provider,
           model: config.model,
-          endpoint: config.endpoint || agent.endpoint || '',
-          apiKey: config.apiKey || agent.apiKey || '',
+          endpoint: config.endpoint || '',
+          apiKey: config.apiKey || '',
           isReasoning: config.isReasoning || false,
           temperature: config.temperature ?? null,
           managesContext: config.managesContext || false,
           supportsImages: config.supportsImages || false,
           maxTokens: config.maxOutputTokens || agent.maxTokens || 4096,
-          contextLength: config.contextSize || agent.contextLength || 0,
-          costPerInputToken: config.costPerInputToken ?? agent.costPerInputToken ?? null,
-          costPerOutputToken: config.costPerOutputToken ?? agent.costPerOutputToken ?? null,
+          contextLength: config.contextSize || 0,
+          costPerInputToken: config.costPerInputToken ?? null,
+          costPerOutputToken: config.costPerOutputToken ?? null,
           configName: config.name,
         };
       }
-      console.warn(`[LLM] Agent ${agent.name} references unknown llmConfigId: ${agent.llmConfigId}, falling back to legacy fields`);
+      console.warn(`[LLM] Agent ${agent.name} references unknown llmConfigId: ${agent.llmConfigId} — using an empty config`);
     }
     return {
-      provider: agent.provider || '',
-      model: agent.model || '',
-      endpoint: agent.endpoint || '',
-      apiKey: agent.apiKey || '',
+      provider: '',
+      model: '',
+      endpoint: '',
+      apiKey: '',
       isReasoning: agent.isReasoning || false,
       temperature: agent.temperature ?? null,
       maxTokens: agent.maxTokens || 4096,
@@ -391,7 +372,7 @@ export class AgentManager {
   // ─── Utility methods ────────────────────────────────────────────────
 
   _sanitize(agent: any) {
-    const { apiKey, mcpAuth, credentials, ...rest } = agent;
+    const { mcpAuth, credentials, ...rest } = agent;
     const sanitizedMcpAuth: Record<string, any> = {};
     if (mcpAuth && typeof mcpAuth === 'object') {
       for (const [serverId, conf] of Object.entries(mcpAuth)) {
@@ -404,7 +385,7 @@ export class AgentManager {
         sanitizedCredentials[name] = { hasValue: !!value };
       }
     }
-    const sanitized: any = { ...rest, hasApiKey: !!apiKey, mcpAuth: sanitizedMcpAuth, credentials: sanitizedCredentials };
+    const sanitized: any = { ...rest, mcpAuth: sanitizedMcpAuth, credentials: sanitizedCredentials };
     if (agent.llmConfigId) {
       const config = this.llmConfigs.get(agent.llmConfigId);
       if (config) {

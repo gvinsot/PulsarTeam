@@ -1,6 +1,5 @@
 /**
- * Tests for apiKeyManager — covers HMAC storage, timing-safe validation,
- * rejection of legacy plain-SHA-256 hashes, and the v1→v2 migration.
+ * Tests for apiKeyManager — covers HMAC storage and timing-safe validation.
  */
 
 import test, { mock } from 'node:test';
@@ -18,7 +17,7 @@ type Row = {
   key_hash: string;
   prefix: string;
   created_at: Date;
-  hash_version: number | null;
+  hash_version: number;
 };
 
 const rows: Row[] = [];
@@ -31,17 +30,7 @@ function makeFakePool() {
       const norm = sql.replace(/\s+/g, ' ').trim();
 
       if (norm.startsWith('CREATE TABLE')) return { rows: [] };
-      if (norm.startsWith('ALTER TABLE')) return { rows: [] };
 
-      if (norm.startsWith('DELETE FROM api_keys WHERE hash_version IS NULL')) {
-        const min = params[0] as number;
-        for (let i = rows.length - 1; i >= 0; i--) {
-          if (rows[i].hash_version == null || rows[i].hash_version < min) {
-            rows.splice(i, 1);
-          }
-        }
-        return { rows: [] };
-      }
       if (norm.startsWith('DELETE FROM api_keys')) {
         rows.length = 0;
         return { rows: [] };
@@ -127,30 +116,6 @@ test('validateApiKey accepts the freshly minted key and rejects a wrong one', as
   assert.equal(await validateApiKey('swarm_sk_' + 'a'.repeat(64)), false);
   assert.equal(await validateApiKey(''), false);
   assert.equal(await validateApiKey(undefined as unknown as string), false);
-});
-
-test('validateApiKey rejects legacy v1 (plain SHA-256) rows even if hash matches', async () => {
-  reset();
-  await ensureApiKeysTable();
-
-  // Inject a row that pretends to be a pre-migration entry: plain SHA-256 of a
-  // known plaintext, no hash_version. The migration should drop it; validation
-  // must refuse the plaintext.
-  const legacyKey = 'swarm_sk_' + 'b'.repeat(64);
-  const legacyHash = crypto.createHash('sha256').update(legacyKey).digest('hex');
-  rows.push({
-    id: 'legacy-id',
-    key_hash: legacyHash,
-    prefix: 'swarm_sk_bbb...bbbb',
-    created_at: new Date(),
-    hash_version: null,
-  });
-
-  // Re-run the migration step (this is what happens at next startup).
-  await ensureApiKeysTable();
-  assert.equal(rows.length, 0, 'v1 row must be pruned by the migration');
-
-  assert.equal(await validateApiKey(legacyKey), false);
 });
 
 test('validation uses crypto.timingSafeEqual on equal-length buffers', async () => {

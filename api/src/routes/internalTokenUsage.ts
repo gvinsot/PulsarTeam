@@ -30,10 +30,10 @@ export function internalTokenUsageRoutes(agentManager) {
         return res.json({ recorded: false, reason: 'empty-usage' });
       }
 
-      const provider = (body.provider || agent.provider || agent.runner || 'cli').toString();
-      const model = (body.model || agent.model || 'unknown').toString();
+      const provider = (body.provider || agent.runner || 'cli').toString();
+      const model = (body.model || 'unknown').toString();
       const userId = agent.ownerId || null;
-      const idempotencyKey = (body.idempotencyKey || body.idempotency_key || '').toString().trim() || null;
+      const idempotencyKey = (body.idempotency_key || '').toString().trim() || null;
 
       const recorded = await recordTokenUsage(
         agent.id,

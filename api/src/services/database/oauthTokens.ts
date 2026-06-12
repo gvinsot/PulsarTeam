@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { getPool } from './connection.js';
-import { encryptIfPlain, tryDecrypt } from '../../lib/crypto.js';
+import { encryptString, tryDecrypt } from '../../lib/crypto.js';
 
 /**
  * Unified OAuth token store.
@@ -139,8 +139,8 @@ export async function storeOAuthToken(
         record.provider,
         record.scopeType,
         record.scopeId,
-        encryptIfPlain(record.accessToken),
-        encryptIfPlain(record.refreshToken || null),
+        encryptString(record.accessToken),
+        record.refreshToken ? encryptString(record.refreshToken) : null,
         record.expiresAt ? new Date(record.expiresAt).toISOString() : null,
         record.meta ? JSON.stringify(record.meta) : null,
       ]

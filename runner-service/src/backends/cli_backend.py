@@ -254,7 +254,7 @@ class CliBackend(RunnerBackend):
         env = sanitize_env(os.environ, agent_user)
         llm = self._get_llm_config(agent_id) if agent_id else None
         if llm:
-            api_key = (llm.get("apiKey") or llm.get("api_key") or "").strip()
+            api_key = (llm.get("apiKey") or "").strip()
             provider = (llm.get("provider") or "").lower().strip()
             endpoint = (llm.get("endpoint") or "").strip()
             if api_key:

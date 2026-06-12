@@ -27,20 +27,6 @@ export async function ensureDefaultBoard(p) {
     const existing = await p.query('SELECT id FROM boards WHERE is_default = TRUE LIMIT 1');
     if (existing.rows.length > 0) return;
 
-    // Migrate from legacy workflows table if it exists
-    let workflow = DEFAULT_BOARD_WORKFLOW;
-    try {
-      const legacy = await p.query("SELECT columns, transitions, version FROM workflows WHERE project = '_default'");
-      if (legacy.rows.length > 0) {
-        const row = legacy.rows[0];
-        workflow = {
-          columns: row.columns || DEFAULT_BOARD_WORKFLOW.columns,
-          transitions: row.transitions || DEFAULT_BOARD_WORKFLOW.transitions,
-          version: row.version || 1,
-        };
-      }
-    } catch { /* workflows table may not exist */ }
-
     // ON CONFLICT DO NOTHING: a concurrently booting replica may have inserted
     // the default board between our SELECT and this INSERT — the partial
     // unique index on is_default turns that race into a no-op.
@@ -48,7 +34,7 @@ export async function ensureDefaultBoard(p) {
       `INSERT INTO boards (name, workflow, filters, position, is_default)
        VALUES ('Default', $1::jsonb, '{}'::jsonb, 0, TRUE)
        ON CONFLICT DO NOTHING`,
-      [JSON.stringify(workflow)]
+      [JSON.stringify(DEFAULT_BOARD_WORKFLOW)]
     );
     if (inserted.rowCount > 0) console.log('✅ Default board created');
   } catch (err) {

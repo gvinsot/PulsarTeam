@@ -168,7 +168,7 @@ The Swarm API exposes an MCP server for integration with AI assistants (Claude, 
 POST https://<your-domain>/api/swarm/mcp
 ```
 
-The server supports **Streamable HTTP** (MCP 2025-03-26 spec) and legacy **SSE** transport.
+The server supports **Streamable HTTP** (MCP 2025-03-26 spec).
 
 ### Configuration
 
@@ -448,14 +448,3 @@ if (firstAgent) {
   console.log('Task created:', task);
 }
 ```
-
----
-
-## Legacy SSE Transport
-
-For clients that don't support Streamable HTTP yet, the server also exposes a legacy SSE endpoint:
-
-- `GET /api/swarm/mcp/sse` — establishes the SSE stream
-- `POST /api/swarm/mcp/messages?sessionId=<id>` — sends JSON-RPC messages
-
-This transport is deprecated and may be removed in future versions. Prefer Streamable HTTP for new integrations.

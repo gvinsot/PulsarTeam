@@ -140,7 +140,6 @@ export const chatMethods = {
       if (messageMeta) {
         historyEntry.type = messageMeta.type;
         if (messageMeta.toolResults) historyEntry.toolResults = messageMeta.toolResults;
-        if (messageMeta.delegationResults) historyEntry.delegationResults = messageMeta.delegationResults;
         if (messageMeta.fromAgent) historyEntry.fromAgent = messageMeta.fromAgent;
       }
       // Store lightweight image metadata in history (thumbnails for display).
@@ -600,7 +599,8 @@ export const chatMethods = {
     systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
     systemContent += `\n\nIMPORTANT CONTINUATION RULE: When you receive a message starting with "[TOOL RESULTS", these are the results of tools YOU previously called. Do NOT restart your reasoning from scratch. Do NOT re-call the same tools. Analyze the results and proceed to the NEXT step of your plan.`;
 
-    if (agent.provider === 'ollama') {
+    const resolvedLlm = this.resolveLlmConfig(agent);
+    if (resolvedLlm.provider === 'ollama') {
       systemContent += `\n\nCRITICAL: You must NEVER use built-in function calls or native tool calls (such as repo_browser, code_sandbox, or any tool_call syntax). Always respond in plain text only. When you need to interact with code, use ONLY the @read_file, @write_file, @list_dir, @search_files, @run_command text commands described above.`;
     }
 
@@ -615,7 +615,7 @@ export const chatMethods = {
     if (systemContent.includes('Current Task List')) sections.push('tasks');
     if (systemContent.includes('PROJECT CONTEXT'))   sections.push('project');
     if (systemContent.includes('Swarm Agents'))      sections.push('swarm');
-    console.log(`📋 [System Prompt] Agent "${agent.name}" (${agent.provider}/${agent.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`);
+    console.log(`📋 [System Prompt] Agent "${agent.name}" (${resolvedLlm.provider}/${resolvedLlm.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`);
 
     return systemContent;
   },

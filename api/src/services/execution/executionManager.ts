@@ -10,13 +10,10 @@ import { RunnerExecutionProvider } from './runnerExecutionProvider.js';
 import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
 
-// Canonical provider types. 'coder' is accepted as a deprecated alias for
-// 'claudecode' (existing agents in the DB may still have runner='coder').
+// Canonical provider types.
 type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode' | 'aider' | 'codex';
-type ProviderTypeInput = ProviderType | 'coder';
 
-function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null): ProviderType {
-  if (t === 'coder') return 'claudecode';
+function _normalizeProviderType(t: string | undefined | null): ProviderType {
   if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode' || t === 'aider' || t === 'codex') return t;
   return 'sandbox';
 }
@@ -24,10 +21,8 @@ function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null
 interface RunnerOpts { baseUrl?: string; apiKey?: string }
 
 interface ExecutionManagerOptions {
-  resolveProvider?: (agentId: string) => ProviderTypeInput;
+  resolveProvider?: (agentId: string) => string;
   claudecodeOptions?: RunnerOpts;
-  /** @deprecated use claudecodeOptions */
-  coderOptions?: RunnerOpts;
   sandboxOptions?: RunnerOpts;
   openclawOptions?: RunnerOpts;
   hermesOptions?: RunnerOpts;
@@ -71,21 +66,17 @@ export class ExecutionManager {
   opencode: RunnerExecutionProvider;
   aider: RunnerExecutionProvider;
   codex: RunnerExecutionProvider;
-  _resolveProvider: (agentId: string) => ProviderTypeInput;
+  _resolveProvider: (agentId: string) => string;
   _agentProviders: Map<string, ProviderType>;
 
   constructor(options: ExecutionManagerOptions = {}) {
     const sharedKey = readSecret('CODER_API_KEY');
     const make = (type: ProviderType, opts?: RunnerOpts) => new RunnerExecutionProvider({
-      // Backward-compat: fall back to legacy CODER_SERVICE_URL for the claudecode runner.
-      baseUrl: opts?.baseUrl
-        || process.env[URL_ENV_VARS[type]]
-        || (type === 'claudecode' ? process.env.CODER_SERVICE_URL : undefined)
-        || DEFAULT_URLS[type],
+      baseUrl: opts?.baseUrl || process.env[URL_ENV_VARS[type]] || DEFAULT_URLS[type],
       apiKey: opts?.apiKey || sharedKey,
     });
 
-    this.claudecode = make('claudecode', options.claudecodeOptions || options.coderOptions);
+    this.claudecode = make('claudecode', options.claudecodeOptions);
     this.sandbox = make('sandbox', options.sandboxOptions);
     this.openclaw = make('openclaw', options.openclawOptions);
     this.hermes = make('hermes', options.hermesOptions);
@@ -95,11 +86,6 @@ export class ExecutionManager {
 
     this._resolveProvider = options.resolveProvider || (() => 'sandbox');
     this._agentProviders = new Map();
-  }
-
-  /** @deprecated alias kept for legacy callers — use `claudecode` */
-  get coder(): RunnerExecutionProvider {
-    return this.claudecode;
   }
 
   // ── Provider resolution ───────────────────────────────────────────────
@@ -129,7 +115,7 @@ export class ExecutionManager {
   /**
    * Explicitly bind an agent to a specific provider.
    */
-  bindAgent(agentId: string, providerType: ProviderTypeInput, meta: BindAgentMeta = {}): void {
+  bindAgent(agentId: string, providerType: string, meta: BindAgentMeta = {}): void {
     const normalized = _normalizeProviderType(providerType);
     const previous = this._agentProviders.get(agentId);
     if (previous && previous !== normalized) {
@@ -300,31 +286,5 @@ export class ExecutionManager {
 
   async exec(agentId: string, command: string, options: { cwd?: string; timeout?: number } = {}): Promise<{ stdout: string; stderr: string }> {
     return this._providerFor(agentId).exec(agentId, command, options);
-  }
-
-  // ── Backward compatibility aliases ────────────────────────────────────
-
-  /** @deprecated Use ensureProject() */
-  async ensureSandbox(agentId: string, project: string | null = null, gitUrl: string | null = null): Promise<void> {
-    return this.ensureProject(agentId, project, gitUrl);
-  }
-
-  /** @deprecated Use hasEnvironment() */
-  hasSandbox(agentId: string): boolean {
-    return this.hasEnvironment(agentId);
-  }
-
-  /** @deprecated Use getProject() */
-  getSandboxProject(agentId: string): string | null {
-    return this.getProject(agentId);
-  }
-
-  /**
-   * @deprecated The new sandbox is a regular runner-service container managed by
-   * Docker Compose / Swarm — there are no orphan docker-exec users to clean up.
-   * Kept as a no-op so callers (e.g. index.ts) don't break.
-   */
-  async cleanupOrphans(): Promise<void> {
-    // no-op
   }
 }

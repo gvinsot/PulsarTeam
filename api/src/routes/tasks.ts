@@ -8,7 +8,6 @@ import {
   reorderTasksSchema,
   updateTaskSchema,
   bulkMoveSchema,
-  purgeTasksSchema,
 } from '../schemas/tasks.js';
 
 async function getUserBoardIds(userId: string): Promise<string[]> {
@@ -861,7 +860,7 @@ router.post('/purge', requireRole('admin'), async (req, res) => {
 
 // ── Helper: extract owner/repo from task context ────────────────────────────
 async function resolveOwnerRepo(task, mgr) {
-  // 1. task.repoFullName (hydrated from board_repos via the JOIN)
+  // 1. task.repoFullName (stored directly on the task row)
   if (task.repoFullName && task.repoFullName.includes('/')) {
     const [owner, repo] = task.repoFullName.split('/');
     if (owner && repo) return { owner, repo };

@@ -46,8 +46,6 @@ function stringifyKeyValue(obj) {
  *                        card and the user can only set the OAuth/API-key credentials
  *                        needed to use the plugin. Use this when a user is enabling a
  *                        plugin they do not own (shared plugins, built-ins).
- *
- * The legacy `readOnly` prop is still accepted and treated as `mode="activate"`.
  */
 export default function PluginEditor({
   value,
@@ -56,10 +54,9 @@ export default function PluginEditor({
   onCancel,
   saving,
   submitLabel,
-  readOnly = false,
   mode,
 }) {
-  const resolvedMode = mode || (readOnly ? 'activate' : 'configure');
+  const resolvedMode = mode || 'configure';
   const isActivate = resolvedMode === 'activate';
   const effectiveSubmitLabel = submitLabel || (isActivate ? 'Activer le plugin' : 'Save Plugin');
 

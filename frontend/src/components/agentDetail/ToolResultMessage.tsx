@@ -1,25 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, AlertCircle, Terminal } from 'lucide-react';
 
-// Parse legacy tool results from raw [TOOL RESULTS] message content
-export function parseLegacyToolResults(content) {
-  const results = [];
-  const pattern = /---\s*(\w+)\(([^)]*)\)\s*---\n([\s\S]*?)(?=\n---\s*\w+\(|$)/g;
-  let m;
-  while ((m = pattern.exec(content)) !== null) {
-    const output = m[3].trim();
-    const isError = output.startsWith('ERROR:');
-    results.push({
-      tool: m[1],
-      args: [m[2]],
-      success: !isError,
-      result: isError ? undefined : output,
-      error: isError ? output.replace(/^ERROR:\s*/, '') : undefined
-    });
-  }
-  return results;
-}
-
 // ─── Rich Tool Output (git diff/show/log/status rendering) ─────────────────
 function isGitOutput(tool, args, output) {
   const cmd = (args || []).join(' ').toLowerCase();
@@ -154,9 +135,7 @@ function ToolResultItem({ result }) {
 
 // ─── Tool Result Collapsible Message ───────────────────────────────────────
 export default function ToolResultMessage({ message }) {
-  const results = message.toolResults?.length
-    ? message.toolResults
-    : parseLegacyToolResults(message.content || '');
+  const results = message.toolResults || [];
   const successCount = results.filter(r => r.success && !r.isErrorReport).length;
   const errorCount = results.filter(r => !r.success).length;
   const reportCount = results.filter(r => r.isErrorReport).length;

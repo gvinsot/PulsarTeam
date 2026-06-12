@@ -18,7 +18,6 @@ const INACTIVE_STATUSES = new Set(['done', 'backlog', 'error']);
 export const Trigger = Object.freeze({
   ON_ENTER: 'on_enter',
   CONDITION: 'condition',
-  JIRA_TICKET: 'jira_ticket',
 });
 
 // ── Action types ────────────────────────────────────────────────────────────
@@ -185,7 +184,7 @@ export function getMatchingTransitions(workflow, status) {
   if (!workflow?.transitions) return [];
   return workflow.transitions
     .filter(isValidTransition)
-    .filter(t => t.from === status && t.trigger !== Trigger.JIRA_TICKET);
+    .filter(t => t.from === status);
 }
 
 /**

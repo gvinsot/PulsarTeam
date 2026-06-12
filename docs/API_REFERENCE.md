@@ -180,7 +180,7 @@ All agent endpoints require JWT authentication: `Authorization: Bearer <jwt-toke
 GET /api/agents
 ```
 
-Returns all agents visible to the current user (admin sees all, others see own + unowned). Sensitive fields like `apiKey` are masked.
+Returns all agents visible to the current user (admin sees all, others see own + unowned). Sensitive fields (MCP auth, credentials) are masked.
 
 ### List Agent Statuses (Lightweight)
 
@@ -245,10 +245,6 @@ POST /api/agents
 | `name`              | string   | yes      | Agent name (1-200 chars)                |
 | `role`              | string   | no       | Agent role (max 100 chars)              |
 | `description`       | string   | no       | Description (max 2000 chars)            |
-| `provider`          | string   | no       | LLM provider (e.g. "anthropic")         |
-| `model`             | string   | no       | Model name (e.g. "claude-sonnet-4-6") |
-| `endpoint`          | string   | no       | Custom API endpoint                     |
-| `apiKey`            | string   | no       | LLM API key                             |
 | `instructions`      | string   | no       | System prompt (max 50K chars)           |
 | `temperature`       | number   | no       | Temperature 0-2 (nullable)              |
 | `maxTokens`         | number   | no       | Max output tokens (1-1M)                |
@@ -267,7 +263,6 @@ POST /api/agents
 | `icon`              | string   | no       | UI icon                                 |
 | `costPerInputToken` | number   | no       | Cost per input token (for budget)       |
 | `costPerOutputToken`| number   | no       | Cost per output token (for budget)      |
-| `copyApiKeyFromAgent`| string  | no       | UUID of agent to copy API key from      |
 
 **Response:** `201 Created` with the created agent object.
 
@@ -503,24 +498,6 @@ POST /api/agents/:id/plugins
 
 ```
 DELETE /api/agents/:id/plugins/:pluginId
-```
-
-### Assign MCP Server to Agent
-
-```
-POST /api/agents/:id/mcp-servers
-```
-
-**Body:**
-
-| Field      | Type   | Required | Description     |
-|------------|--------|----------|-----------------|
-| `serverId` | string | yes      | MCP server ID   |
-
-### Remove MCP Server from Agent
-
-```
-DELETE /api/agents/:id/mcp-servers/:serverId
 ```
 
 ---
@@ -1159,38 +1136,6 @@ GET /api/settings/general
 PUT /api/settings/general
 ```
 
-### Workflow Configuration
-
-#### Get Default Workflow
-
-```
-GET /api/settings/general/workflow
-```
-
-#### Update Default Workflow
-
-```
-PUT /api/settings/general/workflow
-```
-
-#### Get Project-Specific Workflow
-
-```
-GET /api/settings/general/workflow/:project
-```
-
-#### Update Project-Specific Workflow
-
-```
-PUT /api/settings/general/workflow/:project
-```
-
-#### List All Workflows
-
-```
-GET /api/settings/general/workflows
-```
-
 ### Reminder Configuration
 
 #### Get Reminder Settings
@@ -1298,19 +1243,6 @@ GET /api/onedrive/auth-url
 ```
 
 Returns the Microsoft OAuth login URL.
-
-### Exchange Authorization Code
-
-```
-POST /api/onedrive/callback
-```
-
-**Body:**
-
-| Field   | Type   | Required | Description              |
-|---------|--------|----------|--------------------------|
-| `code`  | string | yes      | Authorization code       |
-| `state` | string | yes      | OAuth state parameter    |
 
 ### Disconnect
 
@@ -1514,14 +1446,6 @@ Authorization: Bearer <api-key>
 ```
 
 JSON-RPC over HTTP. Tools: `list_agents`, `get_agent_status`, `add_task`.
-
-### Swarm MCP (SSE — Legacy)
-
-```
-GET  /api/swarm/mcp/sse         → SSE stream
-POST /api/swarm/mcp/messages    → JSON-RPC messages
-Authorization: Bearer <api-key>
-```
 
 ### Code Index MCP
 

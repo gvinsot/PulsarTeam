@@ -11,8 +11,6 @@ The product distinguishes three closely-related concepts:
 
 ## 1. Plugins — `/api/plugins/*`
 
-Backward-compat alias: `/api/skills/*`.
-
 ### GET `/api/plugins`
 List all plugins (API keys masked).
 

@@ -63,7 +63,7 @@ Each column corresponds to a `workflow.column` entry on the board. The column he
 
 Cards are sorted by `position` ascending within a column. Drag-and-drop:
 - Within a column → updates `position` for the affected cards (PUT `/api/tasks/reorder`).
-- Across columns → updates `status` (PUT `/api/tasks/:id`) and may trigger the workflow transition's action (e.g. assign an agent, run a command).
+- Across columns → updates `column` (PUT `/api/tasks/:id`) and may trigger the workflow transition's action (e.g. assign an agent, run a command).
 - Bulk-move (multi-select) → POST `/api/tasks/bulk-move`.
 
 ---

@@ -233,29 +233,6 @@ def test_configure_opencode_idempotent_removes_stale(tmp_path, monkeypatch):
     assert json.loads(sidecar.read_text()) == ["swarm-manager"]
 
 
-def test_configure_opencode_migrates_legacy_bookkeeping(tmp_path, monkeypatch):
-    cfg = tmp_path / ".config" / "opencode" / "config.json"
-    cfg.parent.mkdir(parents=True)
-    cfg.write_text(json.dumps({
-        "mcp": {
-            "old-managed": {"type": "remote", "url": "https://old", "enabled": True},
-            "github": {"type": "local", "command": ["npx"]},
-        },
-        "__pulsarManagedMcpServers": ["old-managed"],
-        "_pulsarMcpUpdatedAt": 123,
-    }))
-    _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
-
-    configure_opencode_mcp(_agent(tmp_path), "agent-1")
-
-    data = json.loads(cfg.read_text())
-    assert "__pulsarManagedMcpServers" not in data
-    assert "_pulsarMcpUpdatedAt" not in data
-    assert "old-managed" not in data["mcp"]
-    assert data["mcp"]["github"] == {"type": "local", "command": ["npx"]}
-    assert set(data["mcp"]) == {"github", "swarm-manager", "code-index"}
-
-
 def test_configure_skips_on_fetch_failure(tmp_path, monkeypatch):
     cfg = tmp_path / ".config" / "opencode" / "config.json"
     cfg.parent.mkdir(parents=True)

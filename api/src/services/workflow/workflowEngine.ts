@@ -133,9 +133,6 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
       break;
     }
 
-    // Skip jira triggers (handled elsewhere)
-    if (transition.trigger === Trigger.JIRA_TICKET) continue;
-
     // Evaluate conditions for conditional triggers
     if (transition.trigger === Trigger.CONDITION) {
       const allMet = evaluateAllConditions(
@@ -252,8 +249,7 @@ export async function recheckPendingTransitions(agentManager) {
   if (boardTransMap.size === 0) return;
 
   // Skip tasks created by a sibling replica when several deployments share
-  // the DB. NULL environment is treated as "prod" so legacy tasks keep
-  // running on the prod replica.
+  // the DB.
   const ownEnv = getCurrentEnvironment();
 
   // One-shot post-restart recovery: a redeploy/crash mid-chain would leave the
@@ -273,7 +269,7 @@ export async function recheckPendingTransitions(agentManager) {
         if (task.status === 'error' || task.isManual) continue;
         if (task.executionStatus === 'stopped') continue;
         if (agentManager._isActiveTaskStatus && !agentManager._isActiveTaskStatus(task.status)) continue;
-        if ((task.environment || 'prod') !== ownEnv) continue;
+        if (task.environment !== ownEnv) continue;
         // A crash during the watch phase persists executionStatus='watching'.
         // The startup sweep (clearAllStaleActionRunning) already reset it in
         // the DB; mirror that on the in-memory copy loaded at boot so a later
@@ -302,8 +298,7 @@ export async function recheckPendingTransitions(agentManager) {
       // reasoning around the in-memory 'stopped' signal.
       if (task.executionStatus === 'stopped') continue;
       // Environment isolation: ignore tasks tagged for another deployment.
-      const taskEnv = task.environment || 'prod';
-      if (taskEnv !== ownEnv) continue;
+      if (task.environment !== ownEnv) continue;
 
       const transitions = boardTransMap.get(task.boardId)
         || (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);

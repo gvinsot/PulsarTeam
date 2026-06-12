@@ -358,14 +358,14 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
   {
     "id": "skill-web-browser",
     "name": "Web Browser",
-    "description": "Search, crawl and extract content from the web. Cloudflare-protected pages are bypassed via FlareSolverr.",
+    "description": "Search, crawl and extract content from the web.",
     "category": "general",
     "icon": "🌍",
     "builtin": true,
     "mcpServerIds": [
       "mcp-browser"
     ],
-    "instructions": `You can browse the internet using the Web Browser MCP tools. Pages protected by Cloudflare or other bot-detection systems are automatically bypassed via FlareSolverr.
+    "instructions": `You can browse the internet using the Web Browser MCP tools.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
 Call them using the @mcp_call(Web Browser, tool_name, {"param": "value"}) syntax shown there.

@@ -8,7 +8,6 @@ import {
 const markdownRemarkPlugins = [remarkGfm];
 import { cleanToolSyntax } from './cleanToolSyntax';
 import ToolResultMessage from './ToolResultMessage';
-import DelegationResultMessage from './DelegationResultMessage';
 
 /**
  * Split text into interleaved text segments and @delegate() blocks.
@@ -179,27 +178,20 @@ export function RichAssistantContent({ text }) {
 
 export default function ChatMessage({ message, index, isLast, onTruncate }) {
   const isUser = message.role === 'user';
-  const isToolResult = message.type === 'tool-result'
-    || (!message.type && isUser && message.content?.startsWith('[TOOL RESULTS]'));
-  const isDelegationResult = message.type === 'delegation-result'
-    || (!message.type && isUser && message.content?.startsWith('[DELEGATION RESULTS]'));
+  const isToolResult = message.type === 'tool-result';
   const isDelegationTask = message.type === 'delegation-task'
     || (!message.type && isUser && message.content?.startsWith('[TASK from '));
   const isNudge = message.type === 'nudge'
     || (!message.type && isUser && message.content?.startsWith('[SYSTEM]'));
-  const isSystemMessage = isToolResult || isDelegationResult;
 
   // Hide internal nudge messages from chat
   if (isNudge) return null;
 
-  // Render tool/delegation results as a collapsible sub-element
-  if (isSystemMessage) {
+  // Render tool results as a collapsible sub-element
+  if (isToolResult) {
     return (
       <div className="group relative">
-        {isToolResult
-          ? <ToolResultMessage message={message} />
-          : <DelegationResultMessage message={message} />
-        }
+        <ToolResultMessage message={message} />
         {!isLast && onTruncate && (
           <button
             onClick={() => onTruncate(index - 1)}

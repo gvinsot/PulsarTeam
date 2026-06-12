@@ -13,15 +13,10 @@ const createAgentSchema = z.object({
   name: z.string().min(1).max(200),
   role: z.string().max(100).optional(),
   description: z.string().max(2000).optional(),
-  provider: z.string().max(100).optional(),
-  model: z.string().max(200).optional(),
-  endpoint: z.string().max(500).optional(),
-  apiKey: z.string().max(500).optional(),
   instructions: z.string().max(50000).optional(),
   temperature: z.number().min(0).max(2).nullable().optional(),
   maxTokens: z.number().int().min(1).max(1000000).optional(),
   contextLength: z.number().int().min(0).optional(),
-  todoList: z.array(z.any()).optional(),
   ragDocuments: z.array(z.any()).optional(),
   skills: z.array(z.string()).optional(),
   mcpServers: z.array(z.string()).optional(),
@@ -46,7 +41,6 @@ const createAgentSchema = z.object({
   icon: z.string().max(50).optional(),
   costPerInputToken: z.number().min(0).nullable().optional(),
   costPerOutputToken: z.number().min(0).nullable().optional(),
-  copyApiKeyFromAgent: z.string().uuid().optional(),
   llmConfigId: z.string().max(200).nullable().optional(),
   boardId: z.string().uuid().nullable().optional(),
   permissions: z.object({
@@ -80,8 +74,7 @@ const createAgentSchema = z.object({
       description: z.string().max(500).optional(),
     })).optional(),
   }).optional(),
-  // 'coder' is a deprecated alias for 'claudecode' (kept for backward compat with stored agents)
-  runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'aider', 'codex']).optional(),
+  runner: z.enum(['sandbox', 'claudecode', 'openclaw', 'hermes', 'opencode', 'aider', 'codex']).optional(),
   // Batch creation: when batchSize > 1, the server creates that many agents
   // sharing the same configuration and a common batchId. Names are auto
   // suffixed `#1`, `#2`, … so each agent stays uniquely identifiable.
@@ -93,16 +86,6 @@ const updateAgentSchema = createAgentSchema.partial().extend({
   ownerId: z.string().uuid().nullable().optional(),
   boardId: z.string().uuid().nullable().optional(),
 });
-
-// Mask sensitive fields before sending agent data to the client
-function sanitizeAgent(agent) {
-  if (!agent) return agent;
-  const { apiKey, ...safe } = agent;
-  if (apiKey) {
-    safe.apiKey = apiKey.length > 8 ? apiKey.slice(0, 4) + '...' + apiKey.slice(-4) : '••••';
-  }
-  return safe;
-}
 
 export function agentRoutes(agentManager) {
   const router = express.Router();
@@ -145,7 +128,7 @@ export function agentRoutes(agentManager) {
   router.get('/', async (req, res) => {
     const userBoardIds = await getUserBoardIds(req.user.userId);
     const agents = agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds);
-    res.json(agents.map(sanitizeAgent));
+    res.json(agents);
   });
 
   // Get lightweight status for ALL enabled agents (includes project + currentTask)
@@ -205,7 +188,7 @@ export function agentRoutes(agentManager) {
   router.get('/:id', requireAgentAccess, (req, res) => {
     const agent = agentManager.getById(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    res.json(sanitizeAgent(agent));
+    res.json(agent);
   });
 
   // Create agent (basic users cannot create)
@@ -688,22 +671,20 @@ export function agentRoutes(agentManager) {
 
   // ── Plugin (skill) assignment endpoints ──────────────────────────
   const pluginAssignHandler = (req, res) => {
-    const pluginId = req.body.skillId || req.body.pluginId;
+    const pluginId = req.body.pluginId;
     if (!pluginId) return res.status(400).json({ error: 'pluginId required' });
     const result = agentManager.assignSkill(req.params.id, pluginId);
     if (result === null) return res.status(404).json({ error: 'Agent not found' });
     res.json({ success: true, plugins: result });
   };
   const pluginRemoveHandler = (req, res) => {
-    const pluginId = req.params.skillId || req.params.pluginId;
+    const pluginId = req.params.pluginId;
     const success = agentManager.removeSkill(req.params.id, pluginId);
     if (!success) return res.status(404).json({ error: 'Not found' });
     res.json({ success: true });
   };
   router.post('/:id/plugins', requireAgentEditAccess, pluginAssignHandler);
   router.delete('/:id/plugins/:pluginId', requireAgentEditAccess, pluginRemoveHandler);
-  // Backward compatibility
-  router.post('/:id/skills', requireAgentEditAccess, pluginAssignHandler);
 
 // ── Task History & Stats ──────────────────────────────────────────────────────
 
@@ -741,22 +722,6 @@ router.get("/tasks/:id/history", async (req, res) => {
   }
   res.json(task.history || []);
 });
-  router.delete('/:id/skills/:skillId', requireAgentEditAccess, pluginRemoveHandler);
-
-  // ── MCP server assignment endpoints (backward compat) ───────────
-  router.post('/:id/mcp-servers', requireAgentEditAccess, (req, res) => {
-    const { serverId } = req.body;
-    if (!serverId) return res.status(400).json({ error: 'serverId required' });
-    const result = agentManager.assignMcpServer(req.params.id, serverId);
-    if (result === null) return res.status(404).json({ error: 'Agent not found' });
-    res.json({ success: true, mcpServers: result });
-  });
-
-  router.delete('/:id/mcp-servers/:serverId', requireAgentEditAccess, (req, res) => {
-    const success = agentManager.removeMcpServer(req.params.id, req.params.serverId);
-    if (!success) return res.status(404).json({ error: 'Not found' });
-    res.json({ success: true });
-  });
 
   return router;
 }

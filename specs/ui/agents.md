@@ -51,7 +51,7 @@ The detail panel has six tabs. The Settings and Permissions tabs are **hidden** 
 Direct conversation with the agent.
 
 - Renders the agent's `conversationHistory` plus the live streaming buffer.
-- Tool-call syntax (e.g. `@read_file(...)`) is rendered with dedicated chrome via `cleanToolSyntax` and the `ToolResultMessage` / `DelegationResultMessage` components.
+- Tool-call syntax (e.g. `@read_file(...)`) is rendered with dedicated chrome via `cleanToolSyntax` and the `ToolResultMessage` component.
 - Input area supports text and image attachments (image types accepted, ~10 MB max per file).
 - Controls:
   - **Send** — POST to `/api/agents/:id/chat`

@@ -82,7 +82,7 @@ function renderEntryTitle(entry: any) {
 }
 
 function isToolResultMessage(m: any): boolean {
-  return m.type === 'tool-result' || !!m.toolResults || (m.role === 'user' && /^\[TOOL RESULTS/i.test(m.content || ''));
+  return m.type === 'tool-result' || !!m.toolResults;
 }
 
 function ToolCallDetail({ tr }: { tr: any }) {
@@ -163,38 +163,6 @@ function ToolResultsBlock({ toolResults }: { toolResults: any[] }) {
           {toolResults.map((tr: any, i: number) => (
             <ToolCallDetail key={i} tr={tr} />
           ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function RawToolResults({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const cleaned = content.replace(/^\[TOOL RESULTS[^\]]*\]\s*/i, '').trim();
-  const isLong = cleaned.length > 300;
-  const display = expanded || !isLong ? cleaned : cleaned.slice(0, 300) + '…';
-
-  return (
-    <div className="rounded-lg bg-dark-800/30 border border-dark-700/50 overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-dark-700/30 transition-colors"
-      >
-        {expanded ? <ChevronDown className="w-3.5 h-3.5 text-dark-400" /> : <ChevronRight className="w-3.5 h-3.5 text-dark-400" />}
-        <Terminal className="w-3.5 h-3.5 text-indigo-400" />
-        <span className="text-[11px] font-medium text-dark-300">Tool results</span>
-      </button>
-      {expanded && (
-        <div className="px-3 pb-3">
-          <pre className="text-[10px] text-dark-300 whitespace-pre-wrap break-words leading-relaxed font-mono bg-dark-900/60 rounded p-2 max-h-[400px] overflow-y-auto">
-            {display}
-          </pre>
-          {isLong && !expanded && (
-            <button onClick={() => setExpanded(true)} className="mt-1 text-[10px] text-indigo-400 hover:text-indigo-300">
-              Show more
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -289,8 +257,6 @@ function ExecutionConversation({ messages }: { messages: any[] }) {
                 {/* Tool results (collapsible) */}
                 {ex.toolResults?.toolResults ? (
                   <ToolResultsBlock toolResults={ex.toolResults.toolResults} />
-                ) : ex.toolResults?.content ? (
-                  <RawToolResults content={ex.toolResults.content} />
                 ) : null}
               </div>
             ))}

@@ -182,7 +182,3 @@ These routes attach things to an agent.
 |---|---|
 | `POST /api/agents/:id/plugins` | Add a plugin. Body: `{ pluginId, userConfig? }`. |
 | `DELETE /api/agents/:id/plugins/:pluginId` | Remove a plugin. |
-| `POST /api/agents/:id/skills` | Backward-compat alias of `plugins`. |
-| `DELETE /api/agents/:id/skills/:skillId` | Backward-compat alias. |
-| `POST /api/agents/:id/mcp-servers` | Attach an MCP server directly to the agent. |
-| `DELETE /api/agents/:id/mcp-servers/:serverId` | Detach an MCP server. |

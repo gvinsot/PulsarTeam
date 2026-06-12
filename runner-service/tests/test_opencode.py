@@ -33,15 +33,11 @@ def test_clear_model_preserves_other_opencode_settings():
         "model": "anthropic/claude-sonnet-4-20250514",
         "mcp": {"github": {"type": "local"}},
         "provider": {"anthropic": {"models": {"claude-sonnet-4-20250514": {}}}},
-        "__pulsarManagedMcpServers": ["old"],
-        "_pulsarMcpUpdatedAt": 123,
     })
 
     merged = json.loads(_merge_opencode_config(existing, None, clear_model=True))
 
     assert "model" not in merged
-    assert "__pulsarManagedMcpServers" not in merged
-    assert "_pulsarMcpUpdatedAt" not in merged
     assert merged["mcp"] == {"github": {"type": "local"}}
     assert "anthropic" in merged["provider"]
 
@@ -58,8 +54,6 @@ def test_default_llm_removes_previous_pin_from_agent_config(tmp_path):
     config_path.write_text(json.dumps({
         "model": "anthropic/claude-sonnet-4-20250514",
         "mcp": {"github": {"type": "local"}},
-        "__pulsarManagedMcpServers": ["stale"],
-        "_pulsarMcpUpdatedAt": 123,
     }))
     _agent_users[agent_id] = {"home": str(tmp_path), "uid": None, "gid": None}
 
@@ -72,8 +66,6 @@ def test_default_llm_removes_previous_pin_from_agent_config(tmp_path):
     assert env["HOME"] == str(tmp_path)
     assert "model" not in config
     assert config["permission"] == "allow"
-    assert "__pulsarManagedMcpServers" not in config
-    assert "_pulsarMcpUpdatedAt" not in config
     assert config["mcp"] == {"github": {"type": "local"}}
 
 

@@ -297,67 +297,6 @@ export function githubRoutes() {
     res.json({ authUrl: `https://github.com/login/oauth/authorize?${params}` });
   });
 
-  router.post('/callback', async (req, res) => {
-    const config = getConfig();
-    if (!config) return res.status(500).json({ error: 'GitHub OAuth not configured' });
-
-    const { code, state } = req.body;
-    if (!code) return res.status(400).json({ error: 'Authorization code is required' });
-    if (!state) return res.status(400).json({ error: 'State parameter required' });
-
-    const stateData = consumeOAuthState(state);
-    if (!stateData) return res.status(400).json({ error: 'Invalid or expired state' });
-
-    try {
-      const response = await fetchWithRetry('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          client_id: config.clientId,
-          client_secret: config.clientSecret,
-          code,
-          redirect_uri: pluginRedirectUri(req),
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok || data.error || !data.access_token) {
-        console.error('[GitHub] Token exchange failed:', data);
-        return res.status(400).json({ error: data.error_description || data.error || data.message || `Token exchange failed (HTTP ${response.status})` });
-      }
-
-      let login = null;
-      try {
-        const userRes = await fetchWithRetry('https://api.github.com/user', {
-          headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'PulsarTeam' },
-        });
-        if (userRes.ok) {
-          const user = await userRes.json();
-          login = user.login;
-        }
-      } catch (err) {
-        console.warn('[GitHub] Could not fetch user profile:', err.message);
-      }
-
-      const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
-
-      await storeOAuthToken({
-        provider: 'github',
-        scopeType,
-        scopeId,
-        accessToken: data.access_token,
-        meta: { scope: data.scope, tokenType: data.token_type, login },
-      }, { throwOnPersistError: true });
-
-      console.log(`✅ [GitHub] OAuth token stored for ${scopeType}:${scopeId} (${login || 'unknown'})`);
-      res.json({ success: true, agentId: stateData.agentId, boardId: stateData.boardId, login });
-    } catch (err: any) {
-      const cause = err?.cause?.code || err?.cause?.message || err?.message || 'unknown';
-      console.error('[GitHub] Token exchange error:', err);
-      res.status(500).json({ error: `Token exchange failed: ${cause}` });
-    }
-  });
-
   router.post('/disconnect', async (req, res) => {
     const agentId = req.body?.agentId || null;
     const boardId = req.body?.boardId || null;

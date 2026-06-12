@@ -45,7 +45,7 @@ Update any subset of: `title, description, column, agentId, type, priority, dueD
 
 ### POST `/api/tasks/bulk-move`
 Move many tasks at once between boards/columns.
-- **Body**: `{ taskIds: string[], boardId, status }`.
+- **Body**: `{ taskIds: string[], boardId, column }`.
 - **Side effects**: audit-logged; may trigger auto-refine on each task.
 
 ### POST `/api/tasks/:id/stop`

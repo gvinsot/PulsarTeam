@@ -1,5 +1,5 @@
 """
-Claude Code backend — wraps the Claude Code CLI (headless mode).
+Claude Code backend — wraps the Claude Code CLI (interactive PTY mode).
 
 Implements RunnerBackend by spawning `claude` subprocesses with --resume
 session persistence keyed by (agent_id, task_id).
@@ -15,10 +15,9 @@ import subprocess
 from typing import AsyncIterator, Optional
 
 from config import (
-    CLAUDE_MODEL, CLAUDE_MAX_TURNS, CLI_CWD, TIMEOUT,
+    RUNNER_MODEL, RUNNER_MAX_TURNS, CLI_CWD, TIMEOUT,
     PROJECTS_DIR, ALLOWED_TOOLS, SYSTEM_PROMPT, VERBOSE,
     OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI,
-    CLAUDE_USE_PRINT_MODE,
     logger,
 )
 from agent_user import ensure_agent_user, get_agent_project_dir
@@ -47,8 +46,6 @@ from .claude_interactive import run_interactive
 from .runner_mcp_config import configure_claude_mcp
 from .runner_instructions_config import configure_claude_instructions
 
-
-MAX_AUTH_RETRIES = 2
 
 # Sentinel printed by the Claude CLI on stdout (as plain text, NOT a stream-json
 # event) when `--resume <uuid>` cannot find a matching session JSONL on disk.
@@ -232,12 +229,11 @@ class ClaudeCodeBackend(RunnerBackend):
 
     async def startup(self) -> None:
         logger.info("Claude Code backend starting...")
-        logger.info(f"  Model: {CLAUDE_MODEL}")
-        logger.info(f"  Max turns: {CLAUDE_MAX_TURNS}")
+        logger.info(f"  Model: {RUNNER_MODEL}")
+        logger.info(f"  Max turns: {RUNNER_MAX_TURNS}")
         logger.info(f"  Timeout: {TIMEOUT}s")
         logger.info(f"  Projects dir: {PROJECTS_DIR}")
-        mode_label = "headless (-p)" if CLAUDE_USE_PRINT_MODE else "interactive (PTY, subscription pricing)"
-        logger.info(f"  CLI mode: {mode_label}")
+        logger.info("  CLI mode: interactive (PTY, subscription pricing)")
 
         try:
             result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=10)
@@ -287,7 +283,7 @@ class ClaudeCodeBackend(RunnerBackend):
             "status": "healthy" if ok else "degraded",
             "backend": self.name,
             "claude_version": version,
-            "claude_model": CLAUDE_MODEL,
+            "claude_model": RUNNER_MODEL,
         }
 
     # ── Permissions ───────────────────────────────────────────────────────
@@ -475,23 +471,11 @@ class ClaudeCodeBackend(RunnerBackend):
                 f"agent_id={agent_id[:12] if agent_id else None} spawn_uid={spawn_uid} parent_uid={os.getuid()}"
             )
 
-        # `-p` / `--print` (headless mode) is moving to API pricing per Anthropic's
-        # announcement; the interactive TUI keeps subscription pricing. We default
-        # to the interactive driver (see claude_interactive.py) and only emit `-p`
-        # when CLAUDE_USE_PRINT_MODE=true is explicitly set. The output-format /
-        # max-turns / include-partial-messages flags are headless-only — drop them
-        # too when running interactively.
         cmd = [
             "claude",
-            "--model", CLAUDE_MODEL,
+            "--model", RUNNER_MODEL,
             "--effort", "high",
         ]
-        if CLAUDE_USE_PRINT_MODE:
-            cmd.insert(1, "-p")
-            cmd.extend([
-                "--output-format", output_format,
-                "--max-turns", str(CLAUDE_MAX_TURNS),
-            ])
         if skip_permissions:
             cmd.append("--dangerously-skip-permissions")
 
@@ -507,17 +491,8 @@ class ClaudeCodeBackend(RunnerBackend):
         if sp:
             cmd.extend(["--append-system-prompt", sp])
 
-        if VERBOSE or output_format == "stream-json":
+        if VERBOSE:
             cmd.append("--verbose")
-
-        # Real-time streaming: in stream-json mode without this flag, the CLI
-        # emits one `assistant` event per *complete* content block (so a pure
-        # text response shows up as a single chunk at the end). With
-        # --include-partial-messages it also emits Anthropic-style
-        # content_block_delta events as tokens arrive, which the loop below
-        # forwards as `text` chunks. Headless-only.
-        if CLAUDE_USE_PRINT_MODE and output_format == "stream-json":
-            cmd.append("--include-partial-messages")
 
         if ALLOWED_TOOLS:
             for tool in ALLOWED_TOOLS.split(","):
@@ -659,10 +634,6 @@ class ClaudeCodeBackend(RunnerBackend):
         used_prompt = self._extract_resume_prompt(messages, prompt) if is_resume else replay_prompt
 
         async def _run_sync_proc(sid: str, resume: bool, p_prompt: str):
-            # Expose the spawned child on the outer `proc` so the caller's
-            # timeout / cancellation handlers can terminate it even when this
-            # closure raises before returning.
-            nonlocal proc
             cmd, proc_cwd = self._build_cmd(
                 output_format="json", system_prompt=system_prompt,
                 agent_id=agent_id, task_id=task_id,
@@ -670,98 +641,48 @@ class ClaudeCodeBackend(RunnerBackend):
                 agent_user=effective_user,
                 session_id=sid, is_resume=resume,
             )
-            logger.info(f"Executing Claude Code{agent_label} (prompt={len(p_prompt)}B, resume={resume}, print_mode={CLAUDE_USE_PRINT_MODE}): {p_prompt[:100]}...")
+            logger.info(f"Executing Claude Code{agent_label} (prompt={len(p_prompt)}B, resume={resume}): {p_prompt[:100]}...")
             logger.debug(f"Command: {' '.join(cmd)} (cwd={proc_cwd})")
             logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
 
-            if not CLAUDE_USE_PRINT_MODE:
-                # Interactive TUI driven through a PTY. The driver handles
-                # banner detection, prompt delivery, interactive Y/N prompts
-                # (auto-answered or routed to a fallback LLM), and clean
-                # shutdown. It returns a result dict compatible with the
-                # synthesised (proc, stdout, stderr) tuple this closure
-                # historically produced.
-                _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
-                preexec_fn = _subp_kwargs.get("preexec_fn")
-                spawn_env = await run_blocking(get_agent_env, effective_user)
-                try:
-                    interactive_result = await asyncio.wait_for(
-                        run_interactive(
-                            cmd=cmd, cwd=proc_cwd,
-                            env=spawn_env,
-                            prompt=p_prompt, preexec_fn=preexec_fn,
-                        ),
-                        timeout=TIMEOUT,
-                    )
-                except PermissionError as spawn_err:
-                    logger.error(f"[Spawn] PermissionError driving claude (cwd={proc_cwd}): {spawn_err}")
-                    raise RuntimeError(f"Permission denied spawning claude CLI (cwd={proc_cwd}).") from spawn_err
-
-                class _FakeProc:
-                    pass
-                fp = _FakeProc()
-                fp.returncode = interactive_result.get("returncode") or 0
-                # Wrap the textual reply into the same JSON envelope the print
-                # mode would have produced so the parser below works
-                # untouched.
-                payload = {
-                    "result": interactive_result.get("output", ""),
-                    "cost_usd": 0,
-                    "duration_ms": 0,
-                    "usage": {"input_tokens": 0, "output_tokens": 0},
-                    "total_tokens": 0,
-                }
-                so_b = json.dumps(payload).encode("utf-8")
-                se_b = (interactive_result.get("stderr") or "").encode("utf-8")
-                return fp, so_b, se_b
-
+            # Interactive TUI driven through a PTY. The driver handles
+            # banner detection, prompt delivery, interactive Y/N prompts
+            # (auto-answered or routed to a fallback LLM), and clean
+            # shutdown. It returns a result dict compatible with the
+            # synthesised (proc, stdout, stderr) tuple this closure
+            # historically produced.
+            _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
+            preexec_fn = _subp_kwargs.get("preexec_fn")
             spawn_env = await run_blocking(get_agent_env, effective_user)
             try:
-                p = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=proc_cwd,
-                    env=spawn_env,
-                    **get_subprocess_kwargs(effective_user),
-                )
-            except PermissionError as spawn_err:
-                logger.error(
-                    f"[Spawn] PermissionError spawning claude (cwd={proc_cwd}, "
-                    f"target_uid={effective_user.get('uid') if effective_user else os.getuid()}): {spawn_err}\n"
-                    f"  path components: {_cwd_path_diagnostic(proc_cwd)}"
-                )
-                raise RuntimeError(
-                    f"Permission denied spawning claude CLI (cwd={proc_cwd}). "
-                    f"The dedicated agent UID likely can't traverse cwd or its parents — "
-                    f"see runner-service logs for the per-component mode/owner dump."
-                ) from spawn_err
-            proc = p
-            try:
-                so, se = await asyncio.wait_for(
-                    p.communicate(input=p_prompt.encode("utf-8")),
+                interactive_result = await asyncio.wait_for(
+                    run_interactive(
+                        cmd=cmd, cwd=proc_cwd,
+                        env=spawn_env,
+                        prompt=p_prompt, preexec_fn=preexec_fn,
+                    ),
                     timeout=TIMEOUT,
                 )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                # Reap the child here so every caller of this closure (initial
-                # run, BrokenPipe retry, resume-miss replay) is covered, not
-                # just the outer try/except.
-                if p.returncode is None:
-                    try:
-                        p.terminate()
-                    except (ProcessLookupError, PermissionError):
-                        pass
-                    else:
-                        try:
-                            await asyncio.wait_for(p.wait(), timeout=5)
-                        except (asyncio.TimeoutError, asyncio.CancelledError):
-                            try:
-                                p.kill()
-                            except (ProcessLookupError, PermissionError):
-                                pass
-                raise
-            return p, so, se
+            except PermissionError as spawn_err:
+                logger.error(f"[Spawn] PermissionError driving claude (cwd={proc_cwd}): {spawn_err}")
+                raise RuntimeError(f"Permission denied spawning claude CLI (cwd={proc_cwd}).") from spawn_err
+
+            class _FakeProc:
+                pass
+            fp = _FakeProc()
+            fp.returncode = interactive_result.get("returncode") or 0
+            # Wrap the textual reply into the JSON envelope shape the parser
+            # below expects.
+            payload = {
+                "result": interactive_result.get("output", ""),
+                "cost_usd": 0,
+                "duration_ms": 0,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+                "total_tokens": 0,
+            }
+            so_b = json.dumps(payload).encode("utf-8")
+            se_b = (interactive_result.get("stderr") or "").encode("utf-8")
+            return fp, so_b, se_b
 
         proc = None
         try:
@@ -941,7 +862,6 @@ class ClaudeCodeBackend(RunnerBackend):
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
         messages: Optional[list] = None,
-        _auth_retry: int = 0,
     ) -> AsyncIterator[dict]:
         exchange_result = await try_exchange_code_from_prompt(prompt, agent_id=agent_id, owner_id=owner_id)
         if exchange_result is not None:
@@ -1046,655 +966,103 @@ class ClaudeCodeBackend(RunnerBackend):
         is_resume = bool(session_id)
         used_prompt = self._extract_resume_prompt(messages, prompt) if is_resume else replay_prompt
 
-        # Interactive (no `-p`) path: drive the TUI through a PTY and surface
-        # the assistant's reply as a single text event followed by a result
-        # event. Token-level streaming isn't available without `-p`, but the
-        # cost trade-off (subscription vs API pricing) is the whole point of
-        # this mode.
-        if not CLAUDE_USE_PRINT_MODE:
-            cmd, proc_cwd = self._build_cmd(
-                output_format="text", system_prompt=system_prompt,
-                agent_id=agent_id, task_id=task_id,
-                permissions=self._get_permissions(agent_id),
-                agent_user=effective_user,
-                session_id=current_session_id, is_resume=is_resume,
-            )
-            logger.info(f"Streaming Claude Code (interactive){agent_label} (prompt={len(used_prompt)}B, resume={is_resume}): {used_prompt[:100]}...")
-            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
-            _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
-            preexec_fn = _subp_kwargs.get("preexec_fn")
+        # Drive the TUI through a PTY and surface the assistant's reply as a
+        # single text event followed by a result event. Token-level streaming
+        # isn't available without `-p`, but the cost trade-off (subscription
+        # vs API pricing) is the whole point of this mode.
+        cmd, proc_cwd = self._build_cmd(
+            output_format="text", system_prompt=system_prompt,
+            agent_id=agent_id, task_id=task_id,
+            permissions=self._get_permissions(agent_id),
+            agent_user=effective_user,
+            session_id=current_session_id, is_resume=is_resume,
+        )
+        logger.info(f"Streaming Claude Code (interactive){agent_label} (prompt={len(used_prompt)}B, resume={is_resume}): {used_prompt[:100]}...")
+        logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
+        _subp_kwargs = get_subprocess_kwargs(effective_user) or {}
+        preexec_fn = _subp_kwargs.get("preexec_fn")
 
-            # Bridge the executor-thread callback into the asyncio event loop
-            # via a queue. The driver fires `on_event` from its thread for
-            # each new fragment of Claude's reply; we marshal those into the
-            # async generator's yield stream as `thinking` events so callers
-            # can mirror real CLI activity to the terminal without inventing
-            # placeholder text.
-            loop = asyncio.get_running_loop()
-            event_queue: asyncio.Queue = asyncio.Queue()
+        # Bridge the executor-thread callback into the asyncio event loop
+        # via a queue. The driver fires `on_event` from its thread for
+        # each new fragment of Claude's reply; we marshal those into the
+        # async generator's yield stream as `thinking` events so callers
+        # can mirror real CLI activity to the terminal without inventing
+        # placeholder text.
+        loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue = asyncio.Queue()
 
-            def _push_event(ev: dict) -> None:
-                loop.call_soon_threadsafe(event_queue.put_nowait, ev)
+        def _push_event(ev: dict) -> None:
+            loop.call_soon_threadsafe(event_queue.put_nowait, ev)
 
-            spawn_env = await run_blocking(get_agent_env, effective_user)
-            runner_task = asyncio.create_task(asyncio.wait_for(
-                run_interactive(
-                    cmd=cmd, cwd=proc_cwd,
-                    env=spawn_env,
-                    prompt=used_prompt, preexec_fn=preexec_fn,
-                    on_event=_push_event,
-                ),
-                timeout=TIMEOUT,
-            ))
-
-            try:
-                while True:
-                    # Race: either a streamed delta or the runner finishing.
-                    get_task = asyncio.create_task(event_queue.get())
-                    done, pending = await asyncio.wait(
-                        {get_task, runner_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if get_task in done:
-                        ev = get_task.result()
-                        yield ev
-                        # If the runner also finished on the same tick, fall
-                        # through and drain the rest below; otherwise loop.
-                        if runner_task not in done:
-                            continue
-                    else:
-                        # Runner finished while no delta was pending; cancel
-                        # the parked get_task so it doesn't leak.
-                        get_task.cancel()
-                    # Drain anything still queued before the final event.
-                    while not event_queue.empty():
-                        try:
-                            yield event_queue.get_nowait()
-                        except asyncio.QueueEmpty:
-                            break
-                    break
-
-                result = runner_task.result()
-            except asyncio.TimeoutError:
-                runner_task.cancel()
-                yield {"type": "error", "content": f"Claude CLI timed out after {TIMEOUT}s"}
-                return
-            except RuntimeError as e:
-                yield {"type": "error", "content": str(e)}
-                return
-
-            output = (result.get("output") or "").strip()
-            stderr_text = (result.get("stderr") or "").strip()
-            rc = result.get("returncode")
-
-            if output:
-                yield {"type": "text", "content": output}
-                yield {
-                    "type": "result",
-                    "content": output,
-                    "cost_usd": 0,
-                    "duration_ms": 0,
-                    "total_tokens": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                }
-                yield {"type": "session_id_used", "session_id": current_session_id}
-                return
-
-            # No output: surface stderr / non-zero rc rather than going silent.
-            err_msg = stderr_text or f"Claude CLI returned no output (rc={rc})."
-            yield {"type": "error", "content": err_msg}
-            return
-
-        async def _start_stream_proc(sid: str, resume: bool, p_prompt: str):
-            cmd, proc_cwd = self._build_cmd(
-                output_format="stream-json", system_prompt=system_prompt,
-                agent_id=agent_id, task_id=task_id,
-                permissions=self._get_permissions(agent_id),
-                agent_user=effective_user,
-                session_id=sid, is_resume=resume,
-            )
-            logger.info(f"Streaming Claude Code{agent_label} (prompt={len(p_prompt)}B, resume={resume}): {p_prompt[:100]}...")
-            logger.info(f"[Spawn] {_spawn_diagnostic(proc_cwd, effective_user)}")
-            spawn_env = await run_blocking(get_agent_env, effective_user)
-            try:
-                p = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=proc_cwd,
-                    env=spawn_env,
-                    limit=10 * 1024 * 1024,
-                    **get_subprocess_kwargs(effective_user),
-                )
-            except PermissionError as spawn_err:
-                logger.error(
-                    f"[Spawn] PermissionError spawning claude (cwd={proc_cwd}, "
-                    f"target_uid={effective_user.get('uid') if effective_user else os.getuid()}): {spawn_err}\n"
-                    f"  path components: {_cwd_path_diagnostic(proc_cwd)}"
-                )
-                raise RuntimeError(
-                    f"Permission denied spawning claude CLI (cwd={proc_cwd}). "
-                    f"The dedicated agent UID likely can't traverse cwd or its parents — "
-                    f"see runner-service logs for the per-component mode/owner dump."
-                ) from spawn_err
-            # Drain stderr concurrently so a chatty CLI can't fill the pipe and
-            # stall mid-run. All later stderr reads must go through this task —
-            # a direct p.stderr.read() would race it.
-            se_task = asyncio.create_task(p.stderr.read())
-            try:
-                p.stdin.write(p_prompt.encode("utf-8"))
-                await p.stdin.drain()
-                p.stdin.close()
-                await p.stdin.wait_closed()
-            except BrokenPipeError:
-                stderr_out = ""
-                try:
-                    stderr_out = (await asyncio.wait_for(se_task, timeout=5)).decode("utf-8", errors="replace").strip()
-                except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(p.wait(), timeout=5)
-                except Exception:
-                    pass
-                raise BrokenPipeError(
-                    f"Claude CLI exited before reading prompt (rc={p.returncode}). "
-                    f"stderr: {stderr_out[:500]}" if stderr_out else
-                    f"Claude CLI exited before reading prompt (rc={p.returncode})"
-                )
-            return p, se_task
+        spawn_env = await run_blocking(get_agent_env, effective_user)
+        runner_task = asyncio.create_task(asyncio.wait_for(
+            run_interactive(
+                cmd=cmd, cwd=proc_cwd,
+                env=spawn_env,
+                prompt=used_prompt, preexec_fn=preexec_fn,
+                on_event=_push_event,
+            ),
+            timeout=TIMEOUT,
+        ))
 
         try:
-            proc, stderr_task = await _start_stream_proc(current_session_id, is_resume, used_prompt)
-        except BrokenPipeError:
-            if is_resume:
-                logger.warning(f"[Session] --resume {current_session_id[:12]} BrokenPipe — falling back to fresh session + replay")
-                current_session_id = str(uuid.uuid4())
-                is_resume = False
-                used_prompt = replay_prompt
-                try:
-                    proc, stderr_task = await _start_stream_proc(current_session_id, False, used_prompt)
-                except BrokenPipeError as e:
-                    logger.error(f"[Session] Fallback replay also failed: {e}")
-                    raise
-            else:
-                raise
-        except RuntimeError as spawn_err:
-            # Spawn-time failure (typically PermissionError translated above).
-            # Surface as a stream error event so the client gets a clean
-            # message instead of an ASGI 500 / broken SSE response.
-            yield {"type": "error", "content": str(spawn_err)}
-            return
-
-        has_content = False
-        last_event_types: list[str] = []
-        last_result_event: Optional[dict] = None
-        # When --include-partial-messages is on, the CLI emits Anthropic-style
-        # content_block_delta events AND a final aggregated `assistant` event
-        # carrying the same text. Track which content_block indices we've
-        # already streamed so the trailing `assistant` event doesn't duplicate.
-        streamed_block_indices: set[int] = set()
-
-        timed_out = False
-
-        async def _stdout_lines():
-            # Overall deadline so a stalled CLI (waiting for input that will
-            # never come) can't hang the SSE stream forever. readline()
-            # returns b"" at EOF, ending iteration exactly like `async for`.
-            io_loop = asyncio.get_running_loop()
-            stream_deadline = io_loop.time() + TIMEOUT
             while True:
-                remaining = stream_deadline - io_loop.time()
-                if remaining <= 0:
-                    raise asyncio.TimeoutError
-                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
-                if not raw:
-                    return
-                yield raw
-
-        try:
-            async for line in _stdout_lines():
-                # Keep only the line terminator stripped — preserve all internal
-                # and leading whitespace so plain-text CLI output (auth banners,
-                # error messages) is not silently mangled when re-emitted.
-                line = line.decode("utf-8", errors="replace").rstrip("\r\n")
-                if not line or not line.strip():
-                    continue
-
-                is_json_event = False
-                event = None
-                try:
-                    event = json.loads(line)
-                    is_json_event = True
-                except json.JSONDecodeError:
-                    pass
-
-                if is_json_event and isinstance(event, dict):
-                    etype = event.get("type", "")
-                    last_event_types.append(etype or "?")
-                    if len(last_event_types) > 20:
-                        last_event_types = last_event_types[-20:]
-                    if etype == "result":
-                        last_result_event = event
-
-                check_auth = not is_json_event
-                if is_json_event and isinstance(event, dict):
-                    etype = event.get("type", "")
-                    if etype in ("system", "error"):
-                        check_auth = True
-                    elif etype == "assistant":
-                        msg = event.get("message", {})
-                        if isinstance(msg, dict) and msg.get("model") == "<synthetic>":
-                            check_auth = True
-
-                if check_auth:
-                    line_lower = line.lower()
-                    # Recognise the various phrasings the Claude CLI uses for
-                    # an expired / rejected OAuth token. The CLI may emit any of:
-                    #   • "OAuth token has expired"
-                    #   • "API Error: 401 ..."  (JSON or plain text)
-                    #   • "Please run /login"
-                    #   • "Invalid authentication credentials"
-                    #   • "Invalid API key"
-                    is_expired_or_unauthorized = (
-                        "token has expired" in line_lower
-                        or ("authentication_error" in line_lower and "401" in line_lower)
-                        or "please run /login" in line_lower
-                        or "invalid authentication credentials" in line_lower
-                        or "invalid api key" in line_lower
-                        or ("401" in line_lower and "invalid" in line_lower and "credential" in line_lower)
-                    )
-                    if is_expired_or_unauthorized:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        logger.warning(f"Expired token detected in stream: {line[:120]}")
-                        if agent_user:
-                            refreshed = await refresh_agent_token(agent_user)
-                        else:
-                            refreshed = await refresh_oauth_token()
-                        if refreshed and _auth_retry < MAX_AUTH_RETRIES:
-                            yield {"type": "status", "content": "Token refreshed, retrying..."}
-                            async for ev in self.stream_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, session_id=session_id, messages=messages, _auth_retry=_auth_retry + 1):
-                                yield ev
-                        else:
-                            if _auth_retry >= MAX_AUTH_RETRIES:
-                                logger.error(f"Auth retry limit ({MAX_AUTH_RETRIES}) reached, aborting")
-                            if agent_user:
-                                login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
-                            else:
-                                login_url = await get_login_url()
-                            yield {
-                                "type": "error",
-                                "content": f"OAuth token expired and refresh failed. Please re-authenticate: {login_url}",
-                                "login_url": login_url,
-                            }
-                        return
-
-                    if "not logged in" in line_lower:
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        if agent_user:
-                            refreshed = await refresh_agent_token(agent_user)
-                            if not refreshed:
-                                global_token = load_saved_token()
-                                if global_token:
-                                    global_refresh = get_saved_refresh_token()
-                                    save_agent_token(agent_user, global_token, refresh_token=global_refresh)
-                                    logger.info(f"[Agent Auth] Copied global token to {agent_user['username']}")
-                                    refreshed = True
-                            if refreshed and _auth_retry < MAX_AUTH_RETRIES:
-                                yield {"type": "status", "content": "Agent token refreshed, retrying..."}
-                                async for ev in self.stream_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, session_id=session_id, messages=messages, _auth_retry=_auth_retry + 1):
-                                    yield ev
-                                return
-                        if agent_user:
-                            login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
-                        else:
-                            login_url = await get_login_url()
-                        if login_url:
-                            yield {
-                                "type": "error",
-                                "content": f"Not authenticated. Open this URL: {login_url} -- then send the verification code as your next message.",
-                                "login_url": login_url,
-                            }
-                        else:
-                            yield {
-                                "type": "error",
-                                "content": "Not authenticated. Call POST /auth/login to start, or POST a token to /auth/token.",
-                            }
-                        return
-
-                if not is_json_event:
-                    # The CLI prints `No conversation found with session ID: <uuid>`
-                    # as plain text (not stream-json) when --resume can't find the
-                    # JSONL. Treating it as content would surface raw CLI noise to
-                    # the user AND mark has_content=True, defeating the fresh-session
-                    # fallback below. Intercept here and trigger the replay path.
-                    if is_resume and RESUME_MISS_SENTINEL in line:
-                        logger.warning(
-                            f"[Session] --resume {current_session_id[:12]} reported missing JSONL "
-                            f"('{RESUME_MISS_SENTINEL}') — falling back to fresh session + full history replay"
-                        )
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        try:
-                            await proc.wait()
-                        except Exception:
-                            pass
-                        if _auth_retry < 1:
-                            async for ev in self.stream_events(
-                                prompt, system_prompt,
-                                agent_id=agent_id, owner_id=owner_id, task_id=task_id,
-                                session_id=None, messages=messages,
-                                _auth_retry=_auth_retry + 1,
-                            ):
-                                yield ev
-                        else:
-                            yield {
-                                "type": "error",
-                                "content": "Claude CLI lost session and replay fallback already attempted.",
-                            }
-                        return
-
-                    # Preserve the line break — these chunks are concatenated
-                    # downstream (OpenAI-stream `delta.content` accumulation)
-                    # and without a separator, the last word of line N and the
-                    # first word of line N+1 would be jammed together. This was
-                    # the cause of garbled output like
-                    # "API Error:401Invalidauthenticationcredentials".
-                    has_content = True
-                    yield {"type": "text", "content": line + "\n"}
-                    continue
-
-                event_type = event.get("type", "")
-
-                # ── Partial-message streaming (--include-partial-messages) ──
-                # Claude CLI 2.x wraps Anthropic SSE events under either a
-                # `stream_event` envelope or emits them directly with their
-                # own `type`. Handle both forms.
-                inner_event = event
-                if event_type == "stream_event":
-                    inner_event = event.get("event", {}) or {}
-                    event_type = inner_event.get("type", "")
-
-                if event_type == "content_block_start":
-                    block = inner_event.get("content_block", {}) or {}
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        idx = inner_event.get("index")
-                        if isinstance(idx, int):
-                            streamed_block_indices.add(idx)
-                        has_content = True
-                        tool_name = block.get("name", "unknown")
-                        yield {"type": "status", "content": f"Using tool: {tool_name}"}
-                    continue
-
-                if event_type == "content_block_delta":
-                    delta = inner_event.get("delta", {}) or {}
-                    dtype = delta.get("type") if isinstance(delta, dict) else None
-                    idx = inner_event.get("index")
-                    if dtype == "text_delta":
-                        text = delta.get("text", "")
-                        if text:
-                            has_content = True
-                            if isinstance(idx, int):
-                                streamed_block_indices.add(idx)
-                            yield {"type": "text", "content": text}
-                    elif dtype == "thinking_delta":
-                        thinking = delta.get("thinking", "")
-                        if thinking:
-                            has_content = True
-                            if isinstance(idx, int):
-                                streamed_block_indices.add(idx)
-                            yield {"type": "thinking", "content": thinking}
-                    continue
-
-                if event_type in ("content_block_stop", "message_start", "message_delta", "message_stop"):
-                    continue
-
-                if event_type == "assistant":
-                    message = event.get("message", {})
-                    content = message.get("content", "")
-                    if isinstance(content, list):
-                        for i, block in enumerate(content):
-                            # Skip blocks already streamed via partial deltas
-                            # to avoid duplicating output. The CLI emits
-                            # content_block_delta with its own `index` but the
-                            # trailing `assistant` event re-lists the blocks
-                            # in the same order, so positional match is safe.
-                            if i in streamed_block_indices:
-                                continue
-                            if isinstance(block, dict) and block.get("type") == "thinking":
-                                has_content = True
-                                yield {"type": "thinking", "content": block.get("thinking", "")}
-                            elif isinstance(block, dict) and block.get("type") == "text":
-                                has_content = True
-                                yield {"type": "text", "content": block.get("text", "")}
-                            elif isinstance(block, dict) and block.get("type") == "tool_use":
-                                has_content = True
-                                tool_name = block.get("name", "unknown")
-                                yield {"type": "status", "content": f"Using tool: {tool_name}"}
-                    elif isinstance(content, str) and content:
-                        if not streamed_block_indices:
-                            has_content = True
-                            yield {"type": "text", "content": content}
-
-                elif event_type == "tool_use":
-                    has_content = True
-                    tool_name = event.get("name", "unknown")
-                    yield {"type": "status", "content": f"Using tool: {tool_name}"}
-
-                elif event_type == "tool_result":
-                    has_content = True
-
-                elif event_type == "result":
-                    result_text = event.get("result", "")
-                    # If --resume reported a missing JSONL via a stream-json
-                    # result event (instead of the plain-text line caught
-                    # earlier), trigger the same fresh-session + replay fallback
-                    # so the user never sees the raw "No conversation found ..."
-                    # noise.
-                    if is_resume and isinstance(result_text, str) and RESUME_MISS_SENTINEL in result_text:
-                        logger.warning(
-                            f"[Session] --resume {current_session_id[:12]} reported missing JSONL "
-                            f"via result event — falling back to fresh session + full history replay"
-                        )
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        try:
-                            await proc.wait()
-                        except Exception:
-                            pass
-                        if _auth_retry < 1:
-                            async for ev in self.stream_events(
-                                prompt, system_prompt,
-                                agent_id=agent_id, owner_id=owner_id, task_id=task_id,
-                                session_id=None, messages=messages,
-                                _auth_retry=_auth_retry + 1,
-                            ):
-                                yield ev
-                        else:
-                            yield {
-                                "type": "error",
-                                "content": "Claude CLI lost session and replay fallback already attempted.",
-                            }
-                        return
-                    cost = event.get("cost_usd", 0)
-                    duration = event.get("duration_ms", 0)
-                    usage = event.get("usage", {}) or {}
-                    input_tokens = usage.get("input_tokens", 0) or 0
-                    output_tokens = usage.get("output_tokens", 0) or 0
-                    total_tokens = event.get("total_tokens", 0) or (input_tokens + output_tokens)
-                    if input_tokens > 0 or output_tokens > 0 or result_text:
-                        has_content = True
-                    yield {"type": "result", "content": result_text or "", "cost_usd": cost, "duration_ms": duration, "total_tokens": total_tokens, "input_tokens": input_tokens, "output_tokens": output_tokens}
-
-                elif event_type == "error":
-                    error_msg = event.get("error", {})
-                    if isinstance(error_msg, dict):
-                        error_msg = error_msg.get("message", str(error_msg))
-                    error_str = str(error_msg)
-                    # Same fallback for error events carrying the resume-miss text.
-                    if is_resume and RESUME_MISS_SENTINEL in error_str:
-                        logger.warning(
-                            f"[Session] --resume {current_session_id[:12]} reported missing JSONL "
-                            f"via error event — falling back to fresh session + full history replay"
-                        )
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        try:
-                            await proc.wait()
-                        except Exception:
-                            pass
-                        if _auth_retry < 1:
-                            async for ev in self.stream_events(
-                                prompt, system_prompt,
-                                agent_id=agent_id, owner_id=owner_id, task_id=task_id,
-                                session_id=None, messages=messages,
-                                _auth_retry=_auth_retry + 1,
-                            ):
-                                yield ev
-                        else:
-                            yield {
-                                "type": "error",
-                                "content": "Claude CLI lost session and replay fallback already attempted.",
-                            }
-                        return
-                    if "token has expired" in error_str.lower() or "oauth token" in error_str.lower():
-                        try:
-                            proc.terminate()
-                        except ProcessLookupError:
-                            pass
-                        logger.warning(f"Token expired mid-stream: {error_str}")
-                        refreshed = await refresh_oauth_token()
-                        if refreshed and _auth_retry < MAX_AUTH_RETRIES:
-                            yield {"type": "status", "content": "Token refreshed, retrying..."}
-                            async for ev in self.stream_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, session_id=session_id, messages=messages, _auth_retry=_auth_retry + 1):
-                                yield ev
-                        else:
-                            if _auth_retry >= MAX_AUTH_RETRIES:
-                                logger.error(f"Auth retry limit ({MAX_AUTH_RETRIES}) reached, aborting")
-                            login_url = await get_login_url()
-                            yield {
-                                "type": "error",
-                                "content": f"OAuth token expired and refresh failed. Please re-authenticate: {login_url}",
-                                "login_url": login_url,
-                            }
-                        return
-                    yield {"type": "error", "content": error_str}
-
-                else:
-                    if VERBOSE:
-                        logger.debug(f"Unhandled event type: {event_type}")
-
-        except asyncio.TimeoutError:
-            timed_out = True
-            # Kill before the finally's wait so cleanup can't block on the
-            # stalled CLI.
-            try:
-                proc.kill()
-            except (ProcessLookupError, PermissionError):
-                pass
-        except asyncio.CancelledError:
-            stderr_task.cancel()
-            try:
-                proc.terminate()
-            except (ProcessLookupError, PermissionError):
-                pass
-            raise
-        finally:
-            try:
-                await proc.wait()
-            except asyncio.CancelledError:
-                pass
-
-        if timed_out:
-            # Do NOT fall through to the resume/replay fallbacks below — they
-            # could re-spawn the CLI we just killed.
-            stderr_task.cancel()
-            yield {"type": "error", "content": f"Execution timeout after {TIMEOUT}s"}
-            return
-
-        # Read any stderr once after process completion (used by both branches below)
-        try:
-            stderr_text = (await stderr_task).decode("utf-8", errors="replace").strip()
-        except Exception:
-            stderr_text = ""
-
-        # If the CLI dumped the resume-miss sentinel to stderr (instead of
-        # stdout) and exited, replay once with a fresh session before surfacing
-        # any raw stderr to the client.
-        if is_resume and stderr_text and RESUME_MISS_SENTINEL in stderr_text and _auth_retry < 1:
-            logger.warning(
-                f"[Session] --resume {current_session_id[:12]} reported missing JSONL "
-                f"via stderr — falling back to fresh session + full history replay"
-            )
-            async for ev in self.stream_events(
-                prompt, system_prompt,
-                agent_id=agent_id, owner_id=owner_id, task_id=task_id,
-                session_id=None, messages=messages,
-                _auth_retry=_auth_retry + 1,
-            ):
-                yield ev
-            return
-
-        if proc.returncode != 0:
-            if stderr_text:
-                yield {"type": "error", "content": stderr_text}
-
-        if has_content:
-            # Tell the route handler which session UUID actually produced the
-            # output so it can be persisted by the caller for the next turn.
-            yield {"type": "session_id_used", "session_id": current_session_id}
-
-        if not has_content and proc.returncode == 0 and agent_id:
-            # Surface every diagnostic we have so the cause is visible in logs.
-            result_summary = ""
-            if last_result_event:
-                usage = (last_result_event.get("usage") or {})
-                result_summary = (
-                    f" result={{subtype={last_result_event.get('subtype')}, "
-                    f"is_error={last_result_event.get('is_error')}, "
-                    f"num_turns={last_result_event.get('num_turns')}, "
-                    f"in_tokens={usage.get('input_tokens', 0)}, "
-                    f"out_tokens={usage.get('output_tokens', 0)}, "
-                    f"result_text_len={len(str(last_result_event.get('result') or ''))}}}"
+                # Race: either a streamed delta or the runner finishing.
+                get_task = asyncio.create_task(event_queue.get())
+                done, pending = await asyncio.wait(
+                    {get_task, runner_task},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
-            logger.warning(
-                f"[Session] Empty response from Claude CLI for agent {agent_id[:12]} "
-                f"(rc=0, was_resume={is_resume}, prompt={len(used_prompt)}B, "
-                f"events={last_event_types or '<none>'}){result_summary}"
-            )
-            if stderr_text:
-                logger.warning(f"[Session] Empty response stderr: {stderr_text[:500]}")
-
-            # If we were resuming and got nothing back, the JSONL probably
-            # isn't on this runner — fall back to a fresh session with the
-            # full replay prompt. Otherwise we've already replayed and there's
-            # nothing more to try; surface the error.
-            if is_resume and _auth_retry < 1:
-                logger.warning(f"[Session] --resume {current_session_id[:12]} returned no output — retrying with fresh session + full history replay")
-                async for ev in self.stream_events(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, session_id=None, messages=messages, _auth_retry=_auth_retry + 1):
+                if get_task in done:
+                    ev = get_task.result()
                     yield ev
-            else:
-                yield {
-                    "type": "error",
-                    "content": (
-                        "Claude CLI returned no output (possible silent rate limit or upstream issue). "
-                        f"Last events: {last_event_types or '<none>'}."
-                        + (f" stderr: {stderr_text[:200]}" if stderr_text else "")
-                    ),
-                }
+                    # If the runner also finished on the same tick, fall
+                    # through and drain the rest below; otherwise loop.
+                    if runner_task not in done:
+                        continue
+                else:
+                    # Runner finished while no delta was pending; cancel
+                    # the parked get_task so it doesn't leak.
+                    get_task.cancel()
+                # Drain anything still queued before the final event.
+                while not event_queue.empty():
+                    try:
+                        yield event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                break
+
+            result = runner_task.result()
+        except asyncio.TimeoutError:
+            runner_task.cancel()
+            yield {"type": "error", "content": f"Claude CLI timed out after {TIMEOUT}s"}
+            return
+        except RuntimeError as e:
+            yield {"type": "error", "content": str(e)}
+            return
+
+        output = (result.get("output") or "").strip()
+        stderr_text = (result.get("stderr") or "").strip()
+        rc = result.get("returncode")
+
+        if output:
+            yield {"type": "text", "content": output}
+            yield {
+                "type": "result",
+                "content": output,
+                "cost_usd": 0,
+                "duration_ms": 0,
+                "total_tokens": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            }
+            yield {"type": "session_id_used", "session_id": current_session_id}
+            return
+
+        # No output: surface stderr / non-zero rc rather than going silent.
+        err_msg = stderr_text or f"Claude CLI returned no output (rc={rc})."
+        yield {"type": "error", "content": err_msg}
+        return
 
     # ── Auth ──────────────────────────────────────────────────────────────
 

@@ -50,7 +50,7 @@ export default function ProjectDetailModal({ projectId, agents = [], onClose, on
   const projectAgents = useMemo(() => {
     if (!project?.boards?.length) return [];
     const boardIds = new Set(project.boards.map(b => b.id));
-    return agents.filter(a => boardIds.has(a.board_id || a.boardId));
+    return agents.filter(a => boardIds.has(a.boardId));
   }, [project, agents]);
 
   const handleChanged = () => {

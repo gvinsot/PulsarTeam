@@ -470,12 +470,6 @@ export class ClaudeProvider {
 }
 
 // ─── OpenAI Provider ────────────────────────────────────────────────────────
-// Completion-only models (legacy, use /v1/completions endpoint)
-const OPENAI_COMPLETION_MODELS = [
-  'gpt-3.5-turbo-instruct', 'davinci-002', 'babbage-002',
-  'text-davinci-003', 'text-davinci-002', 'text-curie-001', 'text-babbage-001', 'text-ada-001'
-];
-
 // Reasoning models: no temperature support, use 'developer' role instead of 'system'
 const OPENAI_REASONING_PREFIXES = ['o1', 'o3', 'o4'];
 
@@ -486,14 +480,12 @@ function isOpenAIReasoningModel(model: string): boolean {
 export class OpenAIProvider {
   client: OpenAI;
   model: string;
-  isCompletionModel: boolean;
   isReasoningModel: boolean;
   useResponsesAPI: boolean;
 
   constructor(apiKey: string, model?: string) {
     this.client = new OpenAI({ apiKey });
     this.model = model || 'gpt-4o';
-    this.isCompletionModel = OPENAI_COMPLETION_MODELS.some(m => this.model.startsWith(m));
     this.isReasoningModel = isOpenAIReasoningModel(this.model);
     // Set to true on 404 to permanently switch to the Responses API for this instance
     this.useResponsesAPI = false;
@@ -512,9 +504,6 @@ export class OpenAIProvider {
   }
 
   async chat(messages: any[], options: any = {}): Promise<any> {
-    if (this.isCompletionModel) {
-      return this._completionChat(messages, options);
-    }
     if (this.useResponsesAPI) {
       return this._responsesChat(messages, options);
     }
@@ -590,42 +579,9 @@ export class OpenAIProvider {
     };
   }
 
-  async _completionChat(messages: any[], options: any = {}): Promise<any> {
-    // Convert messages to a single prompt for completion models
-    const prompt = messages.map(m => {
-      if (m.role === 'system') return `System: ${m.content}`;
-      if (m.role === 'user') return `Human: ${m.content}`;
-      return `Assistant: ${m.content}`;
-    }).join('\\n\\n') + '\\n\\nAssistant:';
-
-    const requestOpts: any = {};
-    if (options.signal) requestOpts.signal = options.signal;
-
-    const response = await this.client.completions.create({
-      model: this.model,
-      prompt,
-      ...tempParam(options),
-      max_tokens: options.maxTokens || 4096,
-    }, requestOpts);
-
-    return {
-      content: response.choices[0]?.text?.trim() || '',
-      model: this.model,
-      provider: 'openai',
-      usage: {
-        inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0
-      }
-    };
-  }
-
   async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const systemMsg = messages.find(m => m.role === 'system');
     console.log(`🔌 [OpenAI] chatStream model=${this.model} | messages=${messages.length} | systemPrompt=${systemMsg ? systemMsg.content.length + ' chars' : 'NONE'} | useResponsesAPI=${this.useResponsesAPI} | isReasoning=${this._isReasoning(options)}`);
-    if (this.isCompletionModel) {
-      yield* this._completionStream(messages, options);
-      return;
-    }
     if (this.useResponsesAPI) {
       yield* this._responsesChatStream(messages, options);
       return;
@@ -738,48 +694,8 @@ export class OpenAIProvider {
     }
   }
 
-  async *_completionStream(messages: any[], options: any = {}): AsyncGenerator<any> {
-    // Convert messages to a single prompt for completion models
-    const prompt = messages.map(m => {
-      if (m.role === 'system') return `System: ${m.content}`;
-      if (m.role === 'user') return `Human: ${m.content}`;
-      return `Assistant: ${m.content}`;
-    }).join('\\n\\n') + '\\n\\nAssistant:';
-
-    const stream = await this.client.completions.create({
-      model: this.model,
-      prompt,
-      ...tempParam(options),
-      max_tokens: options.maxTokens || 4096,
-      stream: true,
-    });
-
-    let totalTokens = 0;
-    for await (const chunk of stream as any) {
-      const text = chunk.choices[0]?.text;
-      if (text) {
-        yield { type: 'text', text };
-        totalTokens++;
-      }
-    }
-
-    yield {
-      type: 'done',
-      finishReason: 'stop',
-      usage: { inputTokens: 0, outputTokens: totalTokens }
-    };
-  }
-
   async ping(): Promise<boolean> {
     try {
-      if (this.isCompletionModel) {
-        const response = await this.client.completions.create({
-          model: this.model,
-          prompt: 'ping',
-          max_tokens: 5,
-        });
-        return !!response;
-      }
       if (this.useResponsesAPI) {
         const response = await (this.client as any).responses.create({
           model: this.model,
@@ -874,9 +790,8 @@ export class VLLMProvider {
 
     const promptTokens = response.usage?.prompt_tokens || 0;
     const completionTokens = response.usage?.completion_tokens || 0;
-    const totalTokens = response.usage?.total_tokens || 0;
     const usage: any = {
-      inputTokens: promptTokens || totalTokens,
+      inputTokens: promptTokens,
       outputTokens: completionTokens
     };
     // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
@@ -934,11 +849,8 @@ export class VLLMProvider {
       if (chunk.usage) {
         const promptTokens = chunk.usage.prompt_tokens || 0;
         const completionTokens = chunk.usage.completion_tokens || 0;
-        const totalTokens = chunk.usage.total_tokens || 0;
-        // coder-service now sends proper prompt_tokens (input) and completion_tokens (output).
-        // Fallback to total_tokens if prompt_tokens is missing (legacy compatibility).
         const usage: any = {
-          inputTokens: promptTokens || totalTokens,
+          inputTokens: promptTokens,
           outputTokens: completionTokens
         };
         // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
@@ -1094,7 +1006,7 @@ export function createProvider(config: any): any {
       );
     case 'claude-paid':
       return new VLLMProvider(
-        process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
+        process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
         config.model || 'claude-sonnet-4-20250514',
         readSecret('CODER_API_KEY'),
         config.agentId || null,
@@ -1159,7 +1071,7 @@ export function createProvider(config: any): any {
       );
     case 'claudecode':
       return new VLLMProvider(
-        process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
+        process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
         config.model,
         readSecret('CODER_API_KEY'),
         config.agentId || null,

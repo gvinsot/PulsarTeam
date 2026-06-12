@@ -4,13 +4,12 @@ This file documents every OAuth or credential-based integration the platform exp
 
 - A `GET /status` endpoint to inspect whether the integration is configured and connected.
 - A `GET /auth-url` (OAuth integrations only) that returns the consent URL plus a `state` we round-trip.
-- A `POST /callback` (legacy) for OAuth code → token exchange.
 - A `GET /oauth-redirect` (public) that the provider redirects to.
 - A `POST /connect` (credential integrations) that validates the credentials by performing a test call.
 - A `POST /disconnect` to revoke the stored token / credentials.
 - An `ALL /mcp` JSON-RPC endpoint that backs the corresponding MCP server.
 
-All `/status`, `/auth-url`, `/connect`, `/disconnect`, `/mcp` routes require JWT. OAuth `/oauth-redirect` is public — the user is bounced to the SPA's callback page which then calls the JWT `/callback` route.
+All `/status`, `/auth-url`, `/connect`, `/disconnect`, `/mcp` routes require JWT. OAuth `/oauth-redirect` is public — it exchanges the code server-side and renders a result page that notifies the SPA popup opener via `postMessage`.
 
 Each integration is **scoped**: an `agentId` query (or `boardId`) selects which agent/board the connection belongs to. With no scope, the token is stored at the user level. The MCP layer reads the most-specific token (agent → board → user).
 
@@ -67,8 +66,3 @@ Some redirect handlers are shared across multiple integrations because the OAuth
 | `GET /api/microsoft/oauth-redirect` | OneDrive + Outlook (dispatched via `state.service`) |
 | `GET /api/github/oauth-redirect` | GitHub plugin |
 | `GET /api/slack/oauth-redirect` | Slack |
-
-Legacy aliases (kept for backwards-compatibility with older browser bookmarks and Traefik routing):
-- `/api/gmail/oauth-redirect`, `/api/gdrive/oauth-redirect`
-- `/api/onedrive/oauth-redirect`
-- `/gmail-callback.html`, `/gdrive-callback.html`, `/google-callback.html`

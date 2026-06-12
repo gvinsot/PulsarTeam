@@ -1,5 +1,3 @@
-import fs from 'fs/promises';
-import path from 'path';
 import { getPool, getAllBoards, getBoardById, getDefaultBoard } from './database.js';
 
 const DEFAULTS = {
@@ -24,13 +22,6 @@ const DEFAULTS = {
   // Default TTS voice / mode for external voice agents
   ttsVoiceId: '',
 };
-
-// ── Data directory configuration ────────────────────────────────────────────
-const DATA_DIR = path.join(process.cwd(), '.data');
-
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-}
 
 export async function getSettings() {
   const pool = getPool();
@@ -126,7 +117,7 @@ const DEFAULT_WORKFLOW = {
   version: 1,
 };
 
-export async function getWorkflow(_project) {
+export async function getWorkflow() {
   // Read from the default board
   try {
     const board = await getDefaultBoard();
@@ -149,7 +140,7 @@ export async function getWorkflow(_project) {
  * Falls back to default board if boardId is null or board not found.
  */
 export async function getWorkflowForBoard(boardId) {
-  if (!boardId) return getWorkflow('_default');
+  if (!boardId) return getWorkflow();
   try {
     const board = await getBoardById(boardId);
     if (board?.workflow) {
@@ -163,7 +154,7 @@ export async function getWorkflowForBoard(boardId) {
   } catch (err) {
     console.error('[ConfigManager] Failed to read workflow for board:', err.message);
   }
-  return getWorkflow('_default');
+  return getWorkflow();
 }
 
 /**

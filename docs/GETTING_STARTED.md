@@ -83,7 +83,6 @@ GIT_USER_NAME=Your Name
 GIT_USER_EMAIL=you@example.com
 GITHUB_TOKEN=ghp_xxx
 GITHUB_USER=your-github-username
-SSH_KEYS_HOST_PATH=/home/youruser/.ssh
 ```
 
 ### Docker Registry
@@ -92,28 +91,12 @@ SSH_KEYS_HOST_PATH=/home/youruser/.ssh
 DOCKER_REGISTRY_URL=registry.example.com
 ```
 
-### Host Paths
-
-```env
-HOST_CODE_PATH=/home/youruser
-```
-
-> This is the parent directory containing the `PulsarTeam` folder on the host.
-
 ### Sandbox
 
 ```env
 SANDBOX_SHARED_CONTAINER_NAME=sandbox
 SANDBOX_BASE_WORKSPACE=/workspace
 ```
-
-### User Permissions
-
-```env
-RUN_AS_USER=youruser
-```
-
-> The UID/GID are auto-detected by the pre-deployment script to match your host user. This ensures agents can read/write files with correct permissions.
 
 ### Coder Service (Optional)
 
@@ -167,12 +150,6 @@ A `docker-compose.yml` at the root of the repository handles everything: Postgre
 
 ```bash
 docker compose up -d --build
-```
-
-### With Coder Service (Claude Code integration)
-
-```bash
-docker compose --profile coder up -d --build
 ```
 
 > PostgreSQL is included and auto-configured. Tables are created automatically on first startup — no manual migration needed.
@@ -259,18 +236,13 @@ docker compose logs api --tail 100 2>&1 | grep -i error
 
 ### Agents can't clone Git repositories
 
-- Verify SSH keys are correctly mounted (`SSH_KEYS_HOST_PATH` in `.env`)
+- Verify SSH keys are available inside the agent container
 - Check that GitHub SSH host keys are present: `ssh-keyscan github.com`
 - Ensure `GITHUB_TOKEN` is set if using HTTPS cloning
 
-### Permission errors on files
-
-- Verify `RUN_AS_USER` matches your host username
-- The pre-deployment script should auto-detect UID/GID — check `.env` for `RUN_AS_UID` and `RUN_AS_GID`
-
 ### Coder Service not responding
 
-- Check OAuth token: `docker compose logs coder-service --tail 50`
+- Check OAuth token: `docker compose logs claudecode-service --tail 50`
 - Verify `CODER_API_KEY` matches between API and Coder Service
 
 ---

@@ -30,10 +30,6 @@ Queue a new task on an agent. The board is auto-resolved if there is exactly one
 | Endpoint | Description |
 |---|---|
 | `ALL /api/swarm/mcp` | JSON-RPC over HTTP — the canonical transport. |
-| `GET /api/swarm/mcp/sse` | Legacy SSE stream (one-way push). |
-| `POST /api/swarm/mcp/messages` | Companion to the SSE stream — clients post their JSON-RPC requests here. |
-
-All three accept the same API key.
 
 ---
 

@@ -98,7 +98,7 @@ if _is_weak(API_KEY, 16):
 PROJECTS_DIR = os.getenv("PROJECTS_DIR", "/projects")
 DATA_DIR = os.getenv("DATA_DIR", "/app/data")
 TIMEOUT = int(os.getenv("TIMEOUT", "600"))
-ALLOWED_TOOLS = os.getenv("RUNNER_ALLOWED_TOOLS", os.getenv("CLAUDE_ALLOWED_TOOLS", ""))
+ALLOWED_TOOLS = os.getenv("RUNNER_ALLOWED_TOOLS", "")
 
 # Working directory for the CLI subprocess. Use /app (not PROJECTS_DIR) to
 # avoid loading stale config files from mounted project volumes.
@@ -107,17 +107,17 @@ CLI_CWD = "/app"
 # --- Agent-specific constants -------------------------------------------------
 
 # Generic max-turns / model — each backend may interpret these differently.
-RUNNER_MODEL = os.getenv("RUNNER_MODEL", os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"))
-RUNNER_MAX_TURNS = int(os.getenv("RUNNER_MAX_TURNS", os.getenv("CLAUDE_MAX_TURNS", "50")))
+RUNNER_MODEL = os.getenv("RUNNER_MODEL", "claude-sonnet-4-20250514")
+RUNNER_MAX_TURNS = int(os.getenv("RUNNER_MAX_TURNS", "50"))
 
-SYSTEM_PROMPT = os.getenv("RUNNER_SYSTEM_PROMPT", os.getenv("CLAUDE_SYSTEM_PROMPT", (
+SYSTEM_PROMPT = os.getenv("RUNNER_SYSTEM_PROMPT", (
     "You are an autonomous code execution agent running inside a Docker container. "
     "You have full access to: Python 3.12, Node.js 22, bash, git, Docker CLI, "
     "PostgreSQL client, SQLite, and all standard Unix tools. "
     "Your working directory IS the project git repository. "
     "You can read, write, and execute code freely. Use git to commit and push your changes. "
     "Be concise and provide actionable results."
-)))
+))
 
 # --- Claude Code OAuth constants (only used by claude-code backend) -----------
 
@@ -133,16 +133,7 @@ OAUTH_SCOPES = "user:profile user:inference user:sessions:claude_code user:mcp_s
 
 USERS_DIR = os.path.join(DATA_DIR, "users")
 
-# --- Interactive (no -p) mode ------------------------------------------------
-#
-# Anthropic has announced that Claude Code headless mode (`-p` / `--print`) is
-# moving to API-rate pricing, while the interactive TUI mode keeps subscription
-# pricing. Default to the interactive driver and let operators opt back into
-# print-mode via env var if they need it (CI shells, integration tests, etc.).
-#
-# CLAUDE_USE_PRINT_MODE=true  → spawn with `-p` (legacy/expensive path)
-# CLAUDE_USE_PRINT_MODE=false → drive the CLI via a PTY (default)
-CLAUDE_USE_PRINT_MODE = os.getenv("CLAUDE_USE_PRINT_MODE", "false").lower() in ("true", "1", "yes")
+# --- Interactive (PTY) mode ----------------------------------------------------
 
 # Silence window (seconds) used to detect "the CLI is done answering" when
 # driving the TUI through a PTY. The previous default of 4 s was too tight
@@ -161,8 +152,3 @@ CLAUDE_INTERACTIVE_TIMEOUT = int(os.getenv("CLAUDE_INTERACTIVE_TIMEOUT", str(TIM
 CLAUDE_FALLBACK_LLM_URL = os.getenv("CLAUDE_FALLBACK_LLM_URL", "").strip()
 CLAUDE_FALLBACK_LLM_KEY = read_secret("CLAUDE_FALLBACK_LLM_KEY", default=os.getenv("CLAUDE_FALLBACK_LLM_KEY", "")).strip()
 CLAUDE_FALLBACK_LLM_MODEL = os.getenv("CLAUDE_FALLBACK_LLM_MODEL", "gpt-4o-mini").strip()
-
-# Backwards-compat aliases (so we don't have to update every file at once)
-CLAUDE_MODEL = RUNNER_MODEL
-CLAUDE_MAX_TURNS = RUNNER_MAX_TURNS
-CLAUDE_CWD = CLI_CWD

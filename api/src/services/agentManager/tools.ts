@@ -274,9 +274,6 @@ export const toolsMethods = {
       return { success: false, result: `Wrong tool: this task is in ${inProgressTask.actionRunningMode} mode, not execute mode. Use @update_task(${inProgressTask.id}, <new_status>) to change the task status.` };
     }
 
-    // Set both legacy in-memory flag AND the signal system for reliable detection
-    inProgressTask._executionCompleted = true;
-    inProgressTask._executionComment = comment;
     setTaskSignal(inProgressTask.id, 'completed', true);
     setTaskSignal(inProgressTask.id, 'comment', comment);
 
@@ -926,6 +923,7 @@ export const toolsMethods = {
           ? Date.now() - new Date(agent.projectChangedAt).getTime()
           : null;
         const projectDuration = AgentManager.formatDuration(projectDurationMs);
+        const agentLlm = this.resolveLlmConfig(agent);
 
         const lines = [
           `Name: ${agent.name}`,
@@ -933,7 +931,7 @@ export const toolsMethods = {
           `Role: ${agent.role || 'worker'}`,
           `Project: ${agent.project || 'none'}${agent.project ? ` (assigned ${projectAssignedAt}, duration: ${projectDuration})` : ''}`,
           `Current task: ${currentTaskInfo}`,
-          `Provider: ${agent.provider || 'unknown'}/${agent.model || 'unknown'}`,
+          `Provider: ${agentLlm.provider || 'unknown'}/${agentLlm.model || 'unknown'}`,
           `Sandbox: ${hasSandbox ? 'running' : 'not running'}`,
           `Tasks: ${activeCount} active, ${waitingTasks} waiting, ${doneTasks} done, ${errorTasks} error / ${totalTasks} total`,
           `Messages: ${msgCount}`,

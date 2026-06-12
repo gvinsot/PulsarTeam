@@ -29,7 +29,6 @@ mock.module('../database.js', {
     saveAgent: noop,
     deleteAgentFromDb: noop,
     setAgentOwner: noop,
-    getAgentsByOwner: async () => [],
     setAgentBoard: noop,
     getAgentsByBoard: async () => [],
     // skills
@@ -155,7 +154,6 @@ mock.module('../database.js', {
     hasActiveTask: async () => false,
     countActiveTasksForAgent: async () => 0,
     getRecurringTasks: async () => [],
-    getTaskByJiraKey: async () => null,
     updateTaskFields: noop,
     getTasksByStatusAndBoard: async () => [],
     searchTasks: async () => [],
@@ -270,6 +268,7 @@ function createTask(mgr, text, status = 'backlog') {
     completedActionIdx: null,
     actionRunning: false,
     actionRunningAgentId: null,
+    environment: 'prod',
     createdAt: new Date().toISOString(),
   };
   mgr._addTaskToStore(firstAgentId, task);

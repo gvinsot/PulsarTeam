@@ -129,8 +129,8 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
       llmConfig = {
         provider: cfg.provider || null,
         model: cfg.model || null,
-        apiKey: cfg.apiKey || agent.apiKey || null,
-        endpoint: cfg.endpoint || agent.endpoint || null,
+        apiKey: cfg.apiKey || null,
+        endpoint: cfg.endpoint || null,
       };
     }
   }

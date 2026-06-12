@@ -600,22 +600,6 @@ async def stream_execution(
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@router.post("/reset")
-async def reset_agent(
-    x_api_key: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None),
-    x_agent_id: Optional[str] = Header(None),
-    x_task_id: Optional[str] = Header(None),
-):
-    """No-op: session state is now caller-managed (passed in via
-    X-Runner-Session-Id). The runner holds no per-agent session cache to
-    reset. Kept as a 200-OK stub so older clients don't 404.
-    """
-    api_key = extract_api_key(x_api_key, authorization)
-    verify_api_key(api_key)
-    return {"status": "success", "message": "runner is stateless — drop X-Runner-Session-Id on the caller side to start fresh"}
-
-
 # =============================================================================
 # OpenAI-compatible endpoints
 # =============================================================================

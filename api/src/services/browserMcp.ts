@@ -27,7 +27,7 @@ export function createBrowserMcpServer() {
 
   server.tool(
     'search_web',
-    'Search the web (DuckDuckGo) and return results as clean Markdown. Cloudflare-protected pages are bypassed via FlareSolverr.',
+    'Search the web (DuckDuckGo) and return results as clean Markdown.',
     {
       query: z.string().describe('Search query'),
     },
