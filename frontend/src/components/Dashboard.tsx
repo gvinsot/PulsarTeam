@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
+import { useClickOutside } from '../hooks/useDismiss';
 import { safeGet, safeSet, safeRemove } from '../lib/safeStorage';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
@@ -23,6 +24,19 @@ const ProjectsView = lazy(() => import('./ProjectsView'));
 const BudgetDashboard = lazy(() => import('./BudgetDashboard'));
 const AdminPanel = lazy(() => import('./AdminPanel'));
 
+// Hash views the render switch actually handles. Used by both the useState
+// initializer and the hashchange effect so the two lists can never drift.
+const VALID_VIEWS: string[] = ['agents', 'tasks', 'projects', 'budget'];
+
+// Top-nav items, shared by the mobile dropdown and the desktop view-switcher.
+// Only the DATA is shared; the two render maps stay separate (different markup).
+const NAV_VIEWS = [
+  { key: 'agents', label: 'Agents', icon: Users, title: 'Agents view' },
+  { key: 'tasks', label: 'Workflows', icon: KanbanSquare, title: 'Workflows board' },
+  { key: 'projects', label: 'Projects', icon: Tag, title: 'Projects' },
+  { key: 'budget', label: 'Budget', icon: DollarSign, title: 'Budget' },
+];
+
 export default function Dashboard({
   user, agents, templates, projects, skills, mcpServers, thinkingMap, streamBuffers,
   onLogout, onRefresh, socket, showToast, onImpersonate, onStopImpersonation,
@@ -35,7 +49,7 @@ export default function Dashboard({
   const [viewMode, setViewMode] = useState('grid'); // grid | list
   const [activeView, setActiveViewRaw] = useState(() => {
     const hash = window.location.hash.replace('#', '').toLowerCase();
-    return ['agents', 'tasks', 'projects', 'budget', 'processes', 'about'].includes(hash) ? hash : 'tasks';
+    return VALID_VIEWS.includes(hash) ? hash : 'tasks';
   });
   const setActiveView = useCallback((view) => {
     setActiveViewRaw(view);
@@ -101,33 +115,14 @@ export default function Dashboard({
   useEffect(() => {
     const onHashChange = () => {
       const hash = window.location.hash.replace('#', '').toLowerCase();
-      if (['agents', 'tasks', 'projects', 'budget', 'about'].includes(hash)) setActiveViewRaw(hash);
+      if (VALID_VIEWS.includes(hash)) setActiveViewRaw(hash);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
-  useEffect(() => {
-    if (!mobileMenuOpen) return;
-    const handleClickOutside = (e) => {
-      if (mobileMenuRef.current && !mobileMenuRef.current.contains(e.target)) {
-        setMobileMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [mobileMenuOpen]);
-
-  useEffect(() => {
-    if (!userMenuOpen) return;
-    const handleClickOutside = (e) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) {
-        setUserMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [userMenuOpen]);
+  useClickOutside(mobileMenuRef, () => setMobileMenuOpen(false), mobileMenuOpen);
+  useClickOutside(userMenuRef, () => setUserMenuOpen(false), userMenuOpen);
 
   const handleNavigateToVoiceAgent = useCallback((agentId) => {
     setSelectedAgent(agentId);
@@ -207,12 +202,7 @@ export default function Dashboard({
               </button>
               {mobileMenuOpen && (
                 <div className="absolute left-0 top-full mt-2 w-56 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
-                  {[
-                    { key: 'agents', label: 'Agents', icon: Users },
-                    { key: 'tasks', label: 'Workflows', icon: KanbanSquare },
-                    { key: 'projects', label: 'Projects', icon: Tag },
-                    { key: 'budget', label: 'Budget', icon: DollarSign },
-                  ].map(({ key, label, icon: Icon }) => (
+                  {NAV_VIEWS.map(({ key, label, icon: Icon }) => (
                     <button
                       key={key}
                       onClick={() => { setActiveView(key); setMobileMenuOpen(false); }}
@@ -249,46 +239,19 @@ export default function Dashboard({
               <p className="text-xs text-dark-400 -mt-0.5">{projectScopedAgents.length} agents active</p>
             </div>
             <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden ml-2">
-              <button
-                onClick={() => setActiveView('agents')}
-                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
-                  activeView === 'agents' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
-                }`}
-                title="Agents view"
-              >
-                <Users className="w-4 h-4" />
-                <span className="hidden md:inline">Agents</span>
-              </button>
-              <button
-                onClick={() => setActiveView('tasks')}
-                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
-                  activeView === 'tasks' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
-                }`}
-                title="Workflows board"
-              >
-                <KanbanSquare className="w-4 h-4" />
-                <span className="hidden md:inline">Workflows</span>
-              </button>
-              <button
-                onClick={() => setActiveView('projects')}
-                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
-                  activeView === 'projects' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
-                }`}
-                title="Projects"
-              >
-                <Tag className="w-4 h-4" />
-                <span className="hidden md:inline">Projects</span>
-              </button>
-              <button
-                onClick={() => setActiveView('budget')}
-                className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
-                  activeView === 'budget' ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
-                }`}
-                title="Budget"
-              >
-                <DollarSign className="w-4 h-4" />
-                <span className="hidden md:inline">Budget</span>
-              </button>
+              {NAV_VIEWS.map(({ key, label, icon: Icon, title }) => (
+                <button
+                  key={key}
+                  onClick={() => setActiveView(key)}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
+                    activeView === key ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                  }`}
+                  title={title}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="hidden md:inline">{label}</span>
+                </button>
+              ))}
             </div>
             {dbProjects.length > 0 && (
               <div className="hidden sm:flex items-center gap-1.5 ml-2 pl-2 border-l border-dark-700">
@@ -580,7 +543,6 @@ export default function Dashboard({
           <AddAgentModal
             templates={templates}
             projects={projects}
-            agents={agents}
             initialBoardId={boardFilter}
             onClose={() => setShowAddModal(false)}
             onCreated={(agent) => {

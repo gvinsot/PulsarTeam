@@ -1,6 +1,10 @@
-// Reusable browser-side STT + TTS pipeline shared by the text chat and the
-// external-voice tab. All audio runs entirely in the browser; the backend
-// only hands us WSS URLs for the STT/TTS services configured in admin.
+// Browser-side STT + TTS audio pipeline.
+//
+// The SttSession / TtsPlayer classes here are used by agentDetail/ChatTab.tsx
+// (the text chat with mic input + spoken replies). The external-voice tab
+// (components/ExternalVoiceChatTab.tsx) runs its own turn loop but shares the
+// low-level audio primitives exported below — the worklet, the VAD tuning
+// constants and decodePcm16ToBuffer — so they are maintained in one place.
 //
 // STT: mic → AudioWorklet (PCM16 + RMS) → STT WS → transcript.final
 //      Uses client-side VAD: trailing silence after speech triggers
@@ -11,15 +15,26 @@
 // Both helpers are exposed as small classes so the React components only
 // wire up callbacks and start/stop.
 
-// Silence-detection tuning (browser-side VAD).
-const SILENCE_MS = 900;      // Trailing silence required to end an utterance.
-const MIN_SPEECH_MS = 300;   // Discard utterances shorter than this.
-const RMS_SPEECH = 0.02;     // Above → speech.
-const RMS_SILENCE = 0.012;   // Below → silence.
+// Silence-detection tuning (browser-side VAD). Exported so the external-voice
+// tab uses the same thresholds as SttSession.
+export const SILENCE_MS = 900;      // Trailing silence required to end an utterance.
+export const MIN_SPEECH_MS = 300;   // Discard utterances shorter than this.
+export const RMS_SPEECH = 0.02;     // Above → speech.
+export const RMS_SILENCE = 0.012;   // Below → silence.
+
+// Decode a PCM16 little-endian chunk into a mono AudioBuffer for playback.
+export function decodePcm16ToBuffer(ctx: AudioContext, arrayBuf: ArrayBuffer, sampleRate: number): AudioBuffer {
+  const int16 = new Int16Array(arrayBuf);
+  const float = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
+  const buf = ctx.createBuffer(1, float.length, sampleRate);
+  buf.copyToChannel(float, 0);
+  return buf;
+}
 
 // AudioWorklet — downsamples mic input to `targetRate` PCM16 frames and posts
 // the per-block RMS so the main thread can run silence detection.
-const WORKLET_CODE = `
+export const WORKLET_CODE = `
 class PcmDownsamplerProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -331,11 +346,7 @@ export class TtsPlayer {
         this.playCtx = new AudioContext({ sampleRate });
       }
       const ctx = this.playCtx;
-      const int16 = new Int16Array(arrayBuf);
-      const float = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
-      const buf = ctx.createBuffer(1, float.length, sampleRate);
-      buf.copyToChannel(float, 0);
+      const buf = decodePcm16ToBuffer(ctx, arrayBuf, sampleRate);
       const src = ctx.createBufferSource();
       src.buffer = buf;
       src.connect(ctx.destination);

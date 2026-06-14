@@ -6,6 +6,7 @@ import {
 import ProjectStats from './ProjectStats';
 import GitHubActivityModal from './GitHubActivityModal';
 import { api } from '../api';
+import { useEscapeKey, useBodyScrollLock } from '../hooks/useDismiss';
 
 const TABS = [
   { id: 'overview',   label: 'Overview',    icon: FolderGit2 },
@@ -36,16 +37,8 @@ export default function ProjectDetailModal({ projectId, agents = [], onClose, on
 
   useEffect(() => { reload(); }, [reload]);
 
-  useEffect(() => {
-    const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onClose]);
-
-  useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
+  useEscapeKey(onClose);
+  useBodyScrollLock();
 
   const projectAgents = useMemo(() => {
     if (!project?.boards?.length) return [];
@@ -408,7 +401,7 @@ function ContextTab({ project, onSaved }) {
 
 /* ── Statistics ───────────────────────────────────────────────────────────── */
 function StatisticsTab({ project }) {
-  return <ProjectStats projectName={project.name} onClose={() => {}} embedded />;
+  return <ProjectStats projectName={project.name} />;
 }
 
 /* ── Shared subcomponents ─────────────────────────────────────────────────── */

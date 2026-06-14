@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { getCommitDiff, api } from '../api';
+import { useClickOutside, useEscapeKey } from '../hooks/useDismiss';
 
 // ── Commit colours (deterministic per hash prefix) ───────────────────────────
 const COMMIT_COLORS = [
@@ -277,25 +278,13 @@ export default function AllCommitsDiffModal({ taskId, commits, onClose, initialH
     }
   }, [initialHash, diffs]);
 
-  // Close on outside click / Escape
-  useEffect(() => {
-    function handleClick(e) {
-      if (modalRef.current && !modalRef.current.contains(e.target)) onClose();
-    }
-    function handleKey(e) {
-      if (e.key === 'Escape') {
-        if (showConfirm) { setShowConfirm(false); return; }
-        if (revertMode) { setRevertMode(false); setSelectedCommits(new Set()); return; }
-        onClose();
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', handleKey);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', handleKey);
-    };
-  }, [onClose, revertMode, showConfirm]);
+  // Close on outside click / Escape (Escape unwinds layered state first)
+  useClickOutside(modalRef, onClose);
+  useEscapeKey(() => {
+    if (showConfirm) { setShowConfirm(false); return; }
+    if (revertMode) { setRevertMode(false); setSelectedCommits(new Set()); return; }
+    onClose();
+  });
 
   function toggleSelect(hash) {
     setSelectedCommits(prev => {

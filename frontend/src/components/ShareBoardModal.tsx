@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Users, Shield, Eye, Edit3, Crown, Trash2, UserPlus, Loader2 } from 'lucide-react';
 import { api } from '../api';
+import { useClickOutside, useEscapeKey } from '../hooks/useDismiss';
 
 const PERMISSION_LEVELS = [
   { value: 'read',  label: 'Read',  icon: Eye,     desc: 'Can view tasks',       cls: 'text-blue-400 bg-blue-500/10' },
@@ -48,19 +49,8 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
     return () => { cancelled = true; };
   }, [board.id]);
 
-  useEffect(() => {
-    const handler = (e) => {
-      if (modalRef.current && !modalRef.current.contains(e.target)) onClose();
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [onClose]);
-
-  useEffect(() => {
-    const handler = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [onClose]);
+  useClickOutside(modalRef, onClose);
+  useEscapeKey(onClose);
 
   // Filter out already shared users and the owner
   const availableUsers = allUsers.filter(u =>

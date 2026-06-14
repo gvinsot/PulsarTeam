@@ -6,7 +6,7 @@ import {
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
 import { api } from '../api';
-import { BarChart3, Bug, Sparkles, Wrench, ArrowUpCircle, BookOpen, HelpCircle, Layers, Clock, TrendingUp, RefreshCw, X } from 'lucide-react';
+import { Bug, Sparkles, Wrench, ArrowUpCircle, BookOpen, HelpCircle, Layers, Clock, TrendingUp, RefreshCw } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import AgentTimeChart from './AgentTimeChart';
 
@@ -52,7 +52,7 @@ interface ProjectTaskStats {
   avgStateDurations: Record<string, DurationStats>;
 }
 
-export default function ProjectStats({ projectName, onClose, embedded = false }) {
+export default function ProjectStats({ projectName }) {
   const { theme } = useTheme() as { theme: string };
   const cc = getChartColors(theme);
   const chartOpts = {
@@ -178,16 +178,10 @@ export default function ProjectStats({ projectName, onClose, embedded = false })
   const hasOpenData = (timeseries.openOverTime || []).some(d => d.open > 0);
 
   return (
-    <div className={embedded ? 'space-y-5' : 'bg-dark-800 border border-purple-500/30 rounded-xl p-4 space-y-5'}>
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
-        {!embedded && (
-          <h3 className="text-sm font-semibold text-dark-100 flex items-center gap-2">
-            <BarChart3 size={16} className="text-purple-400" />
-            Statistics: {projectName}
-          </h3>
-        )}
-        <div className={`flex items-center gap-2 ${embedded ? 'ml-auto' : ''}`}>
+        <div className="flex items-center gap-2 ml-auto">
           <select
             value={days}
             onChange={e => setDays(Number(e.target.value))}
@@ -201,11 +195,6 @@ export default function ProjectStats({ projectName, onClose, embedded = false })
           <button onClick={loadData} className="text-dark-400 hover:text-dark-100 p-1" title="Refresh">
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
-          {!embedded && (
-            <button onClick={onClose} className="text-dark-400 hover:text-dark-100 p-1" title="Close">
-              <X size={14} />
-            </button>
-          )}
         </div>
       </div>
 

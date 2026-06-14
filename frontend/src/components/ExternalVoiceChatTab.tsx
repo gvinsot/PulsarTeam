@@ -15,6 +15,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Mic, MicOff, PhoneOff, Loader2, Volume2, VolumeX, RefreshCw, MessageSquare } from 'lucide-react';
 import { api } from '../api';
+import {
+  WORKLET_CODE, SILENCE_MS, MIN_SPEECH_MS, RMS_SPEECH, RMS_SILENCE, decodePcm16ToBuffer,
+} from '../lib/externalVoiceClient';
 
 type Status = 'disconnected' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
 
@@ -26,54 +29,6 @@ const STATUS_LABEL: Record<Status, string> = {
   speaking:     'Speaking',
   error:        'Error',
 };
-
-// Silence detection tuning (browser-side VAD).
-const SILENCE_MS = 900;      // Trailing silence required to end an utterance.
-const MIN_SPEECH_MS = 300;   // Discard utterances shorter than this.
-const RMS_SPEECH = 0.02;     // Above → speech.
-const RMS_SILENCE = 0.012;   // Below → silence.
-
-// AudioWorklet: downsamples mic input to `targetRate` PCM16 frames and posts
-// the per-block RMS so the main thread can run silence detection.
-const WORKLET_CODE = `
-class PcmDownsamplerProcessor extends AudioWorkletProcessor {
-  constructor(options) {
-    super();
-    this.targetRate = (options.processorOptions && options.processorOptions.targetRate) || 16000;
-    this.inputRate = sampleRate;
-    this.ratio = this.inputRate / this.targetRate;
-    this.acc = 0;
-    this.buffer = [];
-  }
-  process(inputs) {
-    const input = inputs[0];
-    if (!input || input.length === 0) return true;
-    const ch = input[0];
-    if (!ch) return true;
-    // RMS over the whole input block (pre-downsample, more samples → smoother)
-    let sumSq = 0;
-    for (let i = 0; i < ch.length; i++) sumSq += ch[i] * ch[i];
-    const rms = Math.sqrt(sumSq / ch.length);
-    for (let i = 0; i < ch.length; i++) {
-      this.acc += 1;
-      if (this.acc >= this.ratio) {
-        const s = Math.max(-1, Math.min(1, ch[i]));
-        this.buffer.push(s < 0 ? s * 0x8000 : s * 0x7fff);
-        this.acc -= this.ratio;
-      }
-    }
-    if (this.buffer.length >= 1600) { // ~100 ms at 16 kHz
-      const out = new Int16Array(this.buffer);
-      this.buffer = [];
-      this.port.postMessage({ pcm: out.buffer, rms }, [out.buffer]);
-    } else {
-      this.port.postMessage({ rms });
-    }
-    return true;
-  }
-}
-registerProcessor('pcm-downsampler', PcmDownsamplerProcessor);
-`;
 
 export default function ExternalVoiceChatTab({ agent }) {
   const [status, setStatus] = useState<Status>('disconnected');
@@ -165,11 +120,7 @@ export default function ExternalVoiceChatTab({ agent }) {
         playCtxRef.current = new AudioContext({ sampleRate });
       }
       const ctx = playCtxRef.current;
-      const int16 = new Int16Array(arrayBuf);
-      const float = new Float32Array(int16.length);
-      for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
-      const buf = ctx.createBuffer(1, float.length, sampleRate);
-      buf.copyToChannel(float, 0);
+      const buf = decodePcm16ToBuffer(ctx, arrayBuf, sampleRate);
       const src = ctx.createBufferSource();
       src.buffer = buf;
       src.connect(ctx.destination);

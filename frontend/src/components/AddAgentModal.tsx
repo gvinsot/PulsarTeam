@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api';
+import { isRealtimeLlm } from '../utils/llmConfig';
 
-export default function AddAgentModal({ templates, projects, agents = [], initialBoardId = '', onClose, onCreated }) {
+export default function AddAgentModal({ templates, projects, initialBoardId = '', onClose, onCreated }) {
   const [step, setStep] = useState('choose'); // choose | template | custom
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -329,7 +330,7 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                           updateField('runner', '');
                           if (form.voiceMode === 'realtime') {
                             // Auto-select an LLM config with gpt-realtime model
-                            const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
+                            const realtimeConfig = llmConfigs.find(isRealtimeLlm);
                             if (realtimeConfig) updateField('llmConfigId', realtimeConfig.id);
                           }
                         }
@@ -354,12 +355,12 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                         const mode = e.target.value;
                         updateField('voiceMode', mode);
                         if (mode === 'realtime') {
-                          const realtimeConfig = llmConfigs.find(c => c.model && c.model.includes('gpt-realtime'));
+                          const realtimeConfig = llmConfigs.find(isRealtimeLlm);
                           if (realtimeConfig) updateField('llmConfigId', realtimeConfig.id);
                         } else {
                           // External mode uses a regular text LLM — clear realtime auto-pick
                           const sel = llmConfigs.find(c => c.id === form.llmConfigId);
-                          if (sel?.model?.includes('gpt-realtime')) updateField('llmConfigId', '');
+                          if (isRealtimeLlm(sel)) updateField('llmConfigId', '');
                         }
                       }}
                       className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
@@ -489,7 +490,7 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                   >
                     <option value="">{placeholder}</option>
                     {(form.isVoice && form.voiceMode === 'realtime'
-                      ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+                      ? llmConfigs.filter(isRealtimeLlm)
                       : llmConfigs
                     ).map(c => (
                       <option key={c.id} value={c.id}>
@@ -500,7 +501,7 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                       </>
                     );
                   })()}
-                  {form.isVoice && form.voiceMode === 'realtime' && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
+                  {form.isVoice && form.voiceMode === 'realtime' && !llmConfigs.some(isRealtimeLlm) && (
                     <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
                   )}
                   {form.llmConfigId && (() => {

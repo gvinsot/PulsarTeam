@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText, RefreshCw, Network } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
+import { useEscapeKey, useBodyScrollLock } from '../hooks/useDismiss';
 import CallGraphTab from './CallGraphTab';
 
 export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
@@ -31,36 +32,23 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
     return data.tags.filter(t => !commitShas.has(t.sha));
   }, [data]);
 
-  useEffect(() => {
-    const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', handleKey);
-    return () => document.removeEventListener('keydown', handleKey);
-  }, [onClose]);
+  useEscapeKey(onClose);
+  useBodyScrollLock();
 
-  useEffect(() => {
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, []);
-
+  // Bump on each load so only the latest response updates state (guards against
+  // a stale fetch landing after owner/repo/boardId changed or the modal closed).
+  const reqIdRef = useRef(0);
   const loadActivity = useCallback((opts = {}) => {
+    const reqId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     return api.getGitHubActivity(owner, repo, boardId, opts)
-      .then(result => setData(result))
-      .catch(err => setError(err.message))
-      .finally(() => setLoading(false));
+      .then(result => { if (reqId === reqIdRef.current) setData(result); })
+      .catch(err => { if (reqId === reqIdRef.current) setError(err.message); })
+      .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
   }, [owner, repo, boardId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    api.getGitHubActivity(owner, repo, boardId)
-      .then(result => { if (!cancelled) setData(result); })
-      .catch(err => { if (!cancelled) setError(err.message); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [owner, repo, boardId]);
+  useEffect(() => { loadActivity(); }, [loadActivity]);
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '';
