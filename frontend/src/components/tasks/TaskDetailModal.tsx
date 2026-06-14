@@ -1,15 +1,19 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import {
-  Trash2, X, AlertTriangle, Edit3, Save, Check, Tag, Calendar,
-  ChevronDown, Zap, User, GitCommit, GitBranch, Cloud, Repeat, FolderKanban, Loader2, Layers,
-  ArrowRight, Hand, Pause, XCircle, MessageSquare, Square, Play,
+  Trash2, X, AlertTriangle, Edit3, Save, Check, Tag,
+  ChevronDown, Zap, User, GitBranch, Cloud, Repeat, FolderKanban, Loader2, Layers,
+  ArrowRight, Hand, Square, Play,
 } from 'lucide-react';
 import { api, updateTask as updateTaskById } from '../../api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AllCommitsDiffModal from '../AllCommitsDiffModal';
 import HistoryDetailModal from './HistoryDetailModal';
-import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, RECURRENCE_PERIODS, timeAgo, formatDate } from './taskConstants';
+import { SOURCE_META, TASK_TYPES, TASK_TYPE_MAP, buildRecurrence, recurrenceLabel, timeAgo, formatDate } from './taskConstants';
+import RecurrenceFields from './RecurrenceFields';
+import EditableSelectRow from './EditableSelectRow';
+import TaskTimeline from './TaskTimeline';
+import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 
 export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDelete, onStop, onResume, onClearStopped, statusOptions, onNavigateToAgent, boards, activeBoardId }) {
   const [editing, setEditing] = useState(false);
@@ -18,18 +22,6 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
   const [saving, setSaving] = useState(false);
   const [mutationError, setMutationError] = useState(null);
   const [statusOpen, setStatusOpen] = useState(false);
-  const [editingRepo, setEditingRepo] = useState(false);
-  const [savingRepo, setSavingRepo] = useState(false);
-  const [availableRepos, setAvailableRepos] = useState([]);
-  const [repoLoadError, setRepoLoadError] = useState(null);
-  const [editingStorage, setEditingStorage] = useState(false);
-  const [savingStorage, setSavingStorage] = useState(false);
-  const [availableStorages, setAvailableStorages] = useState([]);
-  const [storageLoadError, setStorageLoadError] = useState(null);
-  const [editingAgent, setEditingAgent] = useState(false);
-  const [transferring, setTransferring] = useState(false);
-  const [editingType, setEditingType] = useState(false);
-  const [savingType, setSavingType] = useState(false);
   const [editingRecurrence, setEditingRecurrence] = useState(false);
   const [savingRecurrence, setSavingRecurrence] = useState(false);
   const [recEnabled, setRecEnabled] = useState(!!task.recurrence?.enabled);
@@ -48,25 +40,10 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
   const textareaRef = useRef(null);
   const refineRef = useRef(null);
 
-  // Load repos via the board's GitHub plugin so the user can re-target the task
-  useEffect(() => {
-    const bid = task.boardId;
-    if (!bid) { setAvailableRepos([]); return; }
-    setRepoLoadError(null);
-    api.getBoardAvailableRepos(bid)
-      .then(setAvailableRepos)
-      .catch(err => { setAvailableRepos([]); setRepoLoadError(err.message || 'Failed to load repos'); });
-  }, [task.boardId]);
-
-  // Load storage roots via the board's OneDrive plugin
-  useEffect(() => {
-    const bid = task.boardId;
-    if (!bid) { setAvailableStorages([]); return; }
-    setStorageLoadError(null);
-    api.getBoardAvailableStorages(bid)
-      .then(setAvailableStorages)
-      .catch(err => { setAvailableStorages([]); setStorageLoadError(err.message || 'Failed to load storages'); });
-  }, [task.boardId]);
+  // Repos via the board's GitHub plugin so the user can re-target the task,
+  // storage roots via the board's OneDrive plugin
+  const { repos: availableRepos, error: repoLoadError } = useBoardRepos(task.boardId);
+  const { storages: availableStorages, error: storageLoadError } = useBoardStorages(task.boardId);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -131,9 +108,12 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     }
   };
 
-  const handleRepoChange = async (newFullName) => {
-    if ((newFullName || null) === (task.repoFullName || null)) { setEditingRepo(false); return; }
-    setSavingRepo(true);
+  // onSave wrappers for the EditableSelectRow rows. Each owns its no-op
+  // guard and refresh semantics (repo/storage await the refresh, type and
+  // assignee fire it un-awaited — preserved deliberately). Errors are
+  // surfaced via mutationError and rethrown so the row stays in edit mode.
+  const saveRepo = async (newFullName) => {
+    if ((newFullName || null) === (task.repoFullName || null)) return;
     setMutationError(null);
     try {
       const provider = newFullName
@@ -141,17 +121,14 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
         : 'github';
       await api.updateTaskRepo(task.agentId, task.id, newFullName || null, provider);
       await onRefresh();
-      setEditingRepo(false);
     } catch (err) {
       setMutationError(err?.message || 'Failed to change repo');
-    } finally {
-      setSavingRepo(false);
+      throw err;
     }
   };
 
-  const handleStorageChange = async (newPath) => {
-    if ((newPath || null) === (task.storagePath || null)) { setEditingStorage(false); return; }
-    setSavingStorage(true);
+  const saveStorage = async (newPath) => {
+    if ((newPath || null) === (task.storagePath || null)) return;
     setMutationError(null);
     try {
       const provider = newPath
@@ -159,11 +136,35 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
         : 'onedrive';
       await api.updateTaskStorage(task.agentId, task.id, newPath || null, provider);
       await onRefresh();
-      setEditingStorage(false);
     } catch (err) {
       setMutationError(err?.message || 'Failed to change storage');
-    } finally {
-      setSavingStorage(false);
+      throw err;
+    }
+  };
+
+  const saveType = async (newType) => {
+    // Note: selecting None while the type is already empty still hits the
+    // API (null !== '') — existing behavior, kept as-is.
+    if (newType === (task.taskType || '')) return;
+    setMutationError(null);
+    try {
+      await api.updateTask(task.agentId, task.id, { taskType: newType || '' });
+      onRefresh?.();
+    } catch (err) {
+      setMutationError(err?.message || 'Failed to change type');
+      throw err;
+    }
+  };
+
+  const saveAssignee = async (targetId) => {
+    if (targetId === (task.assignee || '')) return;
+    setMutationError(null);
+    try {
+      await api.setTaskAssignee(task.agentId, task.id, targetId);
+      onRefresh?.();
+    } catch (err) {
+      setMutationError(err?.message || 'Failed to reassign task');
+      throw err;
     }
   };
 
@@ -171,14 +172,9 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     setSavingRecurrence(true);
     setMutationError(null);
     try {
-      const recurrence = recEnabled ? {
-        enabled: true,
-        period: recPeriod,
-        intervalMinutes: recPeriod === 'custom'
-          ? recCustomInterval
-          : RECURRENCE_PERIODS.find(p => p.value === recPeriod)?.minutes || 1440,
-        historyRetentionDays: recRetentionDays > 0 ? recRetentionDays : null,
-      } : { enabled: false };
+      const recurrence = recEnabled
+        ? buildRecurrence(recPeriod, recCustomInterval, recRetentionDays)
+        : { enabled: false };
       await api.updateTask(task.agentId, task.id, { recurrence });
       await onRefresh();
       setEditingRecurrence(false);
@@ -556,13 +552,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                     {task.recurrence?.enabled ? (
                       <>
                         <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
-                          {task.recurrence.period === 'custom'
-                            ? `Every ${task.recurrence.intervalMinutes} min`
-                            : task.recurrence.period === 'hourly' ? 'Every hour'
-                            : task.recurrence.period === 'daily' ? 'Every day'
-                            : task.recurrence.period === 'weekly' ? 'Every week'
-                            : task.recurrence.period === 'monthly' ? 'Every month'
-                            : task.recurrence.period}
+                          {recurrenceLabel(task.recurrence)}
                         </span>
                         {task.recurrence.historyRetentionDays > 0 && (
                           <span
@@ -604,48 +594,15 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                     <span className="text-xs font-semibold text-dark-300 uppercase tracking-wide">Enable recurrence</span>
                   </label>
                   {recEnabled && (
-                    <>
-                      <div className="flex gap-3 items-end">
-                        <div className="flex-1">
-                          <label className="block text-xs text-dark-400 mb-1">Period</label>
-                          <select
-                            value={recPeriod}
-                            onChange={e => setRecPeriod(e.target.value)}
-                            className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-teal-500 transition-colors"
-                          >
-                            {RECURRENCE_PERIODS.map(p => (
-                              <option key={p.value} value={p.value}>{p.label}</option>
-                            ))}
-                          </select>
-                        </div>
-                        {recPeriod === 'custom' && (
-                          <div className="w-32">
-                            <label className="block text-xs text-dark-400 mb-1">Minutes</label>
-                            <input
-                              type="number"
-                              min={1}
-                              value={recCustomInterval}
-                              onChange={e => setRecCustomInterval(Math.max(1, parseInt(e.target.value) || 1))}
-                              className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-teal-500 transition-colors"
-                            />
-                          </div>
-                        )}
-                      </div>
-                      <div>
-                        <label className="block text-xs text-dark-400 mb-1">
-                          Purge history after (days)
-                          <span className="text-[10px] text-dark-500 ml-1">— 0 = keep everything</span>
-                        </label>
-                        <input
-                          type="number"
-                          min={0}
-                          max={3650}
-                          value={recRetentionDays}
-                          onChange={e => setRecRetentionDays(Math.max(0, Math.min(3650, parseInt(e.target.value) || 0)))}
-                          className="w-32 px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-teal-500 transition-colors"
-                        />
-                      </div>
-                    </>
+                    <RecurrenceFields
+                      period={recPeriod}
+                      onPeriodChange={setRecPeriod}
+                      customInterval={recCustomInterval}
+                      onCustomIntervalChange={setRecCustomInterval}
+                      retentionDays={recRetentionDays}
+                      onRetentionDaysChange={setRecRetentionDays}
+                      focusClass="focus:border-teal-500"
+                    />
                   )}
                 </div>
               )}
@@ -695,249 +652,101 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
             </div>
 
             {/* Repo (editable, scoped to the board's repos) */}
-            <div className="flex items-center justify-between py-2 border-b border-dark-800">
-              <div className="flex items-center gap-2 text-xs text-dark-400">
-                <GitBranch className="w-3.5 h-3.5" />
-                Repo
-              </div>
-              {editingRepo ? (
-                <div className="flex items-center gap-1.5">
-                  <select
-                    autoFocus
-                    defaultValue={task.repoFullName || ''}
-                    onChange={e => handleRepoChange(e.target.value || null)}
-                    disabled={savingRepo || availableRepos.length === 0}
-                    className="px-2 py-0.5 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                  >
-                    <option value="">None</option>
-                    {availableRepos.map(r => (
-                      <option key={r.fullName} value={r.fullName}>[{r.provider}] {r.fullName}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setEditingRepo(false)}
-                    className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
-                    title="Cancel"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
+            <EditableSelectRow
+              icon={GitBranch}
+              label="Repo"
+              value={task.repoFullName || ''}
+              options={availableRepos.map(r => ({ value: r.fullName, label: `[${r.provider}] ${r.fullName}` }))}
+              onSave={saveRepo}
+              disableWhenEmpty
+              selectClassName="px-2 py-0.5 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+              editTitle="Change repo"
+              pencilReplacement={repoLoadError ? (
+                <span className="text-[10px] text-amber-400 italic" title={repoLoadError}>github plugin off</span>
+              ) : null}
+              view={task.repoFullName ? (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20">
+                  {task.repoFullName}
+                </span>
               ) : (
-                <div className="flex items-center gap-1.5">
-                  {task.repoFullName ? (
-                    <span className="text-xs px-2 py-0.5 rounded-full font-medium
-                      bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20">
-                      {task.repoFullName}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-dark-500 italic">None</span>
-                  )}
-                  {repoLoadError ? (
-                    <span className="text-[10px] text-amber-400 italic" title={repoLoadError}>github plugin off</span>
-                  ) : (
-                    <button
-                      onClick={() => setEditingRepo(true)}
-                      className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
-                      title="Change repo"
-                    >
-                      <Edit3 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
+                <span className="text-xs text-dark-500 italic">None</span>
               )}
-            </div>
+            />
 
             {/* Storage (editable, scoped to the board's OneDrive plugin) */}
-            <div className="flex items-center justify-between py-2 border-b border-dark-800">
-              <div className="flex items-center gap-2 text-xs text-dark-400">
-                <Cloud className="w-3.5 h-3.5" />
-                Storage
-              </div>
-              {editingStorage ? (
-                <div className="flex items-center gap-1.5">
-                  <select
-                    autoFocus
-                    defaultValue={task.storagePath || ''}
-                    onChange={e => handleStorageChange(e.target.value || null)}
-                    disabled={savingStorage || availableStorages.length === 0}
-                    className="px-2 py-0.5 bg-dark-800 border border-amber-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-amber-500 transition-colors"
-                  >
-                    <option value="">None</option>
-                    {availableStorages.map(s => (
-                      <option key={`${s.provider}:${s.path}`} value={s.path}>[{s.provider}] {s.displayName || s.path}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setEditingStorage(false)}
-                    className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
-                    title="Cancel"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
+            <EditableSelectRow
+              icon={Cloud}
+              label="Storage"
+              value={task.storagePath || ''}
+              options={availableStorages.map(s => ({ key: `${s.provider}:${s.path}`, value: s.path, label: `[${s.provider}] ${s.displayName || s.path}` }))}
+              onSave={saveStorage}
+              disableWhenEmpty
+              selectClassName="px-2 py-0.5 bg-dark-800 border border-amber-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-amber-500 transition-colors"
+              editTitle="Change storage"
+              pencilHoverClass="hover:text-amber-400"
+              pencilReplacement={storageLoadError ? (
+                <span className="text-[10px] text-dark-500 italic">No drive connected</span>
+              ) : null}
+              view={task.storagePath ? (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium
+                  bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
+                  {task.storagePath}
+                </span>
               ) : (
-                <div className="flex items-center gap-1.5">
-                  {task.storagePath ? (
-                    <span className="text-xs px-2 py-0.5 rounded-full font-medium
-                      bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20">
-                      {task.storagePath}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-dark-500 italic">None</span>
-                  )}
-                  {storageLoadError ? (
-                    <span className="text-[10px] text-dark-500 italic">No drive connected</span>
-                  ) : (
-                    <button
-                      onClick={() => setEditingStorage(true)}
-                      className="p-0.5 rounded text-dark-500 hover:text-amber-400 hover:bg-dark-700 transition-colors"
-                      title="Change storage"
-                    >
-                      <Edit3 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
+                <span className="text-xs text-dark-500 italic">None</span>
               )}
-            </div>
+            />
 
             {/* Task Type */}
-            <div className="flex items-center justify-between py-2 border-b border-dark-800">
-              <div className="flex items-center gap-2 text-xs text-dark-400">
-                <Layers className="w-3.5 h-3.5" />
-                Type
-              </div>
-              {editingType ? (
-                <div className="flex items-center gap-1.5">
-                  <select
-                    autoFocus
-                    defaultValue={task.taskType || ''}
-                    onChange={async e => {
-                      const newType = e.target.value || null;
-                      if (newType === (task.taskType || '')) { setEditingType(false); return; }
-                      setSavingType(true);
-                      setMutationError(null);
-                      try {
-                        await api.updateTask(task.agentId, task.id, { taskType: newType || '' });
-                        onRefresh?.();
-                        setEditingType(false);
-                      } catch (err) {
-                        setMutationError(err?.message || 'Failed to change type');
-                      } finally {
-                        setSavingType(false);
-                      }
-                    }}
-                    disabled={savingType}
-                    className="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
-                      focus:outline-none focus:border-indigo-500 transition-colors"
-                  >
-                    <option value="">None</option>
-                    {TASK_TYPES.map(t => (
-                      <option key={t.value} value={t.value}>{t.label}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setEditingType(false)}
-                    className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
-                    title="Cancel"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  {task.taskType && TASK_TYPE_MAP[task.taskType] ? (() => {
-                    const tt = TASK_TYPE_MAP[task.taskType];
-                    const Icon = tt.icon;
-                    return (
-                      <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${tt.cls}`}>
-                        <Icon className="w-2.5 h-2.5" />
-                        {tt.label}
-                      </span>
-                    );
-                  })() : (
-                    <span className="text-xs text-dark-500 italic">None</span>
-                  )}
-                  <button
-                    onClick={() => setEditingType(true)}
-                    className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
-                    title="Change type"
-                  >
-                    <Edit3 className="w-3 h-3" />
-                  </button>
-                </div>
+            <EditableSelectRow
+              icon={Layers}
+              label="Type"
+              value={task.taskType || ''}
+              options={TASK_TYPES.map(t => ({ value: t.value, label: t.label }))}
+              onSave={saveType}
+              selectClassName="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+              editTitle="Change type"
+              view={task.taskType && TASK_TYPE_MAP[task.taskType] ? (() => {
+                const tt = TASK_TYPE_MAP[task.taskType];
+                const Icon = tt.icon;
+                return (
+                  <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ring-1 ${tt.cls}`}>
+                    <Icon className="w-2.5 h-2.5" />
+                    {tt.label}
+                  </span>
+                );
+              })() : (
+                <span className="text-xs text-dark-500 italic">None</span>
               )}
-            </div>
+            />
 
             {/* Assignee */}
-            <div className="flex items-center justify-between py-2 border-b border-dark-800">
-              <div className="flex items-center gap-2 text-xs text-dark-400">
-                <User className="w-3.5 h-3.5" />
-                Assignee
-              </div>
-              {editingAgent ? (
-                <div className="flex items-center gap-1.5">
-                  <select
-                    autoFocus
-                    defaultValue={task.assignee || ''}
-                    onChange={async e => {
-                      const targetId = e.target.value || null;
-                      if (targetId === (task.assignee || '')) { setEditingAgent(false); return; }
-                      setTransferring(true);
-                      setMutationError(null);
-                      try {
-                        await api.setTaskAssignee(task.agentId, task.id, targetId);
-                        onRefresh?.();
-                        setEditingAgent(false);
-                      } catch (err) {
-                        setMutationError(err?.message || 'Failed to reassign task');
-                      } finally {
-                        setTransferring(false);
-                      }
-                    }}
-                    disabled={transferring}
-                    className="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
-                      focus:outline-none focus:border-indigo-500 transition-colors"
-                  >
-                    <option value="">Unassigned</option>
-                    {(agents || []).map(a => (
-                      <option key={a.id} value={a.id}>{a.icon} {a.name}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => setEditingAgent(false)}
-                    className="p-0.5 rounded text-dark-500 hover:text-dark-300 hover:bg-dark-700 transition-colors"
-                    title="Cancel"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  {(() => {
-                    const assignee = task.assignee ? (agents || []).find(a => a.id === task.assignee) : null;
-                    if (assignee) {
-                      return (
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded-full font-medium bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20${onNavigateToAgent ? ' cursor-pointer hover:bg-blue-500/20 transition-colors' : ''}`}
-                          onClick={onNavigateToAgent ? () => { onNavigateToAgent(assignee.id); onClose(); } : undefined}
-                          title={onNavigateToAgent ? `Open ${assignee.name}'s chat` : undefined}
-                        >
-                          {assignee.icon} {assignee.name}
-                        </span>
-                      );
-                    }
-                    return <span className="text-xs text-dark-500 italic">Unassigned</span>;
-                  })()}
-                  <button
-                    onClick={() => setEditingAgent(true)}
-                    className="p-0.5 rounded text-dark-500 hover:text-indigo-400 hover:bg-dark-700 transition-colors"
-                    title="Reassign to another agent"
-                  >
-                    <Edit3 className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-            </div>
+            <EditableSelectRow
+              icon={User}
+              label="Assignee"
+              value={task.assignee || ''}
+              options={(agents || []).map(a => ({ value: a.id, label: `${a.icon} ${a.name}` }))}
+              emptyOptionLabel="Unassigned"
+              onSave={saveAssignee}
+              selectClassName="px-2 py-0.5 w-36 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+              editTitle="Reassign to another agent"
+              view={(() => {
+                const assignee = task.assignee ? (agents || []).find(a => a.id === task.assignee) : null;
+                if (assignee) {
+                  return (
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full font-medium bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20${onNavigateToAgent ? ' cursor-pointer hover:bg-blue-500/20 transition-colors' : ''}`}
+                      onClick={onNavigateToAgent ? () => { onNavigateToAgent(assignee.id); onClose(); } : undefined}
+                      title={onNavigateToAgent ? `Open ${assignee.name}'s chat` : undefined}
+                    >
+                      {assignee.icon} {assignee.name}
+                    </span>
+                  );
+                }
+                return <span className="text-xs text-dark-500 italic">Unassigned</span>;
+              })()}
+            />
 
             {/* Board */}
             {boards && boards.length > 1 && (
@@ -992,165 +801,17 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
             )}
 
             {/* Transition history (with commits interleaved chronologically) */}
-            {(() => {
-              const historyItems = (task.history || []).map((h, i) => ({
-                kind: 'history', at: h.at, h, key: `h-${i}`,
-              }));
-              const commitItems = (task.commits || []).map((c, i) => ({
-                kind: 'commit', at: c.date, c, key: `c-${c.hash || i}`,
-              }));
-              const timeline = [...historyItems, ...commitItems].sort((a, b) => {
-                const ta = a.at ? new Date(a.at).getTime() : 0;
-                const tb = b.at ? new Date(b.at).getTime() : 0;
-                return ta - tb;
-              });
-              if (timeline.length === 0) {
-                return task.createdAt ? (
-                  <div className="flex items-center justify-between py-1">
-                    <div className="flex items-center gap-2 text-xs text-dark-400">
-                      <Calendar className="w-3.5 h-3.5" />
-                      Created
-                    </div>
-                    <span className="text-xs text-dark-300" title={formatDate(task.createdAt)}>
-                      {timeAgo(task.createdAt)}
-                    </span>
-                  </div>
-                ) : null;
-              }
-              return (
-                <div className="space-y-0">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold">History</div>
-                    {task.commits?.length > 0 && (
-                      <button
-                        onClick={() => { setClickedCommitHash(null); setShowAllCommits(true); }}
-                        className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
-                      >
-                        View all diffs ({task.commits.length})
-                      </button>
-                    )}
-                  </div>
-                  <div className="relative pl-4 border-l border-dark-700 space-y-1.5">
-                    {timeline.map((item) => item.kind === 'commit' ? (
-                      <div key={item.key} className="relative group">
-                        <div className="w-full flex items-start gap-2 rounded-md px-1 py-0.5 -ml-1 hover:bg-dark-800/60 transition-colors">
-                          <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-dark-900 group-hover:ring-amber-500/30 transition-colors" />
-                          <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
-                            <button
-                              onClick={() => { setClickedCommitHash(item.c.hash); setShowAllCommits(true); }}
-                              className="flex items-center gap-1.5 text-xs min-w-0 text-left cursor-pointer"
-                              title="View commit diff"
-                            >
-                              <GitCommit className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
-                              <code className="text-amber-300 font-mono hover:text-amber-200 transition-colors flex-shrink-0">{item.c.hash?.slice(0, 7)}</code>
-                              {item.c.message && (
-                                <span className="text-dark-300 truncate">{item.c.message}</span>
-                              )}
-                            </button>
-                            <div className="flex items-center gap-1.5 flex-shrink-0">
-                              <button
-                                onClick={async () => {
-                                  await api.removeTaskCommit(task.agentId, task.id, item.c.hash);
-                                  onRefresh();
-                                }}
-                                className="p-0.5 rounded text-dark-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
-                                title="Remove commit link"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                              {item.c.date && (
-                                <span className="text-[10px] text-dark-500" title={formatDate(item.c.date)}>
-                                  {timeAgo(item.c.date)}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div key={item.key} className="relative">
-                        <button
-                          className="w-full flex items-start gap-2 text-left rounded-md px-1 py-0.5 -ml-1 hover:bg-dark-800/60 transition-colors cursor-pointer group"
-                          onClick={() => setHistoryDetail(item.h)}
-                        >
-                          <div className="absolute -left-[17px] top-1.5 w-2 h-2 rounded-full bg-dark-600 ring-2 ring-dark-900 group-hover:bg-indigo-500 group-hover:ring-indigo-500/30 transition-colors" />
-                          <div className="flex-1 flex items-center justify-between gap-2 min-w-0">
-                            <div className="flex items-center gap-1.5 text-xs min-w-0">
-                              {item.h.type === 'execution' ? (
-                                <>
-                                  <MessageSquare className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
-                                  <span className={`font-medium ${item.h.success ? 'text-blue-300' : 'text-red-300'}`}>
-                                    {item.h.mode === 'refine' ? 'Refine' : item.h.mode === 'decide' ? 'Decide' : item.h.mode === 'title' ? 'Title' : item.h.mode === 'set_type' ? 'Set Type' : 'Execution'} {item.h.success ? '✓' : '✗'}
-                                  </span>
-                                  <span className="text-dark-500 truncate">by {item.h.by}</span>
-                                  {item.h.messages?.length > 0 && (
-                                    <span className="text-[10px] text-dark-500">— {item.h.messages.length} msg{item.h.messages.length > 1 ? 's' : ''}</span>
-                                  )}
-                                </>
-                              ) : item.h.type === 'edit' ? (
-                                <>
-                                  <Edit3 className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
-                                  <span className="text-dark-200 font-medium">edited {item.h.field || (item.h.fields ? item.h.fields.map(f => f.field).join(', ') : 'task')}</span>
-                                  {item.h.by && (
-                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
-                                  )}
-                                </>
-                              ) : item.h.type === 'reassign' ? (
-                                <>
-                                  <User className="w-2.5 h-2.5 text-indigo-400 flex-shrink-0" />
-                                  <span className="text-dark-200 font-medium">reassigned</span>
-                                  {item.h.by && (
-                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
-                                  )}
-                                </>
-                              ) : item.h.type === 'error' ? (
-                                <>
-                                  <XCircle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
-                                  <span className="text-red-300 font-medium">error</span>
-                                  {item.h.from && (
-                                    <span className="text-dark-500 truncate">in {item.h.from}</span>
-                                  )}
-                                  {item.h.by && (
-                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
-                                  )}
-                                  {item.h.error && (
-                                    <span className="text-red-400/70 truncate" title={item.h.error}>{item.h.error.slice(0, 80)}</span>
-                                  )}
-                                </>
-                              ) : item.h.type === 'stopped' ? (
-                                <>
-                                  <Pause className="w-2.5 h-2.5 text-yellow-400 flex-shrink-0" />
-                                  <span className="text-yellow-300 font-medium">stopped</span>
-                                  {item.h.by && (
-                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  {item.h.from && (
-                                    <>
-                                      <span className="text-dark-500">{item.h.from}</span>
-                                      <ArrowRight className="w-2.5 h-2.5 text-dark-600 flex-shrink-0" />
-                                    </>
-                                  )}
-                                  <span className="text-dark-200 font-medium">{item.h.status}</span>
-                                  {item.h.by && (
-                                    <span className="text-dark-500 truncate">by {item.h.by}</span>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-dark-500 flex-shrink-0" title={formatDate(item.h.at)}>
-                              {timeAgo(item.h.at)}
-                            </span>
-                          </div>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
+            <TaskTimeline
+              history={task.history}
+              commits={task.commits}
+              createdAt={task.createdAt}
+              onOpenEntry={setHistoryDetail}
+              onOpenCommit={(hash) => { setClickedCommitHash(hash); setShowAllCommits(true); }}
+              onRemoveCommit={async (hash) => {
+                await api.removeTaskCommit(task.agentId, task.id, hash);
+                onRefresh();
+              }}
+            />
           </div>
         </div>
 

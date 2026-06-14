@@ -225,16 +225,21 @@ export function getOAuthTokensByScope(scopeType: ScopeType, scopeId: string): OA
 }
 
 /**
- * Resolve an access token with fallback chain: agent → board → user.
- * For providers with refresh tokens (Gmail, OneDrive), auto-refresh if expired.
- * The refreshFn is provider-specific and handles token refresh.
+ * Resolve the full token record with fallback chain: agent → board → user.
+ * For providers with refresh tokens (Gmail, OneDrive), auto-refresh if expired
+ * — a refresh failure (or an expired token with no refresh capability) falls
+ * through to the next scope.
+ *
+ * Returns the matched record plus the scope it was found under and the usable
+ * access token (post-refresh when a refresh occurred; === record.accessToken
+ * otherwise), or null when no scope matches.
  */
-export async function resolveAccessToken(
+export async function resolveOAuthTokenRecord(
   provider: OAuthProvider,
   agentId: string | null,
   boardId: string | null,
   refreshFn?: (record: OAuthTokenRecord) => Promise<string>
-): Promise<string> {
+): Promise<{ record: OAuthTokenRecord; scopeType: ScopeType; accessToken: string } | null> {
   const scopes: Array<{ type: ScopeType; id: string }> = [];
   if (agentId) scopes.push({ type: 'agent', id: agentId });
   if (boardId) scopes.push({ type: 'board', id: boardId });
@@ -290,7 +295,8 @@ export async function resolveAccessToken(
     if (token.expiresAt && Date.now() >= token.expiresAt) {
       if (refreshFn && token.refreshToken) {
         try {
-          return await refreshFn(token);
+          const refreshed = await refreshFn(token);
+          return { record: token, scopeType: scope.type, accessToken: refreshed };
         } catch {
           continue; // refresh failed, try next scope
         }
@@ -298,10 +304,26 @@ export async function resolveAccessToken(
       continue; // expired with no refresh capability
     }
 
-    return token.accessToken;
+    return { record: token, scopeType: scope.type, accessToken: token.accessToken };
   }
 
-  throw new Error(`Not connected to ${provider}. Please authenticate first.`);
+  return null;
+}
+
+/**
+ * Resolve an access token with fallback chain: agent → board → user.
+ * For providers with refresh tokens (Gmail, OneDrive), auto-refresh if expired.
+ * The refreshFn is provider-specific and handles token refresh.
+ */
+export async function resolveAccessToken(
+  provider: OAuthProvider,
+  agentId: string | null,
+  boardId: string | null,
+  refreshFn?: (record: OAuthTokenRecord) => Promise<string>
+): Promise<string> {
+  const hit = await resolveOAuthTokenRecord(provider, agentId, boardId, refreshFn);
+  if (!hit) throw new Error(`Not connected to ${provider}. Please authenticate first.`);
+  return hit.accessToken;
 }
 
 /** Load all tokens from the DB into the in-memory cache (called on startup). */

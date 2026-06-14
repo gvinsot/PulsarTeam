@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getAllBoards, getBoardById, searchTasks } from './database.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { getTaskById } from './database/tasks.js';
 import { getReposForBoard } from './database/boardRepos.js';
 
@@ -23,6 +23,156 @@ function normalizeStoragePath(value: any): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
   return trimmed.slice(0, STORAGE_PATH_MAX);
+}
+
+/** Success envelope: pretty-printed JSON text content. */
+const jsonOk = (obj: unknown) => ({
+  content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }],
+});
+
+/** Error envelope: compact `{ error }` JSON text content flagged isError. */
+const jsonError = (error: string) => ({
+  content: [{ type: 'text' as const, text: JSON.stringify({ error }) }],
+  isError: true as const,
+});
+
+/** Resolve an agent by UUID (agent_id) or case-insensitive name (agent_name). */
+function findAgent(
+  agentManager,
+  { agent_id, agent_name }: { agent_id?: string; agent_name?: string },
+) {
+  if (agent_id) return agentManager.agents.get(agent_id) ?? null;
+  if (agent_name) {
+    return (Array.from(agentManager.agents.values()) as any[]).find(
+      (a: any) => a.name.toLowerCase() === agent_name.toLowerCase()
+    ) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Case-insensitively match `status` against a board's workflow columns.
+ * Returns the shared error string when the column doesn't exist, null when
+ * valid. Gating (status provided, board fetched, columns present) stays at
+ * each call site — add_task and update_task gate differently on purpose.
+ */
+function findInvalidStatusError(board: any, boardLabel: string, status: string): string | null {
+  const columns = board?.workflow?.columns || [];
+  const match = columns.find((c: any) => c.id?.toLowerCase() === status.toLowerCase());
+  if (match) return null;
+  const validIds = columns.map((c: any) => c.id).join(', ');
+  return `Invalid status "${status}" for board "${board?.name || boardLabel}". Valid columns: ${validIds}`;
+}
+
+/**
+ * Resolve the (agent, task) pair for update_task:
+ *  - agent from agent_id/agent_name when provided, otherwise by scanning all
+ *    agents' in-memory task lists for the task;
+ *  - task from the resolved agent's in-memory list, falling back to a direct
+ *    DB lookup. Unassigned tasks (the kind add_task creates) live only in the
+ *    DB, never in the agentId-keyed in-memory store (`boardLevel: true`).
+ *
+ * When the DB copy names an owner missing from memory, the task is rehydrated
+ * and `agent` may be REASSIGNED to the real owner — callers must use the
+ * returned agent, not the one they resolved from the input parameters.
+ */
+async function locateTask(
+  agentManager,
+  { agent_id, agent_name, task_id }: { agent_id?: string; agent_name?: string; task_id: string },
+): Promise<{ task: any; agent: any; boardLevel: boolean }> {
+  let agent: any = null;
+  if (agent_id || agent_name) {
+    agent = findAgent(agentManager, { agent_id, agent_name });
+  } else {
+    // No agent given — locate the task across all agents.
+    for (const a of agentManager.agents.values()) {
+      const t = agentManager._getAgentTasks((a as any).id).find((tt: any) => tt.id === task_id);
+      if (t) { agent = a; break; }
+    }
+  }
+
+  let task: any = agent
+    ? agentManager._getAgentTasks(agent.id).find((t: any) => t.id === task_id)
+    : null;
+
+  // Unassigned tasks (the kind add_task creates) live only in the DB,
+  // never in the agentId-keyed in-memory store — fall back to a direct
+  // lookup so they stay updatable.
+  let boardLevel = false;
+  if (!task) {
+    const dbTask = await getTaskById(task_id);
+    if (dbTask?.agentId) {
+      // The task has an owner missing from memory — rehydrate and retry
+      // the normal in-memory path under the owning agent.
+      await agentManager._ensureTaskInMemory(dbTask.agentId, task_id);
+      const owner = agentManager.agents.get(dbTask.agentId);
+      if (owner) {
+        agent = owner;
+        task = agentManager._getAgentTasks(owner.id).find((t: any) => t.id === task_id) || null;
+      }
+      if (!task) {
+        task = dbTask;
+        boardLevel = true;
+      }
+    } else if (dbTask) {
+      task = dbTask;
+      boardLevel = true;
+    }
+  }
+
+  return { task, agent, boardLevel };
+}
+
+/**
+ * Apply an update_task mutation to an unassigned/board-only task: the
+ * agentManager helpers all require an in-memory owner, so mutate the DB copy
+ * directly and persist it — mirroring what PUT /tasks/:id does for these
+ * tasks. Returns the mutated task.
+ */
+async function applyBoardLevelUpdate(
+  agentManager,
+  task: any,
+  { repoUpdate, storageUpdate, status }: {
+    repoUpdate?: { value: string | null; provider: string | null };
+    storageUpdate?: { value: string | null; provider: string | null };
+    status?: string;
+  },
+): Promise<any> {
+  const now = new Date().toISOString();
+  if (!task.history) task.history = [];
+  if (repoUpdate) {
+    task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'repoFullName', oldValue: task.repoFullName || null, newValue: repoUpdate.value });
+    task.repoFullName = repoUpdate.value;
+    task.repoProvider = repoUpdate.value ? repoUpdate.provider : null;
+  }
+  if (storageUpdate) {
+    task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'storagePath', oldValue: task.storagePath || null, newValue: storageUpdate.value });
+    task.storagePath = storageUpdate.value;
+    task.storageProvider = storageUpdate.value ? storageUpdate.provider : null;
+  }
+  const statusChanged = status !== undefined && status !== task.status;
+  if (statusChanged) {
+    task.history.push({ from: task.status, status, at: now, by: 'mcp' });
+    task.status = status;
+    // Clear execution state so the workflow engine starts fresh in the
+    // new column (mirrors setTaskStatus / PUT /tasks/:id).
+    task.startedAt = null;
+    task.executionStatus = null;
+    task.actionRunning = false;
+    delete task.actionRunningAgentId;
+    delete task.actionRunningMode;
+    if (status === 'done') task.completedAt = now;
+  }
+  task.updatedAt = now;
+  await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
+  agentManager._emit('task:updated', { agentId: task.agentId || null, task });
+  // Column-entry workflow actions (auto-assign / run_agent) only fire
+  // through this hook — no loop ever rescans unassigned tasks, so
+  // skipping it would leave the moved task inert in its new column.
+  if (statusChanged && task.status !== 'error') {
+    agentManager._checkAutoRefine({ ...task }, { by: 'mcp' });
+  }
+  return task;
 }
 
 /**
@@ -76,12 +226,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         totalMessages: a.metrics?.totalMessages || 0,
       }));
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ count: result.length, agents: result }, null, 2),
-        }],
-      };
+      return jsonOk({ count: result.length, agents: result });
     }
   );
 
@@ -94,24 +239,10 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
     },
     async ({ agent_id, agent_name }) => {
-      let agent = null;
-
-      if (agent_id) {
-        agent = agentManager.agents.get(agent_id) as any;
-      } else if (agent_name) {
-        agent = (Array.from(agentManager.agents.values()) as any[]).find(
-          (a: any) => a.name.toLowerCase() === agent_name.toLowerCase()
-        );
-      }
+      const agent = findAgent(agentManager, { agent_id, agent_name });
 
       if (!agent) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: 'Agent not found' }),
-          }],
-          isError: true,
-        };
+        return jsonError('Agent not found');
       }
 
       const agentAny = agent as any;
@@ -141,12 +272,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         },
       };
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(result, null, 2),
-        }],
-      };
+      return jsonOk(result);
     }
   );
 
@@ -178,12 +304,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         };
       }));
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ count: result.length, boards: result }, null, 2),
-        }],
-      };
+      return jsonOk({ count: result.length, boards: result });
     }
   );
 
@@ -207,13 +328,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // to null, but for the MCP an explicit failure is friendlier to LLMs).
       const repoFullName = normalizeRepoFullName(repo_full_name);
       if (repo_full_name !== undefined && repo_full_name !== null && repo_full_name !== '' && !repoFullName) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format.` }),
-          }],
-          isError: true,
-        };
+        return jsonError(`Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format.`);
       }
       const storagePath = normalizeStoragePath(storage_path);
 
@@ -223,41 +338,21 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // the "best" board for the project: the caller must choose explicitly so
       // unassigned-task placement is unambiguous.
       if (!board_id) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: 'board_id is required. Use list_boards to discover available board IDs.' }),
-          }],
-          isError: true,
-        };
+        return jsonError('board_id is required. Use list_boards to discover available board IDs.');
       }
       const resolvedBoardId: string = board_id;
       const resolvedBoard: any = await getBoardById(resolvedBoardId);
       if (!resolvedBoard) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: `Board not found: ${resolvedBoardId}. Use list_boards to discover valid IDs.` }),
-          }],
-          isError: true,
-        };
+        return jsonError(`Board not found: ${resolvedBoardId}. Use list_boards to discover valid IDs.`);
       }
 
       // Validate status against the resolved board's workflow columns. The
       // task is rejected (rather than silently accepted) when the caller
       // passes a column that does not exist on the target board.
       if (status && resolvedBoard?.workflow?.columns?.length) {
-        const columns = resolvedBoard.workflow.columns;
-        const match = columns.find((c: any) => c.id?.toLowerCase() === status.toLowerCase());
-        if (!match) {
-          const validIds = columns.map((c: any) => c.id).join(', ');
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ error: `Invalid status "${status}" for board "${resolvedBoard.name || resolvedBoardId}". Valid columns: ${validIds}` }),
-            }],
-            isError: true,
-          };
+        const statusError = findInvalidStatusError(resolvedBoard, resolvedBoardId, status);
+        if (statusError) {
+          return jsonError(statusError);
         }
       }
 
@@ -269,27 +364,16 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         storageProvider: storagePath ? (storage_provider || 'onedrive') : null,
       });
       if (!newTask) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: 'Failed to create task. Verify board_id is valid.' }),
-          }],
-          isError: true,
-        };
+        return jsonError('Failed to create task. Verify board_id is valid.');
       }
       console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created (unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${status || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: true,
-            task: newTask,
-            agent: null,
-            board_id: resolvedBoardId,
-          }, null, 2),
-        }],
-      };
+      return jsonOk({
+        success: true,
+        task: newTask,
+        agent: null,
+        board_id: resolvedBoardId,
+      });
     }
   );
 
@@ -308,67 +392,18 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       storage_provider: z.string().optional().describe('Storage provider — defaults to "onedrive" when storage_path is set.'),
     },
     async ({ agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider }) => {
-      // Resolve the agent (either parameter form is accepted, mirroring add_task)
-      let agent: any = null;
-      if (agent_id) {
-        agent = agentManager.agents.get(agent_id) as any;
-      } else if (agent_name) {
-        agent = (Array.from(agentManager.agents.values()) as any[]).find(
-          (a: any) => a.name.toLowerCase() === agent_name.toLowerCase()
-        );
-      } else {
-        // No agent given — locate the task across all agents.
-        for (const a of agentManager.agents.values()) {
-          const t = agentManager._getAgentTasks((a as any).id).find((tt: any) => tt.id === task_id);
-          if (t) { agent = a; break; }
-        }
-      }
-
-      let task: any = agent
-        ? agentManager._getAgentTasks(agent.id).find((t: any) => t.id === task_id)
-        : null;
-
-      // Unassigned tasks (the kind add_task creates) live only in the DB,
-      // never in the agentId-keyed in-memory store — fall back to a direct
-      // lookup so they stay updatable.
-      let boardLevel = false;
+      // Resolve the agent (either parameter form is accepted, mirroring
+      // add_task) and the task, with DB fallback/rehydration for unassigned
+      // or not-yet-in-memory tasks.
+      const { task, agent, boardLevel } = await locateTask(agentManager, { agent_id, agent_name, task_id });
       if (!task) {
-        const dbTask = await getTaskById(task_id);
-        if (dbTask?.agentId) {
-          // The task has an owner missing from memory — rehydrate and retry
-          // the normal in-memory path under the owning agent.
-          await agentManager._ensureTaskInMemory(dbTask.agentId, task_id);
-          const owner = agentManager.agents.get(dbTask.agentId);
-          if (owner) {
-            agent = owner;
-            task = agentManager._getAgentTasks(owner.id).find((t: any) => t.id === task_id) || null;
-          }
-          if (!task) {
-            task = dbTask;
-            boardLevel = true;
-          }
-        } else if (dbTask) {
-          task = dbTask;
-          boardLevel = true;
-        }
-      }
-      if (!task) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ error: `Task not found: ${task_id}` }) }],
-          isError: true,
-        };
+        return jsonError(`Task not found: ${task_id}`);
       }
 
       // Validate at least one mutating field is provided. We treat "" as a
       // valid clear-signal for repo/storage, so explicitly check for undefined.
       if (status === undefined && repo_full_name === undefined && storage_path === undefined) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: 'At least one of status, repo_full_name, storage_path must be provided.' }),
-          }],
-          isError: true,
-        };
+        return jsonError('At least one of status, repo_full_name, storage_path must be provided.');
       }
 
       // Validate status against the task's board workflow when provided.
@@ -377,35 +412,15 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // transition out of.
       if (status !== undefined) {
         if (!task.boardId) {
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ error: `Cannot update status: task ${task_id} is not bound to a board.` }),
-            }],
-            isError: true,
-          };
+          return jsonError(`Cannot update status: task ${task_id} is not bound to a board.`);
         }
         const board = await getBoardById(task.boardId);
-        const columns = board?.workflow?.columns;
-        if (!columns?.length) {
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ error: `Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.` }),
-            }],
-            isError: true,
-          };
+        if (!board?.workflow?.columns?.length) {
+          return jsonError(`Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.`);
         }
-        const match = columns.find((c: any) => c.id?.toLowerCase() === status.toLowerCase());
-        if (!match) {
-          const validIds = columns.map((c: any) => c.id).join(', ');
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ error: `Invalid status "${status}" for board "${board?.name || task.boardId}". Valid columns: ${validIds}` }),
-            }],
-            isError: true,
-          };
+        const statusError = findInvalidStatusError(board, task.boardId, status);
+        if (statusError) {
+          return jsonError(statusError);
         }
       }
 
@@ -418,13 +433,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         } else {
           const normalized = normalizeRepoFullName(repo_full_name);
           if (!normalized) {
-            return {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({ error: `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format or empty string to clear.` }),
-              }],
-              isError: true,
-            };
+            return jsonError(`Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format or empty string to clear.`);
           }
           repoUpdate = { value: normalized, provider: repo_provider || 'github' };
         }
@@ -446,44 +455,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // mutations regardless of which fields were provided.
       let updated: any = task;
       if (boardLevel) {
-        // Unassigned/board-only task: the agentManager helpers all require an
-        // in-memory owner, so mutate the DB copy directly and persist it —
-        // mirroring what PUT /tasks/:id does for these tasks.
-        const now = new Date().toISOString();
-        if (!task.history) task.history = [];
-        if (repoUpdate) {
-          task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'repoFullName', oldValue: task.repoFullName || null, newValue: repoUpdate.value });
-          task.repoFullName = repoUpdate.value;
-          task.repoProvider = repoUpdate.value ? repoUpdate.provider : null;
-        }
-        if (storageUpdate) {
-          task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'storagePath', oldValue: task.storagePath || null, newValue: storageUpdate.value });
-          task.storagePath = storageUpdate.value;
-          task.storageProvider = storageUpdate.value ? storageUpdate.provider : null;
-        }
-        const statusChanged = status !== undefined && status !== task.status;
-        if (statusChanged) {
-          task.history.push({ from: task.status, status, at: now, by: 'mcp' });
-          task.status = status;
-          // Clear execution state so the workflow engine starts fresh in the
-          // new column (mirrors setTaskStatus / PUT /tasks/:id).
-          task.startedAt = null;
-          task.executionStatus = null;
-          task.actionRunning = false;
-          delete task.actionRunningAgentId;
-          delete task.actionRunningMode;
-          if (status === 'done') task.completedAt = now;
-        }
-        task.updatedAt = now;
-        await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
-        agentManager._emit('task:updated', { agentId: task.agentId || null, task });
-        // Column-entry workflow actions (auto-assign / run_agent) only fire
-        // through this hook — no loop ever rescans unassigned tasks, so
-        // skipping it would leave the moved task inert in its new column.
-        if (statusChanged && task.status !== 'error') {
-          agentManager._checkAutoRefine({ ...task }, { by: 'mcp' });
-        }
-        updated = task;
+        updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status });
       } else {
         if (repoUpdate) {
           updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
@@ -496,16 +468,11 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         }
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: true,
-            task: updated,
-            agent: boardLevel ? null : { id: agent.id, name: agent.name },
-          }, null, 2),
-        }],
-      };
+      return jsonOk({
+        success: true,
+        task: updated,
+        agent: boardLevel ? null : { id: agent.id, name: agent.name },
+      });
     }
   );
 
@@ -535,17 +502,14 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       created_after, created_before, completed_after, completed_before,
       only_completed, include_deleted, limit, offset,
     }) => {
-      // Resolve agent_name → agent_id when only the name was given.
+      // Resolve agent_name → agent_id when only the name was given. An
+      // unknown agent_id is deliberately passed straight through to
+      // searchTasks (zero results), only the name branch errors on miss.
       let resolvedAgentId = agent_id || null;
       if (!resolvedAgentId && agent_name) {
-        const agent = (Array.from(agentManager.agents.values()) as any[]).find(
-          (a: any) => a.name.toLowerCase() === agent_name.toLowerCase()
-        );
+        const agent = findAgent(agentManager, { agent_name });
         if (!agent) {
-          return {
-            content: [{ type: 'text', text: JSON.stringify({ error: `Agent not found: ${agent_name}` }) }],
-            isError: true,
-          };
+          return jsonError(`Agent not found: ${agent_name}`);
         }
         resolvedAgentId = agent.id;
       }
@@ -596,12 +560,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         deleted_at: t.deletedAt || null,
       }));
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ total, returned, tasks: slim }, null, 2),
-        }],
-      };
+      return jsonOk({ total, returned, tasks: slim });
     }
   );
 
@@ -624,13 +583,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
     async ({ comment, task_id, agent_id, commits }) => {
       const agentId = (agent_id || callerAgentId || '').trim();
       if (!agentId) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ error: 'No agent context. Provide agent_id (external callers) — CLI runner agents are resolved automatically.' }),
-          }],
-          isError: true,
-        };
+        return jsonError('No agent context. Provide agent_id (external callers) — CLI runner agents are resolved automatically.');
       }
 
       const outcome = await agentManager.applyTaskExecutionComplete(agentId, {
@@ -659,27 +612,13 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
 
 /**
  * Creates an Express request handler for the Swarm API MCP endpoint (Streamable HTTP).
+ *
+ * X-Agent-Id is injected when this MCP is wired into a CLI runner agent
+ * (mcpManager.getClaudeMcpConfigForAgent), scoping task_execution_complete
+ * to the calling agent. Absent for external API-key callers. The server
+ * builder takes (agentManager, callerAgentId) and ignores boardId.
  */
 export function createSwarmApiMcpHandler(agentManager) {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      // X-Agent-Id is injected when this MCP is wired into a CLI runner agent
-      // (mcpManager.getClaudeMcpConfigForAgent), scoping task_execution_complete
-      // to the calling agent. Absent for external API-key callers.
-      const callerAgentId = (req.headers['x-agent-id'] as string) || null;
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createSwarmApiMcpServer(agentManager, callerAgentId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error('[Swarm API MCP] Error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: error.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Swarm API', ({ agentId }) =>
+    createSwarmApiMcpServer(agentManager, agentId));
 }

@@ -28,7 +28,6 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
     batchSize: 2,
   });
   const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState('');
 
   useEffect(() => {
     api.getLlmConfigs().then(setLlmConfigs).catch(() => {});
@@ -72,7 +71,6 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
   const handleCreate = async () => {
     if (!form.name.trim()) return;
     setCreating(true);
-    setCreateError('');
     try {
       const payload: any = { ...form };
       payload.llmConfigId = payload.llmConfigId || null;
@@ -95,7 +93,6 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
       onCreated(agent);
     } catch (err) {
       console.error(err);
-      setCreateError(err?.message || 'Failed to create agent');
     } finally {
       setCreating(false);
     }
@@ -529,12 +526,6 @@ export default function AddAgentModal({ templates, projects, agents = [], initia
                   />
                 </div>
               </div>
-
-              {createError && (
-                <div className="px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-lg text-xs text-red-400">
-                  {createError}
-                </div>
-              )}
 
               <div className="flex gap-3 pt-2">
                 <button

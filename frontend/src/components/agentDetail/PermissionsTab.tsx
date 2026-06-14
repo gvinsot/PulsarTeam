@@ -180,15 +180,34 @@ const BUILTIN_RULES = [
 
 const TOOL_OPTIONS = ['run_command', 'write_file', 'append_file', 'mcp_call'];
 
-export default function PermissionsTab({ agent, onRefresh }) {
-  const [perms, setPerms] = useState(() => ({
+const BUILTIN_RULE_IDS = new Set(BUILTIN_RULES.map(r => r.id));
+
+// Merge the agent's stored permissions over the defaults. The top-level
+// spread keeps unknown extra permission keys intact across the save
+// round-trip via api.updateAgent.
+function buildPerms(agent) {
+  return {
     ...DEFAULT_PERMISSIONS,
     ...agent.permissions,
     linuxUser: { ...DEFAULT_PERMISSIONS.linuxUser, ...agent.permissions?.linuxUser },
     network: { ...DEFAULT_PERMISSIONS.network, ...agent.permissions?.network },
     filesystem: { ...DEFAULT_PERMISSIONS.filesystem, ...agent.permissions?.filesystem },
     execution: { ...DEFAULT_PERMISSIONS.execution, ...agent.permissions?.execution },
-  }));
+  };
+}
+
+// Overlay stored rule overrides onto the builtin table, then append the
+// agent's custom (non-builtin) rules.
+function buildHookRules(agent) {
+  const existing = agent.toolHooks?.rules || [];
+  return BUILTIN_RULES.map(builtin => {
+    const override = existing.find((r: any) => r.id === builtin.id);
+    return override ? { ...builtin, ...override } : { ...builtin };
+  }).concat(existing.filter((r: any) => !BUILTIN_RULE_IDS.has(r.id)));
+}
+
+export default function PermissionsTab({ agent, onRefresh }) {
+  const [perms, setPerms] = useState(() => buildPerms(agent));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -197,45 +216,27 @@ export default function PermissionsTab({ agent, onRefresh }) {
   const [newCredName, setNewCredName] = useState('');
 
   const [hooksEnabled, setHooksEnabled] = useState(() => agent.toolHooks?.enabled ?? false);
-  const [hookRules, setHookRules] = useState(() => {
-    const existing = agent.toolHooks?.rules || [];
-    return BUILTIN_RULES.map(builtin => {
-      const override = existing.find((r: any) => r.id === builtin.id);
-      return override ? { ...builtin, ...override } : { ...builtin };
-    }).concat(existing.filter((r: any) => !BUILTIN_RULES.find(b => b.id === r.id)));
-  });
+  const [hookRules, setHookRules] = useState(() => buildHookRules(agent));
   const [showNewRule, setShowNewRule] = useState(false);
   const [newRule, setNewRule] = useState({ name: '', pattern: '', action: 'block' as 'block' | 'warn', tools: ['run_command'], description: '' });
 
   useEffect(() => {
-    setPerms({
-      ...DEFAULT_PERMISSIONS,
-      ...agent.permissions,
-      linuxUser: { ...DEFAULT_PERMISSIONS.linuxUser, ...agent.permissions?.linuxUser },
-      network: { ...DEFAULT_PERMISSIONS.network, ...agent.permissions?.network },
-      filesystem: { ...DEFAULT_PERMISSIONS.filesystem, ...agent.permissions?.filesystem },
-      execution: { ...DEFAULT_PERMISSIONS.execution, ...agent.permissions?.execution },
-    });
+    setPerms(buildPerms(agent));
     setCredentials(agent.credentials || {});
     setHooksEnabled(agent.toolHooks?.enabled ?? false);
-    const existing = agent.toolHooks?.rules || [];
-    setHookRules(
-      BUILTIN_RULES.map(builtin => {
-        const override = existing.find((r: any) => r.id === builtin.id);
-        return override ? { ...builtin, ...override } : { ...builtin };
-      }).concat(existing.filter((r: any) => !BUILTIN_RULES.find(b => b.id === r.id)))
-    );
+    setHookRules(buildHookRules(agent));
     setHasChanges(false);
     setSaved(false);
   }, [agent.id]);
+
+  const markDirty = () => { setHasChanges(true); setSaved(false); };
 
   const update = (section, key, value) => {
     setPerms(prev => ({
       ...prev,
       [section]: { ...prev[section], [key]: value },
     }));
-    setHasChanges(true);
-    setSaved(false);
+    markDirty();
   };
 
   const handleSave = async () => {
@@ -278,12 +279,12 @@ export default function PermissionsTab({ agent, onRefresh }) {
 
   const toggleHookRule = (id: string) => {
     setHookRules(prev => prev.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
-    setHasChanges(true); setSaved(false);
+    markDirty();
   };
 
   const deleteHookRule = (id: string) => {
     setHookRules(prev => prev.filter(r => r.id !== id));
-    setHasChanges(true); setSaved(false);
+    markDirty();
   };
 
   const addCustomRule = () => {
@@ -292,12 +293,12 @@ export default function PermissionsTab({ agent, onRefresh }) {
     setHookRules(prev => [...prev, { ...newRule, id, enabled: true }]);
     setNewRule({ name: '', pattern: '', action: 'block', tools: ['run_command'], description: '' });
     setShowNewRule(false);
-    setHasChanges(true); setSaved(false);
+    markDirty();
   };
 
   const toggleHooksEnabled = (v: boolean) => {
     setHooksEnabled(v);
-    setHasChanges(true); setSaved(false);
+    markDirty();
   };
 
   const handleAddCredential = () => {
@@ -498,7 +499,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
                     <span className="text-[10px] text-dark-500">on {rule.tools.join(', ')}</span>
                   </div>
                 </div>
-                {!BUILTIN_RULES.find(b => b.id === rule.id) && (
+                {!BUILTIN_RULE_IDS.has(rule.id) && (
                   <button onClick={() => deleteHookRule(rule.id)} className="p-1 text-dark-500 hover:text-red-400 transition-colors flex-shrink-0">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getWordPressCredentialsForAgent } from '../routes/wordpress.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch } from './providerFetch.js';
 
 /**
  * Minimal MIME type lookup for media uploads. WordPress is fairly strict
@@ -35,6 +36,25 @@ function guessMimeType(filePath: string): string {
   return MIME_BY_EXT[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
 }
 
+// JSON Content-Type is only set when the caller didn't already provide one
+// (media uploads send their own binary Content-Type) — see 'onlyStringBody'.
+const wpProviderFetch = createProviderFetch({
+  errorLabel: 'WordPress API error',
+  getAuth: (agentId, boardId) => {
+    const creds = getWordPressCredentialsForAgent(agentId, boardId);
+    if (!creds) throw new Error('Not connected to WordPress. Please configure WordPress credentials for this agent or board first.');
+    return {
+      authorization: `Basic ${Buffer.from(`${creds.username}:${creds.applicationPassword}`).toString('base64')}`,
+      base: `${creds.siteUrl}/wp-json`,
+    };
+  },
+  defaultHeaders: { Accept: 'application/json' },
+  contentType: 'onlyStringBody',
+  nullStatuses: [204],
+  parse: 'json',
+  maxErrorChars: 400,
+});
+
 /**
  * Call the WordPress REST API with per-agent/board Application Password credentials.
  */
@@ -44,33 +64,11 @@ async function wpFetch(
   endpoint: string,
   options: Record<string, any> = {},
 ): Promise<any> {
-  const creds = getWordPressCredentialsForAgent(agentId, boardId);
-  if (!creds) throw new Error('Not connected to WordPress. Please configure WordPress credentials for this agent or board first.');
-
-  const url = endpoint.startsWith('http')
+  // Normalize the leading slash so "wp/v2/posts" and "/wp/v2/posts" both work.
+  const path = endpoint.startsWith('http')
     ? endpoint
-    : `${creds.siteUrl}/wp-json${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
-  const encoded = Buffer.from(`${creds.username}:${creds.applicationPassword}`).toString('base64');
-
-  const headers: Record<string, string> = {
-    Authorization: `Basic ${encoded}`,
-    Accept: 'application/json',
-    ...(options.headers || {}),
-  };
-  // Only set JSON Content-Type when the caller didn't already provide one
-  // (media uploads send their own binary Content-Type).
-  if (!headers['Content-Type'] && options.body && typeof options.body === 'string') {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(60_000), ...options, headers });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`WordPress API error ${res.status}: ${text.slice(0, 400)}`);
-  }
-  if (res.status === 204) return null;
-  return res.json();
+    : `${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+  return wpProviderFetch(path, agentId, boardId, options);
 }
 
 /**
@@ -526,23 +524,6 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
  * Reads X-Agent-Id and X-Board-Id headers for per-agent/board credential resolution.
  */
 export function createWordPressMcpHandler() {
-  return async (req: any, res: any) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createWordPressMcpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[WordPress MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('WordPress', ({ agentId, boardId }) =>
+    createWordPressMcpServer(agentId, boardId));
 }

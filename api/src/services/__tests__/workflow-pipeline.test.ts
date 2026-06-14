@@ -127,6 +127,7 @@ mock.module('../database.js', {
     deleteOAuthTokensByScope: noop,
     getOAuthTokensByScope: () => [],
     resolveAccessToken: async () => null,
+    resolveOAuthTokenRecord: async () => null,
     loadOAuthTokens: noop,
     getOAuthTokenCache: () => new Map(),
     // tasks

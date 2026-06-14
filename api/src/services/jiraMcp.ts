@@ -1,37 +1,30 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getJiraCredentialsForAgent } from '../routes/jira.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch } from './providerFetch.js';
+
+const jiraProviderFetch = createProviderFetch({
+  errorLabel: 'Jira API error',
+  getAuth: (agentId, boardId) => {
+    const creds = getJiraCredentialsForAgent(agentId, boardId);
+    if (!creds) throw new Error('Not connected to Jira. Please configure Jira credentials for this agent first.');
+    return {
+      authorization: `Basic ${Buffer.from(`${creds.email}:${creds.apiToken}`).toString('base64')}`,
+      base: `https://${creds.domain}`,
+    };
+  },
+  defaultHeaders: { Accept: 'application/json' },
+  nullStatuses: [204],
+  parse: 'json',
+  maxErrorChars: 300,
+});
 
 /**
  * Helper to call Jira REST API with per-agent credentials.
  */
 async function jiraFetch(agentId: string | null, boardId: string | null, path: string, options: Record<string, any> = {}) {
-  const creds = getJiraCredentialsForAgent(agentId, boardId);
-  if (!creds) throw new Error('Not connected to Jira. Please configure Jira credentials for this agent first.');
-
-  const baseUrl = `https://${creds.domain}`;
-  const url = path.startsWith('http') ? path : `${baseUrl}${path}`;
-  const encoded = Buffer.from(`${creds.email}:${creds.apiToken}`).toString('base64');
-
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(60_000),
-    ...options,
-    headers: {
-      Authorization: `Basic ${encoded}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Jira API error ${res.status}: ${text.slice(0, 300)}`);
-  }
-
-  if (res.status === 204) return null;
-  return res.json();
+  return jiraProviderFetch(path, agentId, boardId, options);
 }
 
 /**
@@ -401,23 +394,6 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
  * Reads X-Agent-Id header to provide agent-specific credential resolution.
  */
 export function createJiraMcpHandler() {
-  return async (req: any, res: any) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createJiraMcpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[Jira MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Jira', ({ agentId, boardId }) =>
+    createJiraMcpServer(agentId, boardId));
 }

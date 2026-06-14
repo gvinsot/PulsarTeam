@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getGdriveAccessTokenForAgent } from '../routes/gdrive.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch, readBodyCapped } from './providerFetch.js';
 
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3';
@@ -19,40 +20,15 @@ const NATIVE_EXPORT_MIME: Record<string, string> = {
   'application/vnd.google-apps.drawing': 'image/png',
 };
 
-async function driveFetch(
-  path: string,
-  agentId: string | null = null,
-  boardId: string | null = null,
-  options: Record<string, any> = {},
-) {
-  const token = await getGdriveAccessTokenForAgent(agentId, boardId);
-  const url = path.startsWith('http') ? path : `${DRIVE_BASE}${path}`;
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    ...(options.headers || {}),
-  };
-  if (options.body && !headers['Content-Type'] && typeof options.body === 'string') {
-    headers['Content-Type'] = 'application/json';
-  }
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(options.raw ? 120_000 : 60_000), ...options, headers });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Drive API error ${res.status}: ${text}`);
-  }
-
-  if (options.raw) {
-    return res;
-  }
-
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
-  }
-  return res.text();
-}
+const driveFetch = createProviderFetch({
+  errorLabel: 'Drive API error',
+  getAuth: async (agentId, boardId) => ({
+    authorization: `Bearer ${await getGdriveAccessTokenForAgent(agentId, boardId)}`,
+    base: DRIVE_BASE,
+  }),
+  contentType: 'onlyStringBody',
+  rawTimeoutMs: 120_000,
+});
 
 function escapeDriveQuery(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -162,30 +138,7 @@ async function downloadFile(
     );
   }
 
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > maxBytes) {
-      throw new Error(`File too large to read (${(buf.length / 1024 / 1024).toFixed(1)} MB; max ${(maxBytes / 1024 / 1024).toFixed(1)} MB).`);
-    }
-    return { buffer: buf, mimeType: outMime, exported };
-  }
-
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) {
-      total += value.length;
-      if (total > maxBytes) {
-        try { await reader.cancel(); } catch { /* ignore */ }
-        throw new Error(`File too large to read (>${(maxBytes / 1024 / 1024).toFixed(1)} MB).`);
-      }
-      chunks.push(value);
-    }
-  }
-  return { buffer: Buffer.concat(chunks), mimeType: outMime, exported };
+  return { buffer: await readBodyCapped(res, maxBytes), mimeType: outMime, exported };
 }
 
 export function createGdriveMcpServer(
@@ -617,23 +570,6 @@ export function createGdriveMcpServer(
 }
 
 export function createGdriveMcpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createGdriveMcpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[Gdrive MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Gdrive', ({ agentId, boardId }) =>
+    createGdriveMcpServer(agentId, boardId));
 }

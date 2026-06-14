@@ -1,3 +1,36 @@
+/**
+ * Internal MCP server definitions, keyed by the `__internal__*` URL sentinel
+ * used in BUILTIN_MCP_SERVERS. Kept as a sibling map (NOT extra fields on the
+ * builtin entries) because builtin defs are spread into runtime server objects
+ * that are persisted to the DB and returned over REST.
+ *
+ * - `path`: Express mount path of the MCP endpoint (see api/src/index.ts) —
+ *   explicit per entry, not derivable from the url slug (e.g. aws_s3 → /api/s3).
+ * - `agentContext`: true for servers whose tools resolve per-agent credentials
+ *   (OAuth tokens / API keys); mcpManager must call them through a per-agent
+ *   connection carrying X-Agent-Id. The others use the global connection.
+ *
+ * Adding a new internal MCP = one entry here (plus the route mount in index.ts).
+ */
+export const INTERNAL_MCP_SERVERS = new Map<string, { path: string; agentContext: boolean }>([
+  ['__internal__onedrive', { path: '/api/onedrive/mcp', agentContext: true }],
+  ['__internal__code_index', { path: '/api/code-index/mcp', agentContext: false }],
+  // Legacy alias kept for configs that still reference the dashed form.
+  ['__internal__code-index', { path: '/api/code-index/mcp', agentContext: false }],
+  ['__internal__gandi_dns', { path: '/api/gandi-dns/mcp', agentContext: false }],
+  ['__internal__swarm_api', { path: '/api/swarm-api/mcp', agentContext: false }],
+  ['__internal__gmail', { path: '/api/gmail/mcp', agentContext: true }],
+  ['__internal__outlook', { path: '/api/outlook/mcp', agentContext: true }],
+  ['__internal__gdrive', { path: '/api/gdrive/mcp', agentContext: true }],
+  ['__internal__slack', { path: '/api/slack/mcp', agentContext: true }],
+  ['__internal__jira', { path: '/api/jira/mcp', agentContext: true }],
+  ['__internal__wordpress', { path: '/api/wordpress/mcp', agentContext: true }],
+  ['__internal__github', { path: '/api/github/mcp', agentContext: true }],
+  ['__internal__aws_s3', { path: '/api/s3/mcp', agentContext: false }],
+  ['__internal__auto_learn', { path: '/api/auto-learn/mcp', agentContext: false }],
+  ['__internal__browser', { path: '/api/browser/mcp', agentContext: false }],
+]);
+
 export const BUILTIN_MCP_SERVERS = [
   {
     id: 'mcp-pulsarcd-read',

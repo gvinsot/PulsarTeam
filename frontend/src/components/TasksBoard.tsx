@@ -112,7 +112,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   const activeBoard = useMemo(() => boards.find(b => b.id === activeBoardId) || null, [boards, activeBoardId]);
 
   // Permission checks for shared boards
-  const boardPermission = activeBoard?.share_permission || (activeBoard ? 'admin' : 'admin');
+  const boardPermission = activeBoard?.share_permission || 'admin';
   const isReadOnly = boardPermission === 'read';
   const canEdit = boardPermission === 'edit' || boardPermission === 'admin';
 
@@ -493,6 +493,43 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     }
   }, [tasksByColumn, refreshAll]);
 
+  // Optimistic cross-column move shared by mouse and touch drops. Same-column
+  // handling stays in the callers (drop reorders, touch drop is a no-op), as
+  // do the isReadOnly/actionRunning guards and the outer try/catch.
+  const moveTaskToColumn = useCallback(async (task, col, insertIdx, errLabel) => {
+    const taskId = task.id;
+    const prevStatus = task.status;
+    // Optimistic: change status only. Don't stamp updatedAt with the
+    // client clock — server-emitted task:updated events use server time
+    // and would be rejected by the timestamp merge if the client clock
+    // is ahead, leaving the UI stuck (no actionRunning spinner, etc.).
+    inFlightTaskIds.current.add(taskId);
+    setDbTasks(prev => prev.map(t =>
+      t.id === taskId ? { ...t, status: col.dropStatus } : t
+    ));
+    try {
+      const updated = await updateTaskById(taskId, { column: col.dropStatus });
+      // Apply server's authoritative response so updatedAt is server-sourced.
+      if (updated?.id) {
+        setDbTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updated } : t));
+      }
+      // After status change, reorder within the target column at the drop position
+      if (insertIdx !== undefined) {
+        await reorderColumnTasks(col.id, taskId, insertIdx);
+      }
+      refreshAll();
+    } catch (apiErr) {
+      console.error(`[TasksBoard] ${errLabel} API failed, reverting:`, apiErr.message);
+      setDbTasks(prev => prev.map(t =>
+        t.id === taskId ? { ...t, status: prevStatus } : t
+      ));
+    } finally {
+      // Hold the in-flight guard briefly to cover the window where
+      // task:updated events from workflow processing are still arriving.
+      setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
+    }
+  }, [reorderColumnTasks, refreshAll]);
+
   const handleDrop = useCallback(async (e, col, dropIdx) => {
     if (isReadOnly) return;
     let agentId, taskId;
@@ -504,9 +541,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       if (!task) task = allTasks.find(t => t.id === taskId);
       if (!task) return;
       if (task.actionRunning) return;
-      const isAlreadyInColumn = resolveTaskColumnId(task) === col.id;
 
-      if (isAlreadyInColumn) {
+      if (resolveTaskColumnId(task) === col.id) {
         // Same column — just reorder
         if (dropIdx !== undefined) {
           await reorderColumnTasks(col.id, taskId, dropIdx);
@@ -514,41 +550,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         return;
       }
 
-      // Moving to a different column
-      const prevStatus = task.status;
-      // Optimistic: change status only. Don't stamp updatedAt with the
-      // client clock — server-emitted task:updated events use server time
-      // and would be rejected by the timestamp merge if the client clock
-      // is ahead, leaving the UI stuck (no actionRunning spinner, etc.).
-      inFlightTaskIds.current.add(taskId);
-      setDbTasks(prev => prev.map(t =>
-        t.id === taskId ? { ...t, status: col.dropStatus } : t
-      ));
-      try {
-        const updated = await updateTaskById(taskId, { column: col.dropStatus });
-        // Apply server's authoritative response so updatedAt is server-sourced.
-        if (updated?.id) {
-          setDbTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updated } : t));
-        }
-        // After status change, reorder within the target column at the drop position
-        if (dropIdx !== undefined) {
-          await reorderColumnTasks(col.id, taskId, dropIdx);
-        }
-        refreshAll();
-      } catch (apiErr) {
-        console.error('[TasksBoard] Drop API failed, reverting:', apiErr.message);
-        setDbTasks(prev => prev.map(t =>
-          t.id === taskId ? { ...t, status: prevStatus } : t
-        ));
-      } finally {
-        // Hold the in-flight guard briefly to cover the window where
-        // task:updated events from workflow processing are still arriving.
-        setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
-      }
+      await moveTaskToColumn(task, col, dropIdx, 'Drop');
     } catch (err) {
       console.error('[TasksBoard] Drop status change failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks, resolveTaskColumnId]);
+  }, [allTasks, columns, isReadOnly, reorderColumnTasks, resolveTaskColumnId, moveTaskToColumn]);
 
   // Touch drag-and-drop handler
   const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
@@ -566,36 +572,15 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         console.warn('[TasksBoard] Touch drop: column not found', targetColumnId);
         return;
       }
-      const isAlreadyInColumn = resolveTaskColumnId(task) === col.id;
-      if (isAlreadyInColumn) return;
+      // Same column — silent no-op (no reorder on touch)
+      if (resolveTaskColumnId(task) === col.id) return;
 
-      const prevStatus = task.status;
-      // See handleDrop: don't stamp updatedAt with the client clock.
-      inFlightTaskIds.current.add(taskId);
-      setDbTasks(prev => prev.map(t =>
-        t.id === taskId ? { ...t, status: col.dropStatus } : t
-      ));
-
-      try {
-        const updated = await updateTaskById(taskId, { column: col.dropStatus });
-        if (updated?.id) {
-          setDbTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updated } : t));
-        }
-        // Touch drop appends to end of target column
-        await reorderColumnTasks(col.id, taskId, (tasksByColumn[col.id] || []).length);
-        refreshAll();
-      } catch (apiErr) {
-        console.error('[TasksBoard] Touch drop API failed, reverting:', apiErr.message);
-        setDbTasks(prev => prev.map(t =>
-          t.id === taskId ? { ...t, status: prevStatus } : t
-        ));
-      } finally {
-        setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
-      }
+      // Touch drop appends to end of target column
+      await moveTaskToColumn(task, col, (tasksByColumn[col.id] || []).length, 'Touch drop');
     } catch (err) {
       console.error('[TasksBoard] Touch drop failed:', err.message);
     }
-  }, [allTasks, columns, refreshAll, isReadOnly, reorderColumnTasks, tasksByColumn, resolveTaskColumnId]);
+  }, [allTasks, columns, isReadOnly, tasksByColumn, resolveTaskColumnId, moveTaskToColumn]);
 
   // Batch move all tasks from one column to another
   const handleBatchMove = useCallback(async (sourceColId, targetColId, tasks) => {
@@ -919,7 +904,6 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               key={col.id}
               col={col}
               tasks={tasksByColumn[col.id] || []}
-              agents={agents}
               onDelete={handleDelete}
               onStop={handleStopAction}
               onResume={handleResumeTask}

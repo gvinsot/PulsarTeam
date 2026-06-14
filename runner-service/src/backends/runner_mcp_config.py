@@ -21,6 +21,9 @@ import yaml
 from swarm_secrets import read as read_secret
 
 from config import logger
+# Aliased so the many call sites here (and runner_instructions_config's
+# import of `_resolve_home`) keep working against the shared resolver.
+from agent_user import resolve_agent_home as _resolve_home
 from .runner_local_models import fetch_local_models
 
 # Opt-in: write the operator's local (vLLM/Ollama) models into hermes'
@@ -215,28 +218,6 @@ def _fetch_servers_or_none(agent_id: Optional[str]) -> Optional[dict]:
     return servers if isinstance(servers, dict) else {}
 
 
-def _resolve_home(
-    agent_user: Optional[dict], agent_id: Optional[str],
-) -> tuple[Optional[str], Optional[int], Optional[int]]:
-    """Resolve (home, uid, gid) for the agent. Falls back to the runtime
-    `_agent_users` cache when agent_user is None (e.g. linuxUser.runAsRoot
-    resolves effective_user to None but the per-agent HOME still exists)."""
-    home = (agent_user or {}).get("home") if agent_user else None
-    uid = (agent_user or {}).get("uid") if agent_user else None
-    gid = (agent_user or {}).get("gid", uid) if agent_user else None
-    if not home and agent_id:
-        try:
-            from agent_user import _agent_users
-            cached = _agent_users.get(agent_id)
-        except Exception:
-            cached = None
-        if cached:
-            home = cached.get("home")
-            uid = cached.get("uid")
-            gid = cached.get("gid", uid)
-    return home, uid, gid
-
-
 def _atomic_write(
     path: str, parent_dir: str, text: str,
     uid: Optional[int], gid: Optional[int], dir_mode: int = 0o700,
@@ -294,51 +275,6 @@ def _strip_managed_block(text: str, start: str, end: str) -> str:
             continue
         out.append(line)
     return "\n".join(out)
-
-
-def _reconcile_json_mcp(
-    agent_user: Optional[dict], agent_id: Optional[str],
-    cfg_subpath: tuple[str, ...], key: str, block: dict,
-    label: str,
-) -> None:
-    """Read a JSON config file, replace the previously-managed entries under
-    `key` with `block`, and persist. Preserves every other key (model,
-    provider, user-defined MCP servers, …)."""
-    home, uid, gid = _resolve_home(agent_user, agent_id)
-    if not home:
-        logger.warning(f"[{label}] no HOME for agent {(agent_id or '?')[:12]} — skipping MCP write")
-        return
-    cfg_dir = os.path.join(home, *cfg_subpath[:-1])
-    cfg_path = os.path.join(home, *cfg_subpath)
-    try:
-        with open(cfg_path, "r", encoding="utf-8") as f:
-            settings = json.load(f)
-        if not isinstance(settings, dict):
-            settings = {}
-    except (OSError, json.JSONDecodeError):
-        settings = {}
-
-    servers_map = settings.get(key)
-    if not isinstance(servers_map, dict):
-        servers_map = {}
-    for name in (settings.get(_MANAGED_KEY) or []):
-        if isinstance(name, str):
-            servers_map.pop(name, None)
-    servers_map.update(block)
-
-    if servers_map:
-        settings[key] = servers_map
-    else:
-        settings.pop(key, None)
-    settings[_MANAGED_KEY] = list(block.keys())
-    settings["_pulsarMcpUpdatedAt"] = int(time.time())
-
-    text = json.dumps(settings, indent=2) + "\n"
-    try:
-        _atomic_write(cfg_path, cfg_dir, text, uid, gid)
-        logger.info(f"[{label}] configured {len(block)} MCP server(s) for agent {(agent_id or '?')[:12]}")
-    except OSError as e:
-        logger.warning(f"[{label}] failed to write {cfg_path}: {e}")
 
 
 # ── opencode ──────────────────────────────────────────────────────────────────

@@ -29,9 +29,8 @@ import json
 import logging
 import os
 
-from agent_user import ensure_agent_user, _agent_users
-from .cli_backend import CliBackend
-from .claude_token_store import get_subprocess_kwargs, run_blocking
+from agent_user import resolve_agent_home
+from .cli_backend import CliBackend, resolve_model_spec
 from .runner_mcp_config import configure_opencode_mcp
 from .runner_instructions_config import configure_opencode_instructions
 from .runner_local_models import fetch_local_models
@@ -64,23 +63,10 @@ _PROVIDER_TO_OPENCODE_NAMESPACE = {
 
 
 def _resolve_opencode_model(llm_config: Optional[dict]) -> str:
-    """Compute the `--model` value opencode should use.
-
-    Return the per-agent LLM config when set (formatted as
-    `<provider>/<model>`). An empty value deliberately leaves model
-    selection to OpenCode.
-    """
-    if llm_config:
-        model = (llm_config.get("model") or "").strip()
-        provider = (llm_config.get("provider") or "").lower().strip()
-        if model and "/" in model:
-            return model  # caller already provided a provider-prefixed spec
-        ns = _PROVIDER_TO_OPENCODE_NAMESPACE.get(provider, provider)
-        if model and ns:
-            return f"{ns}/{model}"
-        if model:
-            return model
-    return ""
+    """Compute the `--model` value opencode should use (thin wrapper over
+    the shared resolver; an empty value deliberately leaves model selection
+    to OpenCode)."""
+    return resolve_model_spec(llm_config, _PROVIDER_TO_OPENCODE_NAMESPACE)
 
 
 def _split_model_spec(model_spec: str) -> tuple[Optional[str], Optional[str]]:
@@ -314,14 +300,9 @@ class OpenCodeBackend(CliBackend):
         with `mkdir .config/opencode EACCES`. Pre-creating the chain and handing
         it to the agent UID makes the spawn robust regardless of whether any
         MCP/instructions/provider config was written this round."""
-        home_user = agent_user
-        if (not home_user or not home_user.get("home")) and agent_id:
-            home_user = _agent_users.get(agent_id)
-        home_dir = (home_user or {}).get("home")
+        home_dir, uid, gid = resolve_agent_home(agent_user, agent_id)
         if not home_dir:
             return
-        uid = (home_user or {}).get("uid")
-        gid = (home_user or {}).get("gid", uid)
         config_dir = os.path.join(home_dir, ".config", "opencode")
         try:
             os.makedirs(config_dir, mode=0o700, exist_ok=True)
@@ -351,10 +332,8 @@ class OpenCodeBackend(CliBackend):
         # root (effective_user=None from linuxUser.runAsRoot). Without this the
         # provider config file is never written and opencode receives only
         # `--model vllm/...` with no endpoint/apiKey, so the connection fails.
-        home_user = agent_user
-        if (not home_user or not home_user.get("home")) and agent_id:
-            home_user = _agent_users.get(agent_id)
-        if not (home_user and home_user.get("home")):
+        home_dir, _, _ = resolve_agent_home(agent_user, agent_id)
+        if not home_dir:
             logger.warning(
                 "[OpenCode] No HOME available for agent %s — skipping provider config write",
                 (agent_id or "unknown")[:12],
@@ -362,7 +341,6 @@ class OpenCodeBackend(CliBackend):
             if self._dangerous_skip_permissions(agent_id):
                 env["OPENCODE_PERMISSION"] = json.dumps("allow")
             return env
-        home_dir = home_user["home"]
         config_dir = os.path.join(home_dir, ".config", "opencode")
         cfg_path = os.path.join(config_dir, "config.json")
         # Merge on top of any existing config file content so we don't clobber
@@ -415,18 +393,12 @@ class OpenCodeBackend(CliBackend):
         exec_perms = (permissions or {}).get("execution", {}) if permissions else {}
         return bool(exec_perms.get("dangerousSkipPermissions", True))
 
-    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
-        """Spawn OpenCode in its interactive TUI for the shared PTY."""
-        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        self._ensure_config_dir(agent_user, agent_id)
-        # Off-loop: both helpers do blocking team-api fetches. Resolving the
-        # env next also warms the per-agent LLM config cache for the
-        # _get_llm_config call below.
-        await run_blocking(self._configure_mcp, effective_user, agent_id)
-        await run_blocking(self._configure_instructions, effective_user, agent_id)
-        env = await run_blocking(self._agent_env, effective_user, agent_id)
+    # ── Interactive terminal hooks (see CliBackend.prepare_interactive) ──
 
+    def _pre_interactive(self, agent_user, effective_user, agent_id) -> None:
+        self._ensure_config_dir(agent_user, agent_id)
+
+    def _interactive_cmd(self, agent_id, permissions):
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
 
@@ -439,15 +411,10 @@ class OpenCodeBackend(CliBackend):
             "[OpenCode] prepare_interactive agent=%s model=%s endpoint=%s",
             (agent_id or "unknown")[:12], model or "<none>", endpoint or "<none>",
         )
+        return cmd
 
-        kwargs = get_subprocess_kwargs(effective_user) or {}
-        self._verify_model_config(agent_id, model=model, env=env)
-        return {
-            "cmd": cmd,
-            "cwd": self._resolve_cwd(agent_id),
-            "env": env,
-            "preexec_fn": kwargs.get("preexec_fn"),
-        }
+    def _cli_model(self, agent_id):
+        return _resolve_opencode_model(self._get_llm_config(agent_id))
 
     def _build_command(self, prompt, stream, system_prompt, agent_id, task_id, permissions):
         llm_config = self._get_llm_config(agent_id)

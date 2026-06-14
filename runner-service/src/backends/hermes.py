@@ -31,9 +31,8 @@ import os
 from typing import Optional
 
 from config import logger
-from agent_user import ensure_agent_user, _agent_users
+from agent_user import resolve_agent_home
 from .cli_backend import CliBackend
-from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_mcp_config import configure_hermes_mcp, configure_hermes_local_providers
 from .runner_instructions_config import configure_hermes_instructions
 from .runner_config_store import fetch_runner_config, save_runner_config
@@ -41,18 +40,6 @@ from .runner_config_store import fetch_runner_config, save_runner_config
 # Files under ~/.hermes that the user configures (via `hermes setup` or by
 # editing) and that we persist/restore across stateless restarts.
 _HERMES_PERSISTED_FILES = ("config.yaml", ".env")
-
-
-def _hermes_home(agent_user: Optional[dict], agent_id: Optional[str]):
-    """Resolve agent HOME + uid/gid for ~/.hermes files, falling back to the
-    agent-user cache when running as root (effective_user=None)."""
-    home_user = agent_user
-    if (not home_user or not home_user.get("home")) and agent_id:
-        home_user = _agent_users.get(agent_id)
-    home = (home_user or {}).get("home")
-    uid = (home_user or {}).get("uid")
-    gid = (home_user or {}).get("gid", uid)
-    return home, uid, gid
 
 
 def _hermes_config_paths(home: str) -> list:
@@ -84,7 +71,7 @@ class HermesBackend(CliBackend):
         files = fetch_runner_config("hermes", agent_id)
         if not files:
             return
-        home, uid, gid = _hermes_home(agent_user, agent_id)
+        home, uid, gid = resolve_agent_home(agent_user, agent_id)
         if not home:
             return
         cfg_dir = os.path.join(home, ".hermes")
@@ -158,40 +145,30 @@ class HermesBackend(CliBackend):
             args.append("--yolo")
         return args
 
-    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
-        """Spawn Hermes in its interactive chat mode for the shared PTY."""
-        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        permissions = self._get_permissions(agent_id)
-        # _configure_mcp restores the persisted ~/.hermes config before merging
-        # its MCP wiring on top of the user's setup. Off-loop: both steps do
-        # blocking team-api fetches.
-        await run_blocking(self._configure_mcp, effective_user, agent_id)
-        await run_blocking(self._configure_instructions, effective_user, agent_id)
+    # ── Interactive terminal hooks (see CliBackend.prepare_interactive) ──
 
-        cmd = [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
+    # Hermes' model is fully terminal-driven by design (see module docstring):
+    # no --model argv, so the model-wiring verify log would warn misleadingly.
+    verify_model_on_spawn = False
 
-        env = await run_blocking(self._agent_env, effective_user, agent_id)
+    def _interactive_cmd(self, agent_id, permissions):
+        return [self.cli_command, "chat"] + self._common_chat_args(agent_id, permissions)
 
+    def _interactive_extras(self, agent_id, owner_id, agent_user, effective_user) -> dict:
         # Live-sync: persist ~/.hermes/{config.yaml,.env} to team-api whenever
         # the user runs `hermes setup` / edits config inside the terminal, so it
         # survives the next stateless restart (see PtySession files watcher).
-        home, _, _ = _hermes_home(effective_user, agent_id)
+        home, _, _ = resolve_agent_home(effective_user, agent_id)
         watch_paths = _hermes_config_paths(home) if home else None
         captured_agent_id = agent_id
 
         def _persist_hermes_config(files: dict) -> None:
-            # Raise on failure so PtySession._maybe_sync_files does NOT advance
+            # Raise on failure so PtySession's files watcher does NOT advance
             # its signature and retries the sync on the next poll tick.
             if not save_runner_config("hermes", captured_agent_id, files):
                 raise RuntimeError(f"save_runner_config failed for agent {captured_agent_id}")
 
-        kwargs = get_subprocess_kwargs(effective_user) or {}
         return {
-            "cmd": cmd,
-            "cwd": self._resolve_cwd(agent_id),
-            "env": env,
-            "preexec_fn": kwargs.get("preexec_fn"),
             "files_watch_paths": watch_paths if agent_id else None,
             "files_on_change": _persist_hermes_config if (watch_paths and agent_id) else None,
         }

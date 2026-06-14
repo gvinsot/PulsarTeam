@@ -1,6 +1,6 @@
 import express from 'express';
 import {
-  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken,
+  storeOAuthToken, getOAuthToken, deleteOAuthToken,
 } from '../services/database.js';
 import type { ScopeType } from '../services/database.js';
 
@@ -34,16 +34,6 @@ function normaliseSiteUrl(input: string): string {
   if (!url) return '';
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
   return url.replace(/\/+$/, '');
-}
-
-export function hasWordPressCredentialsForAgent(agentId: string): boolean {
-  if (!agentId) return false;
-  return hasOAuthToken('wordpress', 'agent', agentId);
-}
-
-export function hasWordPressCredentialsForBoard(boardId: string): boolean {
-  if (!boardId) return false;
-  return hasOAuthToken('wordpress', 'board', boardId);
 }
 
 export function getWordPressCredentialsForAgent(

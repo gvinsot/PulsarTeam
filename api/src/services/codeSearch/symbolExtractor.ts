@@ -222,6 +222,21 @@ function extractJavaScriptSymbols(lines, language) {
   const classSymbols = [];
   const symbols = [];
 
+  const pushSymbol = (index: number, name: string, kind: string, extra: { qualifiedName?: string; parentName?: string } = {}) => {
+    const startLine = index + 1;
+    const endLine = findBlockEndJs(lines, index);
+    symbols.push({
+      name,
+      qualifiedName: extra.qualifiedName ?? name,
+      kind,
+      signature: lines[index].trim(),
+      startLine,
+      endLine,
+      source: createSource(lines, startLine, endLine),
+      ...(extra.parentName ? { parentName: extra.parentName } : {}),
+    });
+  };
+
   const classRegex = /^\s*(?:export\s+default\s+|export\s+)?class\s+([A-Za-z_$][\w$]*)/;
   const functionRegex = /^\s*(?:export\s+default\s+|export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/;
   const arrowRegex = /^\s*(?:export\s+default\s+|export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/;
@@ -248,42 +263,18 @@ function extractJavaScriptSymbols(lines, language) {
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    const lineNumber = index + 1;
-    const classContext = findInnermostClass(classSymbols, lineNumber);
     let match = line.match(functionRegex);
 
     if (match) {
-      const startLine = lineNumber;
-      const endLine = findBlockEndJs(lines, index);
-      symbols.push({
-        name: match[1],
-        qualifiedName: match[1],
-        kind: 'function',
-        signature: line.trim(),
-        startLine,
-        endLine,
-        source: createSource(lines, startLine, endLine),
-      });
+      pushSymbol(index, match[1], 'function');
       continue;
     }
 
     match = line.match(arrowRegex) || line.match(functionExprRegex);
     if (match) {
-      const startLine = lineNumber;
-      const endLine = findBlockEndJs(lines, index);
-      symbols.push({
-        name: match[1],
-        qualifiedName: match[1],
-        kind: 'function',
-        signature: line.trim(),
-        startLine,
-        endLine,
-        source: createSource(lines, startLine, endLine),
-      });
+      pushSymbol(index, match[1], 'function');
       continue;
     }
-
-    if (!classContext) continue;
 
     match = line.match(methodRegex);
     if (!match) continue;
@@ -292,16 +283,11 @@ function extractJavaScriptSymbols(lines, language) {
     if (RESERVED_METHOD_NAMES.has(methodName)) continue;
     if (line.trim().startsWith('class ')) continue;
 
-    const startLine = lineNumber;
-    const endLine = findBlockEndJs(lines, index);
-    symbols.push({
-      name: methodName,
+    const classContext = findInnermostClass(classSymbols, index + 1);
+    if (!classContext) continue;
+
+    pushSymbol(index, methodName, 'method', {
       qualifiedName: `${classContext.name}.${methodName}`,
-      kind: 'method',
-      signature: line.trim(),
-      startLine,
-      endLine,
-      source: createSource(lines, startLine, endLine),
       parentName: classContext.name,
     });
   }
@@ -425,9 +411,7 @@ function extractGenericSymbols(lines, language) {
       if (!match) continue;
 
       const startLine = index + 1;
-      const endLine = language === 'python'
-        ? Math.min(lines.length, startLine + 20)
-        : findBlockEndJs(lines, index);
+      const endLine = findBlockEndJs(lines, index);
 
       const symbol: any = {
         name: match[1],
@@ -447,7 +431,7 @@ function extractGenericSymbols(lines, language) {
   return symbols;
 }
 
-export function detectLanguage(filePath) {
+function detectLanguage(filePath) {
   const extension = path.extname(filePath).toLowerCase();
   return LANGUAGE_BY_EXTENSION.get(extension) || 'text';
 }

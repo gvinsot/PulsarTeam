@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
 import { api } from '../../api';
-import { TASK_TYPES, RECURRENCE_PERIODS } from './taskConstants';
+import { TASK_TYPES, buildRecurrence } from './taskConstants';
+import RecurrenceFields from './RecurrenceFields';
+import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
 
 export default function CreateTaskModal({ agents, onClose, onCreated, statusOptions, defaultStatus, boardId, projectName, defaultRepoFullName = null, defaultStoragePath = null }) {
   // Allow all columns as creation statuses (don't exclude the last one —
@@ -25,18 +27,10 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
   const textareaRef = useRef(null);
 
   // Repos accessible via the board's GitHub plugin — task targets one of them
-  const [availableRepos, setAvailableRepos] = useState([]);
-  const [repoLoadError, setRepoLoadError] = useState(null);
+  const { repos: availableRepos, error: repoLoadError } = useBoardRepos(boardId);
   // Pre-fill with the last repo used on this board (passed from TasksBoard).
   const [repoFullName, setRepoFullName] = useState(defaultRepoFullName || '');
   const userTouchedRepo = useRef(false);
-  useEffect(() => {
-    if (!boardId) { setAvailableRepos([]); return; }
-    setRepoLoadError(null);
-    api.getBoardAvailableRepos(boardId)
-      .then(setAvailableRepos)
-      .catch(err => { setAvailableRepos([]); setRepoLoadError(err.message || 'Failed to load repos'); });
-  }, [boardId]);
   // If the user hasn't touched the picker, fall back to either the explicit
   // default or, when only one repo is available, that single repo.
   useEffect(() => {
@@ -49,17 +43,9 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
   }, [availableRepos, defaultRepoFullName, repoFullName]);
 
   // Storages accessible via the board's OneDrive plugin
-  const [availableStorages, setAvailableStorages] = useState([]);
-  const [storageLoadError, setStorageLoadError] = useState(null);
+  const { storages: availableStorages, error: storageLoadError } = useBoardStorages(boardId);
   const [storagePath, setStoragePath] = useState(defaultStoragePath || '');
   const userTouchedStorage = useRef(false);
-  useEffect(() => {
-    if (!boardId) { setAvailableStorages([]); return; }
-    setStorageLoadError(null);
-    api.getBoardAvailableStorages(boardId)
-      .then(setAvailableStorages)
-      .catch(err => { setAvailableStorages([]); setStorageLoadError(err.message || 'Failed to load storages'); });
-  }, [boardId]);
   // Once the OneDrive root list arrives, settle on the default if it's still listed,
   // otherwise on the only available folder (besides the root).
   useEffect(() => {
@@ -91,18 +77,23 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
     setSaving(true);
     setError(null);
     try {
-      const recurrence = recurring ? {
-        enabled: true,
-        period: recurrencePeriod,
-        intervalMinutes: recurrencePeriod === 'custom'
-          ? customInterval
-          : RECURRENCE_PERIODS.find(p => p.value === recurrencePeriod)?.minutes || 1440,
-        historyRetentionDays: historyRetentionDays > 0 ? historyRetentionDays : null,
-      } : undefined;
+      const recurrence = recurring
+        ? buildRecurrence(recurrencePeriod, customInterval, historyRetentionDays)
+        : undefined;
       const storageProvider = storagePath
         ? (availableStorages.find(s => s.path === storagePath)?.provider || 'onedrive')
         : 'onedrive';
-      const created = await api.addTask(defaultAgentId, trimmed, status, boardId, repoFullName || undefined, recurrence, taskType || undefined, isManual || undefined, 'github', storagePath || null, storageProvider);
+      const created = await api.addTask(defaultAgentId, trimmed, {
+        status,
+        boardId,
+        repoFullName: repoFullName || undefined,
+        repoProvider: 'github',
+        recurrence,
+        taskType: taskType || undefined,
+        isManual: isManual || undefined,
+        storagePath: storagePath || null,
+        storageProvider,
+      });
       // Pass the created task so the parent can optimistically insert it
       // before the next loadTasks() fetch (avoids the race where the DB
       // INSERT hasn't committed yet).
@@ -276,48 +267,15 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
               <span className="text-xs font-semibold text-dark-300 uppercase tracking-wide">Recurring task</span>
             </label>
             {recurring && (
-              <div className="mt-3 flex gap-3 items-end">
-                <div className="flex-1">
-                  <label className="block text-xs text-dark-400 mb-1">Period</label>
-                  <select
-                    value={recurrencePeriod}
-                    onChange={e => setRecurrencePeriod(e.target.value)}
-                    className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                  >
-                    {RECURRENCE_PERIODS.map(p => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
-                </div>
-                {recurrencePeriod === 'custom' && (
-                  <div className="w-32">
-                    <label className="block text-xs text-dark-400 mb-1">Minutes</label>
-                    <input
-                      type="number"
-                      min={1}
-                      value={customInterval}
-                      onChange={e => setCustomInterval(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            {recurring && (
-              <div className="mt-3">
-                <label className="block text-xs text-dark-400 mb-1">
-                  Purge history after (days)
-                  <span className="text-[10px] text-dark-500 ml-1">— 0 = keep everything</span>
-                </label>
-                <input
-                  type="number"
-                  min={0}
-                  max={3650}
-                  value={historyRetentionDays}
-                  onChange={e => setHistoryRetentionDays(Math.max(0, Math.min(3650, parseInt(e.target.value) || 0)))}
-                  className="w-32 px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                />
-              </div>
+              <RecurrenceFields
+                period={recurrencePeriod}
+                onPeriodChange={setRecurrencePeriod}
+                customInterval={customInterval}
+                onCustomIntervalChange={setCustomInterval}
+                retentionDays={historyRetentionDays}
+                onRetentionDaysChange={setHistoryRetentionDays}
+                rowClass="mt-3"
+              />
             )}
           </div>
 

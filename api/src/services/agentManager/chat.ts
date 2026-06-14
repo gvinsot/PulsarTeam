@@ -10,10 +10,6 @@ import { AgentManager } from './index.js';
 import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
 
 const MAX_DELEGATION_DEPTH = 5;
-// Hard cap on tool-result/nudge/ask continuation rounds within one user
-// message — prevents a model that re-calls tools every turn from recursing
-// (and billing) forever.
-const MAX_TOOL_ROUNDS = 50;
 
 /** @this {AgentManager} */
 export const chatMethods = {
@@ -42,141 +38,123 @@ export const chatMethods = {
 
     const agent = this.agents.get(id);
     if (!agent) {
-      this.abortControllers.delete(id);
       if (isTopLevel) this._chatLocks.delete(id);
       throw new Error('Agent not found');
     }
 
-    const messages: any[] = [];
-    let managesContext = false;
-    let isTaskExecution = false;
-    let activeTaskId: string | null = null;
+    this.setStatus(id, 'busy');
+    // Only reset thinking for top-level or delegation messages, NOT for
+    // recursive tool-result / nudge calls — those are continuations of the
+    // same thought process and resetting causes the frontend to flash and
+    // the LLM to lose its reasoning context.
+    if (!messageMeta || messageMeta.type === 'delegation-task') {
+      agent.currentThinking = '';
+    }
 
-    try {
-      this.setStatus(id, 'busy');
-      // Only reset thinking for top-level or delegation messages, NOT for
-      // recursive tool-result / nudge calls — those are continuations of the
-      // same thought process and resetting causes the frontend to flash and
-      // the LLM to lose its reasoning context.
-      if (!messageMeta || messageMeta.type === 'delegation-task') {
-        agent.currentThinking = '';
-      }
+    if (messageMeta?.type === 'delegation-task') {
+      agent.currentTask = (userMessage || '').replace(/^\[TASK from [^\]]+\]:\s*/i, '').slice(0, 200) || null;
+    } else if (delegationDepth === 0 && !messageMeta) {
+      agent.currentTask = (userMessage || '').slice(0, 200) || null;
+    }
+    this._emit('agent:status', { id, status: 'busy', project: agent.project || null, currentTask: agent.currentTask || null });
 
-      if (messageMeta?.type === 'delegation-task') {
-        agent.currentTask = (userMessage || '').replace(/^\[TASK from [^\]]+\]:\s*/i, '').slice(0, 200) || null;
-      } else if (delegationDepth === 0 && !messageMeta) {
-        agent.currentTask = (userMessage || '').slice(0, 200) || null;
-      }
-      this._emit('agent:status', { id, status: 'busy', project: agent.project || null, currentTask: agent.currentTask || null });
-
-      if (this.executionManager && agent.project) {
-        // Verify execution environment matches agent's assigned project
-        const envProject = this.executionManager.getProject(id);
-        if (envProject && envProject !== agent.project) {
-          console.warn(`⚠️  [Chat] Project mismatch detected for "${agent.name}": agent.project="${agent.project}" but execution env has "${envProject}". Re-syncing execution environment.`);
-          try {
-            const gitUrl = buildRepoCloneUrl(agent.project);
-            if (gitUrl) {
-              const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
-              await this.executionManager.switchProject(id, agent.project, gitUrl, gitCreds);
-            }
-          } catch (syncErr: any) {
-            console.error(`⚠️  [Chat] Failed to re-sync execution env for "${agent.name}": ${syncErr.message}`);
-          }
-        }
-
+    if (this.executionManager && agent.project) {
+      // Verify execution environment matches agent's assigned project
+      const envProject = this.executionManager.getProject(id);
+      if (envProject && envProject !== agent.project) {
+        console.warn(`⚠️  [Chat] Project mismatch detected for "${agent.name}": agent.project="${agent.project}" but execution env has "${envProject}". Re-syncing execution environment.`);
         try {
-          // Bind agent to the correct execution provider based on runner field or LLM config
-          const earlyLlm = this.resolveLlmConfig(agent);
-          const providerType = agent.runner || (earlyLlm.managesContext ? 'claudecode' : 'sandbox');
-          const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
-          // Only forward the LLM config when the agent actually has one
-          // assigned. With llmConfigId="" ("Default LLM") the runner is
-          // expected to fall back to its built-in credentials.
-          const llmConfigForRunner = agent.llmConfigId ? earlyLlm : null;
-          this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
-
           const gitUrl = buildRepoCloneUrl(agent.project);
           if (gitUrl) {
-            // ensureProject must run on every chat — not just when the API-side
-            // file tree is empty. If the runner-service container was restarted
-            // while the API kept its file-tree cache, the runner has lost its
-            // in-memory `_agent_projects` mapping and would otherwise fall back
-            // to cwd=/app instead of the agent's configured repo. The provider
-            // applies a 60s TTL internally so this stays cheap.
-            await this.executionManager.ensureProject(id, agent.project, gitUrl, gitCreds);
-            if (!this.executionManager.getFileTree(id)) {
-              // Only refresh if the background generation hasn't completed yet
-              await this.executionManager.refreshFileTree(id);
-            }
-          } else if (gitCreds?.token && this.executionManager.installGitCredentials) {
-            // No project → no ensureProject call would carry the token. Ship
-            // it explicitly so ~/.git-credentials and GITHUB_TOKEN are wired
-            // up for any tooling the LLM spawns.
-            await this.executionManager.installGitCredentials(id, gitCreds);
+            const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
+            await this.executionManager.switchProject(id, agent.project, gitUrl, gitCreds);
           }
-        } catch (err: any) {
-          console.warn(`⚠️  [Execution] Early init for file tree failed: ${err.message}`);
+        } catch (syncErr: any) {
+          console.error(`⚠️  [Chat] Failed to re-sync execution env for "${agent.name}": ${syncErr.message}`);
         }
       }
 
-      let systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
-      // Workflow execute mode hint: kept out of the user-facing prompt so it
-      // doesn't appear as if it were part of the task description. It rides
-      // along on the system message for this single LLM call only and is never
-      // persisted to conversation history.
-      if (messageMeta?.type === 'workflow-action' && messageMeta?.mode === 'execute') {
-        systemContent += '\n\n--- Task Execution Note ---\nWhen starting a new task, begin by exploring the project structure to orient yourself before making changes.';
-      }
-      messages.push({ role: 'system', content: systemContent });
+      try {
+        // Bind agent to the correct execution provider based on runner field or LLM config
+        const earlyLlm = this.resolveLlmConfig(agent);
+        const providerType = agent.runner || (earlyLlm.managesContext ? 'claudecode' : 'sandbox');
+        const gitCreds = await getGitHubCredentialsForAgent(id, agent.boardId || null);
+        // Only forward the LLM config when the agent actually has one
+        // assigned. With llmConfigId="" ("Default LLM") the runner is
+        // expected to fall back to its built-in credentials.
+        const llmConfigForRunner = agent.llmConfigId ? earlyLlm : null;
+        this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
 
-      ({ managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(agent, messages, systemContent, userMessage, delegationDepth, messageMeta, streamCallback, images));
-
-      const historyEntry: any = {
-        role: 'user',
-        content: userMessage,
-        timestamp: new Date().toISOString()
-      };
-      if (messageMeta) {
-        historyEntry.type = messageMeta.type;
-        if (messageMeta.toolResults) historyEntry.toolResults = messageMeta.toolResults;
-        if (messageMeta.fromAgent) historyEntry.fromAgent = messageMeta.fromAgent;
-      }
-      // Store lightweight image metadata in history (thumbnails for display).
-      // Full base64 data is only used for the current LLM call, not persisted.
-      if (images && images.length > 0) {
-        historyEntry.images = images.map((img: any) => ({
-          mediaType: img.mediaType,
-          data: img.data, // kept for display in chat UI — images are typically small (< 1MB)
-        }));
-      }
-      agent.conversationHistory.push(historyEntry);
-
-      // Persist the user message immediately. Without this, a crash, restart,
-      // or any unhandled error before the LLM stream completes (which can take
-      // minutes) would lose the message — the user sees their message disappear
-      // on the next agent:updated refresh because it never made it to the DB.
-      // Only persist for actual user input or delegation tasks; intermediate
-      // tool-result/nudge/ask-result messages aren't worth a synchronous write.
-      if (isTopLevel || messageMeta?.type === 'delegation-task') {
-        try {
-          await saveAgent(agent);
-        } catch (persistErr: any) {
-          console.warn(`⚠️  [Chat] Early persist of user message failed for "${agent.name}": ${persistErr.message}`);
+        const gitUrl = buildRepoCloneUrl(agent.project);
+        if (gitUrl) {
+          // ensureProject must run on every chat — not just when the API-side
+          // file tree is empty. If the runner-service container was restarted
+          // while the API kept its file-tree cache, the runner has lost its
+          // in-memory `_agent_projects` mapping and would otherwise fall back
+          // to cwd=/app instead of the agent's configured repo. The provider
+          // applies a 60s TTL internally so this stays cheap.
+          await this.executionManager.ensureProject(id, agent.project, gitUrl, gitCreds);
+          if (!this.executionManager.getFileTree(id)) {
+            // Only refresh if the background generation hasn't completed yet
+            await this.executionManager.refreshFileTree(id);
+          }
+        } else if (gitCreds?.token && this.executionManager.installGitCredentials) {
+          // No project → no ensureProject call would carry the token. Ship
+          // it explicitly so ~/.git-credentials and GITHUB_TOKEN are wired
+          // up for any tooling the LLM spawns.
+          await this.executionManager.installGitCredentials(id, gitCreds);
         }
+      } catch (err: any) {
+        console.warn(`⚠️  [Execution] Early init for file tree failed: ${err.message}`);
       }
-    } catch (err: any) {
-      // Pre-stream failure (system prompt build, message assembly, …) —
-      // release the chat lock and abort controller before surfacing the
-      // error, otherwise the agent stays 'busy' with the lock held forever.
-      this.abortControllers.delete(id);
-      agent.metrics.errors += 1;
-      agent.currentThinking = '';
-      this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
-      this.setStatus(id, 'error', err.message);
-      saveAgent(agent);
-      if (isTopLevel) this._chatLocks.delete(id);
-      throw err;
+    }
+
+    const messages: any[] = [];
+    let systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
+    // Workflow execute mode hint: kept out of the user-facing prompt so it
+    // doesn't appear as if it were part of the task description. It rides
+    // along on the system message for this single LLM call only and is never
+    // persisted to conversation history.
+    if (messageMeta?.type === 'workflow-action' && messageMeta?.mode === 'execute') {
+      systemContent += '\n\n--- Task Execution Note ---\nWhen starting a new task, begin by exploring the project structure to orient yourself before making changes.';
+    }
+    messages.push({ role: 'system', content: systemContent });
+
+    const { managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(agent, messages, systemContent, userMessage, delegationDepth, messageMeta, streamCallback, images);
+
+    const historyEntry: any = {
+      role: 'user',
+      content: userMessage,
+      timestamp: new Date().toISOString()
+    };
+    if (messageMeta) {
+      historyEntry.type = messageMeta.type;
+      if (messageMeta.toolResults) historyEntry.toolResults = messageMeta.toolResults;
+      if (messageMeta.delegationResults) historyEntry.delegationResults = messageMeta.delegationResults;
+      if (messageMeta.fromAgent) historyEntry.fromAgent = messageMeta.fromAgent;
+    }
+    // Store lightweight image metadata in history (thumbnails for display).
+    // Full base64 data is only used for the current LLM call, not persisted.
+    if (images && images.length > 0) {
+      historyEntry.images = images.map((img: any) => ({
+        mediaType: img.mediaType,
+        data: img.data, // kept for display in chat UI — images are typically small (< 1MB)
+      }));
+    }
+    agent.conversationHistory.push(historyEntry);
+
+    // Persist the user message immediately. Without this, a crash, restart,
+    // or any unhandled error before the LLM stream completes (which can take
+    // minutes) would lose the message — the user sees their message disappear
+    // on the next agent:updated refresh because it never made it to the DB.
+    // Only persist for actual user input or delegation tasks; intermediate
+    // tool-result/nudge/ask-result messages aren't worth a synchronous write.
+    if (isTopLevel || messageMeta?.type === 'delegation-task') {
+      try {
+        await saveAgent(agent);
+      } catch (persistErr: any) {
+        console.warn(`⚠️  [Chat] Early persist of user message failed for "${agent.name}": ${persistErr.message}`);
+      }
     }
 
     let fullResponse = '';
@@ -254,9 +232,7 @@ export const chatMethods = {
       const actionResult = await this._processPostResponseActions(agent, id, responseForParsing, fullResponse, streamCallback, delegationDepth, messageMeta);
       if (actionResult.earlyReturn !== null) {
         this.setStatus(id, 'idle');
-        this.abortControllers.delete(id);
-        if (isTopLevel) this._chatLocks.delete(id);
-        return actionResult.earlyReturn ?? fullResponse;
+        return actionResult.earlyReturn;
       }
 
       this.setStatus(id, 'idle');
@@ -303,7 +279,7 @@ export const chatMethods = {
           await this._compactHistory(agent, reactiveKeep);
           agent._compactionArmed = false;
           agent.conversationHistory.pop();
-          const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta, images);
+          const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta);
           delete agent._compactionRetried;
           return retryResult;
         } catch (retryErr: any) {
@@ -338,7 +314,7 @@ export const chatMethods = {
         agent.conversationHistory.pop();
         if (isTopLevel) this._chatLocks.delete(id);
         try {
-          const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta, images);
+          const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta);
           delete agent._streamRetryCount;
           return retryResult;
         } catch (retryErr: any) {
@@ -599,8 +575,7 @@ export const chatMethods = {
     systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
     systemContent += `\n\nIMPORTANT CONTINUATION RULE: When you receive a message starting with "[TOOL RESULTS", these are the results of tools YOU previously called. Do NOT restart your reasoning from scratch. Do NOT re-call the same tools. Analyze the results and proceed to the NEXT step of your plan.`;
 
-    const resolvedLlm = this.resolveLlmConfig(agent);
-    if (resolvedLlm.provider === 'ollama') {
+    if (agent.provider === 'ollama') {
       systemContent += `\n\nCRITICAL: You must NEVER use built-in function calls or native tool calls (such as repo_browser, code_sandbox, or any tool_call syntax). Always respond in plain text only. When you need to interact with code, use ONLY the @read_file, @write_file, @list_dir, @search_files, @run_command text commands described above.`;
     }
 
@@ -615,7 +590,7 @@ export const chatMethods = {
     if (systemContent.includes('Current Task List')) sections.push('tasks');
     if (systemContent.includes('PROJECT CONTEXT'))   sections.push('project');
     if (systemContent.includes('Swarm Agents'))      sections.push('swarm');
-    console.log(`📋 [System Prompt] Agent "${agent.name}" (${resolvedLlm.provider}/${resolvedLlm.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`);
+    console.log(`📋 [System Prompt] Agent "${agent.name}" (${agent.provider}/${agent.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`);
 
     return systemContent;
   },
@@ -1128,12 +1103,6 @@ export const chatMethods = {
         if (hasTerminal || nonTerminal.length === 0) {
           return {};
         }
-        const toolRound = (messageMeta?.toolRound || 0) + 1;
-        if (toolRound > MAX_TOOL_ROUNDS) {
-          console.warn(`⚠️  [Tools] Agent "${agent.name}": tool continuation cap reached (${MAX_TOOL_ROUNDS} rounds) — stopping recursion`);
-          this.addActionLog(id, 'warning', `Tool continuation limit reached (${MAX_TOOL_ROUNDS} rounds) — stopping without further tool execution`);
-          return { earlyReturn: fullResponse };
-        }
         const resultsSummary = nonTerminal.map((r: any) => {
           if (r.isErrorReport) {
             return `--- ⚠️ ERROR REPORT ---\n${r.args[0] || r.result}`;
@@ -1171,7 +1140,7 @@ export const chatMethods = {
           `[TOOL RESULTS — DO NOT RESTART YOUR REASONING]\n${resultsSummary}\n\n${continuationPrompt}`,
           streamCallback,
           delegationDepth,
-          { type: 'tool-result', toolRound, toolResults: nonTerminal.map((r: any) => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false, images: r.images || undefined })) },
+          { type: 'tool-result', toolResults: nonTerminal.map((r: any) => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false, images: r.images || undefined })) },
           toolImages.length > 0 ? toolImages : null
         );
         return { earlyReturn: continuedResponse };
@@ -1189,7 +1158,7 @@ export const chatMethods = {
             nudgeMessage,
             streamCallback,
             delegationDepth,
-            { type: 'nudge', toolRound: (messageMeta?.toolRound || 0) + 1 }
+            { type: 'nudge' }
           );
           return { earlyReturn: nudgeResponse };
         }
@@ -1266,7 +1235,7 @@ export const chatMethods = {
             `[ASK RESULTS]\n${answersSummary}\n\nContinue with your task based on these answers.`,
             streamCallback,
             delegationDepth,
-            { type: 'ask-result', toolRound: (messageMeta?.toolRound || 0) + 1, askResults: askResults.map(r => ({ agentName: r.agentName, answer: r.answer, error: r.error })) }
+            { type: 'ask-result', askResults: askResults.map(r => ({ agentName: r.agentName, answer: r.answer, error: r.error })) }
           );
           return { earlyReturn: continuedResponse };
         }

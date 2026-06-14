@@ -1,23 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { z } from 'zod';
 import { getGmailAccessTokenForAgent } from '../routes/gmail.js';
-
-/**
- * Minimal interface for the runner-service bridge used to read attachment
- * files from an agent's container when the file is not present on the API
- * container filesystem (which is the common case — agents live in separate
- * containers with their own volumes).
- */
-type RunnerExecBridge = {
-  exec: (
-    agentId: string,
-    command: string,
-    options?: { cwd?: string; timeout?: number; maxOutput?: number },
-  ) => Promise<{ stdout: string; stderr: string }>;
-};
+import {
+  buildAttachmentsSchema,
+  resolveAttachmentInput,
+  type AttachmentInput,
+  type RunnerExecBridge,
+} from './mcpAttachments.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch } from './providerFetch.js';
 
 const GMAIL_BASE = 'https://www.googleapis.com/gmail/v1';
 
@@ -26,84 +17,22 @@ const GMAIL_BASE = 'https://www.googleapis.com/gmail/v1';
 // and base64 overhead (~33%).
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
-/**
- * Minimal extension → MIME type map for common attachment types.
- * Falls back to application/octet-stream when unknown.
- */
-const MIME_BY_EXT: Record<string, string> = {
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.csv': 'text/csv',
-  '.tsv': 'text/tab-separated-values',
-  '.json': 'application/json',
-  '.xml': 'application/xml',
-  '.html': 'text/html',
-  '.htm': 'text/html',
-  '.pdf': 'application/pdf',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp',
-  '.tiff': 'image/tiff',
-  '.zip': 'application/zip',
-  '.gz': 'application/gzip',
-  '.tar': 'application/x-tar',
-  '.7z': 'application/x-7z-compressed',
-  '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xls': 'application/vnd.ms-excel',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.ppt': 'application/vnd.ms-powerpoint',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.odt': 'application/vnd.oasis.opendocument.text',
-  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
-  '.odp': 'application/vnd.oasis.opendocument.presentation',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.ics': 'text/calendar',
-};
-
-function guessMimeType(filename: string): string {
-  const ext = path.extname(filename).toLowerCase();
-  return MIME_BY_EXT[ext] || 'application/octet-stream';
-}
+// A 20 MB binary attachment expands to ~27 MB once base64-encoded; request
+// the server-side hard cap (32 MiB) so the runner does not silently truncate
+// the output.
+const RUNNER_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
 /**
  * Helper to call Gmail API with auto-refreshing tokens.
  * Uses agent-specific tokens when agentId is provided.
  */
-async function gmailFetch(path: string, agentId: string | null = null, boardId: string | null = null, options: Record<string, any> = {}) {
-  const token = await getGmailAccessTokenForAgent(agentId, boardId);
-  const url = path.startsWith('http') ? path : `${GMAIL_BASE}${path}`;
-
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(60_000),
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Gmail API error ${res.status}: ${text}`);
-  }
-
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
-  }
-  return res.text();
-}
+const gmailFetch = createProviderFetch({
+  errorLabel: 'Gmail API error',
+  getAuth: async (agentId, boardId) => ({
+    authorization: `Bearer ${await getGmailAccessTokenForAgent(agentId, boardId)}`,
+    base: GMAIL_BASE,
+  }),
+});
 
 /**
  * Decode base64url encoded content (used by Gmail API).
@@ -203,6 +132,34 @@ function formatMessage(msg) {
 }
 
 /**
+ * Fetch per-message metadata for a message list and format the numbered
+ * summary block shared by list_emails and search_emails. Output is
+ * byte-identical between the two: with withStar=false the star slot renders
+ * as an empty string.
+ */
+async function fetchMessageSummaries(
+  messages: { id: string }[],
+  limit: number,
+  agentId: string | null,
+  boardId: string | null,
+  { withStar = false } = {},
+): Promise<string> {
+  // Fetch details for each message (headers + snippet)
+  const details = await Promise.all(
+    messages.slice(0, limit).map(m =>
+      gmailFetch(`/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`, agentId, boardId)
+    )
+  );
+
+  const formatted = details.map(formatMessage);
+  return formatted.map((m, i) => {
+    const unread = m.isUnread ? '📩' : '📧';
+    const star = withStar && m.isStarred ? '⭐' : '';
+    return `${i + 1}. ${unread}${star} ${m.subject}\n   From: ${m.from}\n   Date: ${m.date}\n   ${m.snippet}\n   ID: ${m.id}`;
+  }).join('\n\n');
+}
+
+/**
  * Attachment shape accepted by buildRawEmail (after resolution).
  * `content` is base64-encoded (standard base64, not base64url).
  */
@@ -213,180 +170,27 @@ type EmailAttachment = {
 };
 
 /**
- * Attachment shape accepted by the MCP tools (before resolution).
- * Either `path` (file on disk, read by the MCP) or `content` (pre-encoded
- * base64) must be provided.
- */
-type AttachmentInput = {
-  path?: string;
-  filename?: string;
-  mimeType?: string;
-  content?: string;
-};
-
-/** Shell-quote a string for safe inclusion in a bash command. */
-function shQuote(value: string): string {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * Read a file from the agent's runner-service container via /exec-shell.
- *
- * The Gmail MCP runs in the API container, so file paths supplied by an
- * agent (which live in a separate runner container with its own volumes
- * and per-agent UID isolation) are not accessible via local fs. We delegate
- * the read to the runner-service, which executes under the agent's UID and
- * therefore enforces cross-agent isolation automatically.
- */
-async function readAttachmentViaRunner(
-  bridge: RunnerExecBridge,
-  agentId: string,
-  filePath: string,
-): Promise<Buffer> {
-  // Probe size and file type first so we can fail fast with a useful message
-  // before transferring potentially large base64 payloads.
-  const probe = await bridge.exec(
-    agentId,
-    `if [ ! -e ${shQuote(filePath)} ]; then echo "MISSING"; elif [ ! -f ${shQuote(filePath)} ]; then echo "NOT_A_FILE"; elif [ ! -r ${shQuote(filePath)} ]; then echo "UNREADABLE"; else stat -c %s ${shQuote(filePath)}; fi`,
-    { timeout: 10000 },
-  );
-  const probeOut = (probe.stdout || '').trim();
-  if (probeOut === 'MISSING') {
-    throw new Error(`Cannot read attachment "${filePath}": file not found in agent workspace`);
-  }
-  if (probeOut === 'NOT_A_FILE') {
-    throw new Error(`Attachment path "${filePath}" is not a regular file`);
-  }
-  if (probeOut === 'UNREADABLE') {
-    throw new Error(`Cannot read attachment "${filePath}": permission denied (cross-agent access is blocked)`);
-  }
-  const size = parseInt(probeOut, 10);
-  if (!Number.isFinite(size) || size < 0) {
-    throw new Error(`Cannot stat attachment "${filePath}" via runner: ${probe.stderr || probeOut || 'unknown error'}`);
-  }
-  if (size > MAX_ATTACHMENT_BYTES) {
-    throw new Error(
-      `Attachment "${filePath}" is ${(size / 1024 / 1024).toFixed(1)} MB, ` +
-      `which exceeds the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB limit.`
-    );
-  }
-
-  // A 20 MB binary attachment expands to ~27 MB once base64-encoded; request
-  // the server-side hard cap (32 MiB) so the runner does not silently truncate
-  // the output. The previous default of 10 000 chars caused attachments to be
-  // cut to ~7.3 KB after decoding.
-  const res = await bridge.exec(
-    agentId,
-    `base64 -w0 ${shQuote(filePath)}`,
-    { timeout: 120000, maxOutput: 32 * 1024 * 1024 },
-  );
-  const b64 = (res.stdout || '').replace(/\s+/g, '');
-  if (!b64) {
-    throw new Error(`Empty content reading "${filePath}" via runner: ${res.stderr || 'no output'}`);
-  }
-  const buf = Buffer.from(b64, 'base64');
-  // Defence-in-depth: if the runner output were ever truncated again, the
-  // decoded size would no longer match the size we probed via stat. Surface
-  // that as a hard error rather than silently sending a corrupted attachment.
-  if (buf.length !== size) {
-    throw new Error(
-      `Attachment "${filePath}" was truncated during transfer ` +
-      `(expected ${size} bytes, got ${buf.length}).`,
-    );
-  }
-  return buf;
-}
-
-/**
  * Resolve a user-provided attachment input into the form expected by
- * buildRawEmail: read from disk when `path` is supplied, infer filename and
- * MIME type from the path when not explicitly provided, and validate size.
+ * buildRawEmail (shared two-tier local-fs-then-runner read).
  *
- * Reads happen in two tiers:
- *   1. Try the API container's local filesystem (legacy / dev convenience).
- *   2. If the file isn't on the API container (ENOENT/EACCES) and an agent
- *      context is available, fall back to reading via the agent's runner
- *      container. This is the normal path in production: agent workspaces
- *      live in the runner-service container, not in the API container.
+ * The "content" branch payload is passed through raw — buildRawEmail
+ * normalizes and validates the base64 (legacy behaviour).
  */
 async function resolveAttachment(
   att: AttachmentInput,
   agentId: string | null = null,
   runnerBridge: RunnerExecBridge | null = null,
 ): Promise<EmailAttachment> {
-  if (!att || (typeof att !== 'object')) {
-    throw new Error('Each attachment must be an object.');
-  }
-
-  const hasPath = typeof att.path === 'string' && att.path.length > 0;
-  const hasContent = typeof att.content === 'string' && att.content.length > 0;
-
-  if (hasPath && hasContent) {
-    throw new Error('Provide either "path" or "content" for an attachment, not both.');
-  }
-  if (!hasPath && !hasContent) {
-    throw new Error('Each attachment must specify "path" (file on disk) or "content" (base64).');
-  }
-
-  if (hasPath) {
-    const userPath = att.path!;
-    let buf: Buffer | null = null;
-    let localErr: any = null;
-
-    // Tier 1: try local filesystem on the API container.
-    try {
-      const absPath = path.resolve(userPath);
-      const stat = await fs.stat(absPath);
-      if (!stat.isFile()) {
-        throw new Error(`Attachment path "${userPath}" is not a regular file.`);
-      }
-      if (stat.size > MAX_ATTACHMENT_BYTES) {
-        throw new Error(
-          `Attachment "${userPath}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, ` +
-          `which exceeds the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB limit.`
-        );
-      }
-      buf = await fs.readFile(absPath);
-    } catch (err: any) {
-      localErr = err;
-    }
-
-    // Tier 2: fall back to the agent's runner container if the file isn't on
-    // the API container's filesystem. Most agent-supplied paths land here.
-    if (!buf) {
-      const shouldFallback =
-        agentId &&
-        runnerBridge &&
-        localErr &&
-        (localErr.code === 'ENOENT' || localErr.code === 'EACCES' || localErr.code === 'EPERM');
-      if (shouldFallback) {
-        try {
-          buf = await readAttachmentViaRunner(runnerBridge!, agentId!, userPath);
-        } catch (runnerErr: any) {
-          throw new Error(`Cannot read attachment "${userPath}": ${runnerErr.message}`);
-        }
-      } else if (localErr) {
-        throw new Error(`Cannot read attachment "${userPath}": ${localErr.message}`);
-      }
-    }
-
-    const filename = att.filename || path.basename(userPath);
-    const mimeType = att.mimeType || guessMimeType(filename);
-    return {
-      filename,
-      mimeType,
-      content: buf!.toString('base64'),
-    };
-  }
-
-  // hasContent: legacy path — caller already supplied base64.
-  if (!att.filename) {
-    throw new Error('Attachment supplied via "content" must also include "filename".');
-  }
+  const resolved = await resolveAttachmentInput(att, {
+    agentId,
+    runnerBridge,
+    maxBytes: MAX_ATTACHMENT_BYTES,
+    maxOutput: RUNNER_MAX_OUTPUT_BYTES,
+  });
   return {
-    filename: att.filename,
-    mimeType: att.mimeType || guessMimeType(att.filename),
-    content: att.content!,
+    filename: resolved.filename,
+    mimeType: resolved.mimeType,
+    content: resolved.contentBase64,
   };
 }
 
@@ -499,28 +303,7 @@ function buildRawEmail({
   return encodeBase64Url(headers.join('\r\n') + '\r\n' + parts.join('\r\n') + '\r\n');
 }
 
-/**
- * Zod schema for the `attachments` tool parameter.
- *
- * Each attachment is specified EITHER by:
- *   - `path`: absolute or relative path to a file on the server's disk
- *     (the MCP reads and base64-encodes it itself), OR
- *   - `content`: pre-encoded base64 string (legacy form; requires `filename`).
- *
- * When `path` is provided, `filename` defaults to the file's basename and
- * `mimeType` is auto-detected from the extension.
- */
-const attachmentsSchema = z
-  .array(
-    z.object({
-      path: z.string().optional().describe('Path to the file on the server filesystem. The MCP reads the file and base64-encodes it. Recommended way to attach files.'),
-      filename: z.string().optional().describe('Display filename for the attachment, including extension. Defaults to the basename of "path" when not provided.'),
-      mimeType: z.string().optional().describe('MIME type (e.g. "application/pdf"). Auto-detected from the extension when not provided.'),
-      content: z.string().optional().describe('Optional base64-encoded content (alternative to "path"). Requires "filename".'),
-    })
-  )
-  .optional()
-  .describe('Optional list of file attachments. Specify each via "path" (preferred — file is read from disk) or pre-encoded "content".');
+const attachmentsSchema = buildAttachmentsSchema();
 
 /**
  * Create the Gmail MCP server with all tools registered.
@@ -588,19 +371,7 @@ export function createGmailMcpServer(
         return { content: [{ type: 'text', text: 'No emails found matching the criteria.' }] };
       }
 
-      // Fetch details for each message (headers + snippet)
-      const details = await Promise.all(
-        messages.slice(0, limit).map(m =>
-          gmailFetch(`/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`, agentId, boardId)
-        )
-      );
-
-      const formatted = details.map(formatMessage);
-      const summary = formatted.map((m, i) => {
-        const unread = m.isUnread ? '📩' : '📧';
-        const star = m.isStarred ? '⭐' : '';
-        return `${i + 1}. ${unread}${star} ${m.subject}\n   From: ${m.from}\n   Date: ${m.date}\n   ${m.snippet}\n   ID: ${m.id}`;
-      }).join('\n\n');
+      const summary = await fetchMessageSummaries(messages, limit, agentId, boardId, { withStar: true });
 
       return {
         content: [{
@@ -633,17 +404,7 @@ export function createGmailMcpServer(
         return { content: [{ type: 'text', text: `No emails found for query: "${query}"` }] };
       }
 
-      const details = await Promise.all(
-        messages.slice(0, limit).map(m =>
-          gmailFetch(`/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`, agentId, boardId)
-        )
-      );
-
-      const formatted = details.map(formatMessage);
-      const summary = formatted.map((m, i) => {
-        const unread = m.isUnread ? '📩' : '📧';
-        return `${i + 1}. ${unread} ${m.subject}\n   From: ${m.from}\n   Date: ${m.date}\n   ${m.snippet}\n   ID: ${m.id}`;
-      }).join('\n\n');
+      const summary = await fetchMessageSummaries(messages, limit, agentId, boardId);
 
       return {
         content: [{
@@ -1001,25 +762,6 @@ export function createGmailMcpServer(
  *   attached (which is rarely useful in production).
  */
 export function createGmailMcpHandler(runnerBridge: RunnerExecBridge | null = null) {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      // Read agent context from custom header (set by MCPManager for per-agent calls)
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createGmailMcpServer(agentId, boardId, runnerBridge);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[Gmail MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Gmail', ({ agentId, boardId }) =>
+    createGmailMcpServer(agentId, boardId, runnerBridge));
 }

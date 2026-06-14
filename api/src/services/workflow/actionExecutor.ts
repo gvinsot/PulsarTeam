@@ -10,21 +10,13 @@
  */
 
 import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
-import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, refreshLock, markAgentBusy, clearAgentBusy, touchAgentBusy } from './agentSelector.js';
+import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import { saveTaskToDb, updateTaskExecutionStatus } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 
-const CLI_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
-
-// Heartbeat for the execution lock + busy flag while a run_agent action is in
-// flight. Long CLI/coding runs routinely exceed the 15-min stale-lock TTL in
-// agentSelector; without refreshing, the lock gets evicted mid-run and a
-// second agent can start executing the SAME task. The hard cap lets the TTL
-// eventually reclaim a truly wedged invocation (a never-settling await).
-const LOCK_HEARTBEAT_INTERVAL_MS = 60 * 1000;
-const LOCK_HEARTBEAT_MAX_MS = 6 * 60 * 60 * 1000;
+const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
 
 function isCliRunner(agent) {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
@@ -351,8 +343,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   const columns = workflow?.columns || [];
 
   const lockKey = `${task.agentId}:${task.id}:${mode}`;
-  const lockToken = acquireLock(lockKey);
-  if (!lockToken) {
+  if (!acquireLock(lockKey)) {
     console.log(`[ActionExecutor] run_agent: lock held for "${task.text?.slice(0, 60)}" — skipping`);
     return { executed: false, skipped: true, reason: 'lock-held' };
   }
@@ -370,24 +361,11 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
 
   if (!agent) {
     console.log(`[ActionExecutor] run_agent: no idle agent for role "${role}" — task stays pending`);
-    releaseLock(lockKey, lockToken);
+    releaseLock(lockKey);
     return { executed: false, skipped: true, reason: 'no-idle-agent' };
   }
 
   markAgentBusy(agent.id);
-
-  // Keep the lock + busy flag fresh for the whole action (project switch,
-  // initial sendMessage streaming, _waitForExecutionComplete reminder loop).
-  const heartbeatStartedAt = Date.now();
-  const heartbeat = setInterval(() => {
-    if (Date.now() - heartbeatStartedAt > LOCK_HEARTBEAT_MAX_MS) {
-      clearInterval(heartbeat);
-      return;
-    }
-    refreshLock(lockKey, lockToken);
-    touchAgentBusy(agent.id);
-  }, LOCK_HEARTBEAT_INTERVAL_MS);
-  (heartbeat as any).unref?.();
 
   // Wrap everything after markAgentBusy in try/finally so the busy flag is
   // always cleared — even if task setup or project-switch throws unexpectedly.
@@ -456,7 +434,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       agent.project = taskRepo;
     } catch (switchErr) {
       console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
-      releaseLock(lockKey, lockToken);
+      releaseLock(lockKey);
       clearAgentBusy(agent.id);
       const switchErrTimestamp = new Date().toISOString();
       if (actualTask) {
@@ -574,8 +552,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     }
     return { executed: false, error: true, message: err.message };
   } finally {
-    clearInterval(heartbeat);
-    releaseLock(lockKey, lockToken);
+    releaseLock(lockKey);
     clearAgentBusy(agent.id);
     let cleanupMutated = false;
     // Clear actionRunning flag (in-memory only — the chain's next action or
@@ -626,9 +603,6 @@ async function _runTitleMode(agent, task, { agentManager, io, execStartMsgIdx, e
     }
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'title');
   } catch (err) {
-    // A user Stop must abort the whole chain — executeRunAgent's catch
-    // handles it; only non-stop failures stay best-effort (title is cosmetic).
-    if (isUserStopError(err)) throw err;
     console.error(`[ActionExecutor] title failed:`, err.message);
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, 'title');
   } finally {
@@ -654,9 +628,6 @@ async function _runSetTypeMode(agent, task, { agentManager, io, execStartMsgIdx,
     console.log(`[ActionExecutor] set_type: "${taskType}"`);
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'set_type');
   } catch (err) {
-    // A user Stop must abort the whole chain — executeRunAgent's catch
-    // handles it; only non-stop failures stay best-effort (type is cosmetic).
-    if (isUserStopError(err)) throw err;
     console.error(`[ActionExecutor] set_type failed:`, err.message);
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, 'set_type');
   } finally {
@@ -744,13 +715,6 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
     if (waitResult === 'error') {
       const authError = agentManager._consumeTaskAuthError?.(task.id);
       throw new Error(authError || 'Claude Code CLI ended in an authentication or runtime error');
-    }
-    if (waitResult === 'stopped') {
-      agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, 'decide');
-      return { executed: false, skipped: true, reason: 'user-stop' };
-    }
-    if (waitResult === 'deleted') {
-      return { executed: false, skipped: true, reason: 'task-deleted' };
     }
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
   } else {
@@ -840,16 +804,6 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
       const authError = agentManager._consumeTaskAuthError?.(task.id);
       throw new Error(authError || 'Claude Code CLI ended in an authentication or runtime error');
     }
-    if (waitResult === 'timeout') {
-      throw new Error('Task was not completed before the reminder limit — not advancing the workflow chain');
-    }
-    if (waitResult === 'stopped') {
-      agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, 'execute');
-      return { executed: false, skipped: true, reason: 'user-stop' };
-    }
-    if (waitResult === 'deleted') {
-      return { executed: false, skipped: true, reason: 'task-deleted' };
-    }
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
     return { executed: true };
   }
@@ -873,10 +827,11 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
 
     // Check if agent completed the task via @task_execution_complete
     const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-    const completion = agentManager._consumeTaskCompletion?.(task.id);
 
-    if (completion) {
-      const comment = completion.comment || '';
+    if (freshTask?._executionCompleted) {
+      const comment = freshTask._executionComment || '';
+      delete freshTask._executionCompleted;
+      delete freshTask._executionComment;
       console.log(`✅ [ActionExecutor] execute: completed immediately${hasInstructions ? ' (with instructions)' : ''}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
     } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
       console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);
@@ -885,23 +840,7 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
       return { executed: false, skipped: true, reason: 'empty-response' };
     } else {
       console.log(`[ActionExecutor] execute: waiting for task_execution_complete${hasInstructions ? ' (with instructions)' : ''}`);
-      const waitResult = await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text);
-      // Same contract as the CLI branch: a failed, timed-out, stopped, or
-      // deleted execution must not let the chain advance (e.g. → done/review)
-      // over a task that never finished.
-      if (waitResult === 'error') {
-        const authError = agentManager._consumeTaskAuthError?.(task.id);
-        throw new Error(authError || 'Executor agent ended in error before completing the task');
-      }
-      if (waitResult === 'timeout') {
-        throw new Error('Task was not completed before the reminder limit — not advancing the workflow chain');
-      }
-      if (waitResult === 'stopped') {
-        return { executed: false, skipped: true, reason: 'user-stop' };
-      }
-      if (waitResult === 'deleted') {
-        return { executed: false, skipped: true, reason: 'task-deleted' };
-      }
+      await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text);
     }
   } finally {
     agentManager.wsEmitter.streamEnd(agent.id);

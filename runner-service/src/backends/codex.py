@@ -38,8 +38,9 @@ import os
 import json
 from typing import Optional, AsyncIterator
 
+from command_security import sanitize_env
 from config import logger
-from .cli_backend import CliBackend
+from .cli_backend import CliBackend, resolve_model_spec
 from .codex_token_store import (
     hydrate_agent_auth,
     push_agent_auth_if_changed,
@@ -68,7 +69,7 @@ from .codex_oauth import (
     try_exchange_code_from_prompt,
 )
 from agent_user import ensure_agent_user
-from .claude_token_store import run_blocking
+from .claude_token_store import get_subprocess_kwargs, run_blocking
 from .runner_mcp_config import configure_codex_mcp
 from .runner_instructions_config import configure_codex_instructions
 
@@ -89,11 +90,7 @@ def _resolve_codex_model(llm_config: Optional[dict]) -> str:
     --model flag" so codex uses its built-in default — mirrors the opencode
     backend's _resolve_opencode_model.
     """
-    if llm_config:
-        model = (llm_config.get("model") or "").strip()
-        if model:
-            return model
-    return ""
+    return resolve_model_spec(llm_config)
 
 
 class CodexBackend(CliBackend):
@@ -126,26 +123,26 @@ class CodexBackend(CliBackend):
     async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
         """Build a recipe to spawn `codex` (no `exec` subcommand) in a
         shared PTY. Same per-agent isolation and auth hydration as the
-        headless `run_sync`/`stream_events` path."""
-        from .cli_backend import CliBackend as _CliBackend
+        headless `run_sync`/`stream_events` path.
+
+        Deliberately NOT the CliBackend prepare_interactive template: codex
+        spawns with a plain sanitized env (no _agent_env LLM/GitHub-token
+        injection, which could change codex's auth selection) and has its
+        own auth hydration + creds watcher."""
         # Hydrate the per-agent ~/.codex/auth.json + refresh the OAuth
         # token if it's about to expire. Reuses the same code path the
         # headless modes call before every spawn.
         await self._hydrate_for_exec(agent_id, owner_id)
 
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        effective_user = self._resolve_effective_user(agent_id, agent_user) \
-            if hasattr(self, "_resolve_effective_user") else agent_user
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
         # Off-loop: both helpers do blocking team-api fetches.
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
 
         # cwd: the agent's project workspace when available, else the
-        # generic CLI cwd. Same resolution as cli_backend uses.
-        from agent_user import get_agent_project_dir
-        from config import CLI_CWD
-        project_dir = get_agent_project_dir(agent_id) if agent_id else None
-        cwd = project_dir if (project_dir and os.path.isdir(project_dir)) else CLI_CWD
+        # generic CLI cwd.
+        cwd = self._resolve_cwd(agent_id)
 
         # The interactive CLI is just `codex` — no `exec`, no `--json`, no
         # positional prompt. The user types into the TUI. Pass `--model` ONLY
@@ -159,16 +156,12 @@ class CodexBackend(CliBackend):
         if model:
             cmd += ["--model", model]
 
-        # Env: same per-agent env as headless. CODEX_HOME is implicit via
-        # the HOME of the dropped UID (see ensure_agent_user).
-        env = self._build_env(agent_user) if hasattr(self, "_build_env") else None
-        if env is None:
-            # Fallback: minimal sanitized env.
-            from command_security import sanitize_env
-            env = sanitize_env(os.environ, agent_user)
+        # Env: minimal sanitized env (keyed on agent_user even when runAsRoot
+        # nulls effective_user). CODEX_HOME is implicit via the HOME of the
+        # dropped UID (see ensure_agent_user).
+        env = sanitize_env(os.environ, agent_user)
 
-        from .claude_token_store import get_subprocess_kwargs as _drop_kw
-        kwargs = _drop_kw(effective_user) or {}
+        kwargs = get_subprocess_kwargs(effective_user) or {}
 
         # Reverse-sync hook (same idea as claude-code): when the user runs
         # `codex login` inside the TUI, the CLI rewrites ~/.codex/auth.json.

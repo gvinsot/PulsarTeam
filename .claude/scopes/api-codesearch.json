@@ -1,0 +1,129 @@
+[
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeIndexService.ts"
+    ],
+    "kind": "dedup",
+    "title": "Extract shared fileRecord/symbolRecord/vectorDoc builder — same indexing block pasted in 3 places",
+    "description": "The symbol-to-vector-doc construction `{ id, vector: createHashedEmbedding(this.createEmbeddingText(rec), this.embeddingDimension), fields: { kind, filePath } }` appears verbatim three times: codeIndexService.ts:481-488 (_indexFolderLocked), :732-739 (_ensureMemoryVectors), :876-883 (_applyFileUpdates). On top of that, the whole extract-symbols → build fileRecord → push symbolIds → build vectorDocs sequence is duplicated between _indexFolderLocked (lines 467-491) and _applyFileUpdates (lines 862-889). Any change to the embedding payload or record shape must be made in 2-3 places and they can silently drift.",
+    "sketch": "Add two private methods:\n\n_toVectorDoc(symbol) {\n  return {\n    id: symbol.id,\n    vector: createHashedEmbedding(this.createEmbeddingText(symbol), this.embeddingDimension),\n    fields: { kind: symbol.kind, filePath: symbol.filePath },\n  };\n}\n\n_indexFileContent(relativePath, content, size) {\n  const { language, symbols: extracted } = extractSymbolsFromContent(relativePath, content);\n  const fileRecord = { path: relativePath, language, size, contentHash: hashContent(content), symbolIds: [] };\n  const symbolRecords = extracted.map(s => this.buildSymbolRecord(fileRecord, s));\n  fileRecord.symbolIds = symbolRecords.map(s => s.id);\n  return { fileRecord, symbolRecords, vectorDocs: symbolRecords.map(s => this._toVectorDoc(s)) };\n}\n\n_indexFolderLocked and _applyFileUpdates call _indexFileContent; _ensureMemoryVectors uses repo.symbols.map(s => this._toVectorDoc(s)).",
+    "impact": "~45-50 lines removed in a 928-line file; the on-disk/in-vector record shape gets a single source of truth used by full index, incremental update, and memory rebuild",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "1) Keep vector-store I/O OUT of the helpers: _indexFolderLocked must keep its single bulk upsert after resetCollection (lines 498-502) while _applyFileUpdates keeps its per-file upsert guarded by vectorDocs.length > 0 (lines 887-889). 2) Inside _indexFileContent, prefer keeping the original interleaved loop (buildSymbolRecord → fileRecord.symbolIds.push → vectorDocs.push) verbatim rather than the sketch's map-then-reassign form — it is known to compile in this loosely-typed file (reassigning symbolIds: [] risks a never[] inference error) and removes any reordering question, though the reordering itself is provably output-identical since buildSymbolRecord reads only fileRecord.path/language. 3) At the _indexFolderLocked call site, accumulate with a for-of push loop instead of symbols.push(...symbolRecords) to avoid V8 spread argument limits. 4) The helper signature (relativePath, content, size) works for both callers: pass file.relativePath/file.size in _indexFolderLocked and filePath/fileSize in _applyFileUpdates; the size-computation and skip/removed++ logic in _applyFileUpdates (lines 836-859) stays in the caller. 5) Net line reduction is ~25-35, not 45-50 — immaterial to the value."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeIndexService.ts"
+    ],
+    "kind": "simplify-logic",
+    "title": "Flatten _applyFileUpdates guard chain: dead fallback, duplicate size check, triple skip-pattern",
+    "description": "codeIndexService.ts:836-859 is a check-then-act maze. (1) Line 842: `fileSize = stat?.size ?? (content ? Buffer.byteLength(content) : 0)` — the `??` fallback is dead code because line 843 `if (!stat || ...) continue` exits whenever stat is null, so the fallback value is never read. (2) The maxFileSize check runs twice for the disk path: line 843 (`stat.size > this.maxFileSize`) and again line 856 (`fileSize > this.maxFileSize`, where fileSize === stat.size). (3) The pattern `if (oldFileIdx >= 0) removed++; continue;` is repeated three times (lines 844, 852, 857). Bonus: lines 524-525 and 902-903 both do `this._invalidateCache(repoId); this._setCachedRepo(repoId, repo);` — the invalidate is redundant since _setCachedRepo overwrites the entry.",
+    "sketch": "Resolve content first, then run one combined guard:\n\nlet content = entry.content ?? null;\nif (content === null) {\n  content = await fs.readFile(path.resolve(rootPath, filePath), 'utf8').catch(() => null);\n}\nconst fileSize = content !== null ? Buffer.byteLength(content) : 0;\nconst indexable = content && DEFAULT_ALLOWED_EXTENSIONS.has(extension) && fileSize <= this.maxFileSize;\nif (!indexable) {\n  if (oldFileIdx >= 0) removed++;\n  continue;\n}\n\n(Using Buffer.byteLength uniformly drops the separate fs.stat call — size of the content just read equals the stat size for indexing purposes. If keeping stat is preferred, keep it but remove the dead ?? fallback and the second size check.) Also delete the redundant _invalidateCache calls at 524 and 902.",
+    "impact": "~15 lines removed, one guard instead of four scattered exits; updated/removed/added accounting is covered by codeIndexService.test.ts:127-235",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "Two traps. (1) Do NOT take the sketch's fallback option (\"if keeping stat is preferred... remove the second size check\") literally: line 856 (`fileSize > this.maxFileSize`) is the ONLY size enforcement for the provided-content path (entry.content set, fileSize from Buffer.byteLength at line 848). Removing it while keeping the stat-based check at 843 would silently index oversized inline content — a behavior change. Either use the primary combined-guard sketch (size check applies to both paths) or, if keeping stat, delete only the dead `??` fallback at 842 and leave line 856 in place. (2) The primary sketch changes fileRecord.size (line 866, surfaced via the file tree at line 600) for disk-path files from stat.size to Buffer.byteLength of the utf8-decoded content — identical for valid UTF-8 files, divergent only for invalid-UTF8 content (replacement-char re-encoding), and the inline-content path already records byteLength, so this unifies the function; the full-index path (discoverFiles, line 365) still records stat.size. Accept that delta or keep the stat call for the size value. Also: keep the _invalidateCache calls at line 804 (error-path cache purge) and line 921 (invalidate()) — only the ones at 524 and 902, immediately before _setCachedRepo, are redundant. Preserve the exact skip semantics: every guard failure increments removed only when oldFileIdx >= 0 (old entry was already spliced at lines 823-833 before the guards), including the entry.content === '' case asserted by codeIndexService.test.ts:182-206."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeGraphAnalyzer.ts"
+    ],
+    "kind": "dedup",
+    "title": "codeGraphAnalyzer: pushEdge helper to kill 4x direction if/else, merge featureName twins, drop dead stats placeholder",
+    "description": "buildGraph (codeGraphAnalyzer.ts:260-319) repeats `if (direction === 'ui-to-service') edges.push({from: a, to: b}); else edges.push({from: b, to: a});` four times (lines 279-280, 288-289, 293-294, 304-305). The comment at line 297 ('still surface them in service-to-ui mode') is stale — the code surfaces unlinked routes in BOTH directions. Line 316 fills graph.stats with a zeros placeholder that the caller unconditionally overwrites at lines 106-111. And featureNameFromUiPath / featureNameFromServicePath (lines 416-426) are near-identical basename-strippers differing only by `.py` in the regex.",
+    "sketch": "In buildGraph:\n\nconst pushEdge = (a: string, b: string) =>\n  edges.push(direction === 'ui-to-service' ? { from: a, to: b } : { from: b, to: a });\n\nthen each pair becomes pushEdge(uiId, apiId), pushEdge(apiId, routeId), etc. Fix the line-297 comment to say unlinked routes are surfaced in both directions. Have buildGraph take stats as a parameter (or return nodes/edges and let analyzeRepoCallGraph assemble the CodeGraph once) so the zeros placeholder at 316 disappears. Replace the two featureName functions with one:\n\nfunction fileBaseName(path: string): string {\n  const base = path.split('/').pop() || path;\n  return base.replace(/\\.(t|j)sx?$|\\.py$/, '');\n}\n\n(the only behavior delta is stripping .py from UI labels, which is what you want anyway since UI_DIRS includes 'app/').",
+    "impact": "~20 lines removed; the direction semantics become impossible to get wrong in one of four copies; removes a misleading comment and a dead placeholder",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "Sketch is correct as written; three traps to respect. (a) The featureName merge is a deliberate micro behavior change, not pure refactor: ui-layer node ids/labels for .py files under UI dirs change (ui:main.py -> ui:main), which propagates to mermaid output and the LLM-refinement prompt. Safe (ephemeral cache, no tests, no persistence) but name it in the commit; if strict preservation is ever demanded, keep two one-line wrappers around a shared helper parameterized by the extension regex instead. (b) When removing the stats placeholder, keep the llm: null field wherever the CodeGraph object is assembled (currently line 317) — CodeGraph.stats and the llm field are part of the route response shape, and refineWithLlm reads graph.direction/.nodes/.edges, so assemble the full object before the llmConfigId block at line 113. Passing precomputed stats into buildGraph is the lower-churn option versus restructuring the return type. (c) Keep pushEdge's call order identical to the current push order — edge order feeds dedupEdges and then the mermaid line order, which the cached response exposes verbatim."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeSearch/symbolExtractor.ts"
+    ],
+    "kind": "extract-function",
+    "title": "extractJavaScriptSymbols: one pushSymbol helper instead of three identical 10-line blocks",
+    "description": "symbolExtractor.ts:249-307: the function/arrow/method branches each repeat the same block — compute startLine, call findBlockEndJs, push { name, qualifiedName, kind, signature: line.trim(), startLine, endLine, source: createSource(...) } (lines 255-267, 271-283, 295-306). Also line 252 calls findInnermostClass (a filter+sort over all classes) for EVERY line, but classContext is only needed in the method branch at line 286 — both a readability and an O(lines x classes) issue.",
+    "sketch": "const pushSymbol = (index: number, name: string, kind: string, extra: any = {}) => {\n  const startLine = index + 1;\n  const endLine = findBlockEndJs(lines, index);\n  symbols.push({\n    name,\n    qualifiedName: extra.qualifiedName ?? name,\n    kind,\n    signature: lines[index].trim(),\n    startLine,\n    endLine,\n    source: createSource(lines, startLine, endLine),\n    ...(extra.parentName ? { parentName: extra.parentName } : {}),\n  });\n};\n\nBranches become:\n- functionRegex match -> pushSymbol(index, m[1], 'function')\n- arrow/functionExpr match -> pushSymbol(index, m[1], 'function')\n- method match -> move `const classContext = findInnermostClass(...)` here; pushSymbol(index, name, 'method', { qualifiedName: `${classContext.name}.${name}`, parentName: classContext.name })",
+    "impact": "~30 lines removed from a 472-line file; the per-line loop body fits on one screen; classContext lookup moves next to its only use",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "Implementer must keep the method-path guards at lines 292-293 (RESERVED_METHOD_NAMES.has(methodName) and line.trim().startsWith('class ')) before calling pushSymbol — the sketch omits them. Keep an explicit `if (!classContext) continue;` guard in the method path after relocating the findInnermostClass call (its order relative to the methodRegex match is output-irrelevant since both are pure). Use the conditional spread for parentName exactly as sketched — do NOT emit `parentName: undefined`, which would change Object.keys/`in` semantics on function symbols. The class push at lines 238-246 targets classSymbols (a different array) and is correctly out of scope for the closure-based helper; do not force it in. Minor: type `extra` as `{ qualifiedName?: string; parentName?: string }` instead of `any` if convenient."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeSearch/vectorStore.ts"
+    ],
+    "kind": "simplify-logic",
+    "title": "InMemoryVectorStore.query: duplicated min-rescan block and a comment claiming a heap that isn't one",
+    "description": "vectorStore.ts:95-134: the 9-line 'find the minimum' scan is pasted twice (lines 110-118 and 122-129), and the comment at line 99 says 'Use a min-heap approach' when it is a linear min-tracking array — actively misleading for the next reader. The whole top-K maintenance is 35 lines for what one small helper expresses.",
+    "sketch": "function findMinIndex(results: QueryResult[]): number {\n  let minIdx = 0;\n  for (let i = 1; i < results.length; i++) {\n    if (results[i].score < results[minIdx].score) minIdx = i;\n  }\n  return minIdx;\n}\n\nasync query(collectionName, vector, topK = 10) {\n  const collection = this.collections.get(collectionName);\n  if (!collection) return [];\n  const results: QueryResult[] = [];\n  let minIdx = -1;\n  for (const item of collection.values()) {\n    const score = cosineSimilarity(vector, item.vector);\n    if (results.length < topK) {\n      results.push({ id: item.id, score });\n      if (results.length === topK) minIdx = findMinIndex(results);\n    } else if (score > results[minIdx].score) {\n      results[minIdx] = { id: item.id, score };\n      minIdx = findMinIndex(results);\n    }\n  }\n  return results.sort((l, r) => r.score - l.score);\n}\n\nFix the comment: 'Track the current minimum to keep top-K without sorting the full collection.'",
+    "impact": "~12 lines removed, the duplicated rescan collapses to one helper, comment stops lying about the data structure",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "One behavior-preservation trap in the sketch as written: replacing the minScore = -Infinity sentinel with minIdx = -1 changes behavior for topK <= 0 or fractional topK < 1 — original returns one element (the running max) via the score > -Infinity branch; the sketch throws TypeError on results[-1].score. Unreachable via current callers (only call site is codeIndexService.ts:755 with validated int topK >= 1 from routes/codeIndex.ts:44 and codeIndexMcp.ts:260), but to be strictly faithful either (a) keep a minScore variable updated as minScore = results[minIdx].score after each findMinIndex call and keep the score > minScore comparison, or (b) keep the sketch and accept the unreachable-path difference, noting it in the commit message. Also keep the original typed signature (collectionName: string, vector: number[], topK: number = 10): Promise<QueryResult[]> — the sketch elides the types. Replacement comment text in the sketch is accurate; use it."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeIndexService.ts"
+    ],
+    "kind": "extract-function",
+    "title": "Extract search-hit formatter shared by searchSymbols / searchText / searchSemantic",
+    "description": "Three search methods each hand-build the same result object: codeIndexService.ts:678-689 (searchSymbols), :708-717 (searchText, drops signature/summary for no documented reason), :769-779 (searchSemantic, adds vectorScore). The shape { id, filePath, kind, qualifiedName, signature, summary, score, preview: createPreview(symbol.source, query) } is the API response contract repeated three times — adding a field today means three edits and searchText already drifted.",
+    "sketch": "function toSearchHit(symbol, query, scores) {\n  return {\n    id: symbol.id,\n    filePath: symbol.filePath,\n    kind: symbol.kind,\n    qualifiedName: symbol.qualifiedName,\n    signature: symbol.signature,\n    summary: symbol.summary,\n    ...scores, // { score } or { score, vectorScore }\n    preview: createPreview(symbol.source, query),\n  };\n}\n\nsearchSymbols: scored.slice(0, topK).map(({symbol, score}) => toSearchHit(symbol, query, { score }));\nsearchSemantic: results.push(toSearchHit(symbol, query, { score: ..., vectorScore: ... }));\nsearchText: same — note this ADDS signature/summary to searchText responses (additive, callers in routes/codeIndex.ts:163 and codeIndexMcp.ts:282 just pass results through; if strict wire-format stability is required, pass an omit list instead).",
+    "impact": "~20 lines removed; one place defines what a search hit looks like across the REST route and MCP tool surfaces",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "Do NOT ship the sketch's additive default — adding signature/summary to searchText is a wire-format change (REST /search-text body and MCP search_text JSON dump both change; codeIndexMcp.ts:286 embeds formatJson(results) verbatim in LLM-visible text). Use the preserving form: toSearchHit(symbol, query, scores, { withDoc = true } = {}) with ...(withDoc ? { signature: symbol.signature, summary: symbol.summary } : {}), and call it with withDoc: false from searchText. Two more traps: (1) searchSemantic emits vectorScore BEFORE score (codeIndexService.ts:776-777) and MCP output is raw JSON text, so pass the scores object as { vectorScore, score } in that order to keep serialized bytes identical; (2) keep the Number(...toFixed(6)) computations at the searchSemantic call site as the sketch already does. Place ...scores after the withDoc spread and before preview to match all three current key orders."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeGraphAnalyzer.ts"
+    ],
+    "kind": "data-structure",
+    "title": "toMermaid groups nodes by layer twice into two parallel structures",
+    "description": "codeGraphAnalyzer.ts:335-380: `layers` (lines 343-346, GraphNode[] per layer) and `byLayer` (lines 372-373, safeId strings per layer) are two passes over the same nodes building parallel groupings, followed by four copy-pasted `if (byLayer.X.length) lines.push(...)` statements (lines 374-377) whose class names ('apiclient' vs 'api-client') only line up by convention with the classDef strings at 367-370.",
+    "sketch": "Group once and drive both the subgraphs and the class assignments from a single table:\n\nconst LAYER_STYLE: Record<GraphNode['layer'], { label: string; cls: string; def: string }> = {\n  ui:           { label: 'UI Features',   cls: 'ui',        def: 'fill:#7c3aed22,stroke:#7c3aed,color:#e9d5ff' },\n  'api-client': { label: 'API Client',    cls: 'apiclient', def: 'fill:#0ea5e922,stroke:#0ea5e9,color:#bae6fd' },\n  route:        { label: 'Backend Routes',cls: 'route',     def: 'fill:#22c55e22,stroke:#22c55e,color:#bbf7d0' },\n  service:      { label: 'Services',      cls: 'service',   def: 'fill:#f59e0b22,stroke:#f59e0b,color:#fde68a' },\n};\n\nfor (const layer of layerOrder) { ...subgraph from layers[layer]... }\nfor (const layer of layerOrder) {\n  const s = LAYER_STYLE[layer];\n  lines.push(`  classDef ${s.cls} ${s.def};`);\n  if (layers[layer].length) lines.push(`  class ${layers[layer].map(n => safeId(n.id)).join(',')} ${s.cls};`);\n}\n\nThis also absorbs layerLabel() (line 382-384).",
+    "impact": "~15 lines removed; layer label, color, and css class live in one row instead of four scattered string literals",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "One correction to the sketch: do NOT iterate `layerOrder` for the classDef/class section. `layerOrder` reverses when direction === 'service-to-ui' (lines 348-351), but current output emits classDefs and class lines in fixed ui/apiclient/route/service order regardless of direction, with all four classDef lines grouped before any class line. The sketch would reorder and interleave them for the reversed direction — semantically identical to mermaid but not byte-identical. Instead, declare LAYER_STYLE keys in ui/api-client/route/service order and run two consecutive loops over Object.entries(LAYER_STYLE): first push all classDef lines (unconditionally — today they are emitted even for empty layers), then push the `class` lines guarded by `layers[layer].length`. Also keep the empty-layer `continue` (line 354) in the subgraph loop, and keep using `layerOrder` there since subgraph order IS direction-dependent."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeIndexService.ts"
+    ],
+    "kind": "naming",
+    "title": "Rename the repo.repo double: loadRepo returns the whole index document, not the repo",
+    "description": "Throughout codeIndexService.ts, the persisted document { repo: {...metadata}, stats, files, symbols } is held in locals named `repo`, producing repo.repo.id (line 283), repo.repo.rootPath (lines 642, 811), repo.repo.filesIndexed (line 896), and a return of `repo.repo` (line 527). Every reader must mentally untangle which level of 'repo' a given expression means; saveRepo(repo) with repo.repo.id inside (lines 282-285) is the worst offender. The on-disk JSON shape must NOT change — only identifiers.",
+    "sketch": "Mechanical, file-local rename (loadRepo/saveRepo have zero external callers — verified by grep):\n- loadRepo -> loadIndex, saveRepo -> saveIndex (or keep method names, rename only locals)\n- locals `repo` holding the document -> `index` (or `repoIndex`), so call sites read index.repo.id, index.symbols, index.files, return index.repo\n- _getCachedRepo/_setCachedRepo doc params follow suit.\nTouches roughly lines 266-294, 450-528, 542-564, 567-607, 610-622, 625-665, 667-717, 748-783, 799-906. tsc + the 2 codeIndex test files gate the rename.",
+    "impact": "0 lines removed but disambiguates ~40 expressions in the file's hottest paths; eliminates the repo.repo head-scratcher for every future reader",
+    "risk": "low",
+    "effort": "medium",
+    "guidance": "Two traps, both avoidable: (1) The rename must be per-identifier (IDE/semantic rename or careful manual edits), never a textual find-replace of \"repo\" — the property key `repo` is wire/disk format and appears in the document literal at lines 504-514 ({ repo: {...}, stats, files, symbols }), the response literals at 619 and 634 (`repo: repo.repo` must become `repo: repoIndex.repo`, keeping the key), and the spread at 553 (`...repo.repo`). (2) Do not rename the locals to bare `index`: getFileTree already uses `let index` as a loop counter at line 581, and saveRepo has `indexPath` at 285 — use `repoIndex` (or `doc`) instead, as the sketch's parenthetical suggests. Minor sketch correction: the cited line ranges omit nothing material (findReposByProject at 913+ goes through listRepos, not loadRepo), and effort is closer to small than medium. Method renames loadRepo->loadIndex / saveRepo->saveIndex are safe (zero external callers, no test mocks, no string dispatch), but keeping method names and renaming only locals is an equally valid lower-touch variant."
+  },
+  {
+    "scope": "api-codesearch",
+    "files": [
+      "api/src/services/codeSearch/symbolExtractor.ts",
+      "api/src/services/codeSearch/embedding.ts"
+    ],
+    "kind": "dead-code",
+    "title": "Dead code: unreachable python branch in extractGenericSymbols + three exports nothing imports",
+    "description": "(1) symbolExtractor.ts:428-430: extractGenericSymbols has `language === 'python' ? Math.min(lines.length, startLine + 20) : findBlockEndJs(...)` — unreachable, because extractSymbolsFromContent (lines 461-466) routes python to extractPythonSymbols before the generic path can ever see it. The branch implies generic extraction handles python, which misleads readers. (2) Unused exports (verified by repo-wide grep): detectLanguage (symbolExtractor.ts:450) is only called inside its own module; tokenizeForEmbedding (embedding.ts:16) and normalizeVector (embedding.ts:60) are only used inside embedding.ts. No test imports them either.",
+    "sketch": "In extractGenericSymbols, replace lines 428-430 with `const endLine = findBlockEndJs(lines, index);` and drop the now-unused `language` parameter if createSummary is given the literal (it still needs language for the comment style — keep the param, just delete the ternary). Remove the `export` keyword from detectLanguage, tokenizeForEmbedding, and normalizeVector. tsc will confirm nothing breaks.",
+    "impact": "~5 lines removed; the module's public surface shrinks to what is actually consumed (extractSymbolsFromContent; normalizeText/createHashedEmbedding/cosineSimilarity/EMBEDDING_DIMENSION)",
+    "risk": "low",
+    "effort": "small",
+    "guidance": "Sketch is correct but one parenthetical is confusingly worded: do NOT drop the `language` parameter of extractGenericSymbols — it is still needed by the createSummary(lines, symbol, language) call at symbolExtractor.ts:441 (comment-style selection in extractLeadingComment). Keep the param, delete only the ternary, i.e. `const endLine = findBlockEndJs(lines, index);`. Everything else in the sketch is good as-is: remove `export` from detectLanguage, tokenizeForEmbedding, normalizeVector; leave EMBEDDING_DIMENSION, normalizeText, createHashedEmbedding, cosineSimilarity, extractSymbolsFromContent exported."
+  }
+]

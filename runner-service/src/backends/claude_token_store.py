@@ -762,72 +762,104 @@ async def refresh_oauth_token() -> bool:
         return False
 
 
-async def refresh_owner_token(owner_id: str) -> bool:
+async def _refresh_with(
+    refresh_token: Optional[str],
+    expiry_probe: Optional[dict],
+    invalidate,
+    persist,
+    label: str,
+    who: str,
+    desc: str,
+) -> bool:
+    """Shared owner/agent refresh-token skeleton.
+
+    `invalidate` and `persist` are async callables (callers wrap their sync
+    variants); `persist(access, refresh, expires_in)` returns whether the
+    token was saved. `expiry_probe` is forwarded to token_http_request as its
+    agent_user argument for the under-lock already-valid re-probe (the owner
+    path passes the load-bearing `{"_owner_id": ...}` synthetic dict). `who`
+    is the display id used in log lines, `desc` the token_http_request
+    context string.
+
+    NOTE: refresh_oauth_token (the global variant above) deliberately stays
+    separate — it swallows exceptions, treats an empty refresh_token in the
+    response differently (`or` vs `.get` default), and never checks the
+    save_token return value.
+    """
     global _token_cooldown_until
-    refresh_token = await run_blocking(get_owner_refresh_token, owner_id)
     if not refresh_token:
-        logger.warning(f"[Owner Auth] No refresh token for owner {owner_id}")
+        logger.warning(f"[{label} Auth] No refresh token for {who}")
         return False
     payload = {
         "grant_type": "refresh_token",
         "client_id": OAUTH_CLIENT_ID,
         "refresh_token": refresh_token,
     }
-    owner_check = {"_owner_id": owner_id}
-    result = await token_http_request(payload, f"owner {owner_id} token refresh", agent_user=owner_check)
+    result = await token_http_request(payload, desc, agent_user=expiry_probe)
     if not result or result.get("_already_valid"):
         return bool(result)
     if result.get("_invalid_grant"):
-        logger.error(f"[Owner Auth] Refresh token for owner {owner_id} is permanently invalid — clearing stored tokens")
-        await run_blocking(invalidate_owner_token, owner_id)
+        logger.error(f"[{label} Auth] Refresh token for {who} is permanently invalid — clearing stored tokens")
+        await invalidate()
         _token_cooldown_until = time.time() + 60
         return False
     access_token = result.get("access_token")
     if not access_token:
-        logger.error(f"[Owner Auth] Refresh response missing access_token for owner {owner_id}")
+        logger.error(f"[{label} Auth] Refresh response missing access_token for {who}")
         return False
     new_refresh = result.get("refresh_token", refresh_token)
     expires_in = result.get("expires_in", 28800)
-    if not await run_blocking(save_owner_token, owner_id, access_token, refresh_token=new_refresh, expires_in=expires_in):
-        logger.error(f"[Owner Auth] Refreshed token for owner {owner_id} could not be persisted — caller will treat as failed refresh")
+    if not await persist(access_token, new_refresh, expires_in):
+        logger.error(f"[{label} Auth] Refreshed token for {who} could not be persisted — caller will treat as failed refresh")
         return False
-    logger.info(f"[Owner Auth] Token refreshed for owner {owner_id}")
+    logger.info(f"[{label} Auth] Token refreshed for {who}")
     return True
+
+
+async def refresh_owner_token(owner_id: str) -> bool:
+    async def _invalidate() -> None:
+        await run_blocking(invalidate_owner_token, owner_id)
+
+    async def _persist(access_token, refresh_token, expires_in) -> bool:
+        return await run_blocking(
+            save_owner_token, owner_id, access_token,
+            refresh_token=refresh_token, expires_in=expires_in,
+        )
+
+    return await _refresh_with(
+        await run_blocking(get_owner_refresh_token, owner_id),
+        {"_owner_id": owner_id},
+        _invalidate,
+        _persist,
+        "Owner",
+        f"owner {owner_id}",
+        f"owner {owner_id} token refresh",
+    )
 
 
 async def refresh_agent_token(agent_user: dict) -> bool:
-    global _token_cooldown_until
     owner_id = agent_user.get("owner_id") if agent_user else None
     if owner_id:
         return await refresh_owner_token(owner_id)
-    refresh_token = get_agent_refresh_token(agent_user)
-    if not refresh_token:
-        logger.warning(f"[Agent Auth] No refresh token for {agent_user['username']}")
-        return False
-    payload = {
-        "grant_type": "refresh_token",
-        "client_id": OAUTH_CLIENT_ID,
-        "refresh_token": refresh_token,
-    }
-    result = await token_http_request(payload, f"agent {agent_user['username']} token refresh", agent_user=agent_user)
-    if not result or result.get("_already_valid"):
-        return bool(result)
-    if result.get("_invalid_grant"):
-        logger.error(f"[Agent Auth] Refresh token for {agent_user['username']} is permanently invalid — clearing stored tokens")
+
+    async def _invalidate() -> None:
         invalidate_agent_token(agent_user)
-        _token_cooldown_until = time.time() + 60
-        return False
-    access_token = result.get("access_token")
-    if not access_token:
-        logger.error(f"[Agent Auth] Refresh response missing access_token for {agent_user['username']}")
-        return False
-    new_refresh = result.get("refresh_token", refresh_token)
-    expires_in = result.get("expires_in", 28800)
-    if not save_agent_token(agent_user, access_token, refresh_token=new_refresh, expires_in=expires_in):
-        logger.error(f"[Agent Auth] Refreshed token for {agent_user['username']} could not be persisted — caller will treat as failed refresh")
-        return False
-    logger.info(f"[Agent Auth] Token refreshed for {agent_user['username']}")
-    return True
+
+    async def _persist(access_token, refresh_token, expires_in) -> bool:
+        return save_agent_token(
+            agent_user, access_token,
+            refresh_token=refresh_token, expires_in=expires_in,
+        )
+
+    return await _refresh_with(
+        get_agent_refresh_token(agent_user),
+        agent_user,
+        _invalidate,
+        _persist,
+        "Agent",
+        agent_user["username"],
+        f"agent {agent_user['username']} token refresh",
+    )
 
 
 # =============================================================================
@@ -855,25 +887,11 @@ def get_agent_env(agent_user: dict = None) -> dict:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = token
         elif env.get("CLAUDE_CODE_OAUTH_TOKEN"):
             del env["CLAUDE_CODE_OAUTH_TOKEN"]
-        # GitHub plugin token mirror — same rationale as in CliBackend._agent_env:
+        # GitHub plugin token mirror — see agent_user.apply_github_token_env:
         # the credential helper covers `git`, but `gh` and SDK-based tools need
         # GITHUB_TOKEN/GH_TOKEN in the environment.
-        home = agent_user.get("home") if agent_user else None
-        if home:
-            try:
-                from agent_user import read_github_token_from_credentials
-                gh = read_github_token_from_credentials(home)
-            except Exception:
-                gh = None
-            if gh and gh.get("token"):
-                env["GITHUB_TOKEN"] = gh["token"]
-                env["GH_TOKEN"] = gh["token"]
-                if gh.get("username") and gh["username"] != "x-access-token":
-                    env.setdefault("GITHUB_USER", gh["username"])
-                host = gh.get("host") or "github.com"
-                if host != "github.com":
-                    env.setdefault("GH_HOST", host)
-                    env.setdefault("GITHUB_API_URL", f"https://{host}/api/v3")
+        from agent_user import apply_github_token_env
+        apply_github_token_env(env, agent_user.get("home") if agent_user else None)
         return env
     return get_claude_env()
 

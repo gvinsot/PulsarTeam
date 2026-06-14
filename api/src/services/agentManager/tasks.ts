@@ -5,7 +5,7 @@ import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '..
 import { isActiveStatus, getWorkflowManagedStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 
-const CLI_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
+const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
 
 function isCliRunner(agent: any): boolean {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
@@ -32,6 +32,7 @@ async function bindAgentRunner(manager: any, agent: any): Promise<void> {
 
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
+// Replaces in-memory task._execution* properties.
 const _taskSignals = new Map<string, Record<string, any>>(); // taskId -> { completed, comment, stopped, watching, pendingOnEnter }
 
 export function setTaskSignal(taskId: string, key: string, value: any): void {
@@ -724,85 +725,85 @@ export const tasksMethods = {
     const ownEnv = getCurrentEnvironment();
     const recurringTasks = await getRecurringTasks();
     for (const t of recurringTasks) {
-      try {
-        const task: any = t;
-        // Environment isolation: only the matching replica resets the task.
-        if (task.environment !== ownEnv) continue;
-        const rec = task.recurrence || {};
-        const intervalMs = (rec.intervalMinutes || 1440) * 60 * 1000;
+      const task: any = t;
+      // Environment isolation: only the matching replica resets the task.
+      // NULL env is treated as "prod" to preserve legacy behavior.
+      const taskEnv = task.environment || 'prod';
+      if (taskEnv !== ownEnv) continue;
+      const rec = task.recurrence || {};
+      const intervalMs = (rec.intervalMinutes || 1440) * 60 * 1000;
 
-        // Reference timestamp: lastResetAt is set on creation and at every reset.
-        const refIso = rec.lastResetAt;
-        const refMs = refIso ? Date.parse(refIso) : NaN;
-        if (!Number.isFinite(refMs)) continue;
-        if (now - refMs < intervalMs) continue;
+      // Reference timestamp: prefer the explicit lastResetAt (set on creation
+      // and at every reset). Fall back to completedAt → startedAt → createdAt
+      // so legacy tasks without lastResetAt still trigger correctly.
+      const refIso = rec.lastResetAt || task.completedAt || task.startedAt || task.createdAt;
+      const refMs = refIso ? Date.parse(refIso) : NaN;
+      if (!Number.isFinite(refMs)) continue;
+      if (now - refMs < intervalMs) continue;
 
-        const resetStatus = rec.originalStatus || 'backlog';
-        const prevStatus = task.status;
+      const resetStatus = rec.originalStatus || 'backlog';
+      const prevStatus = task.status;
 
-        // Purge old log entries before appending the reset event, so the new
-        // event isn't itself eligible for purge on the next cycle.
-        let prunedHistory = 0;
-        let prunedCommits = 0;
-        const retentionDays = normalizeRetention(rec.historyRetentionDays);
-        if (retentionDays) {
-          const cutoffMs = now - retentionDays * 24 * 60 * 60 * 1000;
-          prunedHistory = pruneByDate(task.history, cutoffMs);
-          prunedCommits = pruneByDate(task.commits, cutoffMs);
-        }
-
-        console.log(
-          `🔁 [Recurrence] Resetting task "${(task.text || '').slice(0, 60)}" `
-          + `${prevStatus} → ${resetStatus} (interval: ${rec.intervalMinutes}min`
-          + (retentionDays ? `, retention: ${retentionDays}d, pruned: ${prunedHistory}h/${prunedCommits}c` : '')
-          + `)`
-        );
-
-        task.status = resetStatus;
-        task.completedAt = null;
-        task.startedAt = null;
-        task.executionStatus = null;
-        task.completedActionIdx = null;
-        task.actionRunning = false;
-        task.actionRunningAgentId = null;
-        task.actionRunningMode = null;
-        task.error = null;
-        task.errorFromStatus = null;
-        if (!task.history) task.history = [];
-        task.history.push({ from: prevStatus, status: resetStatus, at: nowIso, by: 'recurrence' });
-        task.recurrence = { ...rec, lastResetAt: nowIso };
-
-        // Drop ephemeral execution signals from the previous cycle so the
-        // freshly-reset task isn't blocked by stale "stopped"/"watching" flags.
-        clearTaskSignals(task.id);
-
-        // Mirror the reset onto the in-memory copy used by the task loop, so
-        // it doesn't keep seeing the pre-reset status (e.g. a stale `done`
-        // would prevent the freshly-armed task from being picked up).
-        const memTask = this._getAgentTasks(task.agentId).find((mt: any) => mt.id === task.id);
-        if (memTask) {
-          memTask.status = task.status;
-          memTask.completedAt = task.completedAt;
-          memTask.startedAt = task.startedAt;
-          memTask.executionStatus = task.executionStatus;
-          memTask.completedActionIdx = task.completedActionIdx;
-          memTask.actionRunning = task.actionRunning;
-          memTask.actionRunningAgentId = task.actionRunningAgentId;
-          memTask.actionRunningMode = task.actionRunningMode;
-          memTask.error = task.error;
-          memTask.errorFromStatus = task.errorFromStatus;
-          memTask.history = task.history;
-          memTask.commits = task.commits;
-          memTask.recurrence = task.recurrence;
-        }
-
-        await saveTaskToDb(task);
-        const agent = this.agents.get(task.agentId);
-        if (agent) this._emit('agent:updated', this._sanitize(agent));
-        this._emit('task:updated', { agentId: task.agentId, task: { ...task } });
-      } catch (err: any) {
-        console.error(`🔁 [Recurrence] Failed to process recurring task ${(t as any)?.id}:`, err?.message || err);
+      // Purge old log entries before appending the reset event, so the new
+      // event isn't itself eligible for purge on the next cycle.
+      let prunedHistory = 0;
+      let prunedCommits = 0;
+      const retentionDays = normalizeRetention(rec.historyRetentionDays);
+      if (retentionDays) {
+        const cutoffMs = now - retentionDays * 24 * 60 * 60 * 1000;
+        prunedHistory = pruneByDate(task.history, cutoffMs);
+        prunedCommits = pruneByDate(task.commits, cutoffMs);
       }
+
+      console.log(
+        `🔁 [Recurrence] Resetting task "${(task.text || '').slice(0, 60)}" `
+        + `${prevStatus} → ${resetStatus} (interval: ${rec.intervalMinutes}min`
+        + (retentionDays ? `, retention: ${retentionDays}d, pruned: ${prunedHistory}h/${prunedCommits}c` : '')
+        + `)`
+      );
+
+      task.status = resetStatus;
+      task.completedAt = null;
+      task.startedAt = null;
+      task.executionStatus = null;
+      task.completedActionIdx = null;
+      task.actionRunning = false;
+      task.actionRunningAgentId = null;
+      task.actionRunningMode = null;
+      task.error = null;
+      task.errorFromStatus = null;
+      if (!task.history) task.history = [];
+      task.history.push({ from: prevStatus, status: resetStatus, at: nowIso, by: 'recurrence' });
+      task.recurrence = { ...rec, lastResetAt: nowIso };
+
+      // Drop ephemeral execution signals from the previous cycle so the
+      // freshly-reset task isn't blocked by stale "stopped"/"watching" flags.
+      clearTaskSignals(task.id);
+
+      // Mirror the reset onto the in-memory copy used by the task loop, so
+      // it doesn't keep seeing the pre-reset status (e.g. a stale `done`
+      // would prevent the freshly-armed task from being picked up).
+      const memTask = this._getAgentTasks(task.agentId).find((mt: any) => mt.id === task.id);
+      if (memTask) {
+        memTask.status = task.status;
+        memTask.completedAt = task.completedAt;
+        memTask.startedAt = task.startedAt;
+        memTask.executionStatus = task.executionStatus;
+        memTask.completedActionIdx = task.completedActionIdx;
+        memTask.actionRunning = task.actionRunning;
+        memTask.actionRunningAgentId = task.actionRunningAgentId;
+        memTask.actionRunningMode = task.actionRunningMode;
+        memTask.error = task.error;
+        memTask.errorFromStatus = task.errorFromStatus;
+        memTask.history = task.history;
+        memTask.commits = task.commits;
+        memTask.recurrence = task.recurrence;
+      }
+
+      await saveTaskToDb(task);
+      const agent = this.agents.get(task.agentId);
+      if (agent) this._emit('agent:updated', this._sanitize(agent));
+      this._emit('task:updated', { agentId: task.agentId, task: { ...task } });
     }
   },
 
@@ -862,20 +863,9 @@ export const tasksMethods = {
 
         this._loopProcessing.add(executorId);
         console.log(`🔄 [TaskLoop] Agent "${executor.name}" is idle but has started task "${dbTask.text.slice(0, 60)}" (${dbTask.status}) — resuming`);
-        this._resumeActiveTask(dbTask.agentId, this.agents.get(dbTask.agentId), dbTask).then((result: any) => {
-          if (result === 'timeout') {
-            // Reminder loop exhausted without completion — count it toward
-            // the breaker so the next ticks don't re-resume the task forever.
-            const prev = this._taskResumeFailures?.get(dbTask.id) || { count: 0 };
-            const newCount = prev.count + 1;
-            this._taskResumeFailures?.set(dbTask.id, { count: newCount, lastFailedAt: Date.now() });
-            if (newCount >= MAX_RESUME_FAILURES) {
-              console.log(`🔴 [TaskLoop] Circuit breaker: task "${dbTask.text.slice(0, 60)}" timed out ${newCount} consecutive resumes — pausing for ${FAILURE_COOLDOWN_MS / 60000}min`);
-            }
-          } else {
-            // Successful resume — reset failure counter
-            this._taskResumeFailures?.delete(dbTask.id);
-          }
+        this._resumeActiveTask(dbTask.agentId, this.agents.get(dbTask.agentId), dbTask).then(() => {
+          // Successful resume — reset failure counter
+          this._taskResumeFailures?.delete(dbTask.id);
         }).catch(() => {
           // Track consecutive failures for this task
           const prev = this._taskResumeFailures?.get(dbTask.id) || { count: 0 };
@@ -919,21 +909,10 @@ export const tasksMethods = {
     return (typeof err === 'string' && err.trim()) ? err.trim() : null;
   },
 
-  /** Read-and-clear the completion signal set by @task_execution_complete.
-   *  Exposed as a manager method so workflow/actionExecutor can consume it
-   *  without importing this module (avoids a circular import). */
-  _consumeTaskCompletion(this: any, taskId: string): { comment: string } | null {
-    if (!getTaskSignal(taskId, 'completed')) return null;
-    const comment = getTaskSignal(taskId, 'comment') || '';
-    clearTaskSignal(taskId, 'completed');
-    clearTaskSignal(taskId, 'comment');
-    return { comment };
-  },
-
   async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
     const terminalDriven = Boolean(options.terminalDriven);
     const freshTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
-    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} completed=${getTaskSignal(taskId, 'completed')} status=${freshTask?.status}`);
+    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
 
     // Helper: check if task was completed via signal
     const _checkCompleted = async (): Promise<string | null> => {
@@ -960,6 +939,14 @@ export const tasksMethods = {
     if (freshTask?.status === 'error') {
       console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';
+    }
+
+    if (freshTask?._executionCompleted) {
+      const comment = freshTask._executionComment || '';
+      delete freshTask._executionCompleted;
+      delete freshTask._executionComment;
+      console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+      return 'completed';
     }
 
     const immediateResult = await _checkCompleted();
@@ -1045,6 +1032,13 @@ export const tasksMethods = {
         // Check if the immediate retry completed the task
         const retryResult = await _checkCompleted();
         if (retryResult) return retryResult;
+        const retryTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
+        if (retryTask?._executionCompleted) {
+          const comment = retryTask._executionComment || '';
+          delete retryTask._executionCompleted;
+          delete retryTask._executionComment;
+          return 'completed';
+        }
       }
     }
 
@@ -1066,6 +1060,15 @@ export const tasksMethods = {
       // Check signals first (reliable in-memory coordination set by tool handler)
       const completedResult = await _checkCompleted();
       if (completedResult) return completedResult;
+      // Also check the in-memory task object's legacy flag (set on the live task ref)
+      const inMemoryTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
+      if (inMemoryTask?._executionCompleted) {
+        const comment = inMemoryTask._executionComment || '';
+        delete inMemoryTask._executionCompleted;
+        delete inMemoryTask._executionComment;
+        console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        return 'completed';
+      }
       if (!this._isActiveTaskStatus((currentTask as any).status)) {
         console.log(`🔔 [Execution] Task status changed to "${(currentTask as any).status}" — exiting loop`);
         return 'moved';
@@ -1165,7 +1168,7 @@ export const tasksMethods = {
     }
   },
 
-  async _resumeActiveTask(this: any, agentId: string, agent: any, task: any): Promise<string | void> {
+  async _resumeActiveTask(this: any, agentId: string, agent: any, task: any): Promise<void> {
     const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
 
@@ -1185,8 +1188,8 @@ export const tasksMethods = {
 
     try {
       // Repo selection drives the executor's project context. The task carries
-      // a `repoFullName` (stored directly on the task row); if it differs from
-      // the executor's current repo we switch sandbox + history.
+      // a `repoFullName` (hydrated from board_repos via the JOIN); if it
+      // differs from the executor's current repo we switch sandbox + history.
       const taskRepo = task.repoFullName || null;
       if (taskRepo && taskRepo !== executor.project) {
         console.log(`🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`);
@@ -1274,7 +1277,6 @@ export const tasksMethods = {
       // Save execution log AFTER wait completes — captures the full conversation
       // including retries, reminders, tool calls, and task_execution_complete
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, waitResult !== "error" && waitResult !== "timeout");
-      return waitResult;
     } catch (err: any) {
       const isUserStop = isUserStopError(err);
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);

@@ -1,10 +1,9 @@
 import express from 'express';
-import crypto from 'crypto';
-import {
-  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken, resolveAccessToken,
-} from '../services/database.js';
-import type { ScopeType } from '../services/database.js';
-import { sendOAuthResult } from './oauthHelper.js';
+import { storeOAuthToken, resolveAccessToken, resolveOAuthTokenRecord } from '../services/database.js';
+import { resolveScope, sendOAuthResult } from './oauthHelper.js';
+import { createOAuthStateStore } from './oauthState.js';
+import { oauthProviderRoutes } from './oauthProviderRoutes.js';
+import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
 import { readSecret } from '../secrets.js';
 
 /**
@@ -12,68 +11,17 @@ import { readSecret } from '../secrets.js';
  * Resolution: agent → board → user → error
  */
 
-const STATE_TTL_MS = 10 * 60 * 1000;
+// HKDF domain 'github' must stay byte-identical across deploys — see oauthState.ts.
+const oauthStates = createOAuthStateStore<{ username: string; agentId: string | null; boardId: string | null }>('github');
 
-// States are HMAC-signed and stateless so an API restart/redeploy between
-// /auth-url and the provider redirect does not invalidate in-flight consent
-// popups. The consumed set below only guards against replay within this
-// process; after a restart a state could be replayed until its TTL expires,
-// which is acceptable because the authorization code is single-use at GitHub.
-const consumedStates = new Map<string, number>();
-
-let fallbackStateSecret: Buffer | null = null;
-function getStateSecret(): Buffer {
-  const jwt = readSecret('JWT_SECRET', '');
-  if (jwt) {
-    // Domain-separate from JWT signing and from the other providers' states.
-    return Buffer.from(
-      crypto.hkdfSync('sha256', Buffer.from(jwt, 'utf-8'), Buffer.alloc(0), Buffer.from('pulsarteam:oauth-state:github:v1', 'utf-8'), 32)
-    );
-  }
-  // Dev fallback without JWT_SECRET: per-process key (states then only
-  // survive within this process, as with the previous in-memory store).
-  if (!fallbackStateSecret) fallbackStateSecret = crypto.randomBytes(32);
-  return fallbackStateSecret;
+function generateOAuthState(username: string, agentId: string | null = null, boardId: string | null = null) {
+  return oauthStates.generate({ username, agentId, boardId });
 }
 
-function signStatePayload(payload: string): string {
-  return crypto.createHmac('sha256', getStateSecret()).update(payload).digest('base64url');
-}
-
-function generateOAuthState(username, agentId = null, boardId = null) {
-  const now = Date.now();
-  for (const [k, exp] of consumedStates) { if (exp < now) consumedStates.delete(k); }
-  const payload = Buffer.from(
-    JSON.stringify({ username, agentId, boardId, expiresAt: now + STATE_TTL_MS, nonce: crypto.randomBytes(8).toString('hex') }),
-    'utf-8',
-  ).toString('base64url');
-  return `${payload}.${signStatePayload(payload)}`;
-}
-
-function consumeOAuthState(state) {
-  const dot = state.lastIndexOf('.');
-  if (dot <= 0) return null;
-  const payload = state.slice(0, dot);
-  const signature = Buffer.from(state.slice(dot + 1));
-  const expected = Buffer.from(signStatePayload(payload));
-  if (signature.length !== expected.length || !crypto.timingSafeEqual(signature, expected)) return null;
-
-  let entry;
-  try {
-    entry = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8'));
-  } catch {
-    return null;
-  }
-  if (!entry || typeof entry.expiresAt !== 'number' || entry.expiresAt < Date.now()) return null;
-  if (consumedStates.has(state)) return null;
-  consumedStates.set(state, entry.expiresAt);
+function consumeOAuthState(state: string) {
+  const entry = oauthStates.consume(state);
+  if (!entry) return null;
   return { username: entry.username, agentId: entry.agentId || null, boardId: entry.boardId || null };
-}
-
-function resolveScope(agentId, boardId, username): { scopeType: ScopeType; scopeId: string } {
-  if (agentId) return { scopeType: 'agent', scopeId: agentId };
-  if (boardId) return { scopeType: 'board', scopeId: boardId };
-  return { scopeType: 'user', scopeId: username || 'default' };
 }
 
 function getConfig() {
@@ -125,16 +73,6 @@ async function fetchWithRetry(
   throw lastErr;
 }
 
-export function hasGitHubTokensForAgent(agentId) {
-  if (!agentId) return false;
-  return hasOAuthToken('github', 'agent', agentId);
-}
-
-export function hasGitHubTokensForBoard(boardId) {
-  if (!boardId) return false;
-  return hasOAuthToken('github', 'board', boardId);
-}
-
 export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
   // GitHub tokens don't expire
   return resolveAccessToken('github', agentId, boardId);
@@ -150,30 +88,15 @@ export async function getGitHubCredentialsForAgent(
   agentId: string | null,
   boardId: string | null = null,
 ): Promise<{ token: string; login: string | null; provider: 'github' } | null> {
-  // Try agent then board scope first (cheap, in-memory)
-  const directScopes: Array<{ type: ScopeType; id: string }> = [];
-  if (agentId) directScopes.push({ type: 'agent', id: agentId });
-  if (boardId) directScopes.push({ type: 'board', id: boardId });
-
-  for (const scope of directScopes) {
-    const tok = getOAuthToken('github', scope.type, scope.id);
-    if (tok && tok.accessToken) {
-      return {
-        token: tok.accessToken,
-        login: (tok.meta && (tok.meta as any).login) || null,
-        provider: 'github',
-      };
-    }
-  }
-
-  // Fall back to user-level via the unified resolver (which scans user-scoped
-  // tokens). resolveAccessToken throws when nothing matches — swallow that.
-  try {
-    const token = await resolveAccessToken('github', agentId, boardId);
-    return { token, login: null, provider: 'github' };
-  } catch {
-    return null;
-  }
+  const hit = await resolveOAuthTokenRecord('github', agentId, boardId);
+  if (!hit) return null;
+  return {
+    token: hit.accessToken,
+    // User-scope fallback deliberately reports login: null (the token may
+    // belong to any user); agent/board scopes surface the stored login.
+    login: hit.scopeType === 'user' ? null : (hit.record.meta as any)?.login || null,
+    provider: 'github',
+  };
 }
 
 async function handleOAuthRedirect(req, res) {
@@ -255,57 +178,25 @@ export function githubOAuthRedirectRouter() {
   return router;
 }
 
-export function githubRoutes() {
-  const router = express.Router();
-
-  router.get('/status', (req, res) => {
-    const config = getConfig();
-    const agentId = req.query.agentId || null;
-    const boardId = req.query.boardId || null;
-    const username = req.user?.username;
-
-    const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
-    const token = getOAuthToken('github', scopeType, scopeId);
-    const connected = !!(token && token.accessToken);
-
-    res.json({
-      configured: !!config,
-      connected,
-      login: connected ? token?.meta?.login || null : null,
-      agentId: agentId || null,
-      boardId: boardId || null,
-    });
-  });
-
-  router.get('/auth-url', (req, res) => {
-    const config = getConfig();
-    if (!config) {
-      return res.status(500).json({ error: 'GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.' });
-    }
-
-    const agentId = req.query.agentId || null;
-    const boardId = req.query.boardId || null;
-    const state = generateOAuthState(req.user?.username || 'default', agentId, boardId);
-
+const githubSpec: OAuthProviderSpec<{ clientId: string; clientSecret: string }> = {
+  provider: 'github',
+  label: 'GitHub',
+  getConfig,
+  notConfiguredError: 'GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.',
+  generateState: (username, agentId, boardId) => generateOAuthState(username, agentId, boardId),
+  buildAuthUrl: (req, config, state) => {
     const params = new URLSearchParams({
       client_id: config.clientId,
       redirect_uri: pluginRedirectUri(req),
       scope: 'repo read:org read:user',
       state,
     });
+    return `https://github.com/login/oauth/authorize?${params}`;
+  },
+  isConnected: (token) => !!(token && token.accessToken),
+  statusFields: (token, connected) => ({ login: connected ? token?.meta?.login || null : null }),
+};
 
-    res.json({ authUrl: `https://github.com/login/oauth/authorize?${params}` });
-  });
-
-  router.post('/disconnect', async (req, res) => {
-    const agentId = req.body?.agentId || null;
-    const boardId = req.body?.boardId || null;
-    const username = req.user?.username || 'default';
-    const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
-    await deleteOAuthToken('github', scopeType, scopeId);
-    console.log(`🔌 [GitHub] Disconnected ${scopeType}:${scopeId}`);
-    res.json({ success: true });
-  });
-
-  return router;
+export function githubRoutes() {
+  return oauthProviderRoutes(githubSpec);
 }

@@ -8,6 +8,15 @@ import { RichAssistantContent } from './ChatMessage';
 import { api } from '../../api';
 import { SttSession, TtsPlayer } from '../../lib/externalVoiceClient';
 
+// Image ingestion policy — accepted formats (also drives the file input's
+// accept attr), size cap, and dataURL extraction. Shared by the file picker
+// and the textarea clipboard paste.
+const IMAGE_FORMATS = ['png', 'jpeg', 'gif', 'webp'];
+const IMAGE_ACCEPT_ATTR = IMAGE_FORMATS.map(f => `image/${f}`).join(',');
+const IMAGE_MIME_RE = new RegExp(`^image\\/(${IMAGE_FORMATS.join('|')})$`);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+const DATA_URL_RE = /^data:(image\/[^;]+);base64,(.+)$/;
+
 // Renders the live CLI/PTY output streamed as the agent's "thinking". Keeps
 // terminal alignment intact (no wrap), exposes both axes of scroll so long
 // lines or tall screens stay reachable, and auto-pins to the bottom so the
@@ -235,13 +244,12 @@ export default function ChatTab({
     ? history.slice(0, -1)
     : history;
 
-  const handleFileSelect = (e) => {
-    const files = Array.from<File>(e.target.files || []);
-    if (files.length === 0) return;
-
+  // Shared ingestion for picked and pasted image files. One onAddImages call
+  // per file — readers complete asynchronously and out of order.
+  const ingestImageFiles = (files: File[]) => {
     for (const file of files) {
-      if (!file.type.match(/^image\/(png|jpeg|gif|webp)$/)) continue;
-      if (file.size > 10 * 1024 * 1024) continue; // 10MB max
+      if (!file.type.match(IMAGE_MIME_RE)) continue;
+      if (file.size > MAX_IMAGE_BYTES) continue;
 
       const reader = new FileReader();
       reader.onload = (ev) => {
@@ -249,13 +257,19 @@ export default function ChatTab({
         // readAsDataURL always yields a string; guard narrows the type.
         if (typeof dataUrl !== 'string') return;
         // Extract base64 data and media type from data URL
-        const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        const match = dataUrl.match(DATA_URL_RE);
         if (match) {
           onAddImages?.([{ mediaType: match[1], data: match[2], preview: dataUrl }]);
         }
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const handleFileSelect = (e) => {
+    const files = Array.from<File>(e.target.files || []);
+    if (files.length === 0) return;
+    ingestImageFiles(files);
     // Reset input so same file can be selected again
     e.target.value = '';
   };
@@ -399,7 +413,7 @@ export default function ChatTab({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/png,image/jpeg,image/gif,image/webp"
+                accept={IMAGE_ACCEPT_ATTR}
                 multiple
                 onChange={handleFileSelect}
                 className="hidden"
@@ -478,24 +492,10 @@ export default function ChatTab({
               onPaste={(e) => {
                 if (!supportsImages) return;
                 const items = Array.from(e.clipboardData?.items || []);
-                const imageItems = items.filter(item => item.type.match(/^image\/(png|jpeg|gif|webp)$/));
+                const imageItems = items.filter(item => item.type.match(IMAGE_MIME_RE));
                 if (imageItems.length === 0) return;
                 e.preventDefault();
-                for (const item of imageItems) {
-                  const file = item.getAsFile();
-                  if (!file || file.size > 10 * 1024 * 1024) continue;
-                  const reader = new FileReader();
-                  reader.onload = (ev) => {
-                    const dataUrl = ev.target.result;
-                    // readAsDataURL always yields a string; guard narrows the type.
-                    if (typeof dataUrl !== 'string') return;
-                    const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-                    if (match) {
-                      onAddImages?.([{ mediaType: match[1], data: match[2], preview: dataUrl }]);
-                    }
-                  };
-                  reader.readAsDataURL(file);
-                }
+                ingestImageFiles(imageItems.map(item => item.getAsFile()).filter(Boolean));
               }}
               className="w-full px-4 py-2.5 bg-dark-800 border border-dark-600 rounded-xl text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 resize-none"
               placeholder={

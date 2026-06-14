@@ -56,6 +56,55 @@ OPENAI_COMPATIBLE_LOCAL_PROVIDERS = (
 )
 
 
+# Which env var(s) each provider's official SDK reads for its API key.
+# opencode / openclaw / hermes pick these up automatically when no auth.json
+# is present. The OpenAI-compatible local providers (vLLM, LM Studio,
+# gateways) authenticate via OPENAI_API_KEY too; their spread comes FIRST so
+# an explicit entry wins on any future name collision (matching the old
+# elif-chain precedence).
+_PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
+    **{p: ("OPENAI_API_KEY",) for p in OPENAI_COMPATIBLE_LOCAL_PROVIDERS},
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "claude": ("ANTHROPIC_API_KEY",),
+    "claude-paid": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "mistral": ("MISTRAL_API_KEY",),
+    "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "groq": ("GROQ_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "xai": ("XAI_API_KEY",),
+    "grok": ("XAI_API_KEY",),
+    "nvidia": ("NVIDIA_API_KEY",),
+    "huggingface": ("HF_TOKEN",),
+    "ollama": ("OLLAMA_API_KEY",),
+}
+
+
+def resolve_model_spec(llm_config: Optional[dict], provider_map: Optional[dict] = None) -> str:
+    """Compute the `--model` value a CLI should run with from the per-agent
+    LLM config. An empty result deliberately leaves model selection to the
+    CLI's own default (no stale pin fighting the CLI's evolving default).
+
+    With a `provider_map` (opencode/aider), the internal provider name is
+    translated to the CLI's namespace and the result is the prefixed
+    `<provider>/<model>` spec. Without one (codex/openclaw), the bare model
+    id is returned untouched — those CLIs take no provider prefix.
+    """
+    if not llm_config:
+        return ""
+    model = (llm_config.get("model") or "").strip()
+    if provider_map is None:
+        return model
+    if model and "/" in model:
+        return model  # caller already provided a provider-prefixed spec
+    provider = (llm_config.get("provider") or "").lower().strip()
+    ns = provider_map.get(provider, provider)
+    if model and ns:
+        return f"{ns}/{model}"
+    return model
+
 
 class CliBackend(RunnerBackend):
     """Base class for CLI-driven runners.
@@ -258,34 +307,12 @@ class CliBackend(RunnerBackend):
             provider = (llm.get("provider") or "").lower().strip()
             endpoint = (llm.get("endpoint") or "").strip()
             if api_key:
-                # Expose the agent's API key under the env-var name expected by
-                # each provider's official SDK. opencode / openclaw / hermes read
-                # these automatically when no auth.json is present.
-                if provider in ("anthropic", "claude", "claude-paid"):
-                    env["ANTHROPIC_API_KEY"] = api_key
-                elif provider == "openai" or provider in OPENAI_COMPATIBLE_LOCAL_PROVIDERS:
-                    # Local / self-hosted OpenAI-compatible servers (vLLM, LM
-                    # Studio, gateways) authenticate via OPENAI_API_KEY too.
-                    env["OPENAI_API_KEY"] = api_key
-                elif provider == "openrouter":
-                    env["OPENROUTER_API_KEY"] = api_key
-                elif provider == "mistral":
-                    env["MISTRAL_API_KEY"] = api_key
-                elif provider in ("google", "gemini"):
-                    env["GOOGLE_API_KEY"] = api_key
-                    env["GEMINI_API_KEY"] = api_key
-                elif provider == "groq":
-                    env["GROQ_API_KEY"] = api_key
-                elif provider == "deepseek":
-                    env["DEEPSEEK_API_KEY"] = api_key
-                elif provider in ("xai", "grok"):
-                    env["XAI_API_KEY"] = api_key
-                elif provider == "nvidia":
-                    env["NVIDIA_API_KEY"] = api_key
-                elif provider == "huggingface":
-                    env["HF_TOKEN"] = api_key
-                elif provider == "ollama":
-                    env["OLLAMA_API_KEY"] = api_key
+                # Expose the agent's API key under the env-var name(s) each
+                # provider's SDK expects (see _PROVIDER_KEY_ENV). Must run
+                # BEFORE the endpoint handling below: its placeholder-key
+                # logic checks whether a real OPENAI_API_KEY landed here.
+                for var in _PROVIDER_KEY_ENV.get(provider, ()):
+                    env[var] = api_key
             if endpoint:
                 # Some CLIs (litellm-based, openai-compatible) honor a base URL
                 # override via env. Set the common ones so vLLM / Ollama / proxy
@@ -313,26 +340,11 @@ class CliBackend(RunnerBackend):
                     env.setdefault("OPENAI_API_BASE", base)
                     env.setdefault("OPENAI_API_KEY", "ollama")
 
-        # GitHub plugin token: mirror the OAuth token from ~/.git-credentials
-        # (installed by /projects/ensure or /credentials/git) into the env so
-        # the LLM's tooling (`gh` CLI, octokit-based npm scripts, anything that
-        # reads GITHUB_TOKEN/GH_TOKEN) authenticates without re-prompting. The
-        # `git` CLI itself doesn't need this — the credential helper already
-        # covers it — but every higher-level wrapper does.
+        # GitHub plugin token mirror — see agent_user.apply_github_token_env
+        # for the rationale (gh / SDK tooling needs GITHUB_TOKEN/GH_TOKEN).
         if agent_user and agent_user.get("home"):
-            from agent_user import read_github_token_from_credentials
-            gh = read_github_token_from_credentials(agent_user["home"])
-            if gh and gh.get("token"):
-                env["GITHUB_TOKEN"] = gh["token"]
-                env["GH_TOKEN"] = gh["token"]
-                if gh.get("username") and gh["username"] != "x-access-token":
-                    env.setdefault("GITHUB_USER", gh["username"])
-                # GHES support: point gh CLI at the right host when the cred
-                # entry came from a non-github.com host.
-                host = gh.get("host") or "github.com"
-                if host != "github.com":
-                    env.setdefault("GH_HOST", host)
-                    env.setdefault("GITHUB_API_URL", f"https://{host}/api/v3")
+            from agent_user import apply_github_token_env
+            apply_github_token_env(env, agent_user["home"])
         return env
 
     def _verify_model_config(
@@ -459,6 +471,88 @@ class CliBackend(RunnerBackend):
         _configure_mcp so instruction edits take effect on the next message in
         BOTH the interactive PTY and headless paths."""
         return
+
+    # ── Interactive terminal (shared template) ───────────────────────────
+
+    # Whether prepare_interactive logs the model-wiring summary via
+    # _verify_model_config. hermes opts out: its model is terminal-driven by
+    # design (no --model argv), so the "did NOT resolve to a CLI model
+    # argument" warning would be misleading there.
+    verify_model_on_spawn: bool = True
+
+    def _pre_interactive(
+        self,
+        agent_user: Optional[dict],
+        effective_user: Optional[dict],
+        agent_id: Optional[str],
+    ) -> None:
+        """Subclass setup that must run before the config writers (e.g.
+        opencode pre-creates ~/.config). Runs after ensure_agent_user so the
+        agent HOME already exists on a first spawn. Synchronous by design."""
+        return
+
+    def _post_configure_interactive(
+        self,
+        agent_user: Optional[dict],
+        effective_user: Optional[dict],
+        agent_id: Optional[str],
+    ) -> None:
+        """Subclass setup that runs after the MCP/instructions writers, before
+        the spawn env is resolved (e.g. openclaw's exec-approvals policy).
+        Kept separate from _configure_mcp so the headless run_sync /
+        stream_events paths don't execute it."""
+        return
+
+    def _interactive_cmd(self, agent_id: Optional[str], permissions: Optional[dict]) -> list[str]:
+        """Return the argv for the interactive TUI spawn."""
+        raise NotImplementedError
+
+    def _cli_model(self, agent_id: Optional[str]) -> str:
+        """The resolved CLI model argument, for _verify_model_config logging."""
+        return ""
+
+    def _interactive_extras(
+        self,
+        agent_id: Optional[str],
+        owner_id: Optional[str],
+        agent_user: Optional[dict],
+        effective_user: Optional[dict],
+    ) -> dict:
+        """Extra recipe keys (e.g. hermes' files-watcher pair). Default none."""
+        return {}
+
+    async def prepare_interactive(self, agent_id, owner_id=None) -> dict:
+        """Spawn recipe for the shared interactive PTY (see pty_session).
+
+        One shared skeleton for every CLI backend: provision the agent user,
+        write the CLI's native MCP/instructions config, resolve the spawn
+        env, and let the subclass contribute argv + recipe extras via the
+        hooks above. codex overrides this wholesale (different env/auth
+        model)."""
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
+        self._pre_interactive(agent_user, effective_user, agent_id)
+        # Off-loop: these helpers do blocking team-api fetches. Resolving the
+        # env next also warms the per-agent LLM config cache for the
+        # _interactive_cmd / _cli_model hooks below.
+        await run_blocking(self._configure_mcp, effective_user, agent_id)
+        await run_blocking(self._configure_instructions, effective_user, agent_id)
+        self._post_configure_interactive(agent_user, effective_user, agent_id)
+        env = await run_blocking(self._agent_env, effective_user, agent_id)
+
+        cmd = self._interactive_cmd(agent_id, self._get_permissions(agent_id))
+        if self.verify_model_on_spawn:
+            self._verify_model_config(agent_id, model=self._cli_model(agent_id), env=env)
+
+        kwargs = get_subprocess_kwargs(effective_user) or {}
+        recipe = {
+            "cmd": cmd,
+            "cwd": self._resolve_cwd(agent_id),
+            "env": env,
+            "preexec_fn": kwargs.get("preexec_fn"),
+        }
+        recipe.update(self._interactive_extras(agent_id, owner_id, agent_user, effective_user))
+        return recipe
 
     # ── Sync execution ────────────────────────────────────────────────────
 

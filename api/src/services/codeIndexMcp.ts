@@ -1,8 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 async function pathExists(targetPath) {
   try {
@@ -331,21 +331,5 @@ export function createCodeIndexMcpServer(codeIndexService) {
 }
 
 export function createCodeIndexMcpHandler(codeIndexService) {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createCodeIndexMcpServer(codeIndexService);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      console.error('[Code Index MCP] Error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({ error: error.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Code Index', () => createCodeIndexMcpServer(codeIndexService));
 }

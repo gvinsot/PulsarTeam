@@ -51,13 +51,11 @@ import pyte
 from config import (
     CLAUDE_INTERACTIVE_IDLE_SECS,
     CLAUDE_INTERACTIVE_TIMEOUT,
-    CLAUDE_FALLBACK_LLM_URL,
-    CLAUDE_FALLBACK_LLM_KEY,
-    CLAUDE_FALLBACK_LLM_MODEL,
     logger,
 )
 from backends.fallback_llm_resolver import resolve_fallback_llm
 from backends.claude_token_store import run_blocking
+from startup_prompts import BYPASS_PERMS_RE, build_trust_re
 
 
 # Fixed PTY size for the Claude Code TUI. Wider than typical terminals so
@@ -220,27 +218,18 @@ _YN_RE = re.compile(r"\[\s*y\s*/\s*n\s*\]\s*$", re.IGNORECASE | re.MULTILINE)
 # timeout. The matched text is only counted, not extracted, so over-matching
 # (e.g. ` 1.5`) is harmless.
 _NUMBERED_RE = re.compile(r"^\s*[❯>]?\s*\d+[\.\)]\s*\S", re.MULTILINE)
-# Trust-folder prompt: the wording varies across Claude Code CLI versions
-# AND the TUI lays each word out with absolute cursor positions (so after
-# _strip_ansi the buffer is compacted to e.g. "Isthisaprojectyou…trust?").
-# We use `\s*` between every word to match either form. Each alternative is
-# distinctive enough that over-matching against chat content is unlikely.
-_TRUST_RE = re.compile(
-    r"(do\s*you\s*trust\s*this\s*folder"
-    r"|is\s*this\s*a\s*project\s*you\s*(created|trust)"
-    r"|trust\s*this\s*folder\s*\?"
-    r"|yes,?\s*i\s*trust\s*this\s*folder)",
-    re.IGNORECASE,
-)
+# Trust-folder prompt: alternations shared with pty_session via
+# startup_prompts (see its module docstring for the wording/layout caveats).
+# Built WITHOUT pty_session's extra "contents of this directory" alternative
+# on purpose: this trust branch preempts the numbered-choice / arrow-selector
+# / fallback-LLM branches below, so widening it would change behavior here.
+_TRUST_RE = build_trust_re()
 # Bypass-permissions warning: shown when the CLI is started with
 # `--dangerously-skip-permissions`. Two numbered options where the DEFAULT
 # (option 1) is "No, exit" — picking the default would terminate the CLI.
 # Match this explicitly so we can ship "2" (Yes, I accept) instead of the
 # generic numbered-choice path that would send "1".
-_BYPASS_PERMS_RE = re.compile(
-    r"(bypass\s*permissions\s*mode|yes,?\s*i\s*accept)",
-    re.IGNORECASE,
-)
+_BYPASS_PERMS_RE = BYPASS_PERMS_RE
 # Arrow-key selector: a caret + a selector-y keyword nearby. Catches non-
 # numbered onboarding menus like the post-theme-picker "Select login method"
 # screen where each option is just preceded by `❯` (highlighted) or space

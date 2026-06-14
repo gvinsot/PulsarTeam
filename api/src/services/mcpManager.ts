@@ -3,7 +3,7 @@ import type { SignOptions } from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import { getJwtSecret } from '../middleware/auth.js';
 import { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database.js';
-import { BUILTIN_MCP_SERVERS } from '../data/mcpServers.js';
+import { BUILTIN_MCP_SERVERS, INTERNAL_MCP_SERVERS } from '../data/mcpServers.js';
 import { MCPClient } from './mcpClient.js';
 
 function extractMcpResult(content: any[]) {
@@ -22,25 +22,8 @@ export function resolveInternalMcpConfig(serverUrl: string, {
   jwtSecret = null,
   expiresIn = '1h',
 }: { port?: string | number; jwtSecret?: string | null; expiresIn?: SignOptions['expiresIn'] } = {}) {
-  const mappings = {
-    '__internal__onedrive': `http://localhost:${port}/api/onedrive/mcp`,
-    '__internal__code_index': `http://localhost:${port}/api/code-index/mcp`,
-    '__internal__code-index': `http://localhost:${port}/api/code-index/mcp`,
-    '__internal__gandi_dns': `http://localhost:${port}/api/gandi-dns/mcp`,
-    '__internal__swarm_api': `http://localhost:${port}/api/swarm-api/mcp`,
-    '__internal__gmail': `http://localhost:${port}/api/gmail/mcp`,
-    '__internal__outlook': `http://localhost:${port}/api/outlook/mcp`,
-    '__internal__gdrive': `http://localhost:${port}/api/gdrive/mcp`,
-    '__internal__slack': `http://localhost:${port}/api/slack/mcp`,
-    '__internal__jira': `http://localhost:${port}/api/jira/mcp`,
-    '__internal__wordpress': `http://localhost:${port}/api/wordpress/mcp`,
-    '__internal__github': `http://localhost:${port}/api/github/mcp`,
-    '__internal__aws_s3': `http://localhost:${port}/api/s3/mcp`,
-    '__internal__auto_learn': `http://localhost:${port}/api/auto-learn/mcp`,
-    '__internal__browser': `http://localhost:${port}/api/browser/mcp`,
-  };
-
-  if (!mappings[serverUrl]) {
+  const def = INTERNAL_MCP_SERVERS.get(serverUrl);
+  if (!def) {
     return { url: serverUrl, headers: {} };
   }
 
@@ -51,7 +34,7 @@ export function resolveInternalMcpConfig(serverUrl: string, {
   );
 
   return {
-    url: mappings[serverUrl],
+    url: `http://localhost:${port}${def.path}`,
     headers: {
       Authorization: `Bearer ${token}`,
     },
@@ -445,6 +428,56 @@ export class MCPManager {
 
   // ── Tool Execution ──────────────────────────────────────────────────
 
+  /** Shape a raw MCP callTool result into the { success, result, images, raw } envelope. */
+  _shape(result: any) {
+    const extracted = extractMcpResult(result.content);
+    return {
+      success: !result.isError,
+      result: extracted.text,
+      images: extracted.images,
+      raw: result.content
+    };
+  }
+
+  /** Heuristic sniffing of session/token expiry from an MCP call error. */
+  _isSessionExpired(err: any) {
+    return ['404', 'session', 'Invalid token', 'token', '401'].some(s => err?.message?.includes(s));
+  }
+
+  /**
+   * Call a tool through a cached per-agent client, reconnecting and retrying
+   * once when the session/token has expired. Shared by the per-agent auth and
+   * agent-context call paths (same cache, retry policy, and result shape —
+   * only the cacheKey and headers differ).
+   */
+  async _callAgentClient(cacheKey: string, server: any, headers: Record<string, string>, toolName: string, args: any, expiredLogLabel: string) {
+    let client = this.agentClients.get(cacheKey);
+
+    // Connect if no cached client or previous connection is dead
+    if (!client || !client.isConnected) {
+      client = await this._connectAgentClient(cacheKey, server, headers);
+    }
+
+    try {
+      return this._shape(await client.callTool(toolName, args));
+    } catch (err) {
+      // Session expired — reconnect and retry once
+      if (!this._isSessionExpired(err)) throw err;
+      console.log(`🔌 [MCP] ${expiredLogLabel} for "${server.name}", reconnecting...`);
+      // Drop and close the broken client before reconnecting so its
+      // socket/session is not leaked when the cache entry is replaced.
+      if (this.agentClients.get(cacheKey) === client) this.agentClients.delete(cacheKey);
+      await client.close().catch(() => {});
+      // A concurrent caller may already have reconnected — reuse its client
+      // instead of opening (and leaking) another one.
+      let newClient = this.agentClients.get(cacheKey);
+      if (!newClient || !newClient.isConnected) {
+        newClient = await this._connectAgentClient(cacheKey, server, headers);
+      }
+      return this._shape(await newClient.callTool(toolName, args));
+    }
+  }
+
   async callTool(serverId, toolName, args = {}) {
     let client = this.clients.get(serverId);
     const server = this.servers.get(serverId);
@@ -464,29 +497,15 @@ export class MCPManager {
     }
 
     try {
-      const result = await client.callTool(toolName, args);
-      const extracted = extractMcpResult(result.content);
-      return {
-        success: !result.isError,
-        result: extracted.text,
-        images: extracted.images,
-        raw: result.content
-      };
+      return this._shape(await client.callTool(toolName, args));
     } catch (err) {
-      if (err.message?.includes('404') || err.message?.includes('session') || err.message?.includes('Invalid token') || err.message?.includes('token') || err.message?.includes('401')) {
+      if (this._isSessionExpired(err)) {
         console.log(`🔌 [MCP] Session/token expired for "${server.name}", reconnecting...`);
         try {
           await this.connect(serverId);
           const retryClient = this.clients.get(serverId);
           if (retryClient) {
-            const result = await retryClient.callTool(toolName, args);
-            const extracted = extractMcpResult(result.content);
-            return {
-              success: !result.isError,
-              result: extracted.text,
-              images: extracted.images,
-              raw: result.content
-            };
+            return this._shape(await retryClient.callTool(toolName, args));
           }
         } catch (retryErr) {
           throw new Error(`MCP call failed after reconnect: ${retryErr.message}`);
@@ -542,9 +561,10 @@ export class MCPManager {
       return this._callToolWithAgentAuth(server, toolName, args, agentId, agentAuth.apiKey);
     }
 
-    // For internal OAuth-based MCPs (OneDrive, Gmail): always use per-agent connection
-    // to pass agentId context so the MCP handler can resolve agent-specific OAuth tokens
-    if (agentId && (server.url === '__internal__onedrive' || server.url === '__internal__gmail' || server.url === '__internal__outlook' || server.url === '__internal__gdrive' || server.url === '__internal__slack' || server.url === '__internal__jira' || server.url === '__internal__wordpress' || server.url === '__internal__github')) {
+    // For internal OAuth-based MCPs (OneDrive, Gmail, …): always use per-agent
+    // connection to pass agentId context so the MCP handler can resolve
+    // agent-specific OAuth tokens (see INTERNAL_MCP_SERVERS.agentContext).
+    if (agentId && INTERNAL_MCP_SERVERS.get(server.url)?.agentContext) {
       return this._callToolWithAgentContext(server, toolName, args, agentId, boardId);
     }
 
@@ -565,48 +585,14 @@ export class MCPManager {
    * Manages a per-agent client cache keyed by "agentId:serverId".
    */
   async _callToolWithAgentAuth(server, toolName, args, agentId, apiKey) {
-    const cacheKey = `${agentId}:${server.id}`;
-    let client = this.agentClients.get(cacheKey);
-
-    // Connect if no cached client or previous connection is dead
-    if (!client || !client.isConnected) {
-      client = await this._connectAgentClient(cacheKey, server, { Authorization: `Bearer ${apiKey}` });
-    }
-
-    try {
-      const result = await client.callTool(toolName, args);
-      const extracted = extractMcpResult(result.content);
-      return {
-        success: !result.isError,
-        result: extracted.text,
-        images: extracted.images,
-        raw: result.content
-      };
-    } catch (err) {
-      // Session expired — reconnect and retry once
-      if (err.message?.includes('404') || err.message?.includes('session') || err.message?.includes('Invalid token') || err.message?.includes('token') || err.message?.includes('401')) {
-        console.log(`🔌 [MCP] Agent session/token expired for "${server.name}", reconnecting...`);
-        // Drop and close the broken client before reconnecting so its
-        // socket/session is not leaked when the cache entry is replaced.
-        if (this.agentClients.get(cacheKey) === client) this.agentClients.delete(cacheKey);
-        await client.close().catch(() => {});
-        // A concurrent caller may already have reconnected — reuse its client
-        // instead of opening (and leaking) another one.
-        let newClient = this.agentClients.get(cacheKey);
-        if (!newClient || !newClient.isConnected) {
-          newClient = await this._connectAgentClient(cacheKey, server, { Authorization: `Bearer ${apiKey}` });
-        }
-        const result = await newClient.callTool(toolName, args);
-        const extracted = extractMcpResult(result.content);
-        return {
-          success: !result.isError,
-          result: extracted.text,
-          images: extracted.images,
-          raw: result.content
-        };
-      }
-      throw err;
-    }
+    return this._callAgentClient(
+      `${agentId}:${server.id}`,
+      server,
+      { Authorization: `Bearer ${apiKey}` },
+      toolName,
+      args,
+      'Agent session/token expired',
+    );
   }
 
   /**
@@ -615,52 +601,17 @@ export class MCPManager {
    * to resolve agent-specific tokens, without requiring an API key.
    */
   async _callToolWithAgentContext(server, toolName, args, agentId, boardId = null) {
-    const cacheKey = `${agentId}:${server.id}${boardId ? `:${boardId}` : ''}`;
-    const contextHeaders = {
-      'X-Agent-Id': agentId,
-      ...(boardId ? { 'X-Board-Id': boardId } : {}),
-    };
-    let client = this.agentClients.get(cacheKey);
-
-    // Connect if no cached client or previous connection is dead
-    if (!client || !client.isConnected) {
-      client = await this._connectAgentClient(cacheKey, server, contextHeaders);
-    }
-
-    try {
-      const result = await client.callTool(toolName, args);
-      const extracted = extractMcpResult(result.content);
-      return {
-        success: !result.isError,
-        result: extracted.text,
-        images: extracted.images,
-        raw: result.content
-      };
-    } catch (err) {
-      // Session expired — reconnect and retry once
-      if (err.message?.includes('404') || err.message?.includes('session') || err.message?.includes('Invalid token') || err.message?.includes('token') || err.message?.includes('401')) {
-        console.log(`🔌 [MCP] Agent context session expired for "${server.name}", reconnecting...`);
-        // Drop and close the broken client before reconnecting so its
-        // socket/session is not leaked when the cache entry is replaced.
-        if (this.agentClients.get(cacheKey) === client) this.agentClients.delete(cacheKey);
-        await client.close().catch(() => {});
-        // A concurrent caller may already have reconnected — reuse its client
-        // instead of opening (and leaking) another one.
-        let newClient = this.agentClients.get(cacheKey);
-        if (!newClient || !newClient.isConnected) {
-          newClient = await this._connectAgentClient(cacheKey, server, contextHeaders);
-        }
-        const result = await newClient.callTool(toolName, args);
-        const extracted = extractMcpResult(result.content);
-        return {
-          success: !result.isError,
-          result: extracted.text,
-          images: extracted.images,
-          raw: result.content
-        };
-      }
-      throw err;
-    }
+    return this._callAgentClient(
+      `${agentId}:${server.id}${boardId ? `:${boardId}` : ''}`,
+      server,
+      {
+        'X-Agent-Id': agentId,
+        ...(boardId ? { 'X-Board-Id': boardId } : {}),
+      },
+      toolName,
+      args,
+      'Agent context session expired',
+    );
   }
 
   /**

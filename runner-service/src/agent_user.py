@@ -82,6 +82,24 @@ def _get_project_lock(agent_id: str) -> asyncio.Lock:
 
 # --- Helpers ------------------------------------------------------------------
 
+def resolve_agent_home(
+    agent_user: Optional[dict], agent_id: Optional[str],
+) -> tuple[Optional[str], Optional[int], Optional[int]]:
+    """Resolve (home, uid, gid) for an agent, falling back to the runtime
+    `_agent_users` cache when `agent_user` is None or incomplete —
+    linuxUser.runAsRoot spawns pass effective_user=None but the per-agent
+    HOME still exists. Returns (None, None, None) when no HOME is known;
+    callers must guard on `home` before using uid/gid."""
+    home_user = agent_user
+    if (not home_user or not home_user.get("home")) and agent_id:
+        home_user = _agent_users.get(agent_id)
+    if not home_user or not home_user.get("home"):
+        return None, None, None
+    uid = home_user.get("uid")
+    gid = home_user.get("gid", uid)
+    return home_user["home"], uid, gid
+
+
 def _sanitize_agent_id(agent_id: str) -> str:
     sanitized = re.sub(r'[^a-zA-Z0-9]', '', agent_id)[:24]
     return f"agent_{sanitized}" if sanitized else "agent_default"
@@ -568,6 +586,36 @@ def read_github_token_from_credentials(home_dir: str) -> Optional[dict]:
     except OSError:
         pass
     return None
+
+
+def apply_github_token_env(env: dict, home: Optional[str]) -> None:
+    """Mirror the GitHub OAuth token from `<home>/.git-credentials` into the
+    spawn env: GITHUB_TOKEN/GH_TOKEN/GITHUB_USER, plus GH_HOST/GITHUB_API_URL
+    for GHES hosts.
+
+    The `git` CLI itself doesn't need this — the credential helper installed
+    by /projects/ensure or /credentials/git already covers it — but every
+    higher-level wrapper the LLM spawns (`gh`, octokit-based npm scripts,
+    anything reading GITHUB_TOKEN) does. Best-effort: an unreadable or
+    undecodable credentials file leaves the env untouched."""
+    if not home:
+        return
+    try:
+        gh = read_github_token_from_credentials(home)
+    except Exception:
+        gh = None
+    if not (gh and gh.get("token")):
+        return
+    env["GITHUB_TOKEN"] = gh["token"]
+    env["GH_TOKEN"] = gh["token"]
+    if gh.get("username") and gh["username"] != "x-access-token":
+        env.setdefault("GITHUB_USER", gh["username"])
+    # GHES support: point gh CLI at the right host when the cred entry came
+    # from a non-github.com host.
+    host = gh.get("host") or "github.com"
+    if host != "github.com":
+        env.setdefault("GH_HOST", host)
+        env.setdefault("GITHUB_API_URL", f"https://{host}/api/v3")
 
 
 async def install_agent_git_credentials(

@@ -6,9 +6,8 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { formatDate, timeAgo } from './taskConstants';
+import { formatDate, timeAgo, MODE_LABELS } from './taskConstants';
 
-const MODE_LABELS: Record<string, string> = { execute: 'Execution', refine: 'Refine', decide: 'Decide', title: 'Title', set_type: 'Set Type' };
 const MODE_COLORS: Record<string, string> = { execute: 'text-blue-300', refine: 'text-violet-300', decide: 'text-amber-300', title: 'text-teal-300', set_type: 'text-pink-300' };
 
 const FIELD_LABELS: Record<string, string> = {

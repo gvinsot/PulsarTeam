@@ -122,26 +122,13 @@ class ClaudeCodeBackend(RunnerBackend):
         session/history inside the agent's per-HOME `.claude` tree.
         """
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        # Bootstrap from the global token if the per-owner record is empty
-        # (mirrors the early lines of run_sync). We don't refresh proactively
-        # here — the CLI itself will refresh if it needs to.
-        if agent_user:
-            _owner_id = agent_user.get("owner_id")
-            if not await run_blocking(resolve_token, agent_user):
-                global_token = load_saved_token()
-                if global_token:
-                    global_refresh = get_saved_refresh_token()
-                    if _owner_id:
-                        await run_blocking(save_owner_token, _owner_id, global_token, refresh_token=global_refresh)
-                    else:
-                        save_agent_token(agent_user, global_token, refresh_token=global_refresh)
+        # Bootstrap from the global token if the per-owner record is empty.
+        # We don't refresh proactively here (no _ensure_auth gate) — the CLI
+        # itself will refresh if it needs to, and a PTY recipe has no channel
+        # to surface an auth_required payload anyway.
+        await self._bootstrap_owner_token(agent_user)
 
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        await run_blocking(configure_claude_mcp, effective_user, agent_id)
-        await run_blocking(configure_claude_instructions, effective_user, agent_id)
-        self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
-        seed_onboarding_state(effective_user)
-        await run_blocking(seed_credentials_file, effective_user)
+        effective_user = await self._prepare_spawn(agent_id, agent_user)
 
         # Reuse _build_cmd to get the same flags as the chat path, but in
         # interactive mode (no session_id → no --resume; the user drives
@@ -180,7 +167,7 @@ class ClaudeCodeBackend(RunnerBackend):
             else:
                 expires_in = 28800
             owner = (captured_user or {}).get("owner_id")
-            # Raise on persistence failure so PtySession._maybe_sync_creds
+            # Raise on persistence failure so PtySession's creds watcher
             # doesn't mark the token as synced — next poll retries instead
             # of leaving the stale DB record in place. save_owner_token /
             # save_agent_token return False on HTTP failure without raising,
@@ -211,15 +198,8 @@ class ClaudeCodeBackend(RunnerBackend):
             "cwd": proc_cwd,
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
-            # Raw passthrough: stream the PTY bytes straight to xterm.js (the
-            # client terminal) and let IT render them. xterm is a full, proven
-            # terminal emulator — exactly what every other CLI runner uses.
-            # The previous "snapshot" mode re-derived the screen server-side
-            # from pyte's display grid and re-emitted it with absolute cursor
-            # moves; for Claude Code's dense, absolute-positioned TUI that
-            # reconstruction dropped inter-word spaces and overlapped frames
-            # (garbled output). Raw mode renders the live TUI correctly.
-            "render_mode": "raw",
+            # Server-side "snapshot" rendering was abandoned (it garbled Claude
+            # Code's TUI); the PTY bytes stream raw to xterm.js which renders them.
             "creds_watch_path": creds_watch_path,
             "creds_on_change": _persist_creds,
             "creds_dedup_key": _creds_dedup_key,
@@ -517,6 +497,118 @@ class ClaudeCodeBackend(RunnerBackend):
 
         return cmd, cwd
 
+    # ── Shared auth-bootstrap / spawn-prep helpers ────────────────────────
+
+    async def _bootstrap_owner_token(self, agent_user: Optional[dict]) -> None:
+        """Seed the per-owner (or per-agent) token record from the global
+        token when it is still empty — first spawn after a fresh deploy."""
+        if not agent_user:
+            return
+        if await run_blocking(resolve_token, agent_user):
+            return
+        global_token = load_saved_token()
+        if not global_token:
+            return
+        global_refresh = get_saved_refresh_token()
+        _owner_id = agent_user.get("owner_id")
+        if _owner_id:
+            await run_blocking(save_owner_token, _owner_id, global_token, refresh_token=global_refresh)
+            logger.info(f"[Owner Auth] Bootstrapped owner {_owner_id} with global token")
+        else:
+            save_agent_token(agent_user, global_token, refresh_token=global_refresh)
+            logger.info(f"[Agent Auth] Bootstrapped agent {agent_user['username']} with global token")
+
+    async def _ensure_auth(self, agent_user: Optional[dict], agent_id: Optional[str]) -> Optional[dict]:
+        """Gate a headless spawn on a usable token.
+
+        Bootstraps the owner/agent record from the global token, proactively
+        refreshes an expired token (subject to the refresh cooldown), and
+        fails fast when no token exists at all — the claude CLI exits
+        silently with rc=0 when spawned without credentials. Returns None
+        when a usable token exists, otherwise an auth_required payload in
+        run_sync's dict shape (stream_events adapts it into an error event).
+        """
+        cooldown = get_token_cooldown_until()
+        await self._bootstrap_owner_token(agent_user)
+        if agent_user:
+            _owner_id = agent_user.get("owner_id")
+            if await run_blocking(is_agent_token_expired, agent_user) and time.time() >= cooldown:
+                refreshed = await refresh_agent_token(agent_user)
+                if not refreshed:
+                    who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
+                    if not await run_blocking(resolve_token, agent_user):
+                        logger.error(f"[Auth] No valid token for {who} — requiring re-authentication")
+                        login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
+                        return {
+                            "status": "auth_required",
+                            "output": "",
+                            "error": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
+                            "login_url": login_url,
+                        }
+                    logger.warning(f"[Auth] Proactive token refresh failed for {who}, continuing with existing token...")
+            # Final guard: if we still have no token after bootstrap, fail fast.
+            # Without this, claude CLI exits silently with rc=0 and no output.
+            if not await run_blocking(resolve_token, agent_user):
+                who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
+                logger.error(f"[Auth] No token available for {who} — cannot spawn Claude CLI")
+                login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
+                return {
+                    "status": "auth_required",
+                    "output": "",
+                    "error": f"No authentication token available. Please authenticate: {login_url}",
+                    "login_url": login_url,
+                }
+        else:
+            if is_token_expired() and time.time() >= cooldown:
+                refreshed = await refresh_oauth_token()
+                if not refreshed:
+                    if not load_saved_token():
+                        logger.error("[Auth] No valid global token — requiring re-authentication")
+                        login_url = await get_login_url()
+                        return {
+                            "status": "auth_required",
+                            "output": "",
+                            "error": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
+                            "login_url": login_url,
+                        }
+                    logger.warning("[Auth] Proactive global token refresh failed, continuing with existing token...")
+            # Final guard for the global / no-agent path as well.
+            if not load_saved_token() and auth_method() == "none":
+                logger.error("[Auth] No global token available — cannot spawn Claude CLI")
+                login_url = await get_login_url()
+                return {
+                    "status": "auth_required",
+                    "output": "",
+                    "error": f"No authentication token available. Please authenticate: {login_url}",
+                    "login_url": login_url,
+                }
+        return None
+
+    async def _prepare_spawn(self, agent_id: Optional[str], agent_user: Optional[dict]) -> Optional[dict]:
+        """Per-spawn HOME/config prep shared by run_sync, stream_events and
+        prepare_interactive. Returns the effective user (None in runAsRoot
+        mode)."""
+        # linuxUser.runAsRoot=true: skip the per-agent UID drop and let claude
+        # run as the server's root UID. Off by default — when off, we keep the
+        # dedicated agent UID resolved by ensure_agent_user.
+        effective_user = self._resolve_effective_user(agent_id, agent_user)
+        await run_blocking(configure_claude_mcp, effective_user, agent_id)
+        await run_blocking(configure_claude_instructions, effective_user, agent_id)
+        # Translate permissions (network / filesystem / execution.shell) into
+        # native Claude Code deny rules in the per-agent settings.json. Done
+        # at every spawn so toggles take effect on the next message without
+        # having to recreate the agent's HOME.
+        self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
+        # Mark onboarding as already completed in `.claude.json` so the TUI
+        # skips its first-run theme picker / login-method picker / OAuth
+        # flow — none of which the PTY driver can satisfy. The CLI normally
+        # writes these flags after a successful interactive OAuth login.
+        seed_onboarding_state(effective_user)
+        # Seed `.claude/.credentials.json` as defense in depth alongside the
+        # env-var token injection.
+        await run_blocking(seed_credentials_file, effective_user)
+        return effective_user
+
     # ── Synchronous execution ─────────────────────────────────────────────
 
     async def run_sync(
@@ -543,84 +635,12 @@ class ClaudeCodeBackend(RunnerBackend):
             }
 
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        cooldown = get_token_cooldown_until()
-
-        if agent_user:
-            _owner_id_sync = agent_user.get("owner_id")
-            # Bootstrap from global token if agent has none yet (mirrors stream_events)
-            if not await run_blocking(resolve_token, agent_user):
-                global_token = load_saved_token()
-                if global_token:
-                    global_refresh = get_saved_refresh_token()
-                    if _owner_id_sync:
-                        await run_blocking(save_owner_token, _owner_id_sync, global_token, refresh_token=global_refresh)
-                        logger.info(f"[Owner Auth] Bootstrapped owner {_owner_id_sync} with global token")
-                    else:
-                        save_agent_token(agent_user, global_token, refresh_token=global_refresh)
-                        logger.info(f"[Agent Auth] Bootstrapped agent {agent_user['username']} with global token")
-            if await run_blocking(is_agent_token_expired, agent_user) and time.time() >= cooldown:
-                refreshed = await refresh_agent_token(agent_user)
-                if not refreshed and not await run_blocking(resolve_token, agent_user):
-                    login_url = initiate_owner_login(_owner_id_sync) if _owner_id_sync else initiate_agent_login(agent_id)
-                    return {
-                        "status": "auth_required",
-                        "output": "",
-                        "error": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
-                        "login_url": login_url,
-                    }
-            # Final guard: claude CLI exits silently with rc=0 if there's no token at all.
-            if not await run_blocking(resolve_token, agent_user):
-                who = f"owner {_owner_id_sync}" if _owner_id_sync else f"agent {agent_id}"
-                logger.error(f"[Auth] No token available for {who} — cannot spawn Claude CLI")
-                login_url = initiate_owner_login(_owner_id_sync) if _owner_id_sync else initiate_agent_login(agent_id)
-                return {
-                    "status": "auth_required",
-                    "output": "",
-                    "error": f"No authentication token available. Please authenticate: {login_url}",
-                    "login_url": login_url,
-                }
-        else:
-            if is_token_expired() and time.time() >= cooldown:
-                refreshed = await refresh_oauth_token()
-                if not refreshed and not load_saved_token():
-                    login_url = await get_login_url()
-                    return {
-                        "status": "auth_required",
-                        "output": "",
-                        "error": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
-                        "login_url": login_url,
-                    }
-            if not load_saved_token() and auth_method() == "none":
-                logger.error("[Auth] No global token available — cannot spawn Claude CLI")
-                login_url = await get_login_url()
-                return {
-                    "status": "auth_required",
-                    "output": "",
-                    "error": f"No authentication token available. Please authenticate: {login_url}",
-                    "login_url": login_url,
-                }
+        gate = await self._ensure_auth(agent_user, agent_id)
+        if gate:
+            return gate
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
-
-        # linuxUser.runAsRoot=true: skip the per-agent UID drop and let claude
-        # run as the server's root UID. Off by default — when off, we keep the
-        # dedicated agent UID resolved by ensure_agent_user.
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        await run_blocking(configure_claude_mcp, effective_user, agent_id)
-        await run_blocking(configure_claude_instructions, effective_user, agent_id)
-        # Translate permissions (network / filesystem / execution.shell) into
-        # native Claude Code deny rules in the per-agent settings.json. Done
-        # at every spawn so toggles take effect on the next message without
-        # having to recreate the agent's HOME.
-        self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
-        # Mark onboarding as already completed in `.claude.json` so the TUI
-        # skips its first-run theme picker / login-method picker / OAuth
-        # flow — none of which the PTY driver can satisfy. The CLI normally
-        # writes these flags after a successful interactive OAuth login.
-        seed_onboarding_state(effective_user)
-        # Seed `.claude/.credentials.json` as defense in depth alongside the
-        # env-var token injection.
-        await run_blocking(seed_credentials_file, effective_user)
+        effective_user = await self._prepare_spawn(agent_id, agent_user)
 
         # Decide initial session strategy. If the caller handed us a
         # session_id, try to --resume it (fast path: prior turns live in
@@ -878,82 +898,17 @@ class ClaudeCodeBackend(RunnerBackend):
             return
 
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        cooldown = get_token_cooldown_until()
-
-        _owner_id = agent_user.get("owner_id") if agent_user else None
-        if agent_user:
-            if not await run_blocking(resolve_token, agent_user):
-                global_token = load_saved_token()
-                if global_token:
-                    global_refresh = get_saved_refresh_token()
-                    if _owner_id:
-                        await run_blocking(save_owner_token, _owner_id, global_token, refresh_token=global_refresh)
-                        logger.info(f"[Owner Auth] Bootstrapped owner {_owner_id} with global token")
-                    else:
-                        save_agent_token(agent_user, global_token, refresh_token=global_refresh)
-                        logger.info(f"[Agent Auth] Bootstrapped agent {agent_user['username']} with global token")
-            if await run_blocking(is_agent_token_expired, agent_user) and time.time() >= cooldown:
-                refreshed = await refresh_agent_token(agent_user)
-                if not refreshed:
-                    who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
-                    if not await run_blocking(resolve_token, agent_user):
-                        logger.error(f"[Auth] No valid token for {who} — requiring re-authentication")
-                        if agent_user:
-                            login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
-                        else:
-                            login_url = await get_login_url()
-                        yield {
-                            "type": "error",
-                            "content": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
-                            "login_url": login_url,
-                        }
-                        return
-                    logger.warning(f"[Auth] Proactive token refresh failed for {who}, continuing with existing token...")
-            # Final guard: if we still have no token after bootstrap, fail fast.
-            # Without this, claude CLI exits silently with rc=0 and no output.
-            if not await run_blocking(resolve_token, agent_user):
-                who = f"owner {_owner_id}" if _owner_id else f"agent {agent_id}"
-                logger.error(f"[Auth] No token available for {who} — cannot spawn Claude CLI")
-                login_url = initiate_owner_login(_owner_id) if _owner_id else initiate_agent_login(agent_id)
-                yield {
-                    "type": "error",
-                    "content": f"No authentication token available. Please authenticate: {login_url}",
-                    "login_url": login_url,
-                }
-                return
-        else:
-            if is_token_expired() and time.time() >= cooldown:
-                refreshed = await refresh_oauth_token()
-                if not refreshed:
-                    if not load_saved_token():
-                        logger.error("[Auth] No valid global token — requiring re-authentication")
-                        login_url = await get_login_url()
-                        yield {
-                            "type": "error",
-                            "content": f"OAuth token expired and refresh token is invalid. Please re-authenticate: {login_url}",
-                            "login_url": login_url,
-                        }
-                        return
-                    logger.warning("[Auth] Proactive global token refresh failed, continuing with existing token...")
-            # Final guard for the global / no-agent path as well.
-            if not load_saved_token() and auth_method() == "none":
-                logger.error("[Auth] No global token available — cannot spawn Claude CLI")
-                login_url = await get_login_url()
-                yield {
-                    "type": "error",
-                    "content": f"No authentication token available. Please authenticate: {login_url}",
-                    "login_url": login_url,
-                }
-                return
+        gate = await self._ensure_auth(agent_user, agent_id)
+        if gate:
+            yield {
+                "type": "error",
+                "content": gate["error"],
+                "login_url": gate["login_url"],
+            }
+            return
 
         agent_label = f" (user={agent_user['username']})" if agent_user else ""
-        effective_user = self._resolve_effective_user(agent_id, agent_user)
-        await run_blocking(configure_claude_mcp, effective_user, agent_id)
-        await run_blocking(configure_claude_instructions, effective_user, agent_id)
-        self._apply_permissions_to_settings(effective_user, self._get_permissions(agent_id))
-        # See run_sync for rationale on both seeds.
-        seed_onboarding_state(effective_user)
-        await run_blocking(seed_credentials_file, effective_user)
+        effective_user = await self._prepare_spawn(agent_id, agent_user)
 
         # Same resume/replay strategy as run_sync. The route handler hands us
         # `prompt` already flattened from the full conversation history (it's
@@ -1119,14 +1074,19 @@ class ClaudeCodeBackend(RunnerBackend):
             return flow["auth_url"]
         return initiate_agent_login(agent_id)
 
-    async def agent_auth_callback(self, agent_id: str, code: str) -> dict:
-        flow = get_agent_oauth_flow(agent_id)
-        if not flow:
-            return {"status": "error", "message": "No pending OAuth flow for this agent."}
-        agent_user = await ensure_agent_user(agent_id)
-        if not agent_user:
-            return {"status": "error", "message": "Failed to resolve agent user"}
-
+    async def _oauth_callback(
+        self,
+        flow: dict,
+        code: str,
+        exchange_desc: str,
+        persist,
+        pop,
+        success_payload: dict,
+    ) -> dict:
+        """Shared code-exchange body for agent_auth_callback /
+        owner_auth_callback: exchange the code, validate, persist via
+        `persist(access, refresh, expires_in)` (returns False on persistence
+        failure), pop the pending flow, and return `success_payload`."""
         payload = {
             "grant_type": "authorization_code",
             "client_id": OAUTH_CLIENT_ID,
@@ -1134,7 +1094,7 @@ class ClaudeCodeBackend(RunnerBackend):
             "redirect_uri": OAUTH_REDIRECT_URI,
             "code_verifier": flow["code_verifier"],
         }
-        result = await token_http_request(payload, f"agent {agent_id[:12]} code exchange")
+        result = await token_http_request(payload, exchange_desc)
         if not result:
             return {"status": "error", "message": "Token exchange failed"}
         access_token = result.get("access_token")
@@ -1142,10 +1102,24 @@ class ClaudeCodeBackend(RunnerBackend):
             return {"status": "error", "message": f"Token response missing access_token: {json.dumps(result)}"}
         refresh_token = result.get("refresh_token")
         expires_in = result.get("expires_in", 28800)
-        if not save_agent_token(agent_user, access_token, refresh_token=refresh_token, expires_in=expires_in):
+        if not persist(access_token, refresh_token, expires_in):
             return {"status": "error", "message": "Token exchange succeeded but persistence failed (team-api unreachable)."}
-        pop_agent_oauth_flow(agent_id)
-        return {"status": "authenticated", "agent_id": agent_id, "message": "Agent now has its own OAuth token."}
+        pop()
+        return success_payload
+
+    async def agent_auth_callback(self, agent_id: str, code: str) -> dict:
+        flow = get_agent_oauth_flow(agent_id)
+        if not flow:
+            return {"status": "error", "message": "No pending OAuth flow for this agent."}
+        agent_user = await ensure_agent_user(agent_id)
+        if not agent_user:
+            return {"status": "error", "message": "Failed to resolve agent user"}
+        return await self._oauth_callback(
+            flow, code, f"agent {agent_id[:12]} code exchange",
+            persist=lambda at, rt, exp: save_agent_token(agent_user, at, refresh_token=rt, expires_in=exp),
+            pop=lambda: pop_agent_oauth_flow(agent_id),
+            success_payload={"status": "authenticated", "agent_id": agent_id, "message": "Agent now has its own OAuth token."},
+        )
 
     async def agent_set_token(self, agent_id: str, token: str) -> None:
         agent_user = await ensure_agent_user(agent_id)
@@ -1176,25 +1150,12 @@ class ClaudeCodeBackend(RunnerBackend):
         flow = get_owner_oauth_flow(owner_id)
         if not flow:
             return {"status": "error", "message": "No pending OAuth flow for this owner."}
-        payload = {
-            "grant_type": "authorization_code",
-            "client_id": OAUTH_CLIENT_ID,
-            "code": code,
-            "redirect_uri": OAUTH_REDIRECT_URI,
-            "code_verifier": flow["code_verifier"],
-        }
-        result = await token_http_request(payload, f"owner {owner_id} code exchange")
-        if not result:
-            return {"status": "error", "message": "Token exchange failed"}
-        access_token = result.get("access_token")
-        if not access_token:
-            return {"status": "error", "message": f"Token response missing access_token: {json.dumps(result)}"}
-        refresh_token = result.get("refresh_token")
-        expires_in = result.get("expires_in", 28800)
-        if not save_owner_token(owner_id, access_token, refresh_token=refresh_token, expires_in=expires_in):
-            return {"status": "error", "message": "Token exchange succeeded but persistence failed (team-api unreachable)."}
-        pop_owner_oauth_flow(owner_id)
-        return {"status": "authenticated", "owner_id": owner_id, "message": "Owner now has an OAuth token shared by all their agents."}
+        return await self._oauth_callback(
+            flow, code, f"owner {owner_id} code exchange",
+            persist=lambda at, rt, exp: save_owner_token(owner_id, at, refresh_token=rt, expires_in=exp),
+            pop=lambda: pop_owner_oauth_flow(owner_id),
+            success_payload={"status": "authenticated", "owner_id": owner_id, "message": "Owner now has an OAuth token shared by all their agents."},
+        )
 
     async def owner_set_token(self, owner_id: str, token: str) -> None:
         if not save_owner_token(owner_id, token):

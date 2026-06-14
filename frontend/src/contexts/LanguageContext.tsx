@@ -1,5 +1,8 @@
 import { createContext, useContext, useState, useCallback } from 'react';
 import { t as translate, Lang, TranslationKey } from '../i18n/translations';
+// safeStorage matters here: this provider wraps the whole app, so a
+// storage-blocked browser must degrade instead of crashing the tree.
+import { safeGet, safeSet } from '../lib/safeStorage';
 
 interface LanguageContextValue {
   lang: Lang;
@@ -9,15 +12,6 @@ interface LanguageContextValue {
 }
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
-
-// localStorage can throw (cookies blocked for the site, sandboxed webviews) —
-// this provider wraps the whole app, so degrade instead of crashing the tree.
-const safeGet = (key: string): string | null => {
-  try { return localStorage.getItem(key); } catch { return null; }
-};
-const safeSet = (key: string, value: string): void => {
-  try { localStorage.setItem(key, value); } catch { /* storage blocked */ }
-};
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>(() => {

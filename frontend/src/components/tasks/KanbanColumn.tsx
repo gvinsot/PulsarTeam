@@ -3,7 +3,7 @@ import { Trash2, Edit3, Plus, ArrowRight, GripVertical } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import TaskCard from './TaskCard';
 
-export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onResume, onClearStopped, onDrop, onOpen, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits, columns, onBatchMove, onBatchDelete, canReorderColumns, draggingColumnId, onColumnDragStart, onColumnDragEnd, onColumnReorder, isFirstColumn, isLastColumn }) {
+export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, onClearStopped, onDrop, onOpen, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits, columns, onBatchMove, onBatchDelete, canReorderColumns, draggingColumnId, onColumnDragStart, onColumnDragEnd, onColumnReorder, isFirstColumn, isLastColumn }) {
   const { theme } = useTheme() as { theme?: string };
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
@@ -242,7 +242,6 @@ export default function KanbanColumn({ col, tasks, agents, onDelete, onStop, onR
             )}
             <TaskCard
               task={task}
-              agents={agents}
               onDelete={onDelete}
               onStop={onStop}
               onResume={onResume}

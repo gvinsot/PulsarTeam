@@ -12,6 +12,8 @@ import { readSecret } from '../secrets.js';
  *   MICROSOFT_CLIENT_ID
  *   MICROSOFT_CLIENT_SECRET
  *   MICROSOFT_TENANT_ID (optional — defaults to "common" for personal + work)
+ *   MICROSOFT_CONSUMER_LOGIN_HINT (optional — email pre-filled as login_hint by
+ *     the OneDrive consumer flow, see routes/onedrive.ts /auth-url?consumer=1)
  *
  * The redirect URI is NOT configurable here — it's derived from each request
  * so login lands on /auth/microsoft/callback and the plugin dispatcher lands

@@ -1,5 +1,20 @@
 import crypto from 'crypto';
 import type { Response } from 'express';
+import type { ScopeType } from '../services/database.js';
+
+/**
+ * The core token-scoping rule shared by every OAuth plugin:
+ * resolve the storage scope as agent → board → user (fallback 'default').
+ */
+export function resolveScope(
+  agentId: string | null,
+  boardId: string | null,
+  username: string | undefined,
+): { scopeType: ScopeType; scopeId: string } {
+  if (agentId) return { scopeType: 'agent', scopeId: agentId };
+  if (boardId) return { scopeType: 'board', scopeId: boardId };
+  return { scopeType: 'user', scopeId: username || 'default' };
+}
 
 export function sendOAuthResult(
   res: Response,

@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getSlackAccessTokenForAgent } from '../routes/slack.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 const SLACK_BASE = 'https://slack.com/api';
 
@@ -376,24 +376,6 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
  * Reads X-Agent-Id header to provide agent-specific token resolution.
  */
 export function createSlackMcpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createSlackMcpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[Slack MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Slack', ({ agentId, boardId }) =>
+    createSlackMcpServer(agentId, boardId));
 }

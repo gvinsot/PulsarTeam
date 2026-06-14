@@ -65,6 +65,12 @@ services:
       - SLACK_CLIENT_ID=${SLACK_CLIENT_ID:-}
       - SLACK_CLIENT_SECRET=${SLACK_CLIENT_SECRET:-}
       - SLACK_REDIRECT_URI=${SLACK_REDIRECT_URI:-}
+      - JIRA_BOARD_URL=${JIRA_BOARD_URL:-}
+      - JIRA_ORG_ID=${JIRA_ORG_ID:-}
+      - JIRA_API_KEY=${JIRA_API_KEY:-}
+      - JIRA_USER_EMAIL=${JIRA_USER_EMAIL:-}
+      - JIRA_WEBHOOK_URL=${JIRA_WEBHOOK_URL:-}
+      - JIRA_WEBHOOK_SECRET=${JIRA_WEBHOOK_SECRET:-}
     cap_drop:
       - ALL
     cap_add:
@@ -136,7 +142,9 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
+      - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - VERBOSE=${CODER_VERBOSE:-false}
       - TIMEOUT=600
       - PORT=8000
@@ -156,7 +164,6 @@ services:
       # all re-injected at spawn. A global (no-owner) token must come from the
       # CLAUDE_CODE_OAUTH_TOKEN env. Only the Android SDK cache is kept.
       - claudecode-android-cache:/opt/android-sdk
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -212,7 +219,6 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -270,7 +276,6 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -334,7 +339,6 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -398,7 +402,6 @@ services:
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -439,7 +442,7 @@ services:
       - RUNNER_TYPE=hermes
       - TZ=${TZ:-Europe/Paris}
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${HERMES_MODEL:-}
+      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-8}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TIMEOUT=600
       - PORT=8000
@@ -452,7 +455,6 @@ services:
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -505,7 +507,6 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - sandbox-data:/app/data
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -522,14 +523,6 @@ services:
       - sandbox-net
     depends_on:
       - api
-    deploy:
-      resources:
-        limits:
-          cpus: '4'
-          memory: 4G
-        reservations:
-          cpus: '1'
-          memory: 1G
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
@@ -558,7 +551,6 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - mock-data:/app/data
-    init: true
     cap_drop:
       - ALL
     cap_add:
@@ -583,6 +575,33 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  flaresolverr:
+    image: 21hsmw/flaresolverr:nodriver
+    environment:
+      - LOG_LEVEL=info
+      - TZ=${TZ:-Europe/Paris}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=128M,mode=1777
+    networks:
+      - sandbox-net
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
   mcp-browser:
     build:
       context: .
@@ -591,7 +610,8 @@ services:
       - TZ=${TZ:-Europe/Paris}
       - NODE_ENV=production
       - LOG_LEVEL=info
-    init: true
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+      - MAX_SEARCH_RESULT=5
     cap_drop:
       - ALL
     cap_add:
@@ -606,14 +626,8 @@ services:
     networks:
       - sandbox-net
       - backend
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '0.5'
-          memory: 512M
+    depends_on:
+      - flaresolverr
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
