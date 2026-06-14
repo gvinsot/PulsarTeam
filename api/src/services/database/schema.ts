@@ -50,6 +50,18 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Migrations for existing installs: CREATE TABLE IF NOT EXISTS is a no-op
+      // on a DB that already has the table, so columns added after the table's
+      // first creation must be back-filled here with idempotent ALTERs.
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE').catch(() => {});
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS microsoft_id TEXT UNIQUE').catch(() => {});
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS github_id TEXT UNIQUE').catch(() => {});
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT').catch(() => {});
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ').catch(() => {});
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ').catch(() => {});
+      await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS tutorial_completed_at TIMESTAMPTZ').catch(() => {});
+      // OAuth-only users have no local password.
+      await pool.query('ALTER TABLE users ALTER COLUMN password DROP NOT NULL').catch(() => {});
       console.log('✅ Users table ready');
 
       // ── Projects table (DB-managed projects, M:1 boards → projects) ───────
@@ -83,12 +95,25 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Migrations for existing installs (idempotent). Must run before the
+      // indexes below — idx_boards_project and uniq_boards_default reference
+      // columns that only exist on a fresh DB's CREATE TABLE otherwise.
+      await pool.query('ALTER TABLE boards ALTER COLUMN user_id DROP NOT NULL').catch(() => {});
+      await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS is_default BOOLEAN NOT NULL DEFAULT FALSE').catch(() => {});
+      await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS plugins JSONB NOT NULL DEFAULT \'[]\'').catch(() => {});
+      await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS mcp_auth JSONB NOT NULL DEFAULT \'{}\'').catch(() => {});
+      await pool.query('ALTER TABLE boards ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE SET NULL').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_boards_user ON boards(user_id)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_boards_project ON boards(project_id)').catch(() => {});
-      // No .catch: concurrently booting replicas rely on this unique guard
-      // existing before ensureDefaultBoard runs, so a failure must propagate
-      // to the retry loop instead of letting each replica insert its own
-      // default board.
+      // Demote any duplicate default boards (oldest wins) before adding the
+      // unique guard — CREATE UNIQUE INDEX would fail on a DB that already has
+      // duplicates. No .catch: if either statement fails the retry loop must
+      // see it, otherwise concurrently booting replicas can each insert their
+      // own default board.
+      await pool.query(`
+        UPDATE boards SET is_default = FALSE
+        WHERE is_default AND id NOT IN (SELECT id FROM boards WHERE is_default ORDER BY created_at LIMIT 1)
+      `);
       await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_boards_default ON boards (is_default) WHERE is_default');
       // Ensure a single default board exists
       await ensureDefaultBoard(pool);
@@ -105,6 +130,13 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Migrations for existing installs (idempotent). board_id is added here —
+      // after the boards table exists — because the FK fails with 42P01 on a
+      // fresh database otherwise.
+      await pool.query('ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_id UUID REFERENCES users(id) ON DELETE SET NULL').catch(() => {});
+      await pool.query(`
+        ALTER TABLE agents ADD COLUMN IF NOT EXISTS board_id UUID REFERENCES boards(id) ON DELETE SET NULL
+      `).catch((e: any) => console.error('[initDatabase] ADD COLUMN agents.board_id failed:', e.message));
       await pool.query('CREATE INDEX IF NOT EXISTS idx_agents_board ON agents(board_id)').catch(() => {});
       console.log('✅ Agents table ready');
 
@@ -117,6 +149,8 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           updated_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Migrate existing UUID id column to TEXT if needed (idempotent on TEXT).
+      await pool.query('ALTER TABLE skills ALTER COLUMN id TYPE TEXT').catch(() => {});
       console.log('✅ Skills table ready');
 
       // ── MCP Servers table ─────────────────────────────────────────────────
@@ -170,6 +204,13 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           recorded_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Migrations for existing installs (idempotent). Must run before the
+      // user/idempotency indexes below, which reference these columns.
+      await pool.query('ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS context_tokens INTEGER DEFAULT 0').catch(() => {});
+      await pool.query('ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS idempotency_key TEXT')
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN token_usage_log.idempotency_key failed:', e.message));
+      await pool.query('ALTER TABLE token_usage_log ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL')
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN token_usage_log.user_id failed:', e.message));
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_agent ON token_usage_log(agent_id)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_date ON token_usage_log(recorded_at)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage_log(user_id)').catch(() => {});
@@ -256,6 +297,36 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           started_at TIMESTAMPTZ
         )
       `);
+      // Migrations for existing installs (idempotent). CREATE TABLE IF NOT
+      // EXISTS does NOT add columns to a pre-existing tasks table, so every
+      // column introduced after the table's first creation must be back-filled
+      // here — and before the indexes below, several of which reference these
+      // columns (position, repo_full_name, storage_path, deleted_at).
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS deleted_by UUID').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS execution_status TEXT').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS completed_action_idx INTEGER').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running BOOLEAN DEFAULT FALSE').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_agent_id UUID').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_from_status TEXT').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_mode TEXT').catch(() => {});
+      // pending_on_enter is the deferred on_enter retry flag — durable so
+      // interrupted workflow chains resume after restart.
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pending_on_enter TEXT').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_manual BOOLEAN DEFAULT FALSE').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS position BIGINT NOT NULL DEFAULT 0').catch(() => {});
+      // No silent swallow here — if this migration ever fails the badge stays missing.
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS environment TEXT')
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN tasks.environment failed:', e.message));
+      await pool.query('ALTER TABLE tasks ALTER COLUMN agent_id DROP NOT NULL')
+        .catch((e: any) => console.error('[initDatabase] DROP NOT NULL tasks.agent_id failed:', e.message));
+      // Legacy columns removed when repo/storage targeting moved onto the task.
+      await pool.query('ALTER TABLE tasks DROP COLUMN IF EXISTS project').catch(() => {});
+      await pool.query('ALTER TABLE tasks DROP COLUMN IF EXISTS repo_id').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS repo_provider TEXT').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS repo_full_name TEXT').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS storage_provider TEXT').catch(() => {});
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS storage_path TEXT').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_board ON tasks(board_id)').catch(() => {});
@@ -314,6 +385,10 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           created_at TIMESTAMPTZ DEFAULT NOW()
         )
       `);
+      // Migrations for existing installs (idempotent): the 'delete' audit row is
+      // written after the board is gone, so board_id must be nullable and FK-free.
+      await pool.query('ALTER TABLE board_audit_logs ALTER COLUMN board_id DROP NOT NULL').catch(() => {});
+      await pool.query('ALTER TABLE board_audit_logs DROP CONSTRAINT IF EXISTS board_audit_logs_board_id_fkey').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_board_audit_board ON board_audit_logs(board_id)').catch(() => {});
       console.log('✅ Board audit logs table ready');
 
