@@ -1,4 +1,10 @@
 import express from 'express';
+import {
+  statusesHandler,
+  swarmStatusHandler,
+  byProjectHandler,
+  projectSummaryHandler,
+} from './lib/agentStatusHandlers.js';
 
 export function leaderToolsRoutes(agentManager) {
   const router = express.Router();
@@ -50,40 +56,24 @@ export function leaderToolsRoutes(agentManager) {
     return res.json(status);
   });
 
+  // Swarm Leader tools below mount the UNSCOPED status handlers (scoped=false):
+  // a leader deliberately sees the whole swarm, not just the caller's boards
+  // (see routes/lib/agentStatusHandlers.ts + docs/API_REFERENCE.md).
+
   // Swarm Leader tool: get lightweight status for ALL enabled agents
   // Returns an array of agent status objects (each includes project, currentTask, tasks, etc.)
   // Much lighter than GET /agents which returns full agent data with conversation history
   // Optional query param: ?project=ProjectName to filter by project
-  router.get('/all-statuses', (req, res) => {
-    const { project } = req.query;
-    let statuses = agentManager.getAllStatuses(req.user.userId, req.user.role);
-
-    // Optional project filter
-    if (project) {
-      const lowerProject = (project as string).toLowerCase();
-      statuses = statuses.filter(s =>
-        (s.project || '').toLowerCase() === lowerProject
-      );
-    }
-
-    return res.json(statuses);
-  });
+  router.get('/all-statuses', statusesHandler(agentManager, false));
 
   // Swarm Leader tool: get swarm-wide status with project assignments
-  router.get('/swarm-status', (req, res) => {
-    return res.json(agentManager.getSwarmStatus(req.user.userId, req.user.role));
-  });
+  router.get('/swarm-status', swarmStatusHandler(agentManager, false));
 
   // Swarm Leader tool: get agents working on a specific project
-  router.get('/by-project/:project', (req, res) => {
-    const agents = agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role);
-    return res.json(agents);
-  });
+  router.get('/by-project/:project', byProjectHandler(agentManager, false));
 
   // Swarm Leader tool: get project summary — all projects with their agent distribution
-  router.get('/project-summary', (req, res) => {
-    return res.json(agentManager.getProjectSummary(req.user.userId, req.user.role));
-  });
+  router.get('/project-summary', projectSummaryHandler(agentManager, false));
 
   return router;
 }

@@ -1,23 +1,15 @@
 import { Router } from 'express';
 import { requireRole, checkBoardAccess } from '../middleware/auth.js';
-import { getPool, getBoardById, getBoardsByUser, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
+import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
+import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import {
   reorderTasksSchema,
   updateTaskSchema,
   bulkMoveSchema,
 } from '../schemas/tasks.js';
-
-async function getUserBoardIds(userId: string): Promise<string[]> {
-  try {
-    const boards = await getBoardsByUser(userId);
-    return boards.map(b => b.id);
-  } catch {
-    return [];
-  }
-}
 
 const router = Router();
 
@@ -72,6 +64,53 @@ function validateColumn(board, columnId) {
   return board.workflow.columns[0].id;
 }
 
+/** Look up the in-memory task object for an agent (getTask returns a copy). */
+export function getMemTask(mgr, agentId, taskId) {
+  return mgr._getAgentTasks(agentId).find(t => t.id === taskId) ?? null;
+}
+
+/** Clear the actionRunning trio on a task object (uses delete, not = null). */
+function clearActionRunning(t) {
+  t.actionRunning = false;
+  delete t.actionRunningAgentId;
+  delete t.actionRunningMode;
+}
+
+/** Stop the agent executing a task and clear its actionRunning flags. */
+function stopTaskExecutor(mgr, task) {
+  const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
+  if (executorId) mgr.stopAgent(executorId);
+  clearActionRunning(task);
+}
+
+/**
+ * Clear the stale execution state on the in-memory task after a status change
+ * (the 8-field reset shared by the memTask sync blocks). Intentionally does NOT
+ * stamp completedAt or fire setTaskSignal — those differ per call site and stay
+ * inline at the call sites.
+ */
+function clearExecutionState(t) {
+  t.startedAt = null;
+  t.executionStatus = null;
+  delete t._pendingOnEnter;
+  delete t._completedActionIdx;
+  t.completedActionIdx = null;
+  clearActionRunning(t);
+}
+
+/**
+ * Emit the task:updated + agent:updated pair for a task. Used by PUT /:id and
+ * bulk-move. NOT used by /:id/stop, which emits only task:updated with a
+ * constructed payload and no agent:updated.
+ */
+function emitTaskUpdate(mgr, task) {
+  mgr._emit('task:updated', { agentId: task.agentId, task });
+  if (task.agentId) {
+    const agent = mgr.agents.get(task.agentId);
+    if (agent) mgr._emit('agent:updated', mgr._sanitize(agent));
+  }
+}
+
 // ── GET /tasks — list all tasks (from the tasks table) ─────────────────────
 router.get('/', async (req, res) => {
   try {
@@ -93,9 +132,9 @@ router.get('/', async (req, res) => {
 
     // Scope to user's accessible boards (admins see all)
     if (req.user.role !== 'admin') {
-      const boardIds = await getUserBoardIds(req.user.userId);
-      if (boardIds.length === 0) return res.json([]);
-      params.push(boardIds);
+      const boardIds = await getUserBoardIdSet(req.user.userId);
+      if (boardIds.size === 0) return res.json([]);
+      params.push([...boardIds]);
       query += ` AND t.board_id = ANY($${params.length})`;
     }
 
@@ -182,7 +221,7 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
       if (task) {
         const memAgent = mgr.agents.get(task.agentId);
         if (memAgent) {
-          const memTask = mgr._getAgentTasks(task.agentId).find(t => t.id === orderedIds[i]);
+          const memTask = getMemTask(mgr, task.agentId, orderedIds[i]);
           if (memTask) memTask.position = i;
         }
       }
@@ -214,15 +253,9 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
     const wantsColumnChange = column !== undefined && column !== task.status;
     const wantsBoardChange = boardId !== undefined && boardId !== (task.boardId || null);
     if (task.actionRunning && (wantsColumnChange || wantsBoardChange)) {
-      // Stop the executing agent so the task can be moved
-      const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
-      if (executorId) {
-        mgr.stopAgent(executorId);
-      }
-      // Clear actionRunning on our copy so it persists correctly
-      task.actionRunning = false;
-      delete task.actionRunningAgentId;
-      delete task.actionRunningMode;
+      // Stop the executing agent so the task can be moved and clear
+      // actionRunning on our copy so it persists correctly.
+      stopTaskExecutor(mgr, task);
     }
 
     // Track what changed for history / notifications
@@ -288,12 +321,14 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
 
     // Clear execution state on the copy when status changed — this ensures
     // the DB row is also cleaned up when saveTaskDirectly persists the copy.
+    // NOTE: intentionally a SHORTER reset than clearExecutionState() applied to
+    // the memTask below — completedActionIdx/_pendingOnEnter are persisted columns
+    // and must be retained on the copy that saveTaskDirectly writes; nulling them
+    // here would wipe them from the DB row (observable after restart rehydration).
     if (statusChanged) {
       task.startedAt = null;
       task.executionStatus = null;
-      task.actionRunning = false;
-      delete task.actionRunningAgentId;
-      delete task.actionRunningMode;
+      clearActionRunning(task);
       if (task.status === 'done') task.completedAt = now;
     }
 
@@ -324,7 +359,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
     // ── Sync changes back to in-memory task (getTask returns a copy) ────
     const memAgent = mgr.agents.get(task.agentId);
     if (memAgent) {
-      const memTask = mgr._getAgentTasks(task.agentId).find(t => t.id === req.params.id);
+      const memTask = getMemTask(mgr, task.agentId, req.params.id);
       if (memTask) {
         if (title !== undefined) memTask.title = task.title;
         if (description !== undefined) memTask.text = task.text;
@@ -343,14 +378,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
         // Also signal the reminder loop to stop — the agent should no longer
         // work on this task since it was moved by a user.
         if (statusChanged) {
-          memTask.startedAt = null;
-          memTask.executionStatus = null;
-          delete memTask._pendingOnEnter;
-          delete memTask._completedActionIdx;
-          memTask.completedActionIdx = null;
-          memTask.actionRunning = false;
-          delete memTask.actionRunningAgentId;
-          delete memTask.actionRunningMode;
+          clearExecutionState(memTask);
           if (task.status === 'done') memTask.completedAt = now;
           // Signal the reminder loop / execution wait to exit
           setTaskSignal(req.params.id as string, 'stopped', true);
@@ -379,11 +407,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
         movedBy: username,
       });
     }
-    mgr._emit('task:updated', { agentId: task.agentId, task });
-    if (task.agentId) {
-      const agent = mgr.agents.get(task.agentId);
-      if (agent) mgr._emit('agent:updated', mgr._sanitize(agent));
-    }
+    emitTaskUpdate(mgr, task);
 
     await auditLog('update', req.params.id, req.user.userId, username, {
       boardChanged, statusChanged,
@@ -422,11 +446,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
       if (!await requireTaskAccess(mgr, task, req.user)) { results.failed.push({ taskId, error: 'Access denied' }); continue; }
       // Stop the executing agent if it's actively processing this task
       if (task.actionRunning) {
-        const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
-        if (executorId) mgr.stopAgent(executorId);
-        task.actionRunning = false;
-        delete task.actionRunningAgentId;
-        delete task.actionRunningMode;
+        stopTaskExecutor(mgr, task);
       }
 
       const oldBoardId = task.boardId;
@@ -450,19 +470,12 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
 
       // Sync execution state in memory and trigger workflow if status changed
       if (oldStatus !== targetColumn) {
-        const memTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === taskId);
+        const memTask = getMemTask(mgr, task.agentId, taskId);
         if (memTask) {
           memTask.status = targetColumn;
           memTask.boardId = boardId;
           memTask.updatedAt = now;
-          memTask.startedAt = null;
-          memTask.executionStatus = null;
-          delete memTask._pendingOnEnter;
-          delete memTask._completedActionIdx;
-          memTask.completedActionIdx = null;
-          memTask.actionRunning = false;
-          delete memTask.actionRunningAgentId;
-          delete memTask.actionRunningMode;
+          clearExecutionState(memTask);
         }
         // Signal the reminder loop / execution wait to exit
         setTaskSignal(taskId, 'stopped', true);
@@ -471,11 +484,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
         }
       }
 
-      mgr._emit('task:updated', { agentId: task.agentId, task });
-      if (task.agentId) {
-        const agent = mgr.agents.get(task.agentId);
-        if (agent) mgr._emit('agent:updated', mgr._sanitize(agent));
-      }
+      emitTaskUpdate(mgr, task);
       results.moved.push({ taskId: task.id, title: task.title || task.text?.slice(0, 60) });
     }
 
@@ -508,7 +517,7 @@ router.post('/:id/stop', async (req, res) => {
     }
 
     // Clear stuck flags in memory
-    const memTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === req.params.id);
+    const memTask = getMemTask(mgr, task.agentId, req.params.id);
     const target = memTask || task;
     target.actionRunning = false;
     target.actionRunningAgentId = null;
@@ -548,7 +557,7 @@ router.patch('/:id/clear-stopped', async (req, res) => {
     mgr._taskResumeFailures?.delete(req.params.id);
 
     // Update in-memory task
-    const memTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === req.params.id);
+    const memTask = getMemTask(mgr, task.agentId, req.params.id);
     if (memTask) {
       memTask.executionStatus = null;
     }
@@ -560,7 +569,7 @@ router.patch('/:id/clear-stopped', async (req, res) => {
       const restoreStatus = task.errorFromStatus || 'pending';
       await mgr.setTaskStatus(task.agentId, task.id, restoreStatus, { by: 'user' });
       // setTaskStatus clears startedAt — set it so the task loop picks it up
-      const updatedTask = mgr._getAgentTasks(task.agentId)?.find(t => t.id === req.params.id);
+      const updatedTask = getMemTask(mgr, task.agentId, req.params.id);
       if (updatedTask) {
         updatedTask.startedAt = new Date().toISOString();
       }
@@ -694,9 +703,9 @@ router.get('/project-stats', async (req, res) => {
     let dailyParams: any[] = [days];
     let daysParamIdx = 1;
     if (req.user.role !== 'admin') {
-      const boardIds = await getUserBoardIds(req.user.userId);
-      summaryParams = [boardIds, req.user.userId];
-      dailyParams = [boardIds, days];
+      const boardIds = await getUserBoardIdSet(req.user.userId);
+      summaryParams = [[...boardIds], req.user.userId];
+      dailyParams = [[...boardIds], days];
       daysParamIdx = 2;
       boardFilter = ' AND t.board_id = ANY($1)';
       projectFilter = `WHERE p.owner_id = $2
@@ -786,9 +795,9 @@ router.get('/stats', async (req, res) => {
     let boardFilter = '';
     const params: any[] = [];
     if (req.user.role !== 'admin') {
-      const boardIds = await getUserBoardIds(req.user.userId);
-      if (boardIds.length === 0) return res.json({ total: 0, active: 0, deleted: 0, deletionRate30d: 0 });
-      params.push(boardIds);
+      const boardIds = await getUserBoardIdSet(req.user.userId);
+      if (boardIds.size === 0) return res.json({ total: 0, active: 0, deleted: 0, deletionRate30d: 0 });
+      params.push([...boardIds]);
       boardFilter = ` AND board_id = ANY($1)`;
     }
 

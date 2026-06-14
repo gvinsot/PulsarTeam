@@ -1,8 +1,7 @@
-import express from 'express';
 import {
-  storeOAuthToken, getOAuthToken, deleteOAuthToken,
-} from '../services/database.js';
-import type { ScopeType } from '../services/database.js';
+  credentialConnectorRoutes,
+  getProviderCredentials,
+} from './lib/credentialConnector.js';
 
 /**
  * WordPress per-agent/board authentication routes.
@@ -23,12 +22,6 @@ export interface WordPressCredentials {
   applicationPassword: string;
 }
 
-function resolveScope(agentId: string | null, boardId: string | null): { scopeType: ScopeType; scopeId: string } | null {
-  if (agentId) return { scopeType: 'agent', scopeId: agentId };
-  if (boardId) return { scopeType: 'board', scopeId: boardId };
-  return null;
-}
-
 function normaliseSiteUrl(input: string): string {
   let url = String(input || '').trim();
   if (!url) return '';
@@ -36,55 +29,30 @@ function normaliseSiteUrl(input: string): string {
   return url.replace(/\/+$/, '');
 }
 
-export function getWordPressCredentialsForAgent(
+export const getWordPressCredentialsForAgent = (
   agentId: string | null,
   boardId: string | null = null,
-): WordPressCredentials | null {
-  if (agentId) {
-    const token = getOAuthToken('wordpress', 'agent', agentId);
-    if (token) return token.meta as WordPressCredentials;
-  }
-  if (boardId) {
-    const token = getOAuthToken('wordpress', 'board', boardId);
-    if (token) return token.meta as WordPressCredentials;
-  }
-  return null;
-}
+): WordPressCredentials | null => getProviderCredentials<WordPressCredentials>('wordpress', agentId, boardId);
 
 export function wordpressRoutes() {
-  const router = express.Router();
+  return credentialConnectorRoutes({
+    provider: 'wordpress',
+    label: 'WordPress',
+    statusFields: (meta) => ({
+      siteUrl: meta?.siteUrl || null,
+      username: meta?.username || null,
+    }),
+    connect: async ({ agentId, boardId, siteUrl, username, applicationPassword }) => {
+      if ((!agentId && !boardId) || !siteUrl || !username || !applicationPassword) {
+        return { error: 'agentId or boardId, siteUrl, username, and applicationPassword are required', status: 400 };
+      }
 
-  router.get('/status', (req, res) => {
-    const agentId = (req.query.agentId as string) || null;
-    const boardId = (req.query.boardId as string) || null;
-    if (!agentId && !boardId) {
-      return res.json({ connected: false, agentId: null, boardId: null });
-    }
-    const scope = resolveScope(agentId, boardId);
-    if (!scope) return res.json({ connected: false });
-    const token = getOAuthToken('wordpress', scope.scopeType, scope.scopeId);
-    res.json({
-      connected: !!token,
-      siteUrl: token?.meta?.siteUrl || null,
-      username: token?.meta?.username || null,
-      agentId,
-      boardId,
-    });
-  });
+      const cleanUrl = normaliseSiteUrl(siteUrl);
+      // Application passwords in WordPress come with embedded spaces; strip them
+      // because the user often copy-pastes them as shown in the UI.
+      const cleanPassword = String(applicationPassword).replace(/\s+/g, '');
+      const encoded = Buffer.from(`${username}:${cleanPassword}`).toString('base64');
 
-  router.post('/connect', async (req, res) => {
-    const { agentId, boardId, siteUrl, username, applicationPassword } = req.body || {};
-    if ((!agentId && !boardId) || !siteUrl || !username || !applicationPassword) {
-      return res.status(400).json({ error: 'agentId or boardId, siteUrl, username, and applicationPassword are required' });
-    }
-
-    const cleanUrl = normaliseSiteUrl(siteUrl);
-    // Application passwords in WordPress come with embedded spaces; strip them
-    // because the user often copy-pastes them as shown in the UI.
-    const cleanPassword = String(applicationPassword).replace(/\s+/g, '');
-    const encoded = Buffer.from(`${username}:${cleanPassword}`).toString('base64');
-
-    try {
       const testRes = await fetch(`${cleanUrl}/wp-json/wp/v2/users/me?context=edit`, {
         headers: { Authorization: `Basic ${encoded}`, Accept: 'application/json' },
         // Bound the probe — the URL is user-supplied and a blackholed host
@@ -94,44 +62,22 @@ export function wordpressRoutes() {
 
       if (!testRes.ok) {
         const body = await testRes.text().catch(() => '');
-        return res.status(400).json({ error: `WordPress authentication failed (${testRes.status}): ${body.slice(0, 200)}` });
+        return { error: `WordPress authentication failed (${testRes.status}): ${body.slice(0, 200)}`, status: 400 };
       }
 
       const me = await testRes.json();
-      const scope = resolveScope(agentId, boardId)!;
-
-      await storeOAuthToken({
-        provider: 'wordpress',
-        scopeType: scope.scopeType,
-        scopeId: scope.scopeId,
+      return {
         accessToken: encoded,
         meta: { siteUrl: cleanUrl, username, applicationPassword: cleanPassword },
-      }, { throwOnPersistError: true });
-
-      const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
-      console.log(`✅ [WordPress] Credentials stored for ${target} → ${cleanUrl} (${me.name || username})`);
-      res.json({ success: true, agentId, boardId, displayName: me.name, siteUrl: cleanUrl });
-    } catch (err: any) {
-      console.error('[WordPress] Connection test failed:', err);
+        extra: { displayName: me.name, siteUrl: cleanUrl },
+        logSuffix: `→ ${cleanUrl} (${me.name || username})`,
+      };
+    },
+    onError: (err) => {
       if (err?.name === 'TimeoutError') {
-        return res.status(504).json({ error: 'WordPress site did not respond within 15s — check the site URL' });
+        return { status: 504, message: 'WordPress site did not respond within 15s — check the site URL' };
       }
-      res.status(500).json({ error: `Connection failed: ${err.message}` });
-    }
+      return { status: 500, message: `Connection failed: ${err.message}` };
+    },
   });
-
-  router.post('/disconnect', async (req, res) => {
-    const agentId = req.body?.agentId || null;
-    const boardId = req.body?.boardId || null;
-    if (!agentId && !boardId) {
-      return res.status(400).json({ error: 'agentId or boardId is required' });
-    }
-    const scope = resolveScope(agentId, boardId)!;
-    await deleteOAuthToken('wordpress', scope.scopeType, scope.scopeId);
-    const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
-    console.log(`🔌 [WordPress] Disconnected ${target}`);
-    res.json({ success: true });
-  });
-
-  return router;
 }

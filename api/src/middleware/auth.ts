@@ -850,6 +850,16 @@ export function authorizeBoardAccess(
   };
 }
 
+// Attached by authorizeBoardAccess so downstream handlers can reuse the loaded
+// board without a second checkBoardAccess round-trip.
+declare global {
+  namespace Express {
+    interface Request {
+      boardAccess?: { board?: any; permission?: Permission; isOwner?: boolean };
+    }
+  }
+}
+
 export interface ProjectAccessResult {
   ok: boolean;
   project?: any;

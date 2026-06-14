@@ -49,6 +49,42 @@ function cacheSet(
   }
 }
 
+// Shared cache-lookup → fetch → serve-stale-on-error pattern for the GitHub
+// explorer GET endpoints. The serve-stale policy is stated once here. `cached`
+// is captured BEFORE build() runs so the pre-fetch snapshot is served as the
+// stale fallback even if a concurrent request repopulated the cache mid-await.
+async function serveCached(
+  res: any,
+  opts: {
+    cache: Map<string, { data: any; time: number }>;
+    key: string;
+    ttl: number;
+    maxEntries: number;
+    force?: boolean;
+    logContext: string;   // e.g. `tree for ${owner}/${repo}@${ref}` — preserves console detail
+    responseError: string; // generic body message, e.g. 'Failed to fetch file tree'
+    build: () => Promise<any>;
+  },
+): Promise<void> {
+  const cached = opts.cache.get(opts.key);
+  if (!opts.force && cached && Date.now() - cached.time < opts.ttl) {
+    res.json(cached.data);
+    return;
+  }
+  try {
+    const data = await opts.build();
+    cacheSet(opts.cache, opts.key, data, opts.ttl, opts.maxEntries);
+    res.json(data);
+  } catch (err: any) {
+    console.error(`Failed to fetch ${opts.logContext}:`, err.message);
+    if (cached) {
+      res.json(cached.data);
+      return;
+    }
+    res.status(500).json({ error: opts.responseError });
+  }
+}
+
 // Guard for routes whose `:id` must be a UUID — falls through to the next
 // matching route when the path segment is a literal (e.g. `available-repos`).
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -368,50 +404,46 @@ export function projectRoutes() {
 
     const { owner, repo } = req.params;
     const cacheKey = `${req.query.boardId}:${owner}/${repo}`;
-    const cached = _activityCache.get(cacheKey);
     const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
-    if (!forceRefresh && cached && Date.now() - cached.time < ACTIVITY_CACHE_TTL) return res.json(cached.data);
 
-    try {
-      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const [commitsRes, tagsRes] = await Promise.all([
-        fetch(`https://api.github.com/repos/${owner}/${repo}/commits?since=${since}&per_page=50`, { headers: auth.headers }),
-        fetch(`https://api.github.com/repos/${owner}/${repo}/tags?per_page=20`, { headers: auth.headers }),
-      ]);
+    await serveCached(res, {
+      cache: _activityCache, key: cacheKey, ttl: ACTIVITY_CACHE_TTL, maxEntries: 500, force: forceRefresh,
+      logContext: `GitHub activity for ${owner}/${repo}`, responseError: 'Failed to fetch GitHub activity',
+      build: async () => {
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+        const [commitsRes, tagsRes] = await Promise.all([
+          fetch(`https://api.github.com/repos/${owner}/${repo}/commits?since=${since}&per_page=50`, { headers: auth.headers }),
+          fetch(`https://api.github.com/repos/${owner}/${repo}/tags?per_page=20`, { headers: auth.headers }),
+        ]);
 
-      let commits: any[] = [];
-      let tags: any[] = [];
+        let commits: any[] = [];
+        let tags: any[] = [];
 
-      if (commitsRes.ok) {
-        const commitsData = await commitsRes.json();
-        commits = commitsData.map((c: any) => ({
-          sha: c.sha,
-          shortSha: c.sha.substring(0, 7),
-          message: c.commit.message.split('\n')[0],
-          author: c.commit.author?.name || c.author?.login || 'Unknown',
-          authorAvatar: c.author?.avatar_url || null,
-          date: c.commit.author?.date || c.commit.committer?.date,
-          url: c.html_url,
-        }));
-      }
-      if (tagsRes.ok) {
-        const tagsData = await tagsRes.json();
-        tags = tagsData.map((t: any) => ({
-          name: t.name,
-          sha: t.commit.sha,
-          shortSha: t.commit.sha.substring(0, 7),
-          url: `https://github.com/${owner}/${repo}/releases/tag/${encodeURIComponent(t.name)}`,
-        }));
-      }
+        if (commitsRes.ok) {
+          const commitsData = await commitsRes.json();
+          commits = commitsData.map((c: any) => ({
+            sha: c.sha,
+            shortSha: c.sha.substring(0, 7),
+            message: c.commit.message.split('\n')[0],
+            author: c.commit.author?.name || c.author?.login || 'Unknown',
+            authorAvatar: c.author?.avatar_url || null,
+            date: c.commit.author?.date || c.commit.committer?.date,
+            url: c.html_url,
+          }));
+        }
+        if (tagsRes.ok) {
+          const tagsData = await tagsRes.json();
+          tags = tagsData.map((t: any) => ({
+            name: t.name,
+            sha: t.commit.sha,
+            shortSha: t.commit.sha.substring(0, 7),
+            url: `https://github.com/${owner}/${repo}/releases/tag/${encodeURIComponent(t.name)}`,
+          }));
+        }
 
-      const data = { commits, tags, fetchedAt: new Date().toISOString() };
-      cacheSet(_activityCache, cacheKey, data, ACTIVITY_CACHE_TTL, 500);
-      res.json(data);
-    } catch (err: any) {
-      console.error(`Failed to fetch GitHub activity for ${owner}/${repo}:`, err.message);
-      if (cached) return res.json(cached.data);
-      res.status(500).json({ error: 'Failed to fetch GitHub activity' });
-    }
+        return { commits, tags, fetchedAt: new Date().toISOString() };
+      },
+    });
   });
 
   router.get('/github-branches/:owner/:repo', async (req, res) => {
@@ -420,21 +452,17 @@ export function projectRoutes() {
 
     const { owner, repo } = req.params;
     const cacheKey = `branches:${req.query.boardId}:${owner}/${repo}`;
-    const cached = _branchesCache.get(cacheKey);
-    if (cached && Date.now() - cached.time < BRANCHES_CACHE_TTL) return res.json(cached.data);
 
-    try {
-      const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`, { headers: auth.headers });
-      if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
-      const data = await ghRes.json();
-      const branches = data.map((b: any) => ({ name: b.name, sha: b.commit.sha }));
-      cacheSet(_branchesCache, cacheKey, branches, BRANCHES_CACHE_TTL, 500);
-      res.json(branches);
-    } catch (err: any) {
-      console.error(`Failed to fetch branches for ${owner}/${repo}:`, err.message);
-      if (cached) return res.json(cached.data);
-      res.status(500).json({ error: 'Failed to fetch branches' });
-    }
+    await serveCached(res, {
+      cache: _branchesCache, key: cacheKey, ttl: BRANCHES_CACHE_TTL, maxEntries: 500,
+      logContext: `branches for ${owner}/${repo}`, responseError: 'Failed to fetch branches',
+      build: async () => {
+        const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/branches?per_page=100`, { headers: auth.headers });
+        if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
+        const data = await ghRes.json();
+        return data.map((b: any) => ({ name: b.name, sha: b.commit.sha }));
+      },
+    });
   });
 
   router.get('/github-tree/:owner/:repo/:ref', async (req, res) => {
@@ -443,27 +471,23 @@ export function projectRoutes() {
 
     const { owner, repo, ref } = req.params;
     const cacheKey = `tree:${req.query.boardId}:${owner}/${repo}:${ref}`;
-    const cached = _treeCache.get(cacheKey);
-    if (cached && Date.now() - cached.time < TREE_CACHE_TTL) return res.json(cached.data);
 
-    try {
-      const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`, { headers: auth.headers });
-      if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
-      const data = await ghRes.json();
-      const tree = (data.tree || []).map((item: any) => ({
-        path: item.path,
-        type: item.type,
-        size: item.size || 0,
-        sha: item.sha,
-      }));
-      const result = { tree, truncated: !!data.truncated };
-      cacheSet(_treeCache, cacheKey, result, TREE_CACHE_TTL, 100);
-      res.json(result);
-    } catch (err: any) {
-      console.error(`Failed to fetch tree for ${owner}/${repo}@${ref}:`, err.message);
-      if (cached) return res.json(cached.data);
-      res.status(500).json({ error: 'Failed to fetch file tree' });
-    }
+    await serveCached(res, {
+      cache: _treeCache, key: cacheKey, ttl: TREE_CACHE_TTL, maxEntries: 100,
+      logContext: `tree for ${owner}/${repo}@${ref}`, responseError: 'Failed to fetch file tree',
+      build: async () => {
+        const ghRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`, { headers: auth.headers });
+        if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
+        const data = await ghRes.json();
+        const tree = (data.tree || []).map((item: any) => ({
+          path: item.path,
+          type: item.type,
+          size: item.size || 0,
+          sha: item.sha,
+        }));
+        return { tree, truncated: !!data.truncated };
+      },
+    });
   });
 
   router.get('/github-file/:owner/:repo/:ref/*', async (req, res) => {
@@ -475,46 +499,42 @@ export function projectRoutes() {
     if (!filePath) return res.status(400).json({ error: 'File path required' });
 
     const cacheKey = `file:${req.query.boardId}:${owner}/${repo}:${ref}:${filePath}`;
-    const cached = _fileCache.get(cacheKey);
-    if (cached && Date.now() - cached.time < FILE_CACHE_TTL) return res.json(cached.data);
 
-    try {
-      const ghRes = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(ref)}`,
-        { headers: auth.headers }
-      );
-      if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
-      const data = await ghRes.json();
+    await serveCached(res, {
+      cache: _fileCache, key: cacheKey, ttl: FILE_CACHE_TTL, maxEntries: 1000,
+      logContext: `file ${filePath} for ${owner}/${repo}@${ref}`, responseError: 'Failed to fetch file content',
+      build: async () => {
+        const ghRes = await fetch(
+          `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${encodeURIComponent(ref)}`,
+          { headers: auth.headers }
+        );
+        if (!ghRes.ok) throw new Error(`GitHub API ${ghRes.status}`);
+        const data = await ghRes.json();
 
-      let content: string | null = null;
-      let isBinary = false;
-      if (data.encoding === 'base64' && data.content) {
-        try {
-          content = Buffer.from(data.content, 'base64').toString('utf-8');
-        } catch {
+        let content: string | null = null;
+        let isBinary = false;
+        if (data.encoding === 'base64' && data.content) {
+          try {
+            content = Buffer.from(data.content, 'base64').toString('utf-8');
+          } catch {
+            isBinary = true;
+          }
+        } else if (data.type === 'file' && data.download_url) {
           isBinary = true;
         }
-      } else if (data.type === 'file' && data.download_url) {
-        isBinary = true;
-      }
 
-      const result = {
-        name: data.name,
-        path: data.path,
-        size: data.size,
-        type: data.type,
-        content,
-        isBinary,
-        htmlUrl: data.html_url,
-        downloadUrl: data.download_url,
-      };
-      cacheSet(_fileCache, cacheKey, result, FILE_CACHE_TTL, 1000);
-      res.json(result);
-    } catch (err: any) {
-      console.error(`Failed to fetch file ${filePath} for ${owner}/${repo}@${ref}:`, err.message);
-      if (cached) return res.json(cached.data);
-      res.status(500).json({ error: 'Failed to fetch file content' });
-    }
+        return {
+          name: data.name,
+          path: data.path,
+          size: data.size,
+          type: data.type,
+          content,
+          isBinary,
+          htmlUrl: data.html_url,
+          downloadUrl: data.download_url,
+        };
+      },
+    });
   });
 
   // ── Code call-graph analysis ──────────────────────────────────────────────

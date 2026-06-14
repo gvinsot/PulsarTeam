@@ -2,171 +2,58 @@ import express from 'express';
 
 export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe';
 
-const DELEGATE_TOOL = {
+const tool = (
+  name: string,
+  description: string,
+  props: Record<string, { type: string; description: string; [k: string]: unknown }> = {},
+  required = Object.keys(props),
+) => ({
   type: 'function',
-  name: 'delegate',
-  description:
-    'Delegate a task to another agent in the swarm. Use this when the user asks you to assign work to a specific agent or when a task requires a specialist.',
+  name,
+  description,
   parameters: {
     type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the target agent to delegate to' },
-      task: { type: 'string', description: 'Detailed task description for the agent' },
-    },
-    required: ['agent_name', 'task'],
+    properties: props,
+    ...(required.length ? { required } : {}),
   },
-};
-
-const ASK_TOOL = {
-  type: 'function',
-  name: 'ask',
-  description:
-    'Ask a quick question to another agent without creating a task. Use this for short questions that need a concise answer.',
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent to ask' },
-      question: { type: 'string', description: 'The question to ask' },
-    },
-    required: ['agent_name', 'question'],
-  },
-};
-
-const ASSIGN_PROJECT_TOOL = {
-  type: 'function',
-  name: 'assign_project',
-  description: 'Assign an agent to a project so they can use file and command tools on it.',
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent' },
-      project_name: { type: 'string', description: 'Name of the project to assign' },
-    },
-    required: ['agent_name', 'project_name'],
-  },
-};
-
-const GET_PROJECT_TOOL = {
-  type: 'function',
-  name: 'get_project',
-  description: 'Check which project an agent is currently assigned to.',
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent' },
-    },
-    required: ['agent_name'],
-  },
-};
-
-const LIST_AGENTS_TOOL = {
-  type: 'function',
-  name: 'list_agents',
-  description: 'List all enabled agents with their current status, project, and role.',
-  parameters: { type: 'object', properties: {} },
-};
-
-const AGENT_STATUS_TOOL = {
-  type: 'function',
-  name: 'agent_status',
-  description: "Check a specific agent's status (busy/idle/error), project, pending tasks, and message count.",
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent to check' },
-    },
-    required: ['agent_name'],
-  },
-};
-
-const GET_AVAILABLE_AGENT_TOOL = {
-  type: 'function',
-  name: 'get_available_agent',
-  description: 'Get the first idle agent with the specified role.',
-  parameters: {
-    type: 'object',
-    properties: {
-      role: { type: 'string', description: 'Role to search for (e.g. "developer")' },
-    },
-    required: ['role'],
-  },
-};
-
-const LIST_PROJECTS_TOOL = {
-  type: 'function',
-  name: 'list_projects',
-  description: 'List all available projects.',
-  parameters: { type: 'object', properties: {} },
-};
-
-const CLEAR_CONTEXT_TOOL = {
-  type: 'function',
-  name: 'clear_context',
-  description: "Clear an agent's entire conversation history, giving them a fresh start.",
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent' },
-    },
-    required: ['agent_name'],
-  },
-};
-
-const ROLLBACK_TOOL = {
-  type: 'function',
-  name: 'rollback',
-  description: "Remove the last X messages from an agent's conversation history.",
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent' },
-      count: { type: 'integer', description: 'Number of messages to remove' },
-    },
-    required: ['agent_name', 'count'],
-  },
-};
-
-const STOP_AGENT_TOOL = {
-  type: 'function',
-  name: 'stop_agent',
-  description: "Stop an agent's current task immediately.",
-  parameters: {
-    type: 'object',
-    properties: {
-      agent_name: { type: 'string', description: 'Name of the agent to stop' },
-    },
-    required: ['agent_name'],
-  },
-};
-
-const CLEAR_ALL_CHATS_TOOL = {
-  type: 'function',
-  name: 'clear_all_chats',
-  description: "Clear ALL agents' conversation histories at once.",
-  parameters: { type: 'object', properties: {} },
-};
-
-const CLEAR_ALL_ACTION_LOGS_TOOL = {
-  type: 'function',
-  name: 'clear_all_action_logs',
-  description: "Clear ALL agents' action logs at once.",
-  parameters: { type: 'object', properties: {} },
-};
+});
 
 export const VOICE_TOOLS = [
-  DELEGATE_TOOL,
-  ASK_TOOL,
-  ASSIGN_PROJECT_TOOL,
-  GET_PROJECT_TOOL,
-  LIST_AGENTS_TOOL,
-  AGENT_STATUS_TOOL,
-  GET_AVAILABLE_AGENT_TOOL,
-  LIST_PROJECTS_TOOL,
-  CLEAR_CONTEXT_TOOL,
-  ROLLBACK_TOOL,
-  STOP_AGENT_TOOL,
-  CLEAR_ALL_CHATS_TOOL,
-  CLEAR_ALL_ACTION_LOGS_TOOL,
+  tool('delegate', 'Delegate a task to another agent in the swarm. Use this when the user asks you to assign work to a specific agent or when a task requires a specialist.', {
+    agent_name: { type: 'string', description: 'Name of the target agent to delegate to' },
+    task: { type: 'string', description: 'Detailed task description for the agent' },
+  }),
+  tool('ask', 'Ask a quick question to another agent without creating a task. Use this for short questions that need a concise answer.', {
+    agent_name: { type: 'string', description: 'Name of the agent to ask' },
+    question: { type: 'string', description: 'The question to ask' },
+  }),
+  tool('assign_project', 'Assign an agent to a project so they can use file and command tools on it.', {
+    agent_name: { type: 'string', description: 'Name of the agent' },
+    project_name: { type: 'string', description: 'Name of the project to assign' },
+  }),
+  tool('get_project', 'Check which project an agent is currently assigned to.', {
+    agent_name: { type: 'string', description: 'Name of the agent' },
+  }),
+  tool('list_agents', 'List all enabled agents with their current status, project, and role.'),
+  tool('agent_status', "Check a specific agent's status (busy/idle/error), project, pending tasks, and message count.", {
+    agent_name: { type: 'string', description: 'Name of the agent to check' },
+  }),
+  tool('get_available_agent', 'Get the first idle agent with the specified role.', {
+    role: { type: 'string', description: 'Role to search for (e.g. "developer")' },
+  }),
+  tool('list_projects', 'List all available projects.'),
+  tool('clear_context', "Clear an agent's entire conversation history, giving them a fresh start.", {
+    agent_name: { type: 'string', description: 'Name of the agent' },
+  }),
+  tool('rollback', "Remove the last X messages from an agent's conversation history.", {
+    agent_name: { type: 'string', description: 'Name of the agent' },
+    count: { type: 'integer', description: 'Number of messages to remove' },
+  }),
+  tool('stop_agent', "Stop an agent's current task immediately.", {
+    agent_name: { type: 'string', description: 'Name of the agent to stop' },
+  }),
+  tool('clear_all_chats', "Clear ALL agents' conversation histories at once."),
+  tool('clear_all_action_logs', "Clear ALL agents' action logs at once."),
 ];
 
 export function buildRealtimeSessionConfig({

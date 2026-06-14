@@ -2,97 +2,20 @@ import express from 'express';
 import { z } from 'zod';
 import { globalTaskStore } from '../services/globalTaskStore.js';
 import { getWorkflowForBoard } from '../services/configManager.js';
-import { getAllBoards, getBoardsByUser, saveTaskToDb, getAgentById } from '../services/database.js';
+import { getAllBoards, saveTaskToDb, getAgentById } from '../services/database.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { checkBoardAccess } from '../middleware/auth.js';
 import { detectEnvironment } from '../lib/environment.js';
-
-// Schema for creating a new agent
-const createAgentSchema = z.object({
-  name: z.string().min(1).max(200),
-  role: z.string().max(100).optional(),
-  description: z.string().max(2000).optional(),
-  provider: z.string().max(100).optional(),
-  model: z.string().max(200).optional(),
-  endpoint: z.string().max(500).optional(),
-  apiKey: z.string().max(500).optional(),
-  instructions: z.string().max(50000).optional(),
-  temperature: z.number().min(0).max(2).nullable().optional(),
-  maxTokens: z.number().int().min(1).max(1000000).optional(),
-  contextLength: z.number().int().min(0).optional(),
-  todoList: z.array(z.any()).optional(),
-  ragDocuments: z.array(z.any()).optional(),
-  skills: z.array(z.string()).optional(),
-  mcpServers: z.array(z.string()).optional(),
-  mcpAuth: z.record(z.string(), z.object({
-    apiKey: z.string().max(500).optional(),
-  })).optional(),
-  handoffTargets: z.array(z.string()).optional(),
-  project: z.string().max(200).nullable().optional(),
-  enabled: z.boolean().optional(),
-  isLeader: z.boolean().optional(),
-  isVoice: z.boolean().optional(),
-  isReasoning: z.boolean().optional(),
-  voice: z.string().max(100).optional(),
-  // 'realtime' = OpenAI Realtime API (default), 'external' = browser → STT → LLM → TTS pipeline
-  voiceMode: z.enum(['realtime', 'external']).optional(),
-  ttsVoiceId: z.string().max(200).optional(),
-  // When true, assistant replies in the regular text chat are spoken aloud
-  // using the global TTS service (if configured in Admin Settings).
-  ttsEnabled: z.boolean().optional(),
-  template: z.string().max(200).nullable().optional(),
-  color: z.string().max(50).optional(),
-  icon: z.string().max(50).optional(),
-  costPerInputToken: z.number().min(0).nullable().optional(),
-  costPerOutputToken: z.number().min(0).nullable().optional(),
-  copyApiKeyFromAgent: z.string().uuid().optional(),
-  llmConfigId: z.string().max(200).nullable().optional(),
-  boardId: z.string().uuid().nullable().optional(),
-  permissions: z.object({
-    linuxUser: z.object({
-      runAsRoot: z.boolean().optional(),
-    }).optional(),
-    network: z.object({
-      internetAccess: z.boolean().optional(),
-      allowedDomains: z.array(z.string().max(200)).optional(),
-    }).optional(),
-    filesystem: z.object({
-      readAccess: z.boolean().optional(),
-      writeAccess: z.boolean().optional(),
-      restrictedPaths: z.array(z.string().max(500)).optional(),
-    }).optional(),
-    execution: z.object({
-      shellAccess: z.boolean().optional(),
-      dangerousSkipPermissions: z.boolean().optional(),
-    }).optional(),
-  }).optional(),
-  credentials: z.record(z.string().max(100), z.string().max(2000)).optional(),
-  toolHooks: z.object({
-    enabled: z.boolean().optional(),
-    rules: z.array(z.object({
-      id: z.string().max(100),
-      name: z.string().max(200),
-      enabled: z.boolean(),
-      pattern: z.string().max(2000),
-      action: z.enum(['block', 'warn']),
-      tools: z.array(z.string().max(50)),
-      description: z.string().max(500).optional(),
-    })).optional(),
-  }).optional(),
-  // 'coder' is a deprecated alias for 'claudecode' (kept for backward compat with stored agents)
-  runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'aider', 'codex']).optional(),
-  // Batch creation: when batchSize > 1, the server creates that many agents
-  // sharing the same configuration and a common batchId. Names are auto
-  // suffixed `#1`, `#2`, … so each agent stays uniquely identifiable.
-  batchSize: z.number().int().min(1).max(50).optional(),
-});
-
-// Schema for updating an agent (all fields optional)
-const updateAgentSchema = createAgentSchema.partial().extend({
-  ownerId: z.string().uuid().nullable().optional(),
-  boardId: z.string().uuid().nullable().optional(),
-});
+import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
+import { getMemTask } from './tasks.js';
+import { createAgentSchema, updateAgentSchema } from '../schemas/agents.js';
+import {
+  statusesHandler,
+  swarmStatusHandler,
+  byProjectHandler,
+  projectSummaryHandler,
+} from './lib/agentStatusHandlers.js';
 
 // Mask sensitive fields before sending agent data to the client
 function sanitizeAgent(agent) {
@@ -107,39 +30,21 @@ function sanitizeAgent(agent) {
 export function agentRoutes(agentManager) {
   const router = express.Router();
 
-  // ── Resolve user's accessible board IDs (own boards + shared boards + default) ──
-  async function getUserBoardIds(userId: string): Promise<Set<string>> {
-    try {
-      const boards = await getBoardsByUser(userId);
-      return new Set(boards.map(b => b.id));
-    } catch {
-      return new Set();
-    }
-  }
-
-  // ── Board-based access guard: users can access agents on their boards or unscoped agents ──
-  async function requireAgentAccess(req, res, next) {
+  // Board-based access guard: users can access agents on their boards or
+  // unscoped agents. 'read' is permissive; 'edit' is the stricter guard for
+  // mutating endpoints so that read-only shares cannot modify agents/tasks.
+  const agentAccess = (level: 'read' | 'edit') => async (req, res, next) => {
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     if (req.user.role === 'admin') return next();
     // Agents without a board are accessible to everyone (legacy)
     if (!agent.boardId) return next();
-    const access = await checkBoardAccess(agent.boardId, req.user.userId, req.user.role, 'read');
+    const access = await checkBoardAccess(agent.boardId, req.user.userId, req.user.role, level);
     if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
     next();
-  }
-
-  // Stricter guard for mutating endpoints: requires 'edit' permission on the
-  // agent's board so that read-only shares cannot modify agents/tasks.
-  async function requireAgentEditAccess(req, res, next) {
-    const agent = agentManager.agents.get(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    if (req.user.role === 'admin') return next();
-    if (!agent.boardId) return next();
-    const access = await checkBoardAccess(agent.boardId, req.user.userId, req.user.role, 'edit');
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-    next();
-  }
+  };
+  const requireAgentAccess = agentAccess('read');
+  const requireAgentEditAccess = agentAccess('edit');
 
   // List agents (filtered by board access — each user sees agents on their boards + unscoped)
   router.get('/', async (req, res) => {
@@ -148,40 +53,23 @@ export function agentRoutes(agentManager) {
     res.json(agents.map(sanitizeAgent));
   });
 
+  // Status routes mount the SCOPED status handlers (scoped=true): each user
+  // sees only agents on their boards (+ unscoped). See leaderTools.ts for the
+  // deliberately unscoped swarm-leader variants.
+
   // Get lightweight status for ALL enabled agents (includes project + currentTask)
   // Much lighter than GET / which returns full agent data with conversation history
   // Optional query param: ?project=ProjectName to filter by project
-  router.get('/statuses', async (req, res) => {
-    const { project } = req.query;
-    const userBoardIds = await getUserBoardIds(req.user.userId);
-    let statuses = agentManager.getAllStatuses(req.user.userId, req.user.role, userBoardIds);
-    if (project) {
-      const lowerProject = (project as string).toLowerCase();
-      statuses = statuses.filter(s =>
-        (s.project || '').toLowerCase() === lowerProject
-      );
-    }
-    res.json(statuses);
-  });
+  router.get('/statuses', statusesHandler(agentManager, true));
 
   // Get agents working on a specific project
-  router.get('/by-project/:project', async (req, res) => {
-    const userBoardIds = await getUserBoardIds(req.user.userId);
-    const agents = agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role, userBoardIds);
-    res.json(agents);
-  });
+  router.get('/by-project/:project', byProjectHandler(agentManager, true));
 
   // Get project summary: all projects with their agent counts and assignments
-  router.get('/project-summary', async (req, res) => {
-    const userBoardIds = await getUserBoardIds(req.user.userId);
-    res.json(agentManager.getProjectSummary(req.user.userId, req.user.role, userBoardIds));
-  });
+  router.get('/project-summary', projectSummaryHandler(agentManager, true));
 
   // Get comprehensive swarm status with project assignments
-  router.get('/swarm-status', async (req, res) => {
-    const userBoardIds = await getUserBoardIds(req.user.userId);
-    res.json(agentManager.getSwarmStatus(req.user.userId, req.user.role, userBoardIds));
-  });
+  router.get('/swarm-status', swarmStatusHandler(agentManager, true));
 
   // ── Admin: reset instructions for all agents of a role to default template ──
   router.post('/reset-instructions/:role', async (req, res) => {
@@ -467,80 +355,84 @@ export function agentRoutes(agentManager) {
 
   router.patch('/:id/tasks/:taskId', requireAgentEditAccess, async (req, res) => {
     try {
-    const { status, text, title, repoFullName, repoProvider, storageProvider, storagePath, source, recurrence, taskType, isManual } = req.body || {};
-    // Source is immutable once set at creation — reject any attempt to change it
-    if (source !== undefined) {
-      return res.status(400).json({ error: 'Source cannot be modified after creation' });
-    }
-    // Recover from any in-memory drift before reading the task
-    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
-    // Capture old status before any update
-    const agent = agentManager.agents.get(req.params.id);
-    const oldTask = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
+      const { status, text, title, repoFullName, repoProvider, storageProvider, storagePath, source, recurrence, taskType, isManual } = req.body || {};
+      // Source is immutable once set at creation — reject any attempt to change it
+      if (source !== undefined) {
+        return res.status(400).json({ error: 'Source cannot be modified after creation' });
+      }
+      // Recover from any in-memory drift before reading the task
+      await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
+      // Capture old status before any update
+      const agent = agentManager.agents.get(req.params.id);
+      const oldTask = getMemTask(agentManager, req.params.id, req.params.taskId);
 
-    // When a user changes the task status while it's being executed, stop the agent
-    // so it no longer works on this task or receives reminders.
-    if (status && status !== oldTask?.status && oldTask?.startedAt && agentManager._isActiveTaskStatus(oldTask.status) && agent?.status === 'busy') {
-      agentManager.stopAgent(req.params.id);
-      // Signal the reminder loop to exit for this task
-      setTaskSignal(req.params.taskId, 'stopped', true);
-    }
+      // When a user changes the task status while it's being executed, stop the agent
+      // so it no longer works on this task or receives reminders.
+      if (status && status !== oldTask?.status && oldTask?.startedAt && agentManager._isActiveTaskStatus(oldTask.status) && agent?.status === 'busy') {
+        agentManager.stopAgent(req.params.id);
+        // Signal the reminder loop to exit for this task
+        setTaskSignal(req.params.taskId, 'stopped', true);
+      }
 
-    // Handle recurrence update
-    if (recurrence !== undefined && oldTask) {
-      agentManager.updateTaskRecurrence(req.params.id, req.params.taskId, recurrence);
-    }
+      // ── Independent side-effect updates ──────────────────────────────────
+      // Handle recurrence update
+      if (recurrence !== undefined && oldTask) {
+        agentManager.updateTaskRecurrence(req.params.id, req.params.taskId, recurrence);
+      }
 
-    // Handle taskType update
-    if (taskType !== undefined && oldTask) {
-      agentManager.updateTaskType(req.params.id, req.params.taskId, taskType || null);
-    }
+      // Handle taskType update
+      if (taskType !== undefined && oldTask) {
+        agentManager.updateTaskType(req.params.id, req.params.taskId, taskType || null);
+      }
 
-    // Handle isManual update
-    if (isManual !== undefined && oldTask) {
-      oldTask.isManual = !!isManual;
-      saveTaskToDb({ ...oldTask, agentId: req.params.id });
-      agentManager._emit('task:updated', { agentId: req.params.id, task: { ...oldTask, agentId: req.params.id } });
-    }
+      // Handle isManual update
+      if (isManual !== undefined && oldTask) {
+        oldTask.isManual = !!isManual;
+        saveTaskToDb({ ...oldTask, agentId: req.params.id });
+        agentManager._emit('task:updated', { agentId: req.params.id, task: { ...oldTask, agentId: req.params.id } });
+      }
 
-    let task;
-    if (title !== undefined) {
-      task = agentManager.updateTaskTitle(req.params.id, req.params.taskId, title.trim() || null);
-    }
-    if (text !== undefined) {
-      if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
-      task = agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());
-    } else if (repoFullName !== undefined) {
-      // Format check only — the picker is sourced from the board's GitHub plugin.
-      const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
-      task = agentManager.updateTaskRepo(req.params.id, req.params.taskId, value, repoProvider || (value ? 'github' : null));
-    } else if (storagePath !== undefined) {
-      // Picker sourced from the board's OneDrive plugin; just length-check.
-      const value = (typeof storagePath === 'string' && storagePath.trim().length > 0)
-        ? storagePath.trim().slice(0, 500)
-        : null;
-      task = agentManager.updateTaskStorage(req.params.id, req.params.taskId, value, storageProvider || (value ? 'onedrive' : null));
-    } else if (status) {
-      task = agentManager.setTaskStatus(req.params.id, req.params.taskId, status);
-    } else if (recurrence !== undefined) {
-      // If only recurrence was sent, return the updated task
-      task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
-    } else if (taskType !== undefined) {
-      // If only taskType was sent, return the updated task
-      task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
-    } else if (isManual !== undefined) {
-      task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
-    } else {
-      task = agentManager.toggleTask(req.params.id, req.params.taskId);
-    }
-    if (!task) return res.status(404).json({ error: 'Not found' });
-    res.json(task);
+      if (title !== undefined) {
+        agentManager.updateTaskTitle(req.params.id, req.params.taskId, title.trim() || null);
+      }
+      // text/repo/storage/status remain mutually exclusive (first match wins) —
+      // preserving today's behavior where e.g. {text,status} applies text and
+      // silently ignores status.
+      if (text !== undefined) {
+        if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
+        agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());
+      } else if (repoFullName !== undefined) {
+        // Format check only — the picker is sourced from the board's GitHub plugin.
+        const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
+        agentManager.updateTaskRepo(req.params.id, req.params.taskId, value, repoProvider || (value ? 'github' : null));
+      } else if (storagePath !== undefined) {
+        // Picker sourced from the board's OneDrive plugin; just length-check.
+        const value = (typeof storagePath === 'string' && storagePath.trim().length > 0)
+          ? storagePath.trim().slice(0, 500)
+          : null;
+        agentManager.updateTaskStorage(req.params.id, req.params.taskId, value, storageProvider || (value ? 'onedrive' : null));
+      } else if (status) {
+        agentManager.setTaskStatus(req.params.id, req.params.taskId, status);
+      }
+
+      // A request carrying none of the recognized fields is the legacy toggle
+      // (frontend api.ts depends on the empty-body → toggle behavior). NOTE:
+      // `title` is intentionally NOT counted here — a {title}-only body still
+      // falls through to toggleTask today (likely a latent bug), preserved as-is.
+      const touched = text !== undefined || repoFullName !== undefined || storagePath !== undefined
+        || !!status || recurrence !== undefined || taskType !== undefined || isManual !== undefined;
+      const task = touched
+        ? getMemTask(agentManager, req.params.id, req.params.taskId)
+        : agentManager.toggleTask(req.params.id, req.params.taskId);
+
+      if (!task) return res.status(404).json({ error: 'Not found' });
+      res.json(task);
     } catch (err) {
       console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
       try {
         agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
         const errorAgent = agentManager.agents.get(req.params.id);
-        const errorTask = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
+        const errorTask = getMemTask(agentManager, req.params.id, req.params.taskId);
         if (errorTask) errorTask.error = err.message;
       } catch (_) { /* best effort */ }
       res.status(500).json({ error: err.message });
@@ -556,7 +448,7 @@ export function agentRoutes(agentManager) {
   router.delete('/:id/tasks/:taskId', requireAgentEditAccess, async (req, res) => {
     await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const agent = agentManager.agents.get(req.params.id);
-    const taskToDelete = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
+    const taskToDelete = getMemTask(agentManager, req.params.id, req.params.taskId);
     // Block deletion of tasks being executed — user must stop the agent first
     if (taskToDelete?.startedAt && agentManager._isActiveTaskStatus(taskToDelete.status) && agent?.status === 'busy') {
       return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
@@ -623,7 +515,7 @@ export function agentRoutes(agentManager) {
 
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const task = agentManager._getAgentTasks(req.params.id).find(t => t.id === req.params.taskId);
+    const task = getMemTask(agentManager, req.params.id, req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const refineAgent = agentManager.agents.get(refineAgentId);
@@ -701,42 +593,43 @@ export function agentRoutes(agentManager) {
   // Backward compatibility
   router.post('/:id/skills', requireAgentEditAccess, pluginAssignHandler);
 
-// ── Task History & Stats ──────────────────────────────────────────────────────
+  // ── Task History & Stats ──────────────────────────────────────────────────────
 
-router.get("/tasks/stats", async (req, res) => {
-  const { project } = req.query;
-  const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
-  const stats = agentManager.getTaskStats(project || null, userBoardIds);
-  res.json(stats);
-});
+  router.get("/tasks/stats", async (req, res) => {
+    const { project } = req.query;
+    const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
+    const stats = agentManager.getTaskStats(project || null, userBoardIds);
+    res.json(stats);
+  });
 
-router.get("/tasks/stats/timeseries", async (req, res) => {
-  const { project, days } = req.query;
-  const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
-  const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
-  const timeseries = agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
-  res.json(timeseries);
-});
+  router.get("/tasks/stats/timeseries", async (req, res) => {
+    const { project, days } = req.query;
+    const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
+    const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
+    const timeseries = agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
+    res.json(timeseries);
+  });
 
-router.get("/tasks/stats/agent-time", async (req, res) => {
-  const { project, days } = req.query;
-  const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
-  const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
-  const agentTime = agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
-  res.json(agentTime);
-});
+  router.get("/tasks/stats/agent-time", async (req, res) => {
+    const { project, days } = req.query;
+    const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
+    const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
+    const agentTime = agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
+    res.json(agentTime);
+  });
 
-router.get("/tasks/:id/history", async (req, res) => {
-  const task = agentManager.getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: "Not found" });
-  if (req.user.role !== 'admin') {
-    const userBoardIds = await getUserBoardIds(req.user.userId);
-    if (task.boardId && !userBoardIds.has(task.boardId)) {
-      return res.status(403).json({ error: "Access denied" });
+  router.get("/tasks/:id/history", async (req, res) => {
+    const task = agentManager.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: "Not found" });
+    if (req.user.role !== 'admin') {
+      const userBoardIds = await getUserBoardIds(req.user.userId);
+      if (task.boardId && !userBoardIds.has(task.boardId)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
     }
-  }
-  res.json(task.history || []);
-});
+    res.json(task.history || []);
+  });
+
   router.delete('/:id/skills/:skillId', requireAgentEditAccess, pluginRemoveHandler);
 
   // ── MCP server assignment endpoints (backward compat) ───────────
