@@ -94,7 +94,6 @@ function clearExecutionState(t) {
   t.startedAt = null;
   t.executionStatus = null;
   delete t._pendingOnEnter;
-  delete t._completedActionIdx;
   t.completedActionIdx = null;
   clearActionRunning(t);
 }

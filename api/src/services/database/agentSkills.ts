@@ -1,16 +1,16 @@
 import { getPool } from './connection.js';
+import { createJsonDocStore } from './jsonDocStore.js';
 
-export async function getAllAgentSkills() {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query('SELECT data FROM agent_skills ORDER BY updated_at DESC');
-    return result.rows.map(row => row.data);
-  } catch (err) {
-    console.error('Failed to load agent skills:', err.message);
-    return [];
-  }
-}
+const store = createJsonDocStore('agent_skills', {
+  orderBy: 'updated_at DESC',
+  label: 'agent skill',
+  labelPlural: 'agent skills',
+});
+
+export const getAllAgentSkills = store.getAll;
+export const getAgentSkillById = store.getById;
+export const saveAgentSkill = store.save;
+export const deleteAgentSkillFromDb = store.remove;
 
 export async function searchAgentSkills(query) {
   const pool = getPool();
@@ -44,44 +44,5 @@ export async function searchAgentSkills(query) {
   } catch (err) {
     console.error('Failed to search agent skills:', err.message);
     return [];
-  }
-}
-
-export async function getAgentSkillById(id) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query('SELECT data FROM agent_skills WHERE id = $1', [id]);
-    return result.rows[0]?.data || null;
-  } catch (err) {
-    console.error('Failed to get agent skill:', err.message);
-    return null;
-  }
-}
-
-export async function saveAgentSkill(skill) {
-  const pool = getPool();
-  if (!pool) return;
-  try {
-    await pool.query(
-      `INSERT INTO agent_skills (id, data, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (id) DO UPDATE SET data = $2, updated_at = NOW()`,
-      [skill.id, JSON.stringify(skill)]
-    );
-  } catch (err) {
-    console.error('Failed to save agent skill:', err.message);
-  }
-}
-
-export async function deleteAgentSkillFromDb(id) {
-  const pool = getPool();
-  if (!pool) return false;
-  try {
-    const result = await pool.query('DELETE FROM agent_skills WHERE id = $1', [id]);
-    return result.rowCount > 0;
-  } catch (err) {
-    console.error('Failed to delete agent skill:', err.message);
-    return false;
   }
 }

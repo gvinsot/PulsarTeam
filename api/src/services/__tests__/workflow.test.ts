@@ -413,10 +413,10 @@ test('setTaskStatus records history with by field', async () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 7. _completedActionIdx / action chain resume
+// 7. completedActionIdx / action chain resume
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('_completedActionIdx is cleaned up before change_status', async () => {
+test('completedActionIdx is cleaned up before change_status', async () => {
   const mgr = await setup([
     { name: 'Titles', role: 'titles-manager' },
     { name: 'PM', role: 'product-manager' },
@@ -424,15 +424,13 @@ test('_completedActionIdx is cleaned up before change_status', async () => {
   ]);
   const { task } = addTask(mgr, 'Test task', 'refine');
 
-  task._completedActionIdx = 2;
-  assert.equal(task._completedActionIdx, 2);
+  task.completedActionIdx = 2;
+  assert.equal(task.completedActionIdx, 2);
 
-  delete task._completedActionIdx;
   task.completedActionIdx = null;
   delete task._pendingOnEnter;
   task.status = 'code';
 
-  assert.equal(task._completedActionIdx, undefined);
   assert.equal(task.completedActionIdx, null);
   assert.equal(task.status, 'code');
 });
@@ -441,28 +439,25 @@ test('action chain resume index tracks correctly', async () => {
   const mgr = await setup([{ name: 'A', role: 'dev' }]);
   const { task } = addTask(mgr, 'Chain test', 'refine');
 
-  const rawIdx0 = task.completedActionIdx ?? task._completedActionIdx;
+  const rawIdx0 = task.completedActionIdx;
   const startIdx0 = (typeof rawIdx0 === 'number') ? rawIdx0 + 1 : 0;
   assert.equal(startIdx0, 0, 'should start at action 0');
 
-  task._completedActionIdx = 0;
   task.completedActionIdx = 0;
   const startIdx1 = task.completedActionIdx + 1;
   assert.equal(startIdx1, 1, 'should resume at action 1');
 
-  task._completedActionIdx = 1;
   task.completedActionIdx = 1;
   const startIdx2 = task.completedActionIdx + 1;
   assert.equal(startIdx2, 2, 'should resume at action 2');
 
-  delete task._completedActionIdx;
   task.completedActionIdx = null;
-  const rawIdxClean = task.completedActionIdx ?? task._completedActionIdx;
+  const rawIdxClean = task.completedActionIdx;
   const startIdxClean = (typeof rawIdxClean === 'number') ? rawIdxClean + 1 : 0;
   assert.equal(startIdxClean, 0, 'should restart from 0 after cleanup');
 });
 
-test('full refine→code chain: _completedActionIdx does not leak across transitions', async () => {
+test('full refine→code chain: completedActionIdx does not leak across transitions', async () => {
   const mgr = await setup([
     { name: 'Titles', role: 'titles-manager' },
     { name: 'PM', role: 'product-manager' },
@@ -470,16 +465,15 @@ test('full refine→code chain: _completedActionIdx does not leak across transit
   ]);
   const { task } = addTask(mgr, 'Full chain test', 'refine');
 
-  task._completedActionIdx = 0; task.completedActionIdx = 0;
-  task._completedActionIdx = 1; task.completedActionIdx = 1;
-  task._completedActionIdx = 2; task.completedActionIdx = 2;
+  task.completedActionIdx = 0;
+  task.completedActionIdx = 1;
+  task.completedActionIdx = 2;
 
-  delete task._completedActionIdx;
   task.completedActionIdx = null;
   delete task._pendingOnEnter;
   task.status = 'code';
 
-  const rawIdx = task.completedActionIdx ?? task._completedActionIdx;
+  const rawIdx = task.completedActionIdx;
   const startIdx = (typeof rawIdx === 'number') ? rawIdx + 1 : 0;
   assert.equal(startIdx, 0, 'code on_enter should start at action 0, not resume from refine chain');
   assert.equal(task.status, 'code');
@@ -491,13 +485,12 @@ test('_pendingOnEnter is set when action chain is interrupted', async () => {
 
   // Simulate: action 2 was skipped (no idle agent), action 1 completed
   task._pendingOnEnter = 'refine';
-  task._completedActionIdx = 1;
   task.completedActionIdx = 1;
 
   assert.equal(task._pendingOnEnter, 'refine');
 
   // When retry succeeds: resume from action 2 (completedActionIdx + 1)
-  const rawIdx = task.completedActionIdx ?? task._completedActionIdx;
+  const rawIdx = task.completedActionIdx;
   const resumeIdx = (typeof rawIdx === 'number') ? rawIdx + 1 : 0;
   assert.equal(resumeIdx, 2, 'should resume at the skipped action');
 });
@@ -797,7 +790,6 @@ test('_pendingOnEnter retry: _recheckConditionalTransitions finds pending on_ent
   // Task stuck in refine with pendingOnEnter
   const task = addTaskToAgent(mgr, creatorId, 'Stuck task', 'refine', 'board-1', {
     _pendingOnEnter: 'refine',
-    _completedActionIdx: 1,
     completedActionIdx: 1,
   });
 

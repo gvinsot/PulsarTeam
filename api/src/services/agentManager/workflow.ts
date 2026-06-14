@@ -13,6 +13,7 @@ import {
   evaluateCondition as _evalCond,
   columnExists,
 } from '../workflow/index.js';
+import { hasIdleAgentWithRole } from '../workflow/agentSelector.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const workflowMethods = {
@@ -25,9 +26,7 @@ export const workflowMethods = {
     // Special case: idle_agent_available needs access to agent list
     if (cond.field === 'idle_agent_available') {
       const role = cond.value;
-      const found = [...this.agents.values()].some((a: any) =>
-        a.status === 'idle' && a.enabled !== false && (!role || a.role === role)
-      );
+      const found = hasIdleAgentWithRole(this.agents, role);
       const result = cond.operator === 'neq' ? !found : found;
       if (result) console.log(`[Workflow] Condition: idle_agent_available role="${role}" => true`);
       return result;

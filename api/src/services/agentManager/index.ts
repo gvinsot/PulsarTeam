@@ -179,6 +179,7 @@ export class AgentManager {
   _updateTimers: Map<string, ReturnType<typeof setTimeout>>;
   _updatePending: Map<string, boolean>;
   _conditionProcessing: Map<string, any>;
+  _onEnterRetry: Map<string, { ts: number; count: number }>;
   llmConfigs: Map<string, any>;
   _tasks: Map<string, any[]>;
   _codeIndexPending: Map<string, Map<string, string | null>>;

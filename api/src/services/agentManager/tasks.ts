@@ -188,7 +188,6 @@ export const tasksMethods = {
     // Clear chain resume state so a new on_enter chain starts fresh.
     // Without this, a stale completedActionIdx from a previous chain
     // (e.g. refine) could cause the new chain (e.g. code) to skip actions.
-    delete task._completedActionIdx;
     task.completedActionIdx = null;
     // Clear execution state — processTransition will re-set startedAt when
     // a workflow action genuinely starts execution. Without this, stale

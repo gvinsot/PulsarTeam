@@ -89,7 +89,6 @@ export const conversationMethods = {
             setTaskSignal(task.id, 'stopped', true);
           }
           delete task.startedAt;
-          delete task._completedActionIdx;
           task.completedActionIdx = null;
           task.executionStatus = null;
           delete task.actionRunning;

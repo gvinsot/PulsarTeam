@@ -98,12 +98,8 @@ export function evaluateCondition(cond, task, getAgent) {
     case 'task_has_assignee':
       fieldValue = task.assignee ? 'true' : 'false';
       break;
-    case 'idle_agent_available': {
-      // Special: value contains the role to check
-      // The caller must provide a way to iterate agents
-      fieldValue = 'false'; // will be overridden by caller if needed
-      break;
-    }
+    // Note: 'idle_agent_available' is handled upstream in evaluateAllConditions
+    // (it needs the agent list) and never reaches this switch via that path.
     default:
       fieldValue = '';
   }

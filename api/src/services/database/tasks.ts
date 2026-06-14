@@ -12,6 +12,26 @@ const TASK_SELECT = `
   LEFT JOIN projects p ON b.project_id = p.id
 `;
 
+// Writable columns for updateTaskFields, keyed by the accepted field name.
+// Fields with a distinct camelCase form map to their snake_case column; fields
+// whose name already equals the column are listed as identity entries. A single
+// structure replaces the old parallel allow-list + camel→snake map (which had to
+// be kept in sync). TASK_COLUMNS holds the snake_case columns for passthrough of
+// already-snake_case keys (e.g. 'board_id'). Null prototype avoids inherited keys.
+const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create(null), {
+  text: 'text', title: 'title', status: 'status', assignee: 'assignee',
+  priority: 'priority', source: 'source', recurrence: 'recurrence',
+  commits: 'commits', history: 'history', error: 'error', position: 'position',
+  boardId: 'board_id', taskType: 'task_type', dueDate: 'due_date',
+  completedAt: 'completed_at', startedAt: 'started_at',
+  executionStatus: 'execution_status', completedActionIdx: 'completed_action_idx',
+  actionRunning: 'action_running', actionRunningAgentId: 'action_running_agent_id',
+  actionRunningMode: 'action_running_mode', errorFromStatus: 'error_from_status',
+  isManual: 'is_manual', repoProvider: 'repo_provider', repoFullName: 'repo_full_name',
+  storageProvider: 'storage_provider', storagePath: 'storage_path',
+});
+const TASK_COLUMNS = new Set<string>(Object.values(TASK_COLUMN_BY_FIELD));
+
 /** Convert a DB row to the in-memory task object format */
 export function rowToTask(row) {
   return {
@@ -59,44 +79,39 @@ export function rowToTask(row) {
   };
 }
 
-export async function getTasksByAgent(agentId) {
+/**
+ * Run a TASK_SELECT query with the given trailing clause + params, mapping rows
+ * to task objects. On a no-pool/error condition returns [] (matching the per-
+ * getter fallbacks). `errorPrefix` is the full console.error prefix to preserve
+ * each getter's exact log wording.
+ */
+async function queryTasks(clause: string, params: any[] = [], errorPrefix = 'Failed to load tasks:'): Promise<any[]> {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const result = await pool.query(
-      `${TASK_SELECT} WHERE t.agent_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at`,
-      [agentId]
-    );
+    const result = await pool.query(`${TASK_SELECT} ${clause}`, params);
     return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to load tasks for agent:', err.message);
+  } catch (err: any) {
+    console.error(errorPrefix, err.message);
     return [];
   }
+}
+
+/** Single-row variant of queryTasks: returns the first task or null. */
+async function queryOneTask(clause: string, params: any[], errorPrefix: string): Promise<any> {
+  return (await queryTasks(clause, params, errorPrefix))[0] ?? null;
+}
+
+export async function getTasksByAgent(agentId) {
+  return queryTasks('WHERE t.agent_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at', [agentId], 'Failed to load tasks for agent:');
 }
 
 export async function getAllTasks() {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query(`${TASK_SELECT} WHERE t.deleted_at IS NULL ORDER BY t.created_at`);
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to load all tasks:', err.message);
-    return [];
-  }
+  return queryTasks('WHERE t.deleted_at IS NULL ORDER BY t.created_at', [], 'Failed to load all tasks:');
 }
 
 export async function getTaskById(taskId) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NULL`, [taskId]);
-    if (result.rows.length === 0) return null;
-    return rowToTask(result.rows[0]);
-  } catch (err) {
-    console.error('Failed to get task:', err.message);
-    return null;
-  }
+  return queryOneTask('WHERE t.id = $1 AND t.deleted_at IS NULL', [taskId], 'Failed to get task:');
 }
 
 // Per-task write queue: serializes all saves for the same task so that
@@ -236,28 +251,11 @@ export async function restoreTaskFromDb(taskId) {
 }
 
 export async function getDeletedTasks() {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query(`${TASK_SELECT} WHERE t.deleted_at IS NOT NULL ORDER BY t.deleted_at DESC`);
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to get deleted tasks:', err.message);
-    return [];
-  }
+  return queryTasks('WHERE t.deleted_at IS NOT NULL ORDER BY t.deleted_at DESC', [], 'Failed to get deleted tasks:');
 }
 
 export async function getDeletedTaskById(taskId) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1 AND t.deleted_at IS NOT NULL`, [taskId]);
-    if (result.rows.length === 0) return null;
-    return rowToTask(result.rows[0]);
-  } catch (err) {
-    console.error('Failed to get deleted task:', err.message);
-    return null;
-  }
+  return queryOneTask('WHERE t.id = $1 AND t.deleted_at IS NOT NULL', [taskId], 'Failed to get deleted task:');
 }
 
 export async function deleteTasksByAgent(agentId) {
@@ -423,36 +421,18 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
  * Get active tasks (not done/backlog/error) for a given agent (as owner).
  */
 export async function getActiveTasksByAgent(agentId) {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query(
-      `${TASK_SELECT} WHERE t.agent_id = $1 AND t.status NOT IN ('done','backlog','error') AND t.deleted_at IS NULL ORDER BY t.created_at`,
-      [agentId]
-    );
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to get active tasks for agent:', err.message);
-    return [];
-  }
+  return queryTasks(
+    `WHERE t.agent_id = $1 AND t.status NOT IN ('done','backlog','error') AND t.deleted_at IS NULL ORDER BY t.created_at`,
+    [agentId],
+    'Failed to get active tasks for agent:'
+  );
 }
 
 /**
  * Get all tasks for a board.
  */
 export async function getTasksByBoard(boardId) {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query(
-      `${TASK_SELECT} WHERE t.board_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at`,
-      [boardId]
-    );
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to get tasks for board:', err.message);
-    return [];
-  }
+  return queryTasks('WHERE t.board_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at', [boardId], 'Failed to get tasks for board:');
 }
 
 /**
@@ -485,18 +465,11 @@ export async function getBoardWithMostTasksForProject(projectName) {
  * Get all tasks assigned to an agent (either as assignee or as owner when no assignee).
  */
 export async function getTasksByAssignee(agentId) {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query(
-      `${TASK_SELECT} WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1)) AND t.deleted_at IS NULL ORDER BY t.created_at`,
-      [agentId]
-    );
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to get tasks by assignee:', err.message);
-    return [];
-  }
+  return queryTasks(
+    `WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1)) AND t.deleted_at IS NULL ORDER BY t.created_at`,
+    [agentId],
+    'Failed to get tasks by assignee:'
+  );
 }
 
 /**
@@ -504,23 +477,15 @@ export async function getTasksByAssignee(agentId) {
  * Checks both assignee and owner. Returns null if none found.
  */
 export async function getActiveTaskForExecutor(agentId) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query(
-      `${TASK_SELECT}
-       WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1))
+  return queryOneTask(
+    `WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1))
          AND t.status NOT IN ('done','backlog','error')
          AND t.started_at IS NOT NULL
          AND t.deleted_at IS NULL
        ORDER BY t.started_at ASC LIMIT 1`,
-      [agentId]
-    );
-    return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
-  } catch (err) {
-    console.error('Failed to get active task for executor:', err.message);
-    return null;
-  }
+    [agentId],
+    'Failed to get active task for executor:'
+  );
 }
 
 /**
@@ -586,19 +551,12 @@ export async function countActiveTasksForAgent(agentId, excludeTaskId = null) {
  * mid-workflow column still gets re-armed on its next interval.
  */
 export async function getRecurringTasks() {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const result = await pool.query(
-      `${TASK_SELECT}
-       WHERE t.recurrence IS NOT NULL
-         AND t.deleted_at IS NULL`
-    );
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to get recurring tasks:', err.message);
-    return [];
-  }
+  return queryTasks(
+    `WHERE t.recurrence IS NOT NULL
+         AND t.deleted_at IS NULL`,
+    [],
+    'Failed to get recurring tasks:'
+  );
 }
 
 /**
@@ -718,31 +676,24 @@ export async function searchTasks(opts: {
  * Both parameters are optional — pass null to skip a filter.
  */
 export async function getTasksByStatusAndBoard(status = null, boardId = null) {
-  const pool = getPool();
-  if (!pool) return [];
-  try {
-    const conditions = ['t.deleted_at IS NULL'];
-    const params = [];
-    let idx = 1;
-    if (status) {
-      conditions.push(`t.status = $${idx}`);
-      params.push(status);
-      idx++;
-    }
-    if (boardId) {
-      conditions.push(`t.board_id = $${idx}`);
-      params.push(boardId);
-      idx++;
-    }
-    const result = await pool.query(
-      `${TASK_SELECT} WHERE ${conditions.join(' AND ')} ORDER BY t.position, t.created_at`,
-      params
-    );
-    return result.rows.map(rowToTask);
-  } catch (err) {
-    console.error('Failed to get tasks by status/board:', err.message);
-    return [];
+  const conditions = ['t.deleted_at IS NULL'];
+  const params = [];
+  let idx = 1;
+  if (status) {
+    conditions.push(`t.status = $${idx}`);
+    params.push(status);
+    idx++;
   }
+  if (boardId) {
+    conditions.push(`t.board_id = $${idx}`);
+    params.push(boardId);
+    idx++;
+  }
+  return queryTasks(
+    `WHERE ${conditions.join(' AND ')} ORDER BY t.position, t.created_at`,
+    params,
+    'Failed to get tasks by status/board:'
+  );
 }
 
 /**
@@ -751,31 +702,17 @@ export async function getTasksByStatusAndBoard(status = null, boardId = null) {
 export async function updateTaskFields(taskId, fields) {
   const pool = getPool();
   if (!pool) return null;
-  const allowed = [
-    'text', 'title', 'status', 'repo_provider', 'repo_full_name', 'storage_provider', 'storage_path',
-    'board_id', 'assignee',
-    'task_type', 'priority', 'due_date', 'source', 'recurrence',
-    'commits', 'history', 'error', 'completed_at', 'started_at',
-    'execution_status', 'completed_action_idx', 'action_running', 'action_running_agent_id',
-    'action_running_mode', 'error_from_status',
-    'is_manual', 'position',
-  ];
-  // Map camelCase to snake_case
-  const camelToSnake = {
-    boardId: 'board_id', taskType: 'task_type', dueDate: 'due_date',
-    completedAt: 'completed_at', startedAt: 'started_at',
-    executionStatus: 'execution_status', completedActionIdx: 'completed_action_idx',
-    actionRunning: 'action_running', actionRunningAgentId: 'action_running_agent_id',
-    actionRunningMode: 'action_running_mode', errorFromStatus: 'error_from_status',
-    isManual: 'is_manual', repoProvider: 'repo_provider', repoFullName: 'repo_full_name',
-    storageProvider: 'storage_provider', storagePath: 'storage_path',
-  };
   const sets = [];
   const values = [taskId];
   let paramIdx = 2;
   for (const [key, value] of Object.entries(fields)) {
-    const col = camelToSnake[key] || key;
-    if (!allowed.includes(col)) continue;
+    // Resolve the writable column: a known camelCase field maps to its snake_case
+    // column, or an already-snake_case key passes through if it is a known column.
+    // Object.hasOwn avoids prototype-chain keys (e.g. 'toString') sneaking in.
+    const col = Object.hasOwn(TASK_COLUMN_BY_FIELD, key)
+      ? TASK_COLUMN_BY_FIELD[key]
+      : (TASK_COLUMNS.has(key) ? key : null);
+    if (!col) continue;
     // JSON-serialize objects
     const val = (typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Date))
       ? JSON.stringify(value) : (Array.isArray(value) ? JSON.stringify(value) : value);

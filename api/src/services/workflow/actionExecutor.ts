@@ -38,6 +38,30 @@ async function bindAgentRunner(agentManager, agent) {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
+ * Drive a CLI runner via its interactive PTY: bind the runner, inject the prompt
+ * (submitting it), then wait for the terminal-driven execution to complete.
+ * Returns the wait result string (e.g. 'completed', 'error').
+ */
+async function _runViaCliTerminal(agentManager, agent, task, prompt) {
+  await bindAgentRunner(agentManager, agent);
+  await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
+  return agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
+    terminalDriven: true,
+  });
+}
+
+/**
+ * Throw if a terminal-driven wait ended in a hard error so the chain doesn't
+ * advance over a task that never ran. Surfaces a consumed auth error when present.
+ */
+function _throwIfWaitError(agentManager, task, waitResult, errorLabel) {
+  if (waitResult === 'error') {
+    const authError = agentManager._consumeTaskAuthError?.(task.id);
+    throw new Error(authError || errorLabel);
+  }
+}
+
+/**
  * Emit task:updated through the agentManager so it reaches the user's socket room.
  * Enriches with assigneeName/assigneeIcon for the frontend.
  */
@@ -54,6 +78,33 @@ function _emitTaskUpdated(agentManager, agentId, task) {
     task.assigneeIcon = null;
   }
   agentManager._emit('task:updated', { agentId, task });
+}
+
+/**
+ * Append a 'reassign' history entry recording the task's current status and the
+ * new assignee. Mirrors the guard the inline copies used.
+ */
+export function recordReassign(task, assignee) {
+  if (!task.history) task.history = [];
+  task.history.push({
+    status: task.status,
+    at: new Date().toISOString(),
+    by: 'workflow',
+    type: 'reassign',
+    assignee,
+  });
+}
+
+/**
+ * Persist the task then emit task:updated, in that order, so any loadTasks()
+ * triggered by the emit reads the committed row. The save and emit use separate
+ * payload spreads (the emit mutates its copy with updatedAt + assignee enrichment).
+ */
+export function saveThenEmitTaskUpdated(agentManager, agentId, task) {
+  const payload = { ...task, agentId };
+  Promise.resolve(saveTaskToDb({ ...task, agentId }))
+    .catch(() => {})
+    .then(() => _emitTaskUpdated(agentManager, agentId, payload));
 }
 
 // ── Prompt Builders ─────────────────────────────────────────────────────────
@@ -213,20 +264,9 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
   const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
   if (actualTask) {
     actualTask.assignee = agent.id;
-    if (!actualTask.history) actualTask.history = [];
-    actualTask.history.push({
-      status: actualTask.status,
-      at: new Date().toISOString(),
-      by: 'workflow',
-      type: 'reassign',
-      assignee: agent.id,
-    });
+    recordReassign(actualTask, agent.id);
     task.assignee = agent.id;
-    const assignPayload = { ...actualTask, agentId: task.agentId };
-    const assignSave = saveTaskToDb({ ...actualTask, agentId: task.agentId });
-    Promise.resolve(assignSave)
-      .catch(() => {})
-      .then(() => _emitTaskUpdated(agentManager, task.agentId, assignPayload));
+    saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
     console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
   }
 
@@ -248,20 +288,9 @@ function executeAssignAgentIndividual(action, task, { agentManager, io }) {
       return { executed: false, skipped: true, reason: 'no-change' };
     }
     actualTask.assignee = targetAgentId;
-    if (!actualTask.history) actualTask.history = [];
-    actualTask.history.push({
-      status: actualTask.status,
-      at: new Date().toISOString(),
-      by: 'workflow',
-      type: 'reassign',
-      assignee: targetAgentId,
-    });
+    recordReassign(actualTask, targetAgentId);
     task.assignee = targetAgentId;
-    const indivPayload = { ...actualTask, agentId: task.agentId };
-    const indivSave = saveTaskToDb({ ...actualTask, agentId: task.agentId });
-    Promise.resolve(indivSave)
-      .catch(() => {})
-      .then(() => _emitTaskUpdated(agentManager, task.agentId, indivPayload));
+    saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
     const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
     console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
   }
@@ -306,7 +335,6 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
   // Clean up chain resume state before moving
   const taskBeforeMove = realTask || agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
   if (taskBeforeMove) {
-    delete taskBeforeMove._completedActionIdx;
     taskBeforeMove.completedActionIdx = null;
     delete taskBeforeMove._pendingOnEnter;
   }
@@ -326,6 +354,100 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
 }
 
 // ── run_agent ───────────────────────────────────────────────────────────────
+
+/**
+ * Mark the task as having a workflow action running: set the actionRunning
+ * flags, stamp startedAt, (re)assign the agent recording history, then save and
+ * emit (deferred so loadTasks() reads the committed row).
+ */
+function _markActionRunning(actualTask, agent, mode, agentManager, agentId) {
+  actualTask.actionRunning = true;
+  actualTask.actionRunningAgentId = agent.id;
+  actualTask.actionRunningMode = mode;
+  if (!actualTask.startedAt) actualTask.startedAt = new Date().toISOString();
+  if (actualTask.assignee !== agent.id) {
+    actualTask.assignee = agent.id;
+    recordReassign(actualTask, agent.id);
+  }
+  // Defer emit until after DB save so that any loadTasks() triggered by the
+  // concurrent agent:updated event reads the committed row with actionRunning=true.
+  // Without this, the frontend's loadTasks() can overwrite the real-time update
+  // with stale DB data (same pattern as setTaskStatus in tasks.js).
+  saveThenEmitTaskUpdated(agentManager, agentId, actualTask);
+}
+
+/**
+ * Switch the agent to the task's repo if needed, failing the action if the
+ * switch fails. On failure this leaves the task in its CURRENT column (no status
+ * change) with an 'error' history entry and an agent:error:report — deliberately
+ * different from markTaskError, which would move the task to the error column.
+ * Lock/busy release on failure is handled by executeRunAgent's finally.
+ *
+ * @returns {{ ok: true } | { ok: false; result: ActionResult }}
+ */
+async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, mode, agentId }) {
+  // Auto-switch agent to the task's repo if needed.
+  // Tasks carry two related fields: `repoFullName` ("owner/repo", set on
+  // creation/by GitHub sync) and `project` (set/edited via the task UI). We
+  // honor whichever is present so the agent ends up working on the same repo
+  // the task is about — not whatever it happened to be on last.
+  const taskRepo = task.repoFullName || task.project || null;
+  if (!taskRepo || taskRepo === agent.project) return { ok: true };
+
+  console.log(`[ActionExecutor] Switching "${agent.name}" from "${agent.project || '(none)'}" to repo "${taskRepo}"`);
+  try {
+    // 1. Switch conversation context (saves/restores history)
+    if (agentManager._switchProjectContext) {
+      agentManager._switchProjectContext(agent, agent.project, taskRepo);
+    }
+    // 2. Switch execution environment (coder-service / sandbox)
+    if (agentManager.executionManager) {
+      const gitUrl = task.repoHtmlUrl || buildRepoCloneUrl(taskRepo);
+      if (gitUrl) {
+        const gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
+        await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl, gitCreds);
+      } else {
+        console.warn(`[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`);
+      }
+      // 3. Verify execution environment matches
+      const envProject = agentManager.executionManager.getProject(agent.id);
+      if (envProject && envProject !== taskRepo) {
+        throw new Error(`Execution environment is on "${envProject}" but task requires "${taskRepo}"`);
+      }
+    }
+    agent.project = taskRepo;
+    return { ok: true };
+  } catch (switchErr) {
+    console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
+    const switchErrTimestamp = new Date().toISOString();
+    if (actualTask) {
+      actualTask.actionRunning = false;
+      delete actualTask.actionRunningAgentId;
+      delete actualTask.actionRunningMode;
+      actualTask.error = `Project switch failed: ${switchErr.message}`;
+      if (!actualTask.history) actualTask.history = [];
+      actualTask.history.push({
+        status: actualTask.status,
+        at: switchErrTimestamp,
+        by: agent.name || 'workflow',
+        type: 'error',
+        error: `Project switch failed: ${switchErr.message}`,
+        actionMode: mode,
+      });
+      saveThenEmitTaskUpdated(agentManager, agentId, actualTask);
+    }
+    agentManager._emit('agent:error:report', {
+      agentId: agent.id,
+      agentName: agent.name,
+      project: task.project || null,
+      description: `[System Error] Project switch failed for "${agent.name}": ${switchErr.message}`,
+      timestamp: switchErrTimestamp,
+      isSystemError: true,
+      taskId: task.id,
+    });
+    return { ok: false, result: { executed: false, error: true, message: `Project switch failed: ${switchErr.message}` } };
+  }
+}
 
 /**
  * Execute a run_agent action. This is the main entry point that replaces the
@@ -372,109 +494,22 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   // Set actionRunning flag on the task
   actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
   if (actualTask) {
-    actualTask.actionRunning = true;
-    actualTask.actionRunningAgentId = agent.id;
-    actualTask.actionRunningMode = mode;
-    if (!actualTask.startedAt) actualTask.startedAt = new Date().toISOString();
-    if (actualTask.assignee !== agent.id) {
-      actualTask.assignee = agent.id;
-      if (!actualTask.history) actualTask.history = [];
-      actualTask.history.push({
-        status: actualTask.status,
-        at: new Date().toISOString(),
-        by: 'workflow',
-        type: 'reassign',
-        assignee: agent.id,
-      });
-    }
-    // Defer emit until after DB save so that any loadTasks() triggered by the
-    // concurrent agent:updated event reads the committed row with actionRunning=true.
-    // Without this, the frontend's loadTasks() can overwrite the real-time update
-    // with stale DB data (same pattern as setTaskStatus in tasks.js).
-    const taskPayload = { ...actualTask, agentId: task.agentId };
-    const savePromise = saveTaskToDb({ ...actualTask, agentId: task.agentId });
-    Promise.resolve(savePromise)
-      .catch(() => {})
-      .then(() => _emitTaskUpdated(agentManager, task.agentId, taskPayload));
+    _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
   }
 
   // Auto-switch agent to the task's repo if needed.
-  // Tasks carry two related fields: `repoFullName` ("owner/repo", set on
-  // creation/by GitHub sync) and `project` (set/edited via the task UI). We
-  // honor whichever is present so the agent ends up working on the same repo
-  // the task is about \u2014 not whatever it happened to be on last.
-  const taskRepo = task.repoFullName || task.project || null;
-  if (taskRepo && taskRepo !== agent.project) {
-    console.log(`[ActionExecutor] Switching "${agent.name}" from "${agent.project || '(none)'}" to repo "${taskRepo}"`);
-    try {
-      // 1. Switch conversation context (saves/restores history)
-      if (agentManager._switchProjectContext) {
-        agentManager._switchProjectContext(agent, agent.project, taskRepo);
-      }
-      // 2. Switch execution environment (coder-service / sandbox)
-      if (agentManager.executionManager) {
-        const gitUrl = task.repoHtmlUrl || buildRepoCloneUrl(taskRepo);
-        if (gitUrl) {
-          const gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
-          await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl, gitCreds);
-        } else {
-          console.warn(`[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`);
-        }
-        // 3. Verify execution environment matches
-        const envProject = agentManager.executionManager.getProject(agent.id);
-        if (envProject && envProject !== taskRepo) {
-          throw new Error(`Execution environment is on "${envProject}" but task requires "${taskRepo}"`);
-        }
-      }
-      agent.project = taskRepo;
-    } catch (switchErr) {
-      console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
-      releaseLock(lockKey);
-      clearAgentBusy(agent.id);
-      const switchErrTimestamp = new Date().toISOString();
-      if (actualTask) {
-        actualTask.actionRunning = false;
-        delete actualTask.actionRunningAgentId;
-        delete actualTask.actionRunningMode;
-        actualTask.error = `Project switch failed: ${switchErr.message}`;
-        if (!actualTask.history) actualTask.history = [];
-        actualTask.history.push({
-          status: actualTask.status,
-          at: switchErrTimestamp,
-          by: agent.name || 'workflow',
-          type: 'error',
-          error: `Project switch failed: ${switchErr.message}`,
-          actionMode: mode,
-        });
-        const errPayload = { ...actualTask, agentId: task.agentId };
-        const errSave = saveTaskToDb({ ...actualTask, agentId: task.agentId });
-        Promise.resolve(errSave)
-          .catch(() => {})
-          .then(() => _emitTaskUpdated(agentManager, task.agentId, errPayload));
-      }
-      agentManager._emit('agent:error:report', {
-        agentId: agent.id,
-        agentName: agent.name,
-        project: task.project || null,
-        description: `[System Error] Project switch failed for "${agent.name}": ${switchErr.message}`,
-        timestamp: switchErrTimestamp,
-        isSystemError: true,
-        taskId: task.id,
-      });
-      return { executed: false, error: true, message: `Project switch failed: ${switchErr.message}` };
-    }
-  }
-
+  const switched = await _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, mode, agentId: task.agentId });
+  if (!switched.ok) return switched.result;
   execStartMsgIdx = (agent.conversationHistory || []).length;
   execStartedAt = new Date().toISOString();
 
     let result;
     switch (mode) {
       case AgentMode.TITLE:
-        result = await _runTitleMode(agent, task, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runSimpleMode('title', agent, task, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       case AgentMode.SET_TYPE:
-        result = await _runSetTypeMode(agent, task, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runSimpleMode('set_type', agent, task, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       case AgentMode.REFINE:
         result = await _runRefineMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
@@ -582,49 +617,79 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
 
 // ── Mode-specific handlers ──────────────────────────────────────────────────
 
-async function _runTitleMode(agent, task, { agentManager, io, execStartMsgIdx, execStartedAt }) {
-  const maxLen = agent.contextLength || 4000;
-  const description = (task.text || '').slice(0, maxLen);
-  const prompt = buildTitlePrompt(description);
-
-  console.log(`[ActionExecutor] title: generating for "${task.text?.slice(0, 60)}" via ${agent.name}`);
-
+/**
+ * Run `body` between a streamStart and a streamEnd+agentUpdated finally.
+ * The finally wraps the ENTIRE body (including post-processing and any nested
+ * waits) so the wire-order of streamEnd/agentUpdated is byte-identical to the
+ * pasted copies: they always fire last, after the body's awaits and returns.
+ */
+async function _withAgentStream<T>(agentManager, agentId, body: () => Promise<T>): Promise<T> {
+  agentManager.wsEmitter.streamStart(agentId);
   try {
-    const result = await agentManager.sendMessage(agent.id, prompt, () => {});
-    const title = (result || '').trim().replace(/^["']|["']$/g, '');
-    if (title) {
-      agentManager.updateTaskTitle(task.agentId, task.id, title);
-      console.log(`[ActionExecutor] title: "${title}"`);
-    }
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'title');
-  } catch (err) {
-    console.error(`[ActionExecutor] title failed:`, err.message);
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, 'title');
+    return await body();
   } finally {
-    agentManager.wsEmitter.agentUpdated(agent.id);
+    agentManager.wsEmitter.streamEnd(agentId);
+    agentManager.wsEmitter.agentUpdated(agentId);
   }
-
-  return { executed: true };
 }
 
-async function _runSetTypeMode(agent, task, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+/**
+ * Build a sendMessage stream callback that accumulates chunks into `buf.text`
+ * while forwarding each chunk to the frontend (streamChunk + thinking).
+ */
+function _makeStreamCollector(agentManager, agentId, buf: { text: string }) {
+  return (chunk) => {
+    buf.text += chunk;
+    agentManager.wsEmitter.streamChunk(agentId, chunk);
+    agentManager.wsEmitter.thinking(agentId);
+  };
+}
+
+// Simple (non-streaming) modes share an identical body: slice the description,
+// sendMessage, post-process the raw response, save the execution log, and emit
+// agentUpdated in a finally. Only the prompt builder, the announce message, and
+// the response post-processing differ — captured in SIMPLE_MODES.
+const SET_TYPE_VALID_TYPES = ['bug', 'feature', 'technical', 'improvement', 'documentation', 'other'];
+
+const SIMPLE_MODES = {
+  title: {
+    buildPrompt: buildTitlePrompt,
+    announce: (task, agentName) => `[ActionExecutor] title: generating for "${task.text?.slice(0, 60)}" via ${agentName}`,
+    apply: (agentManager, task, raw, _agentName) => {
+      const title = (raw || '').trim().replace(/^["']|["']$/g, '');
+      if (title) {
+        agentManager.updateTaskTitle(task.agentId, task.id, title);
+        console.log(`[ActionExecutor] title: "${title}"`);
+      }
+    },
+  },
+  set_type: {
+    buildPrompt: buildSetTypePrompt,
+    announce: (task, agentName) => `[ActionExecutor] set_type: classifying "${task.text?.slice(0, 60)}" via ${agentName}`,
+    apply: (agentManager, task, raw, agentName) => {
+      const rawType = (raw || '').trim().toLowerCase().replace(/[^a-z_]/g, '');
+      const taskType = SET_TYPE_VALID_TYPES.includes(rawType) ? rawType : 'other';
+      agentManager.updateTaskType(task.agentId, task.id, taskType, agentName);
+      console.log(`[ActionExecutor] set_type: "${taskType}"`);
+    },
+  },
+} as const;
+
+async function _runSimpleMode(modeName: 'title' | 'set_type', agent, task, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+  const { buildPrompt, announce, apply } = SIMPLE_MODES[modeName];
   const maxLen = agent.contextLength || 4000;
   const description = (task.text || '').slice(0, maxLen);
-  const prompt = buildSetTypePrompt(description);
+  const prompt = buildPrompt(description);
 
-  console.log(`[ActionExecutor] set_type: classifying "${task.text?.slice(0, 60)}" via ${agent.name}`);
+  console.log(announce(task, agent.name));
 
   try {
     const result = await agentManager.sendMessage(agent.id, prompt, () => {});
-    const rawType = (result || '').trim().toLowerCase().replace(/[^a-z_]/g, '');
-    const VALID_TYPES = ['bug', 'feature', 'technical', 'improvement', 'documentation', 'other'];
-    const taskType = VALID_TYPES.includes(rawType) ? rawType : 'other';
-    agentManager.updateTaskType(task.agentId, task.id, taskType, agent.name);
-    console.log(`[ActionExecutor] set_type: "${taskType}"`);
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'set_type');
+    apply(agentManager, task, result, agent.name);
+    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, modeName);
   } catch (err) {
-    console.error(`[ActionExecutor] set_type failed:`, err.message);
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, 'set_type');
+    console.error(`[ActionExecutor] ${modeName} failed:`, err.message);
+    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, modeName);
   } finally {
     agentManager.wsEmitter.agentUpdated(agent.id);
   }
@@ -636,34 +701,26 @@ async function _runRefineMode(agent, task, instructions, { agentManager, io, exe
   const prompt = buildRefinePrompt(task, instructions);
   console.log(`[ActionExecutor] refine: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
-  let fullResponse = '';
+  const buf = { text: '' };
 
-  agentManager.wsEmitter.streamStart(agent.id);
-  try {
+  await _withAgentStream(agentManager, agent.id, async () => {
     const workflowMeta = { type: 'workflow-action', mode: 'refine', taskId: task.id };
     const result = await agentManager.sendMessage(
       agent.id,
       `[Auto-Transition] ${prompt}`,
-      (chunk) => {
-        fullResponse += chunk;
-        agentManager.wsEmitter.streamChunk(agent.id, chunk);
-        agentManager.wsEmitter.thinking(agent.id);
-      },
+      _makeStreamCollector(agentManager, agent.id, buf),
       0,
       workflowMeta
     );
 
-    const response = (result?.content || fullResponse).trim();
+    const response = (result?.content || buf.text).trim();
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'refine');
 
     if (response) {
       const cleaned = stripToolCalls(response);
       if (cleaned) agentManager.updateTaskText(task.agentId, task.id, cleaned);
     }
-  } finally {
-    agentManager.wsEmitter.streamEnd(agent.id);
-    agentManager.wsEmitter.agentUpdated(agent.id);
-  }
+  });
 
   return { executed: true };
 }
@@ -693,7 +750,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   const beforeStatus = beforeTask?.status ?? task.status;
   const beforeTextLen = (beforeTask?.text || '').length;
 
-  let fullResponse = '';
+  const buf = { text: '' };
 
   // CLI runners drive their interactive PTY (visible in the terminal tab) and
   // signal via their MCP tools — never the headless sendMessage path, which
@@ -702,37 +759,22 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   // which the before/after comparison below detects.
   if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
     console.log(`[ActionExecutor] decide: injecting prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
-    await bindAgentRunner(agentManager, agent);
-    await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
-    const waitResult = await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
-      terminalDriven: true,
-    });
-    if (waitResult === 'error') {
-      const authError = agentManager._consumeTaskAuthError?.(task.id);
-      throw new Error(authError || 'Claude Code CLI ended in an authentication or runtime error');
-    }
+    const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt);
+    _throwIfWaitError(agentManager, task, waitResult, 'Claude Code CLI ended in an authentication or runtime error');
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
   } else {
-    agentManager.wsEmitter.streamStart(agent.id);
-    try {
+    await _withAgentStream(agentManager, agent.id, async () => {
       const workflowMeta = { type: 'workflow-action', mode: 'decide', taskId: task.id };
       await agentManager.sendMessage(
         agent.id,
         prompt,
-        (chunk) => {
-          fullResponse += chunk;
-          agentManager.wsEmitter.streamChunk(agent.id, chunk);
-          agentManager.wsEmitter.thinking(agent.id);
-        },
+        _makeStreamCollector(agentManager, agent.id, buf),
         0,
         workflowMeta
       );
 
       agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
-    } finally {
-      agentManager.wsEmitter.streamEnd(agent.id);
-      agentManager.wsEmitter.agentUpdated(agent.id);
-    }
+    });
   }
 
   // Verify the agent actually made a decision: status changed OR details appended.
@@ -775,7 +817,7 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
   const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions, columns) : buildExecutePrompt(task);
   console.log(`[ActionExecutor] execute: "${task.text?.slice(0, 60)}" via ${agent.name}${hasInstructions ? ' (with instructions)' : ''}`);
 
-  let fullResponse = '';
+  const buf = { text: '' };
 
   // CLI runners always execute inside their interactive PTY — never the
   // headless sendMessage fallback. Even if agent.status flipped to "busy"
@@ -786,34 +828,22 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
   // terminal tab and would split the task's context across two backends.
   if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
     console.log(`[ActionExecutor] execute: injecting task prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
-    await bindAgentRunner(agentManager, agent);
-    await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
-    const waitResult = await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
-      terminalDriven: true,
-    });
+    const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt);
     // Honor the wait result: a CLI auth failure (or other hard error) must NOT
     // be reported as a successful execution, otherwise the workflow chain
     // advances (e.g. → done/review) over a task that never ran. Throw so
     // executeRunAgent's catch marks the task error + saves the execution log.
-    if (waitResult === 'error') {
-      const authError = agentManager._consumeTaskAuthError?.(task.id);
-      throw new Error(authError || 'Claude Code CLI ended in an authentication or runtime error');
-    }
+    _throwIfWaitError(agentManager, task, waitResult, 'Claude Code CLI ended in an authentication or runtime error');
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
     return { executed: true };
   }
 
-  agentManager.wsEmitter.streamStart(agent.id);
-  try {
+  const streamResult = await _withAgentStream(agentManager, agent.id, async () => {
     const workflowMeta = { type: 'workflow-action', mode: 'execute', taskId: task.id };
     const result = await agentManager.sendMessage(
       agent.id,
       prompt,
-      (chunk) => {
-        fullResponse += chunk;
-        agentManager.wsEmitter.streamChunk(agent.id, chunk);
-        agentManager.wsEmitter.thinking(agent.id);
-      },
+      _makeStreamCollector(agentManager, agent.id, buf),
       0,
       workflowMeta
     );
@@ -830,17 +860,17 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
       console.log(`✅ [ActionExecutor] execute: completed immediately${hasInstructions ? ' (with instructions)' : ''}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
     } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
       console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);
-    } else if (!fullResponse || fullResponse.trim().length === 0) {
+    } else if (!buf.text || buf.text.trim().length === 0) {
       console.warn(`⚠️ [ActionExecutor] execute: "${agent.name}" returned empty response for "${task.text?.slice(0, 60)}" — skipping reminder loop`);
       return { executed: false, skipped: true, reason: 'empty-response' };
     } else {
       console.log(`[ActionExecutor] execute: waiting for task_execution_complete${hasInstructions ? ' (with instructions)' : ''}`);
       await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text);
     }
-  } finally {
-    agentManager.wsEmitter.streamEnd(agent.id);
-    agentManager.wsEmitter.agentUpdated(agent.id);
-  }
+    return null;
+  });
+
+  if (streamResult) return streamResult;
 
   return { executed: true };
 }
