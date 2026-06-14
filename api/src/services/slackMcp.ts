@@ -6,39 +6,49 @@ import { createMcpHttpHandler } from './mcpHttpHandler.js';
 const SLACK_BASE = 'https://slack.com/api';
 
 /**
+ * Slack methods that are read-only and must be issued as GET even when they
+ * carry parameters. Other methods with params go out as POST with a JSON body;
+ * any method called with zero params also stays GET (existing behavior).
+ * NOTE: conversations.replies is intentionally NOT here — read_thread sends it
+ * as POST with a JSON body, and moving it would change the wire request.
+ */
+const SLACK_GET_METHODS = new Set([
+  'users.list',
+  'conversations.list',
+  'conversations.history',
+  'conversations.info',
+  'reactions.get',
+]);
+
+/**
  * Helper to call the Slack Web API.
  * Uses agent-specific tokens when agentId is provided.
  */
 async function slackApi(method: string, agentId: string | null = null, boardId: string | null = null, params: Record<string, any> = {}) {
   const token = await getSlackAccessTokenForAgent(agentId, boardId);
-  const isGet = Object.keys(params).length === 0 || method === 'users.list' || method === 'conversations.list' || method === 'conversations.history' || method === 'conversations.info' || method === 'reactions.get';
+  const isGet = SLACK_GET_METHODS.has(method) || Object.keys(params).length === 0;
 
-  let res;
-  if (isGet && Object.keys(params).length > 0) {
-    const qs = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) qs.set(k, String(v));
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  const init: RequestInit = { signal: AbortSignal.timeout(60_000), headers };
+  let url = `${SLACK_BASE}/${method}`;
+
+  if (isGet) {
+    // Append a query string whenever params is non-empty, matching the
+    // original behavior (a bare '?' results when every value is null/undefined).
+    if (Object.keys(params).length > 0) {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null) qs.set(k, String(v));
+      }
+      url += `?${qs}`;
     }
-    res = await fetch(`${SLACK_BASE}/${method}?${qs}`, {
-      signal: AbortSignal.timeout(60_000),
-      headers: { Authorization: `Bearer ${token}` },
-    });
-  } else if (isGet) {
-    res = await fetch(`${SLACK_BASE}/${method}`, {
-      signal: AbortSignal.timeout(60_000),
-      headers: { Authorization: `Bearer ${token}` },
-    });
   } else {
-    res = await fetch(`${SLACK_BASE}/${method}`, {
-      signal: AbortSignal.timeout(60_000),
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json; charset=utf-8',
-      },
-      body: JSON.stringify(params),
-    });
+    init.method = 'POST';
+    init.body = JSON.stringify(params);
+    headers['Content-Type'] = 'application/json; charset=utf-8';
   }
+
+  const res = await fetch(url, init);
 
   if (!res.ok) {
     const text = await res.text();
