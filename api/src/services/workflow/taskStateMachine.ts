@@ -11,7 +11,6 @@
  */
 
 // ── Reserved / built-in statuses ────────────────────────────────────────────
-const TERMINAL_STATUSES = new Set(['done']);
 const INACTIVE_STATUSES = new Set(['done', 'backlog', 'error']);
 
 // ── Trigger types ───────────────────────────────────────────────────────────
@@ -47,25 +46,11 @@ export function isActiveStatus(status) {
 }
 
 /**
- * Check if a status is terminal (task completed).
- */
-export function isTerminalStatus(status) {
-  return TERMINAL_STATUSES.has(status);
-}
-
-/**
  * Validate that a column exists in the workflow.
  */
 export function columnExists(workflow, columnId) {
   if (!workflow?.columns || !Array.isArray(workflow.columns)) return false;
   return workflow.columns.some(c => c.id === columnId);
-}
-
-/**
- * Get the first column ID from a workflow (used as default status).
- */
-export function getFirstColumn(workflow) {
-  return workflow?.columns?.[0]?.id || 'backlog';
 }
 
 /**
@@ -147,34 +132,6 @@ export function evaluateAllConditions(conditions, task, getAgent, hasIdleAgentWi
     }
     return evaluateCondition(cond, task, getAgent);
   });
-}
-
-/**
- * Get all on_enter transitions matching a given column status.
- *
- * @param {Object} workflow - { columns, transitions }
- * @param {string} status   - the column the task just entered
- * @returns {Array}         - matching transition configs
- */
-export function getOnEnterTransitions(workflow, status) {
-  if (!workflow?.transitions) return [];
-  return workflow.transitions
-    .filter(isValidTransition)
-    .filter(t => t.from === status && t.trigger === Trigger.ON_ENTER);
-}
-
-/**
- * Get all conditional transitions matching a given column status.
- */
-export function getConditionalTransitions(workflow, status) {
-  if (!workflow?.transitions) return [];
-  return workflow.transitions
-    .filter(isValidTransition)
-    .filter(t =>
-      t.from === status &&
-      t.trigger === Trigger.CONDITION &&
-      (t.conditions || []).length > 0
-    );
 }
 
 /**

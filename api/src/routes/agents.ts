@@ -1,6 +1,5 @@
 import express from 'express';
 import { z } from 'zod';
-import { globalTaskStore } from '../services/globalTaskStore.js';
 import { getWorkflowForBoard } from '../services/configManager.js';
 import { getAllBoards, saveTaskToDb, getAgentById } from '../services/database.js';
 import { stripToolCalls } from '../services/workflow/index.js';

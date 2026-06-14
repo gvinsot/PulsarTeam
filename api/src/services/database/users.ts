@@ -97,27 +97,32 @@ export async function deleteUser(id) {
   }
 }
 
-export async function getUserByGoogleId(googleId) {
+const PROVIDER_ID_COLUMNS = { google: 'google_id', microsoft: 'microsoft_id', github: 'github_id' } as const;
+type IdProvider = keyof typeof PROVIDER_ID_COLUMNS;
+
+export async function getUserByProviderId(provider: IdProvider, externalId) {
+  const col = PROVIDER_ID_COLUMNS[provider];
   const pool = getPool();
   if (!pool) return null;
   try {
-    const result = await pool.query('SELECT * FROM users WHERE google_id = $1', [googleId]);
+    const result = await pool.query(`SELECT * FROM users WHERE ${col} = $1`, [externalId]);
     return result.rows[0] || null;
   } catch (err) {
-    console.error('Failed to get user by google_id:', err.message);
+    console.error(`Failed to get user by ${col}:`, err.message);
     return null;
   }
 }
 
-export async function createGoogleUser(googleId, email, displayName, avatarUrl, role = 'advanced') {
+export async function createProviderUser(provider: IdProvider, externalId, username, displayName, avatarUrl, role = 'advanced') {
+  const col = PROVIDER_ID_COLUMNS[provider];
   const pool = getPool();
   if (!pool) throw new Error('Database not connected');
   try {
     const result = await pool.query(
-      `INSERT INTO users (username, password, role, display_name, google_id, avatar_url)
+      `INSERT INTO users (username, password, role, display_name, ${col}, avatar_url)
        VALUES ($1, NULL, $2, $3, $4, $5)
-       RETURNING id, username, role, display_name, google_id, avatar_url, created_at, updated_at`,
-      [email, role, displayName || email, googleId, avatarUrl || null]
+       RETURNING id, username, role, display_name, ${col}, avatar_url, created_at, updated_at`,
+      [username, role, displayName || username, externalId, avatarUrl || null]
     );
     return result.rows[0];
   } catch (err) {
@@ -126,114 +131,38 @@ export async function createGoogleUser(googleId, email, displayName, avatarUrl, 
   }
 }
 
-export async function linkGoogleId(userId, googleId, avatarUrl) {
+export async function linkProviderId(provider: IdProvider, userId, externalId, avatarUrl) {
+  const col = PROVIDER_ID_COLUMNS[provider];
   const pool = getPool();
   if (!pool) return null;
   try {
     const result = await pool.query(
-      `UPDATE users SET google_id = $2, avatar_url = COALESCE($3, avatar_url), updated_at = NOW()
+      `UPDATE users SET ${col} = $2, avatar_url = COALESCE($3, avatar_url), updated_at = NOW()
        WHERE id = $1
-       RETURNING id, username, role, display_name, google_id, avatar_url`,
-      [userId, googleId, avatarUrl]
+       RETURNING id, username, role, display_name, ${col}, avatar_url`,
+      [userId, externalId, avatarUrl]
     );
     return result.rows[0] || null;
   } catch (err) {
-    console.error('Failed to link google_id:', err.message);
+    console.error(`Failed to link ${col}:`, err.message);
     return null;
   }
 }
 
-export async function getUserByMicrosoftId(microsoftId) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE microsoft_id = $1', [microsoftId]);
-    return result.rows[0] || null;
-  } catch (err) {
-    console.error('Failed to get user by microsoft_id:', err.message);
-    return null;
-  }
-}
+export const getUserByGoogleId = (googleId) => getUserByProviderId('google', googleId);
+export const createGoogleUser = (googleId, email, displayName, avatarUrl, role = 'advanced') =>
+  createProviderUser('google', googleId, email, displayName, avatarUrl, role);
+export const linkGoogleId = (userId, googleId, avatarUrl) => linkProviderId('google', userId, googleId, avatarUrl);
 
-export async function createMicrosoftUser(microsoftId, email, displayName, avatarUrl, role = 'advanced') {
-  const pool = getPool();
-  if (!pool) throw new Error('Database not connected');
-  try {
-    const result = await pool.query(
-      `INSERT INTO users (username, password, role, display_name, microsoft_id, avatar_url)
-       VALUES ($1, NULL, $2, $3, $4, $5)
-       RETURNING id, username, role, display_name, microsoft_id, avatar_url, created_at, updated_at`,
-      [email, role, displayName || email, microsoftId, avatarUrl || null]
-    );
-    return result.rows[0];
-  } catch (err) {
-    if (err.code === '23505') throw new Error('Username already exists');
-    throw err;
-  }
-}
+export const getUserByMicrosoftId = (microsoftId) => getUserByProviderId('microsoft', microsoftId);
+export const createMicrosoftUser = (microsoftId, email, displayName, avatarUrl, role = 'advanced') =>
+  createProviderUser('microsoft', microsoftId, email, displayName, avatarUrl, role);
+export const linkMicrosoftId = (userId, microsoftId, avatarUrl) => linkProviderId('microsoft', userId, microsoftId, avatarUrl);
 
-export async function linkMicrosoftId(userId, microsoftId, avatarUrl) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query(
-      `UPDATE users SET microsoft_id = $2, avatar_url = COALESCE($3, avatar_url), updated_at = NOW()
-       WHERE id = $1
-       RETURNING id, username, role, display_name, microsoft_id, avatar_url`,
-      [userId, microsoftId, avatarUrl]
-    );
-    return result.rows[0] || null;
-  } catch (err) {
-    console.error('Failed to link microsoft_id:', err.message);
-    return null;
-  }
-}
-
-export async function getUserByGitHubId(githubId) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE github_id = $1', [githubId]);
-    return result.rows[0] || null;
-  } catch (err) {
-    console.error('Failed to get user by github_id:', err.message);
-    return null;
-  }
-}
-
-export async function createGitHubUser(githubId, email, displayName, avatarUrl, role = 'advanced') {
-  const pool = getPool();
-  if (!pool) throw new Error('Database not connected');
-  try {
-    const result = await pool.query(
-      `INSERT INTO users (username, password, role, display_name, github_id, avatar_url)
-       VALUES ($1, NULL, $2, $3, $4, $5)
-       RETURNING id, username, role, display_name, github_id, avatar_url, created_at, updated_at`,
-      [email, role, displayName || email, githubId, avatarUrl || null]
-    );
-    return result.rows[0];
-  } catch (err) {
-    if (err.code === '23505') throw new Error('Username already exists');
-    throw err;
-  }
-}
-
-export async function linkGitHubId(userId, githubId, avatarUrl) {
-  const pool = getPool();
-  if (!pool) return null;
-  try {
-    const result = await pool.query(
-      `UPDATE users SET github_id = $2, avatar_url = COALESCE($3, avatar_url), updated_at = NOW()
-       WHERE id = $1
-       RETURNING id, username, role, display_name, github_id, avatar_url`,
-      [userId, githubId, avatarUrl]
-    );
-    return result.rows[0] || null;
-  } catch (err) {
-    console.error('Failed to link github_id:', err.message);
-    return null;
-  }
-}
+export const getUserByGitHubId = (githubId) => getUserByProviderId('github', githubId);
+export const createGitHubUser = (githubId, email, displayName, avatarUrl, role = 'advanced') =>
+  createProviderUser('github', githubId, email, displayName, avatarUrl, role);
+export const linkGitHubId = (userId, githubId, avatarUrl) => linkProviderId('github', userId, githubId, avatarUrl);
 
 export async function acceptTerms(userId: string) {
   const pool = getPool();

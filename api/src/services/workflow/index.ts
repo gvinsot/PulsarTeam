@@ -10,14 +10,10 @@
 // State machine — pure logic, no I/O
 export {
   isActiveStatus,
-  isTerminalStatus,
   isValidTransition,
   columnExists,
-  getFirstColumn,
   evaluateCondition,
   evaluateAllConditions,
-  getOnEnterTransitions,
-  getConditionalTransitions,
   getMatchingTransitions,
   getWorkflowManagedStatuses,
   Trigger,
@@ -33,7 +29,6 @@ export {
   releaseLock,
   markAgentBusy,
   clearAgentBusy,
-  isAgentBusy,
 } from './agentSelector.js';
 
 // Action execution

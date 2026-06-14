@@ -100,14 +100,6 @@ export function clearAgentBusy(agentId: string) {
   _busyAgents.delete(agentId);
 }
 
-/**
- * Check if an agent is currently busy in a transition.
- */
-export function isAgentBusy(agentId: string) {
-  _evictStaleLocks();
-  return _busyAgents.has(agentId);
-}
-
 // ── Agent selection ─────────────────────────────────────────────────────────
 
 /**
