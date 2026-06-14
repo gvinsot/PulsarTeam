@@ -100,6 +100,16 @@ export function clearAgentBusy(agentId: string) {
   _busyAgents.delete(agentId);
 }
 
+/**
+ * Whether at least one idle, enabled agent exists (optionally matching a role).
+ */
+export function hasIdleAgentWithRole(agents: Map<any, any>, role?: string): boolean {
+  for (const a of agents.values()) {
+    if (a.status === 'idle' && a.enabled !== false && (!role || a.role === role)) return true;
+  }
+  return false;
+}
+
 // ── Agent selection ─────────────────────────────────────────────────────────
 
 /**
