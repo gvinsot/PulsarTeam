@@ -205,6 +205,21 @@ class ClaudeCodeBackend(RunnerBackend):
             "creds_dedup_key": _creds_dedup_key,
         }
 
+    async def interactive_preflight_auth(self, agent_id, owner_id=None) -> Optional[str]:
+        """Fail a terminal task injection fast when there is genuinely no
+        usable OAuth token for this owner/agent.
+
+        Reuses the headless `_ensure_auth` gate (which bootstraps from the
+        global token and proactively refreshes) so we only report an error
+        when no token can be resolved at all — NOT for an expired-but-
+        refreshable one. That is exactly the "Please run /login" / login-screen
+        state where the interactive CLI would swallow the pasted prompt and go
+        quiet, which the workflow otherwise misreads as a finished task.
+        """
+        agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
+        gate = await self._ensure_auth(agent_user, agent_id)
+        return gate.get("error") if gate else None
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
     async def startup(self) -> None:

@@ -165,6 +165,34 @@ async def send_terminal_input(
         config_fingerprint=config_fingerprint,
     )
 
+    # Auth preflight: a logged-out CLI (claude-code with no usable token) sits
+    # at a `/login` screen and silently swallows the pasted prompt, then goes
+    # quiet — which the workflow misreads as "task done". Verify the backend
+    # can actually run the task BEFORE pasting; if not, latch the error onto
+    # the session (the API's status probe reads it and fails the task) and skip
+    # the inject entirely. The session stays up so the user can still attach
+    # and run /login in the terminal. We don't clear a stale error here — only
+    # an authenticated preflight below resets it — so a still-broken login
+    # isn't masked by the per-injection clear.
+    preflight = getattr(BACKEND, "interactive_preflight_auth", None)
+    if preflight is not None:
+        try:
+            auth_err = await preflight(agent_id, x_owner_id)
+        except Exception as e:
+            logger.warning(f"[Terminal] Auth preflight raised for agent {agent_id}: {e}")
+            auth_err = None
+        if auth_err:
+            session.set_auth_error(auth_err)
+            logger.warning(
+                f"[Terminal] Refusing task injection for agent {agent_id} — "
+                f"not authenticated: {auth_err}"
+            )
+            return JSONResponse({
+                "status": "auth_required",
+                "alive": session.is_alive(),
+                "auth_error": session.auth_error,
+            })
+
     # A workflow-injected prompt must land in the TUI's message box, not in a
     # startup confirmation screen (trust folder / bypass-permissions) that
     # would swallow it, nor mid-response where it would interleave. Wait until
@@ -189,8 +217,9 @@ async def send_terminal_input(
             f"{ready_timeout}s — pasting prompt anyway after {delay}s fallback"
         )
 
-    # Fresh task attempt: drop any latched auth error from a previous run so a
-    # recovered login isn't reported as still-broken to the API.
+    # The preflight above confirmed a usable token (or the backend has no auth
+    # gate): drop any latched auth error from a previous run so a recovered
+    # login isn't reported as still-broken to the API.
     session.clear_auth_error()
 
     payload = request.input.encode("utf-8", errors="replace")

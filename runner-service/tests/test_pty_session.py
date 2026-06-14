@@ -87,3 +87,31 @@ def test_auto_answers_codex_update_prompt_once(monkeypatch):
     session._maybe_auto_answer_startup_prompt(prompt)
 
     assert written == [b"2\r"]
+
+
+def test_set_auth_error_latches_once():
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+
+    session.set_auth_error("Please run /login")
+    assert session.auth_error == "Please run /login"
+    assert session.status()["auth_error"] == "Please run /login"
+
+    # First match wins — a later preflight/detection must not overwrite it.
+    session.set_auth_error("a different error")
+    assert session.auth_error == "Please run /login"
+
+
+def test_set_auth_error_ignores_empty():
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+    session.set_auth_error("")
+    assert session.auth_error is None
+
+
+def test_clear_then_set_auth_error_roundtrip():
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+    session.set_auth_error("Please run /login")
+    session.clear_auth_error()
+    assert session.auth_error is None
+    # After a genuine recovery + a fresh logout, the latch works again.
+    session.set_auth_error("Please run /login")
+    assert session.auth_error == "Please run /login"

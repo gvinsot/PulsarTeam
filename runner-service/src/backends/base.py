@@ -144,6 +144,27 @@ class RunnerBackend:
         """
         raise NotImplementedError(f"{self.name} backend does not support interactive terminals")
 
+    async def interactive_preflight_auth(
+        self,
+        agent_id: Optional[str],
+        owner_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Verify the backend can actually run a workflow-injected task for
+        this agent/owner, BEFORE the prompt is pasted into the shared PTY.
+
+        Returns a human-readable auth-failure message when the runtime has no
+        usable credentials (e.g. claude-code with no/expired-unrefreshable
+        token, which would sit at a `/login` screen and silently swallow the
+        pasted prompt), else None. The terminal route latches the returned
+        message onto the session so the API's status probe fails the task
+        deterministically instead of waiting for the CLI to re-emit a sentinel
+        that a login screen never prints.
+
+        Default: None — the backend has no auth gate (the user logs in via the
+        terminal themselves) so injection always proceeds.
+        """
+        return None
+
     # ── Auth (only for backends with supports_oauth_login or supports_token_set) ──
 
     async def auth_status(self) -> dict:

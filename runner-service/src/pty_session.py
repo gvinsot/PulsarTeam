@@ -761,6 +761,21 @@ class PtySession:
             logger.info(f"[Terminal] Clearing latched auth error for agent {self.agent_id}")
         self.auth_error = None
 
+    def set_auth_error(self, message: str) -> None:
+        """Latch an auth failure detected OUT of band (e.g. a pre-injection
+        auth preflight) rather than scraped from the PTY output. Same
+        semantics as the reactive `_maybe_detect_auth_error` latch: first one
+        wins, exposed via status() so the API probe can fail the task instead
+        of treating the silent/login-screen CLI as "done". No-op once latched
+        or for an empty message."""
+        if self.auth_error is not None or not message:
+            return
+        self.auth_error = message.strip()[:300]
+        logger.warning(
+            f"[Terminal] Auth failure flagged (preflight) for agent {self.agent_id}: "
+            f"{self.auth_error!r}"
+        )
+
     async def wait_until_input_ready(self, timeout: float = 20.0) -> bool:
         """Block until the TUI shows an input-ready hint (or timeout).
 
