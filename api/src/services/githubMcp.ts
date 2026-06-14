@@ -1,37 +1,24 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getGitHubAccessTokenForAgent } from '../routes/github.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch } from './providerFetch.js';
 
 const GITHUB_API = 'https://api.github.com';
 
-async function githubFetch(path: string, agentId: string | null = null, boardId: string | null = null, options: Record<string, any> = {}) {
-  const token = await getGitHubAccessTokenForAgent(agentId, boardId);
-  const url = path.startsWith('http') ? path : `${GITHUB_API}${path}`;
-
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(60_000),
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'PulsarTeam',
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`GitHub API error ${res.status}: ${text}`);
-  }
-
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
-  }
-  return res.text();
-}
+const githubFetch = createProviderFetch({
+  errorLabel: 'GitHub API error',
+  getAuth: async (agentId, boardId) => ({
+    authorization: `Bearer ${await getGitHubAccessTokenForAgent(agentId, boardId)}`,
+    base: GITHUB_API,
+  }),
+  defaultHeaders: {
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'PulsarTeam',
+    'X-GitHub-Api-Version': '2022-11-28',
+  },
+  contentType: 'none',
+});
 
 export function createGitHubMcpServer(agentId = null, boardId = null) {
   const server = new McpServer({
@@ -522,23 +509,6 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
 }
 
 export function createGitHubMcpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createGitHubMcpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[GitHub MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('GitHub', ({ agentId, boardId }) =>
+    createGitHubMcpServer(agentId, boardId));
 }

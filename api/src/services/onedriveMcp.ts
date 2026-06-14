@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import { getOnedriveAccessTokenForAgent } from '../routes/onedrive.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch, readBodyCapped } from './providerFetch.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const MAX_READ_BYTES = 5 * 1024 * 1024;
@@ -19,31 +20,14 @@ function encodePath(path) {
  * Helper to call Microsoft Graph API with auto-refreshing tokens.
  * Uses agent-specific tokens when agentId is provided.
  */
-async function graphFetch(path: string, agentId: string | null = null, boardId: string | null = null, options: Record<string, any> = {}) {
-  const token = await getOnedriveAccessTokenForAgent(agentId, boardId);
-  const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
-
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(120_000),
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Graph API error ${res.status}: ${text}`);
-  }
-
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
-  }
-  return res.text();
-}
+const graphFetch = createProviderFetch({
+  errorLabel: 'Graph API error',
+  getAuth: async (agentId, boardId) => ({
+    authorization: `Bearer ${await getOnedriveAccessTokenForAgent(agentId, boardId)}`,
+    base: GRAPH_BASE,
+  }),
+  timeoutMs: 120_000,
+});
 
 /**
  * Format file/folder items for display.
@@ -181,31 +165,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
 
       // Stream with a byte cap as a backstop — meta.size can be stale or
       // absent, and an unbounded read of a huge file would blow up the heap.
-      let content: string;
-      const reader = response.body?.getReader();
-      if (!reader) {
-        const buf = Buffer.from(await response.arrayBuffer());
-        if (buf.length > MAX_READ_BYTES) {
-          throw new Error(`File too large to read (${(buf.length / 1024 / 1024).toFixed(1)} MB; max ${MAX_READ_BYTES / 1024 / 1024} MB).`);
-        }
-        content = buf.toString('utf8');
-      } else {
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            total += value.length;
-            if (total > MAX_READ_BYTES) {
-              try { await reader.cancel(); } catch { /* ignore */ }
-              throw new Error(`File too large to read (>${MAX_READ_BYTES / 1024 / 1024} MB).`);
-            }
-            chunks.push(value);
-          }
-        }
-        content = Buffer.concat(chunks).toString('utf8');
-      }
+      const content = (await readBodyCapped(response, MAX_READ_BYTES)).toString('utf8');
 
       return {
         content: [{ type: 'text', text: `File: ${meta.name}\nSize: ${(meta.size / 1024).toFixed(1)} KB\nType: ${mimeType}\nModified: ${meta.lastModifiedDateTime}\n\n--- Content ---\n${content}` }],
@@ -386,25 +346,6 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
  * Reads X-Agent-Id header to provide agent-specific token resolution.
  */
 export function createOneDriveMcpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      // Read agent context from custom header (set by MCPManager for per-agent calls)
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createOneDriveMcpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[OneDrive MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('OneDrive', ({ agentId, boardId }) =>
+    createOneDriveMcpServer(agentId, boardId));
 }

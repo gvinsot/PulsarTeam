@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 const BROWSER_SERVICE_URL = process.env.BROWSER_SERVICE_URL || 'http://mcp-browser:8000';
 
@@ -101,21 +101,5 @@ export function createBrowserMcpServer() {
 }
 
 export function createBrowserMcpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createBrowserMcpServer();
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[Browser MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Browser', () => createBrowserMcpServer());
 }

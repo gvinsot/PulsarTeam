@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import {
   getAllAgentSkills,
   searchAgentSkills,
@@ -166,21 +166,5 @@ export function createAutoLearnMcpServer() {
 }
 
 export function createAutoLearnMcpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createAutoLearnMcpServer();
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[Auto Learn MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Auto Learn', () => createAutoLearnMcpServer());
 }

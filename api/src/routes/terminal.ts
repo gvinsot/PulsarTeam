@@ -60,12 +60,6 @@ const TERMINAL_PATH_RE = /^\/ws\/agents\/([^\/]+)\/terminal$/;
 const CONSOLE_IDLE_TIMEOUT_MS = 5000;
 const REPLAY_GRACE_MS = 1500;
 
-// Backpressure thresholds for the PTY proxy (see handleBackpressure).
-const PROXY_BUFFER_PAUSE_BYTES = 4 * 1024 * 1024;
-const PROXY_BUFFER_RESUME_BYTES = 512 * 1024;
-const PROXY_STALL_TIMEOUT_MS = 30_000;
-const PROXY_DRAIN_POLL_MS = 100;
-
 interface ConsoleActivityState {
   idleTimer: NodeJS.Timeout;
 }
@@ -129,8 +123,8 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
       llmConfig = {
         provider: cfg.provider || null,
         model: cfg.model || null,
-        apiKey: cfg.apiKey || null,
-        endpoint: cfg.endpoint || null,
+        apiKey: cfg.apiKey || agent.apiKey || null,
+        endpoint: cfg.endpoint || agent.endpoint || null,
       };
     }
   }
@@ -145,8 +139,8 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
  * socket.io (different path), so the existing chat WS stays untouched.
  *
  * `executionManager` is optional but recommended: it's used to push the
- * agent's GitHub plugin credentials to the runner-service BEFORE the runner
- * WS is dialled, so the CLI subprocess sees `GITHUB_TOKEN`/`GH_TOKEN` and the
+ * agent's GitHub plugin credentials to the runner-service BEFORE the WS
+ * handshake, so the CLI subprocess sees `GITHUB_TOKEN`/`GH_TOKEN` and the
  * `~/.git-credentials` file from its first byte. Without it, the LLM would
  * have to wait for the first `/projects/ensure` round-trip to authenticate.
  */
@@ -162,18 +156,11 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
   });
   const runnerApiKey = readSecret('CODER_API_KEY') || '';
 
-  httpServer.on('upgrade', (req: IncomingMessage, socket, head) => {
+  httpServer.on('upgrade', async (req: IncomingMessage, socket, head) => {
     // socket.io owns `/socket.io/...` — let it handle those.
     const urlPath = req.url ? req.url.split('?')[0] : '';
     const match = urlPath ? TERMINAL_PATH_RE.exec(urlPath) : null;
     if (!match) return; // not our route, leave for other handlers
-
-    // A browser disconnect during the handshake would otherwise emit an
-    // unhandled 'error' on the raw socket and crash to the last-resort
-    // uncaughtException handler. ws installs its own listener once
-    // handleUpgrade takes over.
-    const onSocketError = () => socket.destroy();
-    socket.on('error', onSocketError);
 
     const agentId = match[1];
     const parsedUrl = new URL(req.url!, 'http://localhost');
@@ -186,116 +173,90 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
     try {
       decoded = jwt.verify(token, getJwtSecret()) as DecodedToken;
     } catch {
-      if (socket.writable) socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      // 4401 = "auth failed". Browsers expose the close code to JS.
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
 
-    // Finalise the upgrade before any async work: socket.io shares this
-    // http.Server, and engine.io's default destroyUpgrade behaviour ends any
-    // non-socket.io upgrade socket that has had nothing written to it within
-    // 1s. Agent lookup + project provisioning can easily exceed that (DB
-    // calls, git clone on the runner), so they run after the 101 and close
-    // the WS with an application code on failure.
-    socket.removeListener('error', onSocketError);
-    wss.handleUpgrade(req, socket as any, head, (clientWs) => {
-      authorizeAndWire(clientWs, agentId, decoded, runnerApiKey, cols, rows, executionManager, agentManager)
-        .catch((err: any) => {
-          console.warn(`[Terminal] Setup failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
-          try { clientWs.close(1011, 'terminal setup failed'); } catch { /* noop */ }
+    // Authorize: agent must exist, be a CLI runner, and the requesting user
+    // must own it (or be an admin).
+    let agent: any;
+    try {
+      agent = await getAgentById(agentId);
+    } catch (err: any) {
+      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    if (!agent) {
+      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const runner = String(agent.runner || '');
+    if (!TERMINAL_RUNNERS.has(runner)) {
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\nAgent is not a CLI runner');
+      socket.destroy();
+      return;
+    }
+    const isOwner = agent.ownerId && decoded.userId && agent.ownerId === decoded.userId;
+    const isAdmin = decoded.role === 'admin';
+    if (!isOwner && !isAdmin) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    let runnerContext: TerminalRunnerContext;
+    try {
+      runnerContext = await buildRunnerContext(agent);
+    } catch (err: any) {
+      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Provision the agent's execution environment BEFORE opening the PTY so
+    // the runner's prepare_interactive resolves cwd to the selected repo
+    // instead of falling back to CLI_CWD=/app. Mirrors the chat path
+    // (agentManager/chat.ts). Best-effort: a failure shouldn't block the
+    // terminal.
+    //
+    //  1. Bind the agent to its real runner (claudecode/codex/…). Without
+    //     this, _providerFor defaults to 'sandbox' for an agent that hasn't
+    //     been bound by a chat/workflow yet, so steps 2-3 would target the
+    //     wrong runner.
+    //  2. Project pinned → clone/update it on the runner so the interactive
+    //     CLI starts inside the working tree (and ~/.git-credentials +
+    //     GITHUB_TOKEN/GH_TOKEN are installed along the way).
+    //  3. No project → just push git credentials so any repo the LLM clones
+    //     itself authenticates.
+    if (executionManager) {
+      try {
+        const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
+        executionManager.bindAgent?.(agentId, runner, {
+          ownerId: agent.ownerId || null,
+          gitCredentials: gitCreds,
+          permissions: agent.permissions || null,
+          llmConfig: runnerContext.llmConfig || null,
         });
+        const gitUrl = buildRepoCloneUrl(agent.project);
+        if (gitUrl && executionManager.ensureProject) {
+          await executionManager.ensureProject(agentId, agent.project, gitUrl, gitCreds);
+        } else if (gitCreds?.token && executionManager.installGitCredentials) {
+          await executionManager.installGitCredentials(agentId, gitCreds);
+        }
+      } catch (err: any) {
+        console.warn(`[Terminal] Project/credential provisioning failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
+      }
+    }
+
+    // Finalise the upgrade now that auth + authz passed.
+    wss.handleUpgrade(req, socket as any, head, (clientWs) => {
+      wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows, runnerContext, agentManager);
     });
   });
-}
-
-/**
- * Post-upgrade authorization + provisioning, then bridge to the runner.
- * Runs after the 101 is sent, so failures surface as WS close codes
- * (the frontend's reconnect loop handles them like any other drop).
- */
-async function authorizeAndWire(
-  clientWs: WebSocket,
-  agentId: string,
-  decoded: DecodedToken,
-  runnerApiKey: string,
-  cols: string,
-  rows: string,
-  executionManager?: any,
-  agentManager?: any,
-): Promise<void> {
-  // Authorize: agent must exist, be a CLI runner, and the requesting user
-  // must own it (or be an admin).
-  let agent: any;
-  try {
-    agent = await getAgentById(agentId);
-  } catch (err: any) {
-    clientWs.close(1011, 'agent lookup failed');
-    return;
-  }
-  if (!agent) {
-    clientWs.close(4404, 'Agent not found');
-    return;
-  }
-  const runner = String(agent.runner || '');
-  if (!TERMINAL_RUNNERS.has(runner)) {
-    clientWs.close(4400, 'Agent is not a CLI runner');
-    return;
-  }
-  const isOwner = agent.ownerId && decoded.userId && agent.ownerId === decoded.userId;
-  const isAdmin = decoded.role === 'admin';
-  if (!isOwner && !isAdmin) {
-    // 4401 = "auth failed". Browsers expose the close code to JS.
-    clientWs.close(4401, 'Forbidden');
-    return;
-  }
-
-  let runnerContext: TerminalRunnerContext;
-  try {
-    runnerContext = await buildRunnerContext(agent);
-  } catch (err: any) {
-    clientWs.close(1011, 'runner context failed');
-    return;
-  }
-
-  // Provision the agent's execution environment BEFORE opening the PTY so
-  // the runner's prepare_interactive resolves cwd to the selected repo
-  // instead of falling back to CLI_CWD=/app. Mirrors the chat path
-  // (agentManager/chat.ts). Best-effort: a failure shouldn't block the
-  // terminal.
-  //
-  //  1. Bind the agent to its real runner (claudecode/codex/…). Without
-  //     this, _providerFor defaults to 'sandbox' for an agent that hasn't
-  //     been bound by a chat/workflow yet, so steps 2-3 would target the
-  //     wrong runner.
-  //  2. Project pinned → clone/update it on the runner so the interactive
-  //     CLI starts inside the working tree (and ~/.git-credentials +
-  //     GITHUB_TOKEN/GH_TOKEN are installed along the way).
-  //  3. No project → just push git credentials so any repo the LLM clones
-  //     itself authenticates.
-  if (executionManager) {
-    try {
-      const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
-      executionManager.bindAgent?.(agentId, runner, {
-        ownerId: agent.ownerId || null,
-        gitCredentials: gitCreds,
-        permissions: agent.permissions || null,
-        llmConfig: runnerContext.llmConfig || null,
-      });
-      const gitUrl = buildRepoCloneUrl(agent.project);
-      if (gitUrl && executionManager.ensureProject) {
-        await executionManager.ensureProject(agentId, agent.project, gitUrl, gitCreds);
-      } else if (gitCreds?.token && executionManager.installGitCredentials) {
-        await executionManager.installGitCredentials(agentId, gitCreds);
-      }
-    } catch (err: any) {
-      console.warn(`[Terminal] Project/credential provisioning failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
-    }
-  }
-
-  // The browser may have given up while we were provisioning.
-  if (clientWs.readyState !== WebSocket.OPEN) return;
-
-  wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows, runnerContext, agentManager);
 }
 
 /**
@@ -335,52 +296,14 @@ function wireProxy(
       serverNoContextTakeover: false,
     },
     headers,
-    // Without this, a blackholed runner (task restarting, overlay network
-    // dropping SYNs) leaves the dial hanging for the OS TCP timeout and the
-    // browser staring at a dead terminal with no close event.
-    handshakeTimeout: 10_000,
   });
-
-  const drainTimers = new Set<NodeJS.Timeout>();
 
   let closed = false;
   const closeBoth = (code = 1000, reason = '') => {
     if (closed) return;
     closed = true;
-    for (const t of drainTimers) clearInterval(t);
-    drainTimers.clear();
-    // A paused socket stops processing incoming frames — including close
-    // frames — so resume before closing to let the handshake complete.
-    try { if (runnerWs.readyState === WebSocket.OPEN && runnerWs.isPaused) runnerWs.resume(); } catch { /* noop */ }
-    try { if (clientWs.readyState === WebSocket.OPEN && clientWs.isPaused) clientWs.resume(); } catch { /* noop */ }
     try { clientWs.close(code, reason); } catch { /* noop */ }
     try { runnerWs.close(code, reason); } catch { /* noop */ }
-  };
-
-  // Backpressure: ws buffers unsent frames in process memory without limit,
-  // so a fast PTY stream into a slow reader (backgrounded mobile tab) would
-  // grow the API heap unboundedly. Pause the source while the sink's send
-  // buffer is over the high-water mark; give up on sinks that never drain —
-  // the PTY survives the detach, so the client just reattaches.
-  const handleBackpressure = (source: WebSocket, sink: WebSocket) => {
-    if (sink.bufferedAmount < PROXY_BUFFER_PAUSE_BYTES) return;
-    if (source.readyState !== WebSocket.OPEN || source.isPaused) return;
-    source.pause();
-    const pausedAt = Date.now();
-    const timer = setInterval(() => {
-      if (sink.bufferedAmount <= PROXY_BUFFER_RESUME_BYTES) {
-        clearInterval(timer);
-        drainTimers.delete(timer);
-        if (source.readyState === WebSocket.OPEN) {
-          try { source.resume(); } catch { /* noop */ }
-        }
-        return;
-      }
-      if (Date.now() - pausedAt > PROXY_STALL_TIMEOUT_MS) {
-        closeBoth(1009, 'receiver too slow');
-      }
-    }, PROXY_DRAIN_POLL_MS);
-    drainTimers.add(timer);
   };
 
   const connectionOpenedAt = Date.now();
@@ -399,7 +322,6 @@ function wireProxy(
       closeBoth(1011, 'client send failed');
       return;
     }
-    handleBackpressure(runnerWs, clientWs);
     // Reflect PTY activity as agent.status='busy' so the UI/workflow sees the
     // CLI is currently working. Text frames are control envelopes (exit,
     // resize), not CLI output — skip them. The grace window suppresses the
@@ -422,9 +344,7 @@ function wireProxy(
       runnerWs.send(data, { binary: isBinary });
     } catch {
       closeBoth(1011, 'runner send failed');
-      return;
     }
-    handleBackpressure(clientWs, runnerWs);
   });
   clientWs.on('close', () => closeBoth());
   clientWs.on('error', () => closeBoth(1011, 'client error'));

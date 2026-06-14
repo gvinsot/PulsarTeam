@@ -1,9 +1,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { z } from 'zod';
 import { getOutlookAccessTokenForAgent } from '../routes/outlook.js';
+import {
+  buildAttachmentsSchema,
+  resolveAttachmentInput,
+  type AttachmentInput,
+  type RunnerExecBridge,
+} from './mcpAttachments.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { createProviderFetch } from './providerFetch.js';
 
 /**
  * Outlook MCP — mirrors the Gmail MCP but talks to Microsoft Graph
@@ -17,14 +22,6 @@ import { getOutlookAccessTokenForAgent } from '../routes/outlook.js';
  * of scope for parity with the Gmail MCP.
  */
 
-type RunnerExecBridge = {
-  exec: (
-    agentId: string,
-    command: string,
-    options?: { cwd?: string; timeout?: number; maxOutput?: number },
-  ) => Promise<{ stdout: string; stderr: string }>;
-};
-
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 
 // Microsoft Graph allows messages up to ~4 MB for the JSON body containing
@@ -32,140 +29,22 @@ const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 // the encoded payload + envelope stay safely below the limit.
 const MAX_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 
-const MIME_BY_EXT: Record<string, string> = {
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.csv': 'text/csv',
-  '.tsv': 'text/tab-separated-values',
-  '.json': 'application/json',
-  '.xml': 'application/xml',
-  '.html': 'text/html',
-  '.htm': 'text/html',
-  '.pdf': 'application/pdf',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp',
-  '.tiff': 'image/tiff',
-  '.zip': 'application/zip',
-  '.gz': 'application/gzip',
-  '.tar': 'application/x-tar',
-  '.7z': 'application/x-7z-compressed',
-  '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.xls': 'application/vnd.ms-excel',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.ppt': 'application/vnd.ms-powerpoint',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.odt': 'application/vnd.oasis.opendocument.text',
-  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
-  '.odp': 'application/vnd.oasis.opendocument.presentation',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-  '.ics': 'text/calendar',
-};
+// Runner exec output cap: 3 MB binary expands to ~4 MB once base64-encoded.
+const RUNNER_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 
-function guessMimeType(filename: string): string {
-  const ext = path.extname(filename).toLowerCase();
-  return MIME_BY_EXT[ext] || 'application/octet-stream';
-}
+const ATTACHMENT_LIMIT_LABEL = 'inline-attachment limit for Outlook';
 
 /**
  * Call Microsoft Graph with auto-refreshing tokens.
  */
-async function graphFetch(
-  pathOrUrl: string,
-  agentId: string | null = null,
-  boardId: string | null = null,
-  options: Record<string, any> = {},
-): Promise<any> {
-  const token = await getOutlookAccessTokenForAgent(agentId, boardId);
-  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
-
-  const res = await fetch(url, {
-    signal: AbortSignal.timeout(60_000),
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Microsoft Graph error ${res.status}: ${text}`);
-  }
-
-  if (res.status === 202 || res.status === 204) return null;
-
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    return res.json();
-  }
-  return res.text();
-}
-
-function shQuote(value: string): string {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-async function readAttachmentViaRunner(
-  bridge: RunnerExecBridge,
-  agentId: string,
-  filePath: string,
-): Promise<Buffer> {
-  const probe = await bridge.exec(
-    agentId,
-    `if [ ! -e ${shQuote(filePath)} ]; then echo "MISSING"; elif [ ! -f ${shQuote(filePath)} ]; then echo "NOT_A_FILE"; elif [ ! -r ${shQuote(filePath)} ]; then echo "UNREADABLE"; else stat -c %s ${shQuote(filePath)}; fi`,
-    { timeout: 10000 },
-  );
-  const probeOut = (probe.stdout || '').trim();
-  if (probeOut === 'MISSING') {
-    throw new Error(`Cannot read attachment "${filePath}": file not found in agent workspace`);
-  }
-  if (probeOut === 'NOT_A_FILE') {
-    throw new Error(`Attachment path "${filePath}" is not a regular file`);
-  }
-  if (probeOut === 'UNREADABLE') {
-    throw new Error(`Cannot read attachment "${filePath}": permission denied (cross-agent access is blocked)`);
-  }
-  const size = parseInt(probeOut, 10);
-  if (!Number.isFinite(size) || size < 0) {
-    throw new Error(`Cannot stat attachment "${filePath}" via runner: ${probe.stderr || probeOut || 'unknown error'}`);
-  }
-  if (size > MAX_ATTACHMENT_BYTES) {
-    throw new Error(
-      `Attachment "${filePath}" is ${(size / 1024 / 1024).toFixed(1)} MB, ` +
-      `which exceeds the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB inline-attachment limit for Outlook.`,
-    );
-  }
-
-  const res = await bridge.exec(
-    agentId,
-    `base64 -w0 ${shQuote(filePath)}`,
-    { timeout: 120000, maxOutput: 8 * 1024 * 1024 },
-  );
-  const b64 = (res.stdout || '').replace(/\s+/g, '');
-  if (!b64) {
-    throw new Error(`Empty content reading "${filePath}" via runner: ${res.stderr || 'no output'}`);
-  }
-  const buf = Buffer.from(b64, 'base64');
-  if (buf.length !== size) {
-    throw new Error(
-      `Attachment "${filePath}" was truncated during transfer ` +
-      `(expected ${size} bytes, got ${buf.length}).`,
-    );
-  }
-  return buf;
-}
+const graphFetch = createProviderFetch({
+  errorLabel: 'Microsoft Graph error',
+  getAuth: async (agentId, boardId) => ({
+    authorization: `Bearer ${await getOutlookAccessTokenForAgent(agentId, boardId)}`,
+    base: GRAPH_BASE,
+  }),
+  nullStatuses: [202, 204],
+});
 
 type GraphAttachment = {
   '@odata.type': '#microsoft.graph.fileAttachment';
@@ -174,108 +53,37 @@ type GraphAttachment = {
   contentBytes: string;
 };
 
-type AttachmentInput = {
-  path?: string;
-  filename?: string;
-  mimeType?: string;
-  content?: string;
-};
-
 async function resolveAttachment(
   att: AttachmentInput,
   agentId: string | null = null,
   runnerBridge: RunnerExecBridge | null = null,
 ): Promise<GraphAttachment> {
-  if (!att || typeof att !== 'object') {
-    throw new Error('Each attachment must be an object.');
-  }
+  const resolved = await resolveAttachmentInput(att, {
+    agentId,
+    runnerBridge,
+    maxBytes: MAX_ATTACHMENT_BYTES,
+    maxOutput: RUNNER_MAX_OUTPUT_BYTES,
+    limitLabel: ATTACHMENT_LIMIT_LABEL,
+  });
 
-  const hasPath = typeof att.path === 'string' && att.path.length > 0;
-  const hasContent = typeof att.content === 'string' && att.content.length > 0;
-
-  if (hasPath && hasContent) {
-    throw new Error('Provide either "path" or "content" for an attachment, not both.');
-  }
-  if (!hasPath && !hasContent) {
-    throw new Error('Each attachment must specify "path" (file on disk) or "content" (base64).');
-  }
-
-  if (hasPath) {
-    const userPath = att.path!;
-    let buf: Buffer | null = null;
-    let localErr: any = null;
-
-    try {
-      const absPath = path.resolve(userPath);
-      const stat = await fs.stat(absPath);
-      if (!stat.isFile()) {
-        throw new Error(`Attachment path "${userPath}" is not a regular file.`);
-      }
-      if (stat.size > MAX_ATTACHMENT_BYTES) {
-        throw new Error(
-          `Attachment "${userPath}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, ` +
-          `which exceeds the ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB inline-attachment limit for Outlook.`,
-        );
-      }
-      buf = await fs.readFile(absPath);
-    } catch (err: any) {
-      localErr = err;
-    }
-
-    if (!buf) {
-      const shouldFallback =
-        agentId &&
-        runnerBridge &&
-        localErr &&
-        (localErr.code === 'ENOENT' || localErr.code === 'EACCES' || localErr.code === 'EPERM');
-      if (shouldFallback) {
-        try {
-          buf = await readAttachmentViaRunner(runnerBridge!, agentId!, userPath);
-        } catch (runnerErr: any) {
-          throw new Error(`Cannot read attachment "${userPath}": ${runnerErr.message}`);
-        }
-      } else if (localErr) {
-        throw new Error(`Cannot read attachment "${userPath}": ${localErr.message}`);
-      }
-    }
-
-    const filename = att.filename || path.basename(userPath);
-    const mimeType = att.mimeType || guessMimeType(filename);
-    return {
-      '@odata.type': '#microsoft.graph.fileAttachment',
-      name: filename,
-      contentType: mimeType,
-      contentBytes: buf!.toString('base64'),
-    };
-  }
-
-  // hasContent
-  if (!att.filename) {
-    throw new Error('Attachment supplied via "content" must also include "filename".');
-  }
-  const cleanB64 = att.content!.replace(/\s+/g, '');
+  // resolveAttachmentInput passes caller-supplied "content" through raw —
+  // Outlook validates the base64 at resolve time (Gmail validates later, in
+  // buildRawEmail). For the "path" branch this clean+validate is a no-op on
+  // freshly generated base64.
+  const cleanB64 = resolved.contentBase64.replace(/\s+/g, '');
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(cleanB64)) {
-    throw new Error(`Attachment "${att.filename}" content is not valid base64.`);
+    throw new Error(`Attachment "${resolved.filename}" content is not valid base64.`);
   }
+
   return {
     '@odata.type': '#microsoft.graph.fileAttachment',
-    name: att.filename,
-    contentType: att.mimeType || guessMimeType(att.filename),
+    name: resolved.filename,
+    contentType: resolved.mimeType,
     contentBytes: cleanB64,
   };
 }
 
-const attachmentsSchema = z
-  .array(
-    z.object({
-      path: z.string().optional().describe('Path to the file on the server filesystem. The MCP reads the file and base64-encodes it. Recommended way to attach files.'),
-      filename: z.string().optional().describe('Display filename for the attachment, including extension. Defaults to the basename of "path" when not provided.'),
-      mimeType: z.string().optional().describe('MIME type (e.g. "application/pdf"). Auto-detected from the extension when not provided.'),
-      content: z.string().optional().describe('Optional base64-encoded content (alternative to "path"). Requires "filename".'),
-    }),
-  )
-  .optional()
-  .describe('Optional list of file attachments. Specify each via "path" (preferred — file is read from disk) or pre-encoded "content". Outlook inline-attachment limit ≈ 3 MB per file.');
+const attachmentsSchema = buildAttachmentsSchema(' Outlook inline-attachment limit ≈ 3 MB per file.');
 
 function parseEmailList(value?: string): { emailAddress: { address: string } }[] | undefined {
   if (!value) return undefined;
@@ -847,24 +655,6 @@ export function createOutlookMcpServer(
  * Reads X-Agent-Id / X-Board-Id headers for token resolution.
  */
 export function createOutlookMcpHandler(runnerBridge: RunnerExecBridge | null = null) {
-  return async (req: any, res: any) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createOutlookMcpServer(agentId, boardId, runnerBridge);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err: any) {
-      console.error('[Outlook MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Outlook', ({ agentId, boardId }) =>
+    createOutlookMcpServer(agentId, boardId, runnerBridge));
 }

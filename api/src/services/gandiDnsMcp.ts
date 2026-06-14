@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 const GANDI_API = 'https://api.gandi.net/v5/livedns';
 
@@ -145,21 +145,5 @@ export function createGandiDnsMcpServer(mcpManager) {
 // ─── Express Handler ─────────────────────────────────────────────────────────
 
 export function createGandiDnsMcpHandler(mcpManager) {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createGandiDnsMcpServer(mcpManager);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[Gandi DNS MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('Gandi DNS', () => createGandiDnsMcpServer(mcpManager));
 }

@@ -1,5 +1,4 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 import {
   S3Client,
@@ -15,6 +14,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getS3CredentialsForAgent } from '../routes/s3.js';
+import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 function createS3Client(agentId: string | null, boardId: string | null): S3Client {
   const creds = getS3CredentialsForAgent(agentId, boardId);
@@ -284,24 +284,6 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
 }
 
 export function createS3McpHandler() {
-  return async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).json({ error: 'Method not allowed' });
-      return;
-    }
-    try {
-      const agentId = req.headers['x-agent-id'] || null;
-      const boardId = req.headers['x-board-id'] || null;
-
-      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-      const server = createS3McpServer(agentId, boardId);
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[S3 MCP] Error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: err.message });
-      }
-    }
-  };
+  return createMcpHttpHandler('S3', ({ agentId, boardId }) =>
+    createS3McpServer(agentId, boardId));
 }
