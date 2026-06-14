@@ -39,6 +39,15 @@ logger = logging.getLogger("runner_service")
 
 _PULSAR_PERMISSION_SIDECAR = ".pulsar-managed-permission.json"
 
+# OpenCode's `permission` config (and the OPENCODE_PERMISSION env var) is a
+# record {tool: "ask"|"allow"|"deny"} — NOT a bare string. Passing the string
+# "allow" makes opencode's zod schema iterate the string's characters and fail
+# with `Expected PermissionActionConfig, got "a" at ["permission"]["0"]`, which
+# kills the CLI on startup. The no-approval ("dangerously skip permissions")
+# equivalent is every approval-gated tool explicitly set to "allow"; the other
+# opencode tools (read/list/glob/grep/…) never prompt.
+_OPENCODE_ALLOW_ALL_PERMISSION = {"edit": "allow", "bash": "allow", "webfetch": "allow"}
+
 
 # Map our internal provider names to the namespace opencode uses in its
 # `provider/model` model spec. Anything not in this map is forwarded as-is.
@@ -339,7 +348,7 @@ class OpenCodeBackend(CliBackend):
                 (agent_id or "unknown")[:12],
             )
             if self._dangerous_skip_permissions(agent_id):
-                env["OPENCODE_PERMISSION"] = json.dumps("allow")
+                env["OPENCODE_PERMISSION"] = json.dumps(_OPENCODE_ALLOW_ALL_PERMISSION)
             return env
         config_dir = os.path.join(home_dir, ".config", "opencode")
         cfg_path = os.path.join(config_dir, "config.json")
@@ -356,10 +365,10 @@ class OpenCodeBackend(CliBackend):
         # config-level model even though the command no longer passes --model.
         skip_permissions = self._dangerous_skip_permissions(agent_id)
         had_managed_permission = _read_opencode_permission_sidecar(config_dir)
-        permission_override = "allow" if skip_permissions else None
+        permission_override = _OPENCODE_ALLOW_ALL_PERMISSION if skip_permissions else None
         clear_permission = (not skip_permissions) and had_managed_permission
         if skip_permissions:
-            env["OPENCODE_PERMISSION"] = json.dumps("allow")
+            env["OPENCODE_PERMISSION"] = json.dumps(_OPENCODE_ALLOW_ALL_PERMISSION)
 
         merged = _merge_opencode_config(
             existing_json,
@@ -378,7 +387,7 @@ class OpenCodeBackend(CliBackend):
             logger.info(
                 "[OpenCode] Wrote config for agent %s at %s (model=%s permission=%s)",
                 (agent_id or "unknown")[:12], cfg_path, model or "<default>",
-                permission_override or ("cleared" if clear_permission else "<unchanged>"),
+                "allow-all" if permission_override else ("cleared" if clear_permission else "<unchanged>"),
             )
         if skip_permissions or clear_permission:
             _write_opencode_permission_sidecar(config_dir, skip_permissions)
@@ -425,8 +434,8 @@ class OpenCodeBackend(CliBackend):
             cmd += ["--model", model]
         cmd += ["--format", "json"]  # opencode has no separate stream-json — JSON events on stdout
         # Permissions are configured via ~/.config/opencode/config.json and
-        # OPENCODE_PERMISSION in _agent_env. Current OpenCode uses
-        # `permission: "allow"` as the no-approval equivalent.
+        # OPENCODE_PERMISSION in _agent_env, as a {tool: "allow"} object
+        # (_OPENCODE_ALLOW_ALL_PERMISSION) — the no-approval equivalent.
         # Runner is stateless — conversation history is replayed inside `prompt`
         # by the caller. The opencode CLI's --session is not used.
         cmd.append(prompt)

@@ -65,7 +65,7 @@ def test_default_llm_removes_previous_pin_from_agent_config(tmp_path):
     config = json.loads(config_path.read_text())
     assert env["HOME"] == str(tmp_path)
     assert "model" not in config
-    assert config["permission"] == "allow"
+    assert config["permission"] == {"edit": "allow", "bash": "allow", "webfetch": "allow"}
     assert config["mcp"] == {"github": {"type": "local"}}
 
 
@@ -79,8 +79,9 @@ def test_dangerous_permissions_write_allow_config_and_env(tmp_path):
         _agent_users.pop(agent_id, None)
 
     config = json.loads((tmp_path / ".config" / "opencode" / "config.json").read_text())
-    assert config["permission"] == "allow"
-    assert env["OPENCODE_PERMISSION"] == '"allow"'
+    expected_permission = {"edit": "allow", "bash": "allow", "webfetch": "allow"}
+    assert config["permission"] == expected_permission
+    assert json.loads(env["OPENCODE_PERMISSION"]) == expected_permission
     sidecar = tmp_path / ".config" / "opencode" / ".pulsar-managed-permission.json"
     assert json.loads(sidecar.read_text()) == {"managed": True}
 
