@@ -5,6 +5,23 @@ import { getTaskSignal, setTaskSignal } from './tasks.js';
 /** @this {import('./index.js').AgentManager} */
 export const statusMethods = {
 
+  /** Apply the shared "mark task stopped" mutation: set executionStatus,
+   * clear startedAt, push a {type:'stopped', by:'user'} history entry, and
+   * persist. Does NOT set the task signal or emit task:updated — each stopAgent
+   * loop keeps its own guard/signal/emit because those differ per block. */
+  _markTaskStopped(this: any, t: any, ownerAgentId: string, stopTimestamp: string): void {
+    t.executionStatus = 'stopped';
+    t.startedAt = null;
+    if (!t.history) t.history = [];
+    t.history.push({
+      status: t.status,
+      at: stopTimestamp,
+      by: 'user',
+      type: 'stopped',
+    });
+    saveTaskToDb({ ...t, agentId: ownerAgentId });
+  },
+
   getAgentStatus(this: any, id: string): any {
     const agent = this.agents.get(id);
     if (!agent) return null;
@@ -267,16 +284,7 @@ export const statusMethods = {
     const stopTimestamp = new Date().toISOString();
     for (const t of this._getAgentTasks(id)) {
       if (this._isActiveTaskStatus(t.status)) {
-        t.executionStatus = 'stopped';
-        t.startedAt = null;
-        if (!t.history) t.history = [];
-        t.history.push({
-          status: t.status,
-          at: stopTimestamp,
-          by: 'user',
-          type: 'stopped',
-        });
-        saveTaskToDb({ ...t, agentId: id });
+        this._markTaskStopped(t, id, stopTimestamp);
         // Signal any pending _waitForExecutionComplete loop so it exits
         // instead of keeping the reminder cycle alive for a stopped agent.
         setTaskSignal(t.id, 'stopped', true);
@@ -299,16 +307,7 @@ export const statusMethods = {
           // started_at intact, so the next 5-second tick of
           // _processNextPendingTasks resumes the task immediately.
           if (this._isActiveTaskStatus(t.status)) {
-            t.executionStatus = 'stopped';
-            t.startedAt = null;
-            if (!t.history) t.history = [];
-            t.history.push({
-              status: t.status,
-              at: stopTimestamp,
-              by: 'user',
-              type: 'stopped',
-            });
-            saveTaskToDb({ ...t, agentId: creatorId });
+            this._markTaskStopped(t, creatorId, stopTimestamp);
           }
           // Signal any pending _waitForExecutionComplete loop so it unblocks
           // the workflow lock instead of waiting out the 10-min reminder cycle.
@@ -329,16 +328,7 @@ export const statusMethods = {
         if (t.assignee !== id || !this._isActiveTaskStatus(t.status)) continue;
         if (!t.startedAt && !getTaskSignal(t.id, 'watching')) continue;
         if (t.executionStatus !== 'stopped') {
-          t.executionStatus = 'stopped';
-          t.startedAt = null;
-          if (!t.history) t.history = [];
-          t.history.push({
-            status: t.status,
-            at: stopTimestamp,
-            by: 'user',
-            type: 'stopped',
-          });
-          saveTaskToDb({ ...t, agentId: creatorId });
+          this._markTaskStopped(t, creatorId, stopTimestamp);
         }
         setTaskSignal(t.id, 'stopped', true);
         this._emit('task:updated', { agentId: creatorId, task: { ...t, agentId: creatorId } });

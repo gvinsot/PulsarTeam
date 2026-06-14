@@ -8,11 +8,37 @@ import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
 import { AgentManager } from './index.js';
 import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
+import { agentRosterLines, ragDocsSection, pluginsSection, credentialsSection, relevantTasksSection, byRecency, RECENT_TASKS_LIMIT, TASK_TEXT_MAX_CHARS } from './promptSections.js';
 
 const MAX_DELEGATION_DEPTH = 5;
 
 /** @this {AgentManager} */
 export const chatMethods = {
+
+  /** Success/idle teardown for a chat turn: set status, drop the abort
+   * controller, and release the top-level chat lock. Order matters — setStatus
+   * runs BEFORE the abortController delete (mirrors the original success path).
+   * Pass status=null to skip the setStatus call (e.g. agent-not-found exit). */
+  _releaseChat(this: any, id: string, isTopLevel: boolean, status: 'idle' | null = 'idle'): void {
+    if (status) this.setStatus(id, status);
+    this.abortControllers.delete(id);
+    if (isTopLevel) this._chatLocks.delete(id);
+  },
+
+  /** Failure teardown for a chat turn (cleanup only — callers keep their own
+   * `throw` so the catch-block control flow stays visible). Order matters — the
+   * abortController is dropped BEFORE setStatus (mirrors the original error
+   * path), and saveAgent is intentionally NOT awaited. The per-error delete of
+   * agent._streamRetryCount / _compactionRetried stays at the call sites. */
+  _failChat(this: any, agent: any, id: string, isTopLevel: boolean, errMessage: string, finalStatus: 'error' | 'idle' = 'error'): void {
+    this.abortControllers.delete(id);
+    agent.metrics.errors += 1;
+    agent.currentThinking = '';
+    this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
+    this.setStatus(id, finalStatus, errMessage);
+    saveAgent(agent);
+    if (isTopLevel) this._chatLocks.delete(id);
+  },
 
   // ─── Chat ───────────────────────────────────────────────────────────
   async sendMessage(this: any, id: string, userMessage: string, streamCallback: any, delegationDepth: number = 0, messageMeta: any = null, images: any[] | null = null): Promise<any> {
@@ -158,7 +184,11 @@ export const chatMethods = {
     }
 
     let fullResponse = '';
-    let toolsExecuted = false;
+    // True once post-response processing has begun (assistant entry persisted,
+    // tool dispatch about to run). NOT a record of whether any tool actually
+    // ran — it gates the stream retry so we never re-send a turn whose
+    // assistant message is already in history.
+    let postProcessingStarted = false;
 
     try {
       const llmConfig = this.resolveLlmConfig(agent);
@@ -178,9 +208,11 @@ export const chatMethods = {
       // from the current active task (to avoid losing context mid-execution).
       const MAX_HISTORY_ENTRIES = 30;
       if (agent.conversationHistory.length > MAX_HISTORY_ENTRIES) {
-        const agentId = [...this.agents.entries()].find(([, a]: [string, any]) => a === agent)?.[0];
-        let activeTask = agentId ? this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt) : null;
-        if (!activeTask && agentId) {
+        // agent was fetched via this.agents.get(id) — its id IS the map key, so
+        // re-deriving it by scanning for object identity was always redundant.
+        const agentId = agent.id;
+        let activeTask = this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt);
+        if (!activeTask) {
           const found = this._findTaskAcross((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt && (t.assignee === agentId || t.actionRunningAgentId === agentId));
           if (found) activeTask = found.task;
         }
@@ -228,16 +260,14 @@ export const chatMethods = {
       saveAgent(agent);
 
       const responseForParsing = this._cleanMarkdown(fullResponse);
-      toolsExecuted = true;
+      postProcessingStarted = true;
       const actionResult = await this._processPostResponseActions(agent, id, responseForParsing, fullResponse, streamCallback, delegationDepth, messageMeta);
       if (actionResult.earlyReturn !== null) {
         this.setStatus(id, 'idle');
         return actionResult.earlyReturn;
       }
 
-      this.setStatus(id, 'idle');
-      this.abortControllers.delete(id);
-      if (isTopLevel) this._chatLocks.delete(id);
+      this._releaseChat(id, isTopLevel);
       return fullResponse;
     } catch (err: any) {
       // ── Rate limit: mark task as error and schedule retry ──
@@ -259,9 +289,7 @@ export const chatMethods = {
           this._recheckConditionalTransitions();
         }, delayMs);
 
-        this.setStatus(id, 'idle');
-        this.abortControllers.delete(id);
-        if (isTopLevel) this._chatLocks.delete(id);
+        this._releaseChat(id, isTopLevel);
         return fullResponse;
       }
 
@@ -285,13 +313,7 @@ export const chatMethods = {
         } catch (retryErr: any) {
           delete agent._compactionRetried;
           console.error(`🗜️  [Reactive Compact] "${agent.name}": retry after compaction also failed: ${retryErr.message}`);
-          this.abortControllers.delete(id);
-          agent.metrics.errors += 1;
-          agent.currentThinking = '';
-          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
-          this.setStatus(id, 'error', retryErr.message);
-          saveAgent(agent);
-          if (isTopLevel) this._chatLocks.delete(id);
+          this._failChat(agent, id, isTopLevel, retryErr.message);
           throw retryErr;
         }
       }
@@ -304,7 +326,7 @@ export const chatMethods = {
       const MAX_STREAM_RETRIES = 3;
       const retryCount = agent._streamRetryCount || 0;
 
-      if (isTransient && !toolsExecuted && !hasPartialToolCalls && retryCount < MAX_STREAM_RETRIES && !abortController.signal.aborted) {
+      if (isTransient && !postProcessingStarted && !hasPartialToolCalls && retryCount < MAX_STREAM_RETRIES && !abortController.signal.aborted) {
         agent._streamRetryCount = retryCount + 1;
         const delay = 2000 * Math.pow(2, retryCount);
         console.log(`🔄 [Stream Retry] "${agent.name}": ${err.message} — retry ${retryCount + 1}/${MAX_STREAM_RETRIES} in ${delay}ms`);
@@ -319,30 +341,18 @@ export const chatMethods = {
           return retryResult;
         } catch (retryErr: any) {
           delete agent._streamRetryCount;
-          this.abortControllers.delete(id);
-          agent.metrics.errors += 1;
-          agent.currentThinking = '';
-          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
           const isRetryUserStop = retryErr.message === 'Agent stopped by user';
-          this.setStatus(id, isRetryUserStop ? 'idle' : 'error', retryErr.message);
-          saveAgent(agent);
-          if (isTopLevel) this._chatLocks.delete(id);
+          this._failChat(agent, id, isTopLevel, retryErr.message, isRetryUserStop ? 'idle' : 'error');
           throw retryErr;
         }
       }
-      if (isTransient && (toolsExecuted || hasPartialToolCalls) && retryCount < MAX_STREAM_RETRIES) {
-        console.log(`🛡️ [Stream Retry] "${agent.name}": skipping retry — ${toolsExecuted ? 'tools already executed' : 'partial response contains tool calls'}`);
+      if (isTransient && (postProcessingStarted || hasPartialToolCalls) && retryCount < MAX_STREAM_RETRIES) {
+        console.log(`🛡️ [Stream Retry] "${agent.name}": skipping retry — ${postProcessingStarted ? 'post-processing already started' : 'partial response contains tool calls'}`);
         this.addActionLog(id, 'warning', 'Error after tool execution — not retrying to avoid duplicate actions', err.message);
       }
       delete agent._streamRetryCount;
 
-      this.abortControllers.delete(id);
-      agent.metrics.errors += 1;
-      agent.currentThinking = '';
-      this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
-      this.setStatus(id, isUserStop ? 'idle' : 'error', err.message);
-      saveAgent(agent);
-      if (isTopLevel) this._chatLocks.delete(id);
+      this._failChat(agent, id, isTopLevel, err.message, isUserStop ? 'idle' : 'error');
       throw err;
     }
   },
@@ -356,14 +366,7 @@ export const chatMethods = {
     let systemContent = `Your name is "${agent.name}".${agent.role ? ` Your role: ${agent.role}.` : ''}\n\nToday's date is ${todayStr}.\n\n${agent.instructions || 'You are a helpful AI assistant.'}`;
 
     if (agent.isLeader && delegationDepth === 0) {
-      const availableAgents = Array.from(this.agents.values())
-        .filter((a: any) => a.id !== id && a.enabled !== false)
-        .map((a: any) => {
-          const statusTag = ` [${a.status}]`;
-          const projectTag = a.project ? ` [project: ${a.project}]` : ' [no project]';
-          const taskInfo = a.currentTask ? ` (working on: "${a.currentTask.slice(0, 60)}${a.currentTask.length > 60 ? '...' : ''}")` : '';
-          return `- ${a.name} (${a.role})${statusTag}${projectTag}${taskInfo}: ${a.description || 'No description'}`;
-        });
+      const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
 
       if (availableAgents.length > 0) {
         systemContent += `\n\n--- Available Swarm Agents ---\nUse the Swarm API MCP tools to manage agents and assign tasks.\n${availableAgents.join('\n')}\n\nTo add a task to a board (any agent watching the board can pick it up), use:\n@mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "task description", "project": "ProjectName"})\nUse @mcp_call(Swarm API, list_boards, {}) first to discover board IDs.\n\nTo check agent status:\n@mcp_call(Swarm API, get_agent_status, {"agent_name": "AgentName"})\n\nTo list all agents:\n@mcp_call(Swarm API, list_agents, {})\n\nIMPORTANT: Agents may report errors using @report_error(). Additionally, the system automatically reports infrastructure-level errors (LLM crashes, connection failures, timeouts, auth issues) — you will see these as [System Error] notifications. When you check agent status and see errors, analyze the problem and decide whether to retry the task, reassign it to another agent, provide additional guidance, or escalate to the user.`;
@@ -379,6 +382,7 @@ export const chatMethods = {
     }
 
     if (agent.ragDocuments.length > 0) {
+      // Refresh stale URL-backed docs before rendering (chat-only side effect).
       for (const doc of agent.ragDocuments) {
         if (doc.type === 'url' && doc.url) {
           const lastFetched = doc.lastFetched ? new Date(doc.lastFetched).getTime() : 0;
@@ -392,11 +396,9 @@ export const chatMethods = {
           }
         }
       }
-      systemContent += '\n\n--- Reference Documents ---\n';
-      for (const doc of agent.ragDocuments) {
-        const label = doc.type === 'url' ? `${doc.name} (source: ${doc.url})` : doc.name;
-        systemContent += `\n[${label}]:\n${doc.content}\n`;
-      }
+      // requireUrl=false → preserves the chat label rule (url doc without url
+      // still renders "name (source: undefined)").
+      systemContent += ragDocsSection(agent.ragDocuments, false);
     }
 
     // Merge agent skills with board-level plugins
@@ -417,26 +419,16 @@ export const chatMethods = {
     const pluginMcpIds = new Set<string>();
     if (allSkillIds.length > 0 && this.skillManager) {
       const resolvedPlugins = allSkillIds.map((sid: string) => this.skillManager.getById(sid)).filter(Boolean);
-      if (resolvedPlugins.length > 0) {
-        systemContent += '\n\n--- Active Plugins ---\n';
-        for (const plugin of resolvedPlugins) {
-          systemContent += `\n[${(plugin as any).name}]:\n${(plugin as any).instructions}\n`;
-          if (Array.isArray((plugin as any).mcpServerIds)) {
-            (plugin as any).mcpServerIds.forEach((mid: string) => pluginMcpIds.add(mid));
-          }
+      systemContent += pluginsSection(resolvedPlugins);
+      // Collect plugin MCP server ids (consumed below) as a separate pass.
+      for (const plugin of resolvedPlugins) {
+        if (Array.isArray((plugin as any).mcpServerIds)) {
+          (plugin as any).mcpServerIds.forEach((mid: string) => pluginMcpIds.add(mid));
         }
       }
     }
 
-    const agentCredentials = agent.credentials || {};
-    const credentialKeys = Object.keys(agentCredentials);
-    if (credentialKeys.length > 0) {
-      systemContent += '\n\n--- Agent Credentials ---\n';
-      systemContent += 'These credentials are available for use with plugins and external services.\n';
-      for (const key of credentialKeys) {
-        systemContent += `- ${key}: ${agentCredentials[key]}\n`;
-      }
-    }
+    systemContent += credentialsSection(agent.credentials || {});
 
     if (allSkillIds.includes('skill-agents-direct-access')) {
       const askableAgents = Array.from(this.agents.values())
@@ -486,8 +478,6 @@ export const chatMethods = {
     // Without this bound, agents that had accumulated many tasks shipped
     // 100+ KB / 30k tokens to Anthropic on every turn, which added minutes
     // of latency before the first response token.
-    const RECENT_TASKS_LIMIT = 3;
-    const TASK_TEXT_MAX_CHARS = 300;
     const SEMANTIC_WEIGHT = 0.7;       // 70% semantic, 30% recency
     const RECENCY_HALF_LIFE_MS = 7 * 24 * 3600 * 1000;  // 7 days
 
@@ -507,11 +497,7 @@ export const chatMethods = {
     let rankedTasks: any[];
     if (activeTasks.length <= RECENT_TASKS_LIMIT) {
       // All tasks fit — sort by recency just for a stable display order.
-      rankedTasks = [...activeTasks].sort((a: any, b: any) => {
-        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
-        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
-        return tb - ta;
-      });
+      rankedTasks = [...activeTasks].sort(byRecency);
     } else if (relevanceQuery) {
       // Combined score: cosine similarity (text + commits vs user query)
       // weighted with an exponential recency decay over `updatedAt`.
@@ -534,29 +520,17 @@ export const chatMethods = {
       rankedTasks = scored.slice(0, RECENT_TASKS_LIMIT).map((s: any) => s.task);
     } else {
       // No user query (first turn or non-text content) → pure recency.
-      rankedTasks = [...activeTasks].sort((a: any, b: any) => {
-        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
-        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
-        return tb - ta;
-      }).slice(0, RECENT_TASKS_LIMIT);
+      rankedTasks = [...activeTasks].sort(byRecency).slice(0, RECENT_TASKS_LIMIT);
     }
 
-    if (rankedTasks.length > 0) {
-      systemContent += `\n\n--- Relevant Tasks (${rankedTasks.length} of ${activeTasks.length}) ---\n`;
-      for (const task of rankedTasks) {
-        const mark = this._isActiveTaskStatus(task.status) ? '~' : '!';
-        const text = String(task.text || '');
-        const truncated = text.length > TASK_TEXT_MAX_CHARS
-          ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…'
-          : text;
-        systemContent += `- [${mark}] (${task.id.slice(0, 8)}) ${truncated}\n`;
-      }
-      const overflow = activeTasks.length - rankedTasks.length;
-      if (overflow > 0) {
-        systemContent += `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — `;
-        systemContent += `use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see all)\n`;
-      }
-    }
+    systemContent += relevantTasksSection(
+      rankedTasks,
+      activeTasks.length,
+      (s: string) => this._isActiveTaskStatus(s),
+      (overflow: number) =>
+        `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — `
+        + `use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see all)\n`,
+    );
 
     if (agent.project) {
       const fileTree = this.executionManager?.getFileTree(id);
@@ -620,14 +594,7 @@ export const chatMethods = {
     // chat @mcp_call syntax. The Swarm API MCP server is assigned to the agent
     // separately (mcpManager) so the CLI sees those tools natively.
     if (agent.isLeader) {
-      const availableAgents = Array.from(this.agents.values())
-        .filter((a: any) => a.id !== id && a.enabled !== false)
-        .map((a: any) => {
-          const statusTag = ` [${a.status}]`;
-          const projectTag = a.project ? ` [project: ${a.project}]` : ' [no project]';
-          const taskInfo = a.currentTask ? ` (working on: "${a.currentTask.slice(0, 60)}${a.currentTask.length > 60 ? '...' : ''}")` : '';
-          return `- ${a.name} (${a.role})${statusTag}${projectTag}${taskInfo}: ${a.description || 'No description'}`;
-        });
+      const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
       out += `\n\n--- Swarm Leadership ---\nYou lead a swarm of agents. Use the Swarm API MCP tools (e.g. list_boards, add_task, list_agents, get_agent_status) to assign work and monitor progress. When adding a task, always specify the project so the agent works in the correct directory.`;
       if (availableAgents.length > 0) {
         out += `\n\nOther agents currently in the swarm:\n${availableAgents.join('\n')}`;
@@ -643,12 +610,9 @@ export const chatMethods = {
     // Reference documents (RAG). Use the content already on the agent — the
     // chat path refreshes stale URL docs; here we keep it cheap and accept the
     // last-fetched content (re-written on the next spawn anyway).
-    if (Array.isArray(agent.ragDocuments) && agent.ragDocuments.length > 0) {
-      out += '\n\n--- Reference Documents ---\n';
-      for (const doc of agent.ragDocuments) {
-        const label = doc.type === 'url' && doc.url ? `${doc.name} (source: ${doc.url})` : doc.name;
-        out += `\n[${label}]:\n${doc.content}\n`;
-      }
+    // requireUrl=true → runner only renders the source suffix when url is set.
+    if (Array.isArray(agent.ragDocuments)) {
+      out += ragDocsSection(agent.ragDocuments, true);
     }
 
     // Active plugin instructions (the human-readable guidance, not the MCP
@@ -656,51 +620,21 @@ export const chatMethods = {
     const agentSkills = agent.skills || [];
     if (agentSkills.length > 0 && this.skillManager) {
       const resolvedPlugins = agentSkills.map((sid: string) => this.skillManager.getById(sid)).filter(Boolean);
-      if (resolvedPlugins.length > 0) {
-        out += '\n\n--- Active Plugins ---\n';
-        for (const plugin of resolvedPlugins) {
-          out += `\n[${(plugin as any).name}]:\n${(plugin as any).instructions}\n`;
-        }
-      }
+      out += pluginsSection(resolvedPlugins);
     }
 
-    const agentCredentials = agent.credentials || {};
-    const credentialKeys = Object.keys(agentCredentials);
-    if (credentialKeys.length > 0) {
-      out += '\n\n--- Agent Credentials ---\n';
-      out += 'These credentials are available for use with plugins and external services.\n';
-      for (const key of credentialKeys) {
-        out += `- ${key}: ${agentCredentials[key]}\n`;
-      }
-    }
+    out += credentialsSection(agent.credentials || {});
 
     // Relevant tasks — recency-ranked (kept light: no embedding pass here).
-    const RECENT_TASKS_LIMIT = 3;
-    const TASK_TEXT_MAX_CHARS = 300;
     const activeTasks = this._getAgentTasks(id)
       .filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
-    const rankedTasks = [...activeTasks]
-      .sort((a: any, b: any) => {
-        const ta = new Date(a.updatedAt || a.createdAt || 0).getTime();
-        const tb = new Date(b.updatedAt || b.createdAt || 0).getTime();
-        return tb - ta;
-      })
-      .slice(0, RECENT_TASKS_LIMIT);
-    if (rankedTasks.length > 0) {
-      out += `\n\n--- Relevant Tasks (${rankedTasks.length} of ${activeTasks.length}) ---\n`;
-      for (const task of rankedTasks) {
-        const mark = this._isActiveTaskStatus(task.status) ? '~' : '!';
-        const text = String(task.text || '');
-        const truncated = text.length > TASK_TEXT_MAX_CHARS
-          ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…'
-          : text;
-        out += `- [${mark}] (${task.id.slice(0, 8)}) ${truncated}\n`;
-      }
-      const overflow = activeTasks.length - rankedTasks.length;
-      if (overflow > 0) {
-        out += `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — use the Swarm API MCP tools to list them all)\n`;
-      }
-    }
+    const rankedTasks = [...activeTasks].sort(byRecency).slice(0, RECENT_TASKS_LIMIT);
+    out += relevantTasksSection(
+      rankedTasks,
+      activeTasks.length,
+      (s: string) => this._isActiveTaskStatus(s),
+      (overflow: number) => `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — use the Swarm API MCP tools to list them all)\n`,
+    );
 
     // Project context — real paths, no @-syntax (the CLI works in a real cwd).
     if (agent.project) {
@@ -733,12 +667,12 @@ export const chatMethods = {
     // last task's startedAt (or full history if no tasks were ever executed).
     // For workflow messages (tool-result, delegation, etc.), also check cross-agent assignments
     // so that utility agents (titles-manager, product-manager) get task-scoped history.
-    const agentId = [...this.agents.entries()].find(([, a]: [string, any]) => a === agent)?.[0];
+    const agentId = agent.id;
     let activeTask = this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt);
     // Also check cross-agent assignments: when an executor is different from the
     // task creator, _getAgentTasks(executorId) won't find it. We need to search
     // across all agents for tasks assigned to this executor.
-    if (!activeTask && agentId) {
+    if (!activeTask) {
       const found = this._findTaskAcross((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt && (t.assignee === agentId || t.actionRunningAgentId === agentId));
       if (found) { activeTask = found.task; }
     }
@@ -748,7 +682,7 @@ export const chatMethods = {
     // When the user chats directly and no task is active, we still scope the history
     // to the last executed task's startedAt to avoid sending the entire history.
     let lastTaskStartTime: number | null = null;
-    if (!isTaskExecution && agentId) {
+    if (!isTaskExecution) {
       const _checkTime = (ts: any) => { if (ts && (!lastTaskStartTime || ts > lastTaskStartTime)) lastTaskStartTime = ts; };
       const _checkTask = (t: any) => {
         if (t.startedAt) _checkTime(new Date(t.startedAt).getTime());
@@ -901,6 +835,87 @@ export const chatMethods = {
     return { managesContext, isTaskExecution, activeTaskId: activeTask?.id || null };
   },
 
+  /** Consume one provider stream to completion and return this call's deltas.
+   * Shared by _streamAndContinue's initial pass and its continuation passes —
+   * the only differences are maxTokens, the runner session id sent in this
+   * call, and the per-pass log lines (gated on `isContinuation`). The caller
+   * keeps the cumulative fullResponse/thinkingBuffer/outputTokens. */
+  async _consumeStream(
+    this: any,
+    provider: any,
+    messages: any[],
+    ctx: {
+      agent: any; id: string; useCliRunner: boolean; streamCallback: any;
+      abortController: AbortController; contextTokens: number; activeTaskId: string | null;
+      sessionKey: string; runnerSessionId: string | undefined; maxTokens: number;
+      llmConfig: any; isContinuation: boolean;
+    },
+  ): Promise<{ text: string; thinking: string; finishReason: string | null; outputTokens: number }> {
+    const { agent, id, useCliRunner, streamCallback, abortController, contextTokens, activeTaskId, sessionKey, runnerSessionId, maxTokens, llmConfig, isContinuation } = ctx;
+    let text = '';
+    let thinking = '';
+    let finishReason: string | null = null;
+    let outputTokens = 0;
+
+    for await (const chunk of provider.chatStream(messages, {
+      temperature: llmConfig.temperature,
+      maxTokens,
+      contextLength: llmConfig.contextLength || 0,
+      isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
+      signal: abortController.signal,
+      taskId: activeTaskId || undefined,
+      runnerSessionId,
+    })) {
+      if (abortController.signal.aborted) {
+        throw new Error('Agent stopped by user');
+      }
+
+      if (chunk.type === 'thinking') {
+        if (useCliRunner) {
+          continue;
+        } else {
+          thinking += chunk.text;
+          agent.currentThinking = thinking;
+          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: agent.currentThinking });
+        }
+      }
+
+      if (chunk.type === 'text') {
+        text += chunk.text;
+        if (!useCliRunner && streamCallback) streamCallback(chunk.text);
+      }
+      if (chunk.type === 'done') {
+        if (chunk.usage) {
+          const inTok = chunk.usage.inputTokens || 0;
+          const outTok = chunk.usage.outputTokens || 0;
+          const cost = chunk.usage.costUsd ?? null;
+          agent.metrics.totalTokensIn += inTok;
+          agent.metrics.totalTokensOut += outTok;
+          outputTokens += outTok;
+          if (cost != null && cost > 0) {
+            this._recordUsageDirect(agent, inTok, outTok, cost, contextTokens);
+          } else {
+            this._recordUsage(agent, inTok, outTok, contextTokens);
+          }
+          console.log(`📊 [Token] "${agent.name}"${isContinuation ? ' (cont)' : ''}: in=${inTok} out=${outTok} ctx=${contextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
+        } else if (!isContinuation) {
+          console.warn(`⚠️ [Token] "${agent.name}": done event with no usage data`);
+        }
+        if (chunk.runnerSessionId && chunk.runnerSessionId !== runnerSessionId) {
+          agent.runnerSessions[sessionKey] = chunk.runnerSessionId;
+          if (!isContinuation) {
+            console.log(`🔑 [Session] "${agent.name}" task=${sessionKey} → runner session ${chunk.runnerSessionId.slice(0, 12)}`);
+          }
+        }
+        if (chunk.finishReason) {
+          finishReason = chunk.finishReason;
+        }
+      }
+    }
+
+    return { text, thinking, finishReason, outputTokens };
+  },
+
   async _streamAndContinue(this: any, agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId: string | null = null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null; outputTokens: number; durationMs: number }> {
     // When the agent is bound to a CLI runner (opencode, openclaw, hermes,
     // codex, claudecode), route the chat call through the runner-service so
@@ -953,60 +968,16 @@ export const chatMethods = {
     if (!agent.runnerSessions || typeof agent.runnerSessions !== 'object') agent.runnerSessions = {};
     const initialRunnerSessionId: string | undefined = agent.runnerSessions[sessionKey];
 
-    for await (const chunk of provider.chatStream(messages, {
-      temperature: llmConfig.temperature,
-      maxTokens: safeMaxTokens,
-      contextLength: llmConfig.contextLength || 0,
-      isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
-      signal: abortController.signal,
-      taskId: activeTaskId || undefined,
-      runnerSessionId: initialRunnerSessionId,
-    })) {
-      if (abortController.signal.aborted) {
-        throw new Error('Agent stopped by user');
-      }
-
-      if (chunk.type === 'thinking') {
-        if (useCliRunner) {
-          continue;
-        } else {
-          thinkingBuffer += chunk.text;
-          agent.currentThinking = thinkingBuffer;
-          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: thinkingBuffer });
-        }
-      }
-
-      if (chunk.type === 'text') {
-        fullResponse += chunk.text;
-        if (!useCliRunner && streamCallback) streamCallback(chunk.text);
-      }
-      if (chunk.type === 'done') {
-        if (chunk.usage) {
-          const inTok = chunk.usage.inputTokens || 0;
-          const outTok = chunk.usage.outputTokens || 0;
-          const cost = chunk.usage.costUsd ?? null;
-          agent.metrics.totalTokensIn += inTok;
-          agent.metrics.totalTokensOut += outTok;
-          totalOutputTokens += outTok;
-          if (cost != null && cost > 0) {
-            // Use actual cost reported by provider (e.g. Claude Paid Plan via coder-service)
-            this._recordUsageDirect(agent, inTok, outTok, cost, estimatedContextTokens);
-          } else {
-            this._recordUsage(agent, inTok, outTok, estimatedContextTokens);
-          }
-          console.log(`📊 [Token] "${agent.name}": in=${inTok} out=${outTok} ctx=${estimatedContextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
-        } else {
-          console.warn(`⚠️ [Token] "${agent.name}": done event with no usage data`);
-        }
-        if (chunk.runnerSessionId && chunk.runnerSessionId !== initialRunnerSessionId) {
-          agent.runnerSessions[sessionKey] = chunk.runnerSessionId;
-          console.log(`🔑 [Session] "${agent.name}" task=${sessionKey} → runner session ${chunk.runnerSessionId.slice(0, 12)}`);
-        }
-        if (chunk.finishReason) {
-          finishReason = chunk.finishReason;
-        }
-      }
-    }
+    const first = await this._consumeStream(provider, messages, {
+      agent, id, useCliRunner, streamCallback, abortController,
+      contextTokens: estimatedContextTokens, activeTaskId, sessionKey,
+      runnerSessionId: initialRunnerSessionId, maxTokens: safeMaxTokens,
+      llmConfig, isContinuation: false,
+    });
+    fullResponse += first.text;
+    thinkingBuffer += first.thinking;
+    totalOutputTokens += first.outputTokens;
+    finishReason = first.finishReason;
 
     // ── Auto-continuation ──
     const MAX_CONTINUATIONS = 3;
@@ -1023,54 +994,16 @@ export const chatMethods = {
       const contMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
       this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, contMaxTokens);
       const contContextTokens = this._estimateTokens(messages);
-      for await (const chunk of provider.chatStream(messages, {
-        temperature: llmConfig.temperature,
-        maxTokens: contMaxTokens,
-        contextLength: llmConfig.contextLength || 0,
-        isReasoning: llmConfig.isReasoning || agent.isReasoning || false,
-        signal: abortController.signal,
-        taskId: activeTaskId || undefined,
-        runnerSessionId: agent.runnerSessions?.[sessionKey],
-      })) {
-        if (abortController.signal.aborted) {
-          throw new Error('Agent stopped by user');
-        }
-        if (chunk.type === 'thinking') {
-          if (useCliRunner) {
-            continue;
-          } else {
-            thinkingBuffer += chunk.text;
-            agent.currentThinking = thinkingBuffer;
-            this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: thinkingBuffer });
-          }
-        }
-        if (chunk.type === 'text') {
-          fullResponse += chunk.text;
-          if (!useCliRunner && streamCallback) streamCallback(chunk.text);
-        }
-        if (chunk.type === 'done') {
-          if (chunk.usage) {
-            const inTok = chunk.usage.inputTokens || 0;
-            const outTok = chunk.usage.outputTokens || 0;
-            const cost = chunk.usage.costUsd ?? null;
-            agent.metrics.totalTokensIn += inTok;
-            agent.metrics.totalTokensOut += outTok;
-            totalOutputTokens += outTok;
-            if (cost != null && cost > 0) {
-              this._recordUsageDirect(agent, inTok, outTok, cost, contContextTokens);
-            } else {
-              this._recordUsage(agent, inTok, outTok, contContextTokens);
-            }
-            console.log(`📊 [Token] "${agent.name}" (cont): in=${inTok} out=${outTok} ctx=${contContextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
-          }
-          if (chunk.runnerSessionId && chunk.runnerSessionId !== agent.runnerSessions[sessionKey]) {
-            agent.runnerSessions[sessionKey] = chunk.runnerSessionId;
-          }
-          if (chunk.finishReason) {
-            finishReason = chunk.finishReason;
-          }
-        }
-      }
+      const cont = await this._consumeStream(provider, messages, {
+        agent, id, useCliRunner, streamCallback, abortController,
+        contextTokens: contContextTokens, activeTaskId, sessionKey,
+        runnerSessionId: agent.runnerSessions?.[sessionKey], maxTokens: contMaxTokens,
+        llmConfig, isContinuation: true,
+      });
+      fullResponse += cont.text;
+      thinkingBuffer += cont.thinking;
+      totalOutputTokens += cont.outputTokens;
+      finishReason = cont.finishReason;
       messages.pop();
       messages.pop();
     }
@@ -1246,9 +1179,7 @@ export const chatMethods = {
     const rateLimitInfo = this._parseRateLimitReset(fullResponse);
     if (rateLimitInfo) {
       agent.conversationHistory.pop();
-      this.setStatus(id, 'idle');
-      this.abortControllers.delete(id);
-      if (isTopLevel) this._chatLocks.delete(id);
+      this._releaseChat(id, isTopLevel);
       const err: any = new Error(`Rate limit reached — resets at ${rateLimitInfo.resetLabel}`);
       err.isRateLimit = true;
       err.retryAt = rateLimitInfo.retryAt;

@@ -15,12 +15,7 @@ import { markTaskError, isUserStopError } from './taskErrors.js';
 import { saveTaskToDb, updateTaskExecutionStatus } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
-
-const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
-
-function isCliRunner(agent) {
-  return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
-}
+import { isCliRunner } from '../runners.js';
 
 async function bindAgentRunner(agentManager, agent) {
   if (!agentManager.executionManager?.bindAgent || !agent?.id) return;

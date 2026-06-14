@@ -179,34 +179,7 @@ function validateCommand(command: string): string | null {
  * @param {import('./execution/executionProvider.js').ExecutionProvider} provider
  * @param {string} agentId
  */
-export async function executeTool(toolName, args, projectPath, provider, agentId, options = {}) {
-  // report_error and update_task don't need sandbox access
-  if (toolName === 'report_error') {
-    const description = args[0] || 'Unknown error';
-    return { success: true, result: `Error reported: ${description}`, isErrorReport: true };
-  }
-  if (toolName === 'update_task') {
-    return { success: true, result: `Task update: ${args[0]} → ${args[1]}`, isTaskUpdate: true };
-  }
-  if (toolName === 'move_task_to_board') {
-    return { success: true, result: `Task ${args[0]} moved to board ${args[1]}`, isMoveTaskToBoard: true };
-  }
-  if (toolName === 'delete_task') {
-    return { success: true, result: `Task deleted: ${args[0]}`, isDeleteTask: true };
-  }
-  if (toolName === 'list_boards') {
-    return { success: true, result: 'Boards listed', isListBoards: true };
-  }
-  if (toolName === 'list_tasks') {
-    return { success: true, result: 'Tasks listed', isListTasks: true };
-  }
-  if (toolName === 'list_my_tasks') {
-    return { success: true, result: 'Tasks listed', isTaskList: true };
-  }
-  if (toolName === 'check_status') {
-    return { success: true, result: 'Status checked', isStatusCheck: true };
-  }
-
+export async function executeTool(toolName, args, projectPath, provider, agentId) {
   if (!provider || !agentId) {
     return { success: false, error: 'Execution provider not available' };
   }
@@ -503,69 +476,68 @@ async function toolAppendFile(provider, agentId, filePath, content) {
 
 // ─── Tool Call Parsing ──────────────────────────────────────────────────────
 
-const KNOWN_TOOLS = ['read_file', 'write_file', 'list_dir', 'search_files', 'run_command', 'append_file', 'report_error', 'update_task', 'move_task_to_board', 'delete_task', 'list_boards', 'list_tasks', 'list_my_tasks', 'check_status', 'mcp_call', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'task_execution_complete', 'search_skill', 'create_skill', 'update_skill', 'delete_skill'];
+// ── Tool registry ────────────────────────────────────────────────────────────
+// Single source of truth for tool parsing metadata, replacing the five parallel
+// lists (KNOWN_TOOLS + SINGLE_ARG/READ_FILE/MULTI_ARG/THREE_ARG + jsonToToolCall
+// switch) that previously had to be kept in sync by hand.
+//
+//  - `arity` drives the @-syntax (phase 2) argument splitting:
+//      'single' = whole-parens-as-one-arg
+//      'read'   = read_file's 1/2/3-arg path
+//      'multi'  = default 2-arg path (with triple-quote stripping)
+//      'three'  = mcp_call / update_task / task_execution_complete 3-arg path
+//  - `fromJson` maps a parsed <tool_call> JSON object to positional args.
+//    KNOWN_TOOLS (the phase-1 gate) is derived from entries that have it, so a
+//    tool with no `fromJson` (e.g. list_projects) is still @-syntax parseable
+//    but intentionally NOT accepted in JSON form — preserving prior behavior.
+//    The `||` alias chains are copied verbatim (do NOT switch to ?? — a numeric
+//    0 start_line must still coerce to '').
+type ToolArity = 'single' | 'read' | 'multi' | 'three';
+interface ToolSpec { arity: ToolArity; fromJson?: (args: any) => any[] }
+
+const TOOL_SPECS: Record<string, ToolSpec> = {
+  read_file:               { arity: 'read',   fromJson: a => [a.path || a.file || a.filename || '', a.start_line || a.startLine || '', a.end_line || a.endLine || ''] },
+  list_dir:                { arity: 'single', fromJson: a => [a.path || a.directory || a.dir || '.'] },
+  run_command:             { arity: 'single', fromJson: a => [a.command || a.cmd || ''] },
+  write_file:              { arity: 'multi',  fromJson: a => [a.path || a.file || '', a.content || ''] },
+  append_file:             { arity: 'multi',  fromJson: a => [a.path || a.file || '', a.content || ''] },
+  search_files:            { arity: 'multi',  fromJson: a => [a.pattern || a.glob || '*', a.query || a.search || ''] },
+  report_error:            { arity: 'single', fromJson: a => [a.description || a.message || a.error || ''] },
+  update_task:             { arity: 'three',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.status || '', a.details || a.detail || a.message || ''] },
+  move_task_to_board:      { arity: 'multi',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.boardId || a.board_id || ''] },
+  delete_task:             { arity: 'single', fromJson: a => [a.taskId || a.task_id || a.id || ''] },
+  list_boards:             { arity: 'single', fromJson: () => [] },
+  list_tasks:              { arity: 'multi',  fromJson: a => [a.status || '', a.boardId || a.board_id || ''] },
+  list_my_tasks:           { arity: 'single', fromJson: () => [] },
+  list_projects:           { arity: 'single' },
+  check_status:            { arity: 'single', fromJson: () => [] },
+  task_execution_complete: { arity: 'three',  fromJson: a => [a.comment || a.message || a.summary || '', a.taskId || a.task_id || '', a.commits || ''] },
+  mcp_call:                { arity: 'three',  fromJson: a => [a.server || a.serverName || '', a.tool || a.toolName || '', JSON.stringify(a.arguments || a.args || {})] },
+  // Convenience aliases for PulsarCD tools — single @-arg, whole JSON in JSON form.
+  get_action_status:       { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  build_stack:             { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  test_stack:              { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  deploy_stack:            { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  list_stacks:             { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  list_containers:         { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  list_computers:          { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  search_logs:             { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  get_log_metadata:        { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  // Agent skills management tools.
+  search_skill:            { arity: 'single', fromJson: a => [a.query || a.search || a.keyword || ''] },
+  create_skill:            { arity: 'multi',  fromJson: a => [a.name || '', JSON.stringify({ description: a.description || '', category: a.category || 'general', instructions: a.instructions || '', mcpServerIds: a.mcpServerIds || [] })] },
+  update_skill:            { arity: 'multi',  fromJson: a => [a.id || '', JSON.stringify({ name: a.name, description: a.description, category: a.category, instructions: a.instructions, mcpServerIds: a.mcpServerIds })] },
+  delete_skill:            { arity: 'single', fromJson: a => [a.id || ''] },
+};
+
+// Phase-1 (<tool_call> JSON) gate: only tools that define a JSON mapping.
+const KNOWN_TOOLS = Object.keys(TOOL_SPECS).filter(name => TOOL_SPECS[name].fromJson);
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
 function jsonToToolCall(name, args) {
   if (!args || typeof args !== 'object') args = {};
-  switch (name) {
-    case 'read_file':
-      return { tool: 'read_file', args: [args.path || args.file || args.filename || '', args.start_line || args.startLine || '', args.end_line || args.endLine || ''] };
-    case 'list_dir':
-      return { tool: 'list_dir', args: [args.path || args.directory || args.dir || '.'] };
-    case 'run_command':
-      return { tool: 'run_command', args: [args.command || args.cmd || ''] };
-    case 'write_file':
-      return { tool: 'write_file', args: [args.path || args.file || '', args.content || ''] };
-    case 'append_file':
-      return { tool: 'append_file', args: [args.path || args.file || '', args.content || ''] };
-    case 'search_files':
-      return { tool: 'search_files', args: [args.pattern || args.glob || '*', args.query || args.search || ''] };
-    case 'report_error':
-      return { tool: 'report_error', args: [args.description || args.message || args.error || ''] };
-    case 'update_task':
-      return { tool: 'update_task', args: [args.taskId || args.task_id || args.id || '', args.status || '', args.details || args.detail || args.message || ''] };
-    case 'move_task_to_board':
-      return { tool: 'move_task_to_board', args: [args.taskId || args.task_id || args.id || '', args.boardId || args.board_id || ''] };
-    case 'delete_task':
-      return { tool: 'delete_task', args: [args.taskId || args.task_id || args.id || ''] };
-    case 'list_boards':
-      return { tool: 'list_boards', args: [] };
-    case 'list_tasks':
-      return { tool: 'list_tasks', args: [args.status || '', args.boardId || args.board_id || ''] };
-    case 'list_my_tasks':
-      return { tool: 'list_my_tasks', args: [] };
-    case 'check_status':
-      return { tool: 'check_status', args: [] };
-    case 'task_execution_complete':
-      return { tool: 'task_execution_complete', args: [args.comment || args.message || args.summary || '', args.taskId || args.task_id || '', args.commits || ''] };
-    case 'mcp_call':
-      return { tool: 'mcp_call', args: [args.server || args.serverName || '', args.tool || args.toolName || '', JSON.stringify(args.arguments || args.args || {})] };
-    // Convenience aliases for PulsarCD tools
-    case 'get_action_status':
-    case 'build_stack':
-    case 'test_stack':
-    case 'deploy_stack':
-    case 'list_stacks':
-    case 'list_containers':
-    case 'list_computers':
-    case 'search_logs':
-    case 'get_log_metadata':
-      return { tool: name, args: [JSON.stringify(args)] };
-
-    // Agent skills management tools
-    case 'search_skill':
-      return { tool: 'search_skill', args: [args.query || args.search || args.keyword || ''] };
-    case 'create_skill':
-      return { tool: 'create_skill', args: [args.name || '', JSON.stringify({ description: args.description || '', category: args.category || 'general', instructions: args.instructions || '', mcpServerIds: args.mcpServerIds || [] })] };
-    case 'update_skill':
-      return { tool: 'update_skill', args: [args.id || '', JSON.stringify({ name: args.name, description: args.description, category: args.category, instructions: args.instructions, mcpServerIds: args.mcpServerIds })] };
-    case 'delete_skill':
-      return { tool: 'delete_skill', args: [args.id || ''] };
-
-    default:
-      return null;
-  }
+  const spec = TOOL_SPECS[name];
+  return spec?.fromJson ? { tool: name, args: spec.fromJson(args) } : null;
 }
 
 // ── Balanced parsing helpers ─────────────────────────────────────────────────
@@ -661,11 +633,8 @@ export function parseToolCalls(response) {
     .replace(/<\|?\/?tool_use\|?>/gi, '')
     .replace(/\[TOOL_CALLS?\]/gi, '');
 
-  const SINGLE_ARG_TOOLS = ['list_dir', 'run_command', 'report_error', 'list_my_tasks', 'list_projects', 'check_status', 'get_action_status', 'build_stack', 'test_stack', 'deploy_stack', 'list_stacks', 'list_containers', 'list_computers', 'search_logs', 'get_log_metadata', 'search_skill', 'delete_skill', 'delete_task', 'list_boards'];
-  const READ_FILE_TOOLS = ['read_file'];  // 1-arg, 2-arg (path, startLine) or 3-arg (path, startLine, endLine)
-  const MULTI_ARG_TOOLS = ['write_file', 'append_file', 'search_files', 'create_skill', 'update_skill', 'move_task_to_board', 'list_tasks'];
-  const THREE_ARG_TOOLS = ['mcp_call', 'update_task', 'task_execution_complete'];
-  const ALL_TOOL_NAMES = [...SINGLE_ARG_TOOLS, ...READ_FILE_TOOLS, ...MULTI_ARG_TOOLS, ...THREE_ARG_TOOLS];
+  // Phase-2 @tool names + per-tool arity both come from TOOL_SPECS.
+  const ALL_TOOL_NAMES = Object.keys(TOOL_SPECS);
   const toolStartPattern = new RegExp(`@(${ALL_TOOL_NAMES.join('|')})\\s*\\(`, 'gi');
   let startMatch;
 
@@ -686,11 +655,12 @@ export function parseToolCalls(response) {
     if (closeIdx === -1) continue;
 
     const argsString = cleaned.slice(argsStart, closeIdx);
+    const arity: ToolArity = TOOL_SPECS[toolName]?.arity || 'multi';
     let args;
 
-    if (SINGLE_ARG_TOOLS.includes(toolName)) {
+    if (arity === 'single') {
       args = [sanitizeArg(argsString.trim())];
-    } else if (READ_FILE_TOOLS.includes(toolName)) {
+    } else if (arity === 'read') {
       // @read_file(path) or @read_file(path, startLine, endLine)
       const firstComma = _findTopLevelComma(argsString);
       if (firstComma !== -1) {
@@ -708,7 +678,7 @@ export function parseToolCalls(response) {
       } else {
         args = [sanitizeArg(argsString.trim())];
       }
-    } else if (THREE_ARG_TOOLS.includes(toolName)) {
+    } else if (arity === 'three') {
       // @mcp_call(server, tool, {json}) — split into 3 args
       const trimmedMcp = argsString.trim();
       const firstComma = _findTopLevelComma(argsString);

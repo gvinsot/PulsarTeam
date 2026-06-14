@@ -5,6 +5,68 @@ import { getTaskSignal, setTaskSignal } from './tasks.js';
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
 
+  /** Run the four independent runtime-teardown steps concurrently and return
+   * whether a CLI terminal session was closed. Shared by reloadContext and
+   * restartRuntime — they differ only in the log prefix (`logTag`).
+   *
+   * Each step is a network round-trip (DB read, MCP disconnect, runner `ls`,
+   * runner session DELETE with a 5s timeout) and none depends on another, so
+   * fanning them out cuts latency from the sum of all four down to the slowest
+   * single step:
+   *   - Force-refresh LLM configs from DB (global 60s cache).
+   *   - Drop per-agent MCP client connections so the next tool call reconnects
+   *     with the current auth / server config.
+   *   - Refresh the project file tree so any new/deleted files are visible in
+   *     the next system prompt. Skip if the agent has no project bound.
+   *   - Restart shared CLI terminal sessions. Close all CLI runner services
+   *     because the operation can run before this API replica has bound the
+   *     agent, or after the runner setting changed.
+   */
+  async _teardownRuntimeConnections(this: any, agentId: string, agent: any, logTag: string): Promise<boolean> {
+    let terminalClosed = false;
+
+    const refreshLlm = (async () => {
+      try { await this.refreshLlmConfigs(); } catch (err: any) {
+        console.warn(`⚠️  [${logTag}] refreshLlmConfigs failed: ${err.message}`);
+      }
+    })();
+
+    const disconnectMcp = (async () => {
+      if (this.mcpManager?.disconnectAgent) {
+        try { await this.mcpManager.disconnectAgent(agentId); } catch (err: any) {
+          console.warn(`⚠️  [${logTag}] mcp.disconnectAgent failed: ${err.message}`);
+        }
+      }
+    })();
+
+    const refreshTree = (async () => {
+      if (agent.project && this.executionManager?.refreshFileTree) {
+        try { await this.executionManager.refreshFileTree(agentId); } catch (err: any) {
+          console.warn(`⚠️  [${logTag}] refreshFileTree failed: ${err.message}`);
+        }
+      }
+    })();
+
+    const closeCli = (async () => {
+      if (this.executionManager?.closeCliTerminalSessions) {
+        try {
+          terminalClosed = await this.executionManager.closeCliTerminalSessions(agentId);
+        } catch (err: any) {
+          console.warn(`⚠️  [${logTag}] closeCliTerminalSessions failed: ${err.message}`);
+        }
+      } else if (this.executionManager?.closeTerminalSession) {
+        try {
+          terminalClosed = await this.executionManager.closeTerminalSession(agentId);
+        } catch (err: any) {
+          console.warn(`⚠️  [${logTag}] closeTerminalSession failed: ${err.message}`);
+        }
+      }
+    })();
+
+    await Promise.all([refreshLlm, disconnectMcp, refreshTree, closeCli]);
+    return terminalClosed;
+  },
+
   async clearHistory(this: any, agentId: string): Promise<boolean> {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
@@ -79,61 +141,9 @@ export const conversationMethods = {
     // 5. Wipe conversation state (history, runner sessions, task flags…).
     await this.clearHistory(agentId);
 
-    // 6-9. Run the four independent teardown steps concurrently. Each is a
-    //      network round-trip (DB read, MCP disconnect, runner `ls`, runner
-    //      session DELETE with a 5s timeout) and none depends on another, so
-    //      fanning them out cuts the reload latency from the sum of all four
-    //      down to the slowest single step.
-    //
-    //   6. Force-refresh LLM configs from DB (global 60s cache).
-    //   7. Drop per-agent MCP client connections so the next tool call
-    //      reconnects with the current auth / server config.
-    //   8. Refresh the project file tree so any new/deleted files are visible
-    //      in the next system prompt. Skip if the agent has no project bound.
-    //   9. Restart shared CLI terminal sessions. Close all CLI runner services
-    //      because reload can run before this API replica has bound the agent,
-    //      or after the runner setting changed.
-    let terminalClosed = false;
-
-    const refreshLlm = (async () => {
-      try { await this.refreshLlmConfigs(); } catch (err: any) {
-        console.warn(`⚠️  [ReloadContext] refreshLlmConfigs failed: ${err.message}`);
-      }
-    })();
-
-    const disconnectMcp = (async () => {
-      if (this.mcpManager?.disconnectAgent) {
-        try { await this.mcpManager.disconnectAgent(agentId); } catch (err: any) {
-          console.warn(`⚠️  [ReloadContext] mcp.disconnectAgent failed: ${err.message}`);
-        }
-      }
-    })();
-
-    const refreshTree = (async () => {
-      if (agent.project && this.executionManager?.refreshFileTree) {
-        try { await this.executionManager.refreshFileTree(agentId); } catch (err: any) {
-          console.warn(`⚠️  [ReloadContext] refreshFileTree failed: ${err.message}`);
-        }
-      }
-    })();
-
-    const closeCli = (async () => {
-      if (this.executionManager?.closeCliTerminalSessions) {
-        try {
-          terminalClosed = await this.executionManager.closeCliTerminalSessions(agentId);
-        } catch (err: any) {
-          console.warn(`⚠️  [ReloadContext] closeCliTerminalSessions failed: ${err.message}`);
-        }
-      } else if (this.executionManager?.closeTerminalSession) {
-        try {
-          terminalClosed = await this.executionManager.closeTerminalSession(agentId);
-        } catch (err: any) {
-          console.warn(`⚠️  [ReloadContext] closeTerminalSession failed: ${err.message}`);
-        }
-      }
-    })();
-
-    await Promise.all([refreshLlm, disconnectMcp, refreshTree, closeCli]);
+    // 6-9. Run the four independent teardown steps concurrently (LLM config
+    //      refresh, MCP disconnect, file-tree refresh, CLI session close).
+    const terminalClosed = await this._teardownRuntimeConnections(agentId, agent, 'ReloadContext');
 
     this.addActionLog(
       agentId,
@@ -186,56 +196,16 @@ export const conversationMethods = {
 
     // NOTE: history + runnerSessions + task flags are intentionally kept.
 
-    let terminalClosed = false;
+    // 4. Run the independent teardown steps concurrently (LLM config refresh,
+    //    MCP disconnect, file-tree refresh, CLI session close).
+    await this._teardownRuntimeConnections(agentId, agent, 'Restart');
 
-    // 4. Run the independent teardown steps concurrently (each is a network
-    //    round-trip and none depends on another).
-    const refreshLlm = (async () => {
-      try { await this.refreshLlmConfigs(); } catch (err: any) {
-        console.warn(`⚠️  [Restart] refreshLlmConfigs failed: ${err.message}`);
-      }
-    })();
-
-    const disconnectMcp = (async () => {
-      if (this.mcpManager?.disconnectAgent) {
-        try { await this.mcpManager.disconnectAgent(agentId); } catch (err: any) {
-          console.warn(`⚠️  [Restart] mcp.disconnectAgent failed: ${err.message}`);
-        }
-      }
-    })();
-
-    const refreshTree = (async () => {
-      if (agent.project && this.executionManager?.refreshFileTree) {
-        try { await this.executionManager.refreshFileTree(agentId); } catch (err: any) {
-          console.warn(`⚠️  [Restart] refreshFileTree failed: ${err.message}`);
-        }
-      }
-    })();
-
-    const closeCli = (async () => {
-      if (this.executionManager?.closeCliTerminalSessions) {
-        try {
-          terminalClosed = await this.executionManager.closeCliTerminalSessions(agentId);
-        } catch (err: any) {
-          console.warn(`⚠️  [Restart] closeCliTerminalSessions failed: ${err.message}`);
-        }
-      } else if (this.executionManager?.closeTerminalSession) {
-        try {
-          terminalClosed = await this.executionManager.closeTerminalSession(agentId);
-        } catch (err: any) {
-          console.warn(`⚠️  [Restart] closeTerminalSession failed: ${err.message}`);
-        }
-      }
-    })();
-
-    await Promise.all([refreshLlm, disconnectMcp, refreshTree, closeCli]);
-
+    // Both branches of the former ternary emitted the same string, so the
+    // terminalClosed distinction was dead — collapse to the single message.
     this.addActionLog(
       agentId,
       'info',
-      terminalClosed
-        ? 'Agent restarted — runtime reset, conversation preserved'
-        : 'Agent restarted — runtime reset, conversation preserved'
+      'Agent restarted — runtime reset, conversation preserved'
     );
     this._emit('agent:updated', this._sanitize(agent));
     return true;

@@ -4,12 +4,7 @@ import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromD
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
 import { isActiveStatus, getWorkflowManagedStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
-
-const CLI_RUNNERS = new Set(['claudecode', 'coder', 'codex', 'opencode', 'openclaw', 'hermes', 'aider']);
-
-function isCliRunner(agent: any): boolean {
-  return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
-}
+import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
 
 async function bindAgentRunner(manager: any, agent: any): Promise<void> {
   if (!manager.executionManager?.bindAgent || !agent?.id) return;
@@ -251,76 +246,55 @@ export const tasksMethods = {
     return task;
   },
 
-  updateTaskTitle(this: any, agentId: string, taskId: string, title: string): any {
+  /** Shared field-edit helper for the simple updateTaskX methods: capture the
+   * old value, assign the new one, push an {type:'edit', field, …} history
+   * entry, persist, and emit agent:updated. `applyExtra` runs after the field
+   * assignment (e.g. to set a paired provider default). Returns the task, or
+   * null when the agent or task is missing. */
+  _editTaskField(
+    this: any,
+    agentId: string,
+    taskId: string,
+    field: string,
+    value: any,
+    { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: any) => void } = {},
+  ): any {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
     if (!task) return null;
-    const oldTitle = task.title || null;
-    task.title = title;
+    const oldValue = task[field] || null;
+    task[field] = value;
+    applyExtra?.(task);
     if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'title', oldValue: oldTitle, newValue: title });
+    task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field, oldValue, newValue: value ?? null });
     saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
+  },
+
+  updateTaskTitle(this: any, agentId: string, taskId: string, title: string): any {
+    return this._editTaskField(agentId, taskId, 'title', title);
   },
 
   updateTaskText(this: any, agentId: string, taskId: string, text: string): any {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-    if (!task) return null;
-    const oldText = task.text;
-    task.text = text;
-    if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'text', oldValue: oldText, newValue: text });
-    saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return this._editTaskField(agentId, taskId, 'text', text);
   },
 
   updateTaskRepo(this: any, agentId: string, taskId: string, repoFullName: string | null, repoProvider: string | null = null): any {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-    if (!task) return null;
-    const oldFullName = task.repoFullName || null;
-    task.repoFullName = repoFullName || null;
-    task.repoProvider = repoFullName ? (repoProvider || task.repoProvider || 'github') : null;
-    if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'repoFullName', oldValue: oldFullName, newValue: repoFullName || null });
-    saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return this._editTaskField(agentId, taskId, 'repoFullName', repoFullName || null, {
+      applyExtra: (task: any) => { task.repoProvider = repoFullName ? (repoProvider || task.repoProvider || 'github') : null; },
+    });
   },
 
   updateTaskStorage(this: any, agentId: string, taskId: string, storagePath: string | null, storageProvider: string | null = null): any {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-    if (!task) return null;
-    const oldPath = task.storagePath || null;
-    task.storagePath = storagePath || null;
-    task.storageProvider = storagePath ? (storageProvider || task.storageProvider || 'onedrive') : null;
-    if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'storagePath', oldValue: oldPath, newValue: storagePath || null });
-    saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return this._editTaskField(agentId, taskId, 'storagePath', storagePath || null, {
+      applyExtra: (task: any) => { task.storageProvider = storagePath ? (storageProvider || task.storageProvider || 'onedrive') : null; },
+    });
   },
 
   updateTaskType(this: any, agentId: string, taskId: string, taskType: string, by: string = 'user'): any {
-    const agent = this.agents.get(agentId);
-    if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-    if (!task) return null;
-    const oldType = task.taskType || null;
-    task.taskType = taskType || null;
-    if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field: 'taskType', oldValue: oldType, newValue: taskType || null });
-    saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
-    return task;
+    return this._editTaskField(agentId, taskId, 'taskType', taskType || null, { by });
   },
 
   updateTaskRecurrence(this: any, agentId: string, taskId: string, recurrence: any): any {
@@ -472,13 +446,10 @@ export const tasksMethods = {
   },
 
   addTaskCommit(this: any, agentId: string, taskId: string, hash: string, message: string): any {
-    let task: any = null;
-    let ownerAgentId = agentId;
-    for (const [aid, tasks] of this._tasks) {
-      const found = (tasks as any[]).find((t: any) => t.id === taskId);
-      if (found) { task = found; ownerAgentId = aid as string; break; }
-    }
-    if (!task) return null;
+    const found = this._findTaskAcross((t: any) => t.id === taskId);
+    if (!found) return null;
+    const task: any = found.task;
+    const ownerAgentId: string = found.agentId;
     if (!task.commits) task.commits = [];
     // Prefix-aware dedup: treat short and full hashes of the same commit as equal.
     // If a full hash is provided and a short hash already exists, upgrade it.
@@ -503,13 +474,11 @@ export const tasksMethods = {
   },
 
   removeTaskCommit(this: any, agentId: string, taskId: string, hash: string): any {
-    let task: any = null;
-    let ownerAgentId = agentId;
-    for (const [aid, tasks] of this._tasks) {
-      const found = (tasks as any[]).find((t: any) => t.id === taskId);
-      if (found) { task = found; ownerAgentId = aid as string; break; }
-    }
-    if (!task || !task.commits) return null;
+    const found = this._findTaskAcross((t: any) => t.id === taskId);
+    if (!found) return null;
+    const task: any = found.task;
+    const ownerAgentId: string = found.agentId;
+    if (!task.commits) return null;
     const before = task.commits.length;
     task.commits = task.commits.filter((c: any) => c.hash !== hash);
     if (task.commits.length === before) return null;
@@ -1252,7 +1221,6 @@ export const tasksMethods = {
       // "went idle" retry, then the full reminder loop — causing an infinite loop.
       // Fix: auto-signal task completion when these runners exit, unless the
       // task was already completed (e.g. opencode somehow did call the tool).
-      const SELF_COMPLETING_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex', 'aider']);
       if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
         if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
           console.log(`✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`);

@@ -35,6 +35,7 @@ export interface AgentManager {
   getProjectSummary(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any;
   getSwarmStatus(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any;
   setStatus(id: string, status: string, detail?: string | null): void;
+  _markTaskStopped(t: any, ownerAgentId: string, stopTimestamp: string): void;
   stopAgent(id: string): boolean;
   beginStream(agentId: string, opts?: { userMessage?: string | null; userMessageId?: string | null }): void;
   appendStreamChunk(agentId: string, chunk: string): void;
@@ -65,18 +66,23 @@ export interface AgentManager {
   removeSkill(agentId: string, skillId: string): boolean;
 
   // ── conversation.ts ──
+  _teardownRuntimeConnections(agentId: string, agent: any, logTag: string): Promise<boolean>;
   clearHistory(agentId: string): Promise<boolean>;
   reloadContext(agentId: string): Promise<boolean>;
+  restartRuntime(agentId: string): Promise<boolean>;
   truncateHistory(agentId: string, afterIndex: number): any[] | null;
   _switchProjectContext(agent: any, oldProject: string | null, newProject: string | null): void;
   buildVoiceInstructions(agentId: string): string;
 
   // ── chat.ts ──
+  _releaseChat(id: string, isTopLevel: boolean, status?: 'idle' | null): void;
+  _failChat(agent: any, id: string, isTopLevel: boolean, errMessage: string, finalStatus?: 'error' | 'idle'): void;
   sendMessage(id: string, userMessage: string, streamCallback: any, delegationDepth?: number, messageMeta?: any): Promise<any>;
   _cleanMarkdown(response: string): string;
   _buildSystemPrompt(agent: any, id: string, delegationDepth: number): Promise<string>;
   buildRunnerInstructions(id: string): Promise<string>;
   _assembleMessages(agent: any, messages: any[], systemContent: string, userMessage: string, delegationDepth: number, messageMeta: any, streamCallback: any): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }>;
+  _consumeStream(provider: any, messages: any[], ctx: { agent: any; id: string; useCliRunner: boolean; streamCallback: any; abortController: AbortController; contextTokens: number; activeTaskId: string | null; sessionKey: string; runnerSessionId: string | undefined; maxTokens: number; llmConfig: any; isContinuation: boolean }): Promise<{ text: string; thinking: string; finishReason: string | null; outputTokens: number }>;
   _streamAndContinue(agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId?: string | null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }>;
   _processPostResponseActions(agent: any, id: string, responseForParsing: string, fullResponse: string, streamCallback: any, delegationDepth: number, messageMeta: any): Promise<{ earlyReturn?: any }>;
 
@@ -91,6 +97,7 @@ export interface AgentManager {
   addTask(agentId: string, text: string, source: any, initialStatus?: string, options?: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean }): any | null;
   toggleTask(agentId: string, taskId: string): any | null;
   setTaskStatus(agentId: string, taskId: string, status: string, options?: { skipAutoRefine?: boolean; by?: string | null }): any | null;
+  _editTaskField(agentId: string, taskId: string, field: string, value: any, options?: { by?: string; applyExtra?: (task: any) => void }): any | null;
   updateTaskTitle(agentId: string, taskId: string, title: string): any | null;
   updateTaskText(agentId: string, taskId: string, text: string): any | null;
   updateTaskRepo(agentId: string, taskId: string, repoFullName: string | null, repoProvider?: string | null): any | null;
@@ -486,6 +493,16 @@ export class AgentManager {
       if (task) return { task, agentId };
     }
     return null;
+  }
+
+  /** Resolve a task id (or id prefix) to its owner across all agents.
+   * Returns { task, agentId } or null. Does a global exact-id pass first, then
+   * a global prefix pass — this equals the inline per-agent "exact-or-prefix"
+   * scans it replaces ONLY because task ids are full uuidv4 (tasks.ts addTask),
+   * so no id is ever a strict prefix of another. */
+  _findTaskByIdOrPrefix(idOrPrefix: string): { task: any; agentId: string } | null {
+    return this._findTaskAcross((t: any) => t.id === idOrPrefix)
+        || this._findTaskAcross((t: any) => t.id.startsWith(idOrPrefix));
   }
 
   /** Get all tasks from all agents as a flat array (each task has agentId) */
