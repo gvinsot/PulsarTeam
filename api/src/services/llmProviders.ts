@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { claudeRateLimiter } from './rateLimiter.js';
 import { readSecret } from '../secrets.js';
+import { runnerServiceUrl, type RunnerServiceType } from './execution/runnerRegistry.js';
 
 // Helper: returns { temperature } object if temperature is set, or empty object to omit it
 function tempParam(options: { temperature?: number | null }): { temperature?: number } {
@@ -44,6 +45,58 @@ function buildOpenAIContent(text: string, images?: ChatImage[]): any {
   }
   if (text) parts.push({ type: 'text', text });
   return parts;
+}
+
+// ─── OpenAI-compatible stream consumption ───────────────────────────────────
+// Shared chunk-consumption loop for any OpenAI-compatible streaming response
+// (OpenAI chat completions, vLLM, Mistral). Yields {type:'text'} from
+// delta.content, {type:'thinking'} from delta.reasoning_content, captures
+// finish_reason, and emits a single {type:'done'} when the usage-only chunk
+// arrives. `mapDone` lets a provider customize the done event (vLLM forwards
+// costUsd inside usage and runnerSessionId at the top level).
+
+interface StreamDone {
+  usage: { inputTokens: number; outputTokens: number; [k: string]: any };
+  runnerSessionId?: string;
+}
+
+function defaultMapDone(usage: any): StreamDone {
+  return {
+    usage: {
+      inputTokens: usage?.prompt_tokens || 0,
+      outputTokens: usage?.completion_tokens || 0,
+    },
+  };
+}
+
+async function* consumeOpenAIStream(
+  stream: AsyncIterable<any>,
+  signal: AbortSignal | undefined,
+  mapDone: (usage: any) => StreamDone = defaultMapDone,
+): AsyncGenerator<any> {
+  let finishReason: string | null = null;
+  for await (const chunk of stream) {
+    if (signal?.aborted) throw new Error('Agent stopped by user');
+    const choice = chunk.choices?.[0];
+    if (choice?.delta?.content) {
+      yield { type: 'text', text: choice.delta.content };
+    }
+    // Reasoning models: emit thinking tokens separately
+    if (choice?.delta?.reasoning_content) {
+      yield { type: 'thinking', text: choice.delta.reasoning_content };
+    }
+    if (choice?.finish_reason) {
+      finishReason = choice.finish_reason;
+    }
+    if (chunk.usage) {
+      const { usage, runnerSessionId } = mapDone(chunk.usage);
+      const doneEvent: any = { type: 'done', finishReason: finishReason || 'stop', usage };
+      if (typeof runnerSessionId === 'string' && runnerSessionId) {
+        doneEvent.runnerSessionId = runnerSessionId;
+      }
+      yield doneEvent;
+    }
+  }
 }
 
 // ─── Ollama Provider ────────────────────────────────────────────────────────
@@ -150,8 +203,11 @@ export class OllamaProvider {
     return this._pulling;
   }
 
-  async chat(messages: any[], options: any = {}): Promise<any> {
-    const body: any = {
+  // Build the OpenAI-compatible request body. `stream` toggles SSE vs single
+  // response. num_ctx uses a truthiness check (NOT ??) because contextLength===0
+  // is a real "use the default" value elsewhere in the codebase.
+  private _buildBody(messages: any[], options: any, stream: boolean): any {
+    return {
       model: this.model,
       messages: messages.map(m => ({
         role: m.role === 'system' ? 'system' : m.role,
@@ -159,36 +215,37 @@ export class OllamaProvider {
       })),
       ...tempParam(options),
       max_tokens: options.maxTokens ?? 4096,
-      stream: false,
+      stream,
       tool_choice: 'none',
+      // Pass num_ctx via Ollama-specific extension
+      options: { num_ctx: options.contextLength || 8192 },
     };
-    // Pass num_ctx via Ollama-specific extension
-    if (options.contextLength) {
-      body.options = { num_ctx: options.contextLength };
-    } else {
-      body.options = { num_ctx: 8192 };
-    }
+  }
 
-    let res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
+  // POST to /v1/chat/completions with the 404 → auto-pull → retry recovery.
+  private async _completionsRequest(body: any, signal: AbortSignal | null): Promise<Response> {
+    const doFetch = () => ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }, OLLAMA_MAX_RETRIES, options.signal || null);
+      body: JSON.stringify(body),
+    }, OLLAMA_MAX_RETRIES, signal);
 
+    let res = await doFetch();
     // Auto-pull model on 404 and retry
     if (res.status === 404) {
       await this._pullModel();
-      res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }, OLLAMA_MAX_RETRIES, options.signal || null);
+      res = await doFetch();
     }
-
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Ollama error ${res.status}: ${text}`);
     }
+    return res;
+  }
+
+  async chat(messages: any[], options: any = {}): Promise<any> {
+    const body = this._buildBody(messages, options, false);
+    const res = await this._completionsRequest(body, options.signal || null);
 
     const data = await res.json();
     const choice = data.choices?.[0];
@@ -204,43 +261,8 @@ export class OllamaProvider {
   }
 
   async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
-    const body: any = {
-      model: this.model,
-      messages: messages.map(m => ({
-        role: m.role === 'system' ? 'system' : m.role,
-        content: buildOpenAIContent(m.content, m.images),
-      })),
-      ...tempParam(options),
-      max_tokens: options.maxTokens ?? 4096,
-      stream: true,
-      tool_choice: 'none',
-    };
-    if (options.contextLength) {
-      body.options = { num_ctx: options.contextLength };
-    } else {
-      body.options = { num_ctx: 8192 };
-    }
-
-    let res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }, OLLAMA_MAX_RETRIES, options.signal || null);
-
-    // Auto-pull model on 404 and retry
-    if (res.status === 404) {
-      await this._pullModel();
-      res = await ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }, OLLAMA_MAX_RETRIES, options.signal || null);
-    }
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Ollama error ${res.status}: ${text}`);
-    }
+    const body = this._buildBody(messages, options, true);
+    const res = await this._completionsRequest(body, options.signal || null);
 
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
@@ -649,34 +671,7 @@ export class OpenAIProvider {
 
     const stream = await this.client.chat.completions.create(params, requestOpts);
 
-    let gptFinishReason: string | null = null;
-    for await (const chunk of stream as any) {
-      if (options.signal?.aborted) throw new Error('Agent stopped by user');
-      const choice = chunk.choices[0];
-      const delta = choice?.delta;
-      if (delta?.content) {
-        yield { type: 'text', text: delta.content };
-      }
-      // Reasoning models (o1/o3/o4): emit thinking tokens
-      if (delta?.reasoning_content) {
-        yield { type: 'thinking', text: delta.reasoning_content };
-      }
-      if (choice?.finish_reason) {
-        gptFinishReason = choice.finish_reason;
-      }
-
-      // Final chunk with usage
-      if (chunk.usage) {
-        yield {
-          type: 'done',
-          finishReason: gptFinishReason || 'stop',
-          usage: {
-            inputTokens: chunk.usage.prompt_tokens || 0,
-            outputTokens: chunk.usage.completion_tokens || 0
-          }
-        };
-      }
-    }
+    yield* consumeOpenAIStream(stream as any, options.signal);
   }
 
   async *_responsesChatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
@@ -902,51 +897,27 @@ export class VLLMProvider {
     }
 
     const stream = await this.client.chat.completions.create(params, requestOpts);
-    let vllmFinishReason: string | null = null;
 
-    for await (const chunk of stream as any) {
-      if (options.signal?.aborted) throw new Error('Agent stopped by user');
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        yield { type: 'text', text: choice.delta.content };
+    yield* consumeOpenAIStream(stream as any, options.signal, (u: any) => {
+      const promptTokens = u.prompt_tokens || 0;
+      const completionTokens = u.completion_tokens || 0;
+      const totalTokens = u.total_tokens || 0;
+      // coder-service now sends proper prompt_tokens (input) and completion_tokens (output).
+      // Fallback to total_tokens if prompt_tokens is missing (legacy compatibility).
+      const usage: any = {
+        inputTokens: promptTokens || totalTokens,
+        outputTokens: completionTokens,
+      };
+      // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
+      if (u.cost_usd != null) {
+        usage.costUsd = u.cost_usd;
       }
-      // Reasoning models: emit thinking tokens separately
-      if (choice?.delta?.reasoning_content) {
-        yield { type: 'thinking', text: choice.delta.reasoning_content };
-      }
-      if (choice?.finish_reason) {
-        vllmFinishReason = choice.finish_reason;
-      }
-
-      if (chunk.usage) {
-        const promptTokens = chunk.usage.prompt_tokens || 0;
-        const completionTokens = chunk.usage.completion_tokens || 0;
-        const totalTokens = chunk.usage.total_tokens || 0;
-        // coder-service now sends proper prompt_tokens (input) and completion_tokens (output).
-        // Fallback to total_tokens if prompt_tokens is missing (legacy compatibility).
-        const usage: any = {
-          inputTokens: promptTokens || totalTokens,
-          outputTokens: completionTokens
-        };
-        // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
-        if (chunk.usage.cost_usd != null) {
-          usage.costUsd = chunk.usage.cost_usd;
-        }
-        // Runner-service returns the CLI session UUID it ended up using
-        // (may differ from the hint we sent if --resume failed and the
-        // runner had to mint a fresh session).
-        const runnerSessionId = (chunk.usage as any).runner_session_id;
-        const doneEvent: any = {
-          type: 'done',
-          finishReason: vllmFinishReason || 'stop',
-          usage
-        };
-        if (typeof runnerSessionId === 'string' && runnerSessionId) {
-          doneEvent.runnerSessionId = runnerSessionId;
-        }
-        yield doneEvent;
-      }
-    }
+      // Runner-service returns the CLI session UUID it ended up using
+      // (may differ from the hint we sent if --resume failed and the
+      // runner had to mint a fresh session).
+      const runnerSessionId = u.runner_session_id;
+      return { usage, runnerSessionId };
+    });
   }
 
   async ping(): Promise<boolean> {
@@ -1013,33 +984,8 @@ export class MistralProvider {
     if (options.signal) requestOpts.signal = options.signal;
 
     const stream = await this.client.chat.completions.create(params, requestOpts);
-    let finishReason: string | null = null;
 
-    for await (const chunk of stream as any) {
-      if (options.signal?.aborted) throw new Error('Agent stopped by user');
-      const choice = chunk.choices?.[0];
-      if (choice?.delta?.content) {
-        yield { type: 'text', text: choice.delta.content };
-      }
-      // Reasoning models: emit thinking tokens separately
-      if (choice?.delta?.reasoning_content) {
-        yield { type: 'thinking', text: choice.delta.reasoning_content };
-      }
-      if (choice?.finish_reason) {
-        finishReason = choice.finish_reason;
-      }
-
-      if (chunk.usage) {
-        yield {
-          type: 'done',
-          finishReason: finishReason || 'stop',
-          usage: {
-            inputTokens: chunk.usage.prompt_tokens || 0,
-            outputTokens: chunk.usage.completion_tokens || 0
-          }
-        };
-      }
-    }
+    yield* consumeOpenAIStream(stream as any, options.signal);
   }
 
   async ping(): Promise<boolean> {
@@ -1053,7 +999,28 @@ export class MistralProvider {
 }
 
 // ─── Provider Factory ───────────────────────────────────────────────────────
+// CLI-runner providers — when agent.runner is set to a CLI runner (opencode,
+// openclaw, hermes, codex, claudecode), the LLM chat is routed through that
+// runner-service instead of the provider's API directly. The runner CLI
+// receives the user-selected LLM config via X-LLM-Config and uses it to call
+// the appropriate vendor (Anthropic / OpenAI / Mistral / ...). They share the
+// exact same VLLMProvider wiring, differing only in the service URL — resolved
+// from the runner registry. ('sandbox' and 'claude-paid' are excluded: sandbox
+// is execution-only and claude-paid has bespoke model/llmConfig handling.)
+const CLI_RUNNERS = new Set<RunnerServiceType>(['opencode', 'aider', 'openclaw', 'hermes', 'codex', 'claudecode']);
+
 export function createProvider(config: any): any {
+  if (CLI_RUNNERS.has(config.provider)) {
+    return new VLLMProvider(
+      runnerServiceUrl(config.provider as RunnerServiceType),
+      config.model,
+      readSecret('CODER_API_KEY'),
+      config.agentId || null,
+      config.ownerId || null,
+      config.permissions || null,
+      config.llmConfig || null,
+    );
+  }
   switch (config.provider) {
     case 'ollama':
       return new OllamaProvider(
@@ -1077,79 +1044,15 @@ export function createProvider(config: any): any {
         config.apiKey || ''
       );
     case 'claude-paid':
+      // Shares the claudecode runner URL but defaults the model and never
+      // forwards llmConfig (the paid plan is pinned to its own model).
       return new VLLMProvider(
-        process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
+        runnerServiceUrl('claudecode'),
         config.model || 'claude-sonnet-4-20250514',
         readSecret('CODER_API_KEY'),
         config.agentId || null,
         config.ownerId || null,
         config.permissions || null
-      );
-    // ── CLI-runner providers ─────────────────────────────────────────────
-    // When agent.runner is set to a CLI runner (opencode, openclaw, hermes,
-    // codex, claudecode), the LLM chat is routed through that runner-service
-    // instead of the provider's API directly. The runner CLI receives the
-    // user-selected LLM config via X-LLM-Config and uses it to call the
-    // appropriate vendor (Anthropic / OpenAI / Mistral / ...).
-    case 'opencode':
-      return new VLLMProvider(
-        process.env.OPENCODE_SERVICE_URL || 'http://opencode-service:8000',
-        config.model,
-        readSecret('CODER_API_KEY'),
-        config.agentId || null,
-        config.ownerId || null,
-        config.permissions || null,
-        config.llmConfig || null,
-      );
-    case 'aider':
-      return new VLLMProvider(
-        process.env.AIDER_SERVICE_URL || 'http://aider-service:8000',
-        config.model,
-        readSecret('CODER_API_KEY'),
-        config.agentId || null,
-        config.ownerId || null,
-        config.permissions || null,
-        config.llmConfig || null,
-      );
-    case 'openclaw':
-      return new VLLMProvider(
-        process.env.OPENCLAW_SERVICE_URL || 'http://openclaw-service:8000',
-        config.model,
-        readSecret('CODER_API_KEY'),
-        config.agentId || null,
-        config.ownerId || null,
-        config.permissions || null,
-        config.llmConfig || null,
-      );
-    case 'hermes':
-      return new VLLMProvider(
-        process.env.HERMES_SERVICE_URL || 'http://hermes-service:8000',
-        config.model,
-        readSecret('CODER_API_KEY'),
-        config.agentId || null,
-        config.ownerId || null,
-        config.permissions || null,
-        config.llmConfig || null,
-      );
-    case 'codex':
-      return new VLLMProvider(
-        process.env.CODEX_SERVICE_URL || 'http://codex-service:8000',
-        config.model,
-        readSecret('CODER_API_KEY'),
-        config.agentId || null,
-        config.ownerId || null,
-        config.permissions || null,
-        config.llmConfig || null,
-      );
-    case 'claudecode':
-      return new VLLMProvider(
-        process.env.CLAUDECODE_SERVICE_URL || process.env.CODER_SERVICE_URL || 'http://claudecode-service:8000',
-        config.model,
-        readSecret('CODER_API_KEY'),
-        config.agentId || null,
-        config.ownerId || null,
-        config.permissions || null,
-        config.llmConfig || null,
       );
     case 'mistral':
       return new MistralProvider(
@@ -1159,97 +1062,4 @@ export function createProvider(config: any): any {
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
   }
-}
-// ── Logging Wrapper ──────────────────────────────────────────────────────────
-// Wraps any provider to log calls, responses, tokens, and duration.
-
-class LoggingProvider {
-  _provider: any;
-  _providerName: string;
-  _model: string;
-  _agentName: string | null;
-
-  constructor(provider: any, config: any) {
-    this._provider = provider;
-    this._providerName = config.provider || 'unknown';
-    this._model = config.model || 'unknown';
-    this._agentName = config.name || config.agentName || null;
-  }
-
-  _prefix(): string {
-    const agent = this._agentName ? ` agent="${this._agentName}"` : '';
-    return `📊 [LLM]${agent} ${this._providerName}/${this._model}`;
-  }
-
-  async chat(messages: any[], options: any = {}): Promise<any> {
-    const start = Date.now();
-    const msgCount = messages.length;
-    const inputChars = messages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
-    console.log(`${this._prefix()} chat start | messages=${msgCount} inputChars=${inputChars}`);
-
-    try {
-      const result = await this._provider.chat(messages, options);
-      const duration = Date.now() - start;
-      const outputChars = result.content?.length || 0;
-      const usage = result.usage || {};
-      console.log(
-        `${this._prefix()} chat done | ${duration}ms` +
-        ` | tokens: in=${usage.prompt_tokens || '?'} out=${usage.completion_tokens || '?'} total=${usage.total_tokens || '?'}` +
-        ` | chars: in=${inputChars} out=${outputChars}`
-      );
-      return result;
-    } catch (err: any) {
-      const duration = Date.now() - start;
-      console.error(`${this._prefix()} chat ERROR | ${duration}ms | ${err.message}`);
-      throw err;
-    }
-  }
-
-  async *stream(messages: any[], options: any = {}): AsyncGenerator<any> {
-    const start = Date.now();
-    const msgCount = messages.length;
-    const inputChars = messages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
-    console.log(`${this._prefix()} stream start | messages=${msgCount} inputChars=${inputChars}`);
-
-    let outputChars = 0;
-    let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-    let chunkCount = 0;
-
-    try {
-      for await (const chunk of this._provider.stream(messages, options)) {
-        chunkCount++;
-
-        // Accumulate usage from chunks
-        if (chunk?.usage) {
-          totalUsage.prompt_tokens += chunk.usage.prompt_tokens || 0;
-          totalUsage.completion_tokens += chunk.usage.completion_tokens || 0;
-          totalUsage.total_tokens += chunk.usage.total_tokens || 0;
-        }
-
-        // Count output chars
-        if (chunk?.content) outputChars += chunk.content.length;
-        if (chunk?.thinking) outputChars += chunk.thinking.length;
-
-        yield chunk;
-      }
-
-      const duration = Date.now() - start;
-      console.log(
-        `${this._prefix()} stream done | ${duration}ms | chunks=${chunkCount}` +
-        ` | tokens: in=${totalUsage.prompt_tokens || '?'} out=${totalUsage.completion_tokens || '?'} total=${totalUsage.total_tokens || '?'}` +
-        ` | chars: in=${inputChars} out=${outputChars}`
-      );
-    } catch (err: any) {
-      const duration = Date.now() - start;
-      if (!err.message?.includes('abort')) {
-        console.error(`${this._prefix()} stream ERROR | ${duration}ms | chunks=${chunkCount} | ${err.message}`);
-      }
-      throw err;
-    }
-  }
-}
-
-export function createLoggingProvider(config: any): LoggingProvider {
-  const provider = createProvider(config);
-  return new LoggingProvider(provider, config);
 }

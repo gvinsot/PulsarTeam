@@ -5,7 +5,7 @@ import { getWorkflowForBoard } from '../services/configManager.js';
 import { getAllBoards, saveTaskToDb, getAgentById } from '../services/database.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
-import { checkBoardAccess } from '../middleware/auth.js';
+import { checkBoardAccess } from '../middleware/authz.js';
 import { detectEnvironment } from '../lib/environment.js';
 import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
 import { getMemTask } from './tasks.js';

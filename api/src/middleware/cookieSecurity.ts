@@ -3,6 +3,11 @@ import type { Request, Response, NextFunction } from 'express';
 /**
  * Cookie security middleware (defense-in-depth).
  *
+ * NOTE: This middleware is currently NOT mounted in index.ts — it protects
+ * nothing at runtime today. It is retained (with its test suite) as ready-to-
+ * mount hardening for the day the API starts issuing cookies. Mounting it is a
+ * (mild) behavior change, so it is intentionally left unmounted until then.
+ *
  * The API authenticates with JWTs in localStorage and intentionally does not
  * issue cookies. This middleware enforces secure flags on any Set-Cookie header
  * that may be added in the future (or by a third-party dependency), so a

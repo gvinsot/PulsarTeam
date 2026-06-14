@@ -7,7 +7,6 @@ import {
   getUserByGoogleId, createGoogleUser, linkGoogleId,
   getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
   getUserByGitHubId, createGitHubUser, linkGitHubId,
-  getBoardById, getBoardShare, getProjectById, hasProjectBoardAccess,
   acceptTerms, completeTutorial,
   isDatabaseConnected,
 } from '../services/database.js';
@@ -57,6 +56,106 @@ function checkLoginRateLimit(ip) {
   }
   entry.count++;
   return entry.count <= LOGIN_MAX_ATTEMPTS;
+}
+
+// ── Shared login machinery (password + OAuth) ─────────────────────────────────
+
+// Allow-list of permitted redirect_uri origins. Built from CORS_ORIGINS so the OAuth
+// flow only accepts redirect targets that are also valid app frontends. Prevents an
+// attacker from supplying ?redirect_uri=https://evil.com to steal authorization codes.
+function getAllowedOriginList(): string[] {
+  const env = process.env.CORS_ORIGINS;
+  if (env) return env.split(',').map(s => s.trim()).filter(Boolean);
+  return ['http://localhost:5173', 'http://localhost:3000'];
+}
+
+function isAllowedRedirectUri(uri: string): boolean {
+  if (!uri) return false;
+  try {
+    const parsed = new URL(uri);
+    const origin = `${parsed.protocol}//${parsed.host}`;
+    return getAllowedOriginList().includes(origin);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the login redirect URI supplied by the frontend.
+ *
+ * Each provider's login lands on its own frontend route — /auth/google/callback,
+ * /auth/microsoft/callback (App.tsx), /auth/github/callback — which is distinct
+ * from the plugin OAuth dispatchers (/api/<provider>/oauth-redirect). The login
+ * URI comes from the frontend; we accept it only when its origin is on the CORS
+ * allow-list (prevents an open-redirect / code-stealing attack).
+ */
+function resolveLoginRedirectUri(frontendUri?: string): string {
+  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
+  return '';
+}
+
+/**
+ * Sign a 24h login JWT for `user` and write the standard login response.
+ *
+ * The OAuth callbacks pass `extra.avatarUrl` (which may be null for Microsoft /
+ * GitHub accounts without a photo). The /login route passes nothing, leaving
+ * avatarUrl undefined — res.json drops undefined-valued keys, so the password
+ * login payload keeps its original shape (no avatarUrl key).
+ */
+function sendLoginResponse(res, user, extra: { avatarUrl?: string | null } = {}) {
+  const token = jwt.sign(
+    { userId: user.id, username: user.username, role: user.role },
+    getJwtSecret(),
+    { expiresIn: '24h' }
+  );
+  res.json({
+    token,
+    username: user.username,
+    role: user.role,
+    userId: user.id,
+    displayName: user.display_name,
+    avatarUrl: extra.avatarUrl,
+    termsAcceptedAt: user.terms_accepted_at || null,
+    tutorialCompletedAt: user.tutorial_completed_at || null,
+  });
+}
+
+/**
+ * Find-or-create the local user for an OAuth identity.
+ *
+ * Ordering (preserved across all three providers):
+ *   provider-id lookup → getUserByUsername(loginUsername) → link + refetch by id
+ *   → countUsers → role admin (first user) else advanced → createUser
+ *   → provisionNewUser(user.id) (fire-and-forget).
+ *
+ * `loginUsername` is the local username key: the email for Google/Microsoft, but
+ * for GitHub a computed value (profile email OR `<login>@users.noreply.github.com`).
+ */
+async function findOrCreateOAuthUser(opts: {
+  getByProviderId: (id: string) => Promise<any>;
+  linkProviderId: (userId: string, id: string, avatarUrl: string | null) => Promise<any>;
+  createUser: (id: string, loginUsername: string, displayName: string, avatarUrl: string | null, role: string) => Promise<any>;
+  providerId: string;
+  loginUsername: string;
+  displayName: string;
+  avatarUrl: string | null;
+}): Promise<any> {
+  let user = await opts.getByProviderId(opts.providerId);
+  if (user) return user;
+
+  // Check if a user with this username/email already exists (link accounts)
+  const existingUser = await getUserByUsername(opts.loginUsername);
+  if (existingUser) {
+    await opts.linkProviderId(existingUser.id, opts.providerId, opts.avatarUrl);
+    return getUserById(existingUser.id);
+  }
+
+  // Determine role — first user gets admin, others get advanced
+  const userCount = await countUsers();
+  const role = userCount === 0 ? 'admin' : 'advanced';
+  user = await opts.createUser(opts.providerId, opts.loginUsername, opts.displayName, opts.avatarUrl, role);
+  provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+  return user;
 }
 
 /**
@@ -144,21 +243,7 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = jwt.sign(
-      { userId: user.id, username: user.username, role: user.role },
-      getJwtSecret(),
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      token,
-      username: user.username,
-      role: user.role,
-      userId: user.id,
-      displayName: user.display_name,
-      termsAcceptedAt: user.terms_accepted_at || null,
-      tutorialCompletedAt: user.tutorial_completed_at || null,
-    });
+    sendLoginResponse(res, user);
   } catch (err) {
     console.error('Login error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -239,40 +324,6 @@ router.post('/impersonate/:userId', authenticateToken, validateParams(impersonat
 // Shares getGoogleOAuthConfig() with the Gmail and Drive plugins — one
 // GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI pair lights up login + both plugins.
 
-function isGoogleConfigured() {
-  return getGoogleOAuthConfig() !== null;
-}
-
-// Allow-list of permitted redirect_uri origins. Built from CORS_ORIGINS so the OAuth
-// flow only accepts redirect targets that are also valid app frontends. Prevents an
-// attacker from supplying ?redirect_uri=https://evil.com to steal authorization codes.
-function getAllowedOriginList(): string[] {
-  const env = process.env.CORS_ORIGINS;
-  if (env) return env.split(',').map(s => s.trim()).filter(Boolean);
-  return ['http://localhost:5173', 'http://localhost:3000'];
-}
-
-function isAllowedRedirectUri(uri: string): boolean {
-  if (!uri) return false;
-  try {
-    const parsed = new URL(uri);
-    const origin = `${parsed.protocol}//${parsed.host}`;
-    return getAllowedOriginList().includes(origin);
-  } catch {
-    return false;
-  }
-}
-
-function resolveGoogleRedirectUri(frontendUri?: string): string {
-  // Login lands on /auth/google/callback (frontend route), plugins land on
-  // /api/google/oauth-redirect (backend dispatcher) — they share the same
-  // OAuth client but never collide. The login URI is supplied by the
-  // frontend; we accept it only when its origin is on the CORS allow-list
-  // (prevents an open-redirect / code-stealing attack).
-  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
-  return '';
-}
-
 // Returns the Google OAuth consent URL for the frontend to redirect to
 router.get('/google/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
   const cfg = getGoogleOAuthConfig();
@@ -280,7 +331,7 @@ router.get('/google/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
     return res.status(501).json({ error: 'Google OAuth not configured' });
   }
 
-  const redirectUri = resolveGoogleRedirectUri(req.query.redirect_uri as string);
+  const redirectUri = resolveLoginRedirectUri(req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
@@ -312,7 +363,7 @@ router.post('/google/callback', validateBody(oauthCallbackSchema), async (req, r
 
   const { code, redirect_uri } = req.body;
 
-  const canonicalRedirectUri = resolveGoogleRedirectUri(redirect_uri);
+  const canonicalRedirectUri = resolveLoginRedirectUri(redirect_uri);
   if (!canonicalRedirectUri) {
     return res.status(400).json({ error: 'redirect_uri required' });
   }
@@ -353,40 +404,17 @@ router.post('/google/callback', validateBody(oauthCallbackSchema), async (req, r
     const displayName = profile.name || email;
     const avatarUrl = profile.picture || null;
 
-    // Find or create user
-    let user = await getUserByGoogleId(googleId);
-
-    if (!user) {
-      // Check if a user with this email already exists (link accounts)
-      const existingUser = await getUserByUsername(email);
-      if (existingUser) {
-        await linkGoogleId(existingUser.id, googleId, avatarUrl);
-        user = await getUserById(existingUser.id);
-      } else {
-        // Determine role — first user gets admin, others get basic
-        const userCount = await countUsers();
-        const role = userCount === 0 ? 'admin' : 'advanced';
-        user = await createGoogleUser(googleId, email, displayName, avatarUrl, role);
-        provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
-      }
-    }
-
-    const token = jwt.sign(
-      { userId: user.id, username: user.username, role: user.role },
-      getJwtSecret(),
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      token,
-      username: user.username,
-      role: user.role,
-      userId: user.id,
-      displayName: user.display_name,
-      avatarUrl: user.avatar_url || avatarUrl,
-      termsAcceptedAt: user.terms_accepted_at || null,
-      tutorialCompletedAt: user.tutorial_completed_at || null,
+    const user = await findOrCreateOAuthUser({
+      getByProviderId: getUserByGoogleId,
+      linkProviderId: linkGoogleId,
+      createUser: createGoogleUser,
+      providerId: googleId,
+      loginUsername: email,
+      displayName,
+      avatarUrl,
     });
+
+    sendLoginResponse(res, user, { avatarUrl: user.avatar_url || avatarUrl });
   } catch (err) {
     console.error('Google OAuth error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -409,22 +437,13 @@ router.get('/microsoft/status', (_req, res) => {
   res.json({ enabled: !!cfg, clientId: cfg?.clientId || null });
 });
 
-function resolveMicrosoftRedirectUri(frontendUri?: string): string {
-  // Same rationale as resolveGoogleRedirectUri: login uses a different
-  // redirect URI than the OneDrive/Outlook plugins. The frontend supplies
-  // the login URI (/auth/microsoft/callback handled by App.tsx); we accept
-  // it only when its origin is on the CORS allow-list.
-  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
-  return '';
-}
-
 router.get('/microsoft/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
   const cfg = getMicrosoftLoginConfig();
   if (!cfg) {
     return res.status(501).json({ error: 'Microsoft OAuth not configured' });
   }
 
-  const redirectUri = resolveMicrosoftRedirectUri(req.query.redirect_uri as string);
+  const redirectUri = resolveLoginRedirectUri(req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
@@ -449,7 +468,7 @@ router.post('/microsoft/callback', validateBody(oauthCallbackSchema), async (req
 
   const { code, redirect_uri } = req.body;
 
-  const canonicalRedirectUri = resolveMicrosoftRedirectUri(redirect_uri);
+  const canonicalRedirectUri = resolveLoginRedirectUri(redirect_uri);
   if (!canonicalRedirectUri) {
     return res.status(400).json({ error: 'redirect_uri required' });
   }
@@ -501,37 +520,17 @@ router.post('/microsoft/callback', validateBody(oauthCallbackSchema), async (req
       }
     } catch {}
 
-    let user = await getUserByMicrosoftId(microsoftId);
-
-    if (!user) {
-      const existingUser = await getUserByUsername(email);
-      if (existingUser) {
-        await linkMicrosoftId(existingUser.id, microsoftId, avatarUrl);
-        user = await getUserById(existingUser.id);
-      } else {
-        const userCount = await countUsers();
-        const role = userCount === 0 ? 'admin' : 'advanced';
-        user = await createMicrosoftUser(microsoftId, email, displayName, avatarUrl, role);
-        provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
-      }
-    }
-
-    const token = jwt.sign(
-      { userId: user.id, username: user.username, role: user.role },
-      getJwtSecret(),
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      token,
-      username: user.username,
-      role: user.role,
-      userId: user.id,
-      displayName: user.display_name,
-      avatarUrl: user.avatar_url || avatarUrl,
-      termsAcceptedAt: user.terms_accepted_at || null,
-      tutorialCompletedAt: user.tutorial_completed_at || null,
+    const user = await findOrCreateOAuthUser({
+      getByProviderId: getUserByMicrosoftId,
+      linkProviderId: linkMicrosoftId,
+      createUser: createMicrosoftUser,
+      providerId: microsoftId,
+      loginUsername: email,
+      displayName,
+      avatarUrl,
     });
+
+    sendLoginResponse(res, user, { avatarUrl: user.avatar_url || avatarUrl });
   } catch (err) {
     console.error('Microsoft OAuth error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -559,22 +558,12 @@ router.get('/github/status', (_req, res) => {
   res.json({ enabled: isGitHubConfigured(), clientId: process.env.GITHUB_OAUTH_CLIENT_ID || null });
 });
 
-function resolveGitHubRedirectUri(frontendUri?: string): string {
-  // Login lands on /auth/github/callback (frontend route); the GitHub plugin
-  // dispatcher lands on /api/github/oauth-redirect (backend). They share one
-  // OAuth App by registering both callback URLs in its settings, and never
-  // collide. The login URI comes from the frontend — accept it only when its
-  // origin is on the CORS allow-list to prevent open-redirect attacks.
-  if (frontendUri && isAllowedRedirectUri(frontendUri)) return frontendUri;
-  return '';
-}
-
 router.get('/github/url', validateQuery(oauthUrlQuerySchema), (req, res) => {
   if (!isGitHubConfigured()) {
     return res.status(501).json({ error: 'GitHub OAuth not configured' });
   }
 
-  const redirectUri = resolveGitHubRedirectUri(req.query.redirect_uri as string);
+  const redirectUri = resolveLoginRedirectUri(req.query.redirect_uri as string);
   if (!redirectUri) {
     return res.status(400).json({ error: 'redirect_uri query parameter required' });
   }
@@ -596,7 +585,7 @@ router.post('/github/callback', validateBody(oauthCallbackSchema), async (req, r
 
   const { code, redirect_uri } = req.body;
 
-  const canonicalRedirectUri = resolveGitHubRedirectUri(redirect_uri);
+  const canonicalRedirectUri = resolveLoginRedirectUri(redirect_uri);
   if (!canonicalRedirectUri) {
     return res.status(400).json({ error: 'redirect_uri required' });
   }
@@ -662,38 +651,18 @@ router.post('/github/callback', validateBody(oauthCallbackSchema), async (req, r
     const displayName = profile.name || profile.login || username;
     const avatarUrl = profile.avatar_url || null;
 
-    let user = await getUserByGitHubId(githubId);
-
-    if (!user) {
-      // Link to an existing local user with the same email/username if any.
-      const existingUser = await getUserByUsername(username);
-      if (existingUser) {
-        await linkGitHubId(existingUser.id, githubId, avatarUrl);
-        user = await getUserById(existingUser.id);
-      } else {
-        const userCount = await countUsers();
-        const role = userCount === 0 ? 'admin' : 'advanced';
-        user = await createGitHubUser(githubId, username, displayName, avatarUrl, role);
-        provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
-      }
-    }
-
-    const token = jwt.sign(
-      { userId: user.id, username: user.username, role: user.role },
-      getJwtSecret(),
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      token,
-      username: user.username,
-      role: user.role,
-      userId: user.id,
-      displayName: user.display_name,
-      avatarUrl: user.avatar_url || avatarUrl,
-      termsAcceptedAt: user.terms_accepted_at || null,
-      tutorialCompletedAt: user.tutorial_completed_at || null,
+    const user = await findOrCreateOAuthUser({
+      getByProviderId: getUserByGitHubId,
+      linkProviderId: linkGitHubId,
+      createUser: createGitHubUser,
+      providerId: githubId,
+      // GitHub passes a computed login username (email OR <login>@users.noreply.github.com)
+      loginUsername: username,
+      displayName,
+      avatarUrl,
     });
+
+    sendLoginResponse(res, user, { avatarUrl: user.avatar_url || avatarUrl });
   } catch (err) {
     console.error('GitHub OAuth error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
@@ -702,36 +671,24 @@ router.post('/github/callback', validateBody(oauthCallbackSchema), async (req, r
 
 // ── Terms & onboarding ─────────────────────────────────────────────────────
 // Record terms acceptance for the current user. Required: a valid JWT.
-router.post('/accept-terms', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'No token provided' });
+router.post('/accept-terms', authenticateToken, async (req, res) => {
   try {
-    const decoded = jwt.verify(authHeader.split(' ')[1], getJwtSecret()) as any;
-    const row = await acceptTerms(decoded.userId);
+    const row = await acceptTerms(req.user.userId);
     if (!row) return res.status(404).json({ error: 'User not found' });
     res.json({ termsAcceptedAt: row.terms_accepted_at });
   } catch (err) {
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
     console.error('Accept terms error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Record tutorial completion for the current user.
-router.post('/complete-tutorial', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'No token provided' });
+router.post('/complete-tutorial', authenticateToken, async (req, res) => {
   try {
-    const decoded = jwt.verify(authHeader.split(' ')[1], getJwtSecret()) as any;
-    const row = await completeTutorial(decoded.userId);
+    const row = await completeTutorial(req.user.userId);
     if (!row) return res.status(404).json({ error: 'User not found' });
     res.json({ tutorialCompletedAt: row.tutorial_completed_at });
   } catch (err) {
-    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
-      return res.status(401).json({ error: 'Invalid token' });
-    }
     console.error('Complete tutorial error:', err.message);
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -760,160 +717,6 @@ export function requireRole(...roles) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     next();
-  };
-}
-
-// ── Resource authorization (IDOR protection) ─────────────────────────────────
-//
-// Centralized helpers used by routes/{boards,projects,tasks,agents}.ts to
-// verify that the authenticated user is allowed to read/edit/admin a board
-// or a project. Without these checks an attacker who knows another tenant's
-// resource id could read or modify it (Insecure Direct Object Reference).
-
-export type Permission = 'read' | 'edit' | 'admin';
-const PERMISSION_LEVELS: Record<Permission, number> = { read: 0, edit: 1, admin: 2 };
-
-export interface BoardAccessResult {
-  ok: boolean;
-  board?: any;
-  permission?: Permission;
-  isOwner?: boolean;
-  status?: number;
-  error?: string;
-}
-
-/**
- * Resolve effective access level a user has on a board.
- * - Default boards: readable by all authenticated users, admin-writable.
- * - Board owner: full admin access.
- * - System admin: full admin access.
- * - Otherwise: must have a board_share row with sufficient permission.
- */
-export async function checkBoardAccess(
-  boardId: string | undefined | null,
-  userId: string,
-  userRole: string,
-  required: Permission = 'read'
-): Promise<BoardAccessResult> {
-  if (!boardId) return { ok: false, status: 400, error: 'boardId required' };
-  const board = await getBoardById(boardId);
-  if (!board) return { ok: false, status: 404, error: 'Board not found' };
-
-  if (board.is_default) {
-    const perm: Permission = userRole === 'admin' ? 'admin' : 'read';
-    if (PERMISSION_LEVELS[perm] < PERMISSION_LEVELS[required]) {
-      return { ok: false, status: 403, error: `Requires ${required} permission` };
-    }
-    return { ok: true, board, permission: perm, isOwner: false };
-  }
-
-  if (board.user_id === userId) {
-    return { ok: true, board, permission: 'admin', isOwner: true };
-  }
-
-  if (userRole === 'admin') {
-    return { ok: true, board, permission: 'admin', isOwner: false };
-  }
-
-  const share = await getBoardShare(boardId, userId);
-  if (!share) return { ok: false, status: 403, error: 'Access denied' };
-
-  const sharePerm = share.permission as Permission;
-  if ((PERMISSION_LEVELS[sharePerm] ?? -1) < PERMISSION_LEVELS[required]) {
-    return { ok: false, status: 403, error: `Requires ${required} permission` };
-  }
-  return { ok: true, board, permission: sharePerm, isOwner: false };
-}
-
-/**
- * Express middleware factory enforcing board access.
- * Reads the board id from req.params[paramName] (default 'id') with fallback
- * to req.query[paramName]. On success, attaches { board, permission, isOwner }
- * to req.boardAccess so the handler can reuse the loaded board without a
- * second DB round-trip.
- */
-export function authorizeBoardAccess(
-  required: Permission = 'read',
-  paramName: string = 'id'
-) {
-  return async (req: any, res: any, next: any) => {
-    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
-    const boardId = (req.params?.[paramName] || req.query?.[paramName]) as string;
-    try {
-      const access = await checkBoardAccess(boardId, req.user.userId, req.user.role, required);
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      req.boardAccess = { board: access.board, permission: access.permission, isOwner: access.isOwner };
-      next();
-    } catch (err: any) {
-      return res.status(500).json({ error: 'Authorization check failed' });
-    }
-  };
-}
-
-// Attached by authorizeBoardAccess so downstream handlers can reuse the loaded
-// board without a second checkBoardAccess round-trip.
-declare global {
-  namespace Express {
-    interface Request {
-      boardAccess?: { board?: any; permission?: Permission; isOwner?: boolean };
-    }
-  }
-}
-
-export interface ProjectAccessResult {
-  ok: boolean;
-  project?: any;
-  isOwner?: boolean;
-  status?: number;
-  error?: string;
-}
-
-/**
- * Resolve effective access on a project.
- * - Read: admin, project owner, or user with access to an attached board.
- * - Edit/admin: admin role OR project owner only.
- */
-export async function checkProjectAccess(
-  projectId: string | undefined | null,
-  userId: string,
-  userRole: string,
-  required: Permission = 'read'
-): Promise<ProjectAccessResult> {
-  if (!projectId) return { ok: false, status: 400, error: 'projectId required' };
-  const project = await getProjectById(projectId);
-  if (!project) return { ok: false, status: 404, error: 'Project not found' };
-
-  const isOwner = !!project.owner_id && project.owner_id === userId;
-
-  if (userRole === 'admin') {
-    return { ok: true, project, isOwner };
-  }
-  if (required === 'read') {
-    const canRead = isOwner || await hasProjectBoardAccess(projectId, userId);
-    if (canRead) return { ok: true, project, isOwner };
-    return { ok: false, status: 403, error: 'Access denied' };
-  }
-  if (!isOwner) {
-    return { ok: false, status: 403, error: 'You can only modify projects you created' };
-  }
-  return { ok: true, project, isOwner: true };
-}
-
-export function authorizeProjectAccess(
-  required: Permission = 'read',
-  paramName: string = 'id'
-) {
-  return async (req: any, res: any, next: any) => {
-    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
-    const projectId = (req.params?.[paramName] || req.query?.[paramName]) as string;
-    try {
-      const access = await checkProjectAccess(projectId, req.user.userId, req.user.role, required);
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      req.projectAccess = { project: access.project, isOwner: access.isOwner };
-      next();
-    } catch (err: any) {
-      return res.status(500).json({ error: 'Authorization check failed' });
-    }
   };
 }
 

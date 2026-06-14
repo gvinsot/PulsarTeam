@@ -1,5 +1,6 @@
 import express from 'express';
-import { requireRole, checkBoardAccess, checkProjectAccess } from '../middleware/auth.js';
+import { requireRole } from '../middleware/auth.js';
+import { checkBoardAccess, checkProjectAccess } from '../middleware/authz.js';
 import {
   getProjectsForUser, getProjectByName, createProject, updateProject, deleteProject,
   getBoardsForProject, setBoardProject,

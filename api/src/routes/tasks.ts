@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { requireRole, checkBoardAccess } from '../middleware/auth.js';
+import { requireRole } from '../middleware/auth.js';
+import { checkBoardAccess } from '../middleware/authz.js';
 import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';

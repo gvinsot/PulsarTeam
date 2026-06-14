@@ -217,57 +217,37 @@ app.use('/api/internal/token-usage', authenticateCoderApiKey, internalTokenUsage
 app.use('/api/codex-auth', authenticateToken, codexAuthRoutes());
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
-const onedriveMcpHandler = createOneDriveMcpHandler();
-app.all('/api/onedrive/mcp', authenticateToken, (req, res) => onedriveMcpHandler(req, res));
-
 // Pass the executionManager as the runner bridge so the Gmail and Outlook
 // MCPs can read agent-side attachment paths (which live in the runner
 // container, not in the API container's filesystem).
-const gmailMcpHandler = createGmailMcpHandler({
+const execBridge = {
   exec: (agentId, command, options) => executionManager.exec(agentId, command, options),
-});
-app.all('/api/gmail/mcp', authenticateToken, (req, res) => gmailMcpHandler(req, res));
+};
 
-const outlookMcpHandler = createOutlookMcpHandler({
-  exec: (agentId, command, options) => executionManager.exec(agentId, command, options),
-});
-app.all('/api/outlook/mcp', authenticateToken, (req, res) => outlookMcpHandler(req, res));
+const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
+  ['/api/onedrive/mcp', createOneDriveMcpHandler()],
+  ['/api/gmail/mcp', createGmailMcpHandler(execBridge)],
+  ['/api/outlook/mcp', createOutlookMcpHandler(execBridge)],
+  ['/api/gdrive/mcp', createGdriveMcpHandler()],
+  ['/api/slack/mcp', createSlackMcpHandler()],
+  ['/api/jira/mcp', createJiraMcpHandler()],
+  ['/api/wordpress/mcp', createWordPressMcpHandler()],
+  ['/api/github/mcp', createGitHubMcpHandler()],
+  ['/api/s3/mcp', createS3McpHandler()],
+  ['/api/code-index/mcp', createCodeIndexMcpHandler(codeIndexService)],
+  ['/api/gandi-dns/mcp', createGandiDnsMcpHandler(mcpManager)],
+  ['/api/auto-learn/mcp', createAutoLearnMcpHandler()],
+  ['/api/browser/mcp', createBrowserMcpHandler()],
+  // Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
+  ['/api/swarm-api/mcp', createSwarmApiMcpHandler(agentManager)],
+];
+for (const [path, handler] of mcpMounts) {
+  app.all(path, authenticateToken, handler);
+}
 
-const gdriveMcpHandler = createGdriveMcpHandler();
-app.all('/api/gdrive/mcp', authenticateToken, (req, res) => gdriveMcpHandler(req, res));
-
-const slackMcpHandler = createSlackMcpHandler();
-app.all('/api/slack/mcp', authenticateToken, (req, res) => slackMcpHandler(req, res));
-
-const jiraMcpHandler = createJiraMcpHandler();
-app.all('/api/jira/mcp', authenticateToken, (req, res) => jiraMcpHandler(req, res));
-
-const wordpressMcpHandler = createWordPressMcpHandler();
-app.all('/api/wordpress/mcp', authenticateToken, (req, res) => wordpressMcpHandler(req, res));
-
-const githubMcpHandler = createGitHubMcpHandler();
-app.all('/api/github/mcp', authenticateToken, (req, res) => githubMcpHandler(req, res));
-
-const s3McpHandler = createS3McpHandler();
-app.all('/api/s3/mcp', authenticateToken, (req, res) => s3McpHandler(req, res));
-
-const codeIndexMcpHandler = createCodeIndexMcpHandler(codeIndexService);
-app.all('/api/code-index/mcp', authenticateToken, (req, res) => codeIndexMcpHandler(req, res));
-
-const gandiDnsMcpHandler = createGandiDnsMcpHandler(mcpManager);
-app.all('/api/gandi-dns/mcp', authenticateToken, (req, res) => gandiDnsMcpHandler(req, res));
-
-const autoLearnMcpHandler = createAutoLearnMcpHandler();
-app.all('/api/auto-learn/mcp', authenticateToken, (req, res) => autoLearnMcpHandler(req, res));
-
-const browserMcpHandler = createBrowserMcpHandler();
-app.all('/api/browser/mcp', authenticateToken, (req, res) => browserMcpHandler(req, res));
-
-// Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
-const swarmApiMcpInternalHandler = createSwarmApiMcpHandler(agentManager);
-app.all('/api/swarm-api/mcp', authenticateToken, (req, res) => swarmApiMcpInternalHandler(req, res));
-
-// External Swarm API — secured via API key (Bearer token)
+// External Swarm API — secured via API key (Bearer token). Kept as its own
+// handler instance (distinct from the internal-JWT mount above) and outside
+// the JWT-auth table because it uses authenticateApiKey.
 const swarmApiMcpHandler = createSwarmApiMcpHandler(agentManager);
 app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(req, res));
 app.use('/api/swarm', authenticateApiKey, swarmApiRoutes(agentManager));

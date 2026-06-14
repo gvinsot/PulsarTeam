@@ -64,7 +64,7 @@ mock.module('../../secrets.js', {
   namedExports: { readSecret: () => 'test-secret' },
 });
 
-const { checkBoardAccess, checkProjectAccess } = await import('../../middleware/auth.js');
+const { checkBoardAccess, checkProjectAccess } = await import('../../middleware/authz.js');
 
 // ── Board access ────────────────────────────────────────────────────────────
 

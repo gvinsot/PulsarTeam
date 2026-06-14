@@ -83,6 +83,27 @@ export function setupSocketHandlers(io, agentManager) {
       return userBoardIds.has(agent.boardId);
     }
 
+    // Shared task-execution streamer: emits STREAM_START → chunks → STREAM_END
+    // on THIS socket only, forwarding each chunk and pulsing ws.thinking, and
+    // converts a thrown error into STREAM_ERROR. Used by the single- and
+    // all-task execute handlers, which differ only in the manager call.
+    const streamTaskToSocket = async (
+      agentId: string,
+      run: (onChunk: (chunk: string) => void) => Promise<any>,
+    ): Promise<void> => {
+      const project = agentManager.agents.get(agentId)?.project || null;
+      try {
+        socket.emit(WsEvents.STREAM_START, { agentId, project });
+        await run((chunk) => {
+          socket.emit(WsEvents.STREAM_CHUNK, { agentId, project, chunk });
+          ws.thinking(agentId);
+        });
+        socket.emit(WsEvents.STREAM_END, { agentId, project });
+      } catch (err: any) {
+        socket.emit(WsEvents.STREAM_ERROR, { agentId, project, error: err.message });
+      }
+    };
+
     // ── Chat with streaming ───────────────────────────────────────────
     // The client passes an ack callback as the last argument. We ALWAYS call
     // it exactly once, so the client knows whether its message was accepted,
@@ -302,21 +323,7 @@ export function setupSocketHandlers(io, agentManager) {
       if (!agentId || !taskId) return;
       if (!canAccessAgent(agentId)) return;
 
-      const taskAgent = agentManager.agents.get(agentId);
-      const taskProject = taskAgent?.project || null;
-
-      try {
-        socket.emit(WsEvents.STREAM_START, { agentId, project: taskProject });
-
-        const result = await agentManager.executeTask(agentId, taskId, (chunk) => {
-          socket.emit(WsEvents.STREAM_CHUNK, { agentId, project: taskProject, chunk });
-          ws.thinking(agentId);
-        });
-
-        socket.emit(WsEvents.STREAM_END, { agentId, project: taskProject });
-      } catch (err) {
-        socket.emit(WsEvents.STREAM_ERROR, { agentId, project: taskProject, error: err.message });
-      }
+      await streamTaskToSocket(agentId, (onChunk) => agentManager.executeTask(agentId, taskId, onChunk));
     });
 
     // ── Execute all pending tasks ─────────────────────────────────────
@@ -325,21 +332,7 @@ export function setupSocketHandlers(io, agentManager) {
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
-      const execAgent = agentManager.agents.get(agentId);
-      const execProject = execAgent?.project || null;
-
-      try {
-        socket.emit(WsEvents.STREAM_START, { agentId, project: execProject });
-
-        await agentManager.executeAllTasks(agentId, (chunk) => {
-          socket.emit(WsEvents.STREAM_CHUNK, { agentId, project: execProject, chunk });
-          ws.thinking(agentId);
-        });
-
-        socket.emit(WsEvents.STREAM_END, { agentId, project: execProject });
-      } catch (err) {
-        socket.emit(WsEvents.STREAM_ERROR, { agentId, project: execProject, error: err.message });
-      }
+      await streamTaskToSocket(agentId, (onChunk) => agentManager.executeAllTasks(agentId, onChunk));
     });
 
     // ── Voice delegation (Realtime API function call relay) ──────────
@@ -472,86 +465,89 @@ export function setupSocketHandlers(io, agentManager) {
         a => a.name.toLowerCase() === (name || '').toLowerCase() && a.id !== agentId && a.enabled !== false
       );
 
-      try {
-        let result;
-
-        switch (functionName) {
-          case 'assign_project': {
-            const target = findAgent(args.agent_name);
-            if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
+      // Handler table — defined inside the event so each entry closes over
+      // agentManager / ws / userAgents / agentId. `needsTarget` entries get a
+      // resolved `target` (the dispatcher emits the shared not-found message
+      // when findAgent misses, so they can assume target is present).
+      const VOICE_FNS: Record<string, { needsTarget?: boolean; run: (ctx: { target?: any; args: any }) => Promise<string> | string }> = {
+        assign_project: {
+          needsTarget: true,
+          run: ({ target, args }) => {
             agentManager.update(target.id, { project: args.project_name });
             ws.agentUpdated(target.id);
-            result = `Assigned ${target.name} to project "${args.project_name}"`;
             console.log(`🎙️ [Voice] assign_project: ${target.name} → ${args.project_name}`);
-            break;
-          }
-          case 'get_project': {
-            const target = findAgent(args.agent_name);
-            if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
-            result = target.project ? `${target.name} is assigned to project "${target.project}"` : `${target.name} has no project assigned`;
-            break;
-          }
-          case 'list_agents': {
+            return `Assigned ${target.name} to project "${args.project_name}"`;
+          },
+        },
+        get_project: {
+          needsTarget: true,
+          run: ({ target }) => target.project ? `${target.name} is assigned to project "${target.project}"` : `${target.name} has no project assigned`,
+        },
+        list_agents: {
+          run: () => {
             const enabled = userAgents.filter(a => a.enabled !== false);
-            result = enabled.map(a => `${a.name} [${a.status}] (${a.role || 'worker'})${a.project ? ` project=${a.project}` : ''}`).join('\n');
-            break;
-          }
-          case 'agent_status': {
-            const target = findAgent(args.agent_name);
-            if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
+            return enabled.map(a => `${a.name} [${a.status}] (${a.role || 'worker'})${a.project ? ` project=${a.project}` : ''}`).join('\n');
+          },
+        },
+        agent_status: {
+          needsTarget: true,
+          run: ({ target }) => {
             const notDone = agentManager._getAgentTasks(target.id).filter(t => t.status !== 'done').length;
             const total = agentManager._getAgentTasks(target.id).length;
             const msgs = (target.conversationHistory || []).length;
-            result = `${target.name}: status=${target.status}, role=${target.role || 'worker'}, project=${target.project || 'none'}, tasks=${notDone} open/${total} total, messages=${msgs}`;
-            break;
-          }
-          case 'get_available_agent': {
+            return `${target.name}: status=${target.status}, role=${target.role || 'worker'}, project=${target.project || 'none'}, tasks=${notDone} open/${total} total, messages=${msgs}`;
+          },
+        },
+        get_available_agent: {
+          run: ({ args }) => {
             const available = userAgents.find(
               a => a.id !== agentId && a.enabled !== false && a.status === 'idle' && (a.role || '').toLowerCase() === (args.role || '').toLowerCase()
             );
-            result = available
+            return available
               ? `Available ${args.role}: ${available.name} [idle]${available.project ? ` project=${available.project}` : ''}`
               : `No idle agent with role "${args.role}" available`;
-            break;
-          }
-          case 'list_projects': {
+          },
+        },
+        list_projects: {
+          run: async () => {
             const projects = await agentManager._listAvailableProjects();
-            result = projects.length > 0 ? `Available projects: ${projects.join(', ')}` : 'No projects found';
-            break;
-          }
-          case 'clear_context': {
-            const target = findAgent(args.agent_name);
-            if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
+            return projects.length > 0 ? `Available projects: ${projects.join(', ')}` : 'No projects found';
+          },
+        },
+        clear_context: {
+          needsTarget: true,
+          run: async ({ target }) => {
             await agentManager.clearHistory(target.id);
-            result = `Cleared conversation history for ${target.name}`;
             console.log(`🎙️ [Voice] clear_context: ${target.name}`);
-            break;
-          }
-          case 'rollback': {
-            const target = findAgent(args.agent_name);
-            if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
+            return `Cleared conversation history for ${target.name}`;
+          },
+        },
+        rollback: {
+          needsTarget: true,
+          run: ({ target, args }) => {
             const histLen = (target.conversationHistory || []).length;
             const count = Math.min(args.count || 0, histLen);
-            if (count === 0) { result = `${target.name} has no messages to rollback`; break; }
+            if (count === 0) return `${target.name} has no messages to rollback`;
             const newLen = histLen - count;
             target.conversationHistory = target.conversationHistory.slice(0, newLen);
             if (newLen === 0) delete target._compactionArmed;
             agentManager.update(target.id, {});
             ws.agentUpdated(target.id);
-            result = `Rolled back ${count} message(s) from ${target.name} (${histLen} → ${newLen})`;
             console.log(`🎙️ [Voice] rollback: ${target.name} -${count}`);
-            break;
-          }
-          case 'stop_agent': {
-            const target = findAgent(args.agent_name);
-            if (!target) { result = `Agent "${args.agent_name}" not found`; break; }
+            return `Rolled back ${count} message(s) from ${target.name} (${histLen} → ${newLen})`;
+          },
+        },
+        stop_agent: {
+          needsTarget: true,
+          run: ({ target }) => {
             const stopped = agentManager.stopAgent(target.id);
-            result = stopped ? `Stopped agent ${target.name}` : `${target.name} is not currently busy`;
             if (stopped) ws.agentUpdated(target.id);
             console.log(`🎙️ [Voice] stop_agent: ${target.name} → ${stopped ? 'stopped' : 'not busy'}`);
-            break;
-          }
-          case 'clear_all_chats': {
+            return stopped ? `Stopped agent ${target.name}` : `${target.name} is not currently busy`;
+          },
+        },
+        clear_all_chats: {
+          run: async () => {
             let count = 0;
             for (const a of userAgents) {
               if (a.id !== agentId && a.enabled !== false) {
@@ -559,11 +555,12 @@ export function setupSocketHandlers(io, agentManager) {
                 count++;
               }
             }
-            result = `Cleared conversation history for ${count} agents`;
             console.log(`🎙️ [Voice] clear_all_chats: ${count} agents`);
-            break;
-          }
-          case 'clear_all_action_logs': {
+            return `Cleared conversation history for ${count} agents`;
+          },
+        },
+        clear_all_action_logs: {
+          run: () => {
             let count = 0;
             for (const a of userAgents) {
               if (a.id !== agentId && a.enabled !== false) {
@@ -571,12 +568,28 @@ export function setupSocketHandlers(io, agentManager) {
                 count++;
               }
             }
-            result = `Cleared action logs for ${count} agents`;
             console.log(`🎙️ [Voice] clear_all_action_logs: ${count} agents`);
-            break;
+            return `Cleared action logs for ${count} agents`;
+          },
+        },
+      };
+
+      try {
+        let result;
+
+        const entry = VOICE_FNS[functionName];
+        if (!entry) {
+          result = `Unknown management function: ${functionName}`;
+        } else {
+          let target;
+          if (entry.needsTarget) {
+            target = findAgent(args.agent_name);
           }
-          default:
-            result = `Unknown management function: ${functionName}`;
+          if (entry.needsTarget && !target) {
+            result = `Agent "${args.agent_name}" not found`;
+          } else {
+            result = await entry.run({ target, args });
+          }
         }
 
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, { agentId, functionName, error: null, result });

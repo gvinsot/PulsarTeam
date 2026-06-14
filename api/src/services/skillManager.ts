@@ -79,14 +79,11 @@ function normalizeSkill(skill: any, mcpResolver: ((id: string) => any) | null): 
     mcps = [];
   }
 
-  // Built-in plugins are system-owned (ownerId=null) and globally shared by default.
+  // Built-in plugins are globally shared by default; ownerId defaults to null.
   // User-created plugins keep whatever ownerId/shared was set on them.
-  const isBuiltin = skill.builtin === true;
-  const ownerId = skill.ownerId === undefined
-    ? (isBuiltin ? null : null)
-    : skill.ownerId;
+  const ownerId = skill.ownerId ?? null;
   const shared = skill.shared === undefined
-    ? !!isBuiltin
+    ? skill.builtin === true
     : !!skill.shared;
 
   return {

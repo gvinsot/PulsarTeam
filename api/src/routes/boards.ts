@@ -4,7 +4,7 @@ import {
   getBoardShares, createBoardShare, updateBoardShare, deleteBoardShare,
   logBoardAudit, getBoardAuditLogs, getAllUsers, getAllBoards,
 } from '../services/database.js';
-import { checkBoardAccess, authorizeBoardAccess } from '../middleware/auth.js';
+import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
 import {
   createBoardSchema,

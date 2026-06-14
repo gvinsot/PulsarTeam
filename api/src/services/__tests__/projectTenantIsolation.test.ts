@@ -60,6 +60,13 @@ mock.module('../database.js', {
 mock.module('../../middleware/auth.js', {
   namedExports: {
     requireRole: () => (_req: any, _res: any, next: any) => next(),
+  },
+});
+
+// Authorization helpers were split out of auth.js into authz.js; routes now
+// import check* from there, so they must be stubbed on the authz module.
+mock.module('../../middleware/authz.js', {
+  namedExports: {
     checkBoardAccess: async () => ({ ok: false, status: 403, error: 'Access denied' }),
     checkProjectAccess: async () => ({ ok: false, status: 403, error: 'Access denied' }),
   },

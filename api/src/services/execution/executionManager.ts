@@ -9,16 +9,19 @@
 import { RunnerExecutionProvider } from './runnerExecutionProvider.js';
 import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
+import { RUNNER_SERVICES, runnerServiceUrl, type RunnerServiceType } from './runnerRegistry.js';
 
-// Canonical provider types. 'coder' is accepted as a deprecated alias for
-// 'claudecode' (existing agents in the DB may still have runner='coder').
-type ProviderType = 'claudecode' | 'sandbox' | 'openclaw' | 'hermes' | 'opencode' | 'aider' | 'codex';
+// Canonical provider types — the runner-service registry is the single source
+// of truth. 'coder' is accepted as a deprecated alias for 'claudecode'
+// (existing agents in the DB may still have runner='coder').
+type ProviderType = RunnerServiceType;
 type ProviderTypeInput = ProviderType | 'coder';
+
+const PROVIDER_TYPES = Object.keys(RUNNER_SERVICES) as ProviderType[];
 
 function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null): ProviderType {
   if (t === 'coder') return 'claudecode';
-  if (t === 'claudecode' || t === 'sandbox' || t === 'openclaw' || t === 'hermes' || t === 'opencode' || t === 'aider' || t === 'codex') return t;
-  return 'sandbox';
+  return (PROVIDER_TYPES as readonly string[]).includes(t as string) ? (t as ProviderType) : 'sandbox';
 }
 
 interface RunnerOpts { baseUrl?: string; apiKey?: string }
@@ -43,63 +46,40 @@ interface BindAgentMeta {
   llmConfig?: any | null;
 }
 
-const DEFAULT_URLS: Record<ProviderType, string> = {
-  claudecode: 'http://claudecode-service:8000',
-  sandbox: 'http://sandbox-service:8000',
-  openclaw: 'http://openclaw-service:8000',
-  hermes: 'http://hermes-service:8000',
-  opencode: 'http://opencode-service:8000',
-  aider: 'http://aider-service:8000',
-  codex: 'http://codex-service:8000',
-};
-
-const URL_ENV_VARS: Record<ProviderType, string> = {
-  claudecode: 'CLAUDECODE_SERVICE_URL',
-  sandbox: 'SANDBOX_SERVICE_URL',
-  openclaw: 'OPENCLAW_SERVICE_URL',
-  hermes: 'HERMES_SERVICE_URL',
-  opencode: 'OPENCODE_SERVICE_URL',
-  aider: 'AIDER_SERVICE_URL',
-  codex: 'CODEX_SERVICE_URL',
-};
-
 export class ExecutionManager {
-  claudecode: RunnerExecutionProvider;
-  sandbox: RunnerExecutionProvider;
-  openclaw: RunnerExecutionProvider;
-  hermes: RunnerExecutionProvider;
-  opencode: RunnerExecutionProvider;
-  aider: RunnerExecutionProvider;
-  codex: RunnerExecutionProvider;
+  private providers: Map<ProviderType, RunnerExecutionProvider> = new Map();
   _resolveProvider: (agentId: string) => ProviderTypeInput;
   _agentProviders: Map<string, ProviderType>;
 
   constructor(options: ExecutionManagerOptions = {}) {
     const sharedKey = readSecret('CODER_API_KEY');
     const make = (type: ProviderType, opts?: RunnerOpts) => new RunnerExecutionProvider({
-      // Backward-compat: fall back to legacy CODER_SERVICE_URL for the claudecode runner.
-      baseUrl: opts?.baseUrl
-        || process.env[URL_ENV_VARS[type]]
-        || (type === 'claudecode' ? process.env.CODER_SERVICE_URL : undefined)
-        || DEFAULT_URLS[type],
+      // runnerServiceUrl already carries the legacy CODER_SERVICE_URL fallback
+      // for the claudecode runner.
+      baseUrl: opts?.baseUrl || runnerServiceUrl(type),
       apiKey: opts?.apiKey || sharedKey,
     });
 
-    this.claudecode = make('claudecode', options.claudecodeOptions || options.coderOptions);
-    this.sandbox = make('sandbox', options.sandboxOptions);
-    this.openclaw = make('openclaw', options.openclawOptions);
-    this.hermes = make('hermes', options.hermesOptions);
-    this.opencode = make('opencode', options.opencodeOptions);
-    this.aider = make('aider', options.aiderOptions);
-    this.codex = make('codex', options.codexOptions);
+    const perTypeOpts: Partial<Record<ProviderType, RunnerOpts | undefined>> = {
+      claudecode: options.claudecodeOptions || options.coderOptions,
+      sandbox: options.sandboxOptions,
+      openclaw: options.openclawOptions,
+      hermes: options.hermesOptions,
+      opencode: options.opencodeOptions,
+      aider: options.aiderOptions,
+      codex: options.codexOptions,
+    };
+    for (const type of PROVIDER_TYPES) {
+      this.providers.set(type, make(type, perTypeOpts[type]));
+    }
 
     this._resolveProvider = options.resolveProvider || (() => 'sandbox');
     this._agentProviders = new Map();
   }
 
-  /** @deprecated alias kept for legacy callers — use `claudecode` */
+  /** @deprecated alias kept for legacy callers — use the claudecode provider */
   get coder(): RunnerExecutionProvider {
-    return this.claudecode;
+    return this._getProvider('claudecode');
   }
 
   // ── Provider resolution ───────────────────────────────────────────────
@@ -115,15 +95,10 @@ export class ExecutionManager {
   }
 
   _getProvider(type: ProviderType): RunnerExecutionProvider {
-    switch (type) {
-      case 'claudecode': return this.claudecode;
-      case 'openclaw': return this.openclaw;
-      case 'hermes': return this.hermes;
-      case 'opencode': return this.opencode;
-      case 'aider': return this.aider;
-      case 'codex': return this.codex;
-      default: return this.sandbox;
-    }
+    // Fall back to the sandbox provider for any value not in the map (matches
+    // the previous switch's `default: return this.sandbox`). Unreachable today
+    // since every caller passes a normalized value, but kept as a defensive arm.
+    return this.providers.get(type) ?? this.providers.get('sandbox')!;
   }
 
   /**
@@ -206,15 +181,9 @@ export class ExecutionManager {
   }
 
   async destroyAll(): Promise<void> {
-    await Promise.all([
-      this.claudecode.destroyAll(),
-      this.sandbox.destroyAll(),
-      this.openclaw.destroyAll(),
-      this.hermes.destroyAll(),
-      this.opencode.destroyAll(),
-      this.aider.destroyAll(),
-      this.codex.destroyAll(),
-    ]);
+    await Promise.all(
+      [...this.providers.values()].map(provider => provider.destroyAll())
+    );
     this._agentProviders.clear();
   }
 
@@ -232,14 +201,10 @@ export class ExecutionManager {
    * so the next terminal attach always starts fresh.
    */
   async closeCliTerminalSessions(agentId: string): Promise<boolean> {
-    const providers = [
-      this.claudecode,
-      this.codex,
-      this.opencode,
-      this.aider,
-      this.openclaw,
-      this.hermes,
-    ];
+    // Every runner except 'sandbox' is a terminal-capable CLI runner.
+    const providers = PROVIDER_TYPES
+      .filter(type => type !== 'sandbox')
+      .map(type => this._getProvider(type));
     const results = await Promise.allSettled(
       providers.map(provider => provider.closeTerminalSession(agentId))
     );
