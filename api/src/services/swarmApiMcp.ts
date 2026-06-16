@@ -4,7 +4,7 @@ import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { getTaskById } from './database/tasks.js';
 import { getReposForBoard } from './database/boardRepos.js';
-import { resolveWorkflowStatus } from './workflow/index.js';
+import { resolveWorkflowStatus } from './workflow/columnIds.js';
 
 // Format of "owner/repo" — same regex used by the REST endpoint.
 const REPO_FULL_NAME_RE = /^[\w.-]+\/[\w.-]+$/;
