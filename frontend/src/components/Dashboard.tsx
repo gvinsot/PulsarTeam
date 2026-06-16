@@ -11,7 +11,7 @@ import { safeGet, safeSet, safeRemove } from '../lib/safeStorage';
 import { WsEvents } from '../socketEvents';
 import AgentCard from './AgentCard';
 import BatchAgentCard from './BatchAgentCard';
-import AgentDetail from './AgentDetail';
+import AgentDetail, { CLI_RUNNERS } from './AgentDetail';
 import SwarmOverview from './SwarmOverview';
 import ActiveVoiceIndicator from './ActiveVoiceIndicator';
 import ApiKeyModal from './ApiKeyModal';
@@ -511,9 +511,13 @@ export default function Dashboard({
             </div>
           )}
 
-          {/* Agent detail panel */}
+          {/* Agent detail panel. CLI runners drive a real terminal here (the
+              terminal IS their primary interface), so give them a wider panel —
+              the Claude Code TUI renders broken and wraps long output lossily
+              below ~80 cols. The list column is flex-1, so it auto-fills the
+              remainder. */}
           {activeView === 'agents' && selectedAgentData && (
-            <div className="lg:w-1/2 xl:w-2/5 border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden">
+            <div className={`${CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}>
               <AgentDetail
                 key={selectedAgentData.id}
                 agent={selectedAgentData}

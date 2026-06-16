@@ -221,12 +221,17 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
 
     // The MIN_COLS floor keeps a narrow *desktop* panel legible by letting the
-    // container scroll. On a real phone, though, forcing 80 cols makes the grid
-    // ~670px wide on a ~360px screen — the TUI overflows, only a cut-off slice
-    // is visible, and it reads as "broken". When the visible area is too small
-    // to hold the floor, fit to the actual width instead (the TUI reflows).
-    const narrow = el.clientWidth < 640;
-    const cols = narrow ? dims.cols : Math.max(MIN_COLS, dims.cols);
+    // container scroll horizontally (overflow-auto) instead of squeezing the
+    // grid below 80 cols — a sub-80 Claude Code TUI renders broken AND wraps
+    // long output (e.g. the /login URL) into more lossy pieces. Distinguish a
+    // narrow desktop panel from a real phone by POINTER TYPE, not container
+    // width: forcing 80 cols on a ~360px touch screen overflows into an
+    // unreadable sliver, so there (coarse pointer) we fit to the actual width.
+    // Keying on width instead made a narrow desktop detail panel drop the floor
+    // and hand the CLI a cramped ~50-col grid.
+    const coarsePointer = typeof window !== 'undefined'
+      && !!window.matchMedia?.('(pointer: coarse)').matches;
+    const cols = coarsePointer ? dims.cols : Math.max(MIN_COLS, dims.cols);
     const rows = Math.max(MIN_ROWS, dims.rows);
     if (cols !== term.cols || rows !== term.rows) {
       try {
