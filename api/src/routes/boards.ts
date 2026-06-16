@@ -3,9 +3,11 @@ import {
   getBoardsByUser, createBoard, updateBoard, deleteBoard,
   getBoardShares, createBoardShare, updateBoardShare, deleteBoardShare,
   logBoardAudit, getBoardAuditLogs, getAllUsers, getAllBoards,
+  getTasksByBoard, updateTaskFields,
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
+import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/index.js';
 import {
   createBoardSchema,
   updateBoardSchema,
@@ -36,6 +38,85 @@ const DEFAULT_BOARD_WORKFLOW = {
   ],
   version: 1,
 };
+
+function enrichTaskAssignee(agentManager, task) {
+  if (task.assignee) {
+    const assigneeAgent = agentManager.agents.get(task.assignee);
+    task.assigneeName = assigneeAgent?.name || null;
+    task.assigneeIcon = assigneeAgent?.icon || null;
+  } else {
+    task.assigneeName = null;
+    task.assigneeIcon = null;
+  }
+  return task;
+}
+
+function emitTaskUpdate(agentManager, task) {
+  enrichTaskAssignee(agentManager, task);
+  agentManager._emit('task:updated', { agentId: task.agentId || null, task });
+  if (task.agentId) {
+    const agent = agentManager.agents.get(task.agentId);
+    if (agent) agentManager._emit('agent:updated', agentManager._sanitize(agent));
+  }
+}
+
+function syncMemoryTaskColumnRename(agentManager, taskId, status, errorFromStatus, history, updatedAt) {
+  for (const agent of agentManager.agents.values()) {
+    const memTask = agentManager._getAgentTasks(agent.id).find(t => t.id === taskId);
+    if (!memTask) continue;
+    if (status !== undefined) memTask.status = status;
+    if (errorFromStatus !== undefined) memTask.errorFromStatus = errorFromStatus;
+    if (history) memTask.history = history;
+    memTask.updatedAt = updatedAt;
+    return;
+  }
+}
+
+async function applyColumnRenamesToBoardTasks(agentManager, boardId: string, renames: ColumnRename[], by: string) {
+  if (!renames.length) return;
+
+  const renameMap = new Map(renames.map(r => [r.from, r.to]));
+  const tasks = await getTasksByBoard(boardId);
+  const now = new Date().toISOString();
+
+  for (const task of tasks) {
+    const nextStatus = renameMap.get(task.status);
+    const nextErrorFromStatus = task.errorFromStatus ? renameMap.get(task.errorFromStatus) : undefined;
+    if (!nextStatus && !nextErrorFromStatus) continue;
+
+    const history = Array.isArray(task.history) ? [...task.history] : [];
+    if (nextStatus) {
+      history.push({
+        at: now,
+        by,
+        type: 'workflow_column_rename',
+        from: task.status,
+        status: nextStatus,
+      });
+    }
+
+    const fields: any = { history };
+    if (nextStatus) fields.status = nextStatus;
+    if (nextErrorFromStatus) fields.errorFromStatus = nextErrorFromStatus;
+
+    const updated = await updateTaskFields(task.id, fields);
+    const taskForEmit = updated || {
+      ...task,
+      ...fields,
+      updatedAt: now,
+    };
+
+    syncMemoryTaskColumnRename(
+      agentManager,
+      task.id,
+      nextStatus,
+      nextErrorFromStatus,
+      taskForEmit.history,
+      taskForEmit.updatedAt || now,
+    );
+    emitTaskUpdate(agentManager, taskForEmit);
+  }
+}
 
 
 export function boardRoutes(agentManager) {
@@ -127,7 +208,22 @@ export function boardRoutes(agentManager) {
     try {
       if (req.boardAccess.board.is_default) return res.status(403).json({ error: 'Default board cannot be modified.' });
 
-      const updated = await updateBoard(req.params.id, req.body);
+      const fields = { ...req.body };
+      const normalized = fields.workflow
+        ? normalizeWorkflowColumnIds(fields.workflow, req.boardAccess.board.workflow)
+        : null;
+      if (normalized) fields.workflow = normalized.workflow;
+
+      const updated = await updateBoard(req.params.id, fields);
+      if (normalized?.renames.length) {
+        await applyColumnRenamesToBoardTasks(
+          agentManager,
+          req.params.id as string,
+          normalized.renames,
+          req.user.username || req.user.userId || 'user',
+        );
+      }
+      if (fields.workflow) agentManager._refreshWorkflowManagedStatuses?.();
       res.json(updated);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -140,9 +236,18 @@ export function boardRoutes(agentManager) {
       const { board } = req.boardAccess;
       if (board.is_default) return res.status(403).json({ error: 'Default board workflow cannot be modified.' });
 
-      const workflow = req.body;
+      const { workflow, renames } = normalizeWorkflowColumnIds(req.body, board.workflow);
       const newWorkflow = { ...workflow, version: (board.workflow?.version || 0) + 1 };
       const updated = await updateBoard(req.params.id, { workflow: newWorkflow });
+      if (renames.length) {
+        await applyColumnRenamesToBoardTasks(
+          agentManager,
+          req.params.id as string,
+          renames,
+          req.user.username || req.user.userId || 'user',
+        );
+      }
+      agentManager._refreshWorkflowManagedStatuses?.();
       res.json(updated);
     } catch (err) {
       res.status(500).json({ error: err.message });

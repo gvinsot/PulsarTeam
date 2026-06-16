@@ -228,6 +228,32 @@ test('add_task always creates an unassigned task (no agent_id accepted)', async 
   assert.equal(am._calls.addTask[0].agentId, null, 'addTask is always called with agentId=null');
 });
 
+test('add_task resolves initial status by label before id', async () => {
+  const originalColumns = BOARD_WORKFLOW.columns;
+  BOARD_WORKFLOW.columns = [
+    { id: 'ready', label: 'Inbox' },
+    { id: 'review', label: 'Ready' },
+  ];
+  try {
+    const am = makeFakeAgentManager();
+    const server = createSwarmApiMcpServer(am as any);
+    const handler = getToolHandler(server, 'add_task');
+
+    const result = await handler({
+      board_id: 'board-1',
+      task: 'Use label status',
+      status: 'Ready',
+    });
+
+    const body = parseResult(result);
+    assert.equal(body.success, true);
+    assert.equal(body.task.status, 'review');
+    assert.equal(am._calls.addTask[0].status, 'review');
+  } finally {
+    BOARD_WORKFLOW.columns = originalColumns;
+  }
+});
+
 test('add_task ignores agent_id/agent_name if a caller still passes them (schema strips them)', async () => {
   const am = makeFakeAgentManager();
   const server = createSwarmApiMcpServer(am as any);

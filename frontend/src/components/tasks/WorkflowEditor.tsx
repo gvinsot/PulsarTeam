@@ -127,9 +127,8 @@ export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
   };
 
   // ── Column helpers ──
-  // The column id stays stable on rename (only the label changes): existing
-  // task statuses and change_status targets reference the id, so re-deriving
-  // it from the label would strand them on a nonexistent column.
+  // The API derives a new id when a label rename is saved, then migrates task
+  // statuses and change_status targets so existing board state remains visible.
   const updateCol = (idx, patch) => setCols(prev => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
   const removeCol = (idx) => {
     const removed = cols[idx];

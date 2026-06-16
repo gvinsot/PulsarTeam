@@ -21,6 +21,14 @@ export {
   AgentMode,
 } from './taskStateMachine.js';
 
+// Column/status ID helpers
+export {
+  slugifyColumnId,
+  resolveWorkflowStatus,
+  normalizeWorkflowColumnIds,
+} from './columnIds.js';
+export type { StatusResolution, ColumnRename } from './columnIds.js';
+
 // Agent selection + locking
 export {
   findAgentByRole,

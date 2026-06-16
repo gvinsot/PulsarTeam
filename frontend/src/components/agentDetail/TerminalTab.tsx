@@ -97,16 +97,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
   const [terminalActive, setTerminalActive] = useState(false);
-  // Free-text input used to paste/type into the PTY. On mobile the soft keyboard
-  // drives xterm poorly (it's why the ↑↓⏎ buttons exist), and pasting a long
-  // value like the Claude Code /login authorization code into the terminal is
-  // effectively impossible — this field is the reliable path for both.
-  const [inputValue, setInputValue] = useState('');
-  // Intact Claude `/login` URL recovered runner-side (via tmux capture-pane -J)
-  // and pushed as a control frame. The on-screen copy is corrupted by the
-  // wrapped redraw (drops a char per wrap boundary), so we surface this clean
-  // copy as a clickable banner instead of letting the user copy the bad one.
-  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -148,7 +138,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     setExitedState(false);
     suppressReconnectRef.current = false;
     reconnectAttemptRef.current = 0;
-    setOauthUrl(null);
     const term = termRef.current;
     if (term) {
       term.reset();
@@ -179,20 +168,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const sendKey = (seq: string) => {
     if (!sendToRunner(seq)) return;
     termRef.current?.focus();
-  };
-
-  // Send the free-text input field to the PTY followed by Enter. This is the
-  // reliable way to paste the Claude Code /login authorization code (and to
-  // type at all) on mobile, where the soft keyboard drives xterm unreliably.
-  const sendInput = () => {
-    const value = inputValue;
-    if (!value) return;
-    if (exitedRef.current) {
-      relaunch();
-      return;
-    }
-    if (!sendToRunner(`${value}\r`)) return;
-    setInputValue('');
   };
 
   const fitTerminalNow = () => {
@@ -285,7 +260,9 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     const term = new XTerminal({
       cursorBlink: true,
       fontFamily: '"Cascadia Code", "SFMono-Regular", "Segoe UI Mono", Menlo, Consolas, monospace',
-      fontSize: isMobileViewport ? 12 : 14,
+      // Slightly smaller than before (was 14) so the ≥80-col grid fits more
+      // window widths before the horizontal scrollbar is needed.
+      fontSize: isMobileViewport ? 12 : 13,
       lineHeight: 1.35,
       letterSpacing: 0,
       // Raw PTY passthrough for all CLI runners now (claudecode included) —
@@ -311,6 +288,15 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       openExternalLink(uri);
     }));
     term.open(containerRef.current);
+    // Let the container scroll horizontally instead of clipping when the grid
+    // is wider than the panel (we hold a MIN_COLS floor so the Claude Code TUI
+    // stays legible). xterm gives `.xterm` no explicit width, so it defaults to
+    // the container width and clips the wider `.xterm-screen` — cutting off the
+    // right columns with no scrollbar. `min-width: max-content` makes `.xterm`
+    // grow to the grid's pixel width (overflowing the overflow-auto container →
+    // real horizontal scrollbar) while still filling the container when it's
+    // wide enough (width stays auto).
+    if (term.element) term.element.style.minWidth = 'max-content';
     fitTerminal();
 
     termRef.current = term;
@@ -483,12 +469,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               t.reset();
               t.clear();
               setTerminalActive(false);
-              setOauthUrl(null);
-            } else if (ctrl?.type === 'oauth_url') {
-              // Runner recovered the intact /login URL — surface it as a
-              // clickable banner so the user never copies the wrapped (and
-              // character-dropped) on-screen version.
-              if (typeof ctrl.url === 'string' && ctrl.url) setOauthUrl(ctrl.url);
             } else if (ctrl?.type === 'exit') {
               // The CLI/tmux session genuinely ended. Don't auto-loop (a crash
               // on startup would spin) — latch exited and offer an explicit
@@ -496,7 +476,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               suppressReconnectRef.current = true;
               setExitedState(true);
               setConnected(false);
-              setOauthUrl(null);
               const code = ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
               const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
               t.writeln(`\r\n\x1b[2m[runner session ended, code=${code}]\x1b[0m`);
@@ -627,67 +606,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           </span>
         </div>
       </div>
-      {/* Paste/type bar — the dependable input path on mobile (soft keyboards
-          drive xterm poorly) and the only practical way to enter the Claude
-          Code /login authorization code. Sends the text followed by Enter. */}
-      <form
-        onSubmit={(e) => { e.preventDefault(); sendInput(); }}
-        className={`flex items-center gap-2 px-3 py-1.5 border-b ${headerClass}`}
-      >
-        <input
-          type="text"
-          value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
-          placeholder="Type or paste, then Send (e.g. the /login code)…"
-          autoCapitalize="off"
-          autoCorrect="off"
-          autoComplete="off"
-          spellCheck={false}
-          inputMode="text"
-          className="flex-1 min-w-0 px-2 py-1 rounded border border-dark-700/60 bg-dark-800/60 text-xs text-dark-100 placeholder:text-dark-500 focus:outline-none focus:border-indigo-500"
-        />
-        <button
-          type="submit"
-          disabled={!connected || !inputValue}
-          title="Send the text above to the terminal, followed by Enter"
-          aria-label="Send input to terminal"
-          className="px-2.5 h-7 rounded border border-indigo-500/50 bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 transition-colors text-[11px] font-medium disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-        >
-          Send
-        </button>
-      </form>
-      {/* Intact /login URL recovered runner-side. The version rendered in the
-          terminal grid loses a character at each wrap boundary, so we offer
-          this clean copy as the reliable click/copy path. */}
-      {oauthUrl && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b text-xs bg-indigo-600/15 border-indigo-500/40 text-indigo-100">
-          <span className="opacity-80 shrink-0">Lien de connexion Claude&nbsp;:</span>
-          <button
-            type="button"
-            onClick={() => openExternalLink(oauthUrl)}
-            title={oauthUrl}
-            className="px-2 h-7 rounded border border-indigo-500/50 bg-indigo-600/30 hover:bg-indigo-600/40 transition-colors font-medium shrink-0"
-          >
-            Ouvrir l'authentification
-          </button>
-          <button
-            type="button"
-            onClick={() => { navigator.clipboard?.writeText(oauthUrl).catch(() => { /* noop */ }); }}
-            title="Copier l'URL intacte"
-            className="px-2 h-7 rounded border border-indigo-500/40 bg-dark-800/60 hover:bg-dark-700/60 transition-colors shrink-0"
-          >
-            Copier
-          </button>
-          <button
-            type="button"
-            onClick={() => setOauthUrl(null)}
-            aria-label="Masquer le lien"
-            className="ml-auto opacity-60 hover:opacity-100 shrink-0"
-          >
-            ✕
-          </button>
-        </div>
-      )}
       <div
         ref={containerRef}
         // overflow-auto lets the container show scrollbars whenever the

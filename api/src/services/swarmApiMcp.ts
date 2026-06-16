@@ -4,6 +4,7 @@ import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { getTaskById } from './database/tasks.js';
 import { getReposForBoard } from './database/boardRepos.js';
+import { resolveWorkflowStatus } from './workflow/index.js';
 
 // Format of "owner/repo" — same regex used by the REST endpoint.
 const REPO_FULL_NAME_RE = /^[\w.-]+\/[\w.-]+$/;
@@ -51,17 +52,16 @@ function findAgent(
 }
 
 /**
- * Case-insensitively match `status` against a board's workflow columns.
- * Returns the shared error string when the column doesn't exist, null when
- * valid. Gating (status provided, board fetched, columns present) stays at
- * each call site — add_task and update_task gate differently on purpose.
+ * Resolve `status` against a board's workflow columns. Labels are checked
+ * first so callers can pass the user-facing column name; IDs remain the
+ * fallback for compatibility.
  */
-function findInvalidStatusError(board: any, boardLabel: string, status: string): string | null {
+function resolveBoardStatus(board: any, boardLabel: string, status: string): { status?: string; error?: string } {
   const columns = board?.workflow?.columns || [];
-  const match = columns.find((c: any) => c.id?.toLowerCase() === status.toLowerCase());
-  if (match) return null;
+  const match = resolveWorkflowStatus(columns, status);
+  if (match) return { status: match.id };
   const validIds = columns.map((c: any) => c.id).join(', ');
-  return `Invalid status "${status}" for board "${board?.name || boardLabel}". Valid columns: ${validIds}`;
+  return { error: `Invalid status "${status}" for board "${board?.name || boardLabel}". Valid columns: ${validIds}` };
 }
 
 /**
@@ -331,7 +331,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
     {
       task: z.string().describe('The task description'),
       project: z.string().optional().describe('Optional project to assign the task to'),
-      status: z.string().optional().describe('Initial task status (any workflow column ID, defaults to "backlog")'),
+      status: z.string().optional().describe('Initial task status (workflow column label preferred, column ID also accepted; defaults to the board first column/backlog)'),
       board_id: z.string().describe('REQUIRED. Board UUID to place the task on. Use list_boards to discover board IDs.'),
       repo_full_name: z.string().optional().describe('Repository the task targets, in "owner/repo" format (e.g. "myorg/myapp").'),
       repo_provider: z.string().optional().describe('Repository provider \u2014 defaults to "github" when repo_full_name is set.'),
@@ -362,17 +362,19 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         return jsonError(`Board not found: ${resolvedBoardId}. Use list_boards to discover valid IDs.`);
       }
 
-      // Validate status against the resolved board's workflow columns. The
+      // Resolve status against the resolved board's workflow columns. The
       // task is rejected (rather than silently accepted) when the caller
       // passes a column that does not exist on the target board.
+      let resolvedStatus = status;
       if (status && resolvedBoard?.workflow?.columns?.length) {
-        const statusError = findInvalidStatusError(resolvedBoard, resolvedBoardId, status);
-        if (statusError) {
-          return jsonError(statusError);
+        const statusResolution = resolveBoardStatus(resolvedBoard, resolvedBoardId, status);
+        if (statusResolution.error) {
+          return jsonError(statusResolution.error);
         }
+        resolvedStatus = statusResolution.status;
       }
 
-      const newTask = agentManager.addTask(null, task, { type: 'mcp' }, status, {
+      const newTask = agentManager.addTask(null, task, { type: 'mcp' }, resolvedStatus, {
         boardId: resolvedBoardId,
         repoFullName,
         repoProvider: repoFullName ? (repo_provider || 'github') : null,
@@ -382,7 +384,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       if (!newTask) {
         return jsonError('Failed to create task. Verify board_id is valid.');
       }
-      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created (unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${status || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
+      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created (unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${resolvedStatus || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
 
       return jsonOk({
         success: true,
@@ -401,7 +403,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       agent_id: z.string().optional().describe('Agent UUID owning the task'),
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
       task_id: z.string().describe('Task UUID to update'),
-      status: z.string().optional().describe('New status (any workflow column ID, e.g. "backlog", "in_progress", "done")'),
+      status: z.string().optional().describe('New status (workflow column label preferred, column ID also accepted, e.g. "Backlog", "in_progress", "Done")'),
       repo_full_name: z.string().optional().describe('New repository in "owner/repo" format. Pass an empty string to unbind the task from any repo.'),
       repo_provider: z.string().optional().describe('Repository provider — defaults to "github" when repo_full_name is set.'),
       storage_path: z.string().optional().describe('New storage location (e.g. OneDrive folder path). Pass an empty string to unbind the task from any storage.'),
@@ -422,10 +424,11 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         return jsonError('At least one of status, repo_full_name, storage_path must be provided.');
       }
 
-      // Validate status against the task's board workflow when provided.
+      // Resolve status against the task's board workflow when provided.
       // We fail loudly — silently accepting an unknown status used to
       // leave tasks stranded in a column the board could not render or
       // transition out of.
+      let resolvedStatus = status;
       if (status !== undefined) {
         if (!task.boardId) {
           return jsonError(`Cannot update status: task ${task_id} is not bound to a board.`);
@@ -434,10 +437,11 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         if (!board?.workflow?.columns?.length) {
           return jsonError(`Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.`);
         }
-        const statusError = findInvalidStatusError(board, task.boardId, status);
-        if (statusError) {
-          return jsonError(statusError);
+        const statusResolution = resolveBoardStatus(board, task.boardId, status);
+        if (statusResolution.error) {
+          return jsonError(statusResolution.error);
         }
+        resolvedStatus = statusResolution.status;
       }
 
       // Validate repo format (empty string = clear, valid format = set,
@@ -465,13 +469,13 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         }
       }
 
-      console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${status ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}`);
+      console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}`);
 
       // Apply updates in a fixed order so the final task object reflects all
       // mutations regardless of which fields were provided.
       let updated: any = task;
       if (boardLevel) {
-        updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status });
+        updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status: resolvedStatus });
       } else {
         if (repoUpdate) {
           updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
@@ -479,8 +483,8 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         if (storageUpdate) {
           updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
         }
-        if (status !== undefined) {
-          updated = agentManager.setTaskStatus(agent.id, task_id, status) || updated;
+        if (resolvedStatus !== undefined) {
+          updated = agentManager.setTaskStatus(agent.id, task_id, resolvedStatus) || updated;
         }
       }
 
