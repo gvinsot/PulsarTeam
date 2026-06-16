@@ -9,12 +9,21 @@
 
 import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
+import { buildRepoCloneUrl } from '../repoUrl.js';
+
+interface SecondaryRepo {
+  provider?: string;
+  fullName: string;
+}
 
 interface AgentEntry {
   project: string | null;
   ready: boolean;
   /** Epoch ms of the last successful /projects/ensure call for this project. */
   lastEnsuredAt?: number;
+  /** Signature of the secondary-repo keep-set last sent to the runner, so a
+   *  change in secondaries forces a re-ensure even when the primary is stable. */
+  secondarySig?: string;
 }
 
 interface FileTreeCacheEntry {
@@ -53,6 +62,10 @@ export class RunnerExecutionProvider extends ExecutionProvider {
    *  the underlying CLI with the agent's selected provider/model/apiKey
    *  instead of falling back to the static RUNNER_MODEL env. */
   llmConfigs: Map<string, any>;
+  /** Per-agent task-scoped secondary repos — extra repos cloned alongside the
+   *  primary `project` and preserved (not pruned) by the runner. Sent on EVERY
+   *  /projects/ensure so frequent primary-only ensures don't wipe them. */
+  secondaryRepos: Map<string, SecondaryRepo[]>;
 
   constructor(options: RunnerOptions = {}) {
     super();
@@ -64,6 +77,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this.gitCredentials = new Map();
     this.permissions = new Map();
     this.llmConfigs = new Map();
+    this.secondaryRepos = new Map();
   }
 
   /**
@@ -84,6 +98,20 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       this.gitCredentials.set(agentId, creds);
     } else {
       this.gitCredentials.delete(agentId);
+    }
+  }
+
+  /**
+   * Set (or clear with null/empty) the agent's task-scoped secondary repos.
+   * Held in-memory and forwarded to the runner on every /projects/ensure so the
+   * runner clones them alongside the primary and excludes them from its prune.
+   */
+  setSecondaryRepos(agentId: string, repos: SecondaryRepo[] | null): void {
+    if (!agentId) return;
+    if (Array.isArray(repos) && repos.length > 0) {
+      this.secondaryRepos.set(agentId, repos.filter((r) => r && r.fullName));
+    } else {
+      this.secondaryRepos.delete(agentId);
     }
   }
 
@@ -175,22 +203,33 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       return;
     }
 
-    // Debounce: if the same (agent, project) was successfully ensured very
-    // recently, skip the HTTP round-trip. The runner-service caches the clone
-    // and re-runs git fetch+reset on every call, which is expensive when
-    // every tool batch from the LLM triggers ensureProject.
+    // Resolve the task-scoped secondary repos to clone alongside the primary.
+    // Each resolves to a github HTTPS URL (the same creds cover them all). The
+    // signature feeds the debounce so adding/removing a secondary forces a
+    // re-ensure even when the primary is unchanged.
+    const keepSet = (this.secondaryRepos.get(agentId) || []).filter((r) => r && r.fullName);
+    const secondaryPayload = keepSet
+      .map((r) => ({ provider: r.provider || 'github', full_name: r.fullName, git_url: buildRepoCloneUrl(r.fullName) }))
+      .filter((r): r is { provider: string; full_name: string; git_url: string } => !!r.git_url);
+    const secondarySig = JSON.stringify(secondaryPayload.map((r) => r.full_name).sort());
+
+    // Debounce: if the same (agent, project, secondary set) was successfully
+    // ensured very recently, skip the HTTP round-trip. The runner-service caches
+    // the clone and re-runs git fetch+reset on every call, which is expensive
+    // when every tool batch from the LLM triggers ensureProject.
     const existing = this._agents.get(agentId);
     if (
       existing &&
       existing.ready &&
       existing.project === project &&
+      existing.secondarySig === secondarySig &&
       existing.lastEnsuredAt &&
       Date.now() - existing.lastEnsuredAt < ENSURE_PROJECT_TTL_MS
     ) {
       return;
     }
 
-    console.log(`🤖 [Runner] ensureProject(agent=${agentId.slice(0, 8)}, project=${project || 'none'}, gitUrl=${gitUrl ? 'yes' : 'no'})`);
+    console.log(`🤖 [Runner] ensureProject(agent=${agentId.slice(0, 8)}, project=${project || 'none'}, gitUrl=${gitUrl ? 'yes' : 'no'}, secondaries=${secondaryPayload.length})`);
 
     try {
       const creds = (this.gitCredentials.get(agentId) || null) as (GitCredentials & { login?: string | null }) | null;
@@ -202,6 +241,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
           username: creds.username || creds.login || null,
         };
       }
+      if (secondaryPayload.length > 0) body.secondary_repos = secondaryPayload;
       const res = await fetch(`${this.baseUrl}/projects/ensure`, {
         method: 'POST',
         headers: this._headers(agentId),
@@ -218,7 +258,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       if (data.status === 'error') {
         throw new Error(data.error || 'Project ensure failed');
       }
-      this._agents.set(agentId, { project, ready: true, lastEnsuredAt: Date.now() });
+      this._agents.set(agentId, { project, ready: true, lastEnsuredAt: Date.now(), secondarySig });
       console.log(`🤖 [Runner] Project "${project}" ready for agent ${agentId.slice(0, 8)}`);
 
       await this.refreshFileTree(agentId);
@@ -253,6 +293,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this.gitCredentials.delete(agentId);
     this.permissions.delete(agentId);
     this.llmConfigs.delete(agentId);
+    this.secondaryRepos.delete(agentId);
     console.log(`🗑️  [Runner] Cleared state for agent ${agentId.slice(0, 8)}`);
   }
 
@@ -263,6 +304,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     this.gitCredentials.clear();
     this.permissions.clear();
     this.llmConfigs.clear();
+    this.secondaryRepos.clear();
     console.log('🗑️  [Runner] Cleared all agent states');
   }
 

@@ -152,8 +152,16 @@ async function applyBoardLevelUpdate(
   }
   const statusChanged = status !== undefined && status !== task.status;
   if (statusChanged) {
-    task.history.push({ from: task.status, status, at: now, by: 'mcp' });
+    const previousAssignee = task.assignee || null;
+    task.history.push({
+      from: task.status,
+      status,
+      at: now,
+      by: 'mcp',
+      ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+    });
     task.status = status;
+    if (previousAssignee) task.assignee = null;
     // Clear execution state so the workflow engine starts fresh in the
     // new column (mirrors setTaskStatus / PUT /tasks/:id).
     task.startedAt = null;
@@ -165,6 +173,14 @@ async function applyBoardLevelUpdate(
   }
   task.updatedAt = now;
   await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
+  if (task.assignee) {
+    const assigneeAgent = agentManager.agents.get(task.assignee);
+    task.assigneeName = assigneeAgent?.name || null;
+    task.assigneeIcon = assigneeAgent?.icon || null;
+  } else {
+    task.assigneeName = null;
+    task.assigneeIcon = null;
+  }
   agentManager._emit('task:updated', { agentId: task.agentId || null, task });
   // Column-entry workflow actions (auto-assign / run_agent) only fire
   // through this hook — no loop ever rescans unassigned tasks, so

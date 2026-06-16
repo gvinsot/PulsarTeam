@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentManager } from '../agentManager.js';
 import { stripToolCalls } from '../workflow/index.js';
+import { setTaskSignal, getTaskSignal, normalizeSecondaryRepos } from '../agentManager/tasks.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -334,6 +335,24 @@ test('setTaskStatus changes status and emits events', async () => {
   assert.equal(updated.status, 'code');
 });
 
+test('setTaskStatus clears assignee immediately when status changes', async () => {
+  const mgr = await setup([
+    { name: 'Creator', role: 'manager' },
+    { name: 'Worker', role: 'developer' },
+  ]);
+  const { id: creatorId } = getAgent(mgr, 'Creator');
+  const { id: workerId } = getAgent(mgr, 'Worker');
+  const task = addTaskToAgent(mgr, creatorId, 'Assigned task', 'todo', 'board-1', {
+    assignee: workerId,
+  });
+
+  const result = mgr.setTaskStatus(creatorId, task.id, 'code', { skipAutoRefine: true });
+
+  assert.equal(result.assignee, null);
+  assert.equal(task.assignee, null);
+  assert.equal(task.history.at(-1)?.previousAssignee, workerId);
+});
+
 test('setTaskStatus returns falsy for invalid task id', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
@@ -542,6 +561,32 @@ test('_processNextPendingTasks skips tasks with executionStatus stopped', async 
   const agent = mgr.agents.get(agentId);
   assert.equal(agent.status, 'idle');
   assert.ok(task.executionStatus === 'stopped');
+});
+
+test('a latched stopped signal aborts the execution wait early', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { task, agentId } = addTask(mgr, 'Stop then move', 'code');
+  const agent = mgr.agents.get(agentId);
+
+  // Reproduces the move route re-setting the in-memory 'stopped' signal after a
+  // user Stop: with it latched, the very first execution-wait bails immediately.
+  setTaskSignal(task.id, 'stopped', true);
+  const result = await mgr._waitForExecutionComplete(agentId, task.id, agentId, agent.name, task.text, {});
+  assert.equal(result, 'stopped', 'stale stop signal short-circuits the wait');
+});
+
+test('_clearStopSignal drops the stale stop signal so a fresh run proceeds', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { task } = addTask(mgr, 'Stop then move then rerun', 'code');
+
+  // executeRunAgent calls this at the start of every fresh run_agent execution,
+  // after the durable executionStatus='stopped' gate has been cleared by the
+  // column move — so a stopped-then-moved task can be picked up again.
+  setTaskSignal(task.id, 'stopped', true);
+  assert.ok(getTaskSignal(task.id, 'stopped'), 'precondition: stop signal latched');
+
+  mgr._clearStopSignal(task.id);
+  assert.ok(!getTaskSignal(task.id, 'stopped'), 'stop signal cleared for the fresh run');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -912,6 +957,60 @@ test('addTask with recurrence config', async () => {
   assert.equal(task.recurrence.enabled, true);
   assert.equal(task.recurrence.period, 'daily');
   assert.equal(task.recurrence.originalStatus, 'backlog');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 19b. Secondary repos (primary + N cloned alongside)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+test('normalizeSecondaryRepos dedupes, excludes primary, caps, coerces shapes', () => {
+  const out = normalizeSecondaryRepos(['a/b', 'a/b', { fullName: 'c/d' }, 'nope', { foo: 1 }], 'x/y');
+  assert.deepEqual(out, [{ provider: 'github', fullName: 'a/b' }, { provider: 'github', fullName: 'c/d' }]);
+  // primary is excluded from the secondary set
+  assert.deepEqual(normalizeSecondaryRepos(['x/y', 'a/b'], 'x/y').map(r => r.fullName), ['a/b']);
+  // non-array input → []
+  assert.deepEqual(normalizeSecondaryRepos(null), []);
+  // capped at 10
+  const many = Array.from({ length: 15 }, (_, i) => `org/r${i}`);
+  assert.equal(normalizeSecondaryRepos(many).length, 10);
+});
+
+test('addTask normalizes secondary repos (dedupe, exclude primary, drop invalid)', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  const task = mgr.addTask(agentId, 'Multi repo', null, null, {
+    skipAutoRefine: true,
+    repoFullName: 'org/primary',
+    secondaryRepos: ['org/lib-a', 'org/lib-a', 'org/primary', 'bad repo name', { fullName: 'org/lib-b', provider: 'github' }],
+  });
+  assert.deepEqual(task.secondaryRepos.map(r => r.fullName), ['org/lib-a', 'org/lib-b']);
+  assert.ok(task.secondaryRepos.every(r => r.provider === 'github'));
+});
+
+test('addTask defaults secondaryRepos to []', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  const task = mgr.addTask(agentId, 'No secondaries', null, null, { skipAutoRefine: true });
+  assert.deepEqual(task.secondaryRepos, []);
+});
+
+test('updateTaskSecondaryRepos replaces the set, excludes primary, records history', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { task, agentId } = addTask(mgr, 'Repo task', 'backlog', 'board-1', { repoFullName: 'org/primary', secondaryRepos: [] });
+  const updated = mgr.updateTaskSecondaryRepos(agentId, task.id, ['org/x', 'org/primary', { fullName: 'org/y' }]);
+  assert.deepEqual(updated.secondaryRepos.map(r => r.fullName), ['org/x', 'org/y']);
+  assert.ok(updated.history.some(h => h.type === 'edit' && h.field === 'secondaryRepos'));
+});
+
+test('updateTaskRepo drops the new primary from existing secondaries', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const { task, agentId } = addTask(mgr, 'Repo task', 'backlog', 'board-1', {
+    repoFullName: 'org/primary',
+    secondaryRepos: [{ provider: 'github', fullName: 'org/lib' }],
+  });
+  const updated = mgr.updateTaskRepo(agentId, task.id, 'org/lib');
+  assert.equal(updated.repoFullName, 'org/lib');
+  assert.deepEqual(updated.secondaryRepos.map(r => r.fullName), []);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

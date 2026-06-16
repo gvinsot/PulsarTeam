@@ -131,6 +131,11 @@ export class ExecutionManager {
     this._providerFor(agentId).setLlmConfig(agentId, llmConfig);
   }
 
+  /** Set (or clear) the agent's task-scoped secondary repos, cloned alongside the primary. */
+  setSecondaryRepos(agentId: string, repos: Array<{ provider?: string; fullName: string }> | null): void {
+    this._providerFor(agentId).setSecondaryRepos(agentId, repos);
+  }
+
   getProviderType(agentId: string): ProviderType | undefined {
     return this._agentProviders.get(agentId);
   }

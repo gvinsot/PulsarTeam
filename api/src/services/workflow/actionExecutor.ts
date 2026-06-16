@@ -392,16 +392,30 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
   // honor whichever is present so the agent ends up working on the same repo
   // the task is about — not whatever it happened to be on last.
   const taskRepo = task.repoFullName || task.project || null;
-  if (!taskRepo || taskRepo === agent.project) return { ok: true };
+  // Secondary repos are cloned alongside the primary. Push the keep-set to the
+  // execution layer FIRST so every subsequent ensure (even the frequent
+  // primary-only ones from tool batches) preserves them instead of pruning.
+  const secondaryRepos = Array.isArray(task.secondaryRepos) ? task.secondaryRepos : [];
+  agentManager.executionManager?.setSecondaryRepos?.(agent.id, secondaryRepos);
 
-  console.log(`[ActionExecutor] Switching "${agent.name}" from "${agent.project || '(none)'}" to repo "${taskRepo}"`);
+  const needsPrimarySwitch = !!taskRepo && taskRepo !== agent.project;
+  const needsSecondaryEnsure = secondaryRepos.length > 0;
+  // Already on the primary and nothing extra to clone → nothing to do. (When
+  // there are secondaries we re-ensure even on an unchanged primary so the
+  // runner clones any that are missing.)
+  if (!needsPrimarySwitch && !needsSecondaryEnsure) return { ok: true };
+
+  console.log(`[ActionExecutor] Ensuring "${agent.name}" on repo "${taskRepo || '(none)'}"${needsSecondaryEnsure ? ` (+${secondaryRepos.length} secondary)` : ''}`);
   try {
-    // 1. Switch conversation context (saves/restores history)
-    if (agentManager._switchProjectContext) {
+    // 1. Switch conversation context (saves/restores history) — only on a real
+    //    primary change; a secondary-only re-ensure keeps the current context.
+    if (needsPrimarySwitch && agentManager._switchProjectContext) {
       agentManager._switchProjectContext(agent, agent.project, taskRepo);
     }
-    // 2. Switch execution environment (coder-service / sandbox)
-    if (agentManager.executionManager) {
+    // 2. Switch execution environment (coder-service / sandbox). switchProject
+    //    forces a re-ensure (TTL reset) so secondaries are (re)cloned even when
+    //    the primary is unchanged.
+    if (agentManager.executionManager && taskRepo) {
       const gitUrl = task.repoHtmlUrl || buildRepoCloneUrl(taskRepo);
       if (gitUrl) {
         const gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
@@ -415,7 +429,7 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
         throw new Error(`Execution environment is on "${envProject}" but task requires "${taskRepo}"`);
       }
     }
-    agent.project = taskRepo;
+    if (taskRepo) agent.project = taskRepo;
     return { ok: true };
   } catch (switchErr) {
     console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
@@ -483,6 +497,18 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   }
 
   markAgentBusy(agent.id);
+
+  // A fresh run_agent execution is genuinely starting here — we've passed the
+  // durable executionStatus='stopped' gate in processColumnEntry. Drop any
+  // stale in-memory 'stopped' signal left by a PRIOR lifecycle (classically:
+  // the user pressed Stop and then moved the task to a new column, where
+  // PUT /tasks/:id re-sets the signal to interrupt the already-gone old run).
+  // Without this, _waitForExecutionComplete's early-stop check would consume
+  // that residual signal and abort this run before the agent does anything —
+  // so a stopped-then-moved task could never be picked up again. A genuine
+  // Stop during THIS run sets the signal again, after this point, so it stays
+  // honored.
+  agentManager._clearStopSignal?.(task.id);
 
   // Wrap everything after markAgentBusy in try/finally so the busy flag is
   // always cleared — even if task setup or project-switch throws unexpectedly.

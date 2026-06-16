@@ -57,6 +57,16 @@ export class ExecutionProvider {
   }
 
   /**
+   * Set (or clear with null) the agent's task-scoped secondary repos — extra
+   * repos to clone alongside the primary `project`. Providers backed by a
+   * remote runner forward this set on every ensure so the runner keeps them
+   * instead of pruning. No-op by default.
+   */
+  setSecondaryRepos(agentId: string, repos: Array<{ provider?: string; fullName: string }> | null): void {
+    // no-op
+  }
+
+  /**
    * Ensure the execution environment is ready for the given agent.
    * Idempotent — safe to call multiple times.
    *

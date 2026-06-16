@@ -242,6 +242,7 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
     return { tool: 'move_task_to_board', args: call.args, success: false, error: `Board not found: ${targetBoardId}` };
   }
   const oldBoardId = task.boardId;
+  const oldStatus = task.status;
   task.boardId = targetBoardId;
   // Check if current status exists in target board's workflow, otherwise reset to first column
   if (targetBoard.workflow?.columns) {
@@ -252,8 +253,20 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
       task.status = firstCol;
     }
   }
+  const statusChanged = task.status !== oldStatus;
+  const previousAssignee = statusChanged ? (task.assignee || null) : null;
+  if (previousAssignee) task.assignee = null;
   if (!task.history) task.history = [];
-  task.history.push({ status: task.status, at: new Date().toISOString(), by: agent.name, type: 'board_move', oldBoardId, newBoardId: targetBoardId });
+  task.history.push({
+    status: task.status,
+    at: new Date().toISOString(),
+    by: agent.name,
+    type: 'board_move',
+    oldBoardId,
+    newBoardId: targetBoardId,
+    ...(statusChanged ? { from: oldStatus } : {}),
+    ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+  });
   try {
     await saveTaskToDb({ ...task, agentId: taskAgentId });
   } catch (err: any) {
@@ -264,7 +277,16 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
     saveAgent(ownerAgent);
     mgr._emit('agent:updated', mgr._sanitize(ownerAgent));
   }
-  mgr._emit('task:updated', { agentId: taskAgentId, task: { ...task, agentId: taskAgentId } });
+  const assigneeAgent = task.assignee ? mgr.agents.get(task.assignee) : null;
+  mgr._emit('task:updated', {
+    agentId: taskAgentId,
+    task: {
+      ...task,
+      agentId: taskAgentId,
+      assigneeName: assigneeAgent?.name || null,
+      assigneeIcon: assigneeAgent?.icon || null,
+    },
+  });
   console.log(`📋 [MoveBoard] Agent "${agent.name}" moved task "${task.text.slice(0, 50)}" to board "${targetBoard.name}" (${targetBoardId})`);
   return { tool: 'move_task_to_board', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" moved to board "${targetBoard.name}" (status: ${task.status})` };
 };

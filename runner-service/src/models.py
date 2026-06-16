@@ -52,10 +52,22 @@ class ShellExecRequest(BaseModel):
     max_output: int = 10000
 
 
+class SecondaryRepo(BaseModel):
+    """An extra repo to clone alongside the primary project. The same git
+    credentials installed in the agent HOME cover every repo, so only the
+    clone URL is needed here."""
+    provider: str = "github"
+    full_name: str
+    git_url: str
+
+
 class EnsureProjectRequest(BaseModel):
     project: str
     git_url: str
     git_credentials: Optional["GitCredentials"] = None
+    # Extra repos to clone next to the primary. The runner keeps them (excludes
+    # them from the stale-project prune); the primary stays the working dir.
+    secondary_repos: list[SecondaryRepo] = []
 
 
 class InstallGitCredentialsRequest(BaseModel):

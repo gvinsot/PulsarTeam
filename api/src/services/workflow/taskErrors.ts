@@ -97,13 +97,19 @@ export function markTaskError(task: any, message: string, opts: MarkTaskErrorOpt
   }
 
   task.errorFromStatus = errorFrom;
+  const previousAssignee = task.assignee || null;
   task.status = 'error';
+  if (previousAssignee) task.assignee = null;
   task.error = errMessage;
   task.actionRunning = false;
   task.actionRunningAgentId = null;
   task.actionRunningMode = null;
 
   historyEntry.from = prevStatus;
+  if (previousAssignee) {
+    historyEntry.assignee = null;
+    historyEntry.previousAssignee = previousAssignee;
+  }
   if (!task.history) task.history = [];
   task.history.push(historyEntry);
   return true;

@@ -73,6 +73,39 @@ function normalizeRetention(value: any): number | null {
   return Math.min(3650, Math.floor(n));
 }
 
+// Same "owner/repo" shape the primary repo is validated against (routes/agents.ts).
+const REPO_FULLNAME_RE = /^[\w.-]+\/[\w.-]+$/;
+const MAX_SECONDARY_REPOS = 10;
+
+/**
+ * Coerce an arbitrary secondaryRepos input into a clean [{provider, fullName}]:
+ * accept either bare "owner/repo" strings or {provider, fullName} objects, keep
+ * only well-formed entries, default provider to 'github', drop the primary repo,
+ * dedupe by fullName, and cap the count so clone time stays bounded. Always
+ * returns an array (never null).
+ */
+export function normalizeSecondaryRepos(input: any, primaryFullName?: string | null): Array<{ provider: string; fullName: string }> {
+  if (!Array.isArray(input)) return [];
+  const primary = primaryFullName || null;
+  const seen = new Set<string>();
+  const out: Array<{ provider: string; fullName: string }> = [];
+  for (const raw of input) {
+    const fullName = typeof raw === 'string'
+      ? raw
+      : (raw && typeof raw.fullName === 'string' ? raw.fullName : null);
+    if (!fullName || !REPO_FULLNAME_RE.test(fullName)) continue;
+    if (primary && fullName === primary) continue;
+    if (seen.has(fullName)) continue;
+    seen.add(fullName);
+    const provider = (raw && typeof raw === 'object' && typeof raw.provider === 'string' && raw.provider)
+      ? raw.provider
+      : 'github';
+    out.push({ provider, fullName });
+    if (out.length >= MAX_SECONDARY_REPOS) break;
+  }
+  return out;
+}
+
 /**
  * Drop history entries with `at` older than `cutoffMs`. Mutates the array
  * in place and returns the number of dropped entries.
@@ -97,7 +130,7 @@ function pruneByDate<T extends { at?: string; date?: string }>(
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
-  addTask(this: any, agentId: string | null, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): any {
+  addTask(this: any, agentId: string | null, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, secondaryRepos, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): any {
     // agentId === null → unassigned task: lives on a board, waits to be picked up.
     // Requires a boardId to make sense (the board IS its home in that case).
     const agent = agentId ? this.agents.get(agentId) : null;
@@ -113,6 +146,9 @@ export const tasksMethods = {
       // project is derived server-side from board.project_id; no longer stored on the task
       repoFullName: repoFullName || null,
       repoProvider: repoFullName ? (repoProvider || 'github') : null,
+      // Secondary repos cloned alongside the primary; normalized (deduped,
+      // primary-excluded, capped) so the stored shape is always clean.
+      secondaryRepos: normalizeSecondaryRepos(secondaryRepos, repoFullName || null),
       storagePath: storagePath || null,
       storageProvider: storagePath ? (storageProvider || 'onedrive') : null,
       source: source || null,
@@ -164,11 +200,19 @@ export const tasksMethods = {
     const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
     if (!task) return null;
     const prevStatus = task.status;
+    const previousAssignee = task.assignee || null;
     task.status = prevStatus === 'done' ? 'backlog' : 'done';
+    if (previousAssignee) task.assignee = null;
     if (task.status === 'done') task.completedAt = new Date().toISOString();
     const now = new Date().toISOString();
     if (!task.history) task.history = [];
-    task.history.push({ from: prevStatus, status: task.status, at: now, by: 'user' });
+    task.history.push({
+      from: prevStatus,
+      status: task.status,
+      at: now,
+      by: 'user',
+      ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+    });
     saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
@@ -181,7 +225,9 @@ export const tasksMethods = {
     if (!task) return null;
     const prevStatus = task.status;
     if (prevStatus === status) return task;
+    const previousAssignee = task.assignee || null;
     task.status = status;
+    if (previousAssignee) task.assignee = null;
     // Clear pending on enter signal
     clearTaskSignal(taskId, 'pendingOnEnter');
     delete task._pendingOnEnter;
@@ -213,7 +259,13 @@ export const tasksMethods = {
       task.error = null;
     }
     if (!task.history) task.history = [];
-    task.history.push({ from: prevStatus, status, at: now, by: by || 'user' });
+    task.history.push({
+      from: prevStatus,
+      status,
+      at: now,
+      by: by || 'user',
+      ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+    });
     // Stamp updatedAt so the frontend can detect stale loadTasks() responses.
     // The DB sets its own updated_at = NOW() inside saveTaskToDb, but a SELECT
     // on a parallel pool connection may run before that UPDATE commits and
@@ -237,6 +289,9 @@ export const tasksMethods = {
       const assigneeAgent = this.agents.get(task.assignee);
       taskPayload.assigneeName = assigneeAgent?.name || null;
       taskPayload.assigneeIcon = assigneeAgent?.icon || null;
+    } else {
+      taskPayload.assigneeName = null;
+      taskPayload.assigneeIcon = null;
     }
     Promise.resolve(savePromise)
       .catch(() => {})
@@ -282,8 +337,29 @@ export const tasksMethods = {
 
   updateTaskRepo(this: any, agentId: string, taskId: string, repoFullName: string | null, repoProvider: string | null = null): any {
     return this._editTaskField(agentId, taskId, 'repoFullName', repoFullName || null, {
-      applyExtra: (task: any) => { task.repoProvider = repoFullName ? (repoProvider || task.repoProvider || 'github') : null; },
+      applyExtra: (task: any) => {
+        task.repoProvider = repoFullName ? (repoProvider || task.repoProvider || 'github') : null;
+        // Keep the invariant: a repo can't be both primary and secondary.
+        if (repoFullName && Array.isArray(task.secondaryRepos)) {
+          task.secondaryRepos = task.secondaryRepos.filter((r: any) => r?.fullName !== repoFullName);
+        }
+      },
     });
+  },
+
+  updateTaskSecondaryRepos(this: any, agentId: string, taskId: string, secondaryRepos: any): any {
+    const agent = this.agents.get(agentId);
+    if (!agent) return null;
+    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    if (!task) return null;
+    const oldValue = task.secondaryRepos || [];
+    const newValue = normalizeSecondaryRepos(secondaryRepos, task.repoFullName);
+    task.secondaryRepos = newValue;
+    if (!task.history) task.history = [];
+    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'secondaryRepos', oldValue, newValue });
+    saveTaskToDb({ ...task, agentId });
+    this._emit('agent:updated', this._sanitize(agent));
+    return task;
   },
 
   updateTaskStorage(this: any, agentId: string, taskId: string, storagePath: string | null, storageProvider: string | null = null): any {
@@ -731,6 +807,8 @@ export const tasksMethods = {
       );
 
       task.status = resetStatus;
+      const previousAssignee = task.assignee || null;
+      if (previousAssignee) task.assignee = null;
       task.completedAt = null;
       task.startedAt = null;
       task.executionStatus = null;
@@ -741,7 +819,13 @@ export const tasksMethods = {
       task.error = null;
       task.errorFromStatus = null;
       if (!task.history) task.history = [];
-      task.history.push({ from: prevStatus, status: resetStatus, at: nowIso, by: 'recurrence' });
+      task.history.push({
+        from: prevStatus,
+        status: resetStatus,
+        at: nowIso,
+        by: 'recurrence',
+        ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+      });
       task.recurrence = { ...rec, lastResetAt: nowIso };
 
       // Drop ephemeral execution signals from the previous cycle so the
@@ -754,6 +838,7 @@ export const tasksMethods = {
       const memTask = this._getAgentTasks(task.agentId).find((mt: any) => mt.id === task.id);
       if (memTask) {
         memTask.status = task.status;
+        memTask.assignee = task.assignee;
         memTask.completedAt = task.completedAt;
         memTask.startedAt = task.startedAt;
         memTask.executionStatus = task.executionStatus;
@@ -875,6 +960,20 @@ export const tasksMethods = {
     const err = getTaskSignal(taskId, 'authError');
     if (err) clearTaskSignal(taskId, 'authError');
     return (typeof err === 'string' && err.trim()) ? err.trim() : null;
+  },
+
+  /** Drop the in-memory 'stopped' interrupt signal for a task. Called when a
+   *  fresh run_agent execution begins (executeRunAgent), AFTER the durable
+   *  executionStatus='stopped' gate has already been cleared/passed. Without
+   *  this, a stale signal from a PRIOR lifecycle — e.g. the user pressed Stop
+   *  and then moved the task to a new column (PUT /tasks/:id re-sets the signal
+   *  to interrupt the now-gone old run) — survives into the new column's
+   *  on_enter execution and trips _waitForExecutionComplete's early-stop check,
+   *  aborting the run before the agent does anything. A genuine Stop DURING the
+   *  new run sets the signal again, after this point, and is still honored.
+   *  Exposed as a manager method to avoid a circular import (see above). */
+  _clearStopSignal(this: any, taskId: string): void {
+    clearTaskSignal(taskId, 'stopped');
   },
 
   async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
@@ -1158,11 +1257,21 @@ export const tasksMethods = {
       // Repo selection drives the executor's project context. The task carries
       // a `repoFullName` (hydrated from board_repos via the JOIN); if it
       // differs from the executor's current repo we switch sandbox + history.
+      // Secondary repos are cloned alongside the primary. Hand the keep-set to
+      // the execution layer first so every subsequent ensure (even primary-only
+      // ones) preserves them; then re-ensure when the primary changed OR there
+      // are secondaries to (re)clone.
       const taskRepo = task.repoFullName || null;
-      if (taskRepo && taskRepo !== executor.project) {
-        console.log(`🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`);
-        if (this._switchProjectContext) {
-          this._switchProjectContext(executor, executor.project, taskRepo);
+      const secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos, taskRepo);
+      this.executionManager?.setSecondaryRepos?.(executorId, secondaryRepos);
+      const needsPrimarySwitch = !!taskRepo && taskRepo !== executor.project;
+      const needsSecondaryEnsure = secondaryRepos.length > 0;
+      if (taskRepo && (needsPrimarySwitch || needsSecondaryEnsure)) {
+        if (needsPrimarySwitch) {
+          console.log(`🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`);
+          if (this._switchProjectContext) {
+            this._switchProjectContext(executor, executor.project, taskRepo);
+          }
         }
         if (this.executionManager) {
           try {

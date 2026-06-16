@@ -104,6 +104,14 @@ function clearExecutionState(t) {
  * constructed payload and no agent:updated.
  */
 function emitTaskUpdate(mgr, task) {
+  if (task.assignee) {
+    const assigneeAgent = mgr.agents.get(task.assignee);
+    task.assigneeName = assigneeAgent?.name || null;
+    task.assigneeIcon = assigneeAgent?.icon || null;
+  } else {
+    task.assigneeName = null;
+    task.assigneeIcon = null;
+  }
   mgr._emit('task:updated', { agentId: task.agentId, task });
   if (task.agentId) {
     const agent = mgr.agents.get(task.agentId);
@@ -308,10 +316,19 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
       task.status = column;
     }
 
+    const previousAssignee = statusChanged && agentId === undefined ? (task.assignee || null) : null;
+    if (previousAssignee) {
+      task.assignee = null;
+      editedFields.push('assignee');
+    }
+
     // ── Update other fields ────────────────────────────────────────────────
     if (title !== undefined && title !== task.title) { task.title = title; editedFields.push('title'); }
     if (description !== undefined && description !== task.text) { task.text = description; editedFields.push('description'); }
-    if (agentId !== undefined && agentId !== task.assignee) { task.assignee = agentId; editedFields.push('assignee'); }
+    if (agentId !== undefined && agentId !== task.assignee) {
+      task.assignee = agentId;
+      if (!editedFields.includes('assignee')) editedFields.push('assignee');
+    }
     if (type !== undefined && type !== task.taskType) { task.taskType = type; editedFields.push('taskType'); }
     if (priority !== undefined && priority !== task.priority) { task.priority = priority; editedFields.push('priority'); }
     if (dueDate !== undefined && dueDate !== task.dueDate) { task.dueDate = dueDate; editedFields.push('dueDate'); }
@@ -351,6 +368,10 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
       }
       if (statusChanged) {
         entry.from = oldStatus;
+        if (previousAssignee) {
+          entry.previousAssignee = previousAssignee;
+          entry.assignee = null;
+        }
         entry.fields.push('status');
       }
       task.history.push(entry);
@@ -379,6 +400,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
         // work on this task since it was moved by a user.
         if (statusChanged) {
           clearExecutionState(memTask);
+          memTask.assignee = task.assignee || null;
           if (task.status === 'done') memTask.completedAt = now;
           // Signal the reminder loop / execution wait to exit
           setTaskSignal(req.params.id as string, 'stopped', true);
@@ -451,20 +473,31 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
 
       const oldBoardId = task.boardId;
       const oldStatus = task.status;
+      const previousAssignee = task.assignee || null;
       let oldBoardName = null;
       if (oldBoardId) { const ob = await getBoardById(oldBoardId); oldBoardName = ob?.name || null; }
 
       task.boardId = boardId;
       task.status = targetColumn;
+      if (oldStatus !== targetColumn && previousAssignee) {
+        task.assignee = null;
+      }
       task.updatedAt = now;
+      const changedFields = ['boardId', 'status'];
+      if (oldStatus !== targetColumn && previousAssignee) changedFields.push('assignee');
       if (!task.history) task.history = [];
-      task.history.push({
+      const historyEntry: any = {
         at: now, by: username, type: 'board_move',
         fromBoard: oldBoardId, toBoard: boardId,
         fromBoardName: oldBoardName, toBoardName: access.board?.name || null,
         from: oldStatus, status: targetColumn,
-        fields: ['boardId', 'status'], bulk: true,
-      });
+        fields: changedFields, bulk: true,
+      };
+      if (oldStatus !== targetColumn && previousAssignee) {
+        historyEntry.previousAssignee = previousAssignee;
+        historyEntry.assignee = null;
+      }
+      task.history.push(historyEntry);
 
       await mgr.saveTaskDirectly(task);
 
@@ -474,6 +507,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
         if (memTask) {
           memTask.status = targetColumn;
           memTask.boardId = boardId;
+          memTask.assignee = task.assignee || null;
           memTask.updatedAt = now;
           clearExecutionState(memTask);
         }

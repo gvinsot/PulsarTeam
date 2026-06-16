@@ -94,13 +94,14 @@ export interface AgentManager {
   _listAvailableProjects(): Promise<string[]>;
 
   // ── tasks.ts ──
-  addTask(agentId: string, text: string, source: any, initialStatus?: string, options?: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean }): any | null;
+  addTask(agentId: string, text: string, source: any, initialStatus?: string, options?: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean }): any | null;
   toggleTask(agentId: string, taskId: string): any | null;
   setTaskStatus(agentId: string, taskId: string, status: string, options?: { skipAutoRefine?: boolean; by?: string | null }): any | null;
   _editTaskField(agentId: string, taskId: string, field: string, value: any, options?: { by?: string; applyExtra?: (task: any) => void }): any | null;
   updateTaskTitle(agentId: string, taskId: string, title: string): any | null;
   updateTaskText(agentId: string, taskId: string, text: string): any | null;
   updateTaskRepo(agentId: string, taskId: string, repoFullName: string | null, repoProvider?: string | null): any | null;
+  updateTaskSecondaryRepos(agentId: string, taskId: string, secondaryRepos: any): any | null;
   updateTaskStorage(agentId: string, taskId: string, storagePath: string | null, storageProvider?: string | null): any | null;
   updateTaskType(agentId: string, taskId: string, taskType: string, by?: string): any | null;
   updateTaskRecurrence(agentId: string, taskId: string, recurrence: any): any | null;

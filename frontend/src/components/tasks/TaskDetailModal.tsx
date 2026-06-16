@@ -127,6 +127,17 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     }
   };
 
+  const saveSecondaryRepos = async (next: Array<{ provider?: string; fullName: string }>) => {
+    setMutationError(null);
+    try {
+      await api.updateTaskSecondaryRepos(task.agentId, task.id, next);
+      await onRefresh();
+    } catch (err) {
+      setMutationError(err?.message || 'Failed to change secondary repos');
+      throw err;
+    }
+  };
+
   const saveStorage = async (newPath) => {
     if ((newPath || null) === (task.storagePath || null)) return;
     setMutationError(null);
@@ -673,6 +684,47 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                 <span className="text-xs text-dark-500 italic">None</span>
               )}
             />
+
+            {/* Secondary repos (editable) — cloned alongside the primary at run time */}
+            {task.repoFullName && (
+              <div className="flex items-start gap-2">
+                <GitBranch className="w-3.5 h-3.5 text-dark-500 mt-1 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] font-semibold text-dark-500 uppercase tracking-wide mb-1">Secondary repos</div>
+                  {(() => {
+                    const current = Array.isArray(task.secondaryRepos) ? task.secondaryRepos : [];
+                    const currentNames = current.map(r => r.fullName);
+                    const addable = availableRepos.filter(r => r.fullName !== task.repoFullName && !currentNames.includes(r.fullName));
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {current.map(r => (
+                          <span key={r.fullName} className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20">
+                            {r.fullName}
+                            <button type="button" title="Remove" onClick={() => saveSecondaryRepos(current.filter(x => x.fullName !== r.fullName))} className="hover:text-emerald-200">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                        {current.length === 0 && <span className="text-xs text-dark-500 italic">None</span>}
+                        {addable.length > 0 && (
+                          <select
+                            value=""
+                            onChange={e => { const v = e.target.value; if (v) saveSecondaryRepos([...current, { provider: availableRepos.find(r => r.fullName === v)?.provider || 'github', fullName: v }]); }}
+                            className="px-2 py-0.5 bg-dark-800 border border-emerald-500/40 rounded text-xs text-dark-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                            title="Add a secondary repo"
+                          >
+                            <option value="">+ Add…</option>
+                            {addable.map(r => (
+                              <option key={r.fullName} value={r.fullName}>[{r.provider}] {r.fullName}</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
 
             {/* Storage (editable, scoped to the board's OneDrive plugin) */}
             <EditableSelectRow

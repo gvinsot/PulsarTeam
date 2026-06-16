@@ -287,6 +287,7 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
           environment TEXT NOT NULL DEFAULT 'prod',
           repo_provider TEXT,
           repo_full_name TEXT,
+          secondary_repos JSONB DEFAULT '[]',
           storage_provider TEXT,
           storage_path TEXT,
           deleted_at TIMESTAMPTZ,
@@ -325,6 +326,8 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks DROP COLUMN IF EXISTS repo_id').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS repo_provider TEXT').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS repo_full_name TEXT').catch(() => {});
+      // Secondary repos (primary + N) — cloned alongside repo_full_name at run time.
+      await pool.query("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS secondary_repos JSONB DEFAULT '[]'").catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS storage_provider TEXT').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS storage_path TEXT').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_agent ON tasks(agent_id)').catch(() => {});

@@ -351,9 +351,15 @@ async def ensure_project(
                 "token": request.git_credentials.token,
                 "username": request.git_credentials.username or "",
             }
+        secondary_repos = [
+            {"provider": r.provider or "github", "full_name": r.full_name, "git_url": r.git_url}
+            for r in (request.secondary_repos or [])
+            if r.full_name and r.git_url
+        ]
         await ensure_agent_user(x_agent_id, owner_id=x_owner_id)
         project_dir = await ensure_agent_project(
             x_agent_id, request.project, request.git_url, git_credentials=creds,
+            secondary_repos=secondary_repos,
         )
         return {"status": "success", "project_dir": project_dir}
     except Exception as e:

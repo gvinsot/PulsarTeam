@@ -219,18 +219,20 @@ export const api = {
     boardId?: string;
     repoFullName?: string;
     repoProvider?: string;
+    secondaryRepos?: Array<{ provider?: string; fullName: string }>;
     recurrence?: any;
     taskType?: string;
     isManual?: boolean;
     storagePath?: string | null;
     storageProvider?: string;
   } = {}) => {
-    const { status, boardId, repoFullName, recurrence, taskType, isManual, repoProvider = 'github', storagePath = null, storageProvider = 'onedrive' } = opts;
+    const { status, boardId, repoFullName, secondaryRepos, recurrence, taskType, isManual, repoProvider = 'github', storagePath = null, storageProvider = 'onedrive' } = opts;
     return post(`/agents/${agentId}/tasks`, {
       text,
       ...(status && { status }),
       ...(boardId && { boardId }),
       ...(repoFullName && { repoFullName, repoProvider }),
+      ...(secondaryRepos && secondaryRepos.length > 0 && { secondaryRepos }),
       ...(storagePath && { storagePath, storageProvider }),
       ...(recurrence && { recurrence }),
       ...(taskType && { taskType }),
@@ -252,6 +254,9 @@ export const api = {
 
   updateTaskRepo: (agentId, taskId, repoFullName, repoProvider = 'github') =>
     patchAgentTask(agentId, taskId, { repoFullName: repoFullName || null, repoProvider: repoFullName ? repoProvider : null }),
+
+  updateTaskSecondaryRepos: (agentId, taskId, secondaryRepos: Array<{ provider?: string; fullName: string }>) =>
+    patchAgentTask(agentId, taskId, { secondaryRepos: secondaryRepos || [] }),
 
   updateTaskStorage: (agentId, taskId, storagePath, storageProvider = 'onedrive') =>
     patchAgentTask(agentId, taskId, { storagePath: storagePath || null, storageProvider: storagePath ? storageProvider : null }),

@@ -342,6 +342,14 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
             {task.repoFullName.split('/').pop()}
           </span>
         )}
+        {Array.isArray(task.secondaryRepos) && task.secondaryRepos.length > 0 && (
+          <span
+            className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
+            title={`Secondary repos:\n${task.secondaryRepos.map(r => r.fullName).join('\n')}`}
+          >
+            +{task.secondaryRepos.length}
+          </span>
+        )}
         {task.environment && task.environment !== 'prod' && (
           <span
             className="text-xs px-1.5 py-0.5 rounded font-medium bg-orange-500/10 text-orange-400 ring-1 ring-orange-500/20 uppercase tracking-wide"

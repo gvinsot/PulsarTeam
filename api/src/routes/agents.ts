@@ -287,7 +287,7 @@ export function agentRoutes(agentManager) {
   // ── Task endpoints ──────────────────────────────────────────────────────
   router.post('/:id/tasks', requireAgentEditAccess, async (req, res) => {
     try {
-      const { text, source, status, boardId, repoFullName, repoProvider, storageProvider, storagePath, recurrence, taskType, isManual } = req.body;
+      const { text, source, status, boardId, repoFullName, repoProvider, secondaryRepos, storageProvider, storagePath, recurrence, taskType, isManual } = req.body;
       if (!text) return res.status(400).json({ error: 'Text required' });
       const agent = agentManager.agents.get(req.params.id);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
@@ -337,6 +337,8 @@ export function agentRoutes(agentManager) {
         boardId: resolvedBoardId,
         repoFullName: resolvedRepoFullName,
         repoProvider: resolvedRepoProvider,
+        // Validated + deduped + primary-excluded inside addTask (normalizeSecondaryRepos)
+        secondaryRepos: secondaryRepos,
         storagePath: resolvedStoragePath,
         storageProvider: resolvedStorageProvider,
         recurrence: recurrence || undefined,
@@ -354,7 +356,7 @@ export function agentRoutes(agentManager) {
 
   router.patch('/:id/tasks/:taskId', requireAgentEditAccess, async (req, res) => {
     try {
-      const { status, text, title, repoFullName, repoProvider, storageProvider, storagePath, source, recurrence, taskType, isManual } = req.body || {};
+      const { status, text, title, repoFullName, repoProvider, secondaryRepos, storageProvider, storagePath, source, recurrence, taskType, isManual } = req.body || {};
       // Source is immutable once set at creation — reject any attempt to change it
       if (source !== undefined) {
         return res.status(400).json({ error: 'Source cannot be modified after creation' });
@@ -404,6 +406,10 @@ export function agentRoutes(agentManager) {
         // Format check only — the picker is sourced from the board's GitHub plugin.
         const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
         agentManager.updateTaskRepo(req.params.id, req.params.taskId, value, repoProvider || (value ? 'github' : null));
+      } else if (secondaryRepos !== undefined) {
+        // Array of {provider, fullName} (or bare "owner/repo" strings) — normalized
+        // (deduped, primary-excluded, capped) inside updateTaskSecondaryRepos.
+        agentManager.updateTaskSecondaryRepos(req.params.id, req.params.taskId, secondaryRepos);
       } else if (storagePath !== undefined) {
         // Picker sourced from the board's OneDrive plugin; just length-check.
         const value = (typeof storagePath === 'string' && storagePath.trim().length > 0)
@@ -418,7 +424,7 @@ export function agentRoutes(agentManager) {
       // (frontend api.ts depends on the empty-body → toggle behavior). NOTE:
       // `title` is intentionally NOT counted here — a {title}-only body still
       // falls through to toggleTask today (likely a latent bug), preserved as-is.
-      const touched = text !== undefined || repoFullName !== undefined || storagePath !== undefined
+      const touched = text !== undefined || repoFullName !== undefined || secondaryRepos !== undefined || storagePath !== undefined
         || !!status || recurrence !== undefined || taskType !== undefined || isManual !== undefined;
       const task = touched
         ? getMemTask(agentManager, req.params.id, req.params.taskId)

@@ -28,6 +28,7 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   actionRunning: 'action_running', actionRunningAgentId: 'action_running_agent_id',
   actionRunningMode: 'action_running_mode', errorFromStatus: 'error_from_status',
   isManual: 'is_manual', repoProvider: 'repo_provider', repoFullName: 'repo_full_name',
+  secondaryRepos: 'secondary_repos',
   storageProvider: 'storage_provider', storagePath: 'storage_path',
 });
 const TASK_COLUMNS = new Set<string>(Object.values(TASK_COLUMN_BY_FIELD));
@@ -48,6 +49,8 @@ export function rowToTask(row) {
     repoProvider: row.repo_provider || null,
     repoFullName: row.repo_full_name || null,
     repoHtmlUrl: row.repo_full_name ? `https://github.com/${row.repo_full_name}` : null,
+    // Secondary repos cloned alongside the primary at run time ([{provider, fullName}])
+    secondaryRepos: Array.isArray(row.secondary_repos) ? row.secondary_repos : [],
     // Storage lives directly on the task — picked from the board's OneDrive/Drive plugin
     storageProvider: row.storage_provider || null,
     storagePath: row.storage_path || null,
@@ -153,8 +156,8 @@ async function _doSaveTask(task) {
                           error, created_at, updated_at, completed_at, started_at,
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
                           action_running_mode, error_from_status, is_manual, position, environment,
-                          pending_on_enter)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+                          pending_on_enter, secondary_repos)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, repo_provider = $6, repo_full_name = $7,
          storage_provider = $8, storage_path = $9,
@@ -164,7 +167,7 @@ async function _doSaveTask(task) {
          completed_at = $21, started_at = $22,
          execution_status = $23, completed_action_idx = $24, action_running = $25, action_running_agent_id = $26,
          action_running_mode = $27, error_from_status = $28, is_manual = $29, position = $30,
-         pending_on_enter = $32`,
+         pending_on_enter = $32, secondary_repos = $33`,
       [
         task.id,
         task.agentId,
@@ -198,6 +201,7 @@ async function _doSaveTask(task) {
         task.position ?? 0,
         task.environment || 'prod',
         task._pendingOnEnter || null,
+        JSON.stringify(Array.isArray(task.secondaryRepos) ? task.secondaryRepos : []),
       ]
     );
   } catch (err: any) {
