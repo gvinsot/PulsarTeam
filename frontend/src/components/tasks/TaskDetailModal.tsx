@@ -84,10 +84,14 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     setSaving(true);
     setMutationError(null);
     try {
-      const body: { text?: string; title?: string } = {};
-      if (textChanged) body.text = trimmedText;
+      // Use the board-level PUT /tasks/:id route (description→text, title) rather
+      // than the agent-scoped PATCH, which 404s with "Agent not found" whenever
+      // task.agentId doesn't map to a live agent (board-only/unassigned tasks, or
+      // a disabled/deleted agent). The board route gates on boardId instead.
+      const body: { description?: string; title?: string } = {};
+      if (textChanged) body.description = trimmedText;
       if (titleChanged) body.title = trimmedTitle;
-      await api.updateTask(task.agentId, task.id, body);
+      await updateTaskById(task.id, body);
       await onRefresh();
       setEditing(false);
     } catch (err) {

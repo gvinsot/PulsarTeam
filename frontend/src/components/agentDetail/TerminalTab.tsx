@@ -24,7 +24,7 @@ import '@xterm/xterm/css/xterm.css';
 import { Terminal as TerminalIcon, ArrowUp, ArrowDown, CornerDownLeft, RotateCcw } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
-  CLAUDE_OAUTH_PREFIX, openExternalLink, createClaudeOAuthLinkProvider, reconstructClaudeOAuthUrlFromBuffer,
+  CLAUDE_OAUTH_PREFIXES, openExternalLink, createClaudeOAuthLinkProvider, reconstructClaudeOAuthUrlFromBuffer,
 } from './claudeOAuthLinks';
 
 interface TerminalTabProps {
@@ -102,6 +102,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // value like the Claude Code /login authorization code into the terminal is
   // effectively impossible — this field is the reliable path for both.
   const [inputValue, setInputValue] = useState('');
+  // Intact Claude `/login` URL recovered runner-side (via tmux capture-pane -J)
+  // and pushed as a control frame. The on-screen copy is corrupted by the
+  // wrapped redraw (drops a char per wrap boundary), so we surface this clean
+  // copy as a clickable banner instead of letting the user copy the bad one.
+  const [oauthUrl, setOauthUrl] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -143,6 +148,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     setExitedState(false);
     suppressReconnectRef.current = false;
     reconnectAttemptRef.current = 0;
+    setOauthUrl(null);
     const term = termRef.current;
     if (term) {
       term.reset();
@@ -292,7 +298,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     term.loadAddon(fit);
     const claudeOAuthLinkProvider = term.registerLinkProvider(createClaudeOAuthLinkProvider(term));
     term.loadAddon(new WebLinksAddon((event, uri) => {
-      if (uri.startsWith(CLAUDE_OAUTH_PREFIX)) {
+      if (CLAUDE_OAUTH_PREFIXES.some((p) => uri.startsWith(p))) {
         event.preventDefault();
         openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
         return;
@@ -472,6 +478,12 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               t.reset();
               t.clear();
               setTerminalActive(false);
+              setOauthUrl(null);
+            } else if (ctrl?.type === 'oauth_url') {
+              // Runner recovered the intact /login URL — surface it as a
+              // clickable banner so the user never copies the wrapped (and
+              // character-dropped) on-screen version.
+              if (typeof ctrl.url === 'string' && ctrl.url) setOauthUrl(ctrl.url);
             } else if (ctrl?.type === 'exit') {
               // The CLI/tmux session genuinely ended. Don't auto-loop (a crash
               // on startup would spin) — latch exited and offer an explicit
@@ -479,6 +491,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               suppressReconnectRef.current = true;
               setExitedState(true);
               setConnected(false);
+              setOauthUrl(null);
               const code = ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
               const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
               t.writeln(`\r\n\x1b[2m[runner session ended, code=${code}]\x1b[0m`);
@@ -638,6 +651,38 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           Send
         </button>
       </form>
+      {/* Intact /login URL recovered runner-side. The version rendered in the
+          terminal grid loses a character at each wrap boundary, so we offer
+          this clean copy as the reliable click/copy path. */}
+      {oauthUrl && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b text-xs bg-indigo-600/15 border-indigo-500/40 text-indigo-100">
+          <span className="opacity-80 shrink-0">Lien de connexion Claude&nbsp;:</span>
+          <button
+            type="button"
+            onClick={() => openExternalLink(oauthUrl)}
+            title={oauthUrl}
+            className="px-2 h-7 rounded border border-indigo-500/50 bg-indigo-600/30 hover:bg-indigo-600/40 transition-colors font-medium shrink-0"
+          >
+            Ouvrir l'authentification
+          </button>
+          <button
+            type="button"
+            onClick={() => { navigator.clipboard?.writeText(oauthUrl).catch(() => { /* noop */ }); }}
+            title="Copier l'URL intacte"
+            className="px-2 h-7 rounded border border-indigo-500/40 bg-dark-800/60 hover:bg-dark-700/60 transition-colors shrink-0"
+          >
+            Copier
+          </button>
+          <button
+            type="button"
+            onClick={() => setOauthUrl(null)}
+            aria-label="Masquer le lien"
+            className="ml-auto opacity-60 hover:opacity-100 shrink-0"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div
         ref={containerRef}
         // overflow-auto lets the container show scrollbars whenever the

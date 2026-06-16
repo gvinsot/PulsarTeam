@@ -323,10 +323,18 @@ async def ws_terminal(
             return
         await websocket.send_bytes(data)
 
+    async def push_control_to_client(msg: dict) -> None:
+        # Out-of-band JSON control events (e.g. the intact /login URL). Sent as
+        # a text frame; the frontend's onmessage already routes JSON by `type`.
+        try:
+            await websocket.send_text(json.dumps(msg))
+        except Exception:
+            pass
+
     label = f"ws@{websocket.client.host}:{websocket.client.port}" if websocket.client else "ws"
     await websocket.send_text(json.dumps({"type": "reset"}))
     await pty_session.replay_terminal_transcript(agent_id, push_bytes_to_client)
-    client_id = await session.attach(push_bytes_to_client, label=label)
+    client_id = await session.attach(push_bytes_to_client, label=label, on_control=push_control_to_client)
 
     try:
         while True:

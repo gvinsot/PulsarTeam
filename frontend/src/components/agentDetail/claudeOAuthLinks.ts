@@ -19,8 +19,29 @@
 import type { Terminal as XTerminal, ILink, ILinkProvider } from '@xterm/xterm';
 
 export const CLAUDE_OAUTH_PREFIX = 'https://claude.com/cai/oauth/authorize?code=';
+// The interactive `claude` CLI prints a *claude.ai* authorize URL (different
+// host + query shape than the claude.com/cai variant above). Both wrap across
+// terminal lines and need reconstruction, so gate the buffer-flavor helpers on
+// either marker. CLAUDE_OAUTH_PREFIX stays the canonical https-only constant.
+export const CLAUDE_OAUTH_PREFIXES = [
+  CLAUDE_OAUTH_PREFIX,
+  'https://claude.ai/oauth/authorize?',
+];
+// Start of either authorize-URL flavor (http or https) plus its non-whitespace
+// remainder — used to grab the first wrapped fragment off the buffer line.
+const CLAUDE_OAUTH_URL_RE = /^https?:\/\/(?:claude\.com\/cai\/oauth\/authorize\?code=|claude\.ai\/oauth\/authorize\?)\S*/;
 const CLAUDE_OAUTH_MAX_CONTINUATION_LINES = 32;
 const CLAUDE_OAUTH_FALLBACK_SEARCH_LINES = 500;
+
+// Index of the earliest OAuth marker (either flavor) on a line, or -1.
+function oauthMarkerIndex(line: string): number {
+  let best = -1;
+  for (const prefix of CLAUDE_OAUTH_PREFIXES) {
+    const idx = line.indexOf(prefix);
+    if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+  }
+  return best;
+}
 
 export function openExternalLink(uri: string) {
   const opened = window.open('');
@@ -41,10 +62,10 @@ function firstNonWhitespaceIndex(line: string) {
 }
 
 function buildClaudeOAuthLink(term: XTerminal, startLine: number, firstLine = getTerminalLine(term, startLine)): ILink | undefined {
-  const markerIndex = firstLine.indexOf(CLAUDE_OAUTH_PREFIX);
+  const markerIndex = oauthMarkerIndex(firstLine);
   if (markerIndex < 0) return undefined;
 
-  const initialMatch = firstLine.slice(markerIndex).match(/^https?:\/\/claude\.com\/cai\/oauth\/authorize\?code=\S*/);
+  const initialMatch = firstLine.slice(markerIndex).match(CLAUDE_OAUTH_URL_RE);
   if (!initialMatch) return undefined;
 
   let url = initialMatch[0];
@@ -83,7 +104,7 @@ export function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
     provideLinks(bufferLineNumber, callback) {
       const startLine = bufferLineNumber - 1;
       const line = getTerminalLine(term, startLine);
-      const link = line.includes(CLAUDE_OAUTH_PREFIX)
+      const link = oauthMarkerIndex(line) >= 0
         ? buildClaudeOAuthLink(term, startLine, line)
         : undefined;
       callback(link ? [link] : undefined);
@@ -92,12 +113,12 @@ export function createClaudeOAuthLinkProvider(term: XTerminal): ILinkProvider {
 }
 
 export function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string) {
-  if (!uri.startsWith(CLAUDE_OAUTH_PREFIX)) return uri;
+  if (!CLAUDE_OAUTH_PREFIXES.some((p) => uri.startsWith(p))) return uri;
   const buffer = term.buffer.active;
   const earliestLine = Math.max(0, buffer.length - CLAUDE_OAUTH_FALLBACK_SEARCH_LINES);
   for (let y = buffer.length - 1; y >= earliestLine; y -= 1) {
     const line = getTerminalLine(term, y);
-    if (!line.includes(CLAUDE_OAUTH_PREFIX)) continue;
+    if (oauthMarkerIndex(line) < 0) continue;
     const link = buildClaudeOAuthLink(term, y, line);
     if (link?.text.startsWith(uri)) return link.text;
   }
@@ -114,7 +135,7 @@ export function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string
 // blank line is encountered, producing a single URL.
 export function reconstructWrappedOAuthUrlsInText(text) {
   if (typeof text !== 'string') return text;
-  const marker = /https?:\/\/claude\.com\/cai\/oauth\/authorize\?code=\S*/g;
+  const marker = /https?:\/\/(?:claude\.com\/cai\/oauth\/authorize\?code=|claude\.ai\/oauth\/authorize\?)\S*/g;
   let result = '';
   let lastIdx = 0;
   let m;

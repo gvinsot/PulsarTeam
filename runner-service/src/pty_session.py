@@ -119,6 +119,19 @@ _AUTH_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Claude Code `/login` authorize URL. The CLI prints it as ONE very long line;
+# at the pane/terminal width that line wraps, and the wrapped client-redraw
+# drops one character per wrap boundary by the time it reaches the browser. The
+# user then copies a corrupted URL (e.g. `sessions`→`sessios`, `code`→`cde`)
+# and Claude's OAuth endpoint rejects the mangled scope. We trigger on the
+# marker in the byte stream, then re-read the INTACT url from tmux's stored
+# grid with `capture-pane -J` (which rejoins wrapped lines losslessly) and
+# surface it to the client as a clean, clickable control frame.
+_OAUTH_URL_RE = re.compile(
+    r"https?://(?:claude\.ai/oauth/authorize|claude\.com/cai/oauth/authorize)\?\S+",
+    re.IGNORECASE,
+)
+
 # Banner sentinels that mean the TUI is ready to accept a typed prompt. A
 # workflow-injected prompt is only pasted once the input box exists — not while
 # a trust/bypass screen is up (would swallow it) and not mid-response (would
@@ -261,6 +274,10 @@ class _Client:
     """One attached observer. We hold callbacks (not WebSocket objects
     directly) so this module stays framework-agnostic."""
     on_output: ClientCallback
+    # Optional out-of-band control channel (JSON-able dicts, not raw PTY bytes)
+    # — e.g. the intact `/login` URL surfaced as {"type": "oauth_url", ...}.
+    # None for clients that only want raw output.
+    on_control: Optional[Callable[[dict], Awaitable[None]]] = None
     # Tracked just for logging / status — never the source of truth.
     label: str = "?"
     # While True, live output from the reader is buffered into `pending`
@@ -337,6 +354,11 @@ class PtySession:
     # status() so the API can fail the in-flight task instead of treating the
     # silent CLI as "done".
     auth_error: Optional[str] = None
+    # Intact Claude Code `/login` authorize URL, recovered from tmux's stored
+    # grid (see _maybe_detect_oauth_url). Latched once per session so the
+    # wrapped-redraw corruption of the on-screen copy can be bypassed: clients
+    # get this clean copy as a control frame and render it as a clickable link.
+    oauth_url: Optional[str] = None
 
     # tmux backing (see module header).
     _tmux_session: Optional[str] = None
@@ -709,6 +731,11 @@ class PtySession:
                 else:
                     targets.append((client_id, client))
 
+        # Surface an intact copy of the /login URL (one-shot, runs tmux
+        # capture-pane off the event loop). Done outside the lock so the
+        # blocking tmux call can't stall attach()/other output.
+        await self._maybe_detect_oauth_url(data)
+
         if not targets:
             return
         dead: list[tuple[int, _Client]] = []
@@ -775,6 +802,83 @@ class PtySession:
             f"[Terminal] Auth failure flagged (preflight) for agent {self.agent_id}: "
             f"{self.auth_error!r}"
         )
+
+    # ── OAuth /login URL recovery ─────────────────────────────────────────
+
+    def _capture_oauth_url(self) -> Optional[str]:
+        """Read the intact authorize URL back from tmux's stored grid.
+
+        `capture-pane -J` rejoins lines tmux marked as wrapped, recovering the
+        full URL that the wrapped client-redraw mangles char-by-char at each
+        wrap boundary. Runs blocking tmux subcommands — call off the event
+        loop (run_in_executor)."""
+        if not self._tmux_session:
+            return None
+        try:
+            cap = self._tmux_run([
+                "capture-pane", "-p", "-J", "-t", self._tmux_session, "-S", "-200",
+            ])
+        except Exception:
+            return None
+        if cap.returncode != 0:
+            return None
+        text = cap.stdout.decode("utf-8", "replace")
+        matches = _OAUTH_URL_RE.findall(text)
+        if not matches:
+            return None
+        # The most recently printed URL is the live one — take the last match
+        # and trim any trailing punctuation the CLI may have appended.
+        return matches[-1].rstrip().rstrip("\"').,)")
+
+    async def _maybe_detect_oauth_url(self, data: bytes) -> None:
+        """Detect the Claude Code `/login` URL in the PTY stream and surface an
+        INTACT copy to clients as a control frame.
+
+        One-shot per session: once latched we skip (a relaunch spawns a fresh
+        PtySession with oauth_url reset). The marker check is loose on purpose
+        — it only TRIGGERS the authoritative capture-pane read, which is what
+        actually recovers the un-corrupted URL."""
+        if self.oauth_url is not None or self._closed or not self._tmux_session:
+            return
+        if not data:
+            return
+        # Same one-chunk-ahead tail as _maybe_detect_auth_error: the reader
+        # extends _auto_answer_buf only AFTER _handle_output returns.
+        tail = _strip_ansi(
+            (bytes(self._auto_answer_buf) + data).decode("utf-8", errors="replace")
+        )
+        compact = re.sub(r"\s+", "", tail).lower()[-8192:]
+        if "oauth" not in compact and "authorize" not in compact:
+            return
+        try:
+            captured = await asyncio.get_running_loop().run_in_executor(
+                None, self._capture_oauth_url
+            )
+        except Exception as e:
+            logger.debug(f"[Terminal] oauth url capture failed for {self.agent_id}: {e}")
+            return
+        if not captured:
+            return
+        self.oauth_url = captured
+        logger.info(
+            f"[Terminal] Recovered intact Claude /login URL for agent "
+            f"{self.agent_id} (len={len(captured)}) — surfacing clickable link"
+        )
+        await self._broadcast_control({"type": "oauth_url", "url": captured})
+
+    async def _broadcast_control(self, msg: dict) -> None:
+        """Send a control event (JSON dict, not raw PTY bytes) to every attached
+        client that registered an on_control callback. Best-effort — a failing
+        client is left to the normal output-path eviction."""
+        for client in list(self._clients.values()):
+            if client.on_control is None:
+                continue
+            try:
+                await client.on_control(msg)
+            except Exception as e:
+                logger.debug(
+                    f"[Terminal] control broadcast failed for {self.agent_id}: {e}"
+                )
 
     async def wait_until_input_ready(self, timeout: float = 20.0) -> bool:
         """Block until the TUI shows an input-ready hint (or timeout).
@@ -970,10 +1074,18 @@ class PtySession:
                 pass
         asyncio.create_task(_close())
 
-    async def attach(self, on_output: ClientCallback, label: str = "?") -> int:
+    async def attach(
+        self,
+        on_output: ClientCallback,
+        label: str = "?",
+        on_control: Optional[Callable[[dict], Awaitable[None]]] = None,
+    ) -> int:
         """Register a new client. Replays the current scrollback synchronously
         so the client renders the existing screen state before live bytes
-        start arriving. Returns the opaque client id used for detach()."""
+        start arriving. Returns the opaque client id used for detach().
+
+        `on_control` is an optional out-of-band channel for JSON control events
+        (e.g. the intact /login URL); raw PTY bytes still go to `on_output`."""
         async with self._lock:
             self._cancel_idle_timer()
             # The raw scrollback ring is never replayed — that corrupts an
@@ -987,7 +1099,7 @@ class PtySession:
             # and a blank screen.
             client_id = self._next_client_id
             self._next_client_id += 1
-            client = _Client(on_output=on_output, label=label)
+            client = _Client(on_output=on_output, on_control=on_control, label=label)
             self._clients[client_id] = client
             logger.info(
                 f"[Terminal] Client {client_id} ({label}) attached to agent "
@@ -1021,6 +1133,13 @@ class PtySession:
             # the reader loop then fans out to every attached client (this one
             # included) — replacing the corrupt raw-scrollback replay.
             await self.request_repaint()
+            # If the /login URL was already recovered before this client
+            # attached (e.g. a reconnect mid-login), hand it the clean copy now.
+            if self.oauth_url and on_control is not None:
+                try:
+                    await on_control({"type": "oauth_url", "url": self.oauth_url})
+                except Exception:
+                    pass
         except BaseException:
             await self.detach(client_id)
             raise
@@ -1099,6 +1218,7 @@ class PtySession:
             "cols": self.cols,
             "rows": self.rows,
             "auth_error": self.auth_error,
+            "oauth_url": self.oauth_url,
         }
 
     def tail_text(self, max_bytes: int = 4096) -> str:
