@@ -7,7 +7,7 @@ import {
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
-import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/index.js';
+import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/columnIds.js';
 import {
   createBoardSchema,
   updateBoardSchema,
