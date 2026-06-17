@@ -301,7 +301,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // Keep modal task in sync with live data
   const liveSelectedTask = useMemo(() => {
     if (!selectedTask) return null;
-    return allTasks.find(t => t.id === selectedTask.id && t.agentId === selectedTask.agentId) || null;
+    return allTasks.find(t => t.id === selectedTask.id) || null;
   }, [selectedTask, allTasks]);
 
   // Repos in use on the active board — derived from tasks (distinct repoFullName)

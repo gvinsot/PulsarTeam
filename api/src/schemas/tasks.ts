@@ -15,10 +15,23 @@ export const updateTaskSchema = z.object({
   boardId: z.string().uuid().nullable().optional(),
   agentId: z.string().uuid().nullable().optional(),
   type: optionalString(50),
+  taskType: optionalString(50),
   priority: optionalString(50),
   dueDate: optionalString(50),
   position: z.number().int().optional(),
   isManual: z.boolean().optional(),
+  recurrence: z.any().optional(),
+  repoFullName: optionalString(300),
+  repoProvider: optionalString(50),
+  secondaryRepos: z.array(z.union([
+    z.string().max(300),
+    z.object({
+      provider: z.string().max(50).optional(),
+      fullName: z.string().max(300),
+    }).passthrough(),
+  ])).max(10).optional(),
+  storagePath: optionalString(500),
+  storageProvider: optionalString(50),
 });
 
 export const bulkMoveSchema = z.object({

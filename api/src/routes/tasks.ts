@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess } from '../middleware/authz.js';
 import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
-import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
+import { setTaskSignal, clearTaskSignal, normalizeSecondaryRepos } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
@@ -253,7 +253,11 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const { title, description, column, agentId, type, priority, dueDate, boardId, position, isManual } = req.body;
+    const {
+      title, description, column, agentId, type, taskType, priority, dueDate,
+      boardId, position, isManual, recurrence, repoFullName, repoProvider,
+      secondaryRepos, storagePath, storageProvider,
+    } = req.body;
     const now = new Date().toISOString();
     const username = req.user?.username || 'user';
 
@@ -326,13 +330,71 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
     if (title !== undefined && title !== task.title) { task.title = title; editedFields.push('title'); }
     if (description !== undefined && description !== task.text) { task.text = description; editedFields.push('description'); }
     if (agentId !== undefined && agentId !== task.assignee) {
+      if (agentId) {
+        const assignee = mgr.agents.get(agentId);
+        if (!assignee) return res.status(404).json({ error: 'Assignee agent not found' });
+        if (req.user.role !== 'admin' && assignee.boardId) {
+          const access = await checkBoardAccess(assignee.boardId, req.user.userId, req.user.role, 'edit');
+          if (!access.ok) return res.status(access.status || 403).json({ error: access.error || 'Access denied to assignee agent' });
+        }
+      }
       task.assignee = agentId;
       if (!editedFields.includes('assignee')) editedFields.push('assignee');
     }
-    if (type !== undefined && type !== task.taskType) { task.taskType = type; editedFields.push('taskType'); }
+    const nextTaskType = taskType !== undefined ? taskType : type;
+    if (nextTaskType !== undefined && nextTaskType !== task.taskType) {
+      task.taskType = nextTaskType || null;
+      editedFields.push('taskType');
+    }
     if (priority !== undefined && priority !== task.priority) { task.priority = priority; editedFields.push('priority'); }
     if (dueDate !== undefined && dueDate !== task.dueDate) { task.dueDate = dueDate; editedFields.push('dueDate'); }
     if (isManual !== undefined && isManual !== task.isManual) { task.isManual = !!isManual; editedFields.push('isManual'); }
+    if (recurrence !== undefined) {
+      const oldValue = task.recurrence || null;
+      if (recurrence && recurrence.enabled) {
+        task.recurrence = {
+          enabled: true,
+          period: recurrence.period || 'daily',
+          intervalMinutes: recurrence.intervalMinutes || 1440,
+          originalStatus: recurrence.originalStatus || oldValue?.originalStatus || 'backlog',
+          historyRetentionDays: recurrence.historyRetentionDays || null,
+          lastResetAt: oldValue?.lastResetAt || now,
+        };
+      } else {
+        task.recurrence = null;
+      }
+      if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null)) editedFields.push('recurrence');
+    }
+    if (repoFullName !== undefined) {
+      const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
+      if (value !== (task.repoFullName || null)) {
+        task.repoFullName = value;
+        task.repoProvider = value ? (repoProvider || task.repoProvider || 'github') : null;
+        task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
+        editedFields.push('repoFullName');
+      } else if (value && repoProvider !== undefined && repoProvider !== task.repoProvider) {
+        task.repoProvider = repoProvider || 'github';
+        editedFields.push('repoProvider');
+      }
+    }
+    if (secondaryRepos !== undefined) {
+      const oldValue = JSON.stringify(task.secondaryRepos || []);
+      task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
+      if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
+    }
+    if (storagePath !== undefined) {
+      const value = typeof storagePath === 'string' && storagePath.trim().length > 0
+        ? storagePath.trim().slice(0, 500)
+        : null;
+      if (value !== (task.storagePath || null)) {
+        task.storagePath = value;
+        task.storageProvider = value ? (storageProvider || task.storageProvider || 'onedrive') : null;
+        editedFields.push('storagePath');
+      } else if (value && storageProvider !== undefined && storageProvider !== task.storageProvider) {
+        task.storageProvider = storageProvider || 'onedrive';
+        editedFields.push('storageProvider');
+      }
+    }
     if (position !== undefined) { task.position = position; }
     task.updatedAt = now;
 
@@ -387,10 +449,21 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
         if (boardChanged || column !== undefined) memTask.status = task.status;
         if (boardId !== undefined) memTask.boardId = task.boardId;
         if (agentId !== undefined) memTask.assignee = task.assignee;
-        if (type !== undefined) memTask.taskType = task.taskType;
+        if (type !== undefined || taskType !== undefined) memTask.taskType = task.taskType;
         if (priority !== undefined) memTask.priority = task.priority;
         if (dueDate !== undefined) memTask.dueDate = task.dueDate;
         if (isManual !== undefined) memTask.isManual = task.isManual;
+        if (recurrence !== undefined) memTask.recurrence = task.recurrence;
+        if (repoFullName !== undefined) {
+          memTask.repoFullName = task.repoFullName;
+          memTask.repoProvider = task.repoProvider;
+          memTask.secondaryRepos = task.secondaryRepos;
+        }
+        if (secondaryRepos !== undefined) memTask.secondaryRepos = task.secondaryRepos;
+        if (storagePath !== undefined) {
+          memTask.storagePath = task.storagePath;
+          memTask.storageProvider = task.storageProvider;
+        }
         if (position !== undefined) memTask.position = task.position;
         memTask.updatedAt = task.updatedAt;
 

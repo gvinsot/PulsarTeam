@@ -105,7 +105,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     setStatusOpen(false);
     if (newStatus === task.status) return;
     try {
-      await api.setTaskStatus(task.agentId, task.id, newStatus);
+      await updateTaskById(task.id, { column: newStatus });
       onRefresh();
     } catch (err) {
       console.error('[TasksBoard] Status change failed:', err.message);
@@ -123,7 +123,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
       const provider = newFullName
         ? (availableRepos.find(r => r.fullName === newFullName)?.provider || 'github')
         : 'github';
-      await api.updateTaskRepo(task.agentId, task.id, newFullName || null, provider);
+      await updateTaskById(task.id, { repoFullName: newFullName || null, repoProvider: provider });
       await onRefresh();
     } catch (err) {
       setMutationError(err?.message || 'Failed to change repo');
@@ -134,7 +134,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
   const saveSecondaryRepos = async (next: Array<{ provider?: string; fullName: string }>) => {
     setMutationError(null);
     try {
-      await api.updateTaskSecondaryRepos(task.agentId, task.id, next);
+      await updateTaskById(task.id, { secondaryRepos: next });
       await onRefresh();
     } catch (err) {
       setMutationError(err?.message || 'Failed to change secondary repos');
@@ -149,7 +149,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
       const provider = newPath
         ? (availableStorages.find(s => s.path === newPath)?.provider || 'onedrive')
         : 'onedrive';
-      await api.updateTaskStorage(task.agentId, task.id, newPath || null, provider);
+      await updateTaskById(task.id, { storagePath: newPath || null, storageProvider: provider });
       await onRefresh();
     } catch (err) {
       setMutationError(err?.message || 'Failed to change storage');
@@ -163,7 +163,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     if (newType === (task.taskType || '')) return;
     setMutationError(null);
     try {
-      await api.updateTask(task.agentId, task.id, { taskType: newType || '' });
+      await updateTaskById(task.id, { taskType: newType || '' });
       onRefresh?.();
     } catch (err) {
       setMutationError(err?.message || 'Failed to change type');
@@ -175,7 +175,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
     if (targetId === (task.assignee || '')) return;
     setMutationError(null);
     try {
-      await api.setTaskAssignee(task.agentId, task.id, targetId);
+      await updateTaskById(task.id, { agentId: targetId || null });
       onRefresh?.();
     } catch (err) {
       setMutationError(err?.message || 'Failed to reassign task');
@@ -190,7 +190,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
       const recurrence = recEnabled
         ? buildRecurrence(recPeriod, recCustomInterval, recRetentionDays)
         : { enabled: false };
-      await api.updateTask(task.agentId, task.id, { recurrence });
+      await updateTaskById(task.id, { recurrence });
       await onRefresh();
       setEditingRecurrence(false);
     } catch (err) {
@@ -635,7 +635,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
                   onClick={async () => {
                     const newVal = !task.isManual;
                     try {
-                      await api.updateTask(task.agentId, task.id, { isManual: newVal });
+                      await updateTaskById(task.id, { isManual: newVal });
                       onRefresh?.();
                     } catch (err) {
                       console.error('Failed to toggle manual:', err);
