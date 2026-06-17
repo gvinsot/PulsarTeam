@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess } from '../middleware/authz.js';
 import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
-import { setTaskSignal, clearTaskSignal, normalizeSecondaryRepos } from '../services/agentManager/tasks.js';
+import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
@@ -15,6 +15,31 @@ import {
 const router = Router();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+const REPO_FULLNAME_RE = /^[\w.-]+\/[\w.-]+$/;
+const MAX_SECONDARY_REPOS = 10;
+
+function normalizeSecondaryReposForTask(input: any, primaryFullName?: string | null) {
+  if (!Array.isArray(input)) return [];
+  const primary = primaryFullName || null;
+  const seen = new Set<string>();
+  const out: Array<{ provider: string; fullName: string }> = [];
+  for (const raw of input) {
+    const fullName = typeof raw === 'string'
+      ? raw
+      : (raw && typeof raw.fullName === 'string' ? raw.fullName : null);
+    if (!fullName || !REPO_FULLNAME_RE.test(fullName)) continue;
+    if (primary && fullName === primary) continue;
+    if (seen.has(fullName)) continue;
+    seen.add(fullName);
+    const provider = raw && typeof raw === 'object' && typeof raw.provider === 'string' && raw.provider
+      ? raw.provider
+      : 'github';
+    out.push({ provider, fullName });
+    if (out.length >= MAX_SECONDARY_REPOS) break;
+  }
+  return out;
+}
 
 /** Check if the authenticated user has access to a task (via agent ownership OR board access) */
 async function requireTaskAccess(mgr, task, user) {
@@ -366,11 +391,11 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
       if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null)) editedFields.push('recurrence');
     }
     if (repoFullName !== undefined) {
-      const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
+      const value = repoFullName && REPO_FULLNAME_RE.test(repoFullName) ? repoFullName : null;
       if (value !== (task.repoFullName || null)) {
         task.repoFullName = value;
         task.repoProvider = value ? (repoProvider || task.repoProvider || 'github') : null;
-        task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
+        task.secondaryRepos = normalizeSecondaryReposForTask(task.secondaryRepos || [], value);
         editedFields.push('repoFullName');
       } else if (value && repoProvider !== undefined && repoProvider !== task.repoProvider) {
         task.repoProvider = repoProvider || 'github';
@@ -379,7 +404,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
     }
     if (secondaryRepos !== undefined) {
       const oldValue = JSON.stringify(task.secondaryRepos || []);
-      task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
+      task.secondaryRepos = normalizeSecondaryReposForTask(secondaryRepos, task.repoFullName || null);
       if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
     }
     if (storagePath !== undefined) {
