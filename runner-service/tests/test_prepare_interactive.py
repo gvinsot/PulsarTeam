@@ -119,3 +119,37 @@ def test_codex_recipe_includes_creds_watch(tmp_path, monkeypatch):
     assert recipe["creds_watch_path"].endswith("auth.json")
     assert callable(recipe["creds_on_change"])
     assert callable(recipe["creds_dedup_key"])
+
+
+def test_claude_recipe_refreshes_auth_before_spawning(tmp_path, monkeypatch):
+    import backends.claude_code as claude_module
+
+    agent_user = {
+        "username": "agent_claude",
+        "owner_id": "owner-1",
+        "home": str(tmp_path),
+        "uid": None,
+        "gid": None,
+    }
+    calls = []
+
+    async def _fake_user(agent_id, owner_id=None):
+        return agent_user
+
+    async def _fake_gate(user, agent_id):
+        calls.append((user, agent_id))
+        return None
+
+    backend = claude_module.ClaudeCodeBackend()
+    monkeypatch.setattr(claude_module, "ensure_agent_user", _fake_user)
+    monkeypatch.setattr(claude_module, "configure_claude_mcp", _noop_configure)
+    monkeypatch.setattr(claude_module, "configure_claude_instructions", _noop_configure)
+    monkeypatch.setattr(claude_module, "seed_credentials_file", lambda _user: True)
+    monkeypatch.setattr(backend, "_ensure_auth", _fake_gate)
+
+    recipe = asyncio.run(backend.prepare_interactive("agent-claude", owner_id="owner-1"))
+
+    assert calls == [(agent_user, "agent-claude")]
+    assert recipe["cmd"][0] == "claude"
+    assert recipe["creds_watch_path"].endswith(os.path.join(".claude", ".credentials.json"))
+    assert callable(recipe["creds_on_change"])

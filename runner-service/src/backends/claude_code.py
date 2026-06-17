@@ -122,11 +122,18 @@ class ClaudeCodeBackend(RunnerBackend):
         session/history inside the agent's per-HOME `.claude` tree.
         """
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
-        # Bootstrap from the global token if the per-owner record is empty.
-        # We don't refresh proactively here (no _ensure_auth gate) — the CLI
-        # itself will refresh if it needs to, and a PTY recipe has no channel
-        # to surface an auth_required payload anyway.
-        await self._bootstrap_owner_token(agent_user)
+        # Use the same auth gate as the headless path so an expired stored
+        # token is refreshed before we seed ~/.claude/.credentials.json for
+        # the TUI. If there is genuinely no token, keep spawning the terminal:
+        # the user still needs a live TUI to run /login.
+        gate = await self._ensure_auth(agent_user, agent_id)
+        if gate:
+            logger.warning(
+                "[Interactive Auth] Starting Claude terminal without a usable "
+                "persisted token for agent %s: %s",
+                agent_id,
+                gate.get("error"),
+            )
 
         effective_user = await self._prepare_spawn(agent_id, agent_user)
 

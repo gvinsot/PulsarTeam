@@ -471,6 +471,12 @@ def is_agent_token_expired(agent_user: dict, margin_seconds: int = 300) -> bool:
     agent_token_json = os.path.join(agent_user["home"], "oauth_token.json")
     data = _read_secret_json(agent_token_json)
     if not data:
+        # Legacy / direct-CLI login fallback: Claude writes this plaintext file
+        # itself, and older sessions may not have the encrypted oauth_token.json
+        # mirror yet. Use its expiry so proactive refresh still works.
+        creds = _read_plain_json(os.path.join(agent_user["home"], ".claude", ".credentials.json"))
+        data = (creds or {}).get("claudeAiOauth") or {}
+    if not data:
         return False
     expires_at_ms = data.get("expiresAt", 0)
     if not expires_at_ms:
@@ -483,7 +489,14 @@ def get_agent_refresh_token(agent_user: dict) -> Optional[str]:
         return None
     agent_token_json = os.path.join(agent_user["home"], "oauth_token.json")
     data = _read_secret_json(agent_token_json)
-    return (data or {}).get("refreshToken") or None
+    refresh = (data or {}).get("refreshToken")
+    if refresh:
+        return refresh
+    # Same fallback as is_agent_token_expired: direct `claude /login` writes the
+    # refresh token to the CLI credentials file first; mirror/watchdog sync can
+    # lag or be absent for legacy homes.
+    creds = _read_plain_json(os.path.join(agent_user["home"], ".claude", ".credentials.json"))
+    return ((creds or {}).get("claudeAiOauth") or {}).get("refreshToken") or None
 
 
 def resolve_token(agent_user: dict) -> Optional[str]:
