@@ -192,6 +192,102 @@ async function applyBoardLevelUpdate(
 }
 
 /**
+ * Core of the update_task MCP tool, extracted so both the Swarm API MCP
+ * (`update_task`) and the Pulsar Gateway MCP (`update_current_task`) share a
+ * single implementation. Locates the task (with DB / board-level fallback and
+ * owner rehydration), validates the requested status against the board
+ * workflow and the repo/storage formats, applies the mutation, and returns a
+ * discriminated result. Callers wrap the result in their own MCP envelope.
+ */
+export async function applyTaskUpdate(
+  agentManager,
+  { agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider }:
+    {
+      agent_id?: string; agent_name?: string; task_id: string; status?: string;
+      repo_full_name?: string; repo_provider?: string; storage_path?: string; storage_provider?: string;
+    },
+): Promise<{ ok: boolean; task?: any; agent?: any; boardLevel?: boolean; error?: string }> {
+  // Resolve the agent (either parameter form is accepted, mirroring add_task)
+  // and the task, with DB fallback/rehydration for unassigned or
+  // not-yet-in-memory tasks.
+  const { task, agent, boardLevel } = await locateTask(agentManager, { agent_id, agent_name, task_id });
+  if (!task) {
+    return { ok: false, error: `Task not found: ${task_id}` };
+  }
+
+  // Validate at least one mutating field is provided. We treat "" as a valid
+  // clear-signal for repo/storage, so explicitly check for undefined.
+  if (status === undefined && repo_full_name === undefined && storage_path === undefined) {
+    return { ok: false, error: 'At least one of status, repo_full_name, storage_path must be provided.' };
+  }
+
+  // Resolve status against the task's board workflow when provided. We fail
+  // loudly — silently accepting an unknown status used to leave tasks stranded
+  // in a column the board could not render or transition out of.
+  let resolvedStatus = status;
+  if (status !== undefined) {
+    if (!task.boardId) {
+      return { ok: false, error: `Cannot update status: task ${task_id} is not bound to a board.` };
+    }
+    const board = await getBoardById(task.boardId);
+    if (!board?.workflow?.columns?.length) {
+      return { ok: false, error: `Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.` };
+    }
+    const statusResolution = resolveBoardStatus(board, task.boardId, status);
+    if (statusResolution.error) {
+      return { ok: false, error: statusResolution.error };
+    }
+    resolvedStatus = statusResolution.status;
+  }
+
+  // Validate repo format (empty string = clear, valid format = set, anything
+  // else is rejected).
+  let repoUpdate: { value: string | null; provider: string | null } | undefined;
+  if (repo_full_name !== undefined) {
+    if (repo_full_name === '' || repo_full_name === null) {
+      repoUpdate = { value: null, provider: null };
+    } else {
+      const normalized = normalizeRepoFullName(repo_full_name);
+      if (!normalized) {
+        return { ok: false, error: `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format or empty string to clear.` };
+      }
+      repoUpdate = { value: normalized, provider: repo_provider || 'github' };
+    }
+  }
+
+  let storageUpdate: { value: string | null; provider: string | null } | undefined;
+  if (storage_path !== undefined) {
+    if (storage_path === '' || storage_path === null) {
+      storageUpdate = { value: null, provider: null };
+    } else {
+      const normalized = normalizeStoragePath(storage_path);
+      storageUpdate = { value: normalized, provider: storage_provider || 'onedrive' };
+    }
+  }
+
+  console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}`);
+
+  // Apply updates in a fixed order so the final task object reflects all
+  // mutations regardless of which fields were provided.
+  let updated: any = task;
+  if (boardLevel) {
+    updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status: resolvedStatus });
+  } else {
+    if (repoUpdate) {
+      updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
+    }
+    if (storageUpdate) {
+      updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
+    }
+    if (resolvedStatus !== undefined) {
+      updated = agentManager.setTaskStatus(agent.id, task_id, resolvedStatus) || updated;
+    }
+  }
+
+  return { ok: true, task: updated, agent, boardLevel };
+}
+
+/**
  * Creates an MCP server exposing swarm management tools:
  * - list_agents: List all agents with their status
  * - get_agent_status: Get detailed status for a specific agent
@@ -410,89 +506,18 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       storage_provider: z.string().optional().describe('Storage provider — defaults to "onedrive" when storage_path is set.'),
     },
     async ({ agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider }) => {
-      // Resolve the agent (either parameter form is accepted, mirroring
-      // add_task) and the task, with DB fallback/rehydration for unassigned
-      // or not-yet-in-memory tasks.
-      const { task, agent, boardLevel } = await locateTask(agentManager, { agent_id, agent_name, task_id });
-      if (!task) {
-        return jsonError(`Task not found: ${task_id}`);
-      }
-
-      // Validate at least one mutating field is provided. We treat "" as a
-      // valid clear-signal for repo/storage, so explicitly check for undefined.
-      if (status === undefined && repo_full_name === undefined && storage_path === undefined) {
-        return jsonError('At least one of status, repo_full_name, storage_path must be provided.');
-      }
-
-      // Resolve status against the task's board workflow when provided.
-      // We fail loudly — silently accepting an unknown status used to
-      // leave tasks stranded in a column the board could not render or
-      // transition out of.
-      let resolvedStatus = status;
-      if (status !== undefined) {
-        if (!task.boardId) {
-          return jsonError(`Cannot update status: task ${task_id} is not bound to a board.`);
-        }
-        const board = await getBoardById(task.boardId);
-        if (!board?.workflow?.columns?.length) {
-          return jsonError(`Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.`);
-        }
-        const statusResolution = resolveBoardStatus(board, task.boardId, status);
-        if (statusResolution.error) {
-          return jsonError(statusResolution.error);
-        }
-        resolvedStatus = statusResolution.status;
-      }
-
-      // Validate repo format (empty string = clear, valid format = set,
-      // anything else is rejected).
-      let repoUpdate: { value: string | null; provider: string | null } | undefined;
-      if (repo_full_name !== undefined) {
-        if (repo_full_name === '' || repo_full_name === null) {
-          repoUpdate = { value: null, provider: null };
-        } else {
-          const normalized = normalizeRepoFullName(repo_full_name);
-          if (!normalized) {
-            return jsonError(`Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format or empty string to clear.`);
-          }
-          repoUpdate = { value: normalized, provider: repo_provider || 'github' };
-        }
-      }
-
-      let storageUpdate: { value: string | null; provider: string | null } | undefined;
-      if (storage_path !== undefined) {
-        if (storage_path === '' || storage_path === null) {
-          storageUpdate = { value: null, provider: null };
-        } else {
-          const normalized = normalizeStoragePath(storage_path);
-          storageUpdate = { value: normalized, provider: storage_provider || 'onedrive' };
-        }
-      }
-
-      console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}`);
-
-      // Apply updates in a fixed order so the final task object reflects all
-      // mutations regardless of which fields were provided.
-      let updated: any = task;
-      if (boardLevel) {
-        updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status: resolvedStatus });
-      } else {
-        if (repoUpdate) {
-          updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
-        }
-        if (storageUpdate) {
-          updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
-        }
-        if (resolvedStatus !== undefined) {
-          updated = agentManager.setTaskStatus(agent.id, task_id, resolvedStatus) || updated;
-        }
-      }
-
-      return jsonOk({
-        success: true,
-        task: updated,
-        agent: boardLevel ? null : { id: agent.id, name: agent.name },
+      const r = await applyTaskUpdate(agentManager, {
+        agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider,
       });
+      if (r.ok) {
+        return jsonOk({
+          success: true,
+          task: r.task,
+          agent: r.boardLevel ? null : { id: r.agent.id, name: r.agent.name },
+        });
+      } else {
+        return jsonError(r.error || 'Failed to update task.');
+      }
     }
   );
 

@@ -45,6 +45,7 @@ import { createAutoLearnMcpHandler } from './services/autoLearnMcp.js';
 import { apiKeyRoutes } from './routes/apiKeys.js';
 import { settingsRoutes } from './routes/settings.js';
 import { createSwarmApiMcpHandler } from './services/swarmApiMcp.js';
+import { createPulsarGatewayMcpHandler } from './services/pulsarGatewayMcp.js';
 import { ensureApiKeysTable } from './services/apiKeyManager.js';
 import { authenticateApiKey } from './middleware/apiKeyAuth.js';
 import { authenticateCoderApiKey } from './middleware/coderApiKeyAuth.js';
@@ -240,6 +241,9 @@ const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
   ['/api/browser/mcp', createBrowserMcpHandler()],
   // Internal Swarm API MCP endpoint (JWT auth — used by agents via mcpManager)
   ['/api/swarm-api/mcp', createSwarmApiMcpHandler(agentManager)],
+  // Pulsar Gateway MCP — the single always-on MCP injected into CLI runners
+  // (task control + dynamic discovery/proxy of every other available MCP).
+  ['/api/pulsar-gateway/mcp', createPulsarGatewayMcpHandler(agentManager, mcpManager, skillManager)],
 ];
 for (const [path, handler] of mcpMounts) {
   app.all(path, authenticateToken, handler);

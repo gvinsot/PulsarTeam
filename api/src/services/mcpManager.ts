@@ -699,7 +699,7 @@ export class MCPManager {
     return { tools, unavailable };
   }
 
-  getClaudeMcpConfigForAgent(agent, skillManager = null, opts: { forceServerIds?: string[] } = {}) {
+  getClaudeMcpConfigForAgent(agent, skillManager = null, opts: { forceServerIds?: string[]; exclusive?: boolean } = {}) {
     if (!agent) return { mcpServers: {}, serverIds: [] };
 
     const entries = new Map();
@@ -743,11 +743,24 @@ export class MCPManager {
     };
 
     // Always-on servers forced by the caller (e.g. CLI runners always get the
-    // Swarm API MCP so the agent can signal task completion / inspect the swarm,
-    // regardless of explicit plugin/MCP assignment). Added first so their slug
-    // names are stable and they cannot be dropped by the dedup below.
+    // Pulsar Gateway MCP so the agent can control its task and discover/invoke
+    // every other available MCP, regardless of explicit plugin/MCP assignment).
+    // Added first so their slug names are stable and they cannot be dropped by
+    // the dedup below.
     for (const serverId of opts.forceServerIds || []) {
       addEntry(serverId);
+    }
+
+    // Exclusive mode: emit ONLY the forced servers. CLI runners use this so the
+    // Pulsar Gateway is the single injected MCP — plugin / board / direct MCPs
+    // are reached dynamically through the gateway (list_mcps / call_mcp_tool)
+    // rather than frozen into the native config at spawn.
+    if (opts.exclusive) {
+      const mcpServers = {};
+      for (const entry of entries.values()) {
+        mcpServers[entry.name] = entry.config;
+      }
+      return { mcpServers, serverIds: [...entries.keys()] };
     }
 
     const pluginManaged = new Set(agent.pluginMcpServers || []);

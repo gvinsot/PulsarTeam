@@ -62,6 +62,7 @@ test('internal MCP agent-context set matches the per-agent credential servers', 
     '__internal__jira',
     '__internal__onedrive',
     '__internal__outlook',
+    '__internal__pulsar_gateway',
     '__internal__slack',
     '__internal__wordpress',
   ]);

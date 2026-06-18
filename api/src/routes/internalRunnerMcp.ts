@@ -14,12 +14,15 @@ export function internalRunnerMcpRoutes(agentManager, skillManager, mcpManager) 
       const agent = agentManager.getById(req.params.agentId);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-      // CLI runners always get the Swarm API MCP injected automatically — it
-      // carries task_execution_complete (how a CLI agent signals it is done) and
-      // the swarm-inspection tools — even when no plugin/MCP is explicitly
-      // assigned to the agent.
+      // CLI runners get exactly ONE MCP injected: the Pulsar Gateway. It always
+      // carries task control (update_current_task, task_execution_complete) plus
+      // list_mcps / call_mcp_tool, through which the agent discovers and invokes
+      // every other MCP available to it or its board — even ones attached after
+      // spawn. `exclusive` suppresses the old per-plugin static wiring so the
+      // gateway is the single source of tools.
       const config = mcpManager.getClaudeMcpConfigForAgent(agent, skillManager, {
-        forceServerIds: ['mcp-swarm-api'],
+        forceServerIds: ['mcp-pulsar-gateway'],
+        exclusive: true,
       });
       res.json({
         configured: Object.keys(config.mcpServers || {}).length > 0,

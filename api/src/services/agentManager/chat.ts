@@ -590,12 +590,23 @@ export const chatMethods = {
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
     let out = `Your name is "${agent.name}".${agent.role ? ` Your role: ${agent.role}.` : ''}\n\nToday's date is ${todayStr}.\n\n${agent.instructions || 'You are a helpful AI assistant.'}`;
 
+    // PulsarTeam tools — every CLI runner gets exactly ONE MCP server, the
+    // Pulsar Gateway. Its task tools are always present; everything else
+    // (plugins on you or your board, which can be added at any time) is reached
+    // dynamically. Tell the agent to discover before acting.
+    out += `\n\n--- PulsarTeam Tools ---\n` +
+      `You have a single MCP server, the Pulsar Gateway, which is always available:\n` +
+      `- ALWAYS start by calling \`list_mcps\` to discover the MCP servers and tools currently available to you. More can be attached to you or your board at any time, so do not assume — list them.\n` +
+      `- To run any tool a server exposes, call \`call_mcp_tool({ server, tool, args })\` with the names and argument schema reported by list_mcps.\n` +
+      `- To move YOUR current task between board columns (e.g. to "In Review" or "Done"), call \`update_current_task({ status })\` — it auto-detects your active task, no task_id needed.\n` +
+      `- When your task is finished (after committing and pushing), call \`task_execution_complete({ comment })\`.`;
+
     // Swarm-leader collaboration context — describe the real MCP tools, not the
     // chat @mcp_call syntax. The Swarm API MCP server is assigned to the agent
     // separately (mcpManager) so the CLI sees those tools natively.
     if (agent.isLeader) {
       const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
-      out += `\n\n--- Swarm Leadership ---\nYou lead a swarm of agents. Use the Swarm API MCP tools (e.g. list_boards, add_task, list_agents, get_agent_status) to assign work and monitor progress. When adding a task, always specify the project so the agent works in the correct directory.`;
+      out += `\n\n--- Swarm Leadership ---\nYou lead a swarm of agents. The Swarm API server (run \`list_mcps\` to see it) exposes list_boards, add_task, list_agents and get_agent_status — invoke them via \`call_mcp_tool({ server: "Swarm API", tool, args })\` to assign work and monitor progress. When adding a task, always specify the project so the agent works in the correct directory.`;
       if (availableAgents.length > 0) {
         out += `\n\nOther agents currently in the swarm:\n${availableAgents.join('\n')}`;
       } else {

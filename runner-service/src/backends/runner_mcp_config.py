@@ -1,10 +1,17 @@
 """
-Fetch agent plugin MCP wiring from team-api and write runner-native config.
+Fetch agent MCP wiring from team-api and write runner-native config.
 
 For Claude Code, MCP servers live in ~/.claude/settings.json under
-`mcpServers`. The API returns exactly that shape after resolving plugin
-assignments, direct MCP assignments, internal JWT headers, and per-agent
-context headers.
+`mcpServers`. The API returns exactly that shape with the internal JWT and
+per-agent context (X-Agent-Id / X-Board-Id) headers already resolved.
+
+As of the gateway change, team-api returns a SINGLE server for CLI runners —
+the Pulsar Gateway — instead of one entry per attached plugin/MCP. The agent
+discovers and invokes every other MCP (its own plugins, board plugins, the
+Swarm API) dynamically through the gateway's list_mcps / call_mcp_tool tools.
+This module stays agnostic: it writes whatever server map the API returns and
+reconciles previously-managed entries idempotently, so the transition from the
+old multi-entry config to the single gateway entry happens on the next spawn.
 """
 
 from __future__ import annotations

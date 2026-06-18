@@ -19,6 +19,9 @@ export const INTERNAL_MCP_SERVERS = new Map<string, { path: string; agentContext
   ['__internal__code-index', { path: '/api/code-index/mcp', agentContext: false }],
   ['__internal__gandi_dns', { path: '/api/gandi-dns/mcp', agentContext: false }],
   ['__internal__swarm_api', { path: '/api/swarm-api/mcp', agentContext: false }],
+  // The Pulsar Gateway is agentContext:true so X-Agent-Id / X-Board-Id always
+  // flow — its task tools and dynamic MCP proxy resolve the calling agent/board.
+  ['__internal__pulsar_gateway', { path: '/api/pulsar-gateway/mcp', agentContext: true }],
   ['__internal__gmail', { path: '/api/gmail/mcp', agentContext: true }],
   ['__internal__outlook', { path: '/api/outlook/mcp', agentContext: true }],
   ['__internal__gdrive', { path: '/api/gdrive/mcp', agentContext: true }],
@@ -88,6 +91,16 @@ export const BUILTIN_MCP_SERVERS = [
     url: '__internal__swarm_api',
     description: 'Swarm management — list agents, check agent status, list boards (with repos in use), add and update tasks (with optional repo or storage targeting), signal task completion (task_execution_complete)',
     icon: '👥',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
+  },
+  {
+    id: 'mcp-pulsar-gateway',
+    name: 'Pulsar Gateway',
+    url: '__internal__pulsar_gateway',
+    description: 'The single always-on MCP for CLI runner agents — move/complete your current task (update_current_task, task_execution_complete) and dynamically discover + invoke every other MCP available to you or your board (list_mcps, call_mcp_tool)',
+    icon: '🛠️',
     apiKey: '',
     builtin: true,
     enabled: true,
