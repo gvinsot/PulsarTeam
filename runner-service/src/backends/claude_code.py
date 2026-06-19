@@ -43,7 +43,7 @@ from .claude_oauth import (
     token_http_request,
 )
 from .claude_interactive import run_interactive
-from .runner_mcp_config import configure_claude_mcp
+from .runner_mcp_config import configure_claude_mcp, claude_mcp_config_path
 from .runner_instructions_config import configure_claude_instructions
 
 
@@ -480,6 +480,18 @@ class ClaudeCodeBackend(RunnerBackend):
         ]
         if skip_permissions:
             cmd.append("--dangerously-skip-permissions")
+
+        # MCP servers. Claude Code ignores `mcpServers` in settings.json, so the
+        # agent's server map (written by configure_claude_mcp) is loaded via
+        # --mcp-config; --strict-mcp-config makes it the SINGLE source so the
+        # Pulsar Gateway (task control + dynamic MCP proxy) is guaranteed present
+        # and no stray project .mcp.json bypasses it. Skipped when there is no
+        # per-agent HOME (runAsRoot / global terminal) or the file was not written.
+        home = (agent_user or {}).get("home")
+        if home:
+            mcp_cfg = claude_mcp_config_path(home)
+            if os.path.isfile(mcp_cfg):
+                cmd.extend(["--mcp-config", mcp_cfg, "--strict-mcp-config"])
 
         if agent_id and session_id:
             if is_resume:

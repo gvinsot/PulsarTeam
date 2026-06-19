@@ -6,6 +6,7 @@ import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.j
 import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
+import { isCliRunner } from '../services/runners.js';
 import {
   reorderTasksSchema,
   updateTaskSchema,
@@ -107,6 +108,27 @@ function stopTaskExecutor(mgr, task) {
   const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
   if (executorId) mgr.stopAgent(executorId);
   clearActionRunning(task);
+}
+
+function requestTaskCliInterrupt(mgr, task): void {
+  const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
+  if (!executorId || !mgr?.executionManager) return;
+  const executor = mgr.agents.get(executorId);
+  const provider = mgr.executionManager.getProviderType?.(executorId);
+  if (executor && !isCliRunner(executor) && (!provider || provider === 'sandbox')) return;
+  const interrupt =
+    mgr.executionManager.interruptCliTerminalSessions
+    || mgr.executionManager.interruptTerminalSession;
+  if (!interrupt) return;
+  Promise.resolve(interrupt.call(mgr.executionManager, executorId))
+    .then((sent: boolean) => {
+      if (sent) {
+        console.log(`🛑 [Execution] Sent CLI interrupt to task executor ${executor?.name || executorId}`);
+      }
+    })
+    .catch((err: any) => {
+      console.warn(`⚠️ [Execution] CLI interrupt failed for task executor ${executorId}: ${err?.message || err}`);
+    });
 }
 
 /**
@@ -651,6 +673,7 @@ router.post('/:id/stop', async (req, res) => {
     // Clear stuck flags in memory
     const memTask = getMemTask(mgr, task.agentId, req.params.id);
     const target = memTask || task;
+    requestTaskCliInterrupt(mgr, target);
     target.actionRunning = false;
     target.actionRunningAgentId = null;
     target.actionRunningMode = null;

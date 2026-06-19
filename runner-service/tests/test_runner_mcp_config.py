@@ -29,6 +29,8 @@ from backends.runner_mcp_config import (  # noqa: E402
     configure_codex_mcp,
     configure_hermes_mcp,
     configure_openclaw_mcp,
+    configure_claude_mcp,
+    claude_mcp_config_path,
 )
 
 
@@ -358,3 +360,70 @@ def test_configure_openclaw_idempotent_removes_stale(tmp_path, monkeypatch):
     srv = json.loads((tmp_path / ".openclaw" / "openclaw.json").read_text())["mcp"]["servers"]
     assert "code-index" not in srv
     assert "swarm-manager" in srv
+
+
+# ── claude writer (--mcp-config file, NOT settings.json) ─────────────────────
+
+def test_configure_claude_writes_mcp_config_file(tmp_path, monkeypatch):
+    """Claude Code ignores settings.json mcpServers, so the server map must land
+    in ~/.claude/pulsar-mcp.json (loaded via --mcp-config), shaped as a top-level
+    {"mcpServers": {...}} document."""
+    _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
+    configure_claude_mcp(_agent(tmp_path), "agent-1")
+
+    cfg = claude_mcp_config_path(str(tmp_path))
+    data = json.loads(Path(cfg).read_text())
+    assert set(data.keys()) == {"mcpServers"}
+    assert data["mcpServers"] == CANONICAL
+    # The map must NOT have been written into settings.json (the CLI ignores it).
+    assert not (tmp_path / ".claude" / "settings.json").exists()
+
+
+def test_configure_claude_purges_stale_settings_mcp(tmp_path, monkeypatch):
+    """A settings.json polluted by older builds (mcpServers + managed key) gets
+    those keys stripped while unrelated settings are preserved."""
+    settings = tmp_path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({
+        "theme": "dark",
+        "permissions": {"deny": ["Bash"]},
+        "mcpServers": {"stale": {"type": "http", "url": "http://x/mcp"}},
+        "__pulsarManagedMcpServers": ["stale"],
+        "_pulsarMcpUpdatedAt": 123,
+    }))
+    _patch_fetch(monkeypatch, {"mcpServers": CANONICAL})
+
+    configure_claude_mcp(_agent(tmp_path), "agent-1")
+
+    after = json.loads(settings.read_text())
+    assert after["theme"] == "dark"                       # preserved
+    assert after["permissions"] == {"deny": ["Bash"]}      # preserved
+    assert "mcpServers" not in after                       # dead key removed
+    assert "__pulsarManagedMcpServers" not in after
+    assert "_pulsarMcpUpdatedAt" not in after
+    # And the live config file now carries the servers.
+    data = json.loads(Path(claude_mcp_config_path(str(tmp_path))).read_text())
+    assert data["mcpServers"] == CANONICAL
+
+
+def test_configure_claude_skips_on_fetch_failure(tmp_path, monkeypatch):
+    cfg = Path(claude_mcp_config_path(str(tmp_path)))
+    cfg.parent.mkdir(parents=True)
+    original = json.dumps({"mcpServers": {"keep": {"type": "http", "url": "http://k/mcp"}}})
+    cfg.write_text(original)
+    _patch_fetch(monkeypatch, None)  # team-api unreachable
+
+    configure_claude_mcp(_agent(tmp_path), "a")
+
+    assert cfg.read_text() == original  # left untouched
+
+
+def test_configure_claude_empty_map_clears_file(tmp_path, monkeypatch):
+    cfg = Path(claude_mcp_config_path(str(tmp_path)))
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text(json.dumps({"mcpServers": CANONICAL}))
+    _patch_fetch(monkeypatch, {"mcpServers": {}})  # agent has zero servers
+
+    configure_claude_mcp(_agent(tmp_path), "a")
+
+    assert not cfg.exists()  # stale file removed so --mcp-config is skipped

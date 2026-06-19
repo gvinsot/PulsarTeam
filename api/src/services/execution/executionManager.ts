@@ -196,6 +196,10 @@ export class ExecutionManager {
     return this._providerFor(agentId).closeTerminalSession(agentId);
   }
 
+  async interruptTerminalSession(agentId: string): Promise<boolean> {
+    return this._providerFor(agentId).interruptTerminalSession(agentId);
+  }
+
   /**
    * Close the shared PTY for this agent on every terminal-capable CLI runner.
    *
@@ -219,6 +223,28 @@ export class ExecutionManager {
     const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
     if (firstError) {
       console.warn(`⚠️ [Execution] closeCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`);
+    }
+    return false;
+  }
+
+  /**
+   * Interrupt the shared PTY for this agent on every terminal-capable CLI
+   * runner. Stop requests can arrive before this API process has rebound the
+   * agent to its runner, so fan out like closeCliTerminalSessions does.
+   */
+  async interruptCliTerminalSessions(agentId: string): Promise<boolean> {
+    const providers = PROVIDER_TYPES
+      .filter(type => type !== 'sandbox')
+      .map(type => this._getProvider(type));
+    const results = await Promise.allSettled(
+      providers.map(provider => provider.interruptTerminalSession(agentId))
+    );
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) return true;
+    }
+    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (firstError) {
+      console.warn(`⚠️ [Execution] interruptCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`);
     }
     return false;
   }

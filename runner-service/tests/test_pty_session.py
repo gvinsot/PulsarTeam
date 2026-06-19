@@ -115,3 +115,32 @@ def test_clear_then_set_auth_error_roundtrip():
     # After a genuine recovery + a fresh logout, the latch works again.
     session.set_auth_error("Please run /login")
     assert session.auth_error == "Please run /login"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cmd", "expected_sequence", "expected_label"),
+    [
+        (["claude"], b"\x03", "ctrl-c"),
+        (["codex"], b"\x1b", "escape"),
+        (["opencode"], b"\x07", "ctrl-g"),
+        (["openclaw", "tui"], b"\x1b", "escape"),
+        (["hermes", "chat"], b"\x03", "ctrl-c"),
+        (["aider"], b"\x03", "ctrl-c"),
+    ],
+)
+async def test_interrupt_uses_cli_specific_sequence(monkeypatch, cmd, expected_sequence, expected_label):
+    session = PtySession(agent_id="agent-a", cmd=cmd, cwd="/tmp", env={})
+    written = []
+
+    async def fake_write(data):
+        written.append(data)
+
+    monkeypatch.setattr(session, "is_alive", lambda: True)
+    monkeypatch.setattr(session, "write", fake_write)
+
+    result = await session.interrupt()
+
+    assert written == [expected_sequence]
+    assert result["interrupted"] is True
+    assert result["sequence"] == expected_label

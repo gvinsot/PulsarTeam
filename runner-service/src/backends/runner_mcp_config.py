@@ -1,9 +1,15 @@
 """
 Fetch agent MCP wiring from team-api and write runner-native config.
 
-For Claude Code, MCP servers live in ~/.claude/settings.json under
-`mcpServers`. The API returns exactly that shape with the internal JWT and
-per-agent context (X-Agent-Id / X-Board-Id) headers already resolved.
+For Claude Code, MCP server *definitions* are NOT read from settings.json
+(only approval keys such as enableAllProjectMcpServers live there). They must
+come from --mcp-config, the user ~/.claude.json, or a project .mcp.json. We
+therefore write the API's server map to a dedicated ~/.claude/pulsar-mcp.json
+and the claude backend launches with `--mcp-config <that file>
+--strict-mcp-config` (see ClaudeCodeBackend._build_cmd) so it is the single,
+guaranteed source of MCP servers for the session. The API returns the
+canonical Claude shape with the internal JWT and per-agent context
+(X-Agent-Id / X-Board-Id) headers already resolved.
 
 As of the gateway change, team-api returns a SINGLE server for CLI runners —
 the Pulsar Gateway — instead of one entry per attached plugin/MCP. The agent
@@ -19,7 +25,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
@@ -120,12 +125,56 @@ def _fetch_agent_mcp(agent_id: str) -> Optional[dict]:
     return data
 
 
-def configure_claude_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> None:
-    """Write ~/.claude/settings.json MCP servers for this agent.
+# Claude Code ignores `mcpServers` in settings.json (see module docstring), so
+# the agent's server map is written here and loaded via `--mcp-config <file>
+# --strict-mcp-config` at spawn. Lives under ~/.claude/ alongside settings.json.
+_CLAUDE_MCP_CONFIG_FILE = "pulsar-mcp.json"
 
-    The write is idempotent and removes previously managed plugin MCP entries
-    before adding the fresh set, so removing a plugin really removes its tools
-    from the next CLI spawn.
+
+def claude_mcp_config_path(home: str) -> str:
+    """Absolute path of the --mcp-config file written for a Claude runner."""
+    return os.path.join(home, ".claude", _CLAUDE_MCP_CONFIG_FILE)
+
+
+def _purge_stale_claude_settings_mcp(home: str, uid: Optional[int], gid: Optional[int]) -> None:
+    """Strip the dead `mcpServers` / `__pulsarManagedMcpServers` keys that older
+    builds wrote into ~/.claude/settings.json. The Claude CLI never read them,
+    but they make it look like MCP is configured when it is not — remove them so
+    the only live source is the --mcp-config file. All other settings (permissions,
+    theme, …) are preserved."""
+    settings_path = os.path.join(home, ".claude", "settings.json")
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(settings, dict):
+        return
+    if not any(k in settings for k in ("mcpServers", _MANAGED_KEY, "_pulsarMcpUpdatedAt")):
+        return
+    for k in ("mcpServers", _MANAGED_KEY, "_pulsarMcpUpdatedAt"):
+        settings.pop(k, None)
+    try:
+        _atomic_write(
+            settings_path, os.path.join(home, ".claude"),
+            json.dumps(settings, indent=2) + "\n", uid, gid,
+        )
+    except OSError:
+        pass
+
+
+def configure_claude_mcp(agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+    """Write the agent's MCP server map to ~/.claude/pulsar-mcp.json.
+
+    Claude Code does NOT read MCP definitions from settings.json, so the claude
+    backend launches with `--mcp-config <this file> --strict-mcp-config`,
+    making this file the single source of MCP servers for the session —
+    currently the Pulsar Gateway, which always carries update_current_task /
+    task_execution_complete plus the dynamic list_mcps / call_mcp_tool proxy.
+
+    A team-api fetch failure leaves any existing file untouched (we never strip
+    tools on a transient outage). An empty server map removes a stale file so
+    --mcp-config is not passed with nothing to load on the next spawn.
     """
     if not agent_user or not agent_id:
         return
@@ -137,51 +186,38 @@ def configure_claude_mcp(agent_user: Optional[dict], agent_id: Optional[str]) ->
     if data is None:
         return
 
-    settings_dir = os.path.join(home, ".claude")
-    settings_path = os.path.join(settings_dir, "settings.json")
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            settings = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        settings = {}
+    uid = agent_user.get("uid")
+    gid = agent_user.get("gid", uid)
 
-    mcp_servers = settings.setdefault("mcpServers", {})
-    previous = settings.get(_MANAGED_KEY) or []
-    for name in previous:
-        if isinstance(name, str):
-            mcp_servers.pop(name, None)
+    # One-time migration: clear the dead settings.json MCP keys older builds left.
+    _purge_stale_claude_settings_mcp(home, uid, gid)
 
     incoming = data.get("mcpServers") if isinstance(data, dict) else {}
-    if isinstance(incoming, dict):
-        mcp_servers.update(incoming)
-        settings[_MANAGED_KEY] = list(incoming.keys())
-    else:
-        settings[_MANAGED_KEY] = []
+    if not isinstance(incoming, dict):
+        incoming = {}
 
-    settings["_pulsarMcpUpdatedAt"] = int(time.time())
+    cfg_dir = os.path.join(home, ".claude")
+    cfg_path = claude_mcp_config_path(home)
 
+    if not incoming:
+        # No servers for this agent — drop a stale file so the backend skips the
+        # --mcp-config flag rather than launching with an empty (strict) map.
+        try:
+            os.remove(cfg_path)
+        except OSError:
+            pass
+        logger.info(f"[Runner MCP] no MCP servers for agent {agent_id[:12]} — cleared {_CLAUDE_MCP_CONFIG_FILE}")
+        return
+
+    payload = json.dumps({"mcpServers": incoming}, indent=2) + "\n"
     try:
-        os.makedirs(settings_dir, mode=0o700, exist_ok=True)
-        tmp = f"{settings_path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-            f.write("\n")
-        os.replace(tmp, settings_path)
-        os.chmod(settings_path, 0o600)
-        uid = agent_user.get("uid")
-        gid = agent_user.get("gid", uid)
-        if uid is not None:
-            try:
-                os.chown(settings_dir, uid, gid)
-                os.chown(settings_path, uid, gid)
-            except OSError:
-                pass
+        _atomic_write(cfg_path, cfg_dir, payload, uid, gid)
         logger.info(
-            f"[Runner MCP] configured {len(settings.get(_MANAGED_KEY) or [])} MCP server(s) "
-            f"for agent {agent_id[:12]}"
+            f"[Runner MCP] configured {len(incoming)} MCP server(s) for agent "
+            f"{agent_id[:12]} via --mcp-config"
         )
     except OSError as e:
-        logger.warning(f"[Runner MCP] failed to write {settings_path}: {e}")
+        logger.warning(f"[Runner MCP] failed to write {cfg_path}: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

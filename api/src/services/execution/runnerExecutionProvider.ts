@@ -323,6 +323,21 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     return Boolean(data.closed);
   }
 
+  async interruptTerminalSession(agentId: string): Promise<boolean> {
+    const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/interrupt`, {
+      method: 'POST',
+      headers: this._headers(agentId),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 404) return false;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`terminal session interrupt failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+    }
+    const data: any = await res.json().catch(() => ({}));
+    return Boolean(data.interrupted);
+  }
+
   /**
    * Fetch the runner-side shared-PTY session status for an agent, or null if
    * there's no session (404) or the runner is unreachable. The status carries

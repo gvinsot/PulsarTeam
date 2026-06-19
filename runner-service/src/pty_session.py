@@ -95,6 +95,29 @@ def _tmux_session_name(agent_id: str) -> str:
     """tmux session names may not contain '.' or ':' — sanitise the agent id."""
     return "pt-" + re.sub(r"[.:\s]", "_", agent_id)
 
+_INTERRUPT_RECIPES = {
+    # Claude Code documents Ctrl-C as the hardcoded interrupt/cancel shortcut.
+    "claude": ("ctrl-c", b"\x03"),
+    "claude-code": ("ctrl-c", b"\x03"),
+    # Codex and OpenClaw use Escape for aborting the active TUI run; Ctrl-C can
+    # exit the whole session when they are already back at the prompt.
+    "codex": ("escape", b"\x1b"),
+    "openclaw": ("escape", b"\x1b"),
+    # OpenCode's documented abort shortcut is Ctrl-G.
+    "opencode": ("ctrl-g", b"\x07"),
+    # Prompt-toolkit style chat CLIs keep Ctrl-C as their interrupt primitive.
+    "hermes": ("ctrl-c", b"\x03"),
+    "aider": ("ctrl-c", b"\x03"),
+}
+
+
+def _interrupt_recipe(cmd: list[str]) -> tuple[str, str, bytes]:
+    """Return (cli_name, key_label, bytes) for the running CLI command."""
+    executable = os.path.basename(cmd[0]) if cmd else ""
+    cli_name = executable.lower()
+    key_label, payload = _INTERRUPT_RECIPES.get(cli_name, ("ctrl-c", b"\x03"))
+    return cli_name or "unknown", key_label, payload
+
 _ANSI_RE = re.compile(
     r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
 )
@@ -1058,6 +1081,32 @@ class PtySession:
         if not self._clients:
             self._schedule_idle_timer()
 
+    async def interrupt(self) -> dict:
+        """Ask the foreground CLI to abort its active run without killing the
+        shared terminal session.
+
+        Different coding TUIs deliberately bind different keys for "stop this
+        turn"; routing through a backend-specific recipe avoids using Ctrl-C
+        for CLIs where it exits the whole app.
+        """
+        if not self.is_alive():
+            return {
+                "interrupted": False,
+                "reason": "session_not_alive",
+            }
+        cli_name, key_label, payload = _interrupt_recipe(self.cmd)
+        await self.write(payload)
+        logger.info(
+            f"[Terminal] Sent {key_label} interrupt to {cli_name} "
+            f"session for agent {self.agent_id}"
+        )
+        return {
+            "interrupted": True,
+            "cli": cli_name,
+            "sequence": key_label,
+            "alive": self.is_alive(),
+        }
+
     async def resize(self, cols: int, rows: int) -> None:
         """Apply a new geometry. When multiple clients have different
         viewport sizes we take the smaller of each axis to avoid overflow
@@ -1382,6 +1431,16 @@ async def close_session(agent_id: str) -> bool:
         return False
     await session.close()
     return True
+
+
+async def interrupt_session(agent_id: str) -> dict:
+    session = _SESSIONS.get(agent_id)
+    if session is None:
+        return {
+            "interrupted": False,
+            "reason": "no_session",
+        }
+    return await session.interrupt()
 
 
 async def close_all_sessions() -> None:

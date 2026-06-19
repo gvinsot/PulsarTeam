@@ -13,6 +13,7 @@ Routes:
     GET    /terminal/sessions/{agent_id}        — status of one session
     DELETE /terminal/sessions/{agent_id}        — kill a session
     POST   /terminal/sessions/{agent_id}/input  — paste task prompt into TUI
+    POST   /terminal/sessions/{agent_id}/interrupt — abort active TUI run
     WS     /ws/terminal/{agent_id}              — attach to / create a session
 
 The WS protocol is bidirectional binary + small JSON control frames:
@@ -119,6 +120,18 @@ async def delete_terminal_session(agent_id: str, authorization: Optional[str] = 
     _check_api_key(authorization, None)
     closed = await pty_session.close_session(agent_id)
     return JSONResponse({"closed": closed})
+
+
+@router.post("/terminal/sessions/{agent_id}/interrupt")
+async def interrupt_terminal_session(agent_id: str, authorization: Optional[str] = Header(None)) -> JSONResponse:
+    _check_api_key(authorization, None)
+    if not getattr(BACKEND, "supports_interactive_terminal", False):
+        raise HTTPException(
+            status_code=501,
+            detail=f"Backend {BACKEND.name} does not support interactive terminals",
+        )
+    result = await pty_session.interrupt_session(agent_id)
+    return JSONResponse(result)
 
 
 @router.post("/terminal/sessions/{agent_id}/input")

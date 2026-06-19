@@ -1,6 +1,26 @@
 // ─── Agent Status: getAgentStatus, swarm status, setStatus, stopAgent ───────
 import { saveAgent, clearActionRunningForAgent, saveTaskToDb } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
+import { isCliRunner } from '../runners.js';
+
+function requestCliTerminalInterrupt(manager: any, agent: any): void {
+  if (!manager?.executionManager || !agent?.id) return;
+  const provider = manager.executionManager.getProviderType?.(agent.id);
+  if (!isCliRunner(agent) && (!provider || provider === 'sandbox')) return;
+  const interrupt =
+    manager.executionManager.interruptCliTerminalSessions
+    || manager.executionManager.interruptTerminalSession;
+  if (!interrupt) return;
+  Promise.resolve(interrupt.call(manager.executionManager, agent.id))
+    .then((sent: boolean) => {
+      if (sent) {
+        console.log(`🛑 [Execution] Sent CLI interrupt to ${agent.name || agent.id}`);
+      }
+    })
+    .catch((err: any) => {
+      console.warn(`⚠️ [Execution] CLI interrupt failed for ${(agent.name || agent.id)}: ${err?.message || err}`);
+    });
+}
 
 /** @this {import('./index.js').AgentManager} */
 export const statusMethods = {
@@ -253,6 +273,8 @@ export const statusMethods = {
     const agent = this.agents.get(id);
     if (!agent) return false;
 
+    requestCliTerminalInterrupt(this, agent);
+
     const controller = this.abortControllers.get(id);
     if (controller) {
       controller.abort();
@@ -264,6 +286,7 @@ export const statusMethods = {
     if (agent.isLeader) {
       for (const [subId, subAgent] of this.agents) {
         if (subId !== id && (subAgent as any).status === 'busy') {
+          requestCliTerminalInterrupt(this, subAgent);
           const subCtrl = this.abortControllers.get(subId);
           if (subCtrl) {
             subCtrl.abort();

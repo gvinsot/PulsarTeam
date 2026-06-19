@@ -120,6 +120,14 @@ export class ExecutionProvider {
   }
 
   /**
+   * Ask an interactive terminal-backed CLI to abort its active run while
+   * keeping the shared terminal session alive.
+   */
+  async interruptTerminalSession(agentId: string): Promise<boolean> {
+    return false;
+  }
+
+  /**
    * Paste text into the interactive terminal prompt for runners that expose a
    * real CLI. This is intentionally narrow: workflow execute actions use it
    * to submit the task prompt to an idle CLI runner.
