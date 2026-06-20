@@ -283,10 +283,16 @@ export async function applyTaskUpdate(
   // task this delegates to shared completion bookkeeping (append summary, link
   // commits, fire the execute completion signal). For an unassigned/board-level
   // task there is no execute wait, but we still record the summary on the card.
+  // Credit the agent that ACTUALLY invoked update_task (the caller resolved from
+  // agent_id / agent_name), NOT `agent` from locateTask — which gets reassigned
+  // to the task's OWNER when the caller isn't the in-memory owner. Without this,
+  // an agent moving a task it doesn't own had its summary attributed to the
+  // owner (e.g. the comment showed the DevOps agent instead of the mover).
+  const callerAgent = findAgent(agentManager, { agent_id, agent_name }) || agent;
   let completed = false;
   if (wantsCompletion) {
-    if (!boardLevel && agent) {
-      const outcome = await agentManager.recordTaskCompletion(agent.id, {
+    if (!boardLevel && callerAgent) {
+      const outcome = await agentManager.recordTaskCompletion(callerAgent.id, {
         comment: comment || '',
         explicitTaskId: task.id,
         commitsArg: (commits || '').trim(),
@@ -296,10 +302,11 @@ export async function applyTaskUpdate(
       // Board-level task: append the summary as a note + persist (no agent /
       // no execute wait to signal). Mirrors appendTaskNote's card format.
       const now = new Date().toISOString();
-      const detailBlock = `**[${agent?.name || 'mcp'}]** ${comment.trim()}`;
+      const actorName = callerAgent?.name || 'mcp';
+      const detailBlock = `**[${actorName}]** ${comment.trim()}`;
       task.text = (task.text || '') + '\n\n---\n' + detailBlock;
       if (!task.history) task.history = [];
-      task.history.push({ status: task.status, at: now, by: agent?.name || 'mcp', type: 'edit', field: 'text', oldValue: null, newValue: detailBlock });
+      task.history.push({ status: task.status, at: now, by: actorName, type: 'edit', field: 'text', oldValue: null, newValue: detailBlock });
       task.updatedAt = now;
       await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
       agentManager._emit('task:updated', { agentId: task.agentId || null, task });
@@ -320,7 +327,9 @@ export async function applyTaskUpdate(
       updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
     }
     if (resolvedStatus !== undefined) {
-      updated = agentManager.setTaskStatus(agent.id, task_id, resolvedStatus) || updated;
+      // First arg must stay the owner (in-memory task lookup), but credit the
+      // status-change history to the caller, not the owner.
+      updated = agentManager.setTaskStatus(agent.id, task_id, resolvedStatus, { by: callerAgent?.name }) || updated;
     }
   }
 

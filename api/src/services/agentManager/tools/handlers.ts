@@ -167,7 +167,10 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   // advances the workflow.
   let completed = false;
   if (hasCompletion) {
-    const outcome = await mgr.recordTaskCompletion(taskAgentId, {
+    // Attribute the summary to the agent that called @update_task (ctx.agentId,
+    // the actor) — NOT taskAgentId, which is the task's OWNER and would make the
+    // comment show the owner's name instead of the mover's.
+    const outcome = await mgr.recordTaskCompletion(agentId, {
       comment: comment || '',
       explicitTaskId: task.id,
       commitsArg: (commits || '').trim(),
