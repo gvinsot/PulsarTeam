@@ -60,7 +60,7 @@ Mounted directly in `api/src/index.ts`. Each `ALL /api/<name>/mcp` exposes a JSO
 | `/api/auto-learn/mcp` | Auto-learning utility (records facts agents discover). |
 | `/api/browser/mcp` | Headless browser tools. |
 | `/api/swarm-api/mcp` | The Swarm API MCP, internal-bound — used by agents to delegate to other agents. |
-| `/api/pulsar-gateway/mcp` | The Pulsar Gateway MCP — the **single** MCP injected into CLI runner agents. Exposes task control (`update_current_task`, `task_execution_complete`) plus `list_mcps` / `call_mcp_tool`, through which the agent dynamically discovers and invokes every other MCP available to it or its board (agent plugins ∪ board plugins ∪ direct agent MCPs ∪ Swarm API). Replaces the old per-plugin static MCP wiring at spawn. |
+| `/api/pulsar-gateway/mcp` | The Pulsar Gateway MCP — the **single** MCP injected into CLI runner agents. Exposes task control via one unified `update_task` tool (move the auto-detected current task between columns and/or mark it finished with a summary + commits) plus `list_mcps` / `call_mcp_tool`, through which the agent dynamically discovers and invokes every other MCP available to it or its board (agent plugins ∪ board plugins ∪ direct agent MCPs ∪ Swarm API). Replaces the old per-plugin static MCP wiring at spawn. |
 | `/api/gmail/mcp`, `/api/outlook/mcp` | Email; runs in-process and can read agent-side attachment files via the runner bridge. |
 | `/api/gdrive/mcp`, `/api/onedrive/mcp` | Cloud storage. |
 | `/api/github/mcp`, `/api/slack/mcp`, `/api/jira/mcp`, `/api/wordpress/mcp`, `/api/s3/mcp` | Per-integration MCPs. |

@@ -11,21 +11,11 @@ import { HANDLERS, appendTaskNote, HandlerCtx } from './tools/handlers.js';
 export const toolsMethods = {
 
   /**
-   * Core of `task_execution_complete`: mark the agent's active task as
-   * execution-complete (set the completion signal `_waitForExecutionComplete`
-   * is polling for), append the agent's summary onto the task, and link commits.
-   *
-   * Shared by two call sites that signal completion differently:
-   *  - the native `@task_execution_complete` text tool (see _processToolCalls),
-   *    used by sandbox/non-CLI agents whose output we parse;
-   *  - the Swarm API MCP tool of the same name (see swarmApiMcp.ts), used by CLI
-   *    runner agents (claude-code/codex/opencode/openclaw/hermes), which invoke
-   *    MCP tools rather than emitting @-syntax our parser would see.
-   *
-   * Returns the per-tool outcome ({ success, result, isTerminal? }) so each
-   * caller can shape its own response envelope.
+   * Record the completion part of `update_task`: append the agent's summary,
+   * link commits, and set the execute-mode completion signal watched by the
+   * task loop. Non-execute workflow modes finish through the status move.
    */
-  async applyTaskExecutionComplete(
+  async recordTaskCompletion(
     this: any,
     agentId: string,
     { comment = '', explicitTaskId = '', commitsArg = '', streamCallback = null }:
@@ -33,7 +23,7 @@ export const toolsMethods = {
   ): Promise<{ success: boolean; result: string; isTerminal?: boolean; taskId?: string }> {
     const agent = this.agents.get(agentId);
     if (!agent) {
-      console.warn(`⚠️ [TaskComplete] task_execution_complete for unknown agent ${agentId}`);
+      console.warn(`⚠️ [UpdateTask] Completion requested for unknown agent ${agentId}`);
       return { success: false, result: `Agent ${agentId} not found.` };
     }
 
@@ -47,7 +37,7 @@ export const toolsMethods = {
       const found = this._findTaskByIdOrPrefix(explicitTaskId);
       if (found) { inProgressTask = found.task; ownerAgentId = found.agentId; }
       if (!inProgressTask) {
-        console.warn(`⚠️  [TaskComplete] Explicit taskId "${explicitTaskId}" not found, falling back to auto-detect`);
+        console.warn(`⚠️  [UpdateTask] Explicit taskId "${explicitTaskId}" not found, falling back to auto-detect`);
       }
     }
 
@@ -77,21 +67,21 @@ export const toolsMethods = {
           }
         }
       }
-      console.log(`⚠️ [TaskComplete] Agent "${agent.name}" (${agentId}) called task_execution_complete but no active task found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`);
+      console.log(`⚠️ [UpdateTask] Agent "${agent.name}" (${agentId}) requested completion but no active task was found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`);
       return { success: true, result: 'No action needed (no active task).', isTerminal: true };
     }
 
-    // Guard: task_execution_complete only makes sense when a _waitForExecutionComplete
-    // is actually listening (execute mode). In decide/refine modes the agent should
-    // use @update_task instead. Warn and let the chat loop continue so the agent
-    // can self-correct.
-    if (inProgressTask.actionRunningMode && inProgressTask.actionRunningMode !== 'execute') {
-      console.warn(`⚠️ [TaskComplete] Agent "${agent.name}" called task_execution_complete but task ${inProgressTask.id} is in "${inProgressTask.actionRunningMode}" mode. Use @update_task instead.`);
-      return { success: false, result: `Wrong tool: this task is in ${inProgressTask.actionRunningMode} mode, not execute mode. Use @update_task(${inProgressTask.id}, <new_status>) to change the task status.` };
-    }
+    // The completion signal consumed by _waitForExecutionComplete only makes
+    // sense in execute mode: decide/refine waits advance on the status move, and
+    // a stray signal there could be consumed by a later execute run. Fire the
+    // signal (and link commits) only in execute mode; append the summary in any
+    // mode.
+    const fireSignal = !inProgressTask.actionRunningMode || inProgressTask.actionRunningMode === 'execute';
 
-    setTaskSignal(inProgressTask.id, 'completed', true);
-    setTaskSignal(inProgressTask.id, 'comment', comment);
+    if (fireSignal) {
+      setTaskSignal(inProgressTask.id, 'completed', true);
+      setTaskSignal(inProgressTask.id, 'comment', comment);
+    }
 
     // Append the completion comment to the task description, same convention as
     // @update_task(taskId, status, details). This makes the agent's summary visible
@@ -103,9 +93,10 @@ export const toolsMethods = {
 
     // ownerAgentId was captured while resolving inProgressTask above.
 
-    // Link commits if provided (format: "hash:message, hash:message")
+    // Link commits if provided (format: "hash:message, hash:message").
+    // Commit linking is part of execute-mode completion only (see fireSignal).
     let linkedCommitCount = 0;
-    if (commitsArg) {
+    if (fireSignal && commitsArg) {
       const commitEntries = commitsArg.split(/,\s*(?=[a-f0-9])/).map((s: string) => s.trim()).filter(Boolean);
       for (const entry of commitEntries) {
         const colonIdx = entry.indexOf(':');
@@ -114,7 +105,7 @@ export const toolsMethods = {
         if (hash && /^[a-f0-9]{7,40}$/.test(hash)) {
           this.addTaskCommit(ownerAgentId, inProgressTask.id, hash, msg);
           linkedCommitCount++;
-          console.log(`🔗 [TaskComplete] Linked commit ${hash.slice(0, 7)} to task ${inProgressTask.id}`);
+          console.log(`🔗 [UpdateTask] Linked commit ${hash.slice(0, 7)} to task ${inProgressTask.id}`);
         }
       }
     }
@@ -125,7 +116,7 @@ export const toolsMethods = {
     // - The execution was retried and commits were made in a previous round
     // - The auto-detection during @run_command(git push) failed
     const existingCommits = inProgressTask.commits || [];
-    if (linkedCommitCount === 0 && existingCommits.length === 0 && this.executionManager?.hasEnvironment(agentId)) {
+    if (fireSignal && linkedCommitCount === 0 && existingCommits.length === 0 && this.executionManager?.hasEnvironment(agentId)) {
       try {
         // Use %aI (ISO author date) so we can filter by task time window in code
         // and avoid relying solely on git's --since (which is fuzzy on edge cases).
@@ -152,7 +143,7 @@ export const toolsMethods = {
               const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
               if (linked) {
                 linkedCommitCount++;
-                console.log(`🔗 [TaskComplete] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`);
+                console.log(`🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`);
               }
             }
           }
@@ -172,16 +163,16 @@ export const toolsMethods = {
               const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
               if (linked) {
                 linkedCommitCount++;
-                console.log(`🔗 [TaskComplete] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`);
+                console.log(`🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`);
               }
             }
           }
         }
         if (linkedCommitCount === 0) {
-          console.log(`ℹ️ [TaskComplete] No auto-detectable commits for task ${inProgressTask.id} (agent="${agent.name}")`);
+          console.log(`ℹ️ [UpdateTask] No auto-detectable commits for task ${inProgressTask.id} (agent="${agent.name}")`);
         }
       } catch (e: any) {
-        console.warn(`⚠️ [TaskComplete] Auto-detect commits failed: ${e.message}`);
+        console.warn(`⚠️ [UpdateTask] Auto-detect commits failed: ${e.message}`);
       }
     }
 
@@ -197,7 +188,7 @@ export const toolsMethods = {
       try {
         await saveTaskToDb({ ...inProgressTask, agentId: ownerAgentId });
       } catch (err: any) {
-        console.warn(`⚠️ [TaskComplete] Failed to persist appended comment for task ${inProgressTask.id}: ${err?.message || err}`);
+        console.warn(`⚠️ [UpdateTask] Failed to persist appended comment for task ${inProgressTask.id}: ${err?.message || err}`);
       }
       const taskPayload: any = { ...inProgressTask, agentId: ownerAgentId };
       if (inProgressTask.assignee) {
@@ -208,13 +199,13 @@ export const toolsMethods = {
       this._emit('task:updated', { agentId: ownerAgentId, task: taskPayload });
     }
 
-    console.log(`✅ [TaskComplete] Agent "${agent.name}" signaled completion for task ${inProgressTask.id} (status="${inProgressTask.status}", assignee="${inProgressTask.assignee || 'none'}"): "${comment.slice(0, 120)}"`);
+    console.log(`✅ [UpdateTask] Agent "${agent.name}" recorded completion for task ${inProgressTask.id} (status="${inProgressTask.status}", assignee="${inProgressTask.assignee || 'none'}"): "${comment.slice(0, 120)}"`);
     if (streamCallback) {
-      streamCallback(`\n✅ Task execution complete: ${comment.slice(0, 200)}\n`);
+      streamCallback(`\n✅ Task updated: ${comment.slice(0, 200)}\n`);
     }
     return {
       success: true,
-      result: `Task "${inProgressTask.text.slice(0, 80)}" marked as execution complete. Comment: ${comment}`,
+      result: `Task "${inProgressTask.text.slice(0, 80)}" completion recorded. Comment: ${comment}`,
       isTerminal: true,
       taskId: inProgressTask.id,
     };

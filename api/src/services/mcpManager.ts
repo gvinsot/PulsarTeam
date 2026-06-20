@@ -711,7 +711,7 @@ export class MCPManager {
       // This config is written into the CLI runner's config file at spawn and
       // the CLI holds the Authorization header in memory for its whole session,
       // so the internal token must outlive long coding sessions — with the 1h
-      // default, every internal MCP call (including task_execution_complete)
+      // default, every internal MCP call
       // starts failing with 401 after an hour.
       const internal = resolveInternalMcpConfig(server.url, { expiresIn: '24h' });
       const headers = {

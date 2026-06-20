@@ -192,21 +192,29 @@ async function applyBoardLevelUpdate(
 }
 
 /**
- * Core of the update_task MCP tool, extracted so both the Swarm API MCP
- * (`update_task`) and the Pulsar Gateway MCP (`update_current_task`) share a
- * single implementation. Locates the task (with DB / board-level fallback and
- * owner rehydration), validates the requested status against the board
- * workflow and the repo/storage formats, applies the mutation, and returns a
- * discriminated result. Callers wrap the result in their own MCP envelope.
+ * Core of the unified `update_task` MCP tool, shared by the Swarm API MCP and
+ * the Pulsar Gateway MCP. Locates the task (with DB / board-level fallback and
+ * owner rehydration), validates the requested status against the board workflow
+ * and the repo/storage formats, optionally records task completion (summary
+ * comment + linked commits + the execute-mode completion signal), applies the
+ * status/repo/storage mutation, and returns a discriminated result. Callers wrap
+ * the result in their own MCP envelope.
+ *
+ * A status move to a non-active column already resolves the workflow wait, so
+ * the extra completion work is recording the summary/commits and, for execute
+ * tasks whose chain advances the column later, firing the completion signal. We
+ * run completion BEFORE the status mutation so the task is still active when
+ * the execute wait/commit auto-detection look at it.
  */
 export async function applyTaskUpdate(
   agentManager,
-  { agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider }:
+  { agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider, comment, commits, done }:
     {
       agent_id?: string; agent_name?: string; task_id: string; status?: string;
       repo_full_name?: string; repo_provider?: string; storage_path?: string; storage_provider?: string;
+      comment?: string; commits?: string; done?: boolean;
     },
-): Promise<{ ok: boolean; task?: any; agent?: any; boardLevel?: boolean; error?: string }> {
+): Promise<{ ok: boolean; task?: any; agent?: any; boardLevel?: boolean; completed?: boolean; error?: string }> {
   // Resolve the agent (either parameter form is accepted, mirroring add_task)
   // and the task, with DB fallback/rehydration for unassigned or
   // not-yet-in-memory tasks.
@@ -215,10 +223,13 @@ export async function applyTaskUpdate(
     return { ok: false, error: `Task not found: ${task_id}` };
   }
 
-  // Validate at least one mutating field is provided. We treat "" as a valid
+  const hasMutation = status !== undefined || repo_full_name !== undefined || storage_path !== undefined;
+  const wantsCompletion = Boolean((comment && comment.trim()) || (commits && commits.trim()) || done);
+
+  // Validate at least one actionable field is provided. We treat "" as a valid
   // clear-signal for repo/storage, so explicitly check for undefined.
-  if (status === undefined && repo_full_name === undefined && storage_path === undefined) {
-    return { ok: false, error: 'At least one of status, repo_full_name, storage_path must be provided.' };
+  if (!hasMutation && !wantsCompletion) {
+    return { ok: false, error: 'Nothing to update. Provide a status, repo_full_name, storage_path, a comment, or done:true.' };
   }
 
   // Resolve status against the task's board workflow when provided. We fail
@@ -265,7 +276,36 @@ export async function applyTaskUpdate(
     }
   }
 
-  console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}`);
+  console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}, completion: ${wantsCompletion ? 'yes' : 'no'}`);
+
+  // Completion FIRST (before the status move) so the task is still active when
+  // the execute-mode wait / commit auto-detection inspect it. For an assigned
+  // task this delegates to shared completion bookkeeping (append summary, link
+  // commits, fire the execute completion signal). For an unassigned/board-level
+  // task there is no execute wait, but we still record the summary on the card.
+  let completed = false;
+  if (wantsCompletion) {
+    if (!boardLevel && agent) {
+      const outcome = await agentManager.recordTaskCompletion(agent.id, {
+        comment: comment || '',
+        explicitTaskId: task.id,
+        commitsArg: (commits || '').trim(),
+      });
+      completed = Boolean(outcome?.isTerminal);
+    } else if (comment && comment.trim()) {
+      // Board-level task: append the summary as a note + persist (no agent /
+      // no execute wait to signal). Mirrors appendTaskNote's card format.
+      const now = new Date().toISOString();
+      const detailBlock = `**[${agent?.name || 'mcp'}]** ${comment.trim()}`;
+      task.text = (task.text || '') + '\n\n---\n' + detailBlock;
+      if (!task.history) task.history = [];
+      task.history.push({ status: task.status, at: now, by: agent?.name || 'mcp', type: 'edit', field: 'text', oldValue: null, newValue: detailBlock });
+      task.updatedAt = now;
+      await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
+      agentManager._emit('task:updated', { agentId: task.agentId || null, task });
+      completed = true;
+    }
+  }
 
   // Apply updates in a fixed order so the final task object reflects all
   // mutations regardless of which fields were provided.
@@ -284,7 +324,7 @@ export async function applyTaskUpdate(
     }
   }
 
-  return { ok: true, task: updated, agent, boardLevel };
+  return { ok: true, task: updated, agent, boardLevel, completed };
 }
 
 /**
@@ -293,16 +333,15 @@ export async function applyTaskUpdate(
  * - get_agent_status: Get detailed status for a specific agent
  * - list_boards: List all task boards (and the repos in use on each)
  * - add_task: Add an unassigned task to a board (with optional repo / storage targeting)
- * - update_task: Update an existing task's status, repo, or storage binding
- * - task_execution_complete: Signal that the calling agent finished its task
+ * - update_task: Update a task's status/repo/storage AND/OR mark it finished
+ *   (summary comment + linked commits).
+ * - search_tasks: Search task history
  *
- * `callerAgentId` is the agent the MCP request is acting on behalf of, resolved
- * from the `X-Agent-Id` header (set automatically when this MCP is wired into a
- * CLI runner agent — see mcpManager.getClaudeMcpConfigForAgent). It scopes
- * task_execution_complete to the right agent; it is null for external (API-key)
- * callers, where that tool requires an explicit agent_id.
+ * The second parameter (the X-Agent-Id caller context) is no longer used: every
+ * task tool here takes an explicit task_id and resolves the owning agent from
+ * the task itself. It is kept for call-site compatibility with the handler.
  */
-export function createSwarmApiMcpServer(agentManager, callerAgentId: string | null = null) {
+export function createSwarmApiMcpServer(agentManager, _callerAgentId: string | null = null) {
   const server = new McpServer({
     name: 'Swarm API',
     version: '1.0.0',
@@ -492,26 +531,33 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
   );
 
   // ── update_task ─────────────────────────────────────────────────────────
+  // The task-mutation+completion tool. Moving a task to a non-active column
+  // finishes workflow waits; pass `comment` (and optionally `commits`) to also
+  // record a summary and link commits.
   server.tool(
     'update_task',
-    'Update an existing task: change status, repository, or storage path. To clear a repo or storage binding, pass an empty string. At least one of status, repo_full_name, storage_path must be provided.',
+    'Update a task AND/OR mark it finished. Change its status (board column), repository, or storage path, and/or record completion by passing a `comment` summary (plus optional `commits`). To finish a task: move it to the next column with a comment — e.g. update_task({ task_id, status: "Done", comment: "what you did" }). To clear a repo/storage binding, pass an empty string. At least one of status, repo_full_name, storage_path, comment, or done must be provided.',
     {
       agent_id: z.string().optional().describe('Agent UUID owning the task'),
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
       task_id: z.string().describe('Task UUID to update'),
       status: z.string().optional().describe('New status (workflow column label preferred, column ID also accepted, e.g. "Backlog", "in_progress", "Done")'),
+      comment: z.string().optional().describe('Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished (commit and push your code first).'),
+      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
+      done: z.boolean().optional().describe('Set true to signal the task is finished when you have no status change or comment to add (rarely needed — a status move or comment already finishes it).'),
       repo_full_name: z.string().optional().describe('New repository in "owner/repo" format. Pass an empty string to unbind the task from any repo.'),
       repo_provider: z.string().optional().describe('Repository provider — defaults to "github" when repo_full_name is set.'),
       storage_path: z.string().optional().describe('New storage location (e.g. OneDrive folder path). Pass an empty string to unbind the task from any storage.'),
       storage_provider: z.string().optional().describe('Storage provider — defaults to "onedrive" when storage_path is set.'),
     },
-    async ({ agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider }) => {
+    async ({ agent_id, agent_name, task_id, status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider }) => {
       const r = await applyTaskUpdate(agentManager, {
-        agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider,
+        agent_id, agent_name, task_id, status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider,
       });
       if (r.ok) {
         return jsonOk({
           success: true,
+          completed: Boolean(r.completed),
           task: r.task,
           agent: r.boardLevel ? null : { id: r.agent.id, name: r.agent.name },
         });
@@ -609,59 +655,15 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
     }
   );
 
-  // ── task_execution_complete ──────────────────────────────────────────────
-  // CLI runner agents (claude-code/codex/opencode/openclaw/hermes) invoke MCP
-  // tools rather than emitting the @task_execution_complete text syntax our
-  // chat parser understands, so this is THE way they signal a task is done.
-  // It shares agentManager.applyTaskExecutionComplete with the native tool, so
-  // behaviour (completion signal, summary appended to the task, commit linking)
-  // is identical across both paths.
-  server.tool(
-    'task_execution_complete',
-    'Signal that you have finished executing your currently assigned task. You MUST call this when your work is done — until you do, the system considers the task still in progress and keeps sending reminders. Commit and push your code first.',
-    {
-      comment: z.string().describe('A brief summary of what was accomplished. Appended onto the task so the requester sees it.'),
-      task_id: z.string().optional().describe('Task UUID to mark complete. Optional — auto-detected from your active task when omitted.'),
-      agent_id: z.string().optional().describe('Agent UUID acting. Optional — inferred from the request context for CLI runner agents; only needed for external API-key callers.'),
-      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
-    },
-    async ({ comment, task_id, agent_id, commits }) => {
-      const agentId = (agent_id || callerAgentId || '').trim();
-      if (!agentId) {
-        return jsonError('No agent context. Provide agent_id (external callers) — CLI runner agents are resolved automatically.');
-      }
-
-      const outcome = await agentManager.applyTaskExecutionComplete(agentId, {
-        comment: comment || '',
-        explicitTaskId: (task_id || '').trim(),
-        commitsArg: (commits || '').trim(),
-      });
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            success: outcome.success,
-            completed: Boolean(outcome.isTerminal),
-            task_id: outcome.taskId || null,
-            message: outcome.result,
-          }, null, 2),
-        }],
-        ...(outcome.success ? {} : { isError: true }),
-      };
-    }
-  );
-
   return server;
 }
 
 /**
  * Creates an Express request handler for the Swarm API MCP endpoint (Streamable HTTP).
  *
- * X-Agent-Id is injected when this MCP is wired into a CLI runner agent
- * (mcpManager.getClaudeMcpConfigForAgent), scoping task_execution_complete
- * to the calling agent. Absent for external API-key callers. The server
- * builder takes (agentManager, callerAgentId) and ignores boardId.
+ * The X-Agent-Id header is still passed through to the server builder for
+ * call-site compatibility, but the task tools no longer depend on it — each
+ * resolves the owning agent from the explicit task_id. boardId is ignored.
  */
 export function createSwarmApiMcpHandler(agentManager) {
   return createMcpHttpHandler('Swarm API', ({ agentId }) =>

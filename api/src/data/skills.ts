@@ -131,8 +131,7 @@ DOCUMENT CONVERSION — pandoc is installed. Before reading large non-text docum
   For spreadsheets (.xlsx, .ods, .csv), the output will be markdown tables.
 
 - @list_my_tasks() — list your assigned tasks with their status and ID
-- @update_task(taskId, status) — update a task status (any workflow column ID or error)
-- @task_execution_complete(comment, taskId, commits) — signal that your current task is finished (REQUIRED when executing a task). taskId is optional (auto-detected). commits is optional (format: hash:msg, hash:msg — must be already pushed).
+- @update_task(taskId, status, comment, commits) — move a task between columns AND/OR finish it. status is any workflow column ID (or error). Pass a comment to record a summary AND mark the task finished (this is how you complete a task — there is no separate completion tool). commits is optional (format: hash:msg, hash:msg — must be already pushed). To finish: @update_task(taskId, <final column>, <summary>).
 - Use @run_command to execute git commands and any shell commands
 
 GIT WORKFLOW — use @run_command for all git operations:
@@ -158,8 +157,8 @@ IMPORTANT:
 - Each tool call MUST be on its own line
 - Do NOT add decorative text before tool calls — just call the tool directly
 - NEVER stop yourself — keep working until the task is fully complete
-- When executing an assigned task, you MUST call @task_execution_complete(summary) when done. The system will not consider your task finished until you call this tool. The system WILL send you reminders if you forget. You can optionally specify the taskId: @task_execution_complete(summary, taskId)
-- COMPLETION SEQUENCE: Always follow this order: 1) commit and push with @run_command (git add, git commit, git push), 2) @task_execution_complete(summary) to signal completion. You can also specify an explicit task: @task_execution_complete(summary, taskId)
+- When executing an assigned task, you MUST finish it by calling @update_task(taskId, <final column>, summary) when done — moving it to its final column WITH a summary. The system will not consider your task finished until you move it out of the working column. The system WILL send you reminders if you forget.
+- COMPLETION SEQUENCE: Always follow this order: 1) commit and push with @run_command (git add, git commit, git push), 2) @update_task(taskId, <final column>, summary) to move the task to its final column and signal completion.
 - Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.
 
 EXECUTION RULES — follow these steps strictly, one at a time:
@@ -168,24 +167,23 @@ EXECUTION RULES — follow these steps strictly, one at a time:
 3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
 4. VERIFY: Use @read_file to confirm your changes are correct.
 5. COMMIT: Use @run_command with git commands to commit and push: git add -A, git commit -m "message (by YourName)", git push.
-6. COMPLETE: Call @task_execution_complete(summary) to signal you are done.
+6. COMPLETE: Call @update_task(taskId, <final column>, summary) to move the task to its final column and signal you are done.
 
 CRITICAL RULES:
 - You MUST call @write_file BEFORE committing. Without @write_file, there are NO changes to commit.
 - Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
 - Do NOT batch multiple unrelated tools in a single response.
-- Do NOT call @task_execution_complete in the same response as @read_file — finish reading first, then write, then commit.
+- Do NOT finish the task (@update_task with a summary) in the same response as @read_file — finish reading first, then write, then commit, then complete.
 
 HANDLING TASKS THAT ASK A QUESTION:
 Some tasks are not work to execute but questions to answer (e.g. "What is the status of X?", "How does Y work?", "Which approach should we use for Z?", any task ending with "?"). When you detect that the task is asking you a question rather than asking you to do work:
 1. Research the answer (read code, search files, check logs, etc.).
-2. Write the answer back onto the task itself using @update_task with the answer in the details parameter — this records the answer ON the task so the requester can read it directly in the kanban:
-   @update_task(taskId, currentStatus, """
+2. Write the answer back onto the task AND finish it in a single @update_task call — put the full answer in the comment parameter (it is appended onto the task so the requester reads it directly in the kanban) and move the task to its final column:
+   @update_task(taskId, <final column>, """
    ## Answer
    <your detailed answer here, with citations like file_path:line_number when relevant>
    """)
-3. Then call @task_execution_complete(<one-line summary of the answer>, taskId) to signal completion.
-Do NOT just put the answer in the @task_execution_complete summary — that goes to the swarm leader, not onto the task. The task description is what the requester sees, so the answer MUST be appended there via @update_task.
+The comment you pass to @update_task is what records the answer ON the task and marks it finished — so put the FULL answer there, not a one-line summary.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
 Call them using the @mcp_call(Code Index, tool_name, {"param": "value"}) syntax.

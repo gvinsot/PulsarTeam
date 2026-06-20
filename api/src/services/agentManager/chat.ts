@@ -321,7 +321,7 @@ export const chatMethods = {
       // ── Transient stream error → retry with backoff ──
       const isUserStop = err.message === 'Agent stopped by user';
       const isAuthError = err.status === 401 || err.status === 403;
-      const hasPartialToolCalls = fullResponse && /@(read_file|write_file|list_dir|search_files|run_command|append_file|mcp_call|report_error|task_execution_complete|search_skill|create_skill|update_skill|delete_skill)\b/i.test(fullResponse);
+      const hasPartialToolCalls = fullResponse && /@(read_file|write_file|list_dir|search_files|run_command|append_file|mcp_call|report_error|update_task|search_skill|create_skill|update_skill|delete_skill)\b/i.test(fullResponse);
       const isTransient = !isUserStop && !isAuthError && !err.isRateLimit && !this._isContextExceededError(err.message);
       const MAX_STREAM_RETRIES = 3;
       const retryCount = agent._streamRetryCount || 0;
@@ -598,8 +598,8 @@ export const chatMethods = {
       `You have a single MCP server, the Pulsar Gateway, which is always available:\n` +
       `- ALWAYS start by calling \`list_mcps\` to discover the MCP servers and tools currently available to you. More can be attached to you or your board at any time, so do not assume — list them.\n` +
       `- To run any tool a server exposes, call \`call_mcp_tool({ server, tool, args })\` with the names and argument schema reported by list_mcps.\n` +
-      `- To move YOUR current task between board columns (e.g. to "In Review" or "Done"), call \`update_current_task({ status })\` — it auto-detects your active task, no task_id needed.\n` +
-      `- When your task is finished (after committing and pushing), call \`task_execution_complete({ comment })\`.`;
+      `- To move YOUR current task between board columns (e.g. to "In Review" or "Done") and/or mark it finished, call \`update_task({ status, comment })\` — it auto-detects your active task, no task_id needed.\n` +
+      `- To finish a task: after committing and pushing, move it to its final column with a summary, e.g. \`update_task({ status: "Done", comment: "what you did" })\`. There is no separate completion tool.`;
 
     // Swarm-leader collaboration context — describe the real MCP tools, not the
     // chat @mcp_call syntax. The Swarm API MCP server is assigned to the agent
@@ -1039,7 +1039,7 @@ export const chatMethods = {
       if (toolResults.length > 0) {
         const hasTerminal = toolResults.some((r: any) => r.isTerminal);
         const nonTerminal = toolResults.filter((r: any) => !r.isTerminal);
-        // If any tool signaled terminal (e.g. @task_execution_complete), stop
+        // If any tool signaled terminal (e.g. a completing @update_task), stop
         // the continuation loop even if there were other non-terminal results
         // (e.g. run_command). Those tools already executed; sending their
         // output back to the LLM only causes it to loop and re-call the same
@@ -1074,7 +1074,7 @@ export const chatMethods = {
         } else if (hasRealErrors) {
           continuationPrompt = '\nSome tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
         } else if (hasSuccessfulCommit) {
-          continuationPrompt = '\nYour code has been committed and pushed. Now call @task_execution_complete(summary) to signal that your task is done.';
+          continuationPrompt = '\nYour code has been committed and pushed. Now call @update_task(taskId, <final column>, summary) to move the task to its final column and signal that your task is done.';
         }
 
         const toolImages = nonTerminal.flatMap((r: any) => r.images || []);

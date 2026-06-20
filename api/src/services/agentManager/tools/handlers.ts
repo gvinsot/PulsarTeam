@@ -30,9 +30,9 @@ export interface HandlerCtx {
 export type ToolHandler = (ctx: HandlerCtx) => Promise<any | null>;
 
 /** Append an agent's note onto a task's description + a matching {type:'edit'}
- * history entry. `stampUpdatedAt` is true for the task_execution_complete copy
- * (which has no following setTaskStatus) and false for the update_task copy
- * (which calls setTaskStatus right after — that stamps updatedAt itself). */
+ * history entry. `stampUpdatedAt` stamps task.updatedAt when no setTaskStatus
+ * follows (recordTaskCompletion passes true; callers that move the task right
+ * after can pass false since setTaskStatus stamps updatedAt itself). */
 export function appendTaskNote(task: any, agentName: string, note: string, stampUpdatedAt: boolean): void {
   const separator = '\n\n---\n';
   const detailBlock = `**[${agentName}]** ${note.trim()}`;
@@ -73,36 +73,6 @@ async function resolveBoardNames(tasks: any[], swallowErrors: boolean): Promise<
   return boardNames;
 }
 
-// ── @task_execution_complete() ──
-const handleTaskExecutionComplete: ToolHandler = async ({ mgr, agent, agentId, call, streamCallback, dedup }) => {
-  if (dedup.taskExecutionCompleteDone) {
-    console.log(`[Dedup] Skipping duplicate @task_execution_complete from "${agent.name}"`);
-    return null;
-  }
-  dedup.taskExecutionCompleteDone = true;
-  // Validate args: taskId (arg[1]) must look like a UUID or UUID prefix.
-  // If it doesn't, it's part of the comment (the parser split on a comma in natural language).
-  const UUID_PREFIX_RE = /^[a-f0-9]{8,}(-[a-f0-9]{4,}){0,4}$/i;
-  let comment = call.args[0] || '';
-  let explicitTaskId = (call.args[1] || '').trim();
-  let commitsArgRaw = call.args[2] || '';
-  if (explicitTaskId && !UUID_PREFIX_RE.test(explicitTaskId)) {
-    // Not a valid taskId — merge back into comment
-    comment = call.args.filter(Boolean).join(', ');
-    explicitTaskId = '';
-    commitsArgRaw = '';
-  }
-  // Shared with the Swarm API MCP tool of the same name (used by CLI
-  // runner agents, which call MCP tools instead of @-syntax).
-  const outcome = await mgr.applyTaskExecutionComplete(agentId, {
-    comment,
-    explicitTaskId,
-    commitsArg: commitsArgRaw,
-    streamCallback,
-  });
-  return { tool: 'task_execution_complete', args: call.args, ...outcome };
-};
-
 // ── @report_error() ──
 const handleReportError: ToolHandler = async ({ mgr, agent, agentId, call, streamCallback }) => {
   const errorDescription = call.args[0] || 'Unknown error';
@@ -127,8 +97,13 @@ const handleReportError: ToolHandler = async ({ mgr, agent, agentId, call, strea
 };
 
 // ── @update_task() ──
+// The task tool: change status AND/OR record completion. Args are
+// (taskId, status?, comment?, commits?). Passing a comment (or commits) appends
+// the summary, links commits, and fires the execute-mode completion signal. A
+// status move to a non-active column finishes workflow waits, so the common
+// "done" call is @update_task(taskId, nextColumn, "summary").
 const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
-  const [taskId, rawStatus, details] = call.args;
+  const [taskId, rawStatus, comment, commits] = call.args;
   let task: any = mgr._getAgentTasks(agentId).find((t: any) => t.id === taskId);
   if (!task) task = mgr._getAgentTasks(agentId).find((t: any) => t.id.startsWith(taskId));
   let taskAgentId = agentId;
@@ -145,82 +120,79 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
     return { tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` };
   }
 
+  const hasStatus = Boolean(rawStatus && String(rawStatus).trim());
+  const hasCompletion = Boolean((comment && String(comment).trim()) || (commits && String(commits).trim()));
+  if (!hasStatus && !hasCompletion) {
+    return {
+      tool: 'update_task',
+      args: call.args,
+      success: false,
+      error: 'Provide a status and/or a comment. Use @update_task(taskId, status) to move it, or @update_task(taskId, status, "summary") to finish it.',
+    };
+  }
+
   // Validate status against the board workflow. Agents must move tasks
   // only to columns that exist in the board — otherwise the task lands
   // in an invisible/unreachable state. Case-insensitive match is used
-  // so "Resolution" still resolves to "resolution".
-  //
-  // Validation is strict: if we can't confirm the status is a valid
-  // column we reject. A silent fallback to the raw status (previous
-  // behavior) used to let bad statuses slip through when the board
-  // lookup failed or the task had no boardId.
+  // so "Resolution" still resolves to "resolution". Strict: if we can't
+  // confirm the status is a valid column we reject.
   let newStatus = rawStatus;
-  if (!rawStatus || !String(rawStatus).trim()) {
-    return {
-      tool: 'update_task',
-      args: call.args,
-      success: false,
-      error: 'Status is required. Use: @update_task(taskId, <new_status>)',
-    };
+  if (hasStatus) {
+    if (!task.boardId) {
+      return { tool: 'update_task', args: call.args, success: false, error: `Cannot update status: task ${task.id} is not bound to a board.` };
+    }
+    let wf: any;
+    try {
+      wf = await getWorkflowForBoard(task.boardId);
+    } catch (err: any) {
+      return { tool: 'update_task', args: call.args, success: false, error: `Cannot validate status: failed to load workflow for board ${task.boardId} (${err?.message || 'unknown error'}).` };
+    }
+    if (!wf?.columns?.length) {
+      return { tool: 'update_task', args: call.args, success: false, error: `Cannot update status: board ${task.boardId} has no workflow columns configured.` };
+    }
+    const match = wf.columns.find((c: any) => c.id.toLowerCase() === String(rawStatus).toLowerCase());
+    if (!match) {
+      const validIds = wf.columns.map((c: any) => c.id).join(', ');
+      return { tool: 'update_task', args: call.args, success: false, error: `Invalid status "${rawStatus}" for this task's board. Valid columns: ${validIds}.` };
+    }
+    if (match.id !== rawStatus) {
+      console.log(`[UpdateTask] Normalizing status "${rawStatus}" → "${match.id}"`);
+    }
+    newStatus = match.id;
   }
-  if (!task.boardId) {
-    return {
-      tool: 'update_task',
-      args: call.args,
-      success: false,
-      error: `Cannot update status: task ${task.id} is not bound to a board.`,
-    };
-  }
-  let wf: any;
-  try {
-    wf = await getWorkflowForBoard(task.boardId);
-  } catch (err: any) {
-    return {
-      tool: 'update_task',
-      args: call.args,
-      success: false,
-      error: `Cannot validate status: failed to load workflow for board ${task.boardId} (${err?.message || 'unknown error'}).`,
-    };
-  }
-  if (!wf?.columns?.length) {
-    return {
-      tool: 'update_task',
-      args: call.args,
-      success: false,
-      error: `Cannot update status: board ${task.boardId} has no workflow columns configured.`,
-    };
-  }
-  const match = wf.columns.find((c: any) => c.id.toLowerCase() === String(rawStatus).toLowerCase());
-  if (!match) {
-    const validIds = wf.columns.map((c: any) => c.id).join(', ');
-    return {
-      tool: 'update_task',
-      args: call.args,
-      success: false,
-      error: `Invalid status "${rawStatus}" for this task's board. Valid columns: ${validIds}.`,
-    };
-  }
-  if (match.id !== rawStatus) {
-    console.log(`[UpdateTask] Normalizing status "${rawStatus}" → "${match.id}"`);
-  }
-  newStatus = match.id;
 
-  if (details && details.trim()) {
-    // No updatedAt stamp here — setTaskStatus below stamps it.
-    appendTaskNote(task, agent.name, details, false);
+  // Completion bookkeeping FIRST (while the task is still active): append the
+  // summary, link commits, and fire the execute-mode completion signal. In
+  // decide/refine mode it only appends the summary; the status move below
+  // advances the workflow.
+  let completed = false;
+  if (hasCompletion) {
+    const outcome = await mgr.recordTaskCompletion(taskAgentId, {
+      comment: comment || '',
+      explicitTaskId: task.id,
+      commitsArg: (commits || '').trim(),
+    });
+    completed = Boolean(outcome?.isTerminal);
   }
-  const updated = mgr.setTaskStatus(taskAgentId, task.id, newStatus, { skipAutoRefine: false, by: agent.name });
-  if (!updated) {
-    return { tool: 'update_task', args: call.args, success: false, error: `Cannot move task to "${newStatus}" (blocked by guard or same status).` };
-  }
-  console.log(`📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}" → ${newStatus}${details ? ' (with details)' : ''}`);
 
-  // In workflow action modes (decide, refine, etc.), stop the chat loop after status change
+  // Status move.
+  let moved = false;
+  if (hasStatus) {
+    const updated = mgr.setTaskStatus(taskAgentId, task.id, newStatus, { skipAutoRefine: false, by: agent.name });
+    moved = Boolean(updated);
+    if (!moved && !hasCompletion) {
+      return { tool: 'update_task', args: call.args, success: false, error: `Cannot move task to "${newStatus}" (blocked by guard or same status).` };
+    }
+  }
+  console.log(`📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}"${hasStatus ? ` → ${newStatus}` : ''}${hasCompletion ? ' (finished)' : ''}`);
+
+  // Stop the chat loop when the task is done: in workflow action modes (decide,
+  // refine, …) any status change is terminal; in execute mode a recorded
+  // completion is terminal.
   const isWorkflowMode = task.actionRunningMode && task.actionRunningMode !== 'execute';
-  if (isWorkflowMode) {
-    console.log(`📋 [Task] Workflow mode "${task.actionRunningMode}" — marking @update_task as terminal`);
-  }
-  return { tool: 'update_task', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" updated to ${newStatus}${details ? ' with details appended' : ''}`, isTerminal: isWorkflowMode || undefined };
+  const isTerminal = (isWorkflowMode && hasStatus) || completed;
+  const parts = [hasStatus && moved ? `moved to ${newStatus}` : null, hasCompletion ? 'marked finished' : null].filter(Boolean);
+  return { tool: 'update_task', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" ${parts.join(' and ') || 'updated'}`, isTerminal: isTerminal || undefined };
 };
 
 // ── @move_task_to_board() ──
@@ -739,7 +711,6 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
 };
 
 export const HANDLERS: Record<string, ToolHandler> = {
-  task_execution_complete: handleTaskExecutionComplete,
   report_error: handleReportError,
   update_task: handleUpdateTask,
   move_task_to_board: handleMoveTaskToBoard,

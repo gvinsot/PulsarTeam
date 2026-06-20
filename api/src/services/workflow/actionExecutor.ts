@@ -175,7 +175,7 @@ export function stripToolCalls(text) {
     'read_file', 'write_file', 'append_file', 'list_dir', 'search_files',
     'run_command', 'report_error', 'mcp_call',
     'update_task', 'list_my_tasks', 'list_projects', 'check_status',
-    'task_execution_complete', 'get_action_status', 'build_stack', 'test_stack',
+    'get_action_status', 'build_stack', 'test_stack',
     'deploy_stack', 'list_stacks', 'list_containers', 'list_computers',
     'search_logs', 'get_log_metadata',
   ];
@@ -406,6 +406,9 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
   if (!needsPrimarySwitch && !needsSecondaryEnsure) return { ok: true };
 
   console.log(`[ActionExecutor] Ensuring "${agent.name}" on repo "${taskRepo || '(none)'}"${needsSecondaryEnsure ? ` (+${secondaryRepos.length} secondary)` : ''}`);
+  // Hoisted so the catch can tell a missing token from a rejected one when the
+  // clone fails with a GitHub auth error.
+  let gitCreds: any = null;
   try {
     // 1. Switch conversation context (saves/restores history) — only on a real
     //    primary change; a secondary-only re-ensure keeps the current context.
@@ -418,7 +421,7 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
     if (agentManager.executionManager && taskRepo) {
       const gitUrl = task.repoHtmlUrl || buildRepoCloneUrl(taskRepo);
       if (gitUrl) {
-        const gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
+        gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
         await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl, gitCreds);
       } else {
         console.warn(`[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`);
@@ -434,18 +437,36 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
   } catch (switchErr) {
     console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
     const switchErrTimestamp = new Date().toISOString();
+    // Recognise a Git authentication failure (private repo + missing/expired
+    // token) and surface a clear, actionable alert instead of the cryptic git
+    // stderr ("could not read Username …"). This is the UI alert that tells the
+    // user a repo-bound task can't run because GitHub isn't connected.
+    const raw = switchErr.message || '';
+    const isAuthFailure = /could not read Username|Authentication failed|terminal prompts disabled|fatal: could not read|HTTP 40[13]\b|Permission denied|invalid username or password|access denied|repository not found/i.test(raw);
+    let taskError: string;
+    let alertDescription: string;
+    if (isAuthFailure) {
+      const why = gitCreds?.token
+        ? `the GitHub token configured for this agent or its board was rejected (expired, or it lacks access to "${taskRepo}")`
+        : `no GitHub token is configured for this agent or its board`;
+      taskError = `GitHub authentication failed for "${taskRepo}": ${why}. Connect or reconnect GitHub for the agent/board, then retry the task.`;
+      alertDescription = `[GitHub] ${agent.name}: ${taskError}`;
+    } else {
+      taskError = `Project switch failed: ${raw}`;
+      alertDescription = `[System Error] Project switch failed for "${agent.name}": ${raw}`;
+    }
     if (actualTask) {
       actualTask.actionRunning = false;
       delete actualTask.actionRunningAgentId;
       delete actualTask.actionRunningMode;
-      actualTask.error = `Project switch failed: ${switchErr.message}`;
+      actualTask.error = taskError;
       if (!actualTask.history) actualTask.history = [];
       actualTask.history.push({
         status: actualTask.status,
         at: switchErrTimestamp,
         by: agent.name || 'workflow',
         type: 'error',
-        error: `Project switch failed: ${switchErr.message}`,
+        error: taskError,
         actionMode: mode,
       });
       saveThenEmitTaskUpdated(agentManager, agentId, actualTask);
@@ -454,12 +475,12 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
       agentId: agent.id,
       agentName: agent.name,
       project: task.project || null,
-      description: `[System Error] Project switch failed for "${agent.name}": ${switchErr.message}`,
+      description: alertDescription,
       timestamp: switchErrTimestamp,
       isSystemError: true,
       taskId: task.id,
     });
-    return { ok: false, result: { executed: false, error: true, message: `Project switch failed: ${switchErr.message}` } };
+    return { ok: false, result: { executed: false, error: true, message: taskError } };
   }
 }
 
@@ -876,21 +897,15 @@ async function _runExecuteMode(agent, task, instructions, columns, { agentManage
 
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
 
-    // Check if agent completed the task via @task_execution_complete
     const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
 
-    if (freshTask?._executionCompleted) {
-      const comment = freshTask._executionComment || '';
-      delete freshTask._executionCompleted;
-      delete freshTask._executionComment;
-      console.log(`✅ [ActionExecutor] execute: completed immediately${hasInstructions ? ' (with instructions)' : ''}${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-    } else if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
+    if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
       console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);
     } else if (!buf.text || buf.text.trim().length === 0) {
       console.warn(`⚠️ [ActionExecutor] execute: "${agent.name}" returned empty response for "${task.text?.slice(0, 60)}" — skipping reminder loop`);
       return { executed: false, skipped: true, reason: 'empty-response' };
     } else {
-      console.log(`[ActionExecutor] execute: waiting for task_execution_complete${hasInstructions ? ' (with instructions)' : ''}`);
+      console.log(`[ActionExecutor] execute: waiting for update_task completion${hasInstructions ? ' (with instructions)' : ''}`);
       await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text);
     }
     return null;

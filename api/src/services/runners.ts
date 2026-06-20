@@ -13,10 +13,9 @@ export type CliRunnerId = typeof CLI_RUNNER_IDS[number];
 
 export const CLI_RUNNERS = new Set<string>(CLI_RUNNER_IDS);
 
-// Runners that drive their own internal tool pipeline and exit when done — they
-// do NOT emit @task_execution_complete via our text parser, so the task loop
-// auto-signals completion when they finish. This is every CLI runner EXCEPT
-// claudecode (and its 'coder' alias), which DOES signal via the MCP tool.
+// Runners that drive their own internal tool pipeline and exit when done. The
+// task loop auto-signals completion when they finish. This is every CLI runner
+// EXCEPT claudecode (and its 'coder' alias), which signals via update_task.
 export const SELF_COMPLETING_RUNNERS = new Set<string>(
   CLI_RUNNER_IDS.filter(r => r !== 'claudecode' && r !== 'coder'),
 );

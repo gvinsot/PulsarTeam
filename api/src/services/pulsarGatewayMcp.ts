@@ -11,9 +11,9 @@ import { getBoardById } from './database.js';
  * old per-plugin static MCP wiring with two always-on capabilities:
  *
  *  1. Task control that is ALWAYS available regardless of attached plugins:
- *     - update_current_task  — move the agent's current task between board
- *       columns (auto-resolves the active task, like task_execution_complete).
- *     - task_execution_complete — signal the current task is finished.
+ *     - update_task — move the agent's current task between board columns
+ *       (auto-resolves the active task) AND/OR mark it finished (summary
+ *       comment + linked commits).
  *
  *  2. A dynamic plugin layer. Plugins / MCP servers can be attached to the
  *     agent OR to the board at any time, so instead of freezing a tool list at
@@ -85,7 +85,7 @@ async function resolveAvailableServerIds(
 
 /**
  * Resolve the agent's current/active task id, using the same priority order as
- * applyTaskExecutionComplete: a task actively running via this agent, then a
+ * recordTaskCompletion: a task actively running via this agent, then a
  * task assigned to it, then its own active task. Returns null when none.
  */
 function resolveCurrentTaskId(agentManager: any, agentId: string): string | null {
@@ -127,21 +127,28 @@ export function createPulsarGatewayMcpServer(
 ) {
   const server = new McpServer({ name: 'Pulsar Gateway', version: '1.0.0' });
 
-  // ── update_current_task ──────────────────────────────────────────────────
+  // ── update_task ──────────────────────────────────────────────────────────
+  // The single task control tool for CLI runner agents. Moves YOUR current task
+  // between board columns and/or marks it finished (summary comment + linked
+  // commits). The task is auto-detected from your active assignment, so task_id
+  // is optional.
   server.tool(
-    'update_current_task',
-    'Move YOUR current task to a different board column (status), or rebind its repo/storage. The task is auto-detected from your active assignment — you do not need a task_id. Use this whenever your work changes column (e.g. moving to "In Review" or "Done").',
+    'update_task',
+    'Update YOUR current task AND/OR mark it finished. The task is auto-detected from your active assignment — task_id is optional. Move it to a board column with `status` (e.g. "In Review", "Done"), and/or record completion with a `comment` summary (plus optional `commits`). To finish a task, move it to its next column with a comment: update_task({ status: "Done", comment: "what you did" }). Commit and push your code first.',
     {
       status: z.string().optional().describe('Target column — workflow column label preferred (e.g. "In Review", "Done"); the column id is also accepted.'),
+      comment: z.string().optional().describe('Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished.'),
+      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
+      done: z.boolean().optional().describe('Set true to signal the task is finished when you have no status change or comment to add (rarely needed — a status move or comment already finishes it).'),
       repo_full_name: z.string().optional().describe('New repository in "owner/repo" format. Empty string clears the binding.'),
       repo_provider: z.string().optional().describe('Repository provider — defaults to "github" when repo_full_name is set.'),
       storage_path: z.string().optional().describe('New storage location (e.g. OneDrive folder path). Empty string clears the binding.'),
       storage_provider: z.string().optional().describe('Storage provider — defaults to "onedrive" when storage_path is set.'),
       task_id: z.string().optional().describe('Optional — target a specific task instead of your auto-detected current one.'),
     },
-    async ({ status, repo_full_name, repo_provider, storage_path, storage_provider, task_id }) => {
+    async ({ status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider, task_id }) => {
       if (!callerAgentId) {
-        return jsonError('No agent context. update_current_task is only available to CLI runner agents.');
+        return jsonError('No agent context. update_task is only available to CLI runner agents.');
       }
       let resolvedTaskId = (task_id || '').trim();
       if (!resolvedTaskId) {
@@ -156,53 +163,19 @@ export function createPulsarGatewayMcpServer(
         agent_id: callerAgentId,
         task_id: resolvedTaskId,
         status,
+        comment,
+        commits,
+        done,
         repo_full_name,
         repo_provider,
         storage_path,
         storage_provider,
       });
       if (r.ok) {
-        return jsonOk({ success: true, task: r.task });
+        return jsonOk({ success: true, completed: Boolean(r.completed), task: r.task });
       } else {
         return jsonError(r.error || 'Failed to update task.');
       }
-    }
-  );
-
-  // ── task_execution_complete ──────────────────────────────────────────────
-  // Native (not proxied) so it resolves the calling agent from callerAgentId,
-  // shares agentManager.applyTaskExecutionComplete with the chat path, and
-  // stays available even when the agent has no plugins.
-  server.tool(
-    'task_execution_complete',
-    'Signal that you have finished executing your currently assigned task. You MUST call this when your work is done — until you do, the system considers the task still in progress and keeps sending reminders. Commit and push your code first.',
-    {
-      comment: z.string().describe('A brief summary of what was accomplished. Appended onto the task so the requester sees it.'),
-      task_id: z.string().optional().describe('Task UUID to mark complete. Optional — auto-detected from your active task when omitted.'),
-      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
-    },
-    async ({ comment, task_id, commits }) => {
-      const agentId = (callerAgentId || '').trim();
-      if (!agentId) {
-        return jsonError('No agent context. task_execution_complete is only available to CLI runner agents.');
-      }
-      const outcome = await agentManager.applyTaskExecutionComplete(agentId, {
-        comment: comment || '',
-        explicitTaskId: (task_id || '').trim(),
-        commitsArg: (commits || '').trim(),
-      });
-      return {
-        content: [{
-          type: 'text' as const,
-          text: JSON.stringify({
-            success: outcome.success,
-            completed: Boolean(outcome.isTerminal),
-            task_id: outcome.taskId || null,
-            message: outcome.result,
-          }, null, 2),
-        }],
-        ...(outcome.success ? {} : { isError: true as const }),
-      };
     }
   );
 
@@ -250,7 +223,7 @@ export function createPulsarGatewayMcpServer(
           status: u.status,
           reason: u.reason,
         })),
-        hint: 'Invoke a tool with call_mcp_tool({ server, tool, args }). For board column moves use update_current_task; when finished use task_execution_complete.',
+        hint: 'Invoke a tool with call_mcp_tool({ server, tool, args }). To move your task between columns or mark it finished, use update_task({ status, comment }).',
       });
     }
   );

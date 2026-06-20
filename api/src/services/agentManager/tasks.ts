@@ -27,7 +27,6 @@ async function bindAgentRunner(manager: any, agent: any): Promise<void> {
 
 // ── Ephemeral task signals ──────────────────────────────────────────────────
 // Transient coordination flags between async coroutines (NOT persisted).
-// Replaces in-memory task._execution* properties.
 const _taskSignals = new Map<string, Record<string, any>>(); // taskId -> { completed, comment, stopped, watching, pendingOnEnter }
 
 export function setTaskSignal(taskId: string, key: string, value: any): void {
@@ -740,9 +739,16 @@ export const tasksMethods = {
 
   _refreshWorkflowManagedStatuses(this: any): void {
     getAllBoardWorkflows().then((boardWorkflows: any) => {
-      this._workflowManagedStatuses = getWorkflowManagedStatuses(boardWorkflows);
-      if (this._workflowManagedStatuses.size > 0) {
-        console.log(`🔄 [TaskLoop] Workflow-managed statuses: ${[...this._workflowManagedStatuses].join(', ')}`);
+      const next = getWorkflowManagedStatuses(boardWorkflows);
+      this._workflowManagedStatuses = next;
+      // Log only when the managed-status set actually changes — this runs every
+      // 30s, and re-printing the (long, static) list each time drowned the logs.
+      const nextKey = [...next].sort().join(',');
+      if (nextKey !== this._workflowManagedStatusesKey) {
+        this._workflowManagedStatusesKey = nextKey;
+        if (next.size > 0) {
+          console.log(`🔄 [TaskLoop] Workflow-managed statuses (${next.size}): ${[...next].join(', ')}`);
+        }
       }
     }).catch(() => {});
   },
@@ -979,15 +985,25 @@ export const tasksMethods = {
   async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
     const terminalDriven = Boolean(options.terminalDriven);
     const freshTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
-    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} _executionCompleted=${freshTask?._executionCompleted} status=${freshTask?.status}`);
+    // The column this wait started on. A workflow transition is finished as soon
+    // as the agent moves the task OFF this column — even to another ACTIVE column
+    // (e.g. a decide moving testclaudepaid → testopencode). The checks below
+    // otherwise only catch a move to an INACTIVE status, so an active→active move
+    // was invisible and the transition blocked until the 15-min stale-lock
+    // eviction — holding the per-task processing lock + agent busy flag and
+    // starving the next column / every other assignment ("no idle agent").
+    const startStatus: string | undefined = freshTask?.status;
+    const movedAway = (s: any): boolean =>
+      typeof s === 'string' && startStatus !== undefined && s !== startStatus;
+    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} completionSignal=${Boolean(getTaskSignal(taskId, 'completed'))} status=${freshTask?.status}`);
 
-    // Helper: check if task was completed via signal
+    // Helper: check if task was completed via update_task's signal.
     const _checkCompleted = async (): Promise<string | null> => {
       if (getTaskSignal(taskId, 'completed')) {
         const comment = getTaskSignal(taskId, 'comment') || '';
         clearTaskSignal(taskId, 'completed');
         clearTaskSignal(taskId, 'comment');
-        console.log(`✅ [Execution] task_execution_complete for "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+        console.log(`✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`);
         return 'completed';
       }
       return null;
@@ -1006,14 +1022,6 @@ export const tasksMethods = {
     if (freshTask?.status === 'error') {
       console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
       return 'error';
-    }
-
-    if (freshTask?._executionCompleted) {
-      const comment = freshTask._executionComment || '';
-      delete freshTask._executionCompleted;
-      delete freshTask._executionComment;
-      console.log(`✅ [Execution] task ${taskId} completed via task_execution_complete${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-      return 'completed';
     }
 
     const immediateResult = await _checkCompleted();
@@ -1044,7 +1052,7 @@ export const tasksMethods = {
         if (getTaskSignal(taskId, 'stopped')) { clearTaskSignal(taskId, 'stopped'); return 'stopped'; }
         const probeTask = await getTaskById(taskId);
         if (!probeTask) return 'deleted';
-        if (!this._isActiveTaskStatus((probeTask as any).status)) return 'moved';
+        if (!this._isActiveTaskStatus((probeTask as any).status) || movedAway((probeTask as any).status)) return 'moved';
         const authErr = await this._checkTerminalAuthError(executorId);
         if (authErr) {
           setTaskSignal(taskId, 'authError', authErr);
@@ -1067,7 +1075,7 @@ export const tasksMethods = {
       const earlyCompleted = await _checkCompleted();
       if (earlyCompleted) return earlyCompleted;
       const earlyTask = await getTaskById(taskId);
-      if (!earlyTask || !this._isActiveTaskStatus((earlyTask as any).status)) {
+      if (!earlyTask || !this._isActiveTaskStatus((earlyTask as any).status) || movedAway((earlyTask as any).status)) {
         return earlyTask ? 'moved' : 'deleted';
       }
       if (getTaskSignal(taskId, 'stopped')) {
@@ -1083,7 +1091,7 @@ export const tasksMethods = {
           const retryStartedAt = new Date().toISOString();
           await this.sendMessage(
             executorId,
-            `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, call @task_execution_complete(summary).`,
+            `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, call @update_task(taskId, <final column>, summary) to move it to its final column and finish it.`,
             (chunk: any) => {
               this._emit('agent:stream:chunk', { agentId: executorId, chunk });
               this._emit('agent:thinking', { agentId: executorId, thinking: immediateExecutor.currentThinking || '' });
@@ -1099,13 +1107,6 @@ export const tasksMethods = {
         // Check if the immediate retry completed the task
         const retryResult = await _checkCompleted();
         if (retryResult) return retryResult;
-        const retryTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
-        if (retryTask?._executionCompleted) {
-          const comment = retryTask._executionComment || '';
-          delete retryTask._executionCompleted;
-          delete retryTask._executionComment;
-          return 'completed';
-        }
       }
     }
 
@@ -1127,16 +1128,7 @@ export const tasksMethods = {
       // Check signals first (reliable in-memory coordination set by tool handler)
       const completedResult = await _checkCompleted();
       if (completedResult) return completedResult;
-      // Also check the in-memory task object's legacy flag (set on the live task ref)
-      const inMemoryTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
-      if (inMemoryTask?._executionCompleted) {
-        const comment = inMemoryTask._executionComment || '';
-        delete inMemoryTask._executionCompleted;
-        delete inMemoryTask._executionComment;
-        console.log(`✅ [Execution] Task ${taskId} completed during wait (in-memory flag)${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-        return 'completed';
-      }
-      if (!this._isActiveTaskStatus((currentTask as any).status)) {
+      if (!this._isActiveTaskStatus((currentTask as any).status) || movedAway((currentTask as any).status)) {
         console.log(`🔔 [Execution] Task status changed to "${(currentTask as any).status}" — exiting loop`);
         return 'moved';
       }
@@ -1184,7 +1176,7 @@ export const tasksMethods = {
         const reminderStartIdx = currentExecutor.conversationHistory.length;
         const reminderStartedAt = new Date().toISOString();
 
-        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @task_execution_complete(summary of what was done) to signal completion.\n\nIf you have already finished all the work, call @task_execution_complete now with a summary of what was accomplished.`;
+        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @update_task(taskId, <final column>, summary of what was done) — moving it to its final column with a summary signals completion.\n\nIf you have already finished all the work, call @update_task now to move the task to its final column with a summary of what was accomplished.`;
 
         if (terminalDriven && isCliRunner(currentExecutor) && this.executionManager?.sendTerminalInput) {
           await bindAgentRunner(this, currentExecutor);
@@ -1307,7 +1299,7 @@ export const tasksMethods = {
         (msg: any) => msg.role === 'user' && typeof msg.content === 'string' && msg.content.includes(taskPrefix)
       );
       const messageToSend = alreadySent
-        ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @task_execution_complete(summary of what was done).`
+        ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @update_task(taskId, <final column>, summary of what was done) to move it to its final column and finish it.`
         : task.text;
 
       // CLI runners always resume through their interactive PTY (not headless
@@ -1322,13 +1314,9 @@ export const tasksMethods = {
       }
 
       // CLI runners like opencode, openclaw, hermes, and codex manage their own
-      // tool execution pipeline internally and exit when their work is done.
-      // They do NOT emit @task_execution_complete via our text-based tool parser
-      // (they use their own JSON tool systems). Without this signal,
-      // _waitForExecutionComplete sees the agent as idle and fires an immediate
-      // "went idle" retry, then the full reminder loop — causing an infinite loop.
-      // Fix: auto-signal task completion when these runners exit, unless the
-      // task was already completed (e.g. opencode somehow did call the tool).
+      // internal tool pipeline and exit when their work is done. For those
+      // runners, process exit is enough to satisfy the task wait; otherwise the
+      // loop would treat the idle runner as unfinished and keep reminding it.
       if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
         if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
           console.log(`✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`);
@@ -1351,7 +1339,7 @@ export const tasksMethods = {
       }
 
       // Save execution log AFTER wait completes — captures the full conversation
-      // including retries, reminders, tool calls, and task_execution_complete
+      // including retries, reminders, and tool calls.
       this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, waitResult !== "error" && waitResult !== "timeout");
     } catch (err: any) {
       const isUserStop = isUserStopError(err);

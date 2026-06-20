@@ -169,8 +169,9 @@ def configure_claude_mcp(agent_user: Optional[dict], agent_id: Optional[str]) ->
     Claude Code does NOT read MCP definitions from settings.json, so the claude
     backend launches with `--mcp-config <this file> --strict-mcp-config`,
     making this file the single source of MCP servers for the session —
-    currently the Pulsar Gateway, which always carries update_current_task /
-    task_execution_complete plus the dynamic list_mcps / call_mcp_tool proxy.
+    currently the Pulsar Gateway, which always carries the unified update_task
+    tool (move and/or finish the current task) plus the dynamic list_mcps /
+    call_mcp_tool proxy.
 
     A team-api fetch failure leaves any existing file untouched (we never strip
     tools on a transient outage). An empty server map removes a stale file so

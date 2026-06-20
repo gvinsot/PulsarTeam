@@ -87,6 +87,7 @@ export interface AgentManager {
   _processPostResponseActions(agent: any, id: string, responseForParsing: string, fullResponse: string, streamCallback: any, delegationDepth: number, messageMeta: any): Promise<{ earlyReturn?: any }>;
 
   // ── tools.ts ──
+  recordTaskCompletion(agentId: string, args?: { comment?: string; explicitTaskId?: string; commitsArg?: string; streamCallback?: any }): Promise<{ success: boolean; result: string; isTerminal?: boolean; taskId?: string }>;
   _processToolCalls(agentId: string, response: string, streamCallback: any, depth?: number): Promise<any[]>;
 
   // ── parsing.ts ──

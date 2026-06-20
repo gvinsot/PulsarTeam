@@ -15,8 +15,8 @@ export function internalRunnerMcpRoutes(agentManager, skillManager, mcpManager) 
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
       // CLI runners get exactly ONE MCP injected: the Pulsar Gateway. It always
-      // carries task control (update_current_task, task_execution_complete) plus
-      // list_mcps / call_mcp_tool, through which the agent discovers and invokes
+      // carries task control (the unified update_task — move and/or finish your
+      // current task) plus list_mcps / call_mcp_tool, through which the agent discovers and invokes
       // every other MCP available to it or its board — even ones attached after
       // spawn. `exclusive` suppresses the old per-plugin static wiring so the
       // gateway is the single source of tools.

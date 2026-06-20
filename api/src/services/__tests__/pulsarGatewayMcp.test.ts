@@ -1,10 +1,11 @@
 /**
  * Pulsar Gateway MCP — task control + dynamic MCP discovery/proxy.
  *
- * Verifies the single always-on gateway: update_current_task auto-resolves the
- * agent's active task, task_execution_complete routes to the caller, list_mcps
- * groups tools (with schemas) by server, and call_mcp_tool gates on the agent's
- * available server set before proxying through mcpManager.callToolByNameForAgent.
+ * Verifies the single always-on gateway: the unified update_task auto-resolves
+ * the agent's active task, moves its column and/or marks it finished (routing
+ * completion to recordTaskCompletion), list_mcps groups tools (with
+ * schemas) by server, and call_mcp_tool gates on the agent's available server
+ * set before proxying through mcpManager.callToolByNameForAgent.
  */
 
 import test, { mock } from 'node:test';
@@ -52,7 +53,7 @@ function makeFakeAgentManager() {
   const tasks: any[] = [
     { id: 'task-1', agentId: 'agent-1', text: 'Active task', status: 'in_progress', boardId: 'board-1' },
   ];
-  const calls: any = { setTaskStatus: [], applyTaskExecutionComplete: [] };
+  const calls: any = { setTaskStatus: [], recordTaskCompletion: [] };
 
   return {
     agents: new Map([[agent.id, agent]]),
@@ -67,8 +68,8 @@ function makeFakeAgentManager() {
     },
     updateTaskRepo: () => null,
     updateTaskStorage: () => null,
-    async applyTaskExecutionComplete(agentId: string, args: any) {
-      calls.applyTaskExecutionComplete.push({ agentId, args });
+    async recordTaskCompletion(agentId: string, args: any) {
+      calls.recordTaskCompletion.push({ agentId, args });
       return { success: true, result: 'done', isTerminal: true, taskId: 'task-1' };
     },
     _calls: calls,
@@ -101,10 +102,10 @@ function makeFakeMcpManager() {
 
 const fakeSkillManager = { getById: () => null };
 
-test('update_current_task auto-resolves the active task and moves its column', async () => {
+test('update_task auto-resolves the active task and moves its column', async () => {
   const am = makeFakeAgentManager();
   const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
-  const handler = getToolHandler(server, 'update_current_task');
+  const handler = getToolHandler(server, 'update_task');
 
   const result = await handler({ status: 'in_progress' });
   const body = parseResult(result);
@@ -114,30 +115,55 @@ test('update_current_task auto-resolves the active task and moves its column', a
   assert.equal(am._calls.setTaskStatus.length, 1);
   assert.equal(am._calls.setTaskStatus[0].taskId, 'task-1');
   assert.equal(am._calls.setTaskStatus[0].status, 'in_progress');
+  // No completion intent -> no completion bookkeeping.
+  assert.equal(am._calls.recordTaskCompletion.length, 0);
 });
 
-test('update_current_task errors with no agent context', async () => {
+test('update_task errors with no agent context', async () => {
   const am = makeFakeAgentManager();
   const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, null, null);
-  const handler = getToolHandler(server, 'update_current_task');
+  const handler = getToolHandler(server, 'update_task');
 
   const result = await handler({ status: 'done' });
   assert.equal(result.isError, true);
   assert.match(parseResult(result).error, /No agent context/);
 });
 
-test('task_execution_complete routes to the caller agent', async () => {
+test('update_task with a comment marks the task finished', async () => {
   const am = makeFakeAgentManager();
   const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
-  const handler = getToolHandler(server, 'task_execution_complete');
+  const handler = getToolHandler(server, 'update_task');
 
-  const result = await handler({ comment: 'shipped' });
+  // No status: pure completion in place (the workflow chain advances the column).
+  const result = await handler({ comment: 'shipped', commits: 'a1b2c3d:feat ship it' });
+  const body = parseResult(result);
+
+  assert.notEqual(result.isError, true);
+  assert.equal(body.success, true);
+  assert.equal(body.completed, true);
+  assert.equal(am._calls.recordTaskCompletion.length, 1);
+  assert.equal(am._calls.recordTaskCompletion[0].agentId, 'agent-1');
+  assert.equal(am._calls.recordTaskCompletion[0].args.comment, 'shipped');
+  assert.equal(am._calls.recordTaskCompletion[0].args.explicitTaskId, 'task-1');
+  assert.equal(am._calls.recordTaskCompletion[0].args.commitsArg, 'a1b2c3d:feat ship it');
+  // No status move when only completing.
+  assert.equal(am._calls.setTaskStatus.length, 0);
+});
+
+test('update_task moves the column AND finishes when given status + comment', async () => {
+  const am = makeFakeAgentManager();
+  const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const handler = getToolHandler(server, 'update_task');
+
+  const result = await handler({ status: 'done', comment: 'all done' });
   const body = parseResult(result);
 
   assert.equal(body.success, true);
   assert.equal(body.completed, true);
-  assert.equal(am._calls.applyTaskExecutionComplete[0].agentId, 'agent-1');
-  assert.equal(am._calls.applyTaskExecutionComplete[0].args.comment, 'shipped');
+  // Completion runs before the move so the task is still active for commit linking.
+  assert.equal(am._calls.recordTaskCompletion.length, 1);
+  assert.equal(am._calls.setTaskStatus.length, 1);
+  assert.equal(am._calls.setTaskStatus[0].status, 'done');
 });
 
 test('list_mcps groups tools by server and includes input schemas', async () => {

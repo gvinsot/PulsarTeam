@@ -53,7 +53,7 @@ const { createSwarmApiMcpServer } = await import('../swarmApiMcp.js');
 function makeFakeAgentManager() {
   const agent = { id: 'agent-1', name: 'Builder', project: 'acme/widgets', boardId: 'board-1' };
   const tasks: any[] = [];
-  const calls: any = { addTask: [], setTaskStatus: [], updateTaskRepo: [], updateTaskStorage: [], applyTaskExecutionComplete: [] };
+  const calls: any = { addTask: [], setTaskStatus: [], updateTaskRepo: [], updateTaskStorage: [], recordTaskCompletion: [] };
 
   return {
     agents: new Map([[agent.id, agent]]),
@@ -98,11 +98,11 @@ function makeFakeAgentManager() {
       calls.updateTaskStorage.push({ agentId, taskId, path, provider });
       return t;
     },
-    async applyTaskExecutionComplete(agentId: string, args: any) {
-      calls.applyTaskExecutionComplete.push({ agentId, args });
+    async recordTaskCompletion(agentId: string, args: any) {
+      calls.recordTaskCompletion.push({ agentId, args });
       return {
         success: true,
-        result: 'Task "Existing" marked as execution complete. Comment: done',
+        result: 'Task "Existing" completion recorded. Comment: done',
         isTerminal: true,
         taskId: 'task-1',
       };
@@ -361,7 +361,7 @@ test('update_task rejects when no fields are provided', async () => {
 
   assert.equal(result.isError, true);
   const body = parseResult(result);
-  assert.match(body.error, /At least one of/);
+  assert.match(body.error, /Nothing to update/);
 });
 
 test('update_task rejects malformed repo_full_name', async () => {
@@ -552,50 +552,61 @@ test('search_tasks rejects unknown agent_name', async () => {
   assert.match(body.error, /Agent not found/);
 });
 
-test('task_execution_complete resolves the caller agent from request context (CLI runner path)', async () => {
+test('update_task with a comment finishes the task', async () => {
   const am = makeFakeAgentManager();
-  // callerAgentId mirrors the X-Agent-Id header injected for CLI runner agents.
-  const server = createSwarmApiMcpServer(am as any, 'agent-1');
-  const handler = getToolHandler(server, 'task_execution_complete');
+  am.addTask('agent-1', 'Existing', { type: 'mcp' }, 'in_progress', { boardId: 'board-1' });
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'update_task');
 
-  const result = await handler({ comment: 'Implemented auth', commits: 'abc1234:feat: auth' });
+  // No status: pure completion in place (the workflow chain advances the column).
+  const result = await handler({ agent_id: 'agent-1', task_id: 'task-1', comment: 'Implemented auth', commits: 'abc1234:feat: auth' });
 
   assert.notEqual(result.isError, true);
-  assert.equal(am._calls.applyTaskExecutionComplete.length, 1);
-  const recorded = am._calls.applyTaskExecutionComplete[0];
+  assert.equal(am._calls.recordTaskCompletion.length, 1);
+  const recorded = am._calls.recordTaskCompletion[0];
   assert.equal(recorded.agentId, 'agent-1');
   assert.equal(recorded.args.comment, 'Implemented auth');
+  assert.equal(recorded.args.explicitTaskId, 'task-1');
   assert.equal(recorded.args.commitsArg, 'abc1234:feat: auth');
+  // No status move when only completing.
+  assert.equal(am._calls.setTaskStatus.length, 0);
 
   const body = parseResult(result);
   assert.equal(body.success, true);
   assert.equal(body.completed, true);
-  assert.equal(body.task_id, 'task-1');
 });
 
-test('task_execution_complete lets an explicit agent_id override the caller context', async () => {
+test('update_task moves the column AND finishes when given status + comment', async () => {
   const am = makeFakeAgentManager();
-  const server = createSwarmApiMcpServer(am as any); // no caller context (external API-key path)
-  const handler = getToolHandler(server, 'task_execution_complete');
+  am.addTask('agent-1', 'Existing', { type: 'mcp' }, 'backlog', { boardId: 'board-1' });
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'update_task');
 
-  const result = await handler({ comment: 'Done', agent_id: 'agent-1', task_id: 'task-1' });
+  const result = await handler({ agent_id: 'agent-1', task_id: 'task-1', status: 'done', comment: 'Done' });
 
   assert.notEqual(result.isError, true);
-  assert.equal(am._calls.applyTaskExecutionComplete[0].agentId, 'agent-1');
-  assert.equal(am._calls.applyTaskExecutionComplete[0].args.explicitTaskId, 'task-1');
+  // Completion runs before the move so the task is still active for commit linking.
+  assert.equal(am._calls.recordTaskCompletion.length, 1);
+  assert.equal(am._calls.recordTaskCompletion[0].args.explicitTaskId, 'task-1');
+  assert.equal(am._calls.setTaskStatus.length, 1);
+  assert.equal(am._calls.setTaskStatus[0].status, 'done');
+
+  const body = parseResult(result);
+  assert.equal(body.success, true);
+  assert.equal(body.completed, true);
 });
 
-test('task_execution_complete errors when there is no agent context', async () => {
+test('update_task without status or completion fields is rejected', async () => {
   const am = makeFakeAgentManager();
-  const server = createSwarmApiMcpServer(am as any); // no caller, no agent_id arg
-  const handler = getToolHandler(server, 'task_execution_complete');
+  am.addTask('agent-1', 'Existing', { type: 'mcp' }, 'backlog', { boardId: 'board-1' });
+  const server = createSwarmApiMcpServer(am as any);
+  const handler = getToolHandler(server, 'update_task');
 
-  const result = await handler({ comment: 'Done' });
+  const result = await handler({ agent_id: 'agent-1', task_id: 'task-1' });
 
   assert.equal(result.isError, true);
-  const body = parseResult(result);
-  assert.match(body.error, /No agent context/);
-  assert.equal(am._calls.applyTaskExecutionComplete.length, 0);
+  assert.match(parseResult(result).error, /Nothing to update/);
+  assert.equal(am._calls.recordTaskCompletion.length, 0);
 });
 
 test('list_boards exposes repos in use on each board', async () => {

@@ -35,13 +35,16 @@ You can interact with project files using these commands. Use the exact format s
   Use this to check what tasks are assigned to you and their current state.
   Example: @list_my_tasks()
 
-@update_task(taskId, status, details) - Update the status of one of your tasks
-  The status MUST be a workflow column ID that exists on the task's board (e.g., backlog, pending, code, build, test, deploy, done). Any other value is rejected with the list of valid columns.
-  The details parameter is optional. When provided, the details text is appended to the task description.
-  Use this to move a task between workflow columns, optionally adding context (e.g., error details, build output).
-  Example: @update_task(abc-123, build)
-  Example: @update_task(abc-123, done)
-  Example: @update_task(abc-123, pending, Build failed: missing dependency libfoo)
+@update_task(taskId, status, comment, commits) - Move a task between columns AND/OR mark it finished
+  The single task tool. Change a task's status, and/or record completion by adding a comment summary (plus optional commits). status, comment and commits are each optional, but provide at least one.
+  - status: a workflow column ID that exists on the task's board (e.g., backlog, pending, code, build, test, deploy, done). Any other value is rejected with the list of valid columns.
+  - comment: when provided, it is appended to the task description AND marks the task finished — this is how you complete a task. There is no separate completion tool.
+  - commits: optional comma-separated commit hashes with messages, format: hash:message, hash:message. Must already be pushed; pushed commits are auto-linked even if omitted.
+  TO FINISH A TASK: move it to its next column WITH a summary, e.g. @update_task(abc-123, done, Implemented user auth with JWT; all tests passing). Commit and push first.
+  Example (move only): @update_task(abc-123, build)
+  Example (move only): @update_task(abc-123, done)
+  Example (move + context): @update_task(abc-123, pending, Build failed: missing dependency libfoo)
+  Example (finish + commits): @update_task(abc-123, done, Implemented user auth, a1b2c3d:feat add JWT auth)
 
 @move_task_to_board(taskId, boardId) - Move a task to a different board
   Use this to transfer a task from its current board to another board.
@@ -73,20 +76,6 @@ You can interact with project files using these commands. Use the exact format s
   Use this when you encounter a blocking issue you cannot resolve yourself.
   Example: @report_error(Cannot compile: missing dependency 'express'.)
 
-@task_execution_complete(comment, taskId, commits) - Signal that you have finished executing your current task
-  You MUST call this tool when you are done with your assigned task. Provide a brief summary of what was accomplished.
-  Until you call this, the system will consider your task still in progress and will send you reminders.
-  CRITICAL: This is the ONLY way the system knows your work is done. Do NOT skip this step.
-  - comment: (required) A brief summary of what was accomplished.
-  - taskId: (optional) The task ID to mark as complete. If omitted, the system auto-detects your current active task.
-  - commits: (optional) A comma-separated list of commit hashes with messages, format: hash:message, hash:message
-    IMPORTANT: The commit hashes MUST refer to commits that have already been pushed.
-    When provided, these commits are linked to the task automatically.
-    If omitted, any commits already pushed are already auto-linked.
-  Example: @task_execution_complete(Implemented user auth with JWT tokens, all tests passing.)
-  Example with explicit task: @task_execution_complete(Implemented auth, abc-123)
-  Example with commits: @task_execution_complete(Implemented user auth, abc-123, a1b2c3d:feat: add JWT auth, e4f5g6h:fix: token expiry)
-
 IMPORTANT:
 - File paths are relative to the project root
 - Always read files before modifying them
@@ -101,7 +90,7 @@ IMPORTANT:
   2. WRITE: Make all necessary changes using @write_file or @append_file
   3. VERIFY: Read back modified files to confirm correctness
   4. COMMIT: Use @run_command with git commands to commit and push your work
-  5. COMPLETE: @task_execution_complete(summary) — signal completion to the system
+  5. COMPLETE: @update_task(taskId, <final column>, summary) — move the task to its final column with a summary; this signals completion
   CRITICAL: You MUST call @write_file BEFORE committing. A commit without prior @write_file calls means NOTHING was changed.
   CRITICAL: Call tools ONE STEP AT A TIME. Do NOT batch all tools in a single response — wait for each tool result before proceeding to the next step.
 `;
@@ -485,7 +474,7 @@ async function toolAppendFile(provider, agentId, filePath, content) {
 //      'single' = whole-parens-as-one-arg
 //      'read'   = read_file's 1/2/3-arg path
 //      'multi'  = default 2-arg path (with triple-quote stripping)
-//      'three'  = mcp_call / update_task / task_execution_complete 3-arg path
+//      'three'  = mcp_call / update_task 3-arg path (3rd arg keeps commas)
 //  - `fromJson` maps a parsed <tool_call> JSON object to positional args.
 //    KNOWN_TOOLS (the phase-1 gate) is derived from entries that have it, so a
 //    tool with no `fromJson` (e.g. list_projects) is still @-syntax parseable
@@ -503,7 +492,7 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   append_file:             { arity: 'multi',  fromJson: a => [a.path || a.file || '', a.content || ''] },
   search_files:            { arity: 'multi',  fromJson: a => [a.pattern || a.glob || '*', a.query || a.search || ''] },
   report_error:            { arity: 'single', fromJson: a => [a.description || a.message || a.error || ''] },
-  update_task:             { arity: 'three',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.status || '', a.details || a.detail || a.message || ''] },
+  update_task:             { arity: 'three',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.status || '', a.comment || a.details || a.detail || a.message || '', a.commits || ''] },
   move_task_to_board:      { arity: 'multi',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.boardId || a.board_id || ''] },
   delete_task:             { arity: 'single', fromJson: a => [a.taskId || a.task_id || a.id || ''] },
   list_boards:             { arity: 'single', fromJson: () => [] },
@@ -511,7 +500,6 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
   list_my_tasks:           { arity: 'single', fromJson: () => [] },
   list_projects:           { arity: 'single' },
   check_status:            { arity: 'single', fromJson: () => [] },
-  task_execution_complete: { arity: 'three',  fromJson: a => [a.comment || a.message || a.summary || '', a.taskId || a.task_id || '', a.commits || ''] },
   mcp_call:                { arity: 'three',  fromJson: a => [a.server || a.serverName || '', a.tool || a.toolName || '', JSON.stringify(a.arguments || a.args || {})] },
   // Convenience aliases for PulsarCD tools — single @-arg, whole JSON in JSON form.
   get_action_status:       { arity: 'single', fromJson: a => [JSON.stringify(a)] },
