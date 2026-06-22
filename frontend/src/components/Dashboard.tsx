@@ -517,7 +517,7 @@ export default function Dashboard({
               below ~80 cols. The list column is flex-1, so it auto-fills the
               remainder. */}
           {activeView === 'agents' && selectedAgentData && (
-            <div className={`${CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}>
+            <div className={`w-full min-w-0 ${CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}>
               <AgentDetail
                 key={selectedAgentData.id}
                 agent={selectedAgentData}
