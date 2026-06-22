@@ -8,7 +8,7 @@ import { checkBoardAccess } from '../middleware/authz.js';
 import { detectEnvironment } from '../lib/environment.js';
 import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
 import { getMemTask } from './tasks.js';
-import { createAgentSchema, updateAgentSchema } from '../schemas/agents.js';
+import { createAgentSchema, updateAgentSchema, convertAgentToBatchSchema } from '../schemas/agents.js';
 import {
   statusesHandler,
   swarmStatusHandler,
@@ -134,6 +134,24 @@ export function agentRoutes(agentManager) {
       const agent = await agentManager.update(req.params.id, parsed);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
       res.json(agent);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ error: 'Validation failed', details: err.issues });
+      }
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Convert an existing agent into a batch. The original agent becomes member #1.
+  router.post('/:id/batch', requireAgentEditAccess, async (req, res) => {
+    if (req.user.role === 'basic') {
+      return res.status(403).json({ error: 'Basic users cannot modify agents' });
+    }
+    try {
+      const parsed = convertAgentToBatchSchema.parse(req.body);
+      const agents = await agentManager.convertToBatch(req.params.id, parsed.batchSize);
+      if (!agents) return res.status(404).json({ error: 'Agent not found' });
+      res.status(201).json({ batch: true, agents });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ error: 'Validation failed', details: err.issues });

@@ -15,6 +15,7 @@ export interface AgentManager {
   // ── crud.ts ──
   create(config: any): Promise<any>;
   createBatch(config: any, size: number): Promise<any[]>;
+  convertToBatch(id: string, size: number): Promise<any[] | null>;
   update(id: string, updates: any): Promise<any>;
   delete(id: string): Promise<boolean>;
   resetInstructionsByRole(role: string): Promise<{ error: string | null; reset: string[] }>;

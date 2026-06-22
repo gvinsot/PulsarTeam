@@ -85,3 +85,7 @@ export const updateAgentSchema = createAgentSchema.partial().extend({
   ownerId: z.string().uuid().nullable().optional(),
   boardId: z.string().uuid().nullable().optional(),
 });
+
+export const convertAgentToBatchSchema = z.object({
+  batchSize: z.number().int().min(2).max(50),
+});

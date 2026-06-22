@@ -165,6 +165,9 @@ export const api = {
   updateAgent: (id, updates) =>
     put(`/agents/${id}`, updates),
 
+  convertAgentToBatch: (id, batchSize) =>
+    post(`/agents/${id}/batch`, { batchSize }, { long: true }),
+
   deleteAgent: (id) =>
     del(`/agents/${id}`),
 

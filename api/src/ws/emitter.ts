@@ -34,18 +34,22 @@ export class WsEmitter {
     this._emitScoped(event, data);
   }
 
-  /** Emit scoped to the board derived from agentId in data, or broadcast. */
+  /** Emit scoped to the most authoritative board we can derive, or broadcast.
+   *
+   * Priority: the task's OWN board (data.task.boardId) → a board on the payload
+   * (data.boardId) → the board of the agent referenced by the payload
+   * (data.id/data.agentId). For task:updated the payload is { agentId, task }
+   * where agentId is the task OWNER — routing by the owner agent's board sent
+   * the event to the wrong room whenever the owner is on a different board than
+   * the task (or has no board), e.g. a batch where the agent that picked the
+   * task up is not the board's primary agent. The task carries its own board,
+   * so route by that first. */
   private _emitScoped(event: string, data: any) {
     const agentId = data?.id || data?.agentId;
-    if (agentId) {
-      const agent = this.agents.get(agentId);
-      if (agent?.boardId) {
-        this.io.to(`board:${agent.boardId}`).emit(event, data);
-        return;
-      }
-    }
-    if (data?.boardId) {
-      this.io.to(`board:${data.boardId}`).emit(event, data);
+    const agentBoardId = agentId ? this.agents.get(agentId)?.boardId : undefined;
+    const boardId = data?.task?.boardId || data?.boardId || agentBoardId;
+    if (boardId) {
+      this.io.to(`board:${boardId}`).emit(event, data);
       return;
     }
     this.io.emit(event, data);

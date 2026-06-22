@@ -16,9 +16,26 @@ const LLM_FIELDS = ['llmConfigId'];
 // member in the same batch; runtime state (history, sessions, metrics, tasks)
 // remains per-agent.
 const BATCH_SHARED_FIELDS = new Set(AGENT_UPDATE_FIELDS);
+const BATCH_CLONE_FIELDS = [
+  ...AGENT_UPDATE_FIELDS.filter((field) => field !== 'name'),
+  'template',
+];
 
 function _batchBaseName(name: string): string {
   return (name || 'Unnamed Agent').replace(/\s+#\d+$/, '');
+}
+
+function _cloneJson(value: any): any {
+  if (value === undefined || value === null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function _batchMemberConfigFromAgent(agent: any, batchId: string, batchIndex: number, name: string): any {
+  const config: any = { name, batchId, batchIndex };
+  for (const field of BATCH_CLONE_FIELDS) {
+    if (agent[field] !== undefined) config[field] = _cloneJson(agent[field]);
+  }
+  return config;
 }
 
 /** @this {import('./index.js').AgentManager} */
@@ -42,6 +59,7 @@ export const crudMethods = {
       ragDocuments: config.ragDocuments || [],
       skills: config.skills || [],
       mcpServers: config.mcpServers || [],
+      mcpAuth: config.mcpAuth || {},
       conversationHistory: [],
       runnerSessions: {},
       actionLogs: [],
@@ -71,7 +89,10 @@ export const crudMethods = {
       llmConfigId: config.llmConfigId || null,
       ownerId: config.ownerId || null,
       boardId: config.boardId || null,
+      permissions: config.permissions || null,
+      credentials: config.credentials || {},
       runner: config.runner || null,
+      toolHooks: config.toolHooks || null,
       color: config.color || this._randomColor(),
       icon: config.icon || '🤖',
       createdAt: new Date().toISOString(),
@@ -114,6 +135,53 @@ export const crudMethods = {
       const agent = await this.create(memberConfig);
       created.push(agent);
     }
+    return created;
+  },
+
+  /**
+   * Convert an existing agent into a batch while keeping the original agent
+   * as member #1. Runtime state stays on that original agent; newly-created
+   * members receive only the shared configuration.
+   */
+  async convertToBatch(this: any, id: string, size: number): Promise<any[] | null> {
+    const agent = this.agents.get(id);
+    if (!agent) return null;
+    if (agent.isVoice) {
+      throw new Error('Voice agents cannot be converted to a batch');
+    }
+
+    const totalSize = Math.max(2, Math.min(50, Number(size) || 2));
+    const existingMembers = agent.batchId
+      ? Array.from(this.agents.values())
+          .filter((candidate: any) => candidate.batchId === agent.batchId)
+          .sort((a: any, b: any) => (a.batchIndex || 0) - (b.batchIndex || 0))
+      : [];
+
+    if (existingMembers.length >= totalSize) {
+      return existingMembers.map((member: any) => this._sanitize(member));
+    }
+
+    const batchId = agent.batchId || uuidv4();
+    const baseName = _batchBaseName((existingMembers[0] || agent).name);
+    const members = existingMembers.length > 0 ? existingMembers : [agent];
+
+    if (!agent.batchId) {
+      agent.batchId = batchId;
+      agent.batchIndex = 1;
+      agent.name = `${baseName} #1`;
+      agent.updatedAt = new Date().toISOString();
+      await saveAgent(agent);
+      this._emit('agent:updated', this._sanitize(agent));
+    }
+
+    const created: any[] = members.map((member: any) => this._sanitize(member));
+    const startIndex = members.length + 1;
+    for (let i = startIndex; i <= totalSize; i++) {
+      const memberConfig = _batchMemberConfigFromAgent(agent, batchId, i, `${baseName} #${i}`);
+      const newAgent = await this.create(memberConfig);
+      created.push(newAgent);
+    }
+
     return created;
   },
 
