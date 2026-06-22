@@ -59,6 +59,7 @@ services:
       - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
+      - OFFICE_SERVICE_URL=http://office-service:8000
     cap_drop:
       - ALL
     cap_add:
@@ -781,8 +782,52 @@ services:
       retries: 3
       start_period: 60s
 
+  # office-service — office-engine MCP (DOCX/XLSX/PPTX/PDF) for cloud/upload files.
+  office-service:
+    build:
+      context: ..
+      dockerfile: office-service/Dockerfile
+    image: registry.methodinfo.fr/office-service:latest
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+    networks:
+      backend:
+        aliases:
+          - office-service
+    environment:
+      - TZ=Europe/Paris
+      - OFFICE_HOST=0.0.0.0
+      - OFFICE_PORT=8000
+      - OFFICE_ROOT=/data
+    volumes:
+      - office-data:/data
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.gpu == none
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        delay: 10s
+        failure_action: rollback
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
 volumes:
   claudecode-android-cache:
+    driver: local
+  office-data:
     driver: local
   # NOTE: the CLI runner *-data volumes were removed — those runners are now
   # stateless (/app/data re-injected at spawn; see claudecode-service). sandbox

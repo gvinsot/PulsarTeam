@@ -60,6 +60,8 @@ test('internal MCP agent-context set matches the per-agent credential servers', 
     '__internal__github',
     '__internal__gmail',
     '__internal__jira',
+    // Resolves X-Agent-Id → agent.ownerId to reach the right user's desktop app.
+    '__internal__local_folder',
     '__internal__onedrive',
     '__internal__outlook',
     '__internal__pulsar_gateway',

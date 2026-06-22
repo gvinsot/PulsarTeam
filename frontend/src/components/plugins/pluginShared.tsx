@@ -8,6 +8,7 @@ import JiraConnect from '../JiraConnect';
 import WordPressConnect from '../WordPressConnect';
 import GitHubConnect from '../GitHubConnect';
 import S3Connect from '../S3Connect';
+import LocalFolderConnect from '../LocalFolderConnect';
 
 // Map MCP server IDs to their dedicated OAuth/API-key connector widget.
 // Returning null means the MCP doesn't need an interactive connector here
@@ -22,6 +23,7 @@ export const MCP_CONNECTOR_MAP: Record<string, any> = {
   'mcp-wordpress': WordPressConnect,
   'mcp-github': GitHubConnect,
   'mcp-aws-s3': S3Connect,
+  'mcp-local-folder': LocalFolderConnect,
 };
 
 export function getPluginMcpIds(plugin: any): string[] {

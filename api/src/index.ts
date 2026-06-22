@@ -65,7 +65,9 @@ import { createWordPressMcpHandler } from './services/wordpressMcp.js';
 import { githubRoutes, githubOAuthRedirectRouter } from './routes/github.js';
 import { createGitHubMcpHandler } from './services/githubMcp.js';
 import { s3Routes } from './routes/s3.js';
+import { localFolderRoutes } from './routes/localFolder.js';
 import { createS3McpHandler } from './services/s3Mcp.js';
+import { createLocalFolderMcpHandler } from './services/localFolderMcp.js';
 import budgetRoutes from './routes/budget.js';
 import { userRoutes } from './routes/users.js';
 import { llmConfigRoutes } from './routes/llmConfigs.js';
@@ -203,6 +205,7 @@ app.use('/api/settings/general', authenticateToken, settingsRoutes());
 app.use('/api/jira', authenticateToken, jiraRoutes());
 app.use('/api/wordpress', authenticateToken, wordpressRoutes());
 app.use('/api/s3', authenticateToken, s3Routes());
+app.use('/api/local-folder', authenticateToken, localFolderRoutes());
 app.use('/api/github', authenticateToken, githubRoutes());
 app.use('/api/boards', authenticateToken, boardRoutes(agentManager));
 app.use('/api/tasks', authenticateToken, taskRoutes);
@@ -235,6 +238,8 @@ const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
   ['/api/wordpress/mcp', createWordPressMcpHandler()],
   ['/api/github/mcp', createGitHubMcpHandler()],
   ['/api/s3/mcp', createS3McpHandler()],
+  // Local Folder bridge — proxies file/office tool calls to the user's desktop app.
+  ['/api/local-folder/mcp', createLocalFolderMcpHandler(agentManager)],
   ['/api/code-index/mcp', createCodeIndexMcpHandler(codeIndexService)],
   ['/api/gandi-dns/mcp', createGandiDnsMcpHandler(mcpManager)],
   ['/api/auto-learn/mcp', createAutoLearnMcpHandler()],

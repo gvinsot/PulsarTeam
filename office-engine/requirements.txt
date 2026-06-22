@@ -1,0 +1,19 @@
+# Office engine — hybrid stack.
+# Pure-library tools (read / extract / outline / edit / generate) need no system
+# deps. convert.py is the ONLY piece that shells out to LibreOffice headless
+# (installed in the Docker image / bundled in the desktop sidecar).
+
+# --- MCP transport (Streamable HTTP, matches api/src/services/mcpClient.ts) ---
+mcp>=1.2.0
+uvicorn>=0.30.0
+starlette>=0.37.0
+
+# --- Office formats (round-trip read/edit/generate) ---
+python-docx>=1.1.2     # Word  — read + edit-in-place + generate
+openpyxl>=3.1.5        # Excel — read + edit-in-place + generate
+python-pptx>=1.0.2     # PowerPoint — read + edit-in-place + generate
+pypdf>=5.1.0           # PDF — merge / split / page ops
+PyMuPDF>=1.24.0        # PDF — text/tables/images extraction + page rendering
+
+# --- Universal "any office file -> markdown for the LLM" ---
+markitdown[docx,xlsx,pptx,pdf]>=0.1.6

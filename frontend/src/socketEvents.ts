@@ -54,6 +54,10 @@ export const WsEvents = {
   REQ_VOICE_MANAGEMENT: 'voice:management',
   REQ_STREAM_STATE: 'agent:stream:state:request',
 
+  // Desktop bridge (local-folder app): server → user web sockets when the
+  // desktop comes online/offline or changes its shared folder.
+  BRIDGE_FOLDER_CHANGED: 'bridge:folder:changed',
+
   ERROR: 'error',
   HANDOFF_COMPLETE: 'agent:handoff:complete',
   HANDOFF_ERROR: 'agent:handoff:error',

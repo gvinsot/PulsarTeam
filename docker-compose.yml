@@ -48,6 +48,7 @@ services:
       - AIDER_SERVICE_URL=http://aider-service:8000
       - CODEX_SERVICE_URL=http://codex-service:8000
       - BROWSER_SERVICE_URL=http://mcp-browser:8000
+      - OFFICE_SERVICE_URL=${OFFICE_SERVICE_URL:-http://office-service:8000}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - MCP_ACTIONS_ENDPOINT=${MCP_ACTIONS_ENDPOINT:-}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
@@ -636,6 +637,37 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # office-service — office-engine MCP (read/edit/generate/convert DOCX/XLSX/PPTX/PDF)
+  # for cloud-connector / uploaded files. The desktop app bundles the SAME engine
+  # as a sidecar for local-folder files. On sandbox-net so `api` reaches it by name
+  # (http://office-service:8000), like mcp-browser.
+  office-service:
+    build:
+      context: .
+      dockerfile: office-service/Dockerfile
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+      - OFFICE_HOST=0.0.0.0
+      - OFFICE_PORT=8000
+      - OFFICE_ROOT=/data
+    volumes:
+      - office-data:/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+    networks:
+      - sandbox-net
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   claudecode-android-cache:
@@ -643,6 +675,8 @@ volumes:
   # (/app/data re-injected at spawn). sandbox/mock keep their data volumes.
   sandbox-data:
   mock-data:
+  # Scratch / uploads volume office-service confines all file ops under (OFFICE_ROOT).
+  office-data:
 
 networks:
   internal:

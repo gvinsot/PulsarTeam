@@ -61,6 +61,12 @@ export const WsEvents = {
   REQ_VOICE_MANAGEMENT: 'voice:management',
   REQ_STREAM_STATE: 'agent:stream:state:request',
 
+  // Desktop bridge (local-folder app ↔ server). The desktop opens a 2nd socket
+  // with auth.role='desktop-bridge'; the server proxies LLM tool calls down to it.
+  BRIDGE_REGISTER: 'bridge:register',        // desktop → server: announce shared folder(s)
+  BRIDGE_TOOL_CALL: 'bridge:tool:call',      // server → desktop: run a file/office tool (ack = result)
+  BRIDGE_FOLDER_CHANGED: 'bridge:folder:changed', // server → user web sockets: desktop state changed
+
   ERROR: 'error',
   HANDOFF_COMPLETE: 'agent:handoff:complete',
   HANDOFF_ERROR: 'agent:handoff:error',

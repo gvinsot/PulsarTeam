@@ -532,6 +532,10 @@ export const api = {
 
   disconnectS3: s3.disconnect,
 
+  // Local Folder (desktop bridge — per-user, not agent/board scoped). Status
+  // reflects whether THIS user's desktop app is online with a folder shared.
+  getLocalFolderStatus: () => get('/local-folder/status'),
+
   // GitHub OAuth (per-agent / per-board)
   getGitHubStatus: github.status,
   getGitHubAuthUrl: github.authUrl,

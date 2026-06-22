@@ -7,6 +7,28 @@ export function getConnectedUserIds(): Set<string> {
   return connectedUserIds;
 }
 
+// ── Desktop bridge registry ──────────────────────────────────────────
+// Live bridge sockets per user (the desktop app's 2nd connection). The
+// Local Folder MCP connector reaches a user's machine by emitWithAck-ing on one
+// of these sockets. Single API node + no socket.io adapter, so a plain in-memory
+// Map is correct; a Set per user tolerates multiple desktops / reconnections.
+const desktopSockets = new Map<string, Set<any>>();
+// Last folder metadata announced by a user's desktop (for the connect widget).
+const desktopBridgeInfo = new Map<string, { folders: string[]; registeredAt: number }>();
+
+export function isDesktopConnected(userId: string): boolean {
+  const set = desktopSockets.get(userId);
+  return !!set && set.size > 0;
+}
+
+export function getDesktopSocketsForUser(userId: string): Set<any> | undefined {
+  return desktopSockets.get(userId);
+}
+
+export function getDesktopBridgeInfo(userId: string): { folders: string[]; registeredAt: number } | null {
+  return desktopBridgeInfo.get(userId) || null;
+}
+
 // ── Per-socket rate limiter for mutating WebSocket events ────────────
 function createSocketRateLimiter(maxEvents = 30, windowMs = 60_000) {
   const timestamps = [];
@@ -71,6 +93,26 @@ export function setupSocketHandlers(io, agentManager) {
       updateLastSeen(userId).catch(() => {});
     }
     if (userRole === 'admin') socket.join('role:admin');
+
+    // ── Desktop bridge: the local-folder app's 2nd connection ──────────
+    // Registered in a separate `desktop:${userId}` room + socket registry so
+    // the Local Folder MCP connector can proxy tool calls to the user's machine.
+    const isDesktopBridge = (socket as any).handshake?.auth?.role === 'desktop-bridge';
+    if (isDesktopBridge && userId) {
+      socket.join(`desktop:${userId}`);
+      let set = desktopSockets.get(userId);
+      if (!set) { set = new Set(); desktopSockets.set(userId, set); }
+      set.add(socket);
+      console.log(`🖥️ Desktop bridge connected for user ${userId}`);
+
+      socket.on(WsEvents.BRIDGE_REGISTER, (data, ack) => {
+        const folders = Array.isArray(data?.folders) ? data.folders.map(String) : [];
+        desktopBridgeInfo.set(userId, { folders, registeredAt: Date.now() });
+        if (typeof ack === 'function') ack({ ok: true });
+        // Notify the user's web UI that the desktop state changed.
+        io.to(`user:${userId}`).emit(WsEvents.BRIDGE_FOLDER_CHANGED, { connected: true, folders });
+      });
+    }
 
     const ws = agentManager.wsEmitter;
 
@@ -607,6 +649,17 @@ export function setupSocketHandlers(io, agentManager) {
         if (!still) {
           connectedUserIds.delete(userId);
           updateLastSeen(userId).catch(() => {});
+        }
+      }
+      if (isDesktopBridge && userId) {
+        const set = desktopSockets.get(userId);
+        if (set) {
+          set.delete(socket);
+          if (set.size === 0) {
+            desktopSockets.delete(userId);
+            desktopBridgeInfo.delete(userId);
+            io.to(`user:${userId}`).emit(WsEvents.BRIDGE_FOLDER_CHANGED, { connected: false, folders: [] });
+          }
         }
       }
     });

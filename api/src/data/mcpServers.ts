@@ -14,6 +14,9 @@
  */
 export const INTERNAL_MCP_SERVERS = new Map<string, { path: string; agentContext: boolean }>([
   ['__internal__onedrive', { path: '/api/onedrive/mcp', agentContext: true }],
+  // Local Folder bridge — agentContext:true so X-Agent-Id flows; the connector
+  // resolves it to agent.ownerId and proxies to that user's desktop app.
+  ['__internal__local_folder', { path: '/api/local-folder/mcp', agentContext: true }],
   ['__internal__code_index', { path: '/api/code-index/mcp', agentContext: false }],
   // Legacy alias kept for configs that still reference the dashed form.
   ['__internal__code-index', { path: '/api/code-index/mcp', agentContext: false }],
@@ -51,6 +54,28 @@ export const BUILTIN_MCP_SERVERS = [
     url: process.env.MCP_ACTIONS_ENDPOINT || 'http://swarm-manager:8000/ai/actions/mcp',
     description: 'PulsarCD Actions — build, test et deploy de stacks Docker Swarm',
     icon: '🚀',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
+  },
+  {
+    id: 'mcp-office',
+    name: 'Office Documents',
+    // External-URL server (like PulsarCD) — the office-engine sidecar/service.
+    // Speaks Streamable HTTP MCP at /mcp; mcpClient.connect reaches it directly.
+    url: (process.env.OFFICE_SERVICE_URL || 'http://office-service:8000') + '/mcp',
+    description: 'Office Documents — read, edit, generate and convert Word/Excel/PowerPoint/PDF (markitdown + python-docx/openpyxl/python-pptx/PyMuPDF + LibreOffice). Works for any configured LLM.',
+    icon: '📄',
+    apiKey: '',
+    builtin: true,
+    enabled: true,
+  },
+  {
+    id: 'mcp-local-folder',
+    name: 'Local Folder',
+    url: '__internal__local_folder',
+    description: 'Local Folder — read, edit and generate files in a folder on the user\'s own machine via the PulsarTeam desktop app. Files never leave the machine. Same office tools as Office Documents, plus list/read/write/search. Requires the desktop app to be open with a folder shared.',
+    icon: '📁',
     apiKey: '',
     builtin: true,
     enabled: true,

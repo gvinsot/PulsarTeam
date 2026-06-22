@@ -1,0 +1,18 @@
+[project]
+name = "office-engine"
+version = "0.1.0"
+description = "Model-agnostic read/edit/generate/convert MCP tools for DOCX/XLSX/PPTX/PDF"
+requires-python = ">=3.10"
+
+[project.scripts]
+office-engine = "office_engine.mcp_server:main"
+
+[tool.setuptools]
+packages = ["office_engine", "office_engine.tools"]
+
+# Runtime deps live in requirements.txt (installed by the Dockerfile / venv /
+# PyInstaller spec), which supports pip-style inline comments.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
