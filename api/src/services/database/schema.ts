@@ -311,6 +311,20 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_agent_id UUID').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS error_from_status TEXT').catch(() => {});
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS action_running_mode TEXT').catch(() => {});
+      // assignee + started_at were defined in CREATE TABLE but never had an
+      // idempotent back-fill here. A tasks table created before these columns
+      // existed in CREATE TABLE silently lacks them, and because the task upsert
+      // (_doSaveTask) writes assignee, started_at AND action_running in a single
+      // INSERT…ON CONFLICT, a missing column makes the WHOLE statement throw —
+      // which saveThenEmitTaskUpdated swallows (.catch). Result: an agent picks
+      // up a task but its assignment + actionRunning flag never persist, so the
+      // card shows no assignee name and no "working" spinner (even after a page
+      // refresh, which re-reads the un-written DB row). No silent swallow on
+      // failure here — these gate every task write, so we want it loud.
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee UUID')
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN tasks.assignee failed:', e.message));
+      await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ')
+        .catch((e: any) => console.error('[initDatabase] ADD COLUMN tasks.started_at failed:', e.message));
       // pending_on_enter is the deferred on_enter retry flag — durable so
       // interrupted workflow chains resume after restart.
       await pool.query('ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pending_on_enter TEXT').catch(() => {});
