@@ -390,12 +390,21 @@ async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
   task.actionRunningAgentId = agent.id;
   task.actionRunningMode = mode;
   if (!task.startedAt) task.startedAt = new Date().toISOString();
+  // Assign the executing agent so the board shows WHO took the task (the busy
+  // spinner alone doesn't say who). Unlike the owned-task path — whose finally
+  // clears the assignee for non-execute modes because the task still has an
+  // owner to attribute it to — a board-level task has no owner, so we KEEP the
+  // assignee after the run (it surfaces "last worked by X"); a later run just
+  // overwrites it with the next executor.
+  const assigneeChanged = task.assignee !== agent.id;
+  if (assigneeChanged) task.assignee = agent.id;
   try {
     await updateTaskFields(task.id, {
       actionRunning: true,
       actionRunningAgentId: agent.id,
       actionRunningMode: mode,
       startedAt: task.startedAt,
+      ...(assigneeChanged ? { assignee: agent.id } : {}),
     });
   } catch { /* best-effort — the emit below still drives the live UI */ }
   _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId });
