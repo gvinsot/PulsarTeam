@@ -2,7 +2,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getActiveTasksByAgent, getActiveTaskForExecutor, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
-import { isActiveStatus, getWorkflowManagedStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
+import { isActiveStatus, getWorkflowManagedStatuses, getReassigningStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
 
@@ -226,7 +226,15 @@ export const tasksMethods = {
     if (prevStatus === status) return task;
     const previousAssignee = task.assignee || null;
     task.status = status;
-    if (previousAssignee) task.assignee = null;
+    // Clear the assignee on column entry ONLY when the destination column is
+    // going to reassign it (a run_agent/assign_agent action, or a non-first/last
+    // autoAssignRole — see getReassigningStatuses). Otherwise keep it so the
+    // record of which agent took the task survives the move. Clearing
+    // unconditionally was invisible while the assignee equalled the task owner
+    // (e.g. a batch's member #1) but, for any other member, wiped the worker so
+    // the board showed nobody had picked the task up.
+    const clearAssignee = !!previousAssignee && (this._reassigningStatuses?.has(status) ?? false);
+    if (clearAssignee) task.assignee = null;
     // Clear pending on enter signal
     clearTaskSignal(taskId, 'pendingOnEnter');
     delete task._pendingOnEnter;
@@ -263,7 +271,7 @@ export const tasksMethods = {
       status,
       at: now,
       by: by || 'user',
-      ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
+      ...(clearAssignee ? { assignee: null, previousAssignee } : {}),
     });
     // Stamp updatedAt so the frontend can detect stale loadTasks() responses.
     // The DB sets its own updated_at = NOW() inside saveTaskToDb, but a SELECT
@@ -730,6 +738,7 @@ export const tasksMethods = {
     this._loopProcessing = new Set();
     this._taskResumeFailures = new Map(); // taskId -> { count, lastFailedAt }
     this._workflowManagedStatuses = new Set();
+    this._reassigningStatuses = new Set();
     this._refreshWorkflowManagedStatuses();
     this._taskLoopInterval = setInterval(() => this._processNextPendingTasks(), intervalMs);
     this._recurrenceInterval = setInterval(() => this._processRecurringTasks(), 60000);
@@ -741,6 +750,9 @@ export const tasksMethods = {
     getAllBoardWorkflows().then((boardWorkflows: any) => {
       const next = getWorkflowManagedStatuses(boardWorkflows);
       this._workflowManagedStatuses = next;
+      // Statuses whose entry will reassign the task — drives whether
+      // setTaskStatus clears the assignee on a column move (see setTaskStatus).
+      this._reassigningStatuses = getReassigningStatuses(boardWorkflows);
       // Log only when the managed-status set actually changes — this runs every
       // 30s, and re-printing the (long, static) list each time drowned the logs.
       const nextKey = [...next].sort().join(',');

@@ -335,7 +335,7 @@ test('setTaskStatus changes status and emits events', async () => {
   assert.equal(updated.status, 'code');
 });
 
-test('setTaskStatus clears assignee immediately when status changes', async () => {
+test('setTaskStatus clears assignee when the destination column reassigns', async () => {
   const mgr = await setup([
     { name: 'Creator', role: 'manager' },
     { name: 'Worker', role: 'developer' },
@@ -345,12 +345,36 @@ test('setTaskStatus clears assignee immediately when status changes', async () =
   const task = addTaskToAgent(mgr, creatorId, 'Assigned task', 'todo', 'board-1', {
     assignee: workerId,
   });
+  // 'code' is a column that reassigns (run_agent / assign_agent / autoAssignRole)
+  mgr._reassigningStatuses = new Set(['code']);
 
   const result = mgr.setTaskStatus(creatorId, task.id, 'code', { skipAutoRefine: true });
 
   assert.equal(result.assignee, null);
   assert.equal(task.assignee, null);
   assert.equal(task.history.at(-1)?.previousAssignee, workerId);
+});
+
+test('setTaskStatus keeps assignee when the destination column does NOT reassign', async () => {
+  const mgr = await setup([
+    { name: 'Creator', role: 'manager' },
+    { name: 'Worker', role: 'developer' },
+  ]);
+  const { id: creatorId } = getAgent(mgr, 'Creator');
+  const { id: workerId } = getAgent(mgr, 'Worker');
+  const task = addTaskToAgent(mgr, creatorId, 'Assigned task', 'todo', 'board-1', {
+    assignee: workerId,
+  });
+  // Destination column 'in_review' has no assigning action → the worker that
+  // took the task must stay visible after the move (regression: the assignee
+  // used to be wiped on every status change, hiding non-owner batch members).
+  mgr._reassigningStatuses = new Set(['code']);
+
+  const result = mgr.setTaskStatus(creatorId, task.id, 'in_review', { skipAutoRefine: true });
+
+  assert.equal(result.assignee, workerId);
+  assert.equal(task.assignee, workerId);
+  assert.equal(task.history.at(-1)?.previousAssignee, undefined);
 });
 
 test('setTaskStatus returns falsy for invalid task id', async () => {

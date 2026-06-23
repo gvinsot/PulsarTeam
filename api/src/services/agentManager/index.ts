@@ -197,6 +197,7 @@ export class AgentManager {
   _loopProcessing: Set<string> | undefined;
   _taskResumeFailures: Map<string, { count: number; lastFailedAt: number }> | undefined;
   _workflowManagedStatuses: Set<string> | undefined;
+  _reassigningStatuses: Set<string> | undefined;
   _staleActionCleanupDone: boolean | undefined;
 
   constructor(io: any, skillManager: any, executionManager: any, mcpManager: any = null, codeIndexService: any = null) {

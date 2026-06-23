@@ -45,7 +45,7 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
   }, [availableRepos, defaultRepoFullName, repoFullName]);
 
   // Storages accessible via the board's OneDrive plugin
-  const { storages: availableStorages, error: storageLoadError } = useBoardStorages(boardId);
+  const { storages: availableStorages, loading: storageLoading } = useBoardStorages(boardId);
   const [storagePath, setStoragePath] = useState(defaultStoragePath || '');
   const userTouchedStorage = useRef(false);
   // Once the OneDrive root list arrives, settle on the default if it's still listed,
@@ -225,9 +225,9 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
             <label className="block text-xs font-semibold text-dark-400 uppercase tracking-wide mb-1.5">
               <Cloud className="inline w-3 h-3 mr-1" />Storage
             </label>
-            {storageLoadError ? (
+            {storageLoading ? (
               <p className="text-xs text-dark-500 italic px-3 py-2 bg-dark-800/40 border border-dark-700 rounded-lg">
-                No drive connected
+                Loading folders...
               </p>
             ) : availableStorages.length > 0 ? (
               <select
@@ -242,7 +242,7 @@ export default function CreateTaskModal({ agents, onClose, onCreated, statusOpti
               </select>
             ) : (
               <p className="text-xs text-dark-500 italic px-3 py-2 bg-dark-800/40 border border-dark-700 rounded-lg">
-                Loading folders...
+                No drive connected
               </p>
             )}
           </div>

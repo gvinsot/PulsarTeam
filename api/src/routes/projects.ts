@@ -326,10 +326,12 @@ export function projectRoutes() {
 
       const tok = getOAuthToken('onedrive', 'board', req.params.boardId);
       if (!tok || !tok.accessToken) {
-        return res.status(400).json({
-          error: 'No drive connected',
-          code: 'DRIVE_NOT_CONNECTED',
-        });
+        // A board without a OneDrive plugin is a normal state (storage is
+        // optional), not a client error — returning 400 made every task-open on
+        // such a board log a console error. Return an empty list (200) instead.
+        // When a drive IS connected the list always contains at least the Drive
+        // root below, so the frontend reads an empty result as "no drive".
+        return res.json([]);
       }
 
       const headers = {

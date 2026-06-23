@@ -16,6 +16,7 @@ export {
   evaluateAllConditions,
   getMatchingTransitions,
   getWorkflowManagedStatuses,
+  getReassigningStatuses,
   Trigger,
   ActionType,
   AgentMode,

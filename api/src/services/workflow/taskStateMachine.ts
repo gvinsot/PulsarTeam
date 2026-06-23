@@ -159,3 +159,42 @@ export function getWorkflowManagedStatuses(allBoardWorkflows) {
   }
   return managed;
 }
+
+// Action types that (re)assign the task's assignee when a column is entered.
+const ASSIGNING_ACTIONS = new Set([
+  ActionType.RUN_AGENT,
+  ActionType.ASSIGN_AGENT,
+  ActionType.ASSIGN_AGENT_INDIVIDUAL,
+]);
+
+/**
+ * Determine the set of statuses (columns) whose ENTRY will (re)assign the
+ * task's assignee — either via an on_enter/condition action that sets it
+ * (run_agent / assign_agent / assign_agent_individual) or via the column's
+ * autoAssignRole (which only fires for non-first/last columns; see
+ * _autoAssignByColumn).
+ *
+ * Consumed by setTaskStatus to decide whether to clear the assignee on entry:
+ * clearing is correct ONLY when the destination column is going to replace it.
+ * Clearing unconditionally wiped the record of which agent took the task — that
+ * was invisible while the assignee equalled the task owner (e.g. a batch's
+ * member #1) but, for any other member, left the board showing nobody had
+ * picked the task up.
+ */
+export function getReassigningStatuses(allBoardWorkflows) {
+  const reassigning = new Set();
+  for (const { workflow } of allBoardWorkflows) {
+    for (const t of (workflow.transitions || [])) {
+      if (!isValidTransition(t)) continue;
+      if ((t.actions || []).some(a => ASSIGNING_ACTIONS.has(a.type))) {
+        reassigning.add(t.from);
+      }
+    }
+    const cols = workflow.columns || [];
+    cols.forEach((col, idx) => {
+      const isFirstOrLast = idx === 0 || idx === cols.length - 1;
+      if (col?.autoAssignRole && !isFirstOrLast) reassigning.add(col.id);
+    });
+  }
+  return reassigning;
+}

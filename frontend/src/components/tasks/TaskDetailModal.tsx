@@ -43,7 +43,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
   // Repos via the board's GitHub plugin so the user can re-target the task,
   // storage roots via the board's OneDrive plugin
   const { repos: availableRepos, error: repoLoadError } = useBoardRepos(task.boardId);
-  const { storages: availableStorages, error: storageLoadError } = useBoardStorages(task.boardId);
+  const { storages: availableStorages, error: storageLoadError, loading: storageLoading } = useBoardStorages(task.boardId);
 
   // Focus textarea when entering edit mode
   useEffect(() => {
@@ -741,7 +741,7 @@ export default function TaskDetailModal({ task, agents, onClose, onRefresh, onDe
               selectClassName="px-2 py-0.5 bg-dark-800 border border-amber-500/50 rounded text-xs text-dark-200 focus:outline-none focus:border-amber-500 transition-colors"
               editTitle="Change storage"
               pencilHoverClass="hover:text-amber-400"
-              pencilReplacement={storageLoadError ? (
+              pencilReplacement={!storageLoading && (storageLoadError || availableStorages.length === 0) ? (
                 <span className="text-[10px] text-dark-500 italic">No drive connected</span>
               ) : null}
               view={task.storagePath ? (
