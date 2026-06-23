@@ -69,6 +69,7 @@ export default function Dashboard({
     else safeRemove('activeBoardId');
   }, []);
   const [dbProjects, setDbProjects] = useState([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [projectFilter, setProjectFilterRaw] = useState(() => safeGet('activeProjectId') || '');
   const setProjectFilter = useCallback((val) => {
     setProjectFilterRaw(val);
@@ -84,7 +85,10 @@ export default function Dashboard({
 
   useEffect(() => {
     api.getBoards().then(setBoards).catch(() => {});
-    api.getProjects().then(setDbProjects).catch(() => setDbProjects([]));
+    api.getProjects()
+      .then(setDbProjects)
+      .catch(() => setDbProjects([]))
+      .finally(() => setProjectsLoaded(true));
   }, []);
 
   // Build lookup: boardId → project_id (from boards loaded above)
@@ -94,11 +98,15 @@ export default function Dashboard({
     return m;
   }, [boards]);
 
-  // Clear stale project filter if the project no longer exists
+  // Clear stale project filter if the project no longer exists. Wait until
+  // projects have actually loaded so we don't drop the filter during the
+  // initial fetch — but once loaded, an empty project list (user has no
+  // projects) must also clear it, otherwise every agent/board gets filtered
+  // out and the UI looks empty.
   useEffect(() => {
-    if (!projectFilter || dbProjects.length === 0) return;
+    if (!projectFilter || !projectsLoaded) return;
     if (!dbProjects.some(p => p.id === projectFilter)) setProjectFilter('');
-  }, [dbProjects, projectFilter, setProjectFilter]);
+  }, [dbProjects, projectsLoaded, projectFilter, setProjectFilter]);
 
   // Lazy-load data based on active view
   useEffect(() => {
