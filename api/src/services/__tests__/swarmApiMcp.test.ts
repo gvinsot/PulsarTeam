@@ -213,19 +213,46 @@ test('add_task rejects calls without board_id', async () => {
   assert.equal(am._calls.addTask.length, 0);
 });
 
-test('add_task always creates an unassigned task (no agent_id accepted)', async () => {
+test('add_task without a caller agent creates a board-level task (no owner)', async () => {
   const am = makeFakeAgentManager();
-  const server = createSwarmApiMcpServer(am as any);
+  const server = createSwarmApiMcpServer(am as any); // no caller agent context
   const handler = getToolHandler(server, 'add_task');
 
   const result = await handler({ board_id: 'board-1', task: 'Pick this up later' });
   const body = parseResult(result);
 
   assert.equal(body.success, true);
-  assert.equal(body.agent, null, 'agent should always be null — agent targeting was removed');
+  assert.equal(body.agent, null, 'no caller → no owner');
   assert.equal(body.board_id, 'board-1');
   assert.equal(am._calls.addTask.length, 1);
-  assert.equal(am._calls.addTask[0].agentId, null, 'addTask is always called with agentId=null');
+  assert.equal(am._calls.addTask[0].agentId, null, 'addTask called with agentId=null when no caller');
+});
+
+test('add_task owns the task to the calling agent', async () => {
+  const am = makeFakeAgentManager();
+  // 'agent-1' (Builder) exists in the fake agents map.
+  const server = createSwarmApiMcpServer(am as any, 'agent-1');
+  const handler = getToolHandler(server, 'add_task');
+
+  const result = await handler({ board_id: 'board-1', task: 'Owned by its creator' });
+  const body = parseResult(result);
+
+  assert.equal(body.success, true);
+  assert.equal(body.agent, 'agent-1', 'owner = the calling agent');
+  assert.equal(am._calls.addTask[0].agentId, 'agent-1', 'addTask called with the caller as owner');
+  assert.equal(am._calls.addTask[0].opts.skipAutoRefine, true, 'no auto-run on creation');
+});
+
+test('add_task falls back to board-level when the caller agent is unknown', async () => {
+  const am = makeFakeAgentManager();
+  const server = createSwarmApiMcpServer(am as any, 'ghost-agent'); // not in agents map
+  const handler = getToolHandler(server, 'add_task');
+
+  const result = await handler({ board_id: 'board-1', task: 'Orphan caller' });
+  const body = parseResult(result);
+
+  assert.equal(body.success, true);
+  assert.equal(am._calls.addTask[0].agentId, null, 'unknown caller → no owner');
 });
 
 test('add_task resolves initial status by label before id', async () => {

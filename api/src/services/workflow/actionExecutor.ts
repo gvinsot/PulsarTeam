@@ -12,7 +12,7 @@
 import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
-import { saveTaskToDb, updateTaskExecutionStatus } from '../database.js';
+import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields } from '../database.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { isCliRunner } from '../runners.js';
@@ -377,6 +377,46 @@ function _markActionRunning(actualTask, agent, mode, agentManager, agentId) {
 }
 
 /**
+ * Board-level variant of _markActionRunning for tasks created unassigned via
+ * MCP add_task (agent_id = null). These never live in the agentId-keyed
+ * in-memory `_tasks` store, so _markActionRunning is skipped and the card never
+ * shows "busy" while the agent works. Persist the running flag with a TARGETED
+ * column update (not the full saveTaskToDb upsert, which would clobber fields
+ * the transient task copy may not carry) and emit so the board updates live.
+ * agentId stays null — ownership is unchanged.
+ */
+async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
+  task.actionRunning = true;
+  task.actionRunningAgentId = agent.id;
+  task.actionRunningMode = mode;
+  if (!task.startedAt) task.startedAt = new Date().toISOString();
+  try {
+    await updateTaskFields(task.id, {
+      actionRunning: true,
+      actionRunningAgentId: agent.id,
+      actionRunningMode: mode,
+      startedAt: task.startedAt,
+    });
+  } catch { /* best-effort — the emit below still drives the live UI */ }
+  _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId });
+}
+
+/** Persist + emit the cleared running flag for a board-level task (see above). */
+async function _clearActionRunningBoardLevel(agentManager, task) {
+  task.actionRunning = false;
+  delete task.actionRunningAgentId;
+  delete task.actionRunningMode;
+  try {
+    await updateTaskFields(task.id, {
+      actionRunning: false,
+      actionRunningAgentId: null,
+      actionRunningMode: null,
+    });
+  } catch { /* best-effort */ }
+  _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId });
+}
+
+/**
  * Switch the agent to the task's repo if needed, failing the action if the
  * switch fails. On failure this leaves the task in its CURRENT column (no status
  * change) with an 'error' history entry and an agent:error:report — deliberately
@@ -542,6 +582,11 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
   if (actualTask) {
     _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
+  } else {
+    // Board-level task (created unassigned via MCP add_task): not in the
+    // in-memory store, so mark + persist the running flag directly — otherwise
+    // the board never shows it as busy while the agent works.
+    await _markActionRunningBoardLevel(agentManager, task, agent, mode);
   }
 
   // Auto-switch agent to the task's repo if needed.
@@ -658,6 +703,12 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // any subsequent emit (change_status, agent:updated → loadTasks) wins.
     if (cleanupMutated && actualTask) {
       _emitTaskUpdated(agentManager, task.agentId, { ...actualTask, agentId: task.agentId });
+    }
+    // Board-level task: no in-memory copy, and board-level moves bypass
+    // setTaskStatus, so nothing else will persist the cleared flag — do it here
+    // or the task stays stuck "busy" in the DB after the run ends.
+    if (!actualTask && task?.actionRunning) {
+      await _clearActionRunningBoardLevel(agentManager, task);
     }
   }
 }

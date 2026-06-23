@@ -346,11 +346,13 @@ export async function applyTaskUpdate(
  *   (summary comment + linked commits).
  * - search_tasks: Search task history
  *
- * The second parameter (the X-Agent-Id caller context) is no longer used: every
- * task tool here takes an explicit task_id and resolves the owning agent from
- * the task itself. It is kept for call-site compatibility with the handler.
+ * The second parameter is the caller agent context (X-Agent-Id). add_task uses
+ * it to record the creating agent as the new task's OWNER (agent_id) so the
+ * task lives in the in-memory store and the workflow machinery (busy spinner,
+ * assignment, etc.) works on it. The mutation tools (update_task/search_tasks)
+ * take an explicit task_id and resolve the owning agent from the task itself.
  */
-export function createSwarmApiMcpServer(agentManager, _callerAgentId: string | null = null) {
+export function createSwarmApiMcpServer(agentManager, callerAgentId: string | null = null) {
   const server = new McpServer({
     name: 'Swarm API',
     version: '1.0.0',
@@ -471,7 +473,7 @@ export function createSwarmApiMcpServer(agentManager, _callerAgentId: string | n
   // ── add_task ───────────────────────────────────────────────────────────
   server.tool(
     'add_task',
-    'Add a new task to a board. board_id is mandatory — use list_boards to discover board IDs. Tasks are always created unassigned on the board; any agent can pick them up later from the board column. A repository or storage path can also be bound to the task.',
+    'Add a new task to a board. board_id is mandatory — use list_boards to discover board IDs. The task is created unassigned (no assignee) so any agent can be assigned to it later from the board column; you (the calling agent) are recorded as the task owner. A repository or storage path can also be bound to the task.',
     {
       task: z.string().describe('The task description'),
       project: z.string().optional().describe('Optional project to assign the task to'),
@@ -518,22 +520,30 @@ export function createSwarmApiMcpServer(agentManager, _callerAgentId: string | n
         resolvedStatus = statusResolution.status;
       }
 
-      const newTask = agentManager.addTask(null, task, { type: 'mcp' }, resolvedStatus, {
+      // Own the task to the calling agent when we have a valid one, so it lands
+      // in the in-memory store and the workflow machinery (busy/assignee) works.
+      // Falls back to a board-level task (no owner) when there's no agent context
+      // (e.g. an external API caller). skipAutoRefine preserves the prior
+      // behaviour of NOT auto-running the workflow on creation — the task still
+      // waits to be moved/picked up, it's just now owned + in memory.
+      const ownerId = callerAgentId && agentManager.agents.get(callerAgentId) ? callerAgentId : null;
+      const newTask = agentManager.addTask(ownerId, task, { type: 'mcp' }, resolvedStatus, {
         boardId: resolvedBoardId,
         repoFullName,
         repoProvider: repoFullName ? (repo_provider || 'github') : null,
         storagePath,
         storageProvider: storagePath ? (storage_provider || 'onedrive') : null,
+        skipAutoRefine: true,
       });
       if (!newTask) {
         return jsonError('Failed to create task. Verify board_id is valid.');
       }
-      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created (unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${resolvedStatus || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
+      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created (owner=${ownerId || 'none'}, unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${resolvedStatus || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
 
       return jsonOk({
         success: true,
         task: newTask,
-        agent: null,
+        agent: ownerId,
         board_id: resolvedBoardId,
       });
     }
