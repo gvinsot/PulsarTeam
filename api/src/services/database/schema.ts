@@ -352,6 +352,10 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_position ON tasks(board_id, status, position)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_repo ON tasks(repo_full_name)').catch(() => {});
       await pool.query('CREATE INDEX IF NOT EXISTS idx_tasks_storage ON tasks(storage_path)').catch(() => {});
+      // Drives getActiveWorkflowTasks (the 5s workflow recheck): live, board-bound
+      // tasks for one environment, narrowed by status. Partial so it only covers
+      // the rows the recheck actually scans.
+      await pool.query("CREATE INDEX IF NOT EXISTS idx_tasks_workflow_recheck ON tasks(environment, status) WHERE deleted_at IS NULL AND board_id IS NOT NULL").catch(() => {});
       console.log('✅ Tasks table ready');
 
       // ── Task Audit Logs table ─────────────────────────────────────────────

@@ -92,6 +92,16 @@ export async function getBoardsByUser(userId) {
        JOIN boards b ON bs.board_id = b.id
        LEFT JOIN users u ON b.user_id = u.id
        WHERE bs.user_id = $1 AND b.user_id != $1
+       UNION ALL
+       SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.plugins, b.mcp_auth, b.project_id, b.created_at, b.updated_at,
+              'read' AS share_permission, NULL AS owner_username
+       FROM boards b
+       WHERE b.is_default = TRUE
+         AND b.user_id IS DISTINCT FROM $1
+         AND NOT EXISTS (
+           SELECT 1 FROM board_shares bs
+           WHERE bs.board_id = b.id AND bs.user_id = $1
+         )
        ORDER BY position, created_at`,
       [userId]
     );

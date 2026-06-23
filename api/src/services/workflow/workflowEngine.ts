@@ -18,7 +18,7 @@
  */
 
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
-import { saveTaskToDb } from '../database.js';
+import { saveTaskToDb, getActiveWorkflowTasks, tryAcquireTaskLock, releaseTaskLock } from '../database.js';
 import { executeAction, recordReassign } from './actionExecutor.js';
 import { markTaskError } from './taskErrors.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
@@ -37,6 +37,23 @@ import { findAgentForAssignment, hasLockForTask, hasIdleAgentWithRole } from './
 // only matters when called at higher frequency (e.g. tests poll every 100ms).
 const ON_ENTER_RETRY_INITIAL_MS = 200;
 const ON_ENTER_RETRY_MAX_MS     = 2_000;
+
+/**
+ * The mutable task object for chain bookkeeping (completedActionIdx,
+ * _pendingOnEnter, assignee, error). For an OWNED task it is the in-memory store
+ * object — mutating it stays visible to other in-memory readers (and is byte-
+ * identical to the prior `_getAgentTasks(...).find(...)`; may be undefined if the
+ * owned task isn't cached). For a BOARD-LEVEL task (agent_id = NULL) there is no
+ * store object, so the working `task` copy is returned: callers persist it via
+ * saveTaskToDb (which writes agent_id = null), so its chain state survives a
+ * restart and recheckPendingTransitions can resume/retry it like an owned task.
+ */
+function _chainTask(agentManager, task) {
+  if (task.agentId) {
+    return agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  }
+  return task;
+}
 
 // ── Per-task processing lock ────────────────────────────────────────────────
 // Prevents concurrent processColumnEntry calls for the same task, which can
@@ -93,7 +110,7 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
     const currentlyProcessing = _processingTasks.get(task.id);
     console.log(`[WorkflowEngine] processColumnEntry: already processing task="${task.id}" (status="${currentlyProcessing}") — deferring for status="${task.status}"`);
     // Flag for deferred on_enter so recheckPendingTransitions picks it up
-    const actualTask = agentManager._getAgentTasks(task.agentId)?.find(t => t.id === task.id);
+    const actualTask = _chainTask(agentManager, task);
     if (actualTask && task.status !== currentlyProcessing) {
       actualTask._pendingOnEnter = task.status;
       saveTaskToDb({ ...actualTask, agentId: task.agentId }).catch(() => {});
@@ -282,10 +299,38 @@ function _reArmInterruptedChainsOnce(agentManager, ownEnv) {
 }
 
 /**
+ * Run a detached workflow chain under the cross-replica per-task advisory lock.
+ * The lock is awaited INSIDE this already-fire-and-forget promise — never in the
+ * synchronous recheck loop — so the loop's interleaving and synchronous lock
+ * sets are unchanged. If a sibling replica holds the lock (or the local cap is
+ * hit), the chain is skipped this tick and retried on the next one. The lock is
+ * released when the chain settles. `run()` is only invoked once the lock is held,
+ * so a run_agent chain can't double-execute across replicas before its durable
+ * action_running flag (which getActiveWorkflowTasks excludes) is set.
+ */
+function _dispatchUnderLock(taskId, run) {
+  return (async () => {
+    const locked = await tryAcquireTaskLock(taskId);
+    if (!locked) {
+      console.log(`[WorkflowEngine] Skipping task=${taskId} — advisory lock held (sibling replica or local cap)`);
+      return;
+    }
+    try {
+      await run();
+    } finally {
+      await releaseTaskLock(taskId);
+    }
+  })();
+}
+
+/**
  * Recheck a single task against its board's relevant transitions. SYNCHRONOUS by
  * design: the original loop body had no awaits, and fires processColumnEntry /
  * _executeActionChain as detached promises. Inserting awaits here would change
  * interleaving with those fire-and-forget chains and the synchronous lock sets.
+ *
+ * `agentId`/`agent` are null for board-level tasks (agent_id = NULL) — keep every
+ * use of `agent` optional-chained.
  */
 function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
   const io = agentManager.io;
@@ -357,8 +402,9 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
 
       console.log(`[WorkflowEngine] on_enter retry #${retryCount + 1} for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
 
-      // Re-run via processColumnEntry to respect completedActionIdx
-      processColumnEntry({ ...task, agentId }, agentManager, { by: 'on-enter-retry' })
+      // Re-run via processColumnEntry to respect completedActionIdx, under the
+      // cross-replica lock (acquired inside the detached promise).
+      _dispatchUnderLock(task.id, () => processColumnEntry({ ...task, agentId }, agentManager, { by: 'on-enter-retry' }))
         .catch(err => console.error(`[WorkflowEngine] on_enter retry error:`, err.message))
         .finally(() => agentManager._conditionProcessing.delete(lockKey));
       return;
@@ -377,16 +423,16 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
 
     const wf = boardWorkflowMap.get(task.boardId)
       || (boardWorkflowMap.size === 1 ? [...boardWorkflowMap.values()][0] : null);
-    const ownerId = wf?.userId || agent.ownerId || null;
+    const ownerId = wf?.userId || agent?.ownerId || null;
 
     _processingTasks.set(task.id, task.status);
-    _executeActionChain(transition.actions || [], { ...task, agentId }, {
+    _dispatchUnderLock(task.id, () => _executeActionChain(transition.actions || [], { ...task, agentId }, {
       agentManager,
       io,
       ownerId,
       workflow: wf,
       originalStatus: task.status,
-    })
+    }))
       .catch(err => console.error(`[WorkflowEngine] Condition action error:`, err.message))
       .finally(() => {
         _processingTasks.delete(task.id);
@@ -417,14 +463,30 @@ export async function recheckPendingTransitions(agentManager) {
 
   _reArmInterruptedChainsOnce(agentManager, ownEnv);
 
-  // Iterate all tasks across all agents
+  // Owned tasks: iterate the in-memory store (unchanged) so each task's live
+  // transient state (completedActionIdx/_pendingOnEnter set mid-chain) and
+  // object identity are preserved exactly until the store is removed in Phase 4.
   for (const [agentId, agent] of agentManager.agents) {
-    const agentTasks = agentManager._getAgentTasks(agentId);
-    for (const task of agentTasks) {
+    for (const task of agentManager._getAgentTasks(agentId)) {
       _recheckTask(task, agentId, agent, boards, agentManager, ownEnv);
     }
   }
+
+  // Board-level tasks (agent_id = NULL): never live in the agent-keyed store, so
+  // the loop above can't see them — the root cause of their workflow transitions
+  // never firing. Query them from the DB and recheck them too. (getActiveWorkflowTasks
+  // returns owned tasks as well; those are already handled above, so skip them.)
+  const dbTasks = await getActiveWorkflowTasks(ownEnv);
+  for (const dbTask of dbTasks) {
+    if (dbTask.agentId) continue; // owned — handled via the in-memory loop above
+    _recheckTask(dbTask, null, null, boards, agentManager, ownEnv);
+  }
 }
+
+// The cross-replica advisory lock (acquired inside `_dispatchUnderLock`) makes
+// BOTH loops above safe when replicas share the DB: every replica sees the same
+// owned (in-memory, loaded from the shared DB) and board-level (DB) tasks, and
+// only the lock holder processes a given task.
 
 // ── Internal helpers ────────────────────────────────────────────────────────
 
@@ -463,7 +525,7 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
       // appears in red. markTaskError guarantees errorFromStatus stays valid
       // even when the task was already errored or the workflow was edited.
       console.log(`[WorkflowEngine] Action ${i} errored: ${result.message} — setting task to error`);
-      const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+      const actualTask = _chainTask(agentManager, task);
       if (actualTask) {
         const mutated = markTaskError(actualTask, result.message, {
           by: 'workflow',
@@ -487,7 +549,7 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
     if (result.skipped) {
       // Action could not run (no agent, lock held, etc.) — flag for retry
       hadSkippedAction = true;
-      const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+      const actualTask = _chainTask(agentManager, task);
       if (actualTask) {
         actualTask._pendingOnEnter = actualTask.status;
         // Persist the resume index even when the FIRST action is skipped
@@ -503,7 +565,7 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
 
     if (result.executed) {
       // Track completed action index for chain resume
-      const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+      const actualTask = _chainTask(agentManager, task);
       if (actualTask) {
         actualTask.completedActionIdx = i;
         if (actualTask._pendingOnEnter === originalStatus) {
@@ -517,7 +579,7 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
       }
 
       // Sync task state from memory (agent may have changed it)
-      const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+      const freshTask = _chainTask(agentManager, task);
       if (freshTask) {
         task.text = freshTask.text;
         task.title = freshTask.title;
@@ -542,7 +604,7 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
   // Clean up chain resume index (only if no action was skipped — skipped chains
   // need the index preserved for retry via recheckPendingTransitions)
   if (!hadSkippedAction) {
-    const taskAfterChain = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+    const taskAfterChain = _chainTask(agentManager, task);
     if (taskAfterChain && typeof taskAfterChain.completedActionIdx === 'number') {
       taskAfterChain.completedActionIdx = null;
       await saveTaskToDb({ ...taskAfterChain, agentId: task.agentId });
@@ -574,7 +636,7 @@ function _autoAssignByColumn(task, workflow, agentManager, ownerId, io) {
   if (autoAgent) {
     console.log(`[WorkflowEngine] Auto-assign: "${(task.text || '').slice(0, 60)}" → "${autoAgent.name}" (role: ${currentColumn.autoAssignRole})`);
     task.assignee = autoAgent.id;
-    const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+    const actualTask = _chainTask(agentManager, task);
     if (actualTask) {
       actualTask.assignee = autoAgent.id;
       // Record history for consistency with other assignment paths

@@ -132,8 +132,39 @@ async unification of `setTaskStatus`/`setTaskAssignee` onto a single DB-backed m
 decide before/after detection's DB re-fetch for board-level tasks (today it compares in-memory
 copies, so a board-level decision reads as "no decision").
 
-### Phase 3 — PENDING (gated). Cross-replica design DECIDED: **per-task `pg_try_advisory_lock(hashtext(task_id))`**.
-### Phase 4 — PENDING (remove the store; depends on 1–3).
+### Phase 3 — DONE (DB-backed workflow iteration + cross-replica advisory lock)
+- `getActiveWorkflowTasks(environment)` DB query (`database/tasks.ts`): live, board-bound, non-manual,
+  non-stopped/watching, NOT action_running, status NOT IN (done,error), this environment. New partial
+  index `idx_tasks_workflow_recheck (environment, status) WHERE deleted_at IS NULL AND board_id IS NOT NULL`.
+- `database/locks.ts`: `tryAcquireTaskLock` / `releaseTaskLock` — session-level `pg_try_advisory_lock(hashtext(task_id))`
+  on a dedicated pooled connection held for the chain's duration, concurrency-capped (MAX_CONCURRENT_TASK_LOCKS=6)
+  to protect the shared max=10 pool; no-DB → always-acquire (single-process dev). 6 unit tests in `locks.test.ts`.
+- `recheckPendingTransitions` (workflowEngine.ts): HYBRID iteration — keeps the in-memory loop for owned
+  tasks (preserves transient state + object identity until Phase 4) and ADDS a `getActiveWorkflowTasks`
+  query for board-level tasks (agent_id = NULL, previously invisible to the recheck). Both dispatch paths
+  wrapped in `_dispatchUnderLock` (lock acquired INSIDE the detached chain, never in the sync loop).
+- `_chainTask(agentManager, task)` helper: board-level chain bookkeeping (completedActionIdx /
+  _pendingOnEnter / assignee / error / auto-assign-by-column) now persists via the working copy + saveTaskToDb,
+  so board-level chains resume/retry like owned ones. Byte-identical for owned tasks. Fixed `agent?.ownerId`.
+- Decide before/after detection (`_runDecideMode`): `_liveTaskSnapshot` re-fetches board-level tasks from the
+  DB (their decision lands in the DB, not the in-memory store) so a board-level decision is no longer read as
+  "no decision".
+- `npx tsc --noEmit` clean; 294/294 tests pass.
+
+Cross-replica scope/limitation: the advisory lock covers the periodic recheck (the all-replicas-tick race
+the plan targets). The mutation-triggered `_checkAutoRefine → processColumnEntry` path stays unlocked — it
+originates on the single replica that performed the mutation, so simultaneous cross-replica mutations of the
+same task remain a low-risk, pre-existing gap (wrap processColumnEntry itself if prod proves it necessary).
+
+### Phase 3 DEFERRED to Phase 4: load-balancer DB-aggregate counts
+`findAgentByRole`/`findAgentForAssignment` (agentSelector.ts) still tie-break on an in-memory task scan that
+undercounts board-level tasks. They are SYNCHRONOUS and shared with the action-dispatch hot path; converting
+to a DB aggregate is a sync→async change with marginal value (a tie-break, not a correctness bug) and is
+pinned by the `load balancing by task count` test. Batches naturally with Phase 4's store removal (all these
+scans become DB reads at once).
+
+### Phase 4 — PENDING (remove the store; depends on 1–3). Then: drop the in-memory owned loop in
+recheckPendingTransitions (DB query alone), convert the load-balancer counts, and remove `_tasks` + helpers.
 
 ## Related
 - [[board-level-tasks-not-in-memory]] (memory) — the gotcha + the local patches already in place.

@@ -12,7 +12,7 @@
 import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
-import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields } from '../database.js';
+import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields, getTaskById } from '../database.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
@@ -79,6 +79,21 @@ function _emitTaskUpdated(agentManager, agentId, task) {
     task.assigneeIcon = null;
   }
   agentManager._emit('task:updated', { agentId, task });
+}
+
+/**
+ * Snapshot of a task's live state for before/after comparison (e.g. decide-mode
+ * decision detection): the in-memory store object for an OWNED task, or the
+ * freshly-read DB row for a BOARD-LEVEL task (agent_id = NULL). A board-level
+ * agent's decision lands in the DB (via update_task → applyBoardLevelUpdate), not
+ * the in-memory store, so the in-memory lookup would always miss it and the move
+ * would read as "no decision".
+ */
+async function _liveTaskSnapshot(agentManager, task) {
+  if (task.agentId) {
+    return agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  }
+  return getTaskById(task.id);
 }
 
 /**
@@ -891,7 +906,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   // decision (moved the task to a new status, or appended details). Detection
   // is by task mutation — which works whether the agent used the @update_task
   // text tool (LLM-chat agents) or the update_task MCP tool (CLI runners).
-  const beforeTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const beforeTask = await _liveTaskSnapshot(agentManager, task);
   const beforeStatus = beforeTask?.status ?? task.status;
   const beforeTextLen = (beforeTask?.text || '').length;
 
@@ -923,7 +938,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   }
 
   // Verify the agent actually made a decision: status changed OR details appended.
-  const afterTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const afterTask = await _liveTaskSnapshot(agentManager, task);
   const afterStatus = afterTask?.status ?? task.status;
   const afterTextLen = (afterTask?.text || '').length;
   const decided = afterStatus !== beforeStatus || afterTextLen !== beforeTextLen;

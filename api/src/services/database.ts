@@ -54,10 +54,13 @@ export {
   getTasksByAgent, getAllTasks, getTaskById, getTaskByIdPrefix, saveTaskToDb,
   deleteTaskFromDb, hardDeleteTaskFromDb, restoreTaskFromDb,
   getDeletedTasks, getDeletedTaskById, deleteTasksByAgent,
-  getTasksForResume, clearTaskExecutionFlags, updateTaskExecutionStatus,
+  getTasksForResume, getActiveWorkflowTasks, clearTaskExecutionFlags, updateTaskExecutionStatus,
   clearActionRunningForAgent, clearAllStaleActionRunning,
   getActiveTasksByAgent, getTasksByBoard, getBoardWithMostTasksForProject,
   getTasksByAssignee, getActiveTaskForExecutor, hasActiveTask,
   countActiveTasksForAgent, getRecurringTasks,
   updateTaskFields, getTasksByStatusAndBoard, searchTasks,
 } from './database/tasks.js';
+export {
+  tryAcquireTaskLock, releaseTaskLock, heldTaskLockCount,
+} from './database/locks.js';

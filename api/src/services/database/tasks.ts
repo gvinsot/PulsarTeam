@@ -347,6 +347,43 @@ export async function getTasksForResume(environment?: string | null) {
 }
 
 /**
+ * Candidate tasks for the periodic workflow recheck (recheckPendingTransitions),
+ * for a single environment, regardless of owner — this is what lets board-level
+ * tasks (agent_id = NULL) be evaluated at all (the agent-keyed in-memory scan
+ * could never see them).
+ *
+ * Filters: live (not deleted), on a board (workflows live on boards), not manual,
+ * not stopped/watching, and NOT currently executing (action_running) — a running
+ * task must not be re-dispatched, which is also the cross-replica guard that pairs
+ * with the per-task advisory lock. Status is left wide (only done/error excluded)
+ * because condition transitions can fire from backlog and other non-active columns;
+ * `_recheckTask` then matches each task's status against its board's transitions.
+ *
+ * Indexed by `idx_tasks_workflow_recheck (environment, status)` (partial:
+ * deleted_at IS NULL AND board_id IS NOT NULL) — see schema.ts.
+ */
+export async function getActiveWorkflowTasks(environment?: string | null) {
+  const params: any[] = [];
+  let envFilter = '';
+  if (environment) {
+    params.push(environment);
+    envFilter = `AND t.environment = $1`;
+  }
+  return queryTasks(
+    `WHERE t.deleted_at IS NULL
+        AND t.board_id IS NOT NULL
+        AND t.is_manual IS NOT TRUE
+        AND t.status NOT IN ('done', 'error')
+        AND t.action_running IS NOT TRUE
+        AND (t.execution_status IS NULL OR t.execution_status NOT IN ('watching', 'stopped'))
+        ${envFilter}
+      ORDER BY t.created_at`,
+    params,
+    'Failed to get active workflow tasks:'
+  );
+}
+
+/**
  * Clear execution flags for all tasks involving a given agent (as assignee or owner).
  */
 export async function clearTaskExecutionFlags(agentId) {
