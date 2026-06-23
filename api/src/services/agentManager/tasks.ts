@@ -242,6 +242,9 @@ export const tasksMethods = {
     // Without this, a stale completedActionIdx from a previous chain
     // (e.g. refine) could cause the new chain (e.g. code) to skip actions.
     task.completedActionIdx = null;
+    // A column move starts a fresh chain — drop the decide no-decision counter
+    // so a later re-entry into a decide column isn't penalised by stale attempts.
+    this._decideNoDecisionCounts?.delete(taskId);
     // Clear execution state — processTransition will re-set startedAt when
     // a workflow action genuinely starts execution. Without this, stale
     // startedAt from a previous execution causes the task loop to resume
@@ -592,6 +595,7 @@ export const tasksMethods = {
     const dbDeleted = await deleteTaskFromDb(taskId);
     if (!inMemory && !dbDeleted) return false;
     clearTaskSignals(taskId);
+    this._decideNoDecisionCounts?.delete(taskId);
     const agent = agentId ? this.agents.get(agentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     this._emit('task:deleted', { taskId, agentId });

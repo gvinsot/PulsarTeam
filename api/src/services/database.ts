@@ -51,7 +51,7 @@ export {
 export type { OAuthProvider, ScopeType, OAuthTokenRecord } from './database/oauthTokens.js';
 export {
   rowToTask,
-  getTasksByAgent, getAllTasks, getTaskById, saveTaskToDb,
+  getTasksByAgent, getAllTasks, getTaskById, getTaskByIdPrefix, saveTaskToDb,
   deleteTaskFromDb, hardDeleteTaskFromDb, restoreTaskFromDb,
   getDeletedTasks, getDeletedTaskById, deleteTasksByAgent,
   getTasksForResume, clearTaskExecutionFlags, updateTaskExecutionStatus,

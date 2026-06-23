@@ -36,7 +36,7 @@ mock.module('../database/boardRepos.js', {
   namedExports: { getReposForBoard: async () => [] },
 });
 mock.module('../database/tasks.js', {
-  namedExports: { getTaskById: async () => null },
+  namedExports: { getTaskById: async () => null, getTaskByIdPrefix: async () => null },
 });
 
 const { createPulsarGatewayMcpServer } = await import('../pulsarGatewayMcp.js');

@@ -14,6 +14,7 @@ import {
   getAllBoards, getBoardById, getTasksByStatusAndBoard, saveTaskToDb,
 } from '../../database.js';
 import { getWorkflowForBoard } from '../../configManager.js';
+import { applyTaskUpdate } from '../../swarmApiMcp.js';
 import { checkToolHooks } from '../../toolHooks.js';
 import { findBuiltinMcpServer } from '../../mcpManager.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -115,9 +116,36 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
     }
   }
   if (!task) {
+    // Not in any in-memory store → almost certainly a board-level task (created
+    // unassigned via MCP add_task) that lives only in the DB. Delegate to
+    // applyTaskUpdate, which has the DB fallback + board-level update path (the
+    // same code the MCP update_task tool uses). Without this, @update_task can't
+    // touch a board-level task even when the agent was explicitly assigned one.
+    const wantsStatusArg = Boolean(rawStatus && String(rawStatus).trim());
+    const r = await applyTaskUpdate(mgr, {
+      agent_id: agentId,
+      task_id: taskId,
+      status: wantsStatusArg ? rawStatus : undefined,
+      comment: comment || undefined,
+      commits: commits || undefined,
+    });
+    if (r.ok) {
+      const parts = [
+        wantsStatusArg ? `moved to ${r.task?.status ?? rawStatus}` : null,
+        (comment || commits) ? 'marked finished' : null,
+      ].filter(Boolean);
+      return {
+        tool: 'update_task',
+        args: call.args,
+        success: true,
+        result: `Task "${String(r.task?.text ?? taskId).slice(0, 60)}" ${parts.join(' and ') || 'updated'}`,
+        isTerminal: (Boolean(r.completed) || wantsStatusArg) || undefined,
+      };
+    }
+    // applyTaskUpdate couldn't find/handle it either → a real not-found.
     const partial = mgr._getAgentTasks(agentId).find((t: any) => t.id.startsWith(taskId.slice(0, 8)));
     const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
-    return { tool: 'update_task', args: call.args, success: false, error: `Task not found: ${taskId}.${hint}` };
+    return { tool: 'update_task', args: call.args, success: false, error: r.error || `Task not found: ${taskId}.${hint}` };
   }
 
   const hasStatus = Boolean(rawStatus && String(rawStatus).trim());
@@ -204,10 +232,13 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
   if (!taskId || !targetBoardId) {
     return { tool: 'move_task_to_board', args: call.args, success: false, error: 'Both taskId and boardId are required. Use: @move_task_to_board(taskId, boardId)' };
   }
-  // Find the task across all agents
-  const moveFound = mgr._findTaskByIdOrPrefix(taskId);
+  // Resolve the task DB-first so board-level tasks (agent_id = NULL, never in
+  // the in-memory store) are addressable too. taskAgentId is the task's real
+  // owner (null for board-level) — do NOT default to the calling agent, or a
+  // board move would silently claim ownership of an unassigned task.
+  const moveFound = await mgr._resolveTaskRef(taskId);
   const task: any = moveFound?.task || null;
-  const taskAgentId = moveFound?.agentId || agentId;
+  const taskAgentId: string | null = moveFound?.agentId ?? null;
   if (!task) {
     return { tool: 'move_task_to_board', args: call.args, success: false, error: `Task not found: ${taskId}` };
   }
@@ -272,10 +303,11 @@ const handleDeleteTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   if (!taskId) {
     return { tool: 'delete_task', args: call.args, success: false, error: 'Task ID is required. Use: @delete_task(taskId)' };
   }
-  // Find the task across all agents
-  const delFound = mgr._findTaskByIdOrPrefix(taskId);
+  // Resolve DB-first so board-level tasks (agent_id = NULL) are deletable too.
+  // deleteTask(null, id) already falls back to a DB soft-delete for those.
+  const delFound = await mgr._resolveTaskRef(taskId);
   const task: any = delFound?.task || null;
-  const taskAgentId = delFound?.agentId || agentId;
+  const taskAgentId: string | null = delFound?.agentId ?? null;
   if (!task) {
     return { tool: 'delete_task', args: call.args, success: false, error: `Task not found: ${taskId}` };
   }

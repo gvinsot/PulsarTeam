@@ -1,5 +1,5 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, getTaskById } from '../database.js';
+import { getAllAgents, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, getTaskById, getTaskByIdPrefix } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
@@ -132,6 +132,7 @@ export interface AgentManager {
   saveTaskDirectly(task: any): any;
   _enqueueAgentTask(agentId: string, taskFn: () => Promise<any>): Promise<any>;
   _ensureTaskInMemory(agentId: string, taskId: string): Promise<boolean>;
+  _resolveTaskRef(idOrPrefix: string): Promise<{ task: any; agentId: string | null } | null>;
 
   // ── workflow.ts ──
   _evaluateCondition(cond: any, task: any): boolean;
@@ -183,6 +184,13 @@ export class AgentManager {
   _updatePending: Map<string, boolean>;
   _conditionProcessing: Map<string, any>;
   _onEnterRetry: Map<string, { ts: number; count: number }>;
+  /** Consecutive "decide produced no decision" attempts, keyed by taskId.
+   * Relocated off the task object (Phase 2 of the task-store DB refactor) so the
+   * fail-fast guard works for board-level tasks too — they have no in-memory
+   * task object to hang the counter on, so it never accumulated. Replica-local
+   * and transient: a retry counter that is fine to lose on restart. Purged in
+   * _processNextPendingTasks alongside the task signals. */
+  _decideNoDecisionCounts: Map<string, number>;
   llmConfigs: Map<string, any>;
   _tasks: Map<string, any[]>;
   _codeIndexPending: Map<string, Map<string, string | null>>;
@@ -215,6 +223,7 @@ export class AgentManager {
     this._updatePending = new Map();
     this.wsEmitter = new WsEmitter(io, this.agents, this._sanitize.bind(this));
     this._conditionProcessing = new Map();
+    this._decideNoDecisionCounts = new Map();
     this.llmConfigs = new Map();
     /** Centralized task store: Map<agentId, Task[]> — source of truth is the tasks DB table */
     this._tasks = new Map();
@@ -563,6 +572,35 @@ export class AgentManager {
       }
     }
     return ownerId === agentId;
+  }
+
+  /**
+   * DB-backed resolution of a task by id or unique id prefix. Returns
+   * `{ task, agentId }` (agentId is the task's OWNER — null for board-level
+   * tasks created unassigned via MCP add_task / external API) or null.
+   *
+   * This is the centralized resolver for Phase 1 of the task-store DB refactor:
+   * it replaces the agent-keyed in-memory `_findTaskByIdOrPrefix` in tool
+   * handlers + routes so a task is addressable regardless of owner. During the
+   * migration it still PREFERS the in-memory copy when the task is owned and
+   * cached — mutating that object keeps the legacy `_tasks` store consistent
+   * for code paths that have not yet moved to the DB — and only falls back to
+   * the DB (rehydrating an owned task into memory when possible) for
+   * board-level or not-yet-cached tasks.
+   */
+  async _resolveTaskRef(idOrPrefix: string): Promise<{ task: any; agentId: string | null } | null> {
+    const mem = this._findTaskByIdOrPrefix(idOrPrefix);
+    if (mem) return mem;
+    const dbTask = await getTaskByIdPrefix(idOrPrefix);
+    if (!dbTask) return null;
+    // Owned task missing from memory → rehydrate (using the FULL id, not the
+    // prefix) and prefer the cached object so in-memory readers stay consistent.
+    if (dbTask.agentId) {
+      await this._ensureTaskInMemory(dbTask.agentId, dbTask.id);
+      const cached = this._getAgentTasks(dbTask.agentId).find((t: any) => t.id === dbTask.id);
+      if (cached) return { task: cached, agentId: dbTask.agentId };
+    }
+    return { task: dbTask, agentId: dbTask.agentId ?? null };
   }
 
   _randomColor() {

@@ -117,6 +117,32 @@ export async function getTaskById(taskId) {
   return queryOneTask('WHERE t.id = $1 AND t.deleted_at IS NULL', [taskId], 'Failed to get task:');
 }
 
+/**
+ * Resolve a task by full id OR a unique id prefix (the short-id form agents and
+ * the UI use). Tries the primary-key exact match first, then a prefix scan.
+ * Task ids are full uuidv4, so a prefix can only collide if one id is a strict
+ * prefix of another — which never happens for distinct uuids; we still cap at
+ * two rows and treat an ambiguous (>1) match as not-found so a mutation can
+ * never hit the wrong task. `id::text` keeps the comparison on the UUID column.
+ *
+ * This is the DB-backed equivalent of the in-memory `_findTaskByIdOrPrefix`,
+ * and unlike it resolves tasks regardless of owner (including `agent_id = NULL`
+ * board-level tasks).
+ */
+export async function getTaskByIdPrefix(idOrPrefix) {
+  if (!idOrPrefix) return null;
+  // Exact-id fast path (uses the PK index).
+  const exact = await getTaskById(idOrPrefix);
+  if (exact) return exact;
+  const rows = await queryTasks(
+    'WHERE LEFT(t.id::text, length($1)) = $1 AND t.deleted_at IS NULL ORDER BY t.created_at LIMIT 2',
+    [idOrPrefix],
+    'Failed to get task by id prefix:'
+  );
+  // Not found or ambiguous prefix → null (caller surfaces "not found").
+  return rows.length === 1 ? rows[0] : null;
+}
+
 // Per-task write queue: serializes all saves for the same task so that
 // fire-and-forget calls cannot overtake each other at the DB level.
 const _taskWriteQueue = new Map();  // taskId -> Promise

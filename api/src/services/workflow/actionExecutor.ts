@@ -13,6 +13,7 @@ import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields } from '../database.js';
+import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { isCliRunner } from '../runners.js';
@@ -105,6 +106,19 @@ export function saveThenEmitTaskUpdated(agentManager, agentId, task) {
   Promise.resolve(saveTaskToDb({ ...task, agentId }))
     .catch(() => {})
     .then(() => _emitTaskUpdated(agentManager, agentId, payload));
+}
+
+/**
+ * Persist named fields of a board-level task (agent_id = null) then emit, in that
+ * order. These tasks have no in-memory store object, so mutations must go to the
+ * DB directly. Uses a TARGETED column update (not the full saveTaskToDb upsert,
+ * which would clobber fields the transient task copy may not carry) — same
+ * rationale as _markActionRunningBoardLevel. Ownership (agentId) is unchanged.
+ */
+function persistBoardLevelFields(agentManager, task, fields) {
+  Promise.resolve(updateTaskFields(task.id, fields))
+    .catch(() => {})
+    .then(() => _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId }));
 }
 
 // ── Prompt Builders ─────────────────────────────────────────────────────────
@@ -268,6 +282,14 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     task.assignee = agent.id;
     saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
     console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
+  } else {
+    // Board-level task (agent_id = null): no in-memory object, so the assignee
+    // was never persisted and the board showed nobody had picked it up. Persist
+    // on the working copy + emit so the card shows WHO took it. Ownership stays null.
+    task.assignee = agent.id;
+    recordReassign(task, agent.id);
+    persistBoardLevelFields(agentManager, task, { assignee: agent.id, history: task.history });
+    console.log(`[ActionExecutor] assign_agent: assigned board-level task to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
   }
 
   return { executed: true };
@@ -278,28 +300,32 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
 function executeAssignAgentIndividual(action, task, { agentManager, io }) {
   const targetAgentId = action.agentId || null;
   const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-  if (actualTask) {
-    const prev = actualTask.assignee || null;
-    // No-op guard: avoid clobbering an assignee set by a concurrent run_agent
-    // action and spamming task:updated events when the target matches current.
-    if (prev === targetAgentId) {
-      const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
-      console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change, skipping`);
-      return { executed: false, skipped: true, reason: 'no-change' };
-    }
-    actualTask.assignee = targetAgentId;
-    recordReassign(actualTask, targetAgentId);
-    task.assignee = targetAgentId;
-    saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
+  const mutable = actualTask || task; // board-level tasks have no in-memory object
+  const prev = mutable.assignee || null;
+  // No-op guard: avoid clobbering an assignee set by a concurrent run_agent
+  // action and spamming task:updated events when the target matches current.
+  if (prev === targetAgentId) {
     const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
-    console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
+    console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change, skipping`);
+    return { executed: false, skipped: true, reason: 'no-change' };
   }
+  mutable.assignee = targetAgentId;
+  recordReassign(mutable, targetAgentId);
+  task.assignee = targetAgentId;
+  if (actualTask) {
+    saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
+  } else {
+    // Board-level task (agent_id = null): persist targeted + emit. Ownership stays null.
+    persistBoardLevelFields(agentManager, task, { assignee: targetAgentId, history: task.history });
+  }
+  const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
+  console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
   return { executed: true };
 }
 
 // ── change_status ───────────────────────────────────────────────────────────
 
-function executeChangeStatus(action, task, { agentManager, workflow }) {
+async function executeChangeStatus(action, task, { agentManager, workflow }) {
   let target = action.target;
 
   // Resolve __next__ to the column immediately after the current one
@@ -332,12 +358,24 @@ function executeChangeStatus(action, task, { agentManager, workflow }) {
     return { executed: true, statusChanged: true };
   }
 
-  // Clean up chain resume state before moving
-  const taskBeforeMove = realTask || agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-  if (taskBeforeMove) {
-    taskBeforeMove.completedActionIdx = null;
-    delete taskBeforeMove._pendingOnEnter;
+  // Board-level task (agent_id = null): no in-memory object, and setTaskStatus
+  // requires an owner — it would silently no-op, stranding the chain. Route
+  // through applyTaskUpdate, the canonical board-level path (mutates the DB row,
+  // emits, and fires the column-entry hook). Mirrors how MCP board moves work.
+  if (!realTask) {
+    console.log(`[ActionExecutor] change_status (board-level): "${task.status}" → "${target}" task="${task.id}"`);
+    const r = await applyTaskUpdate(agentManager, { task_id: task.id, status: target });
+    if (!r.ok) {
+      console.warn(`[ActionExecutor] change_status (board-level): ${r.error}`);
+      return { executed: false, skipped: true, reason: 'board-level-update-failed' };
+    }
+    task.status = target; // reflect the move on the working copy
+    return { executed: true, statusChanged: true };
   }
+
+  // Clean up chain resume state before moving (owned task)
+  realTask.completedActionIdx = null;
+  delete realTask._pendingOnEnter;
 
   console.log(`[ActionExecutor] change_status: "${task.status}" → "${target}" task="${task.id}"`);
   const result = agentManager.setTaskStatus(task.agentId, task.id, target, {
@@ -891,14 +929,15 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   const decided = afterStatus !== beforeStatus || afterTextLen !== beforeTextLen;
 
   if (!decided) {
-    // Count consecutive no-decision attempts on the live in-memory task so a
-    // structurally-stuck agent fails fast instead of retrying forever.
-    const liveTask = afterTask || beforeTask;
-    const attempts = ((liveTask?._decideNoDecisionCount as number) || 0) + 1;
-    if (liveTask) liveTask._decideNoDecisionCount = attempts;
+    // Count consecutive no-decision attempts so a structurally-stuck agent fails
+    // fast instead of retrying forever. Keyed by taskId on the manager (not on
+    // the task object) so the counter accumulates for board-level tasks too —
+    // they have no in-memory task object to hang it on.
+    const attempts = (agentManager._decideNoDecisionCounts.get(task.id) || 0) + 1;
+    agentManager._decideNoDecisionCounts.set(task.id, attempts);
 
     if (attempts >= MAX_DECIDE_NO_DECISION) {
-      if (liveTask) delete liveTask._decideNoDecisionCount;
+      agentManager._decideNoDecisionCounts.delete(task.id);
       const why = isCliRunner(agent)
         ? `Agent "${agent.name}" (CLI runner) produced no decision after ${attempts} attempts. It likely has no tool to update the task — assign the Swarm API MCP (update_task) to this agent, or use an "execute" action instead of "decide".`
         : `Agent "${agent.name}" produced no @update_task call after ${attempts} attempts.`;
@@ -913,8 +952,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   }
 
   // Decision made — clear the no-decision counter.
-  const liveTask = afterTask || beforeTask;
-  if (liveTask?._decideNoDecisionCount) delete liveTask._decideNoDecisionCount;
+  agentManager._decideNoDecisionCounts.delete(task.id);
   console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
   return { executed: true };
 }

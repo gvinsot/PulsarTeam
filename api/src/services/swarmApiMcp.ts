@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
-import { getTaskById } from './database/tasks.js';
+import { getTaskByIdPrefix } from './database/tasks.js';
 import { getReposForBoard } from './database/boardRepos.js';
 import { resolveWorkflowStatus } from './workflow/columnIds.js';
 
@@ -100,15 +100,18 @@ async function locateTask(
   // lookup so they stay updatable.
   let boardLevel = false;
   if (!task) {
-    const dbTask = await getTaskById(task_id);
+    // Resolve by full id OR unique prefix (the short-id form agents pass), and
+    // regardless of owner. Use the resolved task's FULL id from here on — the
+    // input `task_id` may be a prefix that the in-memory helpers can't match.
+    const dbTask = await getTaskByIdPrefix(task_id);
     if (dbTask?.agentId) {
       // The task has an owner missing from memory — rehydrate and retry
       // the normal in-memory path under the owning agent.
-      await agentManager._ensureTaskInMemory(dbTask.agentId, task_id);
+      await agentManager._ensureTaskInMemory(dbTask.agentId, dbTask.id);
       const owner = agentManager.agents.get(dbTask.agentId);
       if (owner) {
         agent = owner;
-        task = agentManager._getAgentTasks(owner.id).find((t: any) => t.id === task_id) || null;
+        task = agentManager._getAgentTasks(owner.id).find((t: any) => t.id === dbTask.id) || null;
       }
       if (!task) {
         task = dbTask;
@@ -166,6 +169,10 @@ async function applyBoardLevelUpdate(
     // new column (mirrors setTaskStatus / PUT /tasks/:id).
     task.startedAt = null;
     task.executionStatus = null;
+    // A column move starts a fresh chain — drop the decide no-decision counter
+    // (relocated off the task object in Phase 2) so a later re-entry into a
+    // decide column isn't penalised by stale attempts. Mirrors setTaskStatus.
+    agentManager._decideNoDecisionCounts?.delete(task.id);
     task.actionRunning = false;
     delete task.actionRunningAgentId;
     delete task.actionRunningMode;

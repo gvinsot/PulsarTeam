@@ -135,6 +135,7 @@ mock.module('../database.js', {
     getTasksByAgent: async () => [],
     getAllTasks: async () => [],
     getTaskById: async () => null,
+    getTaskByIdPrefix: async () => null,
     saveTaskToDb: noop,
     deleteTaskFromDb: noop,
     hardDeleteTaskFromDb: noop,
