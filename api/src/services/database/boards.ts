@@ -1,58 +1,66 @@
 import { getPool } from './connection.js';
+import { normalizeBoardName } from '../boardDefaults.js';
 
-// ── Default board ────────────────────────────────────────────────────────────
+// ── Legacy default board cleanup ────────────────────────────────────────────
 
-const DEFAULT_BOARD_WORKFLOW = {
-  columns: [
-    { id: 'todo', label: 'Todo', color: '#6b7280' },
-    { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
-    { id: 'done', label: 'Done', color: '#22c55e' },
-  ],
-  transitions: [
-    {
-      from: 'in_progress',
-      trigger: 'on_enter',
-      conditions: [],
-      actions: [
-        { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
-        { type: 'change_status', target: '__next__' },
-      ],
-    },
-  ],
-  version: 1,
-};
-
-export async function ensureDefaultBoard(p) {
-  try {
-    const existing = await p.query('SELECT id FROM boards WHERE is_default = TRUE LIMIT 1');
-    if (existing.rows.length > 0) return;
-
-    // ON CONFLICT DO NOTHING: a concurrently booting replica may have inserted
-    // the default board between our SELECT and this INSERT — the partial
-    // unique index on is_default turns that race into a no-op.
-    const inserted = await p.query(
-      `INSERT INTO boards (name, workflow, filters, position, is_default)
-       VALUES ('Default', $1::jsonb, '{}'::jsonb, 0, TRUE)
-       ON CONFLICT DO NOTHING`,
-      [JSON.stringify(DEFAULT_BOARD_WORKFLOW)]
-    );
-    if (inserted.rowCount > 0) console.log('✅ Default board created');
-  } catch (err) {
-    console.error('Failed to ensure default board:', err.message);
-  }
+async function relationExists(p, relationName) {
+  const result = await p.query('SELECT to_regclass($1) AS relation', [relationName]);
+  return Boolean(result.rows[0]?.relation);
 }
 
-export async function getDefaultBoard() {
-  const pool = getPool();
-  if (!pool) return null;
+export async function removeLegacyDefaultBoards(p) {
   try {
-    const result = await pool.query(
-      'SELECT id, user_id, name, workflow, filters, position, is_default, created_at, updated_at FROM boards WHERE is_default = TRUE ORDER BY created_at LIMIT 1'
+    const existing = await p.query(
+      `SELECT id FROM boards
+       WHERE is_default = TRUE OR lower(btrim(name)) = 'default'`
     );
-    return result.rows[0] || null;
+    const ids = existing.rows.map((row) => row.id);
+    if (ids.length === 0) return;
+
+    if (await relationExists(p, 'tasks')) {
+      await p.query(
+        `UPDATE tasks
+         SET board_id = NULL, updated_at = NOW()
+         WHERE board_id = ANY($1::uuid[])`,
+        [ids]
+      );
+    }
+
+    if (await relationExists(p, 'agents')) {
+      await p.query(
+        `UPDATE agents
+         SET board_id = NULL,
+             data = data - 'boardId',
+             updated_at = NOW()
+         WHERE board_id = ANY($1::uuid[])
+            OR data->>'boardId' = ANY($2::text[])`,
+        [ids, ids]
+      );
+    }
+
+    if (await relationExists(p, 'oauth_tokens')) {
+      await p.query(
+        `DELETE FROM oauth_tokens
+         WHERE scope_type = 'board' AND scope_id = ANY($1::text[])`,
+        [ids]
+      );
+    }
+
+    if (await relationExists(p, 'runner_configs')) {
+      await p.query(
+        `DELETE FROM runner_configs
+         WHERE scope_type = 'board' AND scope_id = ANY($1::text[])`,
+        [ids]
+      );
+    }
+
+    const deleted = await p.query('DELETE FROM boards WHERE id = ANY($1::uuid[])', [ids]);
+    if ((deleted.rowCount ?? 0) > 0) {
+      console.log(`✅ Removed ${deleted.rowCount} legacy Default board(s)`);
+    }
   } catch (err) {
-    console.error('Failed to get default board:', err.message);
-    return null;
+    console.error('Failed to remove legacy Default boards:', err.message);
+    throw err;
   }
 }
 
@@ -66,7 +74,7 @@ export async function getAllBoards() {
       `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.plugins, b.mcp_auth, b.project_id, b.created_at, b.updated_at,
               u.username, u.display_name
        FROM boards b LEFT JOIN users u ON b.user_id = u.id
-       ORDER BY b.is_default DESC, u.username, b.position, b.created_at`
+       ORDER BY u.username NULLS LAST, b.position, b.created_at`
     );
     return result.rows;
   } catch (err) {
@@ -79,7 +87,8 @@ export async function getBoardsByUser(userId) {
   const pool = getPool();
   if (!pool) return [];
   try {
-    // Get user's own boards + shared boards + default board
+    // Get user's own boards + shared boards. There is intentionally no global
+    // default board: every user starts with their own "My board".
     const result = await pool.query(
       `SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.plugins, b.mcp_auth, b.project_id, b.created_at, b.updated_at,
               NULL AS share_permission, NULL AS owner_username
@@ -92,16 +101,6 @@ export async function getBoardsByUser(userId) {
        JOIN boards b ON bs.board_id = b.id
        LEFT JOIN users u ON b.user_id = u.id
        WHERE bs.user_id = $1 AND b.user_id != $1
-       UNION ALL
-       SELECT b.id, b.user_id, b.name, b.workflow, b.filters, b.position, b.is_default, b.plugins, b.mcp_auth, b.project_id, b.created_at, b.updated_at,
-              'read' AS share_permission, NULL AS owner_username
-       FROM boards b
-       WHERE b.is_default = TRUE
-         AND b.user_id IS DISTINCT FROM $1
-         AND NOT EXISTS (
-           SELECT 1 FROM board_shares bs
-           WHERE bs.board_id = b.id AND bs.user_id = $1
-         )
        ORDER BY position, created_at`,
       [userId]
     );
@@ -137,11 +136,12 @@ export async function createBoard(userId, name, workflow = {}, filters = {}) {
     );
     const position = posResult.rows[0].next_pos;
 
+    const boardName = normalizeBoardName(name);
     const result = await pool.query(
       `INSERT INTO boards (user_id, name, workflow, filters, position)
        VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
        RETURNING id, user_id, name, workflow, filters, position, is_default, plugins, mcp_auth, project_id, created_at, updated_at`,
-      [userId, name, JSON.stringify(workflow), JSON.stringify(filters), position]
+      [userId, boardName, JSON.stringify(workflow), JSON.stringify(filters), position]
     );
     return result.rows[0];
   } catch (err) {
@@ -166,7 +166,7 @@ export async function updateBoard(id, fields) {
       values.push(JSON.stringify(value));
     } else {
       setClauses.push(`${key} = $${idx}`);
-      values.push(value);
+      values.push(key === 'name' ? normalizeBoardName(value) : value);
     }
     idx++;
   }

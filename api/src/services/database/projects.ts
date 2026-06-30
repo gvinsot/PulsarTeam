@@ -33,8 +33,7 @@ export async function getProjectsForUser(userId: string | null, role: string): P
           FROM boards b
           WHERE b.project_id = p.id
             AND (
-              b.is_default = TRUE
-              OR b.user_id = $1
+              b.user_id = $1
               OR EXISTS (
                 SELECT 1 FROM board_shares bs
                 WHERE bs.board_id = b.id AND bs.user_id = $1
@@ -127,8 +126,7 @@ export async function hasProjectBoardAccess(projectId: string, userId: string | 
        FROM boards b
        WHERE b.project_id = $1
          AND (
-           b.is_default = TRUE
-           OR b.user_id = $2
+           b.user_id = $2
            OR EXISTS (
              SELECT 1 FROM board_shares bs
              WHERE bs.board_id = b.id AND bs.user_id = $2
@@ -147,8 +145,7 @@ export async function getBoardsForProject(projectId: string, userId: string | nu
   const accessFilter = role === 'admin'
     ? ''
     : ` AND (
-          is_default = TRUE
-          OR user_id = $2
+          user_id = $2
           OR EXISTS (
             SELECT 1 FROM board_shares bs
             WHERE bs.board_id = boards.id AND bs.user_id = $2

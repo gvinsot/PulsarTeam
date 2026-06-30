@@ -32,8 +32,7 @@ export async function getReposForProject(projectId: string, userId: string | nul
   const accessFilter = role === 'admin'
     ? ''
     : ` AND (
-          b.is_default = TRUE
-          OR b.user_id = $2
+          b.user_id = $2
           OR EXISTS (
             SELECT 1 FROM board_shares bs
             WHERE bs.board_id = b.id AND bs.user_id = $2
@@ -90,8 +89,7 @@ export async function getAccessibleBoardRepos(userId: string | null, role: strin
      FROM tasks t
      JOIN boards b ON t.board_id = b.id
      WHERE t.repo_full_name IS NOT NULL AND t.deleted_at IS NULL
-       AND (b.is_default = TRUE
-         OR b.user_id = $1
+       AND (b.user_id = $1
          OR EXISTS (SELECT 1 FROM board_shares bs WHERE bs.board_id = b.id AND bs.user_id = $1))
      ORDER BY t.repo_full_name`,
     [userId]

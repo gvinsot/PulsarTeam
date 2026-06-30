@@ -158,7 +158,7 @@ export default function BoardsTab({ active, showToast }) {
             value={boardForm.name}
             onChange={e => setBoardForm(f => ({ ...f, name: e.target.value }))}
             className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
-            placeholder="My Board"
+            placeholder="My board"
           />
         </div>
 
@@ -255,9 +255,6 @@ export default function BoardsTab({ active, showToast }) {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-dark-100">{board.name}</span>
-                    {board.is_default && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/30 text-indigo-400">Default</span>
-                    )}
                   </div>
                   <div className="flex items-center gap-3 mt-1.5">
                     <span className="flex items-center gap-1 text-xs text-dark-400" title="Columns">
@@ -299,15 +296,13 @@ export default function BoardsTab({ active, showToast }) {
                   >
                     <Edit3 className="w-4 h-4" />
                   </button>
-                  {!board.is_default && (
-                    <button
-                      onClick={() => handleDeleteBoard(board)}
-                      className="p-2 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
+                  <button
+                    onClick={() => handleDeleteBoard(board)}
+                    className="p-2 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             </div>

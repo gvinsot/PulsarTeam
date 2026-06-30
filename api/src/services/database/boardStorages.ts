@@ -26,8 +26,7 @@ export async function getStoragesForProject(projectId: string, userId: string | 
   const accessFilter = role === 'admin'
     ? ''
     : ` AND (
-          b.is_default = TRUE
-          OR b.user_id = $2
+          b.user_id = $2
           OR EXISTS (
             SELECT 1 FROM board_shares bs
             WHERE bs.board_id = b.id AND bs.user_id = $2

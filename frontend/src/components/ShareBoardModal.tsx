@@ -22,7 +22,7 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
 
   // Owned boards from getBoardsByUser have share_permission=null; shared boards have a value
   // Use both UUID comparison and share_permission for robust ownership detection
-  const isOwner = String(board.user_id) === String(currentUserId) || (!board.share_permission && !board.is_default);
+  const isOwner = String(board.user_id) === String(currentUserId) || !board.share_permission;
   // Owner and admin-level shared users can manage shares (invite, change perms, revoke)
   const canManageShares = isOwner || board.share_permission === 'admin';
 

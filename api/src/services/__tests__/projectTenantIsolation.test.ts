@@ -23,7 +23,6 @@ mock.module('../database.js', {
     getAllBoards: async () => [],
     getBoardsByUser: async () => [{ id: 'board-A' }],
     getBoardById: async () => null,
-    getDefaultBoard: async () => null,
     getLlmConfig: async () => null,
     rowToTask: (row: any) => row,
     getOAuthToken: () => null,

@@ -133,7 +133,7 @@ export function swarmApiRoutes(agentManager: any) {
     }
 
     // Resolve board_id: pick the board with the most tasks for the project,
-    // fall back to single board or default board
+    // fall back to the first available board.
     let resolvedBoardId = board_id || null;
     if (!resolvedBoardId) {
       const boards = await getAllBoards();
@@ -149,10 +149,9 @@ export function swarmApiRoutes(agentManager: any) {
             console.log(`📋 [SwarmAPI] Auto-resolved board for project "${taskProject}": ${resolvedBoardId}`);
           }
         }
-        // Fallback: use the default board if no project match found
+        // Fallback: use the first board if no project match found.
         if (!resolvedBoardId) {
-          const defaultBoard = boards.find(b => b.is_default);
-          resolvedBoardId = defaultBoard ? defaultBoard.id : boards[0].id;
+          resolvedBoardId = boards[0].id;
           console.log(`📋 [SwarmAPI] No project-specific board found, using fallback: ${resolvedBoardId}`);
         }
       }

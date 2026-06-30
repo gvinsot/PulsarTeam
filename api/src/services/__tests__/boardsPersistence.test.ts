@@ -41,7 +41,7 @@ test('board CRUD persists through SQL-backed database helpers', async () => {
   assert.ok(calls.some(call => call.sql.includes('DELETE FROM boards')));
 });
 
-test('getBoardsByUser reads own, shared, and default boards from the database', async () => {
+test('getBoardsByUser reads only own and shared boards from the database', async () => {
   let capturedSql = '';
   setPool({
     query: async (sql: string, params?: any[]) => {
@@ -51,7 +51,6 @@ test('getBoardsByUser reads own, shared, and default boards from the database', 
         rows: [
           { id: 'owned-board', user_id: 'user-1', name: 'Owned', share_permission: null },
           { id: 'shared-board', user_id: 'user-2', name: 'Shared', share_permission: 'edit' },
-          { id: 'default-board', user_id: null, name: 'Default', is_default: true, share_permission: 'read' },
         ],
       };
     },
@@ -59,10 +58,10 @@ test('getBoardsByUser reads own, shared, and default boards from the database', 
 
   const boards = await getBoardsByUser('user-1');
 
-  assert.equal(boards.length, 3);
-  assert.deepEqual(boards.map((board: any) => board.id), ['owned-board', 'shared-board', 'default-board']);
+  assert.equal(boards.length, 2);
+  assert.deepEqual(boards.map((board: any) => board.id), ['owned-board', 'shared-board']);
   assert.match(capturedSql, /b\.user_id = \$1/);
   assert.match(capturedSql, /board_shares/);
-  assert.match(capturedSql, /b\.is_default = TRUE/);
-  assert.match(capturedSql, /'read' AS share_permission/);
+  assert.doesNotMatch(capturedSql, /b\.is_default = TRUE/);
+  assert.doesNotMatch(capturedSql, /'read' AS share_permission/);
 });

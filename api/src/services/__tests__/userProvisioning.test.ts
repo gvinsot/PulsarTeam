@@ -2,9 +2,13 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 let createdBoard: any = null;
+let boardsByUser: any[] = [];
+let agentsByBoard: any[] = [];
 
 mock.module('../database.js', {
   namedExports: {
+    getBoardsByUser: async () => boardsByUser,
+    getAgentsByBoard: async () => agentsByBoard,
     createBoard: async (userId: string, name: string, workflow: any, filters: any) => {
       createdBoard = { userId, name, workflow, filters };
       return { id: 'board-default-user' };
@@ -15,6 +19,9 @@ mock.module('../database.js', {
 const { provisionNewUser, setAgentManager } = await import('../userProvisioning.js');
 
 test('provisionNewUser creates the default workflow and developer plugins', async () => {
+  createdBoard = null;
+  boardsByUser = [];
+  agentsByBoard = [];
   let createdAgent: any = null;
   setAgentManager({
     create: async (config: any) => {
@@ -26,7 +33,7 @@ test('provisionNewUser creates the default workflow and developer plugins', asyn
   await provisionNewUser('user-new');
 
   assert.equal(createdBoard.userId, 'user-new');
-  assert.equal(createdBoard.name, 'My Board');
+  assert.equal(createdBoard.name, 'My board');
   assert.deepEqual(createdBoard.filters, {});
 
   const inProgress = createdBoard.workflow.columns.find((column: any) => column.id === 'in_progress');
@@ -41,4 +48,22 @@ test('provisionNewUser creates the default workflow and developer plugins', asyn
   assert.equal(createdAgent.runner, 'opencode');
   assert.equal(createdAgent.boardId, 'board-default-user');
   assert.deepEqual(createdAgent.skills, ['skill-basic-tools', 'skill-web-browser']);
+});
+
+test('provisionNewUser reuses an existing personal board', async () => {
+  createdBoard = null;
+  boardsByUser = [{ id: 'board-existing', user_id: 'user-new', name: 'My board' }];
+  agentsByBoard = [];
+  let createdAgent: any = null;
+  setAgentManager({
+    create: async (config: any) => {
+      createdAgent = config;
+      return { id: 'agent-developer' };
+    },
+  });
+
+  await provisionNewUser('user-new');
+
+  assert.equal(createdBoard, null);
+  assert.equal(createdAgent.boardId, 'board-existing');
 });

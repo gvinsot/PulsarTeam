@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { getWorkflowForBoard } from '../services/configManager.js';
-import { getAllBoards, saveTaskToDb, getAgentById } from '../services/database.js';
+import { getAllBoards, getBoardsByUser, saveTaskToDb, getAgentById } from '../services/database.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { checkBoardAccess } from '../middleware/authz.js';
@@ -317,7 +317,9 @@ export function agentRoutes(agentManager) {
       // so the task is visible and gets the correct default status
       if (!resolvedBoardId) {
         try {
-          const boards = await getAllBoards();
+          const boards = req.user.role === 'admin'
+            ? await getAllBoards()
+            : await getBoardsByUser(req.user.userId);
           if (boards.length > 0) {
             resolvedBoardId = boards[0].id;
           }

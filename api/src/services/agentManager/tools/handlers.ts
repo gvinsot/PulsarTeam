@@ -329,8 +329,7 @@ const handleListBoards: ToolHandler = async ({ agent }) => {
     }
     const lines = boards.map((b: any) => {
       const cols = b.workflow?.columns?.map((c: any) => c.id).join(', ') || 'none';
-      const defaultTag = b.is_default ? ' [DEFAULT]' : '';
-      return `- **${b.name}**${defaultTag} (${b.id})\n  Columns: ${cols}`;
+      return `- **${b.name}** (${b.id})\n  Columns: ${cols}`;
     });
     console.log(`📋 [ListBoards] Agent "${agent.name}" listed ${boards.length} board(s)`);
     return { tool: 'list_boards', args: [], success: true, result: `Found ${boards.length} board(s):\n\n${lines.join('\n\n')}` };
@@ -695,7 +694,25 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
     let parsedArgs: any;
     if (typeof argsJson === 'string') {
       let raw = argsJson.trim();
+      const rawBeforeStrip = raw;
       raw = raw.replace(/,?\s*\.{3}\s*/g, '');
+
+      // The model sometimes elides the whole arguments object with an ellipsis
+      // placeholder — e.g. `@mcp_call(Server, tool, ...)` — which the strip above
+      // reduces to an empty string. JSON.parse('') then throws a cryptic
+      // "Unexpected end of JSON input" and the agent gives up without ever
+      // reaching the tool. Catch that here and return an ACTIONABLE error so the
+      // model re-sends the real arguments instead of `...` or nothing.
+      if (raw === '') {
+        const elided = /\.{3}/.test(rawBeforeStrip);
+        throw new Error(
+          (elided
+            ? `You wrote "..." instead of the arguments object for ${toolName}. `
+            : `You sent empty arguments for ${toolName}. `) +
+          `Re-send the call with the real JSON values — do NOT abbreviate. ` +
+          `Example: @mcp_call(${serverName}, ${toolName}, {"key": "actual-value"}).`
+        );
+      }
 
       try {
         parsedArgs = JSON.parse(raw);

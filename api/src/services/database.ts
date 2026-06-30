@@ -37,7 +37,7 @@ export { getAllLlmConfigs, getLlmConfig, saveLlmConfig, deleteLlmConfig } from '
 export { getRunnerConfig, saveRunnerConfig, deleteRunnerConfig } from './database/runnerConfigs.js';
 export {
   getAllBoards, getBoardsByUser, getBoardById, createBoard, updateBoard, deleteBoard,
-  getDefaultBoard, ensureDefaultBoard,
+  removeLegacyDefaultBoards,
 } from './database/boards.js';
 export {
   getBoardShares, getBoardShare, createBoardShare, updateBoardShare, deleteBoardShare,

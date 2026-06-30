@@ -108,8 +108,7 @@ mock.module('../database.js', {
     createBoard: async () => ({ id: 'board-mock' }),
     updateBoard: noop,
     deleteBoard: noop,
-    getDefaultBoard: async () => null,
-    ensureDefaultBoard: noop,
+    removeLegacyDefaultBoards: noop,
     // boardSharing
     getBoardShares: async () => [],
     getBoardShare: async () => null,

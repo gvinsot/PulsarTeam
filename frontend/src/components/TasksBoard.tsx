@@ -59,7 +59,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           setActiveBoardId(validBoard ? validBoard.id : boardList[0].id);
         } else {
           // No boards yet — create with clean default (backend provides Todo/In Progress/Done)
-          const board = await api.createBoard('My Board', undefined, undefined);
+          const board = await api.createBoard('My board', undefined, undefined);
           if (cancelled) return;
           setBoards([board]);
           setActiveBoardId(board.id);
@@ -859,7 +859,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         ))}
 
         {/* Board plugins */}
-        {canEdit && activeBoard && !activeBoard.is_default && (
+        {canEdit && activeBoard && (
           <button
             onClick={() => setShowBoardPlugins(true)}
             className="p-1.5 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors flex-shrink-0"

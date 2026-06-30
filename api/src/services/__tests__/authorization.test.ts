@@ -12,7 +12,6 @@ import assert from 'node:assert/strict';
 const boards: Record<string, any> = {
   'board-A':       { id: 'board-A', user_id: 'user-A', is_default: false, name: 'A board' },
   'board-B':       { id: 'board-B', user_id: 'user-B', is_default: false, name: 'B board' },
-  'board-default': { id: 'board-default', user_id: 'user-A', is_default: true,  name: 'Default' },
 };
 const boardShares: Array<{ board_id: string; user_id: string; permission: 'read' | 'edit' | 'admin' }> = [
   { board_id: 'board-A', user_id: 'user-C', permission: 'read' },
@@ -123,15 +122,12 @@ test('checkBoardAccess: unknown board returns 404', async () => {
   assert.equal(r.status, 404);
 });
 
-test('checkBoardAccess: default board readable by anyone', async () => {
-  const r = await checkBoardAccess('board-default', 'user-Z', 'advanced', 'read');
-  assert.equal(r.ok, true);
-});
-
-test('checkBoardAccess: default board NOT writable by non-admin', async () => {
-  const r = await checkBoardAccess('board-default', 'user-Z', 'advanced', 'edit');
+test('checkBoardAccess: is_default does not grant implicit read access', async () => {
+  boards['board-legacy-default'] = { id: 'board-legacy-default', user_id: 'user-A', is_default: true, name: 'Default' };
+  const r = await checkBoardAccess('board-legacy-default', 'user-Z', 'advanced', 'read');
   assert.equal(r.ok, false);
   assert.equal(r.status, 403);
+  delete boards['board-legacy-default'];
 });
 
 // ── Project access ──────────────────────────────────────────────────────────

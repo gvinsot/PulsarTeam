@@ -126,7 +126,7 @@ function sendLoginResponse(res, user, extra: { avatarUrl?: string | null } = {})
  * Ordering (preserved across all three providers):
  *   provider-id lookup → getUserByUsername(loginUsername) → link + refetch by id
  *   → countUsers → role admin (first user) else advanced → createUser
- *   → provisionNewUser(user.id) (fire-and-forget).
+ *   → provisionNewUser(user.id).
  *
  * `loginUsername` is the local username key: the email for Google/Microsoft, but
  * for GitHub a computed value (profile email OR `<login>@users.noreply.github.com`).
@@ -154,7 +154,7 @@ async function findOrCreateOAuthUser(opts: {
   const userCount = await countUsers();
   const role = userCount === 0 ? 'admin' : 'advanced';
   user = await opts.createUser(opts.providerId, opts.loginUsername, opts.displayName, opts.avatarUrl, role);
-  provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+  await provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
   return user;
 }
 

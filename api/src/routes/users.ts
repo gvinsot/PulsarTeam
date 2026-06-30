@@ -45,7 +45,7 @@ export function userRoutes() {
         parsed.role,
         parsed.displayName || parsed.username
       );
-      provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+      await provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
       res.status(201).json(user);
     } catch (err) {
       res.status(400).json({ error: err.message });

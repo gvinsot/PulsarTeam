@@ -21,7 +21,6 @@ export interface BoardAccessResult {
 
 /**
  * Resolve effective access level a user has on a board.
- * - Default boards: readable by all authenticated users, admin-writable.
  * - Board owner: full admin access.
  * - System admin: full admin access.
  * - Otherwise: must have a board_share row with sufficient permission.
@@ -35,14 +34,6 @@ export async function checkBoardAccess(
   if (!boardId) return { ok: false, status: 400, error: 'boardId required' };
   const board = await getBoardById(boardId);
   if (!board) return { ok: false, status: 404, error: 'Board not found' };
-
-  if (board.is_default) {
-    const perm: Permission = userRole === 'admin' ? 'admin' : 'read';
-    if (PERMISSION_LEVELS[perm] < PERMISSION_LEVELS[required]) {
-      return { ok: false, status: 403, error: `Requires ${required} permission` };
-    }
-    return { ok: true, board, permission: perm, isOwner: false };
-  }
 
   if (board.user_id === userId) {
     return { ok: true, board, permission: 'admin', isOwner: true };

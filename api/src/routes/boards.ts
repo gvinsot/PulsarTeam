@@ -8,6 +8,7 @@ import {
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
 import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/columnIds.js';
+import { DEFAULT_BOARD_WORKFLOW, normalizeBoardName } from '../services/boardDefaults.js';
 import {
   createBoardSchema,
   updateBoardSchema,
@@ -18,26 +19,6 @@ import {
   createShareSchema,
   updateShareSchema,
 } from '../schemas/boards.js';
-
-const DEFAULT_BOARD_WORKFLOW = {
-  columns: [
-    { id: 'todo', label: 'Todo', color: '#6b7280' },
-    { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
-    { id: 'done', label: 'Done', color: '#22c55e' },
-  ],
-  transitions: [
-    {
-      from: 'in_progress',
-      trigger: 'on_enter',
-      conditions: [],
-      actions: [
-        { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
-        { type: 'change_status', target: '__next__' },
-      ],
-    },
-  ],
-  version: 1,
-};
 
 function enrichTaskAssignee(agentManager, task) {
   if (task.assignee) {
@@ -191,7 +172,7 @@ export function boardRoutes(agentManager) {
   router.post('/', validateBody(createBoardSchema), async (req, res) => {
     try {
       const { name, workflow, filters } = req.body;
-      const boardName = (name || 'My Board').slice(0, 100);
+      const boardName = normalizeBoardName(name);
       const boardWorkflow = (workflow && Array.isArray(workflow.columns) && workflow.columns.length > 0)
         ? { columns: workflow.columns, transitions: workflow.transitions || [], version: 1 }
         : JSON.parse(JSON.stringify(DEFAULT_BOARD_WORKFLOW));
@@ -206,8 +187,6 @@ export function boardRoutes(agentManager) {
   // PUT /:id — update a board (requires edit permission)
   router.put('/:id', validateBody(updateBoardSchema), authorizeBoardAccess('edit'), async (req, res) => {
     try {
-      if (req.boardAccess.board.is_default) return res.status(403).json({ error: 'Default board cannot be modified.' });
-
       const fields = { ...req.body };
       const normalized = fields.workflow
         ? normalizeWorkflowColumnIds(fields.workflow, req.boardAccess.board.workflow)
@@ -234,7 +213,6 @@ export function boardRoutes(agentManager) {
   router.put('/:id/workflow', validateBody(updateWorkflowSchema), authorizeBoardAccess('edit'), async (req, res) => {
     try {
       const { board } = req.boardAccess;
-      if (board.is_default) return res.status(403).json({ error: 'Default board workflow cannot be modified.' });
 
       const { workflow, renames } = normalizeWorkflowColumnIds(req.body, board.workflow);
       const newWorkflow = { ...workflow, version: (board.workflow?.version || 0) + 1 };
@@ -327,7 +305,6 @@ export function boardRoutes(agentManager) {
   router.delete('/:id', authorizeBoardAccess('admin'), async (req, res) => {
     try {
       const { board, isOwner } = req.boardAccess;
-      if (board.is_default) return res.status(403).json({ error: 'Default board cannot be deleted.' });
       if (!isOwner && req.user.role !== 'admin') {
         return res.status(403).json({ error: 'Only the board owner can delete it' });
       }

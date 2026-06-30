@@ -1,25 +1,6 @@
-import { createBoard } from './database.js';
+import { createBoard, getAgentsByBoard, getBoardsByUser } from './database.js';
 import { AGENT_TEMPLATES } from '../data/templates.js';
-
-const DEFAULT_USER_WORKFLOW = {
-  columns: [
-    { id: 'todo', label: 'Todo', color: '#6b7280' },
-    { id: 'in_progress', label: 'In Progress', color: '#3b82f6', showAgent: true, showProject: true, showTaskType: true },
-    { id: 'done', label: 'Done', color: '#22c55e', showAgent: true, showProject: true, showTaskType: true },
-  ],
-  transitions: [
-    {
-      from: 'in_progress',
-      trigger: 'on_enter',
-      conditions: [],
-      actions: [
-        { type: 'run_agent', mode: 'decide', role: 'developer', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
-        { type: 'change_status', target: '__next__' },
-      ],
-    },
-  ],
-  version: 1,
-};
+import { NEW_USER_BOARD_WORKFLOW, PERSONAL_BOARD_NAME } from './boardDefaults.js';
 
 let _agentManager: any = null;
 
@@ -29,12 +10,28 @@ export function setAgentManager(am: any) {
 
 export async function provisionNewUser(userId: string): Promise<void> {
   try {
-    const board = await createBoard(userId, 'My Board', DEFAULT_USER_WORKFLOW, {});
-    console.log(`✅ Created default board for user ${userId}: ${board.id}`);
+    const existingBoards = (await getBoardsByUser(userId)).filter((b: any) =>
+      !b.share_permission && String(b.user_id) === String(userId)
+    );
+    const board = existingBoards[0] || await createBoard(userId, PERSONAL_BOARD_NAME, NEW_USER_BOARD_WORKFLOW, {});
+    if (existingBoards.length === 0) {
+      console.log(`✅ Created initial board for user ${userId}: ${board.id}`);
+    } else {
+      console.log(`✅ Initial board already exists for user ${userId}: ${board.id}`);
+    }
 
     if (_agentManager) {
       const devTemplate = AGENT_TEMPLATES.find(t => t.id === 'developer');
       if (devTemplate) {
+        const existingBoardAgents = await getAgentsByBoard(board.id);
+        const hasDeveloper = existingBoardAgents.some((agent: any) =>
+          String(agent.ownerId || '') === String(userId) && agent.template === devTemplate.id
+        );
+        if (hasDeveloper) {
+          console.log(`✅ Default developer agent already exists for user ${userId}`);
+          return;
+        }
+
         await _agentManager.create({
           name: devTemplate.name,
           role: devTemplate.role,

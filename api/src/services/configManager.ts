@@ -1,4 +1,4 @@
-import { getPool, getAllBoards, getBoardById, getDefaultBoard } from './database.js';
+import { getPool, getAllBoards, getBoardById } from './database.js';
 
 const DEFAULTS = {
   ideasAgent: '',
@@ -118,26 +118,12 @@ const DEFAULT_WORKFLOW = {
 };
 
 export async function getWorkflow() {
-  // Read from the default board
-  try {
-    const board = await getDefaultBoard();
-    if (board?.workflow) {
-      const wf = board.workflow;
-      return {
-        columns: wf.columns || DEFAULT_COLUMNS,
-        transitions: wf.transitions || DEFAULT_TRANSITIONS,
-        version: wf.version || 1,
-      };
-    }
-  } catch (err) {
-    console.error('[ConfigManager] Failed to read default board workflow:', err.message);
-  }
   return { ...DEFAULT_WORKFLOW };
 }
 
 /**
  * Get workflow for a specific board.
- * Falls back to default board if boardId is null or board not found.
+ * Falls back to the built-in workflow if boardId is null or board not found.
  */
 export async function getWorkflowForBoard(boardId) {
   if (!boardId) return getWorkflow();

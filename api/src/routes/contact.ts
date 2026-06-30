@@ -54,12 +54,9 @@ export function contactRoutes(agentManager: any) {
         }
       }
 
-      // Fallback: board containing "support", then default board
+      // Fallback: board containing "support". There is no global default board.
       if (!targetBoard) {
         targetBoard = boards.find((b: any) => b.name && b.name.toLowerCase().includes('support'));
-      }
-      if (!targetBoard) {
-        targetBoard = boards.find((b: any) => b.is_default);
       }
 
       const targetBoardId = targetBoard?.id || null;

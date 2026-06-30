@@ -368,7 +368,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         >
           <option value="">No board (visible to all)</option>
           {boards.map(b => (
-            <option key={b.id} value={b.id}>{b.name}{b.is_default ? ' (default)' : ''}</option>
+            <option key={b.id} value={b.id}>{b.name}</option>
           ))}
         </select>
         <p className="text-[11px] text-dark-500 mt-1">Agents are visible to all users who have access to the selected board. An agent without a board is visible to everyone.</p>
