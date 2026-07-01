@@ -556,6 +556,31 @@ function _findBalancedClose(text, start) {
   return -1;
 }
 
+// Best-effort close for a tool call whose ')' _findBalancedClose couldn't find
+// and that has no ')' on its opening line either. If the args opened a quote (a
+// `"""` block, or a plain "/' string) that never closes, the args are genuinely
+// multi-line — consume to the end of the response. Otherwise the call is a
+// single line missing its ')' (agent forgot it) — close at the end of the line.
+// Only ever reached on the parse-failure path, so it strictly recovers calls
+// that would otherwise be dropped (a drop executes nothing → no continuation →
+// a decide/execute loop stalls until it errors out).
+function _recoverToolCallClose(text, argsStart) {
+  let inTriple = false, inDouble = false, inSingle = false;
+  for (let i = argsStart; i < text.length; i++) {
+    if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      if (inTriple) { inTriple = false; i += 2; continue; }
+      if (!inDouble && !inSingle) { inTriple = true; i += 2; continue; }
+    }
+    if (inTriple) continue;
+    if (text[i] === '\\' && (inDouble || inSingle) && i + 1 < text.length) { i++; continue; }
+    if (text[i] === '"' && !inSingle) { inDouble = !inDouble; continue; }
+    if (text[i] === "'" && !inDouble) { inSingle = !inSingle; continue; }
+  }
+  if (inTriple || inDouble || inSingle) return text.length;
+  const lineEnd = text.indexOf('\n', argsStart);
+  return lineEnd === -1 ? text.length : lineEnd;
+}
+
 function _findTopLevelComma(text) {
   let inTripleQuote = false;
   let inDoubleQuote = false;
@@ -638,6 +663,15 @@ export function parseToolCalls(response) {
       const lastParen = cleaned.lastIndexOf(')', searchEnd);
       if (lastParen >= argsStart) {
         closeIdx = lastParen;
+      } else {
+        // No ')' on the opening line at all. Two real-world shapes land here and
+        // must NOT be silently dropped:
+        //   1. The agent forgot the closing ')' — e.g. `@read_file(path` or
+        //      `@run_command(git branch -a` as the last thing it wrote.
+        //   2. A multi-line `"""` block was left unterminated (a long or
+        //      truncated `@write_file(path, """…`) so the real close is many
+        //      lines down or never arrives.
+        closeIdx = _recoverToolCallClose(cleaned, argsStart);
       }
     }
     if (closeIdx === -1) continue;
@@ -700,8 +734,14 @@ export function parseToolCalls(response) {
       if (commaIdx !== -1) {
         const first = argsString.slice(0, commaIdx).trim();
         let second = argsString.slice(commaIdx + 1).trim();
-        if (second.startsWith('"""') && second.endsWith('"""')) {
+        if (second.startsWith('"""') && second.endsWith('"""') && second.length >= 6) {
           second = second.slice(3, -3);
+        } else if (second.startsWith('"""')) {
+          // Opening `"""` fence with no matching close — recovered from a
+          // truncated/missing-close @write_file. Strip the opening fence (and a
+          // leading newline) so the content isn't written with a literal `"""`
+          // prefix; drop a trailing fence too if one happens to be present.
+          second = second.slice(3).replace(/^\r?\n/, '').replace(/\s*"""\s*$/, '');
         }
         args = [sanitizeArg(first), second];
       } else {
