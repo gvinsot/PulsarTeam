@@ -18,7 +18,7 @@ const RUNNER_LABELS = {
   codex: 'OpenAI Codex',
 };
 
-export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop, emphasizedBorder = false }) {
+export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop, emphasizedBorder = false, footer = null }) {
   const effectiveStatus = thinking ? 'busy' : agent.status;
   const status = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.idle;
   const truncatedThinking = thinking ? thinking.slice(-120) + (thinking.length > 120 ? '' : '') : null;
@@ -31,7 +31,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
     return (
       <div
         onClick={onClick}
-        className={`flex items-center gap-4 px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 ${emphasizedBorder ? 'border-2' : 'border'} ${
+        className={`px-4 py-3 rounded-xl cursor-pointer transition-all duration-200 ${emphasizedBorder ? 'border-2' : 'border'} ${
           disabled ? 'opacity-50' : ''
         } ${
           isSelected
@@ -39,6 +39,7 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             : 'bg-dark-800/50 border-dark-700/50 hover:bg-dark-800 hover:border-dark-600'
         }`}
       >
+       <div className="flex items-center gap-4">
         <div className="text-2xl flex-shrink-0">{agent.icon}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -81,6 +82,8 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             <span className={status.textColor}>{status.label}</span>
           )}
         </div>
+       </div>
+       {footer && <div className="mt-2">{footer}</div>}
       </div>
     );
   }
@@ -195,6 +198,10 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             {agent.tasks?.active ?? 0} tasks
           </span>
         </div>
+
+        {/* Optional footer slot (e.g. batch member switcher) — reserved space
+            below the metrics so overlays never cover the card content. */}
+        {footer && <div className="mt-3 flex justify-end">{footer}</div>}
       </div>
     </div>
   );

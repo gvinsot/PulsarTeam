@@ -114,6 +114,21 @@ export default function Dashboard({
     return m;
   }, [boards]);
 
+  // Boards available to the Agents board filter — restricted to the current
+  // project when one is selected (a board belongs to at most one project).
+  const scopedBoards = useMemo(() => {
+    if (!projectFilter) return boards;
+    return (boards || []).filter(b => b.project_id === projectFilter);
+  }, [boards, projectFilter]);
+
+  // Drop a board filter that no longer belongs to the active project scope,
+  // otherwise the agent list filters down to nothing after switching projects.
+  // Wait for boards to load first so a restored filter isn't wiped mid-fetch.
+  useEffect(() => {
+    if (!boardFilter || boards.length === 0) return;
+    if (!scopedBoards.some(b => b.id === boardFilter)) setBoardFilter('');
+  }, [boards, scopedBoards, boardFilter, setBoardFilter]);
+
   // Clear stale project filter if the project no longer exists. Wait until
   // projects have actually loaded so we don't drop the filter during the
   // initial fetch — but once loaded, an empty project list (user has no
@@ -403,7 +418,7 @@ export default function Dashboard({
                     Agents
                     <span className="ml-2 text-sm font-normal text-dark-400">({filteredAgents.length}{boardFilter ? `/${sortedAgents.length}` : ''})</span>
                   </h2>
-                  {boards.length > 1 && (
+                  {scopedBoards.length > 1 && (
                     <select
                       value={boardFilter}
                       onChange={(e) => setBoardFilter(e.target.value)}
@@ -411,7 +426,7 @@ export default function Dashboard({
                       style={{ backgroundImage: 'none' }}
                     >
                       <option value="">All boards</option>
-                      {boards.map(b => (
+                      {scopedBoards.map(b => (
                         <option key={b.id} value={b.id}>{b.name}</option>
                       ))}
                     </select>
