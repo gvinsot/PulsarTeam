@@ -624,12 +624,23 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     try {
       // New boards always start with a clean 3-column workflow
       const board = await api.createBoard(`Board ${boards.length + 1}`, undefined, undefined);
+      // When a project is selected (Workflows filtered by project), attach the
+      // new board to it so it stays visible under the active filter instead of
+      // being created unattached and immediately hidden by visibleBoards.
+      if (projectFilter) {
+        try {
+          await api.attachBoardToProject(projectFilter, board.id);
+          board.project_id = projectFilter;
+        } catch (err) {
+          console.error('Failed to attach board to project:', err.message);
+        }
+      }
       setBoards(prev => [...prev, board]);
       setActiveBoardId(board.id);
     } catch (err) {
       console.error('Failed to create board:', err.message);
     }
-  }, [boards.length]);
+  }, [boards.length, projectFilter]);
 
   const handleRenameBoard = useCallback(async (boardId, newName) => {
     try {
@@ -754,8 +765,21 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         />
       )}
       {projectFilter && visibleBoards.length === 0 && boardsLoaded && (
-        <div className="px-4 py-8 text-center text-sm text-dark-400">
-          No boards attached to the selected project. Attach a board from the Projects view to see its tasks here.
+        <div className="px-4 py-8 flex flex-col items-center gap-3 text-center">
+          <p className="text-sm text-dark-400">
+            No boards attached to the selected project yet.
+          </p>
+          <button
+            onClick={handleCreateBoard}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium
+              bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-500/25 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Create board for this project
+          </button>
+          <p className="text-xs text-dark-500">
+            Or attach an existing board from the Projects view.
+          </p>
         </div>
       )}
 
