@@ -259,10 +259,21 @@ export default function Dashboard({
                 </div>
               )}
             </div>
-            <div>
-              <h1 className="text-lg font-bold text-dark-100" title={`v${import.meta.env.VITE_APP_VERSION || 'dev'}`}>Pulsar Team</h1>
-              <p className="text-xs text-dark-400 -mt-0.5">{projectScopedAgents.length} agents active</p>
-            </div>
+            {/* Active project is the header hero — click to switch/manage */}
+            <button
+              onClick={() => setProjectDrawerOpen(true)}
+              className="group min-w-0 max-w-[45vw] sm:max-w-[280px] text-left"
+              title="Switch or manage projects"
+            >
+              <h1 className="text-lg sm:text-xl font-bold text-dark-100 flex items-center gap-1.5 min-w-0">
+                <FolderGit2 className="w-4 h-4 text-purple-400 shrink-0 hidden sm:block" />
+                <span className="truncate">{activeProject ? activeProject.name : 'All Projects'}</span>
+                <ChevronDown className="w-4 h-4 text-dark-400 shrink-0 group-hover:text-dark-200 transition-colors" />
+              </h1>
+              <p className="text-xs text-dark-400 -mt-0.5 truncate" title={`v${import.meta.env.VITE_APP_VERSION || 'dev'}`}>
+                Pulsar Team · {projectScopedAgents.length} agents active
+              </p>
+            </button>
             <div className="hidden sm:flex items-center border border-dark-700 rounded-lg overflow-hidden ml-2">
               {NAV_VIEWS.map(({ key, label, icon: Icon, title }) => (
                 <button
@@ -277,17 +288,6 @@ export default function Dashboard({
                   <span className="hidden md:inline">{label}</span>
                 </button>
               ))}
-            </div>
-            <div className="hidden sm:flex items-center ml-2 pl-2 border-l border-dark-700">
-              <button
-                onClick={() => setProjectDrawerOpen(true)}
-                className="flex items-center gap-1.5 h-9 px-3 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 hover:border-indigo-500 hover:text-dark-100 transition-colors max-w-[220px]"
-                title="Switch or manage projects"
-              >
-                <FolderGit2 className="w-4 h-4 text-purple-400 shrink-0" />
-                <span className="truncate">{activeProject ? activeProject.name : 'All Projects'}</span>
-                <ChevronDown className="w-3.5 h-3.5 text-dark-400 shrink-0" />
-              </button>
             </div>
           </div>
 
