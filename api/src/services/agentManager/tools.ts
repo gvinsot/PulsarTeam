@@ -6,6 +6,7 @@ import { setTaskSignal } from './tasks.js';
 import { checkToolHooks } from '../toolHooks.js';
 import { _detectCommitHashes } from './tools/commitDetection.js';
 import { HANDLERS, appendTaskNote, HandlerCtx } from './tools/handlers.js';
+import { enrichAssignee } from '../taskMutations.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const toolsMethods = {
@@ -186,12 +187,7 @@ export const toolsMethods = {
       } catch (err: any) {
         console.warn(`⚠️ [UpdateTask] Failed to persist appended comment for task ${inProgressTask.id}: ${err?.message || err}`);
       }
-      const taskPayload: any = { ...inProgressTask, agentId: ownerAgentId };
-      if (inProgressTask.assignee) {
-        const assigneeAgent = this.agents.get(inProgressTask.assignee);
-        taskPayload.assigneeName = assigneeAgent?.name || null;
-        taskPayload.assigneeIcon = assigneeAgent?.icon || null;
-      }
+      const taskPayload: any = enrichAssignee(this, { ...inProgressTask, agentId: ownerAgentId });
       this._emit('task:updated', { agentId: ownerAgentId, task: taskPayload });
     }
 

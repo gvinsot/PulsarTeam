@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getAllTaskIds, getActiveTasksByAgent, getActiveTaskForExecutor, getTasksByAssignee, getTaskByActionRunningAgent, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
 import { isActiveStatus, getWorkflowManagedStatuses, getReassigningStatuses, markTaskError, isUserStopError, reArmInterruptedChains } from '../workflow/index.js';
+import { enrichAssignee } from '../taskMutations.js';
+import { normalizeSecondaryRepos } from '../taskRepos.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
 
@@ -70,39 +72,6 @@ function normalizeRetention(value: any): number | null {
   const n = typeof value === 'number' ? value : parseInt(value, 10);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.min(3650, Math.floor(n));
-}
-
-// Same "owner/repo" shape the primary repo is validated against (routes/agents.ts).
-const REPO_FULLNAME_RE = /^[\w.-]+\/[\w.-]+$/;
-const MAX_SECONDARY_REPOS = 10;
-
-/**
- * Coerce an arbitrary secondaryRepos input into a clean [{provider, fullName}]:
- * accept either bare "owner/repo" strings or {provider, fullName} objects, keep
- * only well-formed entries, default provider to 'github', drop the primary repo,
- * dedupe by fullName, and cap the count so clone time stays bounded. Always
- * returns an array (never null).
- */
-export function normalizeSecondaryRepos(input: any, primaryFullName?: string | null): Array<{ provider: string; fullName: string }> {
-  if (!Array.isArray(input)) return [];
-  const primary = primaryFullName || null;
-  const seen = new Set<string>();
-  const out: Array<{ provider: string; fullName: string }> = [];
-  for (const raw of input) {
-    const fullName = typeof raw === 'string'
-      ? raw
-      : (raw && typeof raw.fullName === 'string' ? raw.fullName : null);
-    if (!fullName || !REPO_FULLNAME_RE.test(fullName)) continue;
-    if (primary && fullName === primary) continue;
-    if (seen.has(fullName)) continue;
-    seen.add(fullName);
-    const provider = (raw && typeof raw === 'object' && typeof raw.provider === 'string' && raw.provider)
-      ? raw.provider
-      : 'github';
-    out.push({ provider, fullName });
-    if (out.length >= MAX_SECONDARY_REPOS) break;
-  }
-  return out;
 }
 
 /**
@@ -295,15 +264,7 @@ export const tasksMethods = {
     if (ownerAgent) this._emit('agent:updated', this._sanitize(ownerAgent));
     // Emit task:updated so the TasksBoard UI updates in real-time
     // (agent:updated alone is not enough — the board listens on task:updated).
-    const taskPayload = { ...task, agentId: ownerId };
-    if (task.assignee) {
-      const assigneeAgent = this.agents.get(task.assignee);
-      taskPayload.assigneeName = assigneeAgent?.name || null;
-      taskPayload.assigneeIcon = assigneeAgent?.icon || null;
-    } else {
-      taskPayload.assigneeName = null;
-      taskPayload.assigneeIcon = null;
-    }
+    const taskPayload = enrichAssignee(this, { ...task, agentId: ownerId });
     this._emit('task:updated', { agentId: ownerId, task: taskPayload });
     if (!skipAutoRefine && status !== 'error' && !task.isManual) this._checkAutoRefine({ ...task, agentId: ownerId }, { by: by || 'user' });
     return task;

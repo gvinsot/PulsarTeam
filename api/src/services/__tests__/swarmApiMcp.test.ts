@@ -43,6 +43,9 @@ mock.module('../database.js', {
       searchTasksCalls.push(opts);
       return searchTasksResponse;
     },
+    // taskMutations.ts imports these from ../database.js
+    saveTaskToDb: taskDbFake.saveTaskToDb,
+    updateTaskFields: taskDbFake.updateTaskFields,
   },
 });
 

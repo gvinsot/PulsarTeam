@@ -3,28 +3,10 @@ import { z } from 'zod';
 import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { getTaskByIdPrefix, getTasksByAgent } from './database/tasks.js';
+import { emitTaskUpdated, clearExecutionOnMove } from './taskMutations.js';
 import { getReposForBoard } from './database/boardRepos.js';
 import { resolveWorkflowStatus } from './workflow/columnIds.js';
-
-// Format of "owner/repo" — same regex used by the REST endpoint.
-const REPO_FULL_NAME_RE = /^[\w.-]+\/[\w.-]+$/;
-const STORAGE_PATH_MAX = 500;
-
-/** Validate and normalise a repo full-name string ("owner/repo") or null. */
-function normalizeRepoFullName(value: any): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return REPO_FULL_NAME_RE.test(trimmed) ? trimmed : null;
-}
-
-/** Trim/length-cap a storage path coming from a remote caller, or null. */
-function normalizeStoragePath(value: any): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.slice(0, STORAGE_PATH_MAX);
-}
+import { normalizeRepoFullName, normalizeStoragePath } from './taskRepos.js';
 
 /** Success envelope: pretty-printed JSON text content. */
 const jsonOk = (obj: unknown) => ({
@@ -133,28 +115,16 @@ async function applyBoardLevelUpdate(
     if (previousAssignee) task.assignee = null;
     // Clear execution state so the workflow engine starts fresh in the
     // new column (mirrors setTaskStatus / PUT /tasks/:id).
-    task.startedAt = null;
-    task.executionStatus = null;
     // A column move starts a fresh chain — drop the decide no-decision counter
     // (relocated off the task object in Phase 2) so a later re-entry into a
     // decide column isn't penalised by stale attempts. Mirrors setTaskStatus.
     agentManager._decideNoDecisionCounts?.delete(task.id);
-    task.actionRunning = false;
-    delete task.actionRunningAgentId;
-    delete task.actionRunningMode;
-    if (status === 'done') task.completedAt = now;
+    // Clear execution state so the workflow engine starts fresh in the new column.
+    clearExecutionOnMove(task, { toStatus: status, now });
   }
   task.updatedAt = now;
   await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
-  if (task.assignee) {
-    const assigneeAgent = agentManager.agents.get(task.assignee);
-    task.assigneeName = assigneeAgent?.name || null;
-    task.assigneeIcon = assigneeAgent?.icon || null;
-  } else {
-    task.assigneeName = null;
-    task.assigneeIcon = null;
-  }
-  agentManager._emit('task:updated', { agentId: task.agentId || null, task });
+  emitTaskUpdated(agentManager, task, { emitAgent: false, stampUpdatedAt: false });
   // Column-entry workflow actions (auto-assign / run_agent) only fire
   // through this hook — no loop ever rescans unassigned tasks, so
   // skipping it would leave the moved task inert in its new column.

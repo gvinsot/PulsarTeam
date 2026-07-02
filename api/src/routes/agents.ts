@@ -2,6 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import { getWorkflowForBoard } from '../services/configManager.js';
 import { getAllBoards, getBoardsByUser, saveTaskToDb, updateTaskFields, getAgentById } from '../services/database.js';
+import { isValidRepoFullName } from '../services/taskRepos.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { checkBoardAccess } from '../middleware/authz.js';
@@ -340,9 +341,7 @@ export function agentRoutes(agentManager) {
       // Repo is the canonical "owner/repo" the picker captured from the
       // board's GitHub plugin — validate format only (full validation against
       // the OAuth scope happens at clone time).
-      const resolvedRepoFullName: string | null = (repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName))
-        ? repoFullName
-        : null;
+      const resolvedRepoFullName: string | null = isValidRepoFullName(repoFullName) ? repoFullName : null;
       const resolvedRepoProvider = resolvedRepoFullName ? (repoProvider || 'github') : null;
 
       // Storage path comes from the board's OneDrive plugin picker.
@@ -422,7 +421,7 @@ export function agentRoutes(agentManager) {
         await agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());
       } else if (repoFullName !== undefined) {
         // Format check only — the picker is sourced from the board's GitHub plugin.
-        const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
+        const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
         await agentManager.updateTaskRepo(req.params.id, req.params.taskId, value, repoProvider || (value ? 'github' : null));
       } else if (secondaryRepos !== undefined) {
         // Array of {provider, fullName} (or bare "owner/repo" strings) — normalized

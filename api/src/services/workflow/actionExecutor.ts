@@ -13,6 +13,7 @@ import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields, getTaskById } from '../database.js';
+import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
@@ -63,25 +64,6 @@ function _throwIfWaitError(agentManager, task, waitResult, errorLabel) {
 }
 
 /**
- * Emit task:updated through the agentManager so it reaches the user's socket room.
- * Enriches with assigneeName/assigneeIcon for the frontend.
- */
-function _emitTaskUpdated(agentManager, agentId, task) {
-  // Stamp updatedAt so the frontend's timestamp-based merge logic preserves
-  // this update over stale loadTasks() responses (same pattern as setTaskStatus).
-  task.updatedAt = new Date().toISOString();
-  if (task.assignee) {
-    const assigneeAgent = agentManager.agents.get(task.assignee);
-    task.assigneeName = assigneeAgent?.name || null;
-    task.assigneeIcon = assigneeAgent?.icon || null;
-  } else {
-    task.assigneeName = null;
-    task.assigneeIcon = null;
-  }
-  agentManager._emit('task:updated', { agentId, task });
-}
-
-/**
  * Snapshot of a task's live state for before/after comparison (e.g. decide-mode
  * decision detection). Read straight from the DB — the single source of truth for
  * both owned and board-level tasks.
@@ -103,31 +85,6 @@ export function recordReassign(task, assignee) {
     type: 'reassign',
     assignee,
   });
-}
-
-/**
- * Persist the task then emit task:updated, in that order, so any loadTasks()
- * triggered by the emit reads the committed row. The save and emit use separate
- * payload spreads (the emit mutates its copy with updatedAt + assignee enrichment).
- */
-export function saveThenEmitTaskUpdated(agentManager, agentId, task) {
-  const payload = { ...task, agentId };
-  Promise.resolve(saveTaskToDb({ ...task, agentId }))
-    .catch(() => {})
-    .then(() => _emitTaskUpdated(agentManager, agentId, payload));
-}
-
-/**
- * Persist named fields of a board-level task (agent_id = null) then emit, in that
- * order. These tasks have no in-memory store object, so mutations must go to the
- * DB directly. Uses a TARGETED column update (not the full saveTaskToDb upsert,
- * which would clobber fields the transient task copy may not carry) — same
- * rationale as _markActionRunningBoardLevel. Ownership (agentId) is unchanged.
- */
-function persistBoardLevelFields(agentManager, task, fields) {
-  Promise.resolve(updateTaskFields(task.id, fields))
-    .catch(() => {})
-    .then(() => _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId }));
 }
 
 // ── Prompt Builders ─────────────────────────────────────────────────────────
@@ -277,7 +234,7 @@ async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     actualTask.assignee = agent.id;
     recordReassign(actualTask, agent.id);
     task.assignee = agent.id;
-    saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
+    persistThenEmit(agentManager, actualTask);
     console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
   } else {
     // Board-level task (agent_id = null): no in-memory object, so the assignee
@@ -285,7 +242,7 @@ async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     // on the working copy + emit so the card shows WHO took it. Ownership stays null.
     task.assignee = agent.id;
     recordReassign(task, agent.id);
-    persistBoardLevelFields(agentManager, task, { assignee: agent.id, history: task.history });
+    persistThenEmit(agentManager, task, { fields: { assignee: agent.id, history: task.history } });
     console.log(`[ActionExecutor] assign_agent: assigned board-level task to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
   }
 
@@ -310,10 +267,10 @@ async function executeAssignAgentIndividual(action, task, { agentManager, io }) 
   recordReassign(mutable, targetAgentId);
   task.assignee = targetAgentId;
   if (actualTask) {
-    saveThenEmitTaskUpdated(agentManager, task.agentId, actualTask);
+    persistThenEmit(agentManager, actualTask);
   } else {
     // Board-level task (agent_id = null): persist targeted + emit. Ownership stays null.
-    persistBoardLevelFields(agentManager, task, { assignee: targetAgentId, history: task.history });
+    persistThenEmit(agentManager, task, { fields: { assignee: targetAgentId, history: task.history } });
   }
   const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
   console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
@@ -408,7 +365,7 @@ function _markActionRunning(actualTask, agent, mode, agentManager, agentId) {
   // concurrent agent:updated event reads the committed row with actionRunning=true.
   // Without this, the frontend's loadTasks() can overwrite the real-time update
   // with stale DB data (same pattern as setTaskStatus in tasks.js).
-  saveThenEmitTaskUpdated(agentManager, agentId, actualTask);
+  persistThenEmit(agentManager, actualTask);
 }
 
 /**
@@ -442,7 +399,7 @@ async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
       ...(assigneeChanged ? { assignee: agent.id } : {}),
     });
   } catch { /* best-effort — the emit below still drives the live UI */ }
-  _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId });
+  emitTaskUpdated(agentManager, { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
 }
 
 /** Persist + emit the cleared running flag for a board-level task (see above). */
@@ -457,7 +414,7 @@ async function _clearActionRunningBoardLevel(agentManager, task) {
       actionRunningMode: null,
     });
   } catch { /* best-effort */ }
-  _emitTaskUpdated(agentManager, task.agentId, { ...task, agentId: task.agentId });
+  emitTaskUpdated(agentManager, { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
 }
 
 /**
@@ -553,7 +510,7 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
         error: taskError,
         actionMode: mode,
       });
-      saveThenEmitTaskUpdated(agentManager, agentId, actualTask);
+      persistThenEmit(agentManager, actualTask);
     }
     agentManager._emit('agent:error:report', {
       agentId: agent.id,
@@ -748,7 +705,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // enough for the realtime UI, since the frontend merges by timestamp and
     // any subsequent emit (change_status, agent:updated → loadTasks) wins.
     if (cleanupMutated && actualTask) {
-      _emitTaskUpdated(agentManager, task.agentId, { ...actualTask, agentId: task.agentId });
+      emitTaskUpdated(agentManager, { ...actualTask, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
     }
     // Board-level task: no in-memory copy, and board-level moves bypass
     // setTaskStatus, so nothing else will persist the cleared flag — do it here

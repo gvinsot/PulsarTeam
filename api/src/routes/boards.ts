@@ -6,6 +6,7 @@ import {
   getTasksByBoard, getTasksByAssignee, updateTaskFields,
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
+import { emitTaskUpdated } from '../services/taskMutations.js';
 import { validateBody } from '../lib/validate.js';
 import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/columnIds.js';
 import { DEFAULT_BOARD_WORKFLOW, normalizeBoardName } from '../services/boardDefaults.js';
@@ -19,27 +20,6 @@ import {
   createShareSchema,
   updateShareSchema,
 } from '../schemas/boards.js';
-
-function enrichTaskAssignee(agentManager, task) {
-  if (task.assignee) {
-    const assigneeAgent = agentManager.agents.get(task.assignee);
-    task.assigneeName = assigneeAgent?.name || null;
-    task.assigneeIcon = assigneeAgent?.icon || null;
-  } else {
-    task.assigneeName = null;
-    task.assigneeIcon = null;
-  }
-  return task;
-}
-
-function emitTaskUpdate(agentManager, task) {
-  enrichTaskAssignee(agentManager, task);
-  agentManager._emit('task:updated', { agentId: task.agentId || null, task });
-  if (task.agentId) {
-    const agent = agentManager.agents.get(task.agentId);
-    if (agent) agentManager._emit('agent:updated', agentManager._sanitize(agent));
-  }
-}
 
 async function applyColumnRenamesToBoardTasks(agentManager, boardId: string, renames: ColumnRename[], by: string) {
   if (!renames.length) return;
@@ -75,7 +55,7 @@ async function applyColumnRenamesToBoardTasks(agentManager, boardId: string, ren
       updatedAt: now,
     };
 
-    emitTaskUpdate(agentManager, taskForEmit);
+    emitTaskUpdated(agentManager, taskForEmit);
   }
 }
 

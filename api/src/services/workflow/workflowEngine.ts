@@ -19,6 +19,7 @@
 
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
 import { saveTaskToDb, getTaskById, getActiveWorkflowTasks, getInterruptedChainTasks, updateTaskFields, tryAcquireTaskLock, releaseTaskLock } from '../database.js';
+import { persistThenEmit } from '../taskMutations.js';
 import { executeAction, recordReassign } from './actionExecutor.js';
 import { markTaskError } from './taskErrors.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
@@ -633,16 +634,9 @@ async function _autoAssignByColumn(task, workflow, agentManager, ownerId, io) {
       actualTask.assignee = autoAgent.id;
       // Record history for consistency with other assignment paths
       recordReassign(actualTask, autoAgent.id);
-      // Defer emit until after DB save so the frontend's loadTasks() reads
-      // the committed row (same pattern as executeAssignAgent).
-      const assignPayload = { ...actualTask, agentId: task.agentId };
-      const assigneeAgent = agentManager.agents.get(autoAgent.id);
-      assignPayload.assigneeName = assigneeAgent?.name || null;
-      assignPayload.assigneeIcon = assigneeAgent?.icon || null;
-      const savePromise = saveTaskToDb({ ...actualTask, agentId: task.agentId });
-      Promise.resolve(savePromise)
-        .catch(() => {})
-        .then(() => agentManager._emit('task:updated', { agentId: task.agentId, task: assignPayload }));
+      // Persist then emit (deferred) so the frontend's loadTasks() reads the
+      // committed row — same contract as executeAssignAgent.
+      persistThenEmit(agentManager, actualTask, { emitAgent: false, stampUpdatedAt: false });
     }
   }
 }

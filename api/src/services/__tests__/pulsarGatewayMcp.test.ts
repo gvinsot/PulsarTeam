@@ -39,6 +39,9 @@ mock.module('../database.js', {
     getTaskByActionRunningAgent: taskDbFake.getTaskByActionRunningAgent,
     getTasksByAssignee: taskDbFake.getTasksByAssignee,
     getActiveTasksByAgent: taskDbFake.getActiveTasksByAgent,
+    // taskMutations.ts imports these from ../database.js
+    saveTaskToDb: taskDbFake.saveTaskToDb,
+    updateTaskFields: taskDbFake.updateTaskFields,
   },
 });
 mock.module('../database/boardRepos.js', {

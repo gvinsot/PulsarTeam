@@ -11,7 +11,7 @@ mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
 
 const { AgentManager } = await import('../agentManager.js');
 const { stripToolCalls } = await import('../workflow/index.js');
-const { setTaskSignal, getTaskSignal, normalizeSecondaryRepos } = await import('../agentManager/tasks.js');
+const { setTaskSignal, getTaskSignal } = await import('../agentManager/tasks.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1008,17 +1008,7 @@ test('addTask with recurrence config', async () => {
 // 19b. Secondary repos (primary + N cloned alongside)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-test('normalizeSecondaryRepos dedupes, excludes primary, caps, coerces shapes', () => {
-  const out = normalizeSecondaryRepos(['a/b', 'a/b', { fullName: 'c/d' }, 'nope', { foo: 1 }], 'x/y');
-  assert.deepEqual(out, [{ provider: 'github', fullName: 'a/b' }, { provider: 'github', fullName: 'c/d' }]);
-  // primary is excluded from the secondary set
-  assert.deepEqual(normalizeSecondaryRepos(['x/y', 'a/b'], 'x/y').map(r => r.fullName), ['a/b']);
-  // non-array input → []
-  assert.deepEqual(normalizeSecondaryRepos(null), []);
-  // capped at 10
-  const many = Array.from({ length: 15 }, (_, i) => `org/r${i}`);
-  assert.equal(normalizeSecondaryRepos(many).length, 10);
-});
+// normalizeSecondaryRepos unit coverage lives in taskRepos.test.ts (shared domain module).
 
 test('addTask normalizes secondary repos (dedupe, exclude primary, drop invalid)', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);

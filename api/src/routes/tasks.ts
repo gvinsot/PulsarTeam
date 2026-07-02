@@ -4,6 +4,8 @@ import { checkBoardAccess } from '../middleware/authz.js';
 import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
+import { enrichAssignee, emitTaskUpdated, clearExecutionOnMove } from '../services/taskMutations.js';
+import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRepos.js';
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { isCliRunner } from '../services/runners.js';
@@ -16,31 +18,6 @@ import {
 const router = Router();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-const REPO_FULLNAME_RE = /^[\w.-]+\/[\w.-]+$/;
-const MAX_SECONDARY_REPOS = 10;
-
-function normalizeSecondaryReposForTask(input: any, primaryFullName?: string | null) {
-  if (!Array.isArray(input)) return [];
-  const primary = primaryFullName || null;
-  const seen = new Set<string>();
-  const out: Array<{ provider: string; fullName: string }> = [];
-  for (const raw of input) {
-    const fullName = typeof raw === 'string'
-      ? raw
-      : (raw && typeof raw.fullName === 'string' ? raw.fullName : null);
-    if (!fullName || !REPO_FULLNAME_RE.test(fullName)) continue;
-    if (primary && fullName === primary) continue;
-    if (seen.has(fullName)) continue;
-    seen.add(fullName);
-    const provider = raw && typeof raw === 'object' && typeof raw.provider === 'string' && raw.provider
-      ? raw.provider
-      : 'github';
-    out.push({ provider, fullName });
-    if (out.length >= MAX_SECONDARY_REPOS) break;
-  }
-  return out;
-}
 
 /** Check if the authenticated user has access to a task (via agent ownership OR board access) */
 async function requireTaskAccess(mgr, task, user) {
@@ -132,40 +109,6 @@ function requestTaskCliInterrupt(mgr, task): void {
     });
 }
 
-/**
- * Clear the stale execution state on the in-memory task after a status change
- * (the 8-field reset shared by the memTask sync blocks). Intentionally does NOT
- * stamp completedAt or fire setTaskSignal — those differ per call site and stay
- * inline at the call sites.
- */
-function clearExecutionState(t) {
-  t.startedAt = null;
-  t.executionStatus = null;
-  delete t._pendingOnEnter;
-  t.completedActionIdx = null;
-  clearActionRunning(t);
-}
-
-/**
- * Emit the task:updated + agent:updated pair for a task. Used by PUT /:id and
- * bulk-move. NOT used by /:id/stop, which emits only task:updated with a
- * constructed payload and no agent:updated.
- */
-function emitTaskUpdate(mgr, task) {
-  if (task.assignee) {
-    const assigneeAgent = mgr.agents.get(task.assignee);
-    task.assigneeName = assigneeAgent?.name || null;
-    task.assigneeIcon = assigneeAgent?.icon || null;
-  } else {
-    task.assigneeName = null;
-    task.assigneeIcon = null;
-  }
-  mgr._emit('task:updated', { agentId: task.agentId, task });
-  if (task.agentId) {
-    const agent = mgr.agents.get(task.agentId);
-    if (agent) mgr._emit('agent:updated', mgr._sanitize(agent));
-  }
-}
 
 // ── GET /tasks — list all tasks (from the tasks table) ─────────────────────
 router.get('/', async (req, res) => {
@@ -225,12 +168,7 @@ router.get('/', async (req, res) => {
       const task: any = rowToTask(row);
       const agent = mgr.agents.get(task.agentId);
       task.agentName = agent?.name || null;
-      // Resolve assignee name
-      if (task.assignee) {
-        const assigneeAgent = mgr.agents.get(task.assignee);
-        task.assigneeName = assigneeAgent?.name || null;
-        task.assigneeIcon = assigneeAgent?.icon || null;
-      }
+      enrichAssignee(mgr, task);
       return task;
     });
 
@@ -401,11 +339,11 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
       if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null)) editedFields.push('recurrence');
     }
     if (repoFullName !== undefined) {
-      const value = repoFullName && REPO_FULLNAME_RE.test(repoFullName) ? repoFullName : null;
+      const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
       if (value !== (task.repoFullName || null)) {
         task.repoFullName = value;
         task.repoProvider = value ? (repoProvider || task.repoProvider || 'github') : null;
-        task.secondaryRepos = normalizeSecondaryReposForTask(task.secondaryRepos || [], value);
+        task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
         editedFields.push('repoFullName');
       } else if (value && repoProvider !== undefined && repoProvider !== task.repoProvider) {
         task.repoProvider = repoProvider || 'github';
@@ -414,7 +352,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
     }
     if (secondaryRepos !== undefined) {
       const oldValue = JSON.stringify(task.secondaryRepos || []);
-      task.secondaryRepos = normalizeSecondaryReposForTask(secondaryRepos, task.repoFullName || null);
+      task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
       if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
     }
     if (storagePath !== undefined) {
@@ -433,17 +371,12 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
     if (position !== undefined) { task.position = position; }
     task.updatedAt = now;
 
-    // Clear execution state on the copy when status changed — this ensures
-    // the DB row is also cleaned up when saveTaskDirectly persists the copy.
-    // NOTE: intentionally a SHORTER reset than clearExecutionState() applied to
-    // the memTask below — completedActionIdx/_pendingOnEnter are persisted columns
-    // and must be retained on the copy that saveTaskDirectly writes; nulling them
-    // here would wipe them from the DB row (observable after restart rehydration).
+    // Clear execution state on a status change so the moved task doesn't resume.
+    // clearExecutionOnMove keeps the persisted completedActionIdx/_pendingOnEnter
+    // (so an interrupted chain can still resume) — a full reset would wipe them
+    // from the DB row that saveTaskDirectly writes.
     if (statusChanged) {
-      task.startedAt = null;
-      task.executionStatus = null;
-      clearActionRunning(task);
-      if (task.status === 'done') task.completedAt = now;
+      clearExecutionOnMove(task, { toStatus: task.status, now });
     }
 
     // ── History entry ──────────────────────────────────────────────────────
@@ -503,7 +436,7 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
         movedBy: username,
       });
     }
-    emitTaskUpdate(mgr, task);
+    emitTaskUpdated(mgr, task);
 
     await auditLog('update', req.params.id, req.user.userId, username, {
       boardChanged, statusChanged,
@@ -560,10 +493,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
       // resume (same SHORTER reset as the single-task PUT — keep the persisted
       // completedActionIdx/_pendingOnEnter so an interrupted chain can resume).
       if (oldStatus !== targetColumn) {
-        task.startedAt = null;
-        task.executionStatus = null;
-        clearActionRunning(task);
-        if (targetColumn === 'done') task.completedAt = now;
+        clearExecutionOnMove(task, { toStatus: targetColumn, now });
       }
       task.updatedAt = now;
       const changedFields = ['boardId', 'status'];
@@ -593,7 +523,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
         }
       }
 
-      emitTaskUpdate(mgr, task);
+      emitTaskUpdated(mgr, task);
       results.moved.push({ taskId: task.id, title: task.title || task.text?.slice(0, 60) });
     }
 
