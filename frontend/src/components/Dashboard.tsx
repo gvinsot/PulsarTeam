@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import {
   LogOut, Plus, Globe, LayoutGrid, List,
-  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Tag, Menu, DollarSign, Eye, ChevronDown,
+  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Menu, DollarSign, Eye, ChevronDown,
   Sun, Moon, FolderGit2
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
@@ -20,20 +20,20 @@ import { Crown, UserCheck } from 'lucide-react';
 const TasksBoard = lazy(() => import('./TasksBoard'));
 const AddAgentModal = lazy(() => import('./AddAgentModal'));
 const BroadcastPanel = lazy(() => import('./BroadcastPanel'));
-const ProjectsView = lazy(() => import('./ProjectsView'));
+const ProjectDrawer = lazy(() => import('./ProjectDrawer'));
 const BudgetDashboard = lazy(() => import('./BudgetDashboard'));
 const AdminPanel = lazy(() => import('./AdminPanel'));
 
 // Hash views the render switch actually handles. Used by both the useState
 // initializer and the hashchange effect so the two lists can never drift.
-const VALID_VIEWS: string[] = ['agents', 'tasks', 'projects', 'budget'];
+// Projects are no longer a peer view — they live in the left ProjectDrawer.
+const VALID_VIEWS: string[] = ['agents', 'tasks', 'budget'];
 
 // Top-nav items, shared by the mobile dropdown and the desktop view-switcher.
 // Only the DATA is shared; the two render maps stay separate (different markup).
 const NAV_VIEWS = [
   { key: 'agents', label: 'Agents', icon: Users, title: 'Agents view' },
   { key: 'tasks', label: 'Workflows', icon: KanbanSquare, title: 'Workflows board' },
-  { key: 'projects', label: 'Projects', icon: Tag, title: 'Projects' },
   { key: 'budget', label: 'Budget', icon: DollarSign, title: 'Budget' },
 ];
 
@@ -59,6 +59,7 @@ export default function Dashboard({
   const [requestedTab, setRequestedTab] = useState(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [boards, setBoards] = useState([]);
@@ -83,6 +84,16 @@ export default function Dashboard({
   const isAdmin = user?.role === 'admin';
   const isBasic = user?.role === 'basic';
 
+  // Reload the project list that feeds the header scope chip + ProjectDrawer.
+  // Also refresh the app-level projects prop so downstream modals stay in sync.
+  const reloadDbProjects = useCallback(() => {
+    api.getProjects()
+      .then(setDbProjects)
+      .catch(() => setDbProjects([]))
+      .finally(() => setProjectsLoaded(true));
+    loadProjects();
+  }, [loadProjects]);
+
   useEffect(() => {
     api.getBoards().then(setBoards).catch(() => {});
     api.getProjects()
@@ -90,6 +101,11 @@ export default function Dashboard({
       .catch(() => setDbProjects([]))
       .finally(() => setProjectsLoaded(true));
   }, []);
+
+  const activeProject = useMemo(
+    () => dbProjects.find(p => p.id === projectFilter) || null,
+    [dbProjects, projectFilter],
+  );
 
   // Build lookup: boardId → project_id (from boards loaded above)
   const boardProjectMap = useMemo(() => {
@@ -111,8 +127,6 @@ export default function Dashboard({
   // Lazy-load data based on active view
   useEffect(() => {
     if (activeView === 'tasks') {
-      loadProjects();
-    } else if (activeView === 'projects') {
       loadProjects();
     } else if (activeView === 'agents') {
       loadProjects();
@@ -201,12 +215,21 @@ export default function Dashboard({
         <div className="max-w-[1800px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="relative sm:static" ref={mobileMenuRef}>
+              {/* Mobile: hamburger opens the view-nav dropdown */}
               <button
                 onClick={() => setMobileMenuOpen(prev => !prev)}
-                className="sm:pointer-events-none w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20"
+                className="sm:hidden w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/20"
+                title="Menu"
               >
-                <Menu className="w-5 h-5 text-white sm:hidden" />
-                <Zap className="w-5 h-5 text-white hidden sm:block" />
+                <Menu className="w-5 h-5 text-white" />
+              </button>
+              {/* Desktop: the logo opens the Projects drawer */}
+              <button
+                onClick={() => setProjectDrawerOpen(true)}
+                className="hidden sm:flex w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 items-center justify-center shadow-lg shadow-indigo-500/20 hover:brightness-110 transition-all"
+                title="Projects"
+              >
+                <Zap className="w-5 h-5 text-white" />
               </button>
               {mobileMenuOpen && (
                 <div className="absolute left-0 top-full mt-2 w-56 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1 sm:hidden">
@@ -224,21 +247,15 @@ export default function Dashboard({
                       {label}
                     </button>
                   ))}
-                  {dbProjects.length > 0 && (
-                    <div className="border-t border-dark-700 mt-1 pt-2 px-3 pb-2">
-                      <label className="block text-[10px] uppercase tracking-wider text-dark-500 mb-1">Project filter</label>
-                      <select
-                        value={projectFilter}
-                        onChange={(e) => setProjectFilter(e.target.value)}
-                        className="w-full h-8 px-2 text-sm bg-dark-900 border border-dark-700 rounded text-dark-200 focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="">All projects</option>
-                        {dbProjects.map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                  <div className="border-t border-dark-700 mt-1 pt-1">
+                    <button
+                      onClick={() => { setMobileMenuOpen(false); setProjectDrawerOpen(true); }}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 text-sm font-medium text-dark-300 hover:bg-dark-700/50 hover:text-dark-100 transition-colors"
+                    >
+                      <FolderGit2 className="w-4 h-4 text-purple-400" />
+                      <span className="truncate">{activeProject ? activeProject.name : 'All Projects'}</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -261,23 +278,17 @@ export default function Dashboard({
                 </button>
               ))}
             </div>
-            {dbProjects.length > 0 && (
-              <div className="hidden sm:flex items-center gap-1.5 ml-2 pl-2 border-l border-dark-700">
-                <FolderGit2 className="w-4 h-4 text-purple-400" />
-                <select
-                  value={projectFilter}
-                  onChange={(e) => setProjectFilter(e.target.value)}
-                  className="h-9 px-2 pr-7 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer"
-                  style={{ backgroundImage: 'none' }}
-                  title="Filter content by project"
-                >
-                  <option value="">All projects</option>
-                  {dbProjects.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div className="hidden sm:flex items-center ml-2 pl-2 border-l border-dark-700">
+              <button
+                onClick={() => setProjectDrawerOpen(true)}
+                className="flex items-center gap-1.5 h-9 px-3 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 hover:border-indigo-500 hover:text-dark-100 transition-colors max-w-[220px]"
+                title="Switch or manage projects"
+              >
+                <FolderGit2 className="w-4 h-4 text-purple-400 shrink-0" />
+                <span className="truncate">{activeProject ? activeProject.name : 'All Projects'}</span>
+                <ChevronDown className="w-3.5 h-3.5 text-dark-400 shrink-0" />
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -371,17 +382,6 @@ export default function Dashboard({
                   user={user}
                   onNavigateToAgent={handleNavigateToAgent}
                   onBoardChange={setBoardFilter}
-                  projectFilter={projectFilter}
-                />
-              </div>
-            </Suspense>
-          )}
-          {activeView === 'projects' && (
-            <Suspense fallback={null}>
-              <div className="flex-1 min-h-0 flex flex-col overflow-auto p-4 sm:p-6">
-                <ProjectsView
-                  agents={projectScopedAgents}
-                  onRefresh={onRefresh}
                   projectFilter={projectFilter}
                 />
               </div>
@@ -581,6 +581,21 @@ export default function Dashboard({
         activeTab={detailActiveTab}
         onNavigateToAgent={handleNavigateToVoiceAgent}
       />
+
+      {/* Projects drawer — the single entry point for project switch + management */}
+      {projectDrawerOpen && (
+        <Suspense fallback={null}>
+          <ProjectDrawer
+            open={projectDrawerOpen}
+            onClose={() => setProjectDrawerOpen(false)}
+            projects={dbProjects}
+            projectFilter={projectFilter}
+            onSelect={setProjectFilter}
+            agents={agents}
+            onProjectsChanged={reloadDbProjects}
+          />
+        </Suspense>
+      )}
 
       {/* Admin Panel */}
       {showAdminPanel && (
