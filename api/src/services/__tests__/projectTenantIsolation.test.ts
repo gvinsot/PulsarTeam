@@ -29,6 +29,10 @@ mock.module('../database.js', {
     getTaskById: async () => null,
     updateTaskExecutionStatus: async () => {},
     saveTaskToDb: async () => {},
+    updateTaskFields: async () => null,
+    getTasksByAssignee: async () => [],
+    getTasksByAgent: async () => [],
+    getTasksByBoard: async () => [],
     getProjectsForUser: async (...args: any[]) => {
       projectListCalls.push(args);
       return [{ id: 'proj-A', name: 'Project A', owner_id: 'user-A' }];

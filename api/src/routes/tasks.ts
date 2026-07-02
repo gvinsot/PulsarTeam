@@ -3,7 +3,7 @@ import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess } from '../middleware/authz.js';
 import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
-import { updateTaskExecutionStatus, saveTaskToDb } from '../services/database.js';
+import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { isCliRunner } from '../services/runners.js';
@@ -91,9 +91,10 @@ function validateColumn(board, columnId) {
   return board.workflow.columns[0].id;
 }
 
-/** Look up the in-memory task object for an agent (getTask returns a copy). */
-export function getMemTask(mgr, agentId, taskId) {
-  return mgr._getAgentTasks(agentId).find(t => t.id === taskId) ?? null;
+/** Look up a task by id from the DB (the single source of truth). `agentId` is
+ * accepted for call-site compatibility but not needed — ids are globally unique. */
+export async function getMemTask(mgr, agentId, taskId) {
+  return getTaskById(taskId);
 }
 
 /** Clear the actionRunning trio on a task object (uses delete, not = null). */
@@ -253,7 +254,7 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
 
     // Verify user has access to at least the first task's board
     if (req.user.role !== 'admin') {
-      const firstTask = mgr.getTask(orderedIds[0]);
+      const firstTask = await mgr.getTask(orderedIds[0]);
       if (firstTask?.boardId) {
         const access = await validateBoardAccess(firstTask.boardId, req.user.userId, req.user.role);
         if (!access.ok) return res.status(access.status).json({ error: access.error });
@@ -261,7 +262,8 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
     }
 
     // Update all positions in a single atomic statement so a mid-flight
-    // failure can't leave the board half-reordered.
+    // failure can't leave the board half-reordered. The DB is the source of
+    // truth — no in-memory positions to mirror.
     const positions = orderedIds.map((_, index) => index);
     await pool.query(
       `UPDATE tasks SET position = u.pos, updated_at = NOW()
@@ -269,18 +271,6 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
        WHERE tasks.id = u.id`,
       [orderedIds, positions]
     );
-
-    // Also update in-memory positions
-    for (let i = 0; i < orderedIds.length; i++) {
-      const task = mgr.getTask(orderedIds[i]);
-      if (task) {
-        const memAgent = mgr.agents.get(task.agentId);
-        if (memAgent) {
-          const memTask = getMemTask(mgr, task.agentId, orderedIds[i]);
-          if (memTask) memTask.position = i;
-        }
-      }
-    }
 
     res.json({ ok: true, count: orderedIds.length });
   } catch (err) {
@@ -292,9 +282,7 @@ router.put('/reorder', validateBody(reorderTasksSchema), async (req, res) => {
 router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    // Fall back to the DB for unassigned/board-only tasks, which never live in
-    // the agentId-keyed in-memory store that getTask() searches.
-    const task = mgr.getTask(req.params.id) || await getTaskById(req.params.id);
+    const task = await getTaskById(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
@@ -486,46 +474,12 @@ router.put('/:id', validateBody(updateTaskSchema), async (req, res) => {
       task.history.push(entry);
     }
 
-    // ── Sync changes back to in-memory task (getTask returns a copy) ────
-    const memAgent = mgr.agents.get(task.agentId);
-    if (memAgent) {
-      const memTask = getMemTask(mgr, task.agentId, req.params.id);
-      if (memTask) {
-        if (title !== undefined) memTask.title = task.title;
-        if (description !== undefined) memTask.text = task.text;
-        if (boardChanged || column !== undefined) memTask.status = task.status;
-        if (boardId !== undefined) memTask.boardId = task.boardId;
-        if (agentId !== undefined) memTask.assignee = task.assignee;
-        if (type !== undefined || taskType !== undefined) memTask.taskType = task.taskType;
-        if (priority !== undefined) memTask.priority = task.priority;
-        if (dueDate !== undefined) memTask.dueDate = task.dueDate;
-        if (isManual !== undefined) memTask.isManual = task.isManual;
-        if (recurrence !== undefined) memTask.recurrence = task.recurrence;
-        if (repoFullName !== undefined) {
-          memTask.repoFullName = task.repoFullName;
-          memTask.repoProvider = task.repoProvider;
-          memTask.secondaryRepos = task.secondaryRepos;
-        }
-        if (secondaryRepos !== undefined) memTask.secondaryRepos = task.secondaryRepos;
-        if (storagePath !== undefined) {
-          memTask.storagePath = task.storagePath;
-          memTask.storageProvider = task.storageProvider;
-        }
-        if (position !== undefined) memTask.position = task.position;
-        memTask.updatedAt = task.updatedAt;
-
-        // When status changed, clear stale execution state so the workflow
-        // engine starts fresh and the task loop doesn't incorrectly resume.
-        // Also signal the reminder loop to stop — the agent should no longer
-        // work on this task since it was moved by a user.
-        if (statusChanged) {
-          clearExecutionState(memTask);
-          memTask.assignee = task.assignee || null;
-          if (task.status === 'done') memTask.completedAt = now;
-          // Signal the reminder loop / execution wait to exit
-          setTaskSignal(req.params.id as string, 'stopped', true);
-        }
-      }
+    // When status changed by a user move, signal the reminder loop / execution
+    // wait to exit — the agent should no longer work on this task. (All field
+    // changes, incl. the execution-state clear above, are already on `task`,
+    // which saveTaskDirectly persists — the DB is the single source of truth.)
+    if (statusChanged) {
+      setTaskSignal(req.params.id as string, 'stopped', true);
     }
 
     await mgr.saveTaskDirectly(task);
@@ -583,7 +537,7 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
     const results = { moved: [], failed: [] };
 
     for (const taskId of taskIds) {
-      const task = mgr.getTask(taskId);
+      const task = await mgr.getTask(taskId);
       if (!task) { results.failed.push({ taskId, error: 'Task not found' }); continue; }
       if (!await requireTaskAccess(mgr, task, req.user)) { results.failed.push({ taskId, error: 'Access denied' }); continue; }
       // Stop the executing agent if it's actively processing this task
@@ -601,6 +555,15 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
       task.status = targetColumn;
       if (oldStatus !== targetColumn && previousAssignee) {
         task.assignee = null;
+      }
+      // Clear execution state on a status change so the moved task doesn't
+      // resume (same SHORTER reset as the single-task PUT — keep the persisted
+      // completedActionIdx/_pendingOnEnter so an interrupted chain can resume).
+      if (oldStatus !== targetColumn) {
+        task.startedAt = null;
+        task.executionStatus = null;
+        clearActionRunning(task);
+        if (targetColumn === 'done') task.completedAt = now;
       }
       task.updatedAt = now;
       const changedFields = ['boardId', 'status'];
@@ -621,16 +584,8 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
 
       await mgr.saveTaskDirectly(task);
 
-      // Sync execution state in memory and trigger workflow if status changed
+      // Trigger workflow / signal the reminder loop if status changed.
       if (oldStatus !== targetColumn) {
-        const memTask = getMemTask(mgr, task.agentId, taskId);
-        if (memTask) {
-          memTask.status = targetColumn;
-          memTask.boardId = boardId;
-          memTask.assignee = task.assignee || null;
-          memTask.updatedAt = now;
-          clearExecutionState(memTask);
-        }
         // Signal the reminder loop / execution wait to exit
         setTaskSignal(taskId, 'stopped', true);
         if (targetColumn !== 'error') {
@@ -664,15 +619,14 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), async (req, res) => {
 router.post('/:id/stop', async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    const task = mgr.getTask(req.params.id);
+    const task = await mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Clear stuck flags in memory
-    const memTask = getMemTask(mgr, task.agentId, req.params.id);
-    const target = memTask || task;
+    // Clear stuck flags on the DB-sourced task
+    const target = task;
     requestTaskCliInterrupt(mgr, target);
     target.actionRunning = false;
     target.actionRunningAgentId = null;
@@ -699,7 +653,7 @@ router.post('/:id/stop', async (req, res) => {
 router.patch('/:id/clear-stopped', async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    const task = mgr.getTask(req.params.id);
+    const task = await mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
@@ -711,30 +665,25 @@ router.patch('/:id/clear-stopped', async (req, res) => {
     // Reset circuit breaker so the task loop doesn't skip this task
     mgr._taskResumeFailures?.delete(req.params.id);
 
-    // Update in-memory task
-    const memTask = getMemTask(mgr, task.agentId, req.params.id);
-    if (memTask) {
-      memTask.executionStatus = null;
-    }
     task.executionStatus = null;
+    const startedAt = new Date().toISOString();
 
     // If task is in 'error' status, restore it to the previous active status
-    // so the task loop picks it up for re-execution
+    // so the task loop picks it up for re-execution.
     if (task.status === 'error') {
       const restoreStatus = task.errorFromStatus || 'pending';
       await mgr.setTaskStatus(task.agentId, task.id, restoreStatus, { by: 'user' });
-      // setTaskStatus clears startedAt — set it so the task loop picks it up
-      const updatedTask = getMemTask(mgr, task.agentId, req.params.id);
-      if (updatedTask) {
-        updatedTask.startedAt = new Date().toISOString();
-      }
+      // setTaskStatus clears startedAt — re-stamp it (persisted) so the DB-driven
+      // task loop resumes the task.
+      await updateTaskFields(req.params.id, { startedAt });
+      task.status = restoreStatus;
     } else {
-      // For non-error tasks, just re-stamp startedAt so the task loop resumes
-      if (memTask) {
-        memTask.startedAt = new Date().toISOString();
-      }
-      task.startedAt = new Date().toISOString();
+      // For non-error tasks, persist startedAt (+ cleared executionStatus) so the
+      // DB-driven task loop resumes.
+      task.startedAt = startedAt;
+      await updateTaskFields(req.params.id, { startedAt, executionStatus: null });
     }
+    task.startedAt = startedAt;
 
     mgr._emit('task:updated', { agentId: task.agentId, task: { ...task, agentId: task.agentId } });
     res.json({ ok: true });
@@ -747,9 +696,7 @@ router.patch('/:id/clear-stopped', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    // Fall back to the DB for unassigned/board-only tasks, which never live in
-    // the agentId-keyed in-memory store that getTask() searches.
-    const task = mgr.getTask(req.params.id) || await getTaskById(req.params.id);
+    const task = await getTaskById(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
@@ -832,7 +779,7 @@ router.delete('/:id/permanent', requireRole('admin'), async (req, res) => {
 router.get('/:id/history', async (req, res) => {
   try {
     const mgr = req.app.get('agentManager');
-    const task = mgr.getTask(req.params.id);
+    const task = await mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });
@@ -1052,7 +999,7 @@ router.get('/:id/commits/:hash/diff', async (req, res) => {
     }
 
     const mgr = req.app.get('agentManager');
-    const task = mgr.getTask(req.params.id);
+    const task = await mgr.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found' });
     if (!await requireTaskAccess(mgr, task, req.user)) {
       return res.status(403).json({ error: 'Access denied' });

@@ -100,7 +100,6 @@ export const crudMethods = {
     };
 
     this.agents.set(id, agent);
-    this._tasks.set(id, []);
     await saveAgent(agent);
     if (config.ownerId) {
       await setAgentOwner(id, config.ownerId);
@@ -361,7 +360,6 @@ export const crudMethods = {
       });
     }
     // Clean up all in-memory state for this agent
-    this._tasks.delete(id);
     this._taskQueues.delete(id);
     this._chatLocks.delete(id);
     const pendingTimer = this._updateTimers.get(id);

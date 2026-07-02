@@ -1,4 +1,4 @@
-import { getBoardsByUser, updateLastSeen, getPool } from '../services/database.js';
+import { getBoardsByUser, updateLastSeen, getPool, getTasksByAgent } from '../services/database.js';
 import { WsEvents } from './events.js';
 
 const connectedUserIds = new Set<string>();
@@ -314,31 +314,31 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Get swarm status with project assignments ─────────────────────
-    socket.on(WsEvents.REQ_SWARM_STATUS, () => {
-      socket.emit(WsEvents.REQ_SWARM_STATUS, agentManager.getSwarmStatus(userId, userRole, userBoardIds));
+    socket.on(WsEvents.REQ_SWARM_STATUS, async () => {
+      socket.emit(WsEvents.REQ_SWARM_STATUS, await agentManager.getSwarmStatus(userId, userRole, userBoardIds));
     });
 
     // ── Get lightweight status for ALL enabled agents ─────────────────
-    socket.on(WsEvents.REQ_STATUSES, () => {
-      socket.emit(WsEvents.REQ_STATUSES, agentManager.getAllStatuses(userId, userRole, userBoardIds));
+    socket.on(WsEvents.REQ_STATUSES, async () => {
+      socket.emit(WsEvents.REQ_STATUSES, await agentManager.getAllStatuses(userId, userRole, userBoardIds));
     });
 
     // ── Get single agent detailed status ──────────────────────────────
-    socket.on(WsEvents.REQ_AGENT_STATUS, (data) => {
+    socket.on(WsEvents.REQ_AGENT_STATUS, async (data) => {
       const { agentId } = data || {};
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
-      const status = agentManager.getAgentStatus(agentId);
+      const status = await agentManager.getAgentStatus(agentId);
       if (status) {
         socket.emit(WsEvents.AGENT_STATUS, status);
       }
     });
 
     // ── Get agents by project ────────────────────────────────────────
-    socket.on(WsEvents.REQ_BY_PROJECT, (data) => {
+    socket.on(WsEvents.REQ_BY_PROJECT, async (data) => {
       const { project } = data || {};
       if (!project) return;
-      socket.emit(WsEvents.REQ_BY_PROJECT, agentManager.getAgentsByProject(project, userId, userRole, userBoardIds));
+      socket.emit(WsEvents.REQ_BY_PROJECT, await agentManager.getAgentsByProject(project, userId, userRole, userBoardIds));
     });
 
     // ── Get project summary ──────────────────────────────────────────
@@ -407,7 +407,7 @@ export function setupSocketHandlers(io, agentManager) {
         const leader = agentManager.agents.get(agentId);
         const leaderName = leader?.name || 'Voice Leader';
 
-        agentManager.addTask(targetAgent.id, `[From ${leaderName}] ${task}`);
+        await agentManager.addTask(targetAgent.id, `[From ${leaderName}] ${task}`);
 
         const response = await agentManager.sendMessage(
           targetAgent.id,
@@ -533,9 +533,10 @@ export function setupSocketHandlers(io, agentManager) {
         },
         agent_status: {
           needsTarget: true,
-          run: ({ target }) => {
-            const notDone = agentManager._getAgentTasks(target.id).filter(t => t.status !== 'done').length;
-            const total = agentManager._getAgentTasks(target.id).length;
+          run: async ({ target }) => {
+            const agentTasks = await getTasksByAgent(target.id);
+            const notDone = agentTasks.filter(t => t.status !== 'done').length;
+            const total = agentTasks.length;
             const msgs = (target.conversationHistory || []).length;
             return `${target.name}: status=${target.status}, role=${target.role || 'worker'}, project=${target.project || 'none'}, tasks=${notDone} open/${total} total, messages=${msgs}`;
           },

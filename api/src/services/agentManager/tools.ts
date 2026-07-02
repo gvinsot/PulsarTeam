@@ -1,7 +1,7 @@
 // ─── Tools: _processToolCalls ────────────────────────────────────────────────
 import { parseToolCalls, executeTool } from '../agentTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
-import { saveAgent, saveTaskToDb } from '../database.js';
+import { saveAgent, saveTaskToDb, getTaskByIdPrefix, getTaskByActionRunningAgent, getTasksByAssignee, getActiveTasksByAgent, getAllTasks } from '../database.js';
 import { setTaskSignal } from './tasks.js';
 import { checkToolHooks } from '../toolHooks.js';
 import { _detectCommitHashes } from './tools/commitDetection.js';
@@ -32,10 +32,10 @@ export const toolsMethods = {
     // have to re-scan _tasks for the owner later (the previous includes() pass).
     let ownerAgentId: string = agentId;
 
-    // If explicit taskId provided, look it up directly
+    // If explicit taskId provided, look it up directly (DB, by id or unique prefix)
     if (explicitTaskId) {
-      const found = this._findTaskByIdOrPrefix(explicitTaskId);
-      if (found) { inProgressTask = found.task; ownerAgentId = found.agentId; }
+      const found = await getTaskByIdPrefix(explicitTaskId);
+      if (found) { inProgressTask = found; ownerAgentId = (found as any).agentId; }
       if (!inProgressTask) {
         console.warn(`⚠️  [UpdateTask] Explicit taskId "${explicitTaskId}" not found, falling back to auto-detect`);
       }
@@ -43,40 +43,36 @@ export const toolsMethods = {
 
     // Auto-detect: Priority 1: Task actively running via this agent (set by processTransition)
     if (!inProgressTask) {
-      const found = this._findTaskAcross((t: any) => t.actionRunningAgentId === agentId && this._isActiveTaskStatus(t.status));
-      if (found) { inProgressTask = found.task; ownerAgentId = found.agentId; }
+      const found = await getTaskByActionRunningAgent(agentId);
+      if (found && this._isActiveTaskStatus((found as any).status)) { inProgressTask = found; ownerAgentId = (found as any).agentId; }
     }
-    // Auto-detect: Priority 2: Active task explicitly assigned to this agent
+    // Auto-detect: Priority 2/3: Active task this agent executes (assignee, or its
+    // own unassigned task — getTasksByAssignee is exactly that set).
     if (!inProgressTask) {
-      const found = this._findTaskAcross((t: any) => this._isActiveTaskStatus(t.status) && t.assignee === agentId);
-      if (found) { inProgressTask = found.task; ownerAgentId = found.agentId; }
+      const found = (await getTasksByAssignee(agentId)).find((t: any) => this._isActiveTaskStatus(t.status));
+      if (found) { inProgressTask = found; ownerAgentId = found.agentId; }
     }
-    // Auto-detect: Priority 3: Agent's own active task (owner is this agent)
+    // Auto-detect: Priority 3b: Agent's own active task assigned to someone else (rare).
     if (!inProgressTask) {
-      inProgressTask = this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status));
-      if (inProgressTask) ownerAgentId = agentId;
+      const found = (await getActiveTasksByAgent(agentId)).find((t: any) => this._isActiveTaskStatus(t.status));
+      if (found) { inProgressTask = found; ownerAgentId = agentId; }
     }
 
     if (!inProgressTask) {
       // Log diagnostic info to help debug why no task was found
-      const allActiveTasks: any[] = [];
-      for (const [ownerId, tasks] of this._tasks) {
-        for (const t of tasks as any[]) {
-          if (this._isActiveTaskStatus(t.status)) {
-            allActiveTasks.push({ id: t.id, status: t.status, assignee: t.assignee, actionRunningAgentId: t.actionRunningAgentId, ownerId });
-          }
-        }
-      }
+      const allActiveTasks = (await getAllTasks())
+        .filter((t: any) => this._isActiveTaskStatus(t.status))
+        .map((t: any) => ({ id: t.id, status: t.status, assignee: t.assignee, actionRunningAgentId: t.actionRunningAgentId, ownerId: t.agentId }));
       console.log(`⚠️ [UpdateTask] Agent "${agent.name}" (${agentId}) requested completion but no active task was found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`);
       return { success: true, result: 'No action needed (no active task).', isTerminal: true };
     }
 
     // The completion signal consumed by _waitForExecutionComplete only makes
-    // sense in execute mode: decide/refine waits advance on the status move, and
-    // a stray signal there could be consumed by a later execute run. Fire the
-    // signal (and link commits) only in execute mode; append the summary in any
-    // mode.
-    const fireSignal = !inProgressTask.actionRunningMode || inProgressTask.actionRunningMode === 'execute';
+    // sense outside a workflow action mode: decide/refine waits advance on the
+    // status move, and a stray signal there could be consumed elsewhere. Fire the
+    // signal (and link commits) only when no action mode is running; append the
+    // summary in any mode.
+    const fireSignal = !inProgressTask.actionRunningMode;
 
     if (fireSignal) {
       setTaskSignal(inProgressTask.id, 'completed', true);
@@ -103,7 +99,7 @@ export const toolsMethods = {
         const hash = colonIdx > 0 ? entry.slice(0, colonIdx).trim() : entry.trim();
         const msg = colonIdx > 0 ? entry.slice(colonIdx + 1).trim() : '';
         if (hash && /^[a-f0-9]{7,40}$/.test(hash)) {
-          this.addTaskCommit(ownerAgentId, inProgressTask.id, hash, msg);
+          await this.addTaskCommit(ownerAgentId, inProgressTask.id, hash, msg);
           linkedCommitCount++;
           console.log(`🔗 [UpdateTask] Linked commit ${hash.slice(0, 7)} to task ${inProgressTask.id}`);
         }
@@ -140,7 +136,7 @@ export const toolsMethods = {
           // Pass 1: name-based match (existing convention, highest confidence)
           for (const e of entries) {
             if (agentNameLower && e.msg.toLowerCase().includes(agentNameLower)) {
-              const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
+              const linked = await this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
               if (linked) {
                 linkedCommitCount++;
                 console.log(`🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`);
@@ -160,7 +156,7 @@ export const toolsMethods = {
               if (e.ts < startedAtMs) continue;
               const msgLower = e.msg.toLowerCase();
               if (otherAgentNames.some(n => msgLower.includes(n))) continue;
-              const linked = this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
+              const linked = await this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
               if (linked) {
                 linkedCommitCount++;
                 console.log(`🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`);
@@ -363,9 +359,9 @@ export const toolsMethods = {
 
             if (!targetTask) {
               const taskText = agent.currentTask || detectedCommits[0].msg || 'Commit without task';
-              const created = this.addTask(agentId, taskText, { type: 'auto', reason: 'commit-link' });
+              const created = await this.addTask(agentId, taskText, { type: 'auto', reason: 'commit-link' });
               if (created) {
-                targetTask = this._getAgentTasks(agentId).find((t: any) => t.id === created.id);
+                targetTask = created;
                 ownerAgentId = agentId;
                 console.log(`🔗 [Commit] Auto-created task "${taskText.slice(0, 50)}" for commit linking`);
               }
@@ -374,7 +370,7 @@ export const toolsMethods = {
             if (targetTask) {
               let linkedCount = 0;
               for (const { hash, msg } of detectedCommits) {
-                const linked = this.addTaskCommit(ownerAgentId, targetTask.id, hash, msg);
+                const linked = await this.addTaskCommit(ownerAgentId, targetTask.id, hash, msg);
                 if (linked) linkedCount++;
               }
               if (linkedCount > 0) {

@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getAllBoards, getBoardById, searchTasks } from './database.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
-import { getTaskByIdPrefix } from './database/tasks.js';
+import { getTaskByIdPrefix, getTasksByAgent } from './database/tasks.js';
 import { getReposForBoard } from './database/boardRepos.js';
 import { resolveWorkflowStatus } from './workflow/columnIds.js';
 
@@ -80,50 +80,16 @@ async function locateTask(
   agentManager,
   { agent_id, agent_name, task_id }: { agent_id?: string; agent_name?: string; task_id: string },
 ): Promise<{ task: any; agent: any; boardLevel: boolean }> {
-  let agent: any = null;
-  if (agent_id || agent_name) {
-    agent = findAgent(agentManager, { agent_id, agent_name });
-  } else {
-    // No agent given — locate the task across all agents.
-    for (const a of agentManager.agents.values()) {
-      const t = agentManager._getAgentTasks((a as any).id).find((tt: any) => tt.id === task_id);
-      if (t) { agent = a; break; }
-    }
-  }
-
-  let task: any = agent
-    ? agentManager._getAgentTasks(agent.id).find((t: any) => t.id === task_id)
-    : null;
-
-  // Unassigned tasks (the kind add_task creates) live only in the DB,
-  // never in the agentId-keyed in-memory store — fall back to a direct
-  // lookup so they stay updatable.
-  let boardLevel = false;
-  if (!task) {
-    // Resolve by full id OR unique prefix (the short-id form agents pass), and
-    // regardless of owner. Use the resolved task's FULL id from here on — the
-    // input `task_id` may be a prefix that the in-memory helpers can't match.
-    const dbTask = await getTaskByIdPrefix(task_id);
-    if (dbTask?.agentId) {
-      // The task has an owner missing from memory — rehydrate and retry
-      // the normal in-memory path under the owning agent.
-      await agentManager._ensureTaskInMemory(dbTask.agentId, dbTask.id);
-      const owner = agentManager.agents.get(dbTask.agentId);
-      if (owner) {
-        agent = owner;
-        task = agentManager._getAgentTasks(owner.id).find((t: any) => t.id === dbTask.id) || null;
-      }
-      if (!task) {
-        task = dbTask;
-        boardLevel = true;
-      }
-    } else if (dbTask) {
-      task = dbTask;
-      boardLevel = true;
-    }
-  }
-
-  return { task, agent, boardLevel };
+  // DB-first resolution by full id OR unique prefix (the short-id form agents
+  // pass), regardless of owner — the DB is the single source of truth.
+  const task = await getTaskByIdPrefix(task_id);
+  if (!task) return { task: null, agent: null, boardLevel: false };
+  // `agent` is the task's OWNER. When there is no owner agent available (an
+  // unassigned board-level task, or an owner missing from memory) the owned
+  // mutators — which require an existing owner agent — can't be used, so route
+  // through the board-level path instead.
+  const owner = (task as any).agentId ? agentManager.agents.get((task as any).agentId) : null;
+  return { task, agent: owner, boardLevel: !owner };
 }
 
 /**
@@ -328,15 +294,14 @@ export async function applyTaskUpdate(
     updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status: resolvedStatus });
   } else {
     if (repoUpdate) {
-      updated = agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
+      updated = await agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
     }
     if (storageUpdate) {
-      updated = agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
+      updated = await agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
     }
     if (resolvedStatus !== undefined) {
-      // First arg must stay the owner (in-memory task lookup), but credit the
-      // status-change history to the caller, not the owner.
-      updated = agentManager.setTaskStatus(agent.id, task_id, resolvedStatus, { by: callerAgent?.name }) || updated;
+      // First arg is the owner; credit the status-change history to the caller.
+      updated = await agentManager.setTaskStatus(agent.id, task_id, resolvedStatus, { by: callerAgent?.name }) || updated;
     }
   }
 
@@ -384,6 +349,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         agents = agents.filter((a: any) => a.status === status);
       }
 
+      const byAgent = await agentManager._tasksByAgentMap();
       const result = agents.map((a: any) => ({
         id: a.id,
         name: a.name,
@@ -391,7 +357,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         status: a.status,
         project: a.project || null,
         currentTask: a.currentTask || null,
-        openTasks: agentManager._getAgentTasks(a.id).filter((t: any) => t.status !== 'done').length,
+        openTasks: (byAgent.get(a.id) || []).filter((t: any) => t.status !== 'done').length,
         totalMessages: a.metrics?.totalMessages || 0,
       }));
 
@@ -424,7 +390,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         project: agentAny.project || null,
         currentTask: agentAny.currentTask || null,
         enabled: agentAny.enabled !== false,
-        todoList: agentManager._getAgentTasks(agentAny.id).map((t: any) => ({
+        todoList: (await getTasksByAgent(agentAny.id)).map((t: any) => ({
           id: t.id,
           text: t.text,
           status: t.status,
@@ -534,7 +500,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // behaviour of NOT auto-running the workflow on creation — the task still
       // waits to be moved/picked up, it's just now owned + in memory.
       const ownerId = callerAgentId && agentManager.agents.get(callerAgentId) ? callerAgentId : null;
-      const newTask = agentManager.addTask(ownerId, task, { type: 'mcp' }, resolvedStatus, {
+      const newTask = await agentManager.addTask(ownerId, task, { type: 'mcp' }, resolvedStatus, {
         boardId: resolvedBoardId,
         repoFullName,
         repoProvider: repoFullName ? (repo_provider || 'github') : null,

@@ -106,7 +106,7 @@ const DEFAULT_COLUMNS = [
 const DEFAULT_TRANSITIONS = [
   { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'product-manager', mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.' }] },
   { from: 'backlog', trigger: 'on_enter', actions: [] },
-  { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: '' }] },
+  { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'decide', instructions: 'Execute this task end to end. Explore the project to orient yourself, make the necessary changes, then commit and push. When done, move this task to its final column with a short summary of what you did.' }] },
   { from: 'in_progress', trigger: 'on_enter', actions: [] },
   { from: 'done', trigger: 'on_enter', actions: [] },
 ];
@@ -122,6 +122,35 @@ export async function getWorkflow() {
 }
 
 /**
+ * Backward compat: the 'execute' run_agent mode was removed in favor of a single
+ * 'decide' mode (execution instructions now live in the decide prompt). Existing
+ * boards may still have transitions authored with mode:'execute' — map them to
+ * 'decide' at load so those actions keep running instead of hitting the
+ * unknown-mode skip in the engine. A legacy execute with empty instructions
+ * becomes a no-op decide (decide requires instructions), so such boards need a
+ * prompt added — but nothing silently misbehaves.
+ */
+export function mapLegacyExecuteMode(transitions) {
+  if (!Array.isArray(transitions)) return transitions;
+  let changed = false;
+  const mapped = transitions.map(t => {
+    if (!Array.isArray(t?.actions)) return t;
+    let actionsChanged = false;
+    const actions = t.actions.map(a => {
+      if (a?.type === 'run_agent' && a?.mode === 'execute') {
+        actionsChanged = true;
+        return { ...a, mode: 'decide' };
+      }
+      return a;
+    });
+    if (!actionsChanged) return t;
+    changed = true;
+    return { ...t, actions };
+  });
+  return changed ? mapped : transitions;
+}
+
+/**
  * Get workflow for a specific board.
  * Falls back to the built-in workflow if boardId is null or board not found.
  */
@@ -132,7 +161,7 @@ export async function getWorkflowForBoard(boardId) {
     if (board?.workflow) {
       return {
         columns: board.workflow.columns || DEFAULT_COLUMNS,
-        transitions: board.workflow.transitions || DEFAULT_TRANSITIONS,
+        transitions: mapLegacyExecuteMode(board.workflow.transitions || DEFAULT_TRANSITIONS),
         version: board.workflow.version || 1,
         userId: board.user_id || null,
       };
@@ -156,7 +185,7 @@ export async function getAllBoardWorkflows() {
         boardId: b.id,
         workflow: {
           columns: b.workflow.columns || DEFAULT_COLUMNS,
-          transitions: b.workflow.transitions || [],
+          transitions: mapLegacyExecuteMode(b.workflow.transitions || []),
           version: b.workflow.version || 1,
         },
       }));

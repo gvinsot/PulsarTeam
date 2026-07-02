@@ -30,7 +30,6 @@ export const ActionType = Object.freeze({
 // ── Agent action modes ──────────────────────────────────────────────────────
 export const AgentMode = Object.freeze({
   REFINE: 'refine',
-  EXECUTE: 'execute',
   DECIDE: 'decide',
   TITLE: 'title',
   SET_TYPE: 'set_type',

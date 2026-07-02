@@ -3,7 +3,7 @@ import {
   getBoardsByUser, createBoard, updateBoard, deleteBoard,
   getBoardShares, createBoardShare, updateBoardShare, deleteBoardShare,
   logBoardAudit, getBoardAuditLogs, getAllUsers, getAllBoards,
-  getTasksByBoard, updateTaskFields,
+  getTasksByBoard, getTasksByAssignee, updateTaskFields,
 } from '../services/database.js';
 import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { validateBody } from '../lib/validate.js';
@@ -41,18 +41,6 @@ function emitTaskUpdate(agentManager, task) {
   }
 }
 
-function syncMemoryTaskColumnRename(agentManager, taskId, status, errorFromStatus, history, updatedAt) {
-  for (const agent of agentManager.agents.values()) {
-    const memTask = agentManager._getAgentTasks(agent.id).find(t => t.id === taskId);
-    if (!memTask) continue;
-    if (status !== undefined) memTask.status = status;
-    if (errorFromStatus !== undefined) memTask.errorFromStatus = errorFromStatus;
-    if (history) memTask.history = history;
-    memTask.updatedAt = updatedAt;
-    return;
-  }
-}
-
 async function applyColumnRenamesToBoardTasks(agentManager, boardId: string, renames: ColumnRename[], by: string) {
   if (!renames.length) return;
 
@@ -87,14 +75,6 @@ async function applyColumnRenamesToBoardTasks(agentManager, boardId: string, ren
       updatedAt: now,
     };
 
-    syncMemoryTaskColumnRename(
-      agentManager,
-      task.id,
-      nextStatus,
-      nextErrorFromStatus,
-      taskForEmit.history,
-      taskForEmit.updatedAt || now,
-    );
     emitTaskUpdate(agentManager, taskForEmit);
   }
 }
@@ -120,12 +100,15 @@ export function boardRoutes(agentManager) {
       const boards = await getBoardsByUser(req.user.userId);
       const userBoardIds = new Set(boards.map(b => b.id));
       const allAgents = agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds);
+      const accessibleIds = new Set(allAgents.map((a: any) => a.id));
+      const nameById = new Map(allAgents.map((a: any) => [a.id, a.name]));
+      // DB query: tasks assigned to the agent (or its own unassigned tasks),
+      // scoped to owners the caller can access — mirrors the old owner-keyed scan.
+      const assigned = await getTasksByAssignee(targetAgentId);
       const tasks = [];
-      for (const agent of allAgents) {
-        for (const task of agentManager._getAgentTasks(agent.id)) {
-          if (task.assignee === targetAgentId || (!task.assignee && agent.id === targetAgentId)) {
-            tasks.push({ ...task, _ownerId: agent.id, _ownerName: agent.name });
-          }
+      for (const task of assigned) {
+        if (task.agentId && accessibleIds.has(task.agentId)) {
+          tasks.push({ ...task, _ownerId: task.agentId, _ownerName: nameById.get(task.agentId) });
         }
       }
       res.json(tasks);

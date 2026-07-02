@@ -9,8 +9,15 @@
 
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeTaskDbFake } from './helpers/taskDbFake.js';
 
 const noop = async () => {};
+
+// swarmApiMcp resolves tasks via ../database/tasks.js (getTaskByIdPrefix,
+// getTasksByAgent) now that the in-memory store is gone. Back it with the
+// Map-backed fake; the fake agentManager below seeds tasks into the same rows.
+const { rows: taskRows, exports: taskDbFake } = makeTaskDbFake();
+mock.module('../database/tasks.js', { namedExports: taskDbFake });
 
 // The swarm MCP imports both ../database.js (re-exporter) and
 // ../database/boardRepos.js. Mock both so the module can load without a
@@ -52,12 +59,14 @@ const { createSwarmApiMcpServer } = await import('../swarmApiMcp.js');
 /** Build a minimal agentManager stub that records calls. */
 function makeFakeAgentManager() {
   const agent = { id: 'agent-1', name: 'Builder', project: 'acme/widgets', boardId: 'board-1' };
+  // Seed into the shared DB fake so swarmApiMcp's DB-based task resolution
+  // (getTaskByIdPrefix) finds tasks this fake manager creates.
+  taskRows.clear();
   const tasks: any[] = [];
   const calls: any = { addTask: [], setTaskStatus: [], updateTaskRepo: [], updateTaskStorage: [], recordTaskCompletion: [] };
 
   return {
     agents: new Map([[agent.id, agent]]),
-    _getAgentTasks: () => tasks,
     addTask(agentId: string, text: string, source: any, status: any, opts: any) {
       const t = {
         id: `task-${tasks.length + 1}`,
@@ -71,6 +80,7 @@ function makeFakeAgentManager() {
         storageProvider: opts?.storageProvider || null,
       };
       tasks.push(t);
+      taskRows.set(t.id, t); // same object → mutations via the stubs stay visible to the DB fake
       calls.addTask.push({ agentId, text, source, status, opts });
       return t;
     },

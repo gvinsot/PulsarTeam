@@ -4,7 +4,7 @@
 // Refactored: delegates to the new workflow/ module for all transition logic.
 // This file now contains thin wrappers that call into WorkflowEngine.
 //
-import { saveAgent, saveTaskToDb } from '../database.js';
+import { saveAgent, saveTaskToDb, hasActiveTask } from '../database.js';
 import {
   processColumnEntry,
   recheckPendingTransitions,
@@ -34,17 +34,11 @@ export const workflowMethods = {
     return _evalCond(cond, task, (agentId: string) => this.agents.get(agentId));
   },
 
-  agentHasActiveTask(this: any, agentId: string, excludeTaskId: string | null = null): boolean {
-    for (const [creatorId] of this.agents) {
-      const tasks = this._getAgentTasks(creatorId);
-      for (const task of tasks) {
-        if (!isActiveStatus(task.status)) continue;
-        if (excludeTaskId && task.id === excludeTaskId) continue;
-        if (creatorId === agentId) return true;
-        if (task.assignee === agentId) return true;
-      }
-    }
-    return false;
+  /** True if the agent has an active task it executes — as assignee, or as owner
+   * of an unassigned task. DB-backed (the single source of truth); replaces the
+   * old cross-agent in-memory scan. */
+  async agentHasActiveTask(this: any, agentId: string, excludeTaskId: string | null = null): Promise<boolean> {
+    return hasActiveTask(agentId, excludeTaskId);
   },
 
   _validTransition(this: any, t: any): boolean {

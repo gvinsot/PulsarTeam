@@ -27,6 +27,7 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   executionStatus: 'execution_status', completedActionIdx: 'completed_action_idx',
   actionRunning: 'action_running', actionRunningAgentId: 'action_running_agent_id',
   actionRunningMode: 'action_running_mode', errorFromStatus: 'error_from_status',
+  pendingOnEnter: 'pending_on_enter',
   isManual: 'is_manual', repoProvider: 'repo_provider', repoFullName: 'repo_full_name',
   secondaryRepos: 'secondary_repos',
   storageProvider: 'storage_provider', storagePath: 'storage_path',
@@ -111,6 +112,20 @@ export async function getTasksByAgent(agentId) {
 
 export async function getAllTasks() {
   return queryTasks('WHERE t.deleted_at IS NULL ORDER BY t.created_at', [], 'Failed to load all tasks:');
+}
+
+/** Lightweight id-only scan of live tasks — used to purge stale ephemeral signals
+ * without hydrating full task rows. Returns an array of task id strings. */
+export async function getAllTaskIds(): Promise<string[]> {
+  const pool = getPool();
+  if (!pool) return [];
+  try {
+    const result = await pool.query('SELECT id FROM tasks WHERE deleted_at IS NULL');
+    return result.rows.map((r: any) => r.id);
+  } catch (err: any) {
+    console.error('Failed to load task ids:', err.message);
+    return [];
+  }
 }
 
 export async function getTaskById(taskId) {
@@ -384,6 +399,34 @@ export async function getActiveWorkflowTasks(environment?: string | null) {
 }
 
 /**
+ * Candidate tasks for one-shot post-restart chain re-arming: live, board-bound,
+ * non-manual tasks for this environment that carry a durable interruption marker
+ * — a stale action_running flag (crashed mid run_agent) or a numeric
+ * completed_action_idx (chain saved mid-way). The caller applies the finer
+ * active-status / already-armed / stopped filters in JS (they depend on the
+ * board workflow definition). MUST be read BEFORE clearAllStaleActionRunning so
+ * the action_running signal is still present.
+ */
+export async function getInterruptedChainTasks(environment?: string | null) {
+  const params: any[] = [];
+  let envFilter = '';
+  if (environment) {
+    params.push(environment);
+    envFilter = `AND t.environment = $1`;
+  }
+  return queryTasks(
+    `WHERE t.deleted_at IS NULL
+        AND t.board_id IS NOT NULL
+        AND t.is_manual IS NOT TRUE
+        AND (t.action_running IS TRUE OR t.completed_action_idx IS NOT NULL)
+        ${envFilter}
+      ORDER BY t.created_at`,
+    params,
+    'Failed to get interrupted chain tasks:'
+  );
+}
+
+/**
  * Clear execution flags for all tasks involving a given agent (as assignee or owner).
  */
 export async function clearTaskExecutionFlags(agentId) {
@@ -526,6 +569,22 @@ export async function getBoardWithMostTasksForProject(projectName) {
     console.error('Failed to get board with most tasks for project:', err.message);
     return null;
   }
+}
+
+/**
+ * Find the task an agent is currently executing an action for, identified by the
+ * live `action_running_agent_id` flag (set while a run_agent action is in flight).
+ * Independent of ownership/assignee and of the task's status — the flag is the
+ * authoritative "this agent is working this task right now" signal. Returns the
+ * most-recently-started match, or null.
+ */
+export async function getTaskByActionRunningAgent(agentId) {
+  return queryOneTask(
+    `WHERE t.action_running_agent_id = $1 AND t.action_running IS TRUE AND t.deleted_at IS NULL
+       ORDER BY t.started_at DESC NULLS LAST LIMIT 1`,
+    [agentId],
+    'Failed to get task by action-running agent:'
+  );
 }
 
 /**

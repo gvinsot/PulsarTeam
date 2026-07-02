@@ -1,8 +1,8 @@
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getActiveTasksByAgent, getActiveTaskForExecutor, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
+import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getAllTaskIds, getActiveTasksByAgent, getActiveTaskForExecutor, getTasksByAssignee, getTaskByActionRunningAgent, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
-import { isActiveStatus, getWorkflowManagedStatuses, getReassigningStatuses, markTaskError, isUserStopError } from '../workflow/index.js';
+import { isActiveStatus, getWorkflowManagedStatuses, getReassigningStatuses, markTaskError, isUserStopError, reArmInterruptedChains } from '../workflow/index.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
 
@@ -129,7 +129,7 @@ function pruneByDate<T extends { at?: string; date?: string }>(
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
 
-  addTask(this: any, agentId: string | null, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, secondaryRepos, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): any {
+  async addTask(this: any, agentId: string | null, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, secondaryRepos, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): Promise<any> {
     // agentId === null → unassigned task: lives on a board, waits to be picked up.
     // Requires a boardId to make sense (the board IS its home in that case).
     const agent = agentId ? this.agents.get(agentId) : null;
@@ -178,25 +178,26 @@ export const tasksMethods = {
         lastResetAt: now,
       };
     }
-    if (agentId) this._addTaskToStore(agentId, newTask);
-    const savePromise = saveTaskToDb({ ...newTask, agentId });
+    // Persist first; the DB row is the single source of truth (no in-memory store).
+    // Awaiting the write guarantees downstream readers (_checkAutoRefine → workflow
+    // processing, and the frontend's loadTasks() after agent:updated) observe the
+    // committed row rather than racing a fire-and-forget save.
+    await saveTaskToDb({ ...newTask, agentId }).catch(() => {});
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     // Emit task:updated after the DB write has committed so the frontend
     // can add the new task to its list in real-time (the handler must support
     // inserting tasks it hasn't seen before, not just patching existing ones).
     const taskPayload = { ...newTask, agentId };
-    Promise.resolve(savePromise)
-      .catch(() => {})
-      .then(() => this._emit('task:updated', { agentId, task: taskPayload }));
+    this._emit('task:updated', { agentId, task: taskPayload });
     // Skip auto-refine for unassigned tasks — there's no agent to refine for yet.
     if (agentId && !skipAutoRefine && !newTask.isManual) this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },
 
-  toggleTask(this: any, agentId: string, taskId: string): any {
+  async toggleTask(this: any, agentId: string, taskId: string): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const prevStatus = task.status;
     const previousAssignee = task.assignee || null;
@@ -212,15 +213,15 @@ export const tasksMethods = {
       by: 'user',
       ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
     });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  setTaskStatus(this: any, agentId: string, taskId: string, status: string, { skipAutoRefine = false, by = null }: { skipAutoRefine?: boolean; by?: string | null } = {}): any {
+  async setTaskStatus(this: any, agentId: string, taskId: string, status: string, { skipAutoRefine = false, by = null }: { skipAutoRefine?: boolean; by?: string | null } = {}): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const prevStatus = task.status;
     if (prevStatus === status) return task;
@@ -282,19 +283,19 @@ export const tasksMethods = {
     // return a stale row. By including this client-side timestamp in the
     // task:updated payload, the frontend can compare and reject stale data.
     task.updatedAt = now;
-    const savePromise = saveTaskToDb({ ...task, agentId });
-    this._emit('agent:updated', this._sanitize(agent));
+    // Persist under the task's OWN owner (task.agentId is authoritative) — never
+    // reassign ownership to the caller's agentId, which for delegated executions
+    // (rate-limit handler, cross-agent assignee) is the executor, not the owner.
+    // Persist first, then emit: the debounced agent:updated (300ms) triggers a
+    // loadTasks() re-fetch, so emitting after the write commits guarantees that
+    // fetch — and the task:updated payload — reflect the persisted row.
+    const ownerId = task.agentId ?? null;
+    await saveTaskToDb(task).catch(() => {});
+    const ownerAgent = ownerId ? this.agents.get(ownerId) : agent;
+    if (ownerAgent) this._emit('agent:updated', this._sanitize(ownerAgent));
     // Emit task:updated so the TasksBoard UI updates in real-time
     // (agent:updated alone is not enough — the board listens on task:updated).
-    //
-    // We defer this emit until after the DB write has committed. The reason:
-    // the debounced agent:updated emit (300ms) triggers a loadTasks() on the
-    // frontend, which re-fetches from the DB. If the DB write hasn't landed
-    // yet, that fetch returns a stale row and overwrites the in-memory state
-    // — and since this is the last transition, no subsequent emit corrects
-    // it. By chaining task:updated after savePromise we guarantee the emit
-    // reflects (and is observed after) the persisted state.
-    const taskPayload = { ...task, agentId };
+    const taskPayload = { ...task, agentId: ownerId };
     if (task.assignee) {
       const assigneeAgent = this.agents.get(task.assignee);
       taskPayload.assigneeName = assigneeAgent?.name || null;
@@ -303,10 +304,8 @@ export const tasksMethods = {
       taskPayload.assigneeName = null;
       taskPayload.assigneeIcon = null;
     }
-    Promise.resolve(savePromise)
-      .catch(() => {})
-      .then(() => this._emit('task:updated', { agentId, task: taskPayload }));
-    if (!skipAutoRefine && status !== 'error' && !task.isManual) this._checkAutoRefine({ ...task, agentId }, { by: by || 'user' });
+    this._emit('task:updated', { agentId: ownerId, task: taskPayload });
+    if (!skipAutoRefine && status !== 'error' && !task.isManual) this._checkAutoRefine({ ...task, agentId: ownerId }, { by: by || 'user' });
     return task;
   },
 
@@ -315,24 +314,24 @@ export const tasksMethods = {
    * entry, persist, and emit agent:updated. `applyExtra` runs after the field
    * assignment (e.g. to set a paired provider default). Returns the task, or
    * null when the agent or task is missing. */
-  _editTaskField(
+  async _editTaskField(
     this: any,
     agentId: string,
     taskId: string,
     field: string,
     value: any,
     { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: any) => void } = {},
-  ): any {
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const oldValue = task[field] || null;
     task[field] = value;
     applyExtra?.(task);
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field, oldValue, newValue: value ?? null });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -357,17 +356,17 @@ export const tasksMethods = {
     });
   },
 
-  updateTaskSecondaryRepos(this: any, agentId: string, taskId: string, secondaryRepos: any): any {
+  async updateTaskSecondaryRepos(this: any, agentId: string, taskId: string, secondaryRepos: any): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     const oldValue = task.secondaryRepos || [];
     const newValue = normalizeSecondaryRepos(secondaryRepos, task.repoFullName);
     task.secondaryRepos = newValue;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'secondaryRepos', oldValue, newValue });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -382,10 +381,10 @@ export const tasksMethods = {
     return this._editTaskField(agentId, taskId, 'taskType', taskType || null, { by });
   },
 
-  updateTaskRecurrence(this: any, agentId: string, taskId: string, recurrence: any): any {
+  async updateTaskRecurrence(this: any, agentId: string, taskId: string, recurrence: any): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     if (recurrence && recurrence.enabled) {
       const prev = task.recurrence || {};
@@ -407,7 +406,7 @@ export const tasksMethods = {
     } else {
       task.recurrence = null;
     }
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
@@ -435,71 +434,51 @@ export const tasksMethods = {
     const RECENT_ACTIVE_MS = 15 * 60 * 1000;
     const now = Date.now();
 
-    // Priority 1: Task actively running via this agent.
-    // We INTENTIONALLY do not require _isActiveTaskStatus here — if
-    // actionRunningAgentId is still pointing at this agent, the action is in
-    // flight and the link is valid even if the status briefly transitioned
-    // (e.g. to "error" via a rate-limit handler or to "done" via @update_task).
-    for (const [creatorId] of this.agents) {
-      const creatorTasks = this._getAgentTasks(creatorId);
-      for (const task of creatorTasks) {
-        if (task.actionRunningAgentId === agentId) {
-          console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${task.text?.slice(0, 50)}" (status=${task.status}, owner=${creatorId.slice(0, 8)})`);
-          return { task, ownerAgentId: creatorId };
-        }
-      }
+    // Priority 1: Task actively running via this agent (DB flag action_running_agent_id).
+    // We INTENTIONALLY do not require _isActiveTaskStatus here — if the flag is
+    // still pointing at this agent, the action is in flight and the link is valid
+    // even if the status briefly transitioned (e.g. to "error" via a rate-limit
+    // handler or to "done" via @update_task).
+    const running = await getTaskByActionRunningAgent(agentId);
+    if (running) {
+      console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${(running as any).text?.slice(0, 50)}" (status=${(running as any).status})`);
+      return { task: running, ownerAgentId: (running as any).agentId };
     }
 
-    // Priority 2: Active task explicitly assigned to this agent (from any agent's list)
-    // Prefer the most recently started task when multiple are assigned.
-    let bestAssigned: { task: any; ownerAgentId: string } | null = null;
-    for (const [creatorId] of this.agents) {
-      const creatorTasks = this._getAgentTasks(creatorId);
-      for (const task of creatorTasks) {
-        if (task.assignee !== agentId || !this._isActiveTaskStatus(task.status)) continue;
-        if (!bestAssigned || (task.startedAt && (!bestAssigned.task.startedAt || new Date(task.startedAt) > new Date(bestAssigned.task.startedAt)))) {
-          bestAssigned = { task, ownerAgentId: creatorId };
-        }
+    // Priorities 2-4 operate on the tasks this agent executes: those assigned to
+    // it (from any owner) plus its own unassigned tasks. getTasksByAssignee is
+    // exactly that set (assignee = agentId OR (assignee IS NULL AND owner)).
+    const assignedTasks = await getTasksByAssignee(agentId);
+
+    // Priority 2/3: Active assigned/own task, preferring the most recently started.
+    let bestActive: any = null;
+    for (const task of assignedTasks) {
+      if (!this._isActiveTaskStatus(task.status)) continue;
+      if (!bestActive || (task.startedAt && (!bestActive.startedAt || new Date(task.startedAt) > new Date(bestActive.startedAt)))) {
+        bestActive = task;
       }
     }
-    if (bestAssigned) {
-      console.log(`🔗 [Commit] Found task via assignee: "${bestAssigned.task.text?.slice(0, 50)}" (owner=${bestAssigned.ownerAgentId.slice(0, 8)})`);
-      return bestAssigned;
+    if (bestActive) {
+      console.log(`🔗 [Commit] Found task via assignee/own active: "${bestActive.text?.slice(0, 50)}" (owner=${(bestActive.agentId || '').slice(0, 8)})`);
+      return { task: bestActive, ownerAgentId: bestActive.agentId };
     }
 
-    // Priority 3: Agent's own active task (when no assigned/running task found)
-    const ownTasks = this._getAgentTasks(agentId);
-    if (ownTasks.length) {
-      const ownActive = ownTasks.find((t: any) => this._isActiveTaskStatus(t.status));
-      if (ownActive) {
-        console.log(`🔗 [Commit] Found own active task: "${ownActive.text?.slice(0, 50)}"`);
-        return { task: ownActive, ownerAgentId: agentId };
-      }
-    }
-
-    // Priority 4: Recently active in-memory task (any status).
+    // Priority 4: Recently active task (any status) within RECENT_ACTIVE_MS.
     // Catches the case where a task transitioned to error/done between the
     // commit being made and the run_command handler processing the result.
-    // We scan ALL in-memory tasks (the agent may have been the assignee or the
-    // executor for someone else's task) and pick the most-recently-started one
-    // within RECENT_ACTIVE_MS.
-    let bestRecent: { task: any; ownerAgentId: string; ts: number } | null = null;
-    for (const [creatorId] of this.agents) {
-      const creatorTasks = this._getAgentTasks(creatorId);
-      for (const task of creatorTasks) {
-        if (task.assignee !== agentId) continue;
-        const ref = task.completedAt || task.startedAt;
-        if (!ref) continue;
-        const ts = new Date(ref).getTime();
-        if (now - ts > RECENT_ACTIVE_MS) continue;
-        if (!bestRecent || ts > bestRecent.ts) {
-          bestRecent = { task, ownerAgentId: creatorId, ts };
-        }
+    let bestRecent: { task: any; ts: number } | null = null;
+    for (const task of assignedTasks) {
+      const ref = task.completedAt || task.startedAt;
+      if (!ref) continue;
+      const ts = new Date(ref).getTime();
+      if (now - ts > RECENT_ACTIVE_MS) continue;
+      if (!bestRecent || ts > bestRecent.ts) {
+        bestRecent = { task, ts };
       }
     }
     if (bestRecent) {
       console.log(`🔗 [Commit] Found recently-active task: "${bestRecent.task.text?.slice(0, 50)}" (status=${bestRecent.task.status}, age=${Math.round((now - bestRecent.ts) / 1000)}s)`);
-      return { task: bestRecent.task, ownerAgentId: bestRecent.ownerAgentId };
+      return { task: bestRecent.task, ownerAgentId: bestRecent.task.agentId };
     }
 
     // Priority 5 (DB fallback): find active task from DB
@@ -530,11 +509,10 @@ export const tasksMethods = {
     return null;
   },
 
-  addTaskCommit(this: any, agentId: string, taskId: string, hash: string, message: string): any {
-    const found = this._findTaskAcross((t: any) => t.id === taskId);
-    if (!found) return null;
-    const task: any = found.task;
-    const ownerAgentId: string = found.agentId;
+  async addTaskCommit(this: any, agentId: string, taskId: string, hash: string, message: string): Promise<any> {
+    const task: any = await getTaskById(taskId);
+    if (!task) return null;
+    const ownerAgentId: string = task.agentId;
     if (!task.commits) task.commits = [];
     // Prefix-aware dedup: treat short and full hashes of the same commit as equal.
     // If a full hash is provided and a short hash already exists, upgrade it.
@@ -547,53 +525,50 @@ export const tasksMethods = {
       if (hash.length > existing.hash.length) {
         existing.hash = hash;
         if (message && !existing.message) existing.message = message;
-        saveTaskToDb({ ...task, agentId: ownerAgentId });
+        await saveTaskToDb({ ...task, agentId: ownerAgentId });
       }
       return task;
     }
     task.commits.push({ hash, message: message || '', date: new Date().toISOString() });
-    saveTaskToDb({ ...task, agentId: ownerAgentId });
-    const agent = this.agents.get(ownerAgentId);
+    await saveTaskToDb({ ...task, agentId: ownerAgentId });
+    const agent = ownerAgentId ? this.agents.get(ownerAgentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  removeTaskCommit(this: any, agentId: string, taskId: string, hash: string): any {
-    const found = this._findTaskAcross((t: any) => t.id === taskId);
-    if (!found) return null;
-    const task: any = found.task;
-    const ownerAgentId: string = found.agentId;
+  async removeTaskCommit(this: any, agentId: string, taskId: string, hash: string): Promise<any> {
+    const task: any = await getTaskById(taskId);
+    if (!task) return null;
+    const ownerAgentId: string = task.agentId;
     if (!task.commits) return null;
     const before = task.commits.length;
     task.commits = task.commits.filter((c: any) => c.hash !== hash);
     if (task.commits.length === before) return null;
-    saveTaskToDb({ ...task, agentId: ownerAgentId });
-    const agent = this.agents.get(ownerAgentId);
+    await saveTaskToDb({ ...task, agentId: ownerAgentId });
+    const agent = ownerAgentId ? this.agents.get(ownerAgentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  setTaskAssignee(this: any, agentId: string, taskId: string, assigneeId: string): any {
+  async setTaskAssignee(this: any, agentId: string, taskId: string, assigneeId: string): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const task = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
+    const task = await getTaskById(taskId);
     if (!task) return null;
     task.assignee = assigneeId;
     if (!task.history) task.history = [];
     task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'reassign', assignee: assigneeId });
-    saveTaskToDb({ ...task, agentId });
+    await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     this._recheckConditionalTransitions();
     return task;
   },
 
   async deleteTask(this: any, agentId: string | null, taskId: string): Promise<boolean> {
-    // Unassigned/board-only tasks have no agentId and never live in the
-    // agentId-keyed in-memory store, so soft-delete must fall back to the DB.
-    const inMemory = agentId ? this._getAgentTasks(agentId).some((t: any) => t.id === taskId) : false;
-    if (agentId) this._removeTaskFromStore(agentId, taskId);
+    // The DB row is the single source of truth; soft-delete goes straight to it
+    // (works uniformly for owned and unassigned/board-level tasks).
     const dbDeleted = await deleteTaskFromDb(taskId);
-    if (!inMemory && !dbDeleted) return false;
+    if (!dbDeleted) return false;
     clearTaskSignals(taskId);
     this._decideNoDecisionCounts?.delete(taskId);
     const agent = agentId ? this.agents.get(agentId) : null;
@@ -608,8 +583,7 @@ export const tasksMethods = {
     if (!restored.history) restored.history = [];
     restored.history.push({ status: restored.status, at: new Date().toISOString(), by: 'user', type: 'restored' });
     await saveTaskToDb({ ...restored, agentId: restored.agentId });
-    this._addTaskToStore(restored.agentId, restored);
-    const agent = this.agents.get(restored.agentId);
+    const agent = restored.agentId ? this.agents.get(restored.agentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     return restored;
   },
@@ -627,26 +601,24 @@ export const tasksMethods = {
   clearTasks(this: any, agentId: string): boolean {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
-    this._clearAgentTasks(agentId);
     deleteTasksByAgent(agentId);
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },
 
-  transferTask(this: any, fromAgentId: string, taskId: string, toAgentId: string): any {
+  async transferTask(this: any, fromAgentId: string, taskId: string, toAgentId: string): Promise<any> {
     const fromAgent = this.agents.get(fromAgentId);
     const toAgent = this.agents.get(toAgentId);
     if (!fromAgent || !toAgent) return null;
-    const taskToTransfer = this._getAgentTasks(fromAgentId).find((t: any) => t.id === taskId);
+    const taskToTransfer = await getTaskById(taskId);
     if (!taskToTransfer) return null;
     const prevStatus = taskToTransfer.status;
-    this._removeTaskFromStore(fromAgentId, taskId);
-    deleteTaskFromDb(taskId);
+    await deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(fromAgent));
-    const newTask = this.addTask(toAgentId, taskToTransfer.text, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus, { boardId: taskToTransfer.boardId, repoFullName: taskToTransfer.repoFullName, repoProvider: taskToTransfer.repoProvider, storagePath: taskToTransfer.storagePath, storageProvider: taskToTransfer.storageProvider });
+    const newTask = await this.addTask(toAgentId, taskToTransfer.text, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus, { boardId: taskToTransfer.boardId, repoFullName: taskToTransfer.repoFullName, repoProvider: taskToTransfer.repoProvider, storagePath: taskToTransfer.storagePath, storageProvider: taskToTransfer.storageProvider });
     if (newTask) {
       newTask.assignee = toAgentId;
-      saveTaskToDb({ ...newTask, agentId: toAgentId });
+      await saveTaskToDb({ ...newTask, agentId: toAgentId });
       this._checkAutoRefine({ ...newTask, assignee: toAgentId, agentId: toAgentId });
     }
     return newTask;
@@ -668,12 +640,10 @@ export const tasksMethods = {
     // Reset the failure circuit breaker so a manual resume always gets a fresh attempt
     this._taskResumeFailures?.delete(taskId);
 
-    // Update in-memory task and notify frontend so the yellow "Stopped" state clears
-    const memTask = this._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-    if (memTask) {
-      memTask.executionStatus = null;
-      this._emit('task:updated', { agentId, task: { ...memTask, agentId } });
-    }
+    // Notify frontend so the yellow "Stopped" state clears (executionStatus was
+    // just cleared in the DB above; reflect it on the fetched task for the emit).
+    task.executionStatus = null;
+    this._emit('task:updated', { agentId, task: { ...task, agentId } });
 
     if (this._isActiveTaskStatus(task.status)) {
       // Manual resume of an in-flight task: send the prompt directly so the
@@ -854,29 +824,8 @@ export const tasksMethods = {
       // freshly-reset task isn't blocked by stale "stopped"/"watching" flags.
       clearTaskSignals(task.id);
 
-      // Mirror the reset onto the in-memory copy used by the task loop, so
-      // it doesn't keep seeing the pre-reset status (e.g. a stale `done`
-      // would prevent the freshly-armed task from being picked up).
-      const memTask = this._getAgentTasks(task.agentId).find((mt: any) => mt.id === task.id);
-      if (memTask) {
-        memTask.status = task.status;
-        memTask.assignee = task.assignee;
-        memTask.completedAt = task.completedAt;
-        memTask.startedAt = task.startedAt;
-        memTask.executionStatus = task.executionStatus;
-        memTask.completedActionIdx = task.completedActionIdx;
-        memTask.actionRunning = task.actionRunning;
-        memTask.actionRunningAgentId = task.actionRunningAgentId;
-        memTask.actionRunningMode = task.actionRunningMode;
-        memTask.error = task.error;
-        memTask.errorFromStatus = task.errorFromStatus;
-        memTask.history = task.history;
-        memTask.commits = task.commits;
-        memTask.recurrence = task.recurrence;
-      }
-
       await saveTaskToDb(task);
-      const agent = this.agents.get(task.agentId);
+      const agent = task.agentId ? this.agents.get(task.agentId) : null;
       if (agent) this._emit('agent:updated', this._sanitize(agent));
       this._emit('task:updated', { agentId: task.agentId, task: { ...task } });
     }
@@ -890,21 +839,32 @@ export const tasksMethods = {
     if (!this._staleActionCleanupDone) {
       this._staleActionCleanupDone = true;
       const env = getCurrentEnvironment();
-      clearAllStaleActionRunning(env)
-        .then((cleared: number) => {
-          if (cleared > 0) console.log(`🔄 Cleared ${cleared} stale action_running flags for env="${env}"`);
-        })
-        .catch((err: any) => console.error('[TaskLoop] stale action cleanup failed:', err.message));
+      // Re-arm interrupted chains BEFORE clearing stale action_running — the
+      // re-arm relies on that flag to detect a crash mid-run. It persists a
+      // durable pending_on_enter, so after the clear the task becomes visible to
+      // getActiveWorkflowTasks and recheckPendingTransitions resumes it.
+      reArmInterruptedChains(this, env)
+        .catch((err: any) => console.error('[TaskLoop] chain re-arm failed:', err.message))
+        .finally(() => {
+          clearAllStaleActionRunning(env)
+            .then((cleared: number) => {
+              if (cleared > 0) console.log(`🔄 Cleared ${cleared} stale action_running flags for env="${env}"`);
+            })
+            .catch((err: any) => console.error('[TaskLoop] stale action cleanup failed:', err.message));
+        });
     }
 
     this._recheckConditionalTransitions();
 
-    // Periodically purge stale task signals to prevent unbounded Map growth
-    const allTaskIds = new Set<string>();
-    for (const tasks of this._tasks.values()) {
-      for (const t of tasks as any[]) allTaskIds.add(t.id);
+    // Periodically purge stale task signals to prevent unbounded Map growth.
+    // The task set now lives in the DB, so fetch live ids — but only roughly
+    // once a minute (every ~12th 5s tick) to avoid a full-table scan each tick.
+    this._signalPurgeTick = ((this._signalPurgeTick || 0) + 1) % 12;
+    if (this._signalPurgeTick === 1) {
+      getAllTaskIds()
+        .then((ids: string[]) => purgeStaleTaskSignals(new Set(ids)))
+        .catch(() => {});
     }
-    purgeStaleTaskSignals(allTaskIds);
 
     // Use DB query to find tasks that need resume — filtered to our environment
     // so a sibling replica sharing the DB doesn't steal each other's tasks.
@@ -1000,7 +960,7 @@ export const tasksMethods = {
 
   async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
     const terminalDriven = Boolean(options.terminalDriven);
-    const freshTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
+    const freshTask = await getTaskById(taskId);
     // The column this wait started on. A workflow transition is finished as soon
     // as the agent moves the task OFF this column — even to another ACTIVE column
     // (e.g. a decide moving testclaudepaid → testopencode). The checks below
@@ -1236,8 +1196,8 @@ export const tasksMethods = {
       // (or by the catch in _resumeActiveTask) — leaving it as 'stopped' is
       // what keeps the next task-loop tick from picking the task up again.
       // Only clear to NULL when the task is in some other transient state.
-      const finalMemTask = this._getAgentTasks(creatorAgentId).find((t: any) => t.id === taskId);
-      if (finalMemTask?.executionStatus !== 'stopped') {
+      const finalTask = await getTaskById(taskId);
+      if (finalTask?.executionStatus !== 'stopped') {
         updateTaskExecutionStatus(taskId, null);
       }
     }
@@ -1372,7 +1332,7 @@ export const tasksMethods = {
         setTaskSignal(task.id, 'stopped', true);
         await updateTaskExecutionStatus(task.id, 'stopped');
         // Add stopped entry to history
-        const stoppedTask = this._getAgentTasks(agentId).find((t: any) => t.id === task.id);
+        const stoppedTask = await getTaskById(task.id);
         if (stoppedTask) {
           if (!stoppedTask.history) stoppedTask.history = [];
           stoppedTask.history.push({
@@ -1393,7 +1353,7 @@ export const tasksMethods = {
         // markTaskError guards against the disappearance bug (errorFromStatus
         // clobbered to 'error' when the task was already errored, or set to a
         // status that no longer exists in the workflow).
-        const errorTask = this._getAgentTasks(agentId).find((t: any) => t.id === task.id);
+        const errorTask = await getTaskById(task.id);
         if (errorTask) {
           // Load the workflow so markTaskError can validate the fallback column.
           // Best-effort: if it fails the helper still works (just no validation).
@@ -1433,11 +1393,10 @@ export const tasksMethods = {
     }
   },
 
-  /** Find a task by ID (from in-memory store) */
-  getTask(this: any, taskId: string): any {
-    const result = this._findTaskAcross((t: any) => t.id === taskId);
-    if (!result) return null;
-    return { ...result.task, agentId: result.agentId };
+  /** Find a task by ID (from the DB — the single source of truth). Returns the
+   * task (with its `agentId` owner, null for board-level tasks) or null. */
+  async getTask(this: any, taskId: string): Promise<any> {
+    return getTaskById(taskId);
   },
 
   /** Save a task to the database (returns a promise for awaitable saves) */

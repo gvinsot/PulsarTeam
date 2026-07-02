@@ -93,7 +93,7 @@ export function contactRoutes(agentManager: any) {
 
       const source = { type: 'website', name: sName };
       const environment = detectEnvironment(req.hostname);
-      const task = agentManager.addTask(
+      const task = await agentManager.addTask(
         targetAgentId,
         taskText,
         source,

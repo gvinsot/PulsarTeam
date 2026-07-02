@@ -163,8 +163,39 @@ to a DB aggregate is a sync→async change with marginal value (a tie-break, not
 pinned by the `load balancing by task count` test. Batches naturally with Phase 4's store removal (all these
 scans become DB reads at once).
 
-### Phase 4 — PENDING (remove the store; depends on 1–3). Then: drop the in-memory owned loop in
-recheckPendingTransitions (DB query alone), convert the load-balancer counts, and remove `_tasks` + helpers.
+### Phase 4 — DONE (remove the store)
+The in-memory `_tasks` store, all its helpers (`_getAgentTasks`, `_findTaskAcross`,
+`_findTaskByIdOrPrefix`, `_getAllTasks`, `_addTaskToStore`, `_removeTaskFromStore`,
+`_clearAgentTasks`, `_ensureTaskInMemory`), the startup `getTasksByAgent` load, and the
+`_tasks.set/delete` in crud.ts are removed. The DB is now the single source of truth for reads
+AND writes; a grep for `_getAgentTasks`/`_tasks` over `api/src` shows zero remaining readers.
+- **Mutators are now async DB read-modify-write** (`addTask`, `setTaskStatus`, `toggleTask`,
+  `_editTaskField` + wrappers, `setTaskAssignee`, `transferTask`, `addTaskCommit`,
+  `removeTaskCommit`, `getTask`): fetch via `getTaskById`, mutate, `await saveTaskToDb`, emit.
+  setTaskStatus persists under the task's OWN `agentId` (never reassigns ownership to a caller/
+  executor that differs from the owner — a real bug the broadened resolvers would otherwise hit).
+- **Status/stats getters are async + batched**: `getAgentStatus`/`getAllStatuses`/`getSwarmStatus`/
+  `getAgentsByProject` and `getTaskStats`/`getTaskTimeSeries`/`getAgentTimeSeries` fetch once via
+  `_tasksByAgentMap()` (one `getAllTasks` grouped by owner) instead of N per-agent queries. Callers
+  (socketHandler, agentStatusHandlers, swarmApi/MCP, agents routes) now `await`.
+- **Workflow iteration is DB-only**: `recheckPendingTransitions` drops the in-memory owned loop and
+  iterates `getActiveWorkflowTasks(env)` for owned AND board-level tasks (one code path). Chain
+  bookkeeping (`_chainTask`) re-reads the FRESH DB row each time — the working snapshot goes stale
+  as actions mutate the row, and saving the stale copy back reverted the status move (found + fixed
+  via the pipeline integration test). Startup chain re-arm moved to `reArmInterruptedChains` (DB
+  query, runs BEFORE `clearAllStaleActionRunning` so the stale `action_running` signal is still
+  visible; persists `pending_on_enter`).
+- **Load-balancer** (`findAgentByRole`/`findAgentForAssignment`) stays synchronous — callers
+  precompute the owned-task-count map (`_tasksByAgentMap`) from the DB and pass it in.
+- **New DB accessors**: `getTaskByActionRunningAgent`, `getAllTaskIds`, `getInterruptedChainTasks`;
+  `updateTaskFields` gained a `pendingOnEnter` column mapping.
+- **stopAgent stays sync**: its task-halting moved to a fire-and-forget `_haltAgentTasks` (DB-sourced)
+  so the abort/idle path isn't blocked on DB round-trips. `addActionLog` stays fire-and-forget but is
+  async: it pushes+persists the entry synchronously (before the first await) then best-effort backfills
+  the task link from the DB.
+- **Tests**: the pool-less suite gets an in-memory task-DB fake (`__tests__/helpers/taskDbFake.ts`,
+  Map-backed, identity-preserving to mirror the old shared-object store) wired into the 5 affected
+  files via module mocks. `npx tsc --noEmit` clean; 309/309 tests pass.
 
 ## Related
 - [[board-level-tasks-not-in-memory]] (memory) — the gotcha + the local patches already in place.

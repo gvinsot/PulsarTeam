@@ -125,13 +125,13 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   const columns = useMemo(() => workflow ? buildColumns(workflow.columns) : [], [workflow]);
   const statusOptions = useMemo(() => workflow ? buildStatusOptions(workflow.columns) : [], [workflow]);
 
-  // Map column IDs to their "Instructions/Execute (agent)" actions from transitions
+  // Map column IDs to their "Instructions (agent)" decide actions from transitions
   const columnInstructionsMap = useMemo(() => {
     if (!workflow?.transitions) return {};
     const map = {};
     workflow.transitions.forEach((tr, tIdx) => {
       (tr.actions || []).forEach((act, aIdx) => {
-        if (act.type === 'run_agent' && (act.mode === 'decide' || act.mode === 'execute')) {
+        if (act.type === 'run_agent' && (act.mode === 'decide' || act.mode === 'execute')) { // execute = legacy, still shown
           const colId = tr.from;
           if (!map[colId]) map[colId] = [];
           map[colId].push({

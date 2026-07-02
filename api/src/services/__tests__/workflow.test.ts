@@ -1,16 +1,38 @@
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentManager } from '../agentManager.js';
-import { stripToolCalls } from '../workflow/index.js';
-import { setTaskSignal, getTaskSignal, normalizeSecondaryRepos } from '../agentManager/tasks.js';
+
+// ── DB fake — the task store was removed from AgentManager (DB is the single
+// source of truth), and this suite runs pool-less, so back the task accessors
+// with an in-memory Map. Must be registered BEFORE importing AgentManager. ──
+import { makeTaskDbFake } from './helpers/taskDbFake.js';
+const realDb = await import('../database.js');
+const { rows, exports: taskDbFake } = makeTaskDbFake();
+mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
+
+const { AgentManager } = await import('../agentManager.js');
+const { stripToolCalls } = await import('../workflow/index.js');
+const { setTaskSignal, getTaskSignal, normalizeSecondaryRepos } = await import('../agentManager/tasks.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Minimal mock IO */
 const mockIo = { emit() {}, to() { return { emit() {} }; } };
 
+/** All live tasks owned by an agent (replaces the old in-memory _getAgentTasks). */
+function agentTasks(agentId: any): any[] {
+  return [...rows.values()].filter((t: any) => t.agentId === agentId && !t.deletedAt);
+}
+
+/** Seed a task row directly into the DB fake. Stores the SAME object so tests
+ * can mutate the returned task and read it back after a mutator (identity). */
+function seedTask(agentId: any, task: any) {
+  task.agentId = agentId;
+  rows.set(task.id, task);
+}
+
 /** Create an AgentManager with agents pre-registered */
 async function setup(agentDefs: any[] = []) {
+  rows.clear();
   const mgr = new AgentManager(mockIo, null, null, null) as any;
   for (const def of agentDefs) {
     const created = await mgr.create(def);
@@ -18,7 +40,6 @@ async function setup(agentDefs: any[] = []) {
     // Ensure agents start idle
     raw.status = 'idle';
     raw.conversationHistory = [];
-    mgr._tasks.set(created.id, []);
   }
   return mgr;
 }
@@ -28,7 +49,7 @@ function workflow(columns: any, transitions: any) {
   return { columns, transitions };
 }
 
-/** Create a task on the first agent's task store */
+/** Create a task owned by the first agent (seeded into the DB fake). */
 function addTask(mgr: any, text: any, status: any, boardId = 'board-1', extra: any = {}) {
   const [firstAgentId] = mgr.agents.keys();
   const task: any = {
@@ -40,11 +61,11 @@ function addTask(mgr: any, text: any, status: any, boardId = 'board-1', extra: a
     environment: 'prod',
     ...extra,
   };
-  mgr._addTaskToStore(firstAgentId, task);
+  seedTask(firstAgentId, task);
   return { task, agentId: firstAgentId };
 }
 
-/** Create a task on a specific agent's task store */
+/** Create a task owned by a specific agent (seeded into the DB fake). */
 function addTaskToAgent(mgr: any, agentId: any, text: any, status: any, boardId = 'board-1', extra: any = {}) {
   const task: any = {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -55,7 +76,7 @@ function addTaskToAgent(mgr: any, agentId: any, text: any, status: any, boardId 
     environment: 'prod',
     ...extra,
   };
-  mgr._addTaskToStore(agentId, task);
+  seedTask(agentId, task);
   return task;
 }
 
@@ -265,11 +286,11 @@ test('agentHasActiveTask excludes specific task when excludeTaskId is provided',
   const { id: titlesId } = getAgent(mgr, 'Titles');
 
   const taskId = 'task-chain-1';
-  mgr._addTaskToStore(creatorId, { id: taskId, text: 'Multi-action task', status: 'refine', assignee: titlesId });
+  seedTask(creatorId, { id: taskId, text: 'Multi-action task', status: 'refine', assignee: titlesId });
 
-  assert.equal(mgr.agentHasActiveTask(titlesId), true);
-  assert.equal(mgr.agentHasActiveTask(titlesId, taskId), false);
-  assert.equal(mgr.agentHasActiveTask(titlesId, 'other-task'), true);
+  assert.equal(await mgr.agentHasActiveTask(titlesId), true);
+  assert.equal(await mgr.agentHasActiveTask(titlesId, taskId), false);
+  assert.equal(await mgr.agentHasActiveTask(titlesId, 'other-task'), true);
 });
 
 test('agentHasActiveTask detects cross-agent assignments', async () => {
@@ -280,27 +301,27 @@ test('agentHasActiveTask detects cross-agent assignments', async () => {
   const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
   const { id: workerId } = getAgent(mgr, 'Worker');
 
-  assert.equal(mgr.agentHasActiveTask(workerId), false);
+  assert.equal(await mgr.agentHasActiveTask(workerId), false);
 
-  mgr._addTaskToStore(creatorId, { id: 'task-1', text: 'Build feature', status: 'code', assignee: workerId });
+  seedTask(creatorId, { id: 'task-1', text: 'Build feature', status: 'code', assignee: workerId });
 
-  assert.equal(mgr.agentHasActiveTask(workerId), true);
+  assert.equal(await mgr.agentHasActiveTask(workerId), true);
 
-  mgr._getAgentTasks(creatorId)[0].status = 'done';
-  assert.equal(mgr.agentHasActiveTask(workerId), false);
+  agentTasks(creatorId)[0].status = 'done';
+  assert.equal(await mgr.agentHasActiveTask(workerId), false);
 });
 
 test('agentHasActiveTask: own tasks count', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { id: devId, agent: dev } = getAgent(mgr, 'Dev');
 
-  assert.equal(mgr.agentHasActiveTask(devId), false);
+  assert.equal(await mgr.agentHasActiveTask(devId), false);
 
-  mgr._addTaskToStore(devId, { id: 't1', text: 'Own task', status: 'code', assignee: null });
-  assert.equal(mgr.agentHasActiveTask(devId), true);
+  seedTask(devId, { id: 't1', text: 'Own task', status: 'code', assignee: null });
+  assert.equal(await mgr.agentHasActiveTask(devId), true);
 
-  mgr._getAgentTasks(devId)[0].status = 'backlog';
-  assert.equal(mgr.agentHasActiveTask(devId), false);
+  agentTasks(devId)[0].status = 'backlog';
+  assert.equal(await mgr.agentHasActiveTask(devId), false);
 });
 
 test('agentHasActiveTask: multiple tasks, exclude only one', async () => {
@@ -311,13 +332,13 @@ test('agentHasActiveTask: multiple tasks, exclude only one', async () => {
   const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
   const { id: devId } = getAgent(mgr, 'Dev');
 
-  mgr._addTaskToStore(creatorId, { id: 't1', text: 'Task 1', status: 'code', assignee: devId });
-  mgr._addTaskToStore(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: devId });
+  seedTask(creatorId, { id: 't1', text: 'Task 1', status: 'code', assignee: devId });
+  seedTask(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: devId });
 
   // Even excluding t1, t2 still makes the agent busy
-  assert.equal(mgr.agentHasActiveTask(devId, 't1'), true);
+  assert.equal(await mgr.agentHasActiveTask(devId, 't1'), true);
   // Excluding both individually won't help — the other one is still active
-  assert.equal(mgr.agentHasActiveTask(devId, 't2'), true);
+  assert.equal(await mgr.agentHasActiveTask(devId, 't2'), true);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -328,10 +349,10 @@ test('setTaskStatus changes status and emits events', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Status test', 'backlog');
 
-  const result = mgr.setTaskStatus(agentId, task.id, 'code');
+  const result = await mgr.setTaskStatus(agentId, task.id, 'code');
   assert.ok(result, 'setTaskStatus should return truthy result');
 
-  const updated = mgr._getAgentTasks(agentId).find(t => t.id === task.id);
+  const updated = agentTasks(agentId).find(t => t.id === task.id);
   assert.equal(updated.status, 'code');
 });
 
@@ -348,7 +369,7 @@ test('setTaskStatus clears assignee when the destination column reassigns', asyn
   // 'code' is a column that reassigns (run_agent / assign_agent / autoAssignRole)
   mgr._reassigningStatuses = new Set(['code']);
 
-  const result = mgr.setTaskStatus(creatorId, task.id, 'code', { skipAutoRefine: true });
+  const result = await mgr.setTaskStatus(creatorId, task.id, 'code', { skipAutoRefine: true });
 
   assert.equal(result.assignee, null);
   assert.equal(task.assignee, null);
@@ -370,7 +391,7 @@ test('setTaskStatus keeps assignee when the destination column does NOT reassign
   // used to be wiped on every status change, hiding non-owner batch members).
   mgr._reassigningStatuses = new Set(['code']);
 
-  const result = mgr.setTaskStatus(creatorId, task.id, 'in_review', { skipAutoRefine: true });
+  const result = await mgr.setTaskStatus(creatorId, task.id, 'in_review', { skipAutoRefine: true });
 
   assert.equal(result.assignee, workerId);
   assert.equal(task.assignee, workerId);
@@ -381,13 +402,13 @@ test('setTaskStatus returns falsy for invalid task id', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
 
-  const result = mgr.setTaskStatus(agentId, 'nonexistent', 'code');
+  const result = await mgr.setTaskStatus(agentId, 'nonexistent', 'code');
   assert.ok(!result, 'setTaskStatus should return falsy for invalid task');
 });
 
 test('setTaskStatus returns falsy for invalid agent id', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  const result = mgr.setTaskStatus('nonexistent-agent', 'task-1', 'code');
+  const result = await mgr.setTaskStatus('nonexistent-agent', 'task-1', 'code');
   assert.ok(!result);
 });
 
@@ -396,7 +417,7 @@ test('setTaskStatus is a no-op when moving to same status', async () => {
   const { task, agentId } = addTask(mgr, 'Same status', 'code');
 
   const historyBefore = task.history?.length || 0;
-  const result = mgr.setTaskStatus(agentId, task.id, 'code');
+  const result = await mgr.setTaskStatus(agentId, task.id, 'code');
   // Should return the task (truthy) but not add a history entry
   assert.ok(result);
   assert.equal(task.history?.length || 0, historyBefore);
@@ -407,7 +428,7 @@ test('setTaskStatus sets completedAt when moving to done', async () => {
   const { task, agentId } = addTask(mgr, 'Complete me', 'code');
 
   assert.equal(task.completedAt, undefined);
-  mgr.setTaskStatus(agentId, task.id, 'done');
+  await mgr.setTaskStatus(agentId, task.id, 'done');
   assert.ok(task.completedAt, 'completedAt should be set');
   assert.equal(task.status, 'done');
 });
@@ -416,7 +437,7 @@ test('setTaskStatus records errorFromStatus on error', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Error test', 'code');
 
-  mgr.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true });
+  await mgr.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true });
   assert.equal(task.status, 'error');
   assert.equal(task.errorFromStatus, 'code');
 });
@@ -425,12 +446,12 @@ test('setTaskStatus clears error fields when recovering from error', async () =>
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Recover test', 'code');
 
-  mgr.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true });
+  await mgr.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true });
   task.error = 'something broke';
   assert.equal(task.errorFromStatus, 'code');
   assert.equal(task.error, 'something broke');
 
-  mgr.setTaskStatus(agentId, task.id, 'backlog', { skipAutoRefine: true });
+  await mgr.setTaskStatus(agentId, task.id, 'backlog', { skipAutoRefine: true });
   assert.equal(task.errorFromStatus, null);
   assert.equal(task.error, null);
 });
@@ -440,7 +461,7 @@ test('setTaskStatus clears _pendingOnEnter', async () => {
   const { task, agentId } = addTask(mgr, 'Pending test', 'refine');
 
   task._pendingOnEnter = 'refine';
-  mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true });
+  await mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true });
   assert.equal(task._pendingOnEnter, undefined);
 });
 
@@ -448,7 +469,7 @@ test('setTaskStatus records history with by field', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'History test', 'backlog');
 
-  mgr.setTaskStatus(agentId, task.id, 'code', { by: 'workflow' });
+  await mgr.setTaskStatus(agentId, task.id, 'code', { by: 'workflow' });
   const lastEntry = task.history[task.history.length - 1];
   assert.equal(lastEntry.from, 'backlog');
   assert.equal(lastEntry.status, 'code');
@@ -706,24 +727,24 @@ test('toggleTask flips between done and backlog', async () => {
   const { task, agentId } = addTask(mgr, 'Toggle me', 'backlog');
 
   // backlog → done
-  const toggled = mgr.toggleTask(agentId, task.id);
+  const toggled = await mgr.toggleTask(agentId, task.id);
   assert.equal(toggled.status, 'done');
   assert.ok(toggled.completedAt, 'should set completedAt when done');
 
   // done → backlog
-  const toggled2 = mgr.toggleTask(agentId, task.id);
+  const toggled2 = await mgr.toggleTask(agentId, task.id);
   assert.equal(toggled2.status, 'backlog');
 });
 
 test('toggleTask returns null for unknown task', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
-  assert.equal(mgr.toggleTask(agentId, 'fake'), null);
+  assert.equal(await mgr.toggleTask(agentId, 'fake'), null);
 });
 
 test('toggleTask returns null for unknown agent', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  assert.equal(mgr.toggleTask('fake-agent', 'fake-task'), null);
+  assert.equal(await mgr.toggleTask('fake-agent', 'fake-task'), null);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -734,7 +755,7 @@ test('updateTaskTitle updates title and adds history', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Original text', 'backlog');
 
-  const result = mgr.updateTaskTitle(agentId, task.id, 'New Title');
+  const result = await mgr.updateTaskTitle(agentId, task.id, 'New Title');
   assert.equal(result.title, 'New Title');
   const lastEntry = task.history[task.history.length - 1];
   assert.equal(lastEntry.type, 'edit');
@@ -746,15 +767,15 @@ test('updateTaskText updates text and adds history', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Original text', 'backlog');
 
-  const result = mgr.updateTaskText(agentId, task.id, 'Updated text');
+  const result = await mgr.updateTaskText(agentId, task.id, 'Updated text');
   assert.equal(result.text, 'Updated text');
 });
 
 test('updateTaskTitle returns null for invalid ids', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
-  assert.equal(mgr.updateTaskTitle('fake', 'fake', 'title'), null);
-  assert.equal(mgr.updateTaskTitle(agentId, 'fake', 'title'), null);
+  assert.equal(await mgr.updateTaskTitle('fake', 'fake', 'title'), null);
+  assert.equal(await mgr.updateTaskTitle(agentId, 'fake', 'title'), null);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -816,9 +837,9 @@ test('cross-agent task assignment: worker detects task from creator todoList', a
   });
 
   // Worker should see the cross-agent task
-  assert.ok(mgr.agentHasActiveTask(workerId));
+  assert.ok(await mgr.agentHasActiveTask(workerId));
   // But excluding that task, worker is free
-  assert.ok(!mgr.agentHasActiveTask(workerId, task.id));
+  assert.ok(!await mgr.agentHasActiveTask(workerId, task.id));
 });
 
 test('multiple agents with same role: load balancing by task count', async () => {
@@ -832,17 +853,17 @@ test('multiple agents with same role: load balancing by task count', async () =>
   const { id: pm2Id } = getAgent(mgr, 'PM2');
 
   // PM1 has one task assigned
-  mgr._addTaskToStore(creatorId, { id: 't1', text: 'Task 1', status: 'done', assignee: pm1Id });
+  seedTask(creatorId, { id: 't1', text: 'Task 1', status: 'done', assignee: pm1Id });
 
   // Both agents have active tasks counted by agentHasActiveTask
   // PM1 has 0 active (t1 is done), PM2 has 0 active — both are free
-  assert.ok(!mgr.agentHasActiveTask(pm1Id));
-  assert.ok(!mgr.agentHasActiveTask(pm2Id));
+  assert.ok(!await mgr.agentHasActiveTask(pm1Id));
+  assert.ok(!await mgr.agentHasActiveTask(pm2Id));
 
   // Give PM1 an active task
-  mgr._addTaskToStore(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: pm1Id });
-  assert.ok(mgr.agentHasActiveTask(pm1Id));
-  assert.ok(!mgr.agentHasActiveTask(pm2Id));
+  seedTask(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: pm1Id });
+  assert.ok(await mgr.agentHasActiveTask(pm1Id));
+  assert.ok(!await mgr.agentHasActiveTask(pm2Id));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -947,33 +968,33 @@ test('addTask creates task with correct defaults', async () => {
   const [agentId] = mgr.agents.keys();
   const agent = mgr.agents.get(agentId);
 
-  const task = mgr.addTask(agentId, 'New task', null, null, { skipAutoRefine: true });
+  const task = await mgr.addTask(agentId, 'New task', null, null, { skipAutoRefine: true });
   assert.ok(task);
   assert.equal(task.status, 'backlog');
   assert.ok(task.id);
   assert.equal(task.text, 'New task');
   assert.ok(task.createdAt);
-  assert.equal(mgr._getAgentTasks(agentId).length, 1);
+  assert.equal(agentTasks(agentId).length, 1);
 });
 
 test('addTask respects initial status', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
 
-  const task = mgr.addTask(agentId, 'Code task', null, 'code', { skipAutoRefine: true });
+  const task = await mgr.addTask(agentId, 'Code task', null, 'code', { skipAutoRefine: true });
   assert.equal(task.status, 'code');
 });
 
 test('addTask returns null for invalid agent', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  assert.equal(mgr.addTask('fake-agent', 'Task', null), null);
+  assert.equal(await mgr.addTask('fake-agent', 'Task', null), null);
 });
 
 test('addTask with recurrence config', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
 
-  const task = mgr.addTask(agentId, 'Daily task', null, null, {
+  const task = await mgr.addTask(agentId, 'Daily task', null, null, {
     skipAutoRefine: true,
     recurrence: { enabled: true, period: 'daily', intervalMinutes: 1440 },
   });
@@ -1002,7 +1023,7 @@ test('normalizeSecondaryRepos dedupes, excludes primary, caps, coerces shapes', 
 test('addTask normalizes secondary repos (dedupe, exclude primary, drop invalid)', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
-  const task = mgr.addTask(agentId, 'Multi repo', null, null, {
+  const task = await mgr.addTask(agentId, 'Multi repo', null, null, {
     skipAutoRefine: true,
     repoFullName: 'org/primary',
     secondaryRepos: ['org/lib-a', 'org/lib-a', 'org/primary', 'bad repo name', { fullName: 'org/lib-b', provider: 'github' }],
@@ -1014,14 +1035,14 @@ test('addTask normalizes secondary repos (dedupe, exclude primary, drop invalid)
 test('addTask defaults secondaryRepos to []', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
-  const task = mgr.addTask(agentId, 'No secondaries', null, null, { skipAutoRefine: true });
+  const task = await mgr.addTask(agentId, 'No secondaries', null, null, { skipAutoRefine: true });
   assert.deepEqual(task.secondaryRepos, []);
 });
 
 test('updateTaskSecondaryRepos replaces the set, excludes primary, records history', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Repo task', 'backlog', 'board-1', { repoFullName: 'org/primary', secondaryRepos: [] });
-  const updated = mgr.updateTaskSecondaryRepos(agentId, task.id, ['org/x', 'org/primary', { fullName: 'org/y' }]);
+  const updated = await mgr.updateTaskSecondaryRepos(agentId, task.id, ['org/x', 'org/primary', { fullName: 'org/y' }]);
   assert.deepEqual(updated.secondaryRepos.map(r => r.fullName), ['org/x', 'org/y']);
   assert.ok(updated.history.some(h => h.type === 'edit' && h.field === 'secondaryRepos'));
 });
@@ -1032,7 +1053,7 @@ test('updateTaskRepo drops the new primary from existing secondaries', async () 
     repoFullName: 'org/primary',
     secondaryRepos: [{ provider: 'github', fullName: 'org/lib' }],
   });
-  const updated = mgr.updateTaskRepo(agentId, task.id, 'org/lib');
+  const updated = await mgr.updateTaskRepo(agentId, task.id, 'org/lib');
   assert.equal(updated.repoFullName, 'org/lib');
   assert.deepEqual(updated.secondaryRepos.map(r => r.fullName), []);
 });
@@ -1045,9 +1066,9 @@ test('task history accumulates across multiple status transitions', async () => 
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Track history', 'backlog');
 
-  mgr.setTaskStatus(agentId, task.id, 'refine', { skipAutoRefine: true, by: 'user' });
-  mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'workflow' });
-  mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'agent' });
+  await mgr.setTaskStatus(agentId, task.id, 'refine', { skipAutoRefine: true, by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'workflow' });
+  await mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'agent' });
 
   // Initial + 3 transitions = 4 entries (addTask creates with initial history)
   assert.ok(task.history.length >= 3, `expected at least 3 history entries, got ${task.history.length}`);
@@ -1062,14 +1083,14 @@ test('error → recovery → completion preserves full history', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const { task, agentId } = addTask(mgr, 'Error recovery', 'code');
 
-  mgr.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
+  await mgr.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
   assert.equal(task.errorFromStatus, 'code');
 
-  mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'user' });
   assert.equal(task.errorFromStatus, null);
   assert.equal(task.error, null);
 
-  mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'workflow' });
+  await mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'workflow' });
   assert.equal(task.status, 'done');
   assert.ok(task.completedAt);
 
@@ -1093,12 +1114,12 @@ test('setTaskStatus clears startedAt to prevent stale task loop resume', async (
   task.executionStatus = null;
 
   // Move to done (like after execution completes)
-  mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'workflow' });
+  await mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'workflow' });
   assert.equal(task.status, 'done');
   assert.equal(task.startedAt, null, 'startedAt should be cleared on status change');
 
   // User moves done → nextsprint
-  mgr.setTaskStatus(agentId, task.id, 'nextsprint', { skipAutoRefine: true, by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'nextsprint', { skipAutoRefine: true, by: 'user' });
   assert.equal(task.status, 'nextsprint');
   assert.equal(task.startedAt, null, 'startedAt must stay cleared — task loop must NOT resume this');
   assert.equal(task.executionStatus, null, 'executionStatus must be cleared');
@@ -1111,7 +1132,7 @@ test('setTaskStatus clears startedAt even during workflow transitions', async ()
 
   // Simulate: refine chain completes, change_status → code
   task.startedAt = '2026-04-01T10:00:00.000Z';
-  mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'workflow' });
+  await mgr.setTaskStatus(agentId, task.id, 'code', { skipAutoRefine: true, by: 'workflow' });
 
   // startedAt should be cleared by setTaskStatus
   assert.equal(task.startedAt, null);

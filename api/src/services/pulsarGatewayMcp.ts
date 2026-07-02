@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { applyTaskUpdate } from './swarmApiMcp.js';
 import { BUILTIN_MCP_SERVERS } from '../data/mcpServers.js';
-import { getBoardById } from './database.js';
+import { getBoardById, getTaskByActionRunningAgent, getTasksByAssignee, getActiveTasksByAgent } from './database.js';
 
 /**
  * Pulsar Gateway MCP — the SINGLE MCP server injected into every CLI runner
@@ -88,18 +88,15 @@ async function resolveAvailableServerIds(
  * recordTaskCompletion: a task actively running via this agent, then a
  * task assigned to it, then its own active task. Returns null when none.
  */
-function resolveCurrentTaskId(agentManager: any, agentId: string): string | null {
-  let found = agentManager._findTaskAcross(
-    (t: any) => t.actionRunningAgentId === agentId && agentManager._isActiveTaskStatus(t.status),
-  );
-  if (!found) {
-    found = agentManager._findTaskAcross(
-      (t: any) => agentManager._isActiveTaskStatus(t.status) && t.assignee === agentId,
-    );
-  }
-  if (found) return found.task.id;
-
-  const own = agentManager._getAgentTasks(agentId).find((t: any) => agentManager._isActiveTaskStatus(t.status));
+async function resolveCurrentTaskId(agentManager: any, agentId: string): Promise<string | null> {
+  // Priority 1: a task with an in-flight action attributed to this agent.
+  const running = await getTaskByActionRunningAgent(agentId);
+  if (running && agentManager._isActiveTaskStatus((running as any).status)) return (running as any).id;
+  // Priority 2/3: an active task assigned to this agent (or its own unassigned).
+  const assigned = (await getTasksByAssignee(agentId)).find((t: any) => agentManager._isActiveTaskStatus(t.status));
+  if (assigned) return assigned.id;
+  // Priority 3b: the agent's own active task assigned to someone else (rare).
+  const own = (await getActiveTasksByAgent(agentId)).find((t: any) => agentManager._isActiveTaskStatus(t.status));
   return own ? own.id : null;
 }
 
@@ -152,7 +149,7 @@ export function createPulsarGatewayMcpServer(
       }
       let resolvedTaskId = (task_id || '').trim();
       if (!resolvedTaskId) {
-        const current = resolveCurrentTaskId(agentManager, callerAgentId);
+        const current = await resolveCurrentTaskId(agentManager, callerAgentId);
         if (!current) {
           return jsonError('No active task found to update. Pass task_id explicitly, or ensure you have an in-progress task assigned to you.');
         }

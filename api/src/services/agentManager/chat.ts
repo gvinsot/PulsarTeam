@@ -1,7 +1,7 @@
 // ─── Chat: sendMessage, _cleanMarkdown, _buildSystemPrompt, _assembleMessages,
 //     _streamAndContinue, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
-import { saveAgent, saveTaskToDb, getBoardById } from '../database.js';
+import { saveAgent, saveTaskToDb, getBoardById, getTasksByAgent, getTasksByAssignee, getActiveTaskForExecutor, getTaskByActionRunningAgent, updateTaskFields } from '../database.js';
 import { TOOL_DEFINITIONS } from '../agentTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
@@ -136,14 +136,7 @@ export const chatMethods = {
     }
 
     const messages: any[] = [];
-    let systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
-    // Workflow execute mode hint: kept out of the user-facing prompt so it
-    // doesn't appear as if it were part of the task description. It rides
-    // along on the system message for this single LLM call only and is never
-    // persisted to conversation history.
-    if (messageMeta?.type === 'workflow-action' && messageMeta?.mode === 'execute') {
-      systemContent += '\n\n--- Task Execution Note ---\nWhen starting a new task, begin by exploring the project structure to orient yourself before making changes.';
-    }
+    const systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
     messages.push({ role: 'system', content: systemContent });
 
     const { managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(agent, messages, systemContent, userMessage, delegationDepth, messageMeta, streamCallback, images);
@@ -211,10 +204,12 @@ export const chatMethods = {
         // agent was fetched via this.agents.get(id) — its id IS the map key, so
         // re-deriving it by scanning for object identity was always redundant.
         const agentId = agent.id;
-        let activeTask = this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt);
+        // Active started task this agent is executing (assignee/owner, then the
+        // in-flight action_running fallback for delegated executions).
+        let activeTask: any = await getActiveTaskForExecutor(agentId);
         if (!activeTask) {
-          const found = this._findTaskAcross((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt && (t.assignee === agentId || t.actionRunningAgentId === agentId));
-          if (found) activeTask = found.task;
+          const running = await getTaskByActionRunningAgent(agentId);
+          if (running && (running as any).startedAt) activeTask = running;
         }
 
         const summary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
@@ -277,11 +272,13 @@ export const chatMethods = {
         if (streamCallback) streamCallback(`\n⏸️ *${err.message}. Task will auto-retry at ${err.resetLabel} + 5min.*\n`);
         this.addActionLog(id, 'error', `Rate limit reached — resets at ${err.resetLabel}`, err.message);
 
-        const activeTask = this._getAgentTasks(id).find((t: any) => this._isActiveTaskStatus(t.status));
+        const activeTask = await getActiveTaskForExecutor(id);
         if (activeTask) {
-          activeTask.error = `Rate limit reached — resets at ${err.resetLabel}`;
-          this.setTaskStatus(id, activeTask.id, 'error', { skipAutoRefine: true, by: 'rate-limit' });
-          console.log(`🕐 [Rate Limit] Task "${activeTask.text.slice(0, 60)}" set to error`);
+          // Persist the error text first, then flip status — setTaskStatus
+          // re-fetches the row and preserves the error in its upsert.
+          await updateTaskFields((activeTask as any).id, { error: `Rate limit reached — resets at ${err.resetLabel}` });
+          await this.setTaskStatus(id, (activeTask as any).id, 'error', { skipAutoRefine: true, by: 'rate-limit' });
+          console.log(`🕐 [Rate Limit] Task "${(activeTask as any).text.slice(0, 60)}" set to error`);
         }
 
         setTimeout(() => {
@@ -481,7 +478,7 @@ export const chatMethods = {
     const SEMANTIC_WEIGHT = 0.7;       // 70% semantic, 30% recency
     const RECENCY_HALF_LIFE_MS = 7 * 24 * 3600 * 1000;  // 7 days
 
-    const activeTasks = this._getAgentTasks(id).filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
+    const activeTasks = (await getTasksByAgent(id)).filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
 
     // Look for the latest user message to use as the relevance query.
     let relevanceQuery = '';
@@ -637,7 +634,7 @@ export const chatMethods = {
     out += credentialsSection(agent.credentials || {});
 
     // Relevant tasks — recency-ranked (kept light: no embedding pass here).
-    const activeTasks = this._getAgentTasks(id)
+    const activeTasks = (await getTasksByAgent(id))
       .filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
     const rankedTasks = [...activeTasks].sort(byRecency).slice(0, RECENT_TASKS_LIMIT);
     out += relevantTasksSection(
@@ -679,13 +676,13 @@ export const chatMethods = {
     // For workflow messages (tool-result, delegation, etc.), also check cross-agent assignments
     // so that utility agents (titles-manager, product-manager) get task-scoped history.
     const agentId = agent.id;
-    let activeTask = this._getAgentTasks(agentId).find((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt);
-    // Also check cross-agent assignments: when an executor is different from the
-    // task creator, _getAgentTasks(executorId) won't find it. We need to search
-    // across all agents for tasks assigned to this executor.
+    // Active started task this agent is executing. getActiveTaskForExecutor
+    // covers assignee/owner (incl. cross-agent assignments); the action_running
+    // flag is the fallback for delegated executions where the executor differs.
+    let activeTask: any = await getActiveTaskForExecutor(agentId);
     if (!activeTask) {
-      const found = this._findTaskAcross((t: any) => this._isActiveTaskStatus(t.status) && t.startedAt && (t.assignee === agentId || t.actionRunningAgentId === agentId));
-      if (found) { activeTask = found.task; }
+      const running = await getTaskByActionRunningAgent(agentId);
+      if (running && (running as any).startedAt) activeTask = running;
     }
     const isTaskExecution = !!activeTask;
 
@@ -703,12 +700,12 @@ export const chatMethods = {
           }
         }
       };
-      for (const t of this._getAgentTasks(agentId)) _checkTask(t);
-      for (const [, tasks] of this._tasks) {
-        for (const t of tasks as any[]) {
-          if (t.assignee === agentId || t.actionRunningAgentId === agentId) _checkTask(t);
-        }
-      }
+      // Own tasks (any assignee) ∪ tasks assigned to this agent — the DB union
+      // of what the in-memory scan (own + assignee/actionRunning) covered.
+      const scoped = new Map<string, any>();
+      for (const t of await getTasksByAgent(agentId)) scoped.set(t.id, t);
+      for (const t of await getTasksByAssignee(agentId)) scoped.set(t.id, t);
+      for (const t of scoped.values()) _checkTask(t);
     }
 
     // Proactive compaction: only during task execution, non-managed context.
@@ -732,10 +729,12 @@ export const chatMethods = {
       }
     }
 
-    // Workflow one-shot actions (title, set_type, refine, decide) don't need
-    // conversation history — they're self-contained prompts. Only 'execute'
-    // mode benefits from task-scoped history for multi-turn agent work.
-    if (isWorkflowAction && messageMeta.mode !== 'execute') {
+    // Workflow actions (title, set_type, refine, decide) start one-shot — a
+    // self-contained prompt with no prior conversation dragged in. Multi-turn
+    // work within the action (tool-result continuations) still accumulates via
+    // conversationHistory, since those follow-up calls are not workflow-action
+    // messages.
+    if (isWorkflowAction) {
       // No history — just system prompt + the action prompt (added below)
       console.log(`📋 [Workflow Action] "${agent.name}": mode=${messageMeta.mode} — no history (one-shot)`);
     } else if (managesContext) {

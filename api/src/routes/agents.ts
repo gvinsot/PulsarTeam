@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { getWorkflowForBoard } from '../services/configManager.js';
-import { getAllBoards, getBoardsByUser, saveTaskToDb, getAgentById } from '../services/database.js';
+import { getAllBoards, getBoardsByUser, saveTaskToDb, updateTaskFields, getAgentById } from '../services/database.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { checkBoardAccess } from '../middleware/authz.js';
@@ -353,7 +353,7 @@ export function agentRoutes(agentManager) {
 
       const environment = detectEnvironment(req.hostname);
       console.log(`[CreateTask] POST /:id/tasks — status="${status}", boardId="${boardId}", repo="${resolvedRepoFullName || ''}", storage="${resolvedStoragePath || ''}" env="${environment}" text="${(text || '').slice(0, 60)}"`);
-      const task = agentManager.addTask(req.params.id, text, resolvedSource, resolvedStatus, {
+      const task = await agentManager.addTask(req.params.id, text, resolvedSource, resolvedStatus, {
         boardId: resolvedBoardId,
         repoFullName: resolvedRepoFullName,
         repoProvider: resolvedRepoProvider,
@@ -381,11 +381,9 @@ export function agentRoutes(agentManager) {
       if (source !== undefined) {
         return res.status(400).json({ error: 'Source cannot be modified after creation' });
       }
-      // Recover from any in-memory drift before reading the task
-      await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
       // Capture old status before any update
       const agent = agentManager.agents.get(req.params.id);
-      const oldTask = getMemTask(agentManager, req.params.id, req.params.taskId);
+      const oldTask = await getMemTask(agentManager, req.params.id, req.params.taskId);
 
       // When a user changes the task status while it's being executed, stop the agent
       // so it no longer works on this task or receives reminders.
@@ -398,46 +396,46 @@ export function agentRoutes(agentManager) {
       // ── Independent side-effect updates ──────────────────────────────────
       // Handle recurrence update
       if (recurrence !== undefined && oldTask) {
-        agentManager.updateTaskRecurrence(req.params.id, req.params.taskId, recurrence);
+        await agentManager.updateTaskRecurrence(req.params.id, req.params.taskId, recurrence);
       }
 
       // Handle taskType update
       if (taskType !== undefined && oldTask) {
-        agentManager.updateTaskType(req.params.id, req.params.taskId, taskType || null);
+        await agentManager.updateTaskType(req.params.id, req.params.taskId, taskType || null);
       }
 
       // Handle isManual update
       if (isManual !== undefined && oldTask) {
         oldTask.isManual = !!isManual;
-        saveTaskToDb({ ...oldTask, agentId: req.params.id });
-        agentManager._emit('task:updated', { agentId: req.params.id, task: { ...oldTask, agentId: req.params.id } });
+        await saveTaskToDb({ ...oldTask, agentId: oldTask.agentId });
+        agentManager._emit('task:updated', { agentId: oldTask.agentId, task: { ...oldTask, agentId: oldTask.agentId } });
       }
 
       if (title !== undefined) {
-        agentManager.updateTaskTitle(req.params.id, req.params.taskId, title.trim() || null);
+        await agentManager.updateTaskTitle(req.params.id, req.params.taskId, title.trim() || null);
       }
       // text/repo/storage/status remain mutually exclusive (first match wins) —
       // preserving today's behavior where e.g. {text,status} applies text and
       // silently ignores status.
       if (text !== undefined) {
         if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
-        agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());
+        await agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());
       } else if (repoFullName !== undefined) {
         // Format check only — the picker is sourced from the board's GitHub plugin.
         const value = repoFullName && /^[\w.-]+\/[\w.-]+$/.test(repoFullName) ? repoFullName : null;
-        agentManager.updateTaskRepo(req.params.id, req.params.taskId, value, repoProvider || (value ? 'github' : null));
+        await agentManager.updateTaskRepo(req.params.id, req.params.taskId, value, repoProvider || (value ? 'github' : null));
       } else if (secondaryRepos !== undefined) {
         // Array of {provider, fullName} (or bare "owner/repo" strings) — normalized
         // (deduped, primary-excluded, capped) inside updateTaskSecondaryRepos.
-        agentManager.updateTaskSecondaryRepos(req.params.id, req.params.taskId, secondaryRepos);
+        await agentManager.updateTaskSecondaryRepos(req.params.id, req.params.taskId, secondaryRepos);
       } else if (storagePath !== undefined) {
         // Picker sourced from the board's OneDrive plugin; just length-check.
         const value = (typeof storagePath === 'string' && storagePath.trim().length > 0)
           ? storagePath.trim().slice(0, 500)
           : null;
-        agentManager.updateTaskStorage(req.params.id, req.params.taskId, value, storageProvider || (value ? 'onedrive' : null));
+        await agentManager.updateTaskStorage(req.params.id, req.params.taskId, value, storageProvider || (value ? 'onedrive' : null));
       } else if (status) {
-        agentManager.setTaskStatus(req.params.id, req.params.taskId, status);
+        await agentManager.setTaskStatus(req.params.id, req.params.taskId, status);
       }
 
       // A request carrying none of the recognized fields is the legacy toggle
@@ -447,18 +445,16 @@ export function agentRoutes(agentManager) {
       const touched = text !== undefined || repoFullName !== undefined || secondaryRepos !== undefined || storagePath !== undefined
         || !!status || recurrence !== undefined || taskType !== undefined || isManual !== undefined;
       const task = touched
-        ? getMemTask(agentManager, req.params.id, req.params.taskId)
-        : agentManager.toggleTask(req.params.id, req.params.taskId);
+        ? await getMemTask(agentManager, req.params.id, req.params.taskId)
+        : await agentManager.toggleTask(req.params.id, req.params.taskId);
 
       if (!task) return res.status(404).json({ error: 'Not found' });
       res.json(task);
     } catch (err) {
       console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
       try {
-        agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
-        const errorAgent = agentManager.agents.get(req.params.id);
-        const errorTask = getMemTask(agentManager, req.params.id, req.params.taskId);
-        if (errorTask) errorTask.error = err.message;
+        await agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', { skipAutoRefine: true, by: 'system' });
+        await updateTaskFields(req.params.taskId, { error: err.message });
       } catch (_) { /* best effort */ }
       res.status(500).json({ error: err.message });
     }
@@ -471,9 +467,8 @@ export function agentRoutes(agentManager) {
   });
 
   router.delete('/:id/tasks/:taskId', requireAgentEditAccess, async (req, res) => {
-    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
     const agent = agentManager.agents.get(req.params.id);
-    const taskToDelete = getMemTask(agentManager, req.params.id, req.params.taskId);
+    const taskToDelete = await getMemTask(agentManager, req.params.id, req.params.taskId);
     // Block deletion of tasks being executed — user must stop the agent first
     if (taskToDelete?.startedAt && agentManager._isActiveTaskStatus(taskToDelete.status) && agent?.status === 'busy') {
       return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
@@ -498,8 +493,7 @@ export function agentRoutes(agentManager) {
         }
       }
     }
-    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
-    const task = agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
+    const task = await agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });
     res.status(201).json(task);
   });
@@ -510,8 +504,7 @@ export function agentRoutes(agentManager) {
     if (assigneeId && !agentManager.agents.get(assigneeId)) {
       return res.status(404).json({ error: 'Assignee agent not found' });
     }
-    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
-    const task = agentManager.setTaskAssignee(req.params.id, req.params.taskId, assigneeId || null);
+    const task = await agentManager.setTaskAssignee(req.params.id, req.params.taskId, assigneeId || null);
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });
     res.json(task);
   });
@@ -520,15 +513,13 @@ export function agentRoutes(agentManager) {
   router.post('/:id/tasks/:taskId/commits', requireAgentEditAccess, async (req, res) => {
     const { hash, message } = req.body;
     if (!hash) return res.status(400).json({ error: 'Commit hash required' });
-    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
-    const task = agentManager.addTaskCommit(req.params.id, req.params.taskId, hash, message || '');
+    const task = await agentManager.addTaskCommit(req.params.id, req.params.taskId, hash, message || '');
     if (!task) return res.status(404).json({ error: 'Agent or task not found' });
     res.status(201).json(task);
   });
 
   router.delete('/:id/tasks/:taskId/commits/:hash', requireAgentEditAccess, async (req, res) => {
-    await agentManager._ensureTaskInMemory(req.params.id, req.params.taskId);
-    const task = agentManager.removeTaskCommit(req.params.id, req.params.taskId, req.params.hash);
+    const task = await agentManager.removeTaskCommit(req.params.id, req.params.taskId, req.params.hash);
     if (!task) return res.status(404).json({ error: 'Not found' });
     res.json(task);
   });
@@ -540,7 +531,7 @@ export function agentRoutes(agentManager) {
 
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const task = getMemTask(agentManager, req.params.id, req.params.taskId);
+    const task = await getMemTask(agentManager, req.params.id, req.params.taskId);
     if (!task) return res.status(404).json({ error: 'Task not found' });
 
     const refineAgent = agentManager.agents.get(refineAgentId);
@@ -552,7 +543,7 @@ export function agentRoutes(agentManager) {
       const result = await agentManager.sendMessage(refineAgentId, prompt, () => {});
       const refined = stripToolCalls((result?.content || result || '').trim());
       if (refined) {
-        agentManager.updateTaskText(req.params.id, req.params.taskId, refined);
+        await agentManager.updateTaskText(req.params.id, req.params.taskId, refined);
       }
       res.json({ success: true, text: refined });
     } catch (err) {
@@ -623,7 +614,7 @@ export function agentRoutes(agentManager) {
   router.get("/tasks/stats", async (req, res) => {
     const { project } = req.query;
     const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
-    const stats = agentManager.getTaskStats(project || null, userBoardIds);
+    const stats = await agentManager.getTaskStats(project || null, userBoardIds);
     res.json(stats);
   });
 
@@ -631,7 +622,7 @@ export function agentRoutes(agentManager) {
     const { project, days } = req.query;
     const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
     const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
-    const timeseries = agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
+    const timeseries = await agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
     res.json(timeseries);
   });
 
@@ -639,12 +630,12 @@ export function agentRoutes(agentManager) {
     const { project, days } = req.query;
     const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
     const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
-    const agentTime = agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
+    const agentTime = await agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
     res.json(agentTime);
   });
 
   router.get("/tasks/:id/history", async (req, res) => {
-    const task = agentManager.getTask(req.params.id);
+    const task = await agentManager.getTask(req.params.id);
     if (!task) return res.status(404).json({ error: "Not found" });
     if (req.user.role !== 'admin') {
       const userBoardIds = await getUserBoardIds(req.user.userId);

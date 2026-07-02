@@ -10,10 +10,14 @@
 
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeTaskDbFake } from './helpers/taskDbFake.js';
 
 // ── Module mocks — must be registered BEFORE importing modules under test ────
 
 const noop = async () => {};
+
+// In-memory task DB (the store was removed; DB is the single source of truth).
+const { rows: taskRows, exports: taskDbFake } = makeTaskDbFake();
 
 // Mock database: every export as a no-op
 mock.module('../database.js', {
@@ -129,39 +133,14 @@ mock.module('../database.js', {
     resolveOAuthTokenRecord: async () => null,
     loadOAuthTokens: noop,
     getOAuthTokenCache: () => new Map(),
-    // tasks
+    // tasks — Map-backed in-memory fake (identity-preserving)
+    ...taskDbFake,
     rowToTask: (r) => r,
-    getTasksByAgent: async () => [],
-    getAllTasks: async () => [],
-    getTaskById: async () => null,
-    getTaskByIdPrefix: async () => null,
-    saveTaskToDb: noop,
-    deleteTaskFromDb: noop,
-    hardDeleteTaskFromDb: noop,
-    restoreTaskFromDb: async () => null,
-    getDeletedTasks: async () => [],
-    getDeletedTaskById: async () => null,
-    deleteTasksByAgent: noop,
-    getTasksForResume: async () => [],
-    getActiveWorkflowTasks: async () => [],
     tryAcquireTaskLock: async () => true,
     releaseTaskLock: async () => {},
     heldTaskLockCount: () => 0,
-    clearTaskExecutionFlags: noop,
-    updateTaskExecutionStatus: noop,
-    clearActionRunningForAgent: noop,
-    clearAllStaleActionRunning: async () => 0,
-    getActiveTasksByAgent: async () => [],
-    getTasksByBoard: async () => [],
     getBoardWithMostTasksForProject: async () => null,
-    getTasksByAssignee: async () => [],
-    getActiveTaskForExecutor: async () => null,
-    hasActiveTask: async () => false,
-    countActiveTasksForAgent: async () => 0,
-    getRecurringTasks: async () => [],
-    updateTaskFields: noop,
-    getTasksByStatusAndBoard: async () => [],
-    searchTasks: async () => [],
+    searchTasks: async () => ({ total: 0, returned: 0, tasks: [] }),
   },
 });
 
@@ -229,6 +208,7 @@ const { AgentManager } = await import('../agentManager.js');
 const mockIo = { emit() {}, to() { return { emit() {} }; } };
 
 async function setup(agentDefs: any[] = []) {
+  taskRows.clear();
   const mgr = new AgentManager(mockIo, null, null, null);
   for (const def of agentDefs) {
     const created = await mgr.create({ boardId: 'board-test', ...def });
@@ -236,7 +216,6 @@ async function setup(agentDefs: any[] = []) {
     raw.status = 'idle';
     raw.boardId = 'board-test';
     raw.conversationHistory = [];
-    mgr._tasks.set(created.id, []);
     console.log(`[test-setup] agent "${raw.name}" role="${raw.role}" boardId="${raw.boardId}" enabled=${raw.enabled}`);
   }
 
@@ -249,14 +228,14 @@ async function setup(agentDefs: any[] = []) {
   };
 
   // Mock execution log — no-op
-  mgr._saveExecutionLog = () => {};
+  mgr._saveExecutionLog = async () => {};
 
   return mgr;
 }
 
 function createTask(mgr, text, status = 'backlog') {
   const [firstAgentId] = mgr.agents.keys();
-  const task = {
+  const task: any = {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     text,
     title: null,
@@ -276,20 +255,27 @@ function createTask(mgr, text, status = 'backlog') {
     environment: 'prod',
     createdAt: new Date().toISOString(),
   };
-  mgr._addTaskToStore(firstAgentId, task);
+  task.agentId = firstAgentId;
+  taskRows.set(task.id, task);
   return { task, agentId: firstAgentId };
+}
+
+/** Live task lookup from the DB fake (identity-preserving). */
+function findTask(agentId, taskId) {
+  const t = taskRows.get(taskId);
+  return t && !t.deletedAt && t.agentId === agentId ? t : null;
 }
 
 async function waitForStatus(mgr, agentId, taskId, expectedStatus, timeoutMs = 15000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const task = mgr._getAgentTasks(agentId).find(t => t.id === taskId);
+    const task = findTask(agentId, taskId);
     if (task?.status === expectedStatus) return task;
     // Trigger the recheck loop manually (simulates the 5s task loop interval)
     mgr._recheckConditionalTransitions();
     await new Promise(r => setTimeout(r, 100));
   }
-  const task = mgr._getAgentTasks(agentId).find(t => t.id === taskId);
+  const task = findTask(agentId, taskId);
   const transitions = (task?.history || [])
     .filter(h => h.from !== undefined)
     .map(h => `${h.from}→${h.status}`);
@@ -307,7 +293,7 @@ test('single task flows through entire pipeline: todo → done', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);
   const { task, agentId } = createTask(mgr, 'Build a login page');
 
-  mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
   const final = await waitForStatus(mgr, agentId, task.id, 'done');
 
   assert.equal(final.status, 'done');
@@ -327,7 +313,7 @@ test('3 parallel tasks all reach done', async () => {
   );
 
   for (const { task, agentId } of tasks)
-    mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+    await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
 
   const results = await Promise.all(
     tasks.map(({ task, agentId }) => waitForStatus(mgr, agentId, task.id, 'done'))
@@ -344,7 +330,7 @@ test('5 parallel tasks with 1 agent all reach done', async () => {
   );
 
   for (const { task, agentId } of tasks)
-    mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+    await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
 
   const results = await Promise.all(
     tasks.map(({ task, agentId }) => waitForStatus(mgr, agentId, task.id, 'done', 30000))
@@ -364,7 +350,7 @@ test('5 parallel tasks with 2 agents all reach done', async () => {
   );
 
   for (const { task, agentId } of tasks)
-    mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+    await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
 
   const results = await Promise.all(
     tasks.map(({ task, agentId }) => waitForStatus(mgr, agentId, task.id, 'done', 30000))
@@ -377,7 +363,7 @@ test('task history records every transition in order', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);
   const { task, agentId } = createTask(mgr, 'History test');
 
-  mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
   const final = await waitForStatus(mgr, agentId, task.id, 'done');
 
   const transitions = final.history
@@ -397,7 +383,7 @@ test('step4 → done transitions instantly (no run_agent)', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);
   const { task, agentId } = createTask(mgr, 'Instant test');
 
-  mgr.setTaskStatus(agentId, task.id, 'step4', { by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'step4', { by: 'user' });
   const final = await waitForStatus(mgr, agentId, task.id, 'done');
   assert.equal(final.status, 'done');
 });
@@ -406,7 +392,7 @@ test('status does not regress after reaching done', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);
   const { task, agentId } = createTask(mgr, 'No regression');
 
-  mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+  await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
   await waitForStatus(mgr, agentId, task.id, 'done');
 
   // Let any straggling async operations settle
@@ -426,7 +412,7 @@ test('10 tasks fired rapidly with 3 agents all complete', async () => {
   );
 
   for (const { task, agentId } of tasks)
-    mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
+    await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
 
   const results = await Promise.all(
     tasks.map(({ task, agentId }) => waitForStatus(mgr, agentId, task.id, 'done', 60000))

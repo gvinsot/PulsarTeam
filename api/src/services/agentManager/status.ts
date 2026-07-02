@@ -1,5 +1,5 @@
 // ─── Agent Status: getAgentStatus, swarm status, setStatus, stopAgent ───────
-import { saveAgent, clearActionRunningForAgent, saveTaskToDb } from '../database.js';
+import { saveAgent, clearActionRunningForAgent, saveTaskToDb, getTasksByAgent, getAllTasks, getTasksByAssignee, getTaskByActionRunningAgent } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 import { isCliRunner } from '../runners.js';
 
@@ -29,7 +29,7 @@ export const statusMethods = {
    * clear startedAt, push a {type:'stopped', by:'user'} history entry, and
    * persist. Does NOT set the task signal or emit task:updated — each stopAgent
    * loop keeps its own guard/signal/emit because those differ per block. */
-  _markTaskStopped(this: any, t: any, ownerAgentId: string, stopTimestamp: string): void {
+  _markTaskStopped(this: any, t: any, ownerAgentId: string | null, stopTimestamp: string): void {
     t.executionStatus = 'stopped';
     t.startedAt = null;
     if (!t.history) t.history = [];
@@ -42,11 +42,33 @@ export const statusMethods = {
     saveTaskToDb({ ...t, agentId: ownerAgentId });
   },
 
-  getAgentStatus(this: any, id: string): any {
+  /** Fetch every live task once and group by owning agentId. Board-level tasks
+   * (agentId = null) belong to no agent's todoList — matching the prior
+   * agent-keyed store — so they are skipped. Used by the bulk status getters to
+   * avoid an N+1 per-agent query. */
+  async _tasksByAgentMap(this: any): Promise<Map<string, any[]>> {
+    const all = await getAllTasks();
+    const byAgent = new Map<string, any[]>();
+    for (const t of all) {
+      if (!t.agentId) continue;
+      let list = byAgent.get(t.agentId);
+      if (!list) { list = []; byAgent.set(t.agentId, list); }
+      list.push(t);
+    }
+    return byAgent;
+  },
+
+  async getAgentStatus(this: any, id: string): Promise<any> {
     const agent = this.agents.get(id);
     if (!agent) return null;
+    return this._buildAgentStatus(agent, await getTasksByAgent(id));
+  },
 
-    const todoList = this._getAgentTasks(id);
+  /** Build the status snapshot for an agent from a pre-fetched todoList (its
+   * owned tasks). Synchronous so the bulk getters can map over a grouped set
+   * without a per-agent await. */
+  _buildAgentStatus(this: any, agent: any, todoList: any[]): any {
+    const id = agent.id;
     const waitingTasks = todoList.filter((t: any) => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
     const activeTaskCount = todoList.filter((t: any) => this._isActiveTaskStatus(t.status)).length;
     const doneTasks = todoList.filter((t: any) => t.status === 'done').length;
@@ -105,21 +127,19 @@ export const statusMethods = {
     };
   },
 
-  getAllStatuses(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): any[] {
+  async getAllStatuses(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): Promise<any[]> {
     const agents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
-    return (agents as any[])
-      .filter((a: any) => a.enabled !== false)
-      .map((a: any) => this.getAgentStatus(a.id))
-      .filter(Boolean);
+    const enabled = (agents as any[]).filter((a: any) => a.enabled !== false);
+    const byAgent = await this._tasksByAgentMap();
+    return enabled.map((a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || [])).filter(Boolean);
   },
 
-  getAgentsByProject(this: any, projectName: string, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): any[] {
+  async getAgentsByProject(this: any, projectName: string, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): Promise<any[]> {
     if (!projectName) return [];
     const agents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
-    return (agents as any[])
-      .filter((a: any) => a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase())
-      .map((a: any) => this.getAgentStatus(a.id))
-      .filter(Boolean);
+    const matched = (agents as any[]).filter((a: any) => a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase());
+    const byAgent = await this._tasksByAgentMap();
+    return matched.map((a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || [])).filter(Boolean);
   },
 
   getProjectSummary(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): any {
@@ -167,15 +187,17 @@ export const statusMethods = {
     };
   },
 
-  getSwarmStatus(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): any {
+  async getSwarmStatus(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): Promise<any> {
     const allAgents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
     const enabled = (allAgents as any[]).filter((a: any) => a.enabled !== false);
     const disabled = (allAgents as any[]).filter((a: any) => a.enabled === false);
+    const byAgent = await this._tasksByAgentMap();
+    const statusOf = (a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || []);
 
     const projectMap: Record<string, any[]> = {};
     const unassigned: any[] = [];
     for (const agent of enabled) {
-      const status = this.getAgentStatus(agent.id);
+      const status = statusOf(agent);
       if (agent.project) {
         if (!projectMap[agent.project]) projectMap[agent.project] = [];
         projectMap[agent.project].push(status);
@@ -217,7 +239,7 @@ export const statusMethods = {
       projectSummaries,
       projectAssignments: projectMap,
       unassignedAgents: unassigned,
-      agents: enabled.map((a: any) => this.getAgentStatus(a.id))
+      agents: enabled.map((a: any) => statusOf(a))
     };
   },
 
@@ -305,58 +327,12 @@ export const statusMethods = {
     }
 
     const stopTimestamp = new Date().toISOString();
-    for (const t of this._getAgentTasks(id)) {
-      if (this._isActiveTaskStatus(t.status)) {
-        this._markTaskStopped(t, id, stopTimestamp);
-        // Signal any pending _waitForExecutionComplete loop so it exits
-        // instead of keeping the reminder cycle alive for a stopped agent.
-        setTaskSignal(t.id, 'stopped', true);
-        this._emit('task:updated', { agentId: id, task: { ...t, agentId: id } });
-      }
-    }
-
-    // Clear actionRunning flags for tasks assigned to this agent
-    clearActionRunningForAgent(id);
-    for (const [creatorId, creatorAgent] of this.agents) {
-      for (const t of this._getAgentTasks(creatorId)) {
-        if (t.actionRunning && t.actionRunningAgentId === id) {
-          t.actionRunning = false;
-          delete t.actionRunningAgentId;
-          delete t.actionRunningMode;
-          // Mark the task as stopped in DB + memory so the task-loop SQL
-          // filter (started_at IS NOT NULL AND execution_status NOT IN
-          // (watching, stopped)) excludes it. Without this an
-          // executor-only stop leaves execution_status=NULL and
-          // started_at intact, so the next 5-second tick of
-          // _processNextPendingTasks resumes the task immediately.
-          if (this._isActiveTaskStatus(t.status)) {
-            this._markTaskStopped(t, creatorId, stopTimestamp);
-          }
-          // Signal any pending _waitForExecutionComplete loop so it unblocks
-          // the workflow lock instead of waiting out the 10-min reminder cycle.
-          setTaskSignal(t.id, 'stopped', true);
-          this._emit('task:updated', { agentId: (creatorAgent as any).id, task: t });
-        }
-      }
-    }
-
-    // Tasks owned by another agent but assigned to this one: the task loop
-    // resumes via executorId = task.assignee || task.agentId, so a stop must
-    // also halt these or their reminder loops keep prompting the stopped agent.
-    // Only in-flight tasks (started or actively watched) — an assigned task
-    // that never started must stay eligible for normal workflow entry.
-    for (const [creatorId] of this.agents) {
-      if (creatorId === id) continue;
-      for (const t of this._getAgentTasks(creatorId)) {
-        if (t.assignee !== id || !this._isActiveTaskStatus(t.status)) continue;
-        if (!t.startedAt && !getTaskSignal(t.id, 'watching')) continue;
-        if (t.executionStatus !== 'stopped') {
-          this._markTaskStopped(t, creatorId, stopTimestamp);
-        }
-        setTaskSignal(t.id, 'stopped', true);
-        this._emit('task:updated', { agentId: creatorId, task: { ...t, agentId: creatorId } });
-      }
-    }
+    // Halt the agent's in-flight tasks. Sourced from the DB (the single source of
+    // truth) and run fire-and-forget so the synchronous stop path (abort + set
+    // idle below) isn't blocked on DB round-trips. Signals set here still reach
+    // the polling _waitForExecutionComplete loops moments later.
+    this._haltAgentTasks(id, stopTimestamp).catch((err: any) =>
+      console.warn(`⚠️ [stopAgent] halting tasks for ${id} failed: ${err?.message || err}`));
 
     agent.currentThinking = '';
     this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
@@ -368,5 +344,38 @@ export const statusMethods = {
     console.log(`🛑 Agent ${agent.name} stopped`);
     this._emit('agent:stopped', { id, name: agent.name, project: agent.project || null });
     return true;
+  },
+
+  /** Mark every in-flight task this agent is executing as stopped. The candidate
+   * set is the DB union of: tasks it owns (active), tasks assigned to it (active,
+   * started or being watched), and the task carrying its in-flight action_running
+   * flag. Clears action_running, pushes a stopped history entry (via
+   * _markTaskStopped), sets the 'stopped' signal so a waiting reminder loop exits,
+   * and emits task:updated. Board-level (ownerless) tasks emit under their own
+   * agentId = null. */
+  async _haltAgentTasks(this: any, id: string, stopTimestamp: string): Promise<void> {
+    // Capture the running task BEFORE clearing the DB flags below.
+    const running = await getTaskByActionRunningAgent(id);
+    clearActionRunningForAgent(id);
+
+    const owned = (await getTasksByAgent(id)).filter((t: any) => this._isActiveTaskStatus(t.status));
+    const assigned = (await getTasksByAssignee(id)).filter((t: any) =>
+      this._isActiveTaskStatus(t.status) && (t.startedAt || getTaskSignal(t.id, 'watching')));
+
+    const halt = new Map<string, any>();
+    for (const t of [...owned, ...assigned, ...(running ? [running] : [])]) {
+      if (!halt.has(t.id)) halt.set(t.id, t);
+    }
+    for (const t of halt.values()) {
+      const ownerId = t.agentId || null;
+      t.actionRunning = false;
+      delete t.actionRunningAgentId;
+      delete t.actionRunningMode;
+      if (this._isActiveTaskStatus(t.status)) {
+        this._markTaskStopped(t, ownerId, stopTimestamp);
+      }
+      setTaskSignal(t.id, 'stopped', true);
+      this._emit('task:updated', { agentId: ownerId, task: { ...t, agentId: ownerId } });
+    }
   },
 };

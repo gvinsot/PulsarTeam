@@ -95,6 +95,8 @@ export const TASK_TYPE_MAP = Object.fromEntries(TASK_TYPES.map(t => [t.value, t]
 
 // ── Execution mode labels (history entries) ─────────────────────────────────
 
+// 'execute' is a removed action mode, kept here only to label historical
+// execution-log entries that genuinely ran under it.
 export const MODE_LABELS: Record<string, string> = { execute: 'Execution', refine: 'Refine', decide: 'Decide', title: 'Title', set_type: 'Set Type' };
 
 // ── Recurrence periods ────────────────────────────────────────────────────────
@@ -205,7 +207,6 @@ export const AVAILABLE_COLORS = [
 export const ACTION_OPTIONS = [
   { value: 'assign_agent', label: 'Assign to agent (by role)' },
   { value: 'assign_agent_individual', label: 'Assign to agent (individually)' },
-  { value: 'run_agent:execute', label: 'Execute task (agent)' },
   { value: 'run_agent:refine', label: 'Refine description (agent)' },
   { value: 'run_agent:title', label: 'Generate title (agent)' },
   { value: 'run_agent:set_type', label: 'Set task type (agent)' },
@@ -216,7 +217,6 @@ export const ACTION_OPTIONS = [
 export function createAction(key, cols) {
   if (key === 'assign_agent') return { type: 'assign_agent', role: '' };
   if (key === 'assign_agent_individual') return { type: 'assign_agent_individual', agentId: '' };
-  if (key === 'run_agent:execute') return { type: 'run_agent', mode: 'execute', role: '', instructions: '' };
   if (key === 'run_agent:refine') return { type: 'run_agent', mode: 'refine', role: '', instructions: '' };
   if (key === 'run_agent:title') return { type: 'run_agent', mode: 'title', role: '' };
   if (key === 'run_agent:set_type') return { type: 'run_agent', mode: 'set_type', role: '' };
@@ -226,7 +226,10 @@ export function createAction(key, cols) {
 }
 
 export function getActionKey(action) {
-  if (action.type === 'run_agent') return `run_agent:${action.mode}`;
+  // Legacy boards may still carry mode:'execute' (removed) — surface it as the
+  // 'decide' option so the action stays editable instead of showing a blank
+  // dropdown. Re-saving the board then persists it as decide.
+  if (action.type === 'run_agent') return `run_agent:${action.mode === 'execute' ? 'decide' : action.mode}`;
   return action.type;
 }
 

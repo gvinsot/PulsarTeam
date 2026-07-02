@@ -106,7 +106,7 @@ test('markTaskError clears actionRunning flags so UI can offer recovery', () => 
     status: 'code',
     actionRunning: true,
     actionRunningAgentId: 'a1',
-    actionRunningMode: 'execute',
+    actionRunningMode: 'decide',
     history: [],
   };
 
@@ -121,12 +121,12 @@ test('markTaskError attaches optional context (mode, actionIndex, agentName)', (
   const task: any = { id: 't1', status: 'code', history: [] };
   markTaskError(task, 'boom', {
     by: 'agent-1',
-    mode: 'execute',
+    mode: 'decide',
     actionIndex: 2,
     agentName: 'Worker',
   });
   const entry = task.history[0];
-  assert.equal(entry.actionMode, 'execute');
+  assert.equal(entry.actionMode, 'decide');
   assert.equal(entry.actionIndex, 2);
   assert.equal(entry.agentName, 'Worker');
 });

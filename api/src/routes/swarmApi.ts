@@ -1,6 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
-import { getAllBoards, getBoardById, getBoardWithMostTasksForProject } from '../services/database.js';
+import { getAllBoards, getBoardById, getBoardWithMostTasksForProject, getTasksByAgent } from '../services/database.js';
 import { detectEnvironment } from '../lib/environment.js';
 
 const createTaskSchema = z.object({
@@ -22,7 +22,7 @@ export function swarmApiRoutes(agentManager: any) {
   const router = express.Router();
 
   // ── List agents ────────────────────────────────────────────────────────
-  router.get('/agents', (req, res) => {
+  router.get('/agents', async (req, res) => {
     const { project, status } = req.query;
     const allAgents: any[] = Array.from(agentManager.agents.values());
     let agents = allAgents.filter(a => a.enabled !== false);
@@ -34,6 +34,7 @@ export function swarmApiRoutes(agentManager: any) {
       agents = agents.filter(a => a.status === status);
     }
 
+    const byAgent = await agentManager._tasksByAgentMap();
     const result = agents.map(a => ({
       id: a.id,
       name: a.name,
@@ -41,7 +42,7 @@ export function swarmApiRoutes(agentManager: any) {
       status: a.status,
       project: a.project || null,
       currentTask: a.currentTask || null,
-      openTasks: agentManager._getAgentTasks(a.id).filter(t => t.status !== 'done').length,
+      openTasks: (byAgent.get(a.id) || []).filter((t: any) => t.status !== 'done').length,
       totalMessages: a.metrics?.totalMessages || 0,
     }));
 
@@ -49,7 +50,7 @@ export function swarmApiRoutes(agentManager: any) {
   });
 
   // ── Get agent status ───────────────────────────────────────────────────
-  router.get('/agents/:id', (req, res) => {
+  router.get('/agents/:id', async (req, res) => {
     const agent: any = agentManager.agents.get(req.params.id)
       || Array.from<any>(agentManager.agents.values()).find(
         (a: any) => a.name.toLowerCase() === req.params.id.toLowerCase()
@@ -68,7 +69,7 @@ export function swarmApiRoutes(agentManager: any) {
       project: agent.project || null,
       currentTask: agent.currentTask || null,
       enabled: agent.enabled !== false,
-      todoList: agentManager._getAgentTasks(agent.id).map(t => ({
+      todoList: (await getTasksByAgent(agent.id)).map((t: any) => ({
         id: t.id,
         text: t.text,
         status: t.status,
@@ -163,7 +164,7 @@ export function swarmApiRoutes(agentManager: any) {
     }
 
     const environment = detectEnvironment(req.hostname);
-    const newTask = agentManager.addTask(agent.id, task, { type: 'api' }, status, { boardId: resolvedBoardId, environment });
+    const newTask = await agentManager.addTask(agent.id, task, { type: 'api' }, status, { boardId: resolvedBoardId, environment });
     console.log(`\u2705 [SwarmAPI] Task created for agent "${agent.name}" (${agent.id}) \u2014 task: ${newTask?.id}, project: ${project}, board: ${resolvedBoardId || '(none)'}`);
 
     res.status(201).json({

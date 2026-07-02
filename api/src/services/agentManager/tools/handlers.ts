@@ -12,6 +12,7 @@
 import {
   saveAgent, searchAgentSkills, getAgentSkillById, saveAgentSkill, deleteAgentSkillFromDb,
   getAllBoards, getBoardById, getTasksByStatusAndBoard, saveTaskToDb,
+  getTasksByAgent, getTaskByIdPrefix,
 } from '../../database.js';
 import { getWorkflowForBoard } from '../../configManager.js';
 import { applyTaskUpdate } from '../../swarmApiMcp.js';
@@ -105,22 +106,15 @@ const handleReportError: ToolHandler = async ({ mgr, agent, agentId, call, strea
 // "done" call is @update_task(taskId, nextColumn, "summary").
 const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   const [taskId, rawStatus, comment, commits] = call.args;
-  let task: any = mgr._getAgentTasks(agentId).find((t: any) => t.id === taskId);
-  if (!task) task = mgr._getAgentTasks(agentId).find((t: any) => t.id.startsWith(taskId));
-  let taskAgentId = agentId;
-  if (!task) {
-    const found = mgr._findTaskByIdOrPrefix(taskId);
-    if (found) {
-      task = found.task;
-      taskAgentId = found.agentId;
-    }
-  }
-  if (!task) {
-    // Not in any in-memory store → almost certainly a board-level task (created
-    // unassigned via MCP add_task) that lives only in the DB. Delegate to
-    // applyTaskUpdate, which has the DB fallback + board-level update path (the
-    // same code the MCP update_task tool uses). Without this, @update_task can't
-    // touch a board-level task even when the agent was explicitly assigned one.
+  // Resolve DB-first (by id or unique prefix), regardless of owner.
+  const found = await mgr._resolveTaskRef(taskId);
+  let task: any = found?.task || null;
+  const taskAgentId: string | null = found?.agentId ?? null;
+
+  // Board-level task (no owner) → delegate to applyTaskUpdate, which owns the
+  // board-level DB update path (setTaskStatus requires an owner agent). This is
+  // also the graceful handler when the task can't be resolved at all.
+  if (!task || !taskAgentId) {
     const wantsStatusArg = Boolean(rawStatus && String(rawStatus).trim());
     const r = await applyTaskUpdate(mgr, {
       agent_id: agentId,
@@ -143,7 +137,7 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
       };
     }
     // applyTaskUpdate couldn't find/handle it either → a real not-found.
-    const partial = mgr._getAgentTasks(agentId).find((t: any) => t.id.startsWith(taskId.slice(0, 8)));
+    const partial = await getTaskByIdPrefix(String(taskId).slice(0, 8));
     const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
     return { tool: 'update_task', args: call.args, success: false, error: r.error || `Task not found: ${taskId}.${hint}` };
   }
@@ -209,7 +203,7 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   // Status move.
   let moved = false;
   if (hasStatus) {
-    const updated = mgr.setTaskStatus(taskAgentId, task.id, newStatus, { skipAutoRefine: false, by: agent.name });
+    const updated = await mgr.setTaskStatus(taskAgentId, task.id, newStatus, { skipAutoRefine: false, by: agent.name });
     moved = Boolean(updated);
     if (!moved && !hasCompletion) {
       return { tool: 'update_task', args: call.args, success: false, error: `Cannot move task to "${newStatus}" (blocked by guard or same status).` };
@@ -217,10 +211,10 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   }
   console.log(`📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}"${hasStatus ? ` → ${newStatus}` : ''}${hasCompletion ? ' (finished)' : ''}`);
 
-  // Stop the chat loop when the task is done: in workflow action modes (decide,
-  // refine, …) any status change is terminal; in execute mode a recorded
-  // completion is terminal.
-  const isWorkflowMode = task.actionRunningMode && task.actionRunningMode !== 'execute';
+  // Stop the chat loop when the task is done: inside a workflow action mode
+  // (decide, refine, …) any status change is terminal; a recorded completion is
+  // terminal in any mode.
+  const isWorkflowMode = Boolean(task.actionRunningMode);
   const isTerminal = (isWorkflowMode && hasStatus) || completed;
   const parts = [hasStatus && moved ? `moved to ${newStatus}` : null, hasCompletion ? 'marked finished' : null].filter(Boolean);
   return { tool: 'update_task', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" ${parts.join(' and ') || 'updated'}`, isTerminal: isTerminal || undefined };
@@ -416,14 +410,14 @@ const handleListMyTasks: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
   // Cross-turn dedup: skip if called recently (within 60s) with unchanged task list
   const now = Date.now();
   const lastCall = agent._lastListMyTasks || 0;
-  const taskHash = JSON.stringify(mgr._getAgentTasks(agentId).map((t: any) => `${t.id}:${t.status}`));
+  const tasks = await getTasksByAgent(agentId);
+  const taskHash = JSON.stringify(tasks.map((t: any) => `${t.id}:${t.status}`));
   if (now - lastCall < 60000 && agent._lastListMyTasksHash === taskHash) {
     console.log(`[Dedup] Skipping @list_my_tasks from "${agent.name}" — unchanged since ${Math.round((now - lastCall) / 1000)}s ago`);
     return { tool: 'list_my_tasks', args: [], success: true, result: '[Tasks unchanged since last check — focus on your current task]' };
   }
   agent._lastListMyTasks = now;
   agent._lastListMyTasksHash = taskHash;
-  const tasks = mgr._getAgentTasks(agentId);
   const header = `Agent: ${agent.name} | Project: ${agent.project || 'none'} | Status: ${agent.status}`;
   if (tasks.length === 0) {
     return { tool: 'list_my_tasks', args: [], success: true, result: `${header}\nNo tasks assigned.` };
@@ -453,7 +447,7 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
   }
   agent._lastCheckStatus = csNow;
   const { AgentManager } = await import('../index.js');
-  const todoList = mgr._getAgentTasks(agentId);
+  const todoList = await getTasksByAgent(agentId);
   const waitingTasks = todoList.filter((t: any) => !mgr._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
   const activeCount = todoList.filter((t: any) => mgr._isActiveTaskStatus(t.status)).length;
   const doneTasks = todoList.filter((t: any) => t.status === 'done').length;

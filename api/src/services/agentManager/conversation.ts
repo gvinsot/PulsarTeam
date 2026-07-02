@@ -1,5 +1,5 @@
 // ─── Conversation: history management, context switching, voice ───────────────
-import { saveAgent, clearTaskExecutionFlags } from '../database.js';
+import { saveAgent, clearTaskExecutionFlags, getTasksByAgent, getTasksByAssignee } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 
 /** @this {import('./index.js').AgentManager} */
@@ -78,23 +78,16 @@ export const conversationMethods = {
     // mints a fresh session UUID and the runner records it in
     // agent.runnerSessions for us.
     agent.runnerSessions = {};
-    // Stop all active reminder loops for tasks involving this agent
-    for (const [ownerId] of this.agents) {
-      for (const task of this._getAgentTasks(ownerId)) {
-        if (task.assignee === agentId || ownerId === agentId) {
-          // Only signal tasks a live _waitForExecutionComplete loop is
-          // watching — an unconsumed 'stopped' signal would silently
-          // suppress the task loop's auto-resume.
-          if (getTaskSignal(task.id, 'watching')) {
-            setTaskSignal(task.id, 'stopped', true);
-          }
-          delete task.startedAt;
-          task.completedActionIdx = null;
-          task.executionStatus = null;
-          delete task.actionRunning;
-          delete task.actionRunningAgentId;
-        }
-      }
+    // Stop all active reminder loops for tasks involving this agent (owner or
+    // assignee). The DB execution-flag reset is handled by clearTaskExecutionFlags
+    // below; here we only need to fire the 'stopped' signal for tasks a live
+    // _waitForExecutionComplete loop is watching (an unconsumed signal would
+    // silently suppress the task loop's auto-resume).
+    const involved = new Map<string, any>();
+    for (const t of await getTasksByAgent(agentId)) involved.set(t.id, t);
+    for (const t of await getTasksByAssignee(agentId)) involved.set(t.id, t);
+    for (const t of involved.values()) {
+      if (getTaskSignal(t.id, 'watching')) setTaskSignal(t.id, 'stopped', true);
     }
     // Persist the cleared execution flags to DB
     clearTaskExecutionFlags(agentId);
@@ -258,7 +251,7 @@ export const conversationMethods = {
   },
 
   // ─── Voice Agent Instructions ────────────────────────────────────
-  buildVoiceInstructions(this: any, agentId: string): string {
+  async buildVoiceInstructions(this: any, agentId: string): Promise<string> {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
 
@@ -290,7 +283,7 @@ export const conversationMethods = {
       }
     }
 
-    const voiceTasks = this._getAgentTasks(agentId);
+    const voiceTasks = await getTasksByAgent(agentId);
     if (voiceTasks.length > 0) {
       instructions += '\n\n--- Current Task List ---\n';
       for (const task of voiceTasks) {

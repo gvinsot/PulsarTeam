@@ -110,7 +110,7 @@ export function realtimeRoutes(agentManager) {
     }
 
     try {
-      const instructions = agentManager.buildVoiceInstructions(agentId);
+      const instructions = await agentManager.buildVoiceInstructions(agentId);
       const voice = agent.voice || process.env.OPENAI_REALTIME_VOICE || 'alloy';
       const DEFAULT_REALTIME_MODEL = 'gpt-realtime-1.5';
       const candidateModel = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || '';

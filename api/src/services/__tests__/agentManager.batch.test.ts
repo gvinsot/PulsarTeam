@@ -27,7 +27,6 @@ test('convertToBatch keeps the original agent as member #1 and creates configure
 
   const original = manager.agents.get(created.id);
   original.conversationHistory = [{ role: 'user', content: 'hello' }];
-  manager._tasks.set(created.id, [{ id: 'task-1', text: 'Ship it' }]);
 
   const batch = await manager.convertToBatch(created.id, 3);
 
@@ -49,8 +48,6 @@ test('convertToBatch keeps the original agent as member #1 and creates configure
   assert.deepEqual(clone.permissions, { execution: { shellAccess: true } });
   assert.deepEqual(clone.toolHooks, { enabled: true, rules: [] });
   assert.equal(clone.conversationHistory.length, 0);
-  assert.deepEqual(manager._tasks.get(batch[1].id), []);
-  assert.deepEqual(manager._tasks.get(created.id), [{ id: 'task-1', text: 'Ship it' }]);
 });
 
 test('convertToBatch rejects voice agents', async () => {

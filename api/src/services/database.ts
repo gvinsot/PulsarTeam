@@ -51,13 +51,13 @@ export {
 export type { OAuthProvider, ScopeType, OAuthTokenRecord } from './database/oauthTokens.js';
 export {
   rowToTask,
-  getTasksByAgent, getAllTasks, getTaskById, getTaskByIdPrefix, saveTaskToDb,
+  getTasksByAgent, getAllTasks, getAllTaskIds, getTaskById, getTaskByIdPrefix, saveTaskToDb,
   deleteTaskFromDb, hardDeleteTaskFromDb, restoreTaskFromDb,
   getDeletedTasks, getDeletedTaskById, deleteTasksByAgent,
-  getTasksForResume, getActiveWorkflowTasks, clearTaskExecutionFlags, updateTaskExecutionStatus,
+  getTasksForResume, getActiveWorkflowTasks, getInterruptedChainTasks, clearTaskExecutionFlags, updateTaskExecutionStatus,
   clearActionRunningForAgent, clearAllStaleActionRunning,
   getActiveTasksByAgent, getTasksByBoard, getBoardWithMostTasksForProject,
-  getTasksByAssignee, getActiveTaskForExecutor, hasActiveTask,
+  getTasksByAssignee, getTaskByActionRunningAgent, getActiveTaskForExecutor, hasActiveTask,
   countActiveTasksForAgent, getRecurringTasks,
   updateTaskFields, getTasksByStatusAndBoard, searchTasks,
 } from './database/tasks.js';

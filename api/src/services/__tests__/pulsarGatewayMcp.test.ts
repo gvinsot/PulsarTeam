@@ -10,6 +10,11 @@
 
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { makeTaskDbFake } from './helpers/taskDbFake.js';
+
+// Shared in-memory task DB — resolveCurrentTaskId (database.js) and applyTaskUpdate's
+// locateTask (database/tasks.js) both read from it; the fake manager seeds it.
+const { rows: taskRows, exports: taskDbFake } = makeTaskDbFake();
 
 const BOARD_WORKFLOW = {
   columns: [
@@ -30,14 +35,17 @@ mock.module('../database.js', {
     getBoardById: async (id: string) => BOARDS[id] || null,
     getAllBoards: async () => Object.values(BOARDS),
     searchTasks: async () => ({ total: 0, returned: 0, tasks: [] }),
+    // resolveCurrentTaskId reads these from database.js
+    getTaskByActionRunningAgent: taskDbFake.getTaskByActionRunningAgent,
+    getTasksByAssignee: taskDbFake.getTasksByAssignee,
+    getActiveTasksByAgent: taskDbFake.getActiveTasksByAgent,
   },
 });
 mock.module('../database/boardRepos.js', {
   namedExports: { getReposForBoard: async () => [] },
 });
-mock.module('../database/tasks.js', {
-  namedExports: { getTaskById: async () => null, getTaskByIdPrefix: async () => null },
-});
+// applyTaskUpdate's locateTask resolves via database/tasks.js
+mock.module('../database/tasks.js', { namedExports: taskDbFake });
 
 const { createPulsarGatewayMcpServer } = await import('../pulsarGatewayMcp.js');
 
@@ -53,13 +61,14 @@ function makeFakeAgentManager() {
   const tasks: any[] = [
     { id: 'task-1', agentId: 'agent-1', text: 'Active task', status: 'in_progress', boardId: 'board-1' },
   ];
+  // Seed into the shared DB fake so resolveCurrentTaskId + locateTask find it.
+  taskRows.clear();
+  for (const t of tasks) taskRows.set(t.id, t);
   const calls: any = { setTaskStatus: [], recordTaskCompletion: [] };
 
   return {
     agents: new Map([[agent.id, agent]]),
-    _getAgentTasks: () => tasks,
     _isActiveTaskStatus: (s: string) => s === 'in_progress',
-    _findTaskAcross: () => null,
     setTaskStatus(agentId: string, taskId: string, status: string) {
       const t = tasks.find(x => x.id === taskId);
       if (t) t.status = status;

@@ -83,16 +83,10 @@ function _emitTaskUpdated(agentManager, agentId, task) {
 
 /**
  * Snapshot of a task's live state for before/after comparison (e.g. decide-mode
- * decision detection): the in-memory store object for an OWNED task, or the
- * freshly-read DB row for a BOARD-LEVEL task (agent_id = NULL). A board-level
- * agent's decision lands in the DB (via update_task → applyBoardLevelUpdate), not
- * the in-memory store, so the in-memory lookup would always miss it and the move
- * would read as "no decision".
+ * decision detection). Read straight from the DB — the single source of truth for
+ * both owned and board-level tasks.
  */
 async function _liveTaskSnapshot(agentManager, task) {
-  if (task.agentId) {
-    return agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-  }
   return getTaskById(task.id);
 }
 
@@ -178,21 +172,6 @@ Instructions:
 ${instructions}`;
 }
 
-function buildExecutePrompt(task) {
-  const commits = formatCommitsContext(task);
-  // Note: the "explore the project structure first" hint used to live at the
-  // bottom of this prompt, but it was visible to the user as if it were part
-  // of the task description. The hint is now injected as a system-context
-  // note in chat.ts when messageMeta indicates execute mode (see
-  // _buildSystemPrompt / sendMessage), so it stays out of the user-facing
-  // prompt and out of the persisted conversation history.
-  return `You have been assigned the following task to execute.
-
-Task ID: ${task.id}
-Task: ${task.text}
-${task.error ? `Previous error: ${task.error}\n` : ''}${commits}`;
-}
-
 /**
  * Strip tool calls (@tool(...) and <tool_call> blocks) from an LLM response
  * so that only the descriptive text remains.
@@ -274,12 +253,15 @@ export async function executeAction(action, task, context) {
 
 // ── assign_agent ────────────────────────────────────────────────────────────
 
-function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
+async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
+  // Precompute owned-task counts once from the DB so the (sync) load-balancer
+  // can tie-break by task count without an in-memory store.
+  const tasksByAgent = await agentManager._tasksByAgentMap();
   const agent = findAgentForAssignment(
     agentManager.agents,
     action.role,
     ownerId,
-    (agentId: any) => agentManager._getAgentTasks(agentId),
+    (agentId: any) => tasksByAgent.get(agentId) || [],
     task.id,
     task.boardId || null,
     task.repoFullName || task.project || null
@@ -290,7 +272,7 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     return { executed: false, skipped: true, reason: 'no-agent-for-role' };
   }
 
-  const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const actualTask = task.agentId ? await getTaskById(task.id) : null;
   if (actualTask) {
     actualTask.assignee = agent.id;
     recordReassign(actualTask, agent.id);
@@ -312,10 +294,10 @@ function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
 
 // ── assign_agent_individual ─────────────────────────────────────────────────
 
-function executeAssignAgentIndividual(action, task, { agentManager, io }) {
+async function executeAssignAgentIndividual(action, task, { agentManager, io }) {
   const targetAgentId = action.agentId || null;
-  const actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-  const mutable = actualTask || task; // board-level tasks have no in-memory object
+  const actualTask = task.agentId ? await getTaskById(task.id) : null;
+  const mutable = actualTask || task; // board-level tasks: mutate the working copy
   const prev = mutable.assignee || null;
   // No-op guard: avoid clobbering an assignee set by a concurrent run_agent
   // action and spamming task:updated events when the target matches current.
@@ -367,7 +349,7 @@ async function executeChangeStatus(action, task, { agentManager, workflow }) {
   // Check if the real task is already at the target status (concurrent chain
   // may have moved it). This prevents duplicate "stopping chain" log spam and
   // avoids triggering a redundant _checkAutoRefine for an already-processed column.
-  const realTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  const realTask = task.agentId ? await getTaskById(task.id) : null;
   if (realTask && realTask.status === target) {
     console.log(`[ActionExecutor] change_status: task="${task.id}" already at "${target}" — no-op`);
     return { executed: true, statusChanged: true };
@@ -393,7 +375,7 @@ async function executeChangeStatus(action, task, { agentManager, workflow }) {
   delete realTask._pendingOnEnter;
 
   console.log(`[ActionExecutor] change_status: "${task.status}" → "${target}" task="${task.id}"`);
-  const result = agentManager.setTaskStatus(task.agentId, task.id, target, {
+  const result = await agentManager.setTaskStatus(task.agentId, task.id, target, {
     skipAutoRefine: false,
     by: 'workflow',
   });
@@ -591,7 +573,10 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
  * old monolithic processTransition function.
  */
 async function executeRunAgent(action, task, { agentManager, io, ownerId, workflow }) {
-  const mode = action.mode || AgentMode.EXECUTE;
+  // Default to DECIDE for a run_agent action with no explicit mode (also the
+  // landing spot for legacy 'execute' actions, which configManager maps to
+  // 'decide' at load — see mapLegacyExecuteMode).
+  const mode = action.mode || AgentMode.DECIDE;
   const role = action.role || '';
   const instructions = action.instructions || '';
   const columns = workflow?.columns || [];
@@ -604,11 +589,13 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
 
   // Find agent for this role (scoped to the task's board, preferring agents
   // already on the task's repo so we don't have to project-switch every run).
+  // Precompute owned-task counts from the DB for the (sync) load-balancer.
+  const tasksByAgent = await agentManager._tasksByAgentMap();
   const agent = findAgentByRole(
     agentManager.agents,
     role,
     ownerId,
-    (agentId: any) => agentManager._getAgentTasks(agentId),
+    (agentId: any) => tasksByAgent.get(agentId) || [],
     task.boardId || null,
     task.repoFullName || task.project || null
   ) as any;
@@ -641,7 +628,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   try {
 
   // Set actionRunning flag on the task
-  actualTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
+  actualTask = task.agentId ? await getTaskById(task.id) : null;
   if (actualTask) {
     _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
   } else {
@@ -670,9 +657,6 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
         break;
       case AgentMode.DECIDE:
         result = await _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt });
-        break;
-      case AgentMode.EXECUTE:
-        result = await _runExecuteMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       default:
         console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
@@ -748,10 +732,10 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       delete actualTask.actionRunningMode;
       cleanupMutated = true;
     }
-    // Non-execute modes (decide, refine, title, set_type) should not leave the
-    // agent as the permanent assignee — clear it so the task loop won't send
+    // Workflow action modes (decide, refine, title, set_type) should not leave
+    // the agent as the permanent assignee — clear it so the task loop won't send
     // the task to the wrong agent if the next workflow action is delayed.
-    if (mode !== AgentMode.EXECUTE && actualTask && actualTask.assignee === agent.id) {
+    if (actualTask && actualTask.assignee === agent.id) {
       actualTask.assignee = null;
       cleanupMutated = true;
     }
@@ -954,7 +938,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
     if (attempts >= MAX_DECIDE_NO_DECISION) {
       agentManager._decideNoDecisionCounts.delete(task.id);
       const why = isCliRunner(agent)
-        ? `Agent "${agent.name}" (CLI runner) produced no decision after ${attempts} attempts. It likely has no tool to update the task — assign the Swarm API MCP (update_task) to this agent, or use an "execute" action instead of "decide".`
+        ? `Agent "${agent.name}" (CLI runner) produced no decision after ${attempts} attempts. It likely has no tool to update the task — assign the Swarm API MCP (update_task) to this agent.`
         : `Agent "${agent.name}" produced no @update_task call after ${attempts} attempts.`;
       console.error(`[ActionExecutor] decide: ${why} — failing task="${task.id}"`);
       // Throw so executeRunAgent's catch marks the task error (visible on the
@@ -969,62 +953,5 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   // Decision made — clear the no-decision counter.
   agentManager._decideNoDecisionCounts.delete(task.id);
   console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
-  return { executed: true };
-}
-
-async function _runExecuteMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt }) {
-  const hasInstructions = !!instructions;
-  const prompt = hasInstructions ? buildInstructionsPrompt(task, instructions, columns) : buildExecutePrompt(task);
-  console.log(`[ActionExecutor] execute: "${task.text?.slice(0, 60)}" via ${agent.name}${hasInstructions ? ' (with instructions)' : ''}`);
-
-  const buf = { text: '' };
-
-  // CLI runners always execute inside their interactive PTY — never the
-  // headless sendMessage fallback. Even if agent.status flipped to "busy"
-  // (e.g. console activity from an attached browser terminal), we still drive
-  // the same shared PTY: the runner blocks the inject call until the TUI is
-  // back at an input-ready prompt (the PTY-is-free gate). Falling back to
-  // headless here would create an invisible session the user can't see in the
-  // terminal tab and would split the task's context across two backends.
-  if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
-    console.log(`[ActionExecutor] execute: injecting task prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
-    const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt);
-    // Honor the wait result: a CLI auth failure (or other hard error) must NOT
-    // be reported as a successful execution, otherwise the workflow chain
-    // advances (e.g. → done/review) over a task that never ran. Throw so
-    // executeRunAgent's catch marks the task error + saves the execution log.
-    _throwIfWaitError(agentManager, task, waitResult, 'Claude Code CLI ended in an authentication or runtime error');
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
-    return { executed: true };
-  }
-
-  const streamResult = await _withAgentStream(agentManager, agent.id, async () => {
-    const workflowMeta = { type: 'workflow-action', mode: 'execute', taskId: task.id };
-    const result = await agentManager.sendMessage(
-      agent.id,
-      prompt,
-      _makeStreamCollector(agentManager, agent.id, buf),
-      0,
-      workflowMeta
-    );
-
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'execute');
-
-    const freshTask = agentManager._getAgentTasks(task.agentId).find(t => t.id === task.id);
-
-    if (freshTask && !agentManager._isActiveTaskStatus(freshTask.status)) {
-      console.log(`[ActionExecutor] execute: task already moved to "${freshTask.status}"${hasInstructions ? ' (with instructions)' : ''}`);
-    } else if (!buf.text || buf.text.trim().length === 0) {
-      console.warn(`⚠️ [ActionExecutor] execute: "${agent.name}" returned empty response for "${task.text?.slice(0, 60)}" — skipping reminder loop`);
-      return { executed: false, skipped: true, reason: 'empty-response' };
-    } else {
-      console.log(`[ActionExecutor] execute: waiting for update_task completion${hasInstructions ? ' (with instructions)' : ''}`);
-      await agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text);
-    }
-    return null;
-  });
-
-  if (streamResult) return streamResult;
-
   return { executed: true };
 }

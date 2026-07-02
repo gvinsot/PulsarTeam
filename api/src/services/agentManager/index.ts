@@ -1,5 +1,5 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTasksByAgent, getTaskById, getTaskByIdPrefix } from '../database.js';
+import { getAllAgents, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTaskByIdPrefix } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
@@ -30,13 +30,16 @@ export interface AgentManager {
   getLastMessagesByName(agentName: string, limit?: number): any | null;
 
   // ── status.ts ──
-  getAgentStatus(id: string): any | null;
-  getAllStatuses(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any[];
-  getAgentsByProject(projectName: string, userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any[];
+  _tasksByAgentMap(): Promise<Map<string, any[]>>;
+  _buildAgentStatus(agent: any, todoList: any[]): any;
+  getAgentStatus(id: string): Promise<any | null>;
+  getAllStatuses(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any[]>;
+  getAgentsByProject(projectName: string, userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any[]>;
   getProjectSummary(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any;
-  getSwarmStatus(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any;
+  getSwarmStatus(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any>;
   setStatus(id: string, status: string, detail?: string | null): void;
-  _markTaskStopped(t: any, ownerAgentId: string, stopTimestamp: string): void;
+  _markTaskStopped(t: any, ownerAgentId: string | null, stopTimestamp: string): void;
+  _haltAgentTasks(id: string, stopTimestamp: string): Promise<void>;
   stopAgent(id: string): boolean;
   beginStream(agentId: string, opts?: { userMessage?: string | null; userMessageId?: string | null }): void;
   appendStreamChunk(agentId: string, chunk: string): void;
@@ -46,19 +49,19 @@ export interface AgentManager {
   getActiveStreamsForUser(userId: string, role: string | null, userBoardIds: Set<string>): ActiveStream[];
 
   // ── taskStats.ts ──
-  _collectTasks(projectFilter?: string | null): any[];
-  getTaskStats(projectFilter?: string | null): any;
-  getTaskTimeSeries(projectFilter?: string | null, days?: number): any;
-  getAgentTimeSeries(projectFilter?: string | null, days?: number): any;
+  _collectTasks(projectFilter?: string | null, allowedBoardIds?: Set<string> | null): Promise<any[]>;
+  getTaskStats(projectFilter?: string | null, allowedBoardIds?: Set<string> | null): Promise<any>;
+  getTaskTimeSeries(projectFilter?: string | null, days?: number, allowedBoardIds?: Set<string> | null): Promise<any>;
+  getAgentTimeSeries(projectFilter?: string | null, days?: number, allowedBoardIds?: Set<string> | null): Promise<any>;
 
   // ── broadcast.ts ──
   broadcastMessage(message: string, streamCallback: any, agentIdFilter?: Set<string> | null): Promise<any[]>;
   handoff(fromId: string, toId: string, context: string, streamCallback: any): Promise<any>;
 
   // ── actionLogs.ts ──
-  addActionLog(agentId: string, type: string, message: string, errorDetail?: string | null): any | null;
+  addActionLog(agentId: string, type: string, message: string, errorDetail?: string | null): Promise<any | null>;
   clearActionLogs(agentId: string): boolean;
-  _saveExecutionLog(creatorAgentId: string, taskId: string, executorId: string, startMsgIdx: number, startedAt: string, success?: boolean, actionMode?: string): void;
+  _saveExecutionLog(creatorAgentId: string, taskId: string, executorId: string, startMsgIdx: number, startedAt: string, success?: boolean, actionMode?: string): Promise<void>;
 
   // ── agentFeatures.ts ──
   addRagDocument(agentId: string, name: string, content: string): any | null;
@@ -73,7 +76,7 @@ export interface AgentManager {
   restartRuntime(agentId: string): Promise<boolean>;
   truncateHistory(agentId: string, afterIndex: number): any[] | null;
   _switchProjectContext(agent: any, oldProject: string | null, newProject: string | null): void;
-  buildVoiceInstructions(agentId: string): string;
+  buildVoiceInstructions(agentId: string): Promise<string>;
 
   // ── chat.ts ──
   _releaseChat(id: string, isTopLevel: boolean, status?: 'idle' | null): void;
@@ -96,29 +99,29 @@ export interface AgentManager {
   _listAvailableProjects(): Promise<string[]>;
 
   // ── tasks.ts ──
-  addTask(agentId: string, text: string, source: any, initialStatus?: string, options?: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean }): any | null;
-  toggleTask(agentId: string, taskId: string): any | null;
-  setTaskStatus(agentId: string, taskId: string, status: string, options?: { skipAutoRefine?: boolean; by?: string | null }): any | null;
-  _editTaskField(agentId: string, taskId: string, field: string, value: any, options?: { by?: string; applyExtra?: (task: any) => void }): any | null;
-  updateTaskTitle(agentId: string, taskId: string, title: string): any | null;
-  updateTaskText(agentId: string, taskId: string, text: string): any | null;
-  updateTaskRepo(agentId: string, taskId: string, repoFullName: string | null, repoProvider?: string | null): any | null;
-  updateTaskSecondaryRepos(agentId: string, taskId: string, secondaryRepos: any): any | null;
-  updateTaskStorage(agentId: string, taskId: string, storagePath: string | null, storageProvider?: string | null): any | null;
-  updateTaskType(agentId: string, taskId: string, taskType: string, by?: string): any | null;
-  updateTaskRecurrence(agentId: string, taskId: string, recurrence: any): any | null;
+  addTask(agentId: string | null, text: string, source: any, initialStatus?: string, options?: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null }): Promise<any | null>;
+  toggleTask(agentId: string, taskId: string): Promise<any | null>;
+  setTaskStatus(agentId: string, taskId: string, status: string, options?: { skipAutoRefine?: boolean; by?: string | null }): Promise<any | null>;
+  _editTaskField(agentId: string, taskId: string, field: string, value: any, options?: { by?: string; applyExtra?: (task: any) => void }): Promise<any | null>;
+  updateTaskTitle(agentId: string, taskId: string, title: string): Promise<any | null>;
+  updateTaskText(agentId: string, taskId: string, text: string): Promise<any | null>;
+  updateTaskRepo(agentId: string, taskId: string, repoFullName: string | null, repoProvider?: string | null): Promise<any | null>;
+  updateTaskSecondaryRepos(agentId: string, taskId: string, secondaryRepos: any): Promise<any | null>;
+  updateTaskStorage(agentId: string, taskId: string, storagePath: string | null, storageProvider?: string | null): Promise<any | null>;
+  updateTaskType(agentId: string, taskId: string, taskType: string, by?: string): Promise<any | null>;
+  updateTaskRecurrence(agentId: string, taskId: string, recurrence: any): Promise<any | null>;
   _isActiveTaskStatus(status: string): boolean;
   _getFirstColumnStatus(boardId: string): Promise<string>;
   _findTaskForCommitLink(agentId: string): Promise<{ task: any; ownerAgentId: string } | null>;
-  addTaskCommit(agentId: string, taskId: string, hash: string, message: string): any | null;
-  removeTaskCommit(agentId: string, taskId: string, hash: string): any | null;
-  setTaskAssignee(agentId: string, taskId: string, assigneeId: string): any | null;
+  addTaskCommit(agentId: string, taskId: string, hash: string, message: string): Promise<any | null>;
+  removeTaskCommit(agentId: string, taskId: string, hash: string): Promise<any | null>;
+  setTaskAssignee(agentId: string, taskId: string, assigneeId: string): Promise<any | null>;
   deleteTask(agentId: string | null, taskId: string): Promise<boolean>;
   restoreTask(taskId: string): Promise<any | null>;
   hardDeleteTask(taskId: string): Promise<any>;
   getDeletedTasks(): Promise<any[]>;
   clearTasks(agentId: string): boolean;
-  transferTask(fromAgentId: string, taskId: string, toAgentId: string): any | null;
+  transferTask(fromAgentId: string, taskId: string, toAgentId: string): Promise<any | null>;
   executeTask(agentId: string, taskId: string, streamCallback: any): Promise<{ taskId: string; response: null }>;
   executeAllTasks(agentId: string, streamCallback: any): Promise<any[]>;
   startTaskLoop(intervalMs?: number): void;
@@ -128,15 +131,14 @@ export interface AgentManager {
   _processNextPendingTasks(): void;
   _waitForExecutionComplete(creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options?: any): Promise<string>;
   _resumeActiveTask(agentId: string, agent: any, task: any): Promise<void>;
-  getTask(taskId: string): any | null;
+  getTask(taskId: string): Promise<any | null>;
   saveTaskDirectly(task: any): any;
   _enqueueAgentTask(agentId: string, taskFn: () => Promise<any>): Promise<any>;
-  _ensureTaskInMemory(agentId: string, taskId: string): Promise<boolean>;
   _resolveTaskRef(idOrPrefix: string): Promise<{ task: any; agentId: string | null } | null>;
 
   // ── workflow.ts ──
   _evaluateCondition(cond: any, task: any): boolean;
-  agentHasActiveTask(agentId: string, excludeTaskId?: string | null): boolean;
+  agentHasActiveTask(agentId: string, excludeTaskId?: string | null): Promise<boolean>;
   _validTransition(t: any): boolean;
   _columnExists(workflow: any, columnId: string): boolean;
   _checkAutoRefine(task: any, options?: { by?: string | null }): void;
@@ -192,7 +194,6 @@ export class AgentManager {
    * _processNextPendingTasks alongside the task signals. */
   _decideNoDecisionCounts: Map<string, number>;
   llmConfigs: Map<string, any>;
-  _tasks: Map<string, any[]>;
   _codeIndexPending: Map<string, Map<string, string | null>>;
   _codeIndexTimers: Map<string, ReturnType<typeof setTimeout>>;
   // Cache fields used in _getLlmConfigsCached
@@ -225,8 +226,6 @@ export class AgentManager {
     this._conditionProcessing = new Map();
     this._decideNoDecisionCounts = new Map();
     this.llmConfigs = new Map();
-    /** Centralized task store: Map<agentId, Task[]> — source of truth is the tasks DB table */
-    this._tasks = new Map();
 
     // Debounced code index re-indexation
     this._codeIndexPending = new Map(); // repoId -> Set<filePath>
@@ -253,8 +252,8 @@ export class AgentManager {
         if (agent.projectChangedAt === undefined) {
           agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;
         }
-        // Load tasks from the dedicated tasks table into centralized store
-        this._tasks.set(agent.id, await getTasksByAgent(agent.id));
+        // Tasks are no longer cached in memory — the DB is the single source of
+        // truth and every reader/mutator goes through the task accessors directly.
         this.agents.set(agent.id, agent);
       }
       console.log(`📂 Loaded ${agents.length} agents from database`);
@@ -494,112 +493,16 @@ export class AgentManager {
     return out;
   }
 
-  // ─── Task store helpers (replace agent.todoList) ─────────────────────
-  /** Get all tasks for an agent */
-  _getAgentTasks(agentId: string) {
-    return this._tasks.get(agentId) || [];
-  }
-
-  /** Find a single task by predicate across all agents. Returns { task, agentId } or null */
-  _findTaskAcross(predicate: (task: any) => boolean) {
-    for (const [agentId, tasks] of this._tasks) {
-      const task = tasks.find(predicate);
-      if (task) return { task, agentId };
-    }
-    return null;
-  }
-
-  /** Resolve a task id (or id prefix) to its owner across all agents.
-   * Returns { task, agentId } or null. Does a global exact-id pass first, then
-   * a global prefix pass — this equals the inline per-agent "exact-or-prefix"
-   * scans it replaces ONLY because task ids are full uuidv4 (tasks.ts addTask),
-   * so no id is ever a strict prefix of another. */
-  _findTaskByIdOrPrefix(idOrPrefix: string): { task: any; agentId: string } | null {
-    return this._findTaskAcross((t: any) => t.id === idOrPrefix)
-        || this._findTaskAcross((t: any) => t.id.startsWith(idOrPrefix));
-  }
-
-  /** Get all tasks from all agents as a flat array (each task has agentId) */
-  _getAllTasks() {
-    const all: any[] = [];
-    for (const [agentId, tasks] of this._tasks) {
-      for (const t of tasks) all.push({ ...t, agentId });
-    }
-    return all;
-  }
-
-  /** Add a task to the in-memory store for an agent */
-  _addTaskToStore(agentId: string, task: any) {
-    if (!this._tasks.has(agentId)) this._tasks.set(agentId, []);
-    this._tasks.get(agentId)!.push(task);
-  }
-
-  /** Remove a task from the in-memory store */
-  _removeTaskFromStore(agentId: string, taskId: string) {
-    const tasks = this._tasks.get(agentId);
-    if (!tasks) return;
-    this._tasks.set(agentId, tasks.filter((t: any) => t.id !== taskId));
-  }
-
-  /** Clear all tasks for an agent from the in-memory store */
-  _clearAgentTasks(agentId: string) {
-    this._tasks.set(agentId, []);
-  }
-
-  /**
-   * Ensure a task is loaded in the in-memory `_tasks` store for the given agent.
-   * Falls back to the DB if missing, and rehydrates the store under the task's
-   * actual `agent_id` (which may differ from the requested `agentId`).
-   * Returns true iff after this call the task is present in `_tasks.get(agentId)`.
-   *
-   * Why: in-memory `_tasks` is populated at startup via `getTasksByAgent` and
-   * mutated by addTask/_addTaskToStore. Any drift (orphaned agent_id, manual
-   * DB edit, missed in-memory insert) leaves PATCH/DELETE routes 404'ing on
-   * tasks that exist in the DB. This helper is the recovery path.
-   */
-  async _ensureTaskInMemory(agentId: string, taskId: string): Promise<boolean> {
-    const tasks = this._tasks.get(agentId) || [];
-    if (tasks.some((t: any) => t.id === taskId)) return true;
-    const dbTask = await getTaskById(taskId);
-    if (!dbTask) return false;
-    const ownerId = dbTask.agentId;
-    if (ownerId) {
-      if (!this._tasks.has(ownerId)) this._tasks.set(ownerId, []);
-      const ownerTasks = this._tasks.get(ownerId)!;
-      if (!ownerTasks.some((t: any) => t.id === taskId)) {
-        ownerTasks.push(dbTask);
-        console.warn(`[AgentManager] Rehydrated task ${taskId} into memory under agent ${ownerId} (requested via ${agentId})`);
-      }
-    }
-    return ownerId === agentId;
-  }
-
   /**
    * DB-backed resolution of a task by id or unique id prefix. Returns
    * `{ task, agentId }` (agentId is the task's OWNER — null for board-level
-   * tasks created unassigned via MCP add_task / external API) or null.
-   *
-   * This is the centralized resolver for Phase 1 of the task-store DB refactor:
-   * it replaces the agent-keyed in-memory `_findTaskByIdOrPrefix` in tool
-   * handlers + routes so a task is addressable regardless of owner. During the
-   * migration it still PREFERS the in-memory copy when the task is owned and
-   * cached — mutating that object keeps the legacy `_tasks` store consistent
-   * for code paths that have not yet moved to the DB — and only falls back to
-   * the DB (rehydrating an owned task into memory when possible) for
-   * board-level or not-yet-cached tasks.
+   * tasks created unassigned via MCP add_task / external API) or null. The DB
+   * is the single source of truth, so this is a thin wrapper over the
+   * prefix-capable accessor, resolving tasks regardless of owner.
    */
   async _resolveTaskRef(idOrPrefix: string): Promise<{ task: any; agentId: string | null } | null> {
-    const mem = this._findTaskByIdOrPrefix(idOrPrefix);
-    if (mem) return mem;
     const dbTask = await getTaskByIdPrefix(idOrPrefix);
     if (!dbTask) return null;
-    // Owned task missing from memory → rehydrate (using the FULL id, not the
-    // prefix) and prefer the cached object so in-memory readers stay consistent.
-    if (dbTask.agentId) {
-      await this._ensureTaskInMemory(dbTask.agentId, dbTask.id);
-      const cached = this._getAgentTasks(dbTask.agentId).find((t: any) => t.id === dbTask.id);
-      if (cached) return { task: cached, agentId: dbTask.agentId };
-    }
     return { task: dbTask, agentId: dbTask.agentId ?? null };
   }
 
