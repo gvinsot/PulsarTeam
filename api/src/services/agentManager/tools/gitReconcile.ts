@@ -29,6 +29,37 @@ export interface DetectedCommit {
   pushed?: boolean;
 }
 
+/**
+ * Non-throwing git exec helper. The runner /exec-shell returns status="error"
+ * for ANY non-zero git exit, which the provider turns into a THROWN Error
+ * (with the real output stashed on err.stdout). This helper recovers the
+ * output and logs every failure so prod issues are visible.
+ */
+async function _execGit(
+  executionManager: any,
+  agentId: string,
+  command: string,
+  timeout: number = 10000,
+): Promise<string> {
+  if (typeof executionManager?.exec !== 'function') return '';
+  try {
+    const r = await executionManager.exec(agentId, command, { timeout });
+    // Pick one stream (provider sets stdout==stderr for CLI runners) to avoid
+    // double-parsing. Prefer stdout, fall back to stderr.
+    const output = (r.stdout || r.stderr || '').trim();
+    return output;
+  } catch (err: any) {
+    // The provider throws on non-zero exit, but the real output is on the error.
+    const recovered = (err?.stdout || err?.stderr || err?.message || '').trim();
+    if (recovered) {
+      console.warn(`⚠️  [git-reconcile] exec error for agent ${agentId}: ${command} → ${recovered.slice(0, 200)}`);
+      return recovered;
+    }
+    console.warn(`⚠️  [git-reconcile] exec exception for agent ${agentId}: ${command} → ${err?.message || 'unknown'}`);
+    return '';
+  }
+}
+
 /** Capture the repo HEAD before a run so the reconcile can diff baseline..HEAD
  *  afterwards. Returns null when the environment isn't ready, the project is
  *  not a git repo, or the command fails — callers fall back to a time window.
@@ -41,20 +72,30 @@ export interface DetectedCommit {
  *  filter. (This same gate is why recordTaskCompletion's detection could miss.) */
 export async function snapshotGitBaseline(executionManager: any, agentId: string): Promise<string | null> {
   if (typeof executionManager?.exec !== 'function') return null;
-  try {
-    const r = await executionManager.exec(agentId, 'git rev-parse HEAD', { timeout: 10000 });
-    const head = ((r.stdout || '') + (r.stderr || '')).trim();
-    return /^[a-f0-9]{40}$/.test(head) ? head : null;
-  } catch {
-    return null;
+  const output = await _execGit(executionManager, agentId, 'git rev-parse HEAD');
+  if (!output) return null;
+  // Tolerate noisy output — pick the first valid 40-hex hash
+  const lines = output.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^[a-f0-9]{40}$/.test(trimmed)) {
+      return trimmed;
+    }
   }
+  console.warn(`⚠️  [git-reconcile] Could not parse HEAD for agent ${agentId}: ${output.slice(0, 100)}`);
+  return null;
 }
 
 /**
  * List the commits created during a run, terminal-independently.
  * Prefers the exact rev-range `baselineHead..HEAD`; falls back to a
- * `--since=startedAt` window when no baseline was captured (e.g. the API
- * restarted mid-run). Returns [] when neither anchor is available.
+ * `--since=startedAt` window when no baseline was captured OR when the
+ * range query FAILS (unreachable baseline after a history-rewriting
+ * fetch/reset, invalid range, exec error). Returns [] when neither
+ * anchor is available.
+ *
+ * A range that succeeds but returns empty still means "no new commits"
+ * and does NOT widen to the time window (no over-linking).
  */
 export async function detectCommitsSinceBaseline(
   executionManager: any,
@@ -63,26 +104,31 @@ export async function detectCommitsSinceBaseline(
 ): Promise<DetectedCommit[]> {
   if (typeof executionManager?.exec !== 'function') return [];
 
-  let logCmd: string;
+  // Attempt the exact rev-range if we have a valid baseline.
+  let rangeOutput: string | null = null;
+  let rangeFailed = false;
   if (baselineHead && /^[a-f0-9]{7,40}$/.test(baselineHead)) {
-    logCmd = `git log --format="%H %s" ${baselineHead}..HEAD`;
-  } else if (startedAt && !isNaN(new Date(startedAt).getTime())) {
-    logCmd = `git log --format="%H %s" --since="${new Date(startedAt).toISOString()}" -30`;
-  } else {
-    return [];
+    rangeOutput = await _execGit(executionManager, agentId, `git log --format="%H %s" ${baselineHead}..HEAD`);
+    // If the range query returned output, check if it's a real result or a fatal
+    if (rangeOutput && /^fatal:/im.test(rangeOutput)) {
+      rangeFailed = true;
+      rangeOutput = null;
+    }
   }
 
-  let output = '';
-  try {
-    const r = await executionManager.exec(agentId, logCmd, { timeout: 10000 });
-    output = ((r.stdout || '') + (r.stderr || '')).trim();
-  } catch {
-    return [];
+  // If range failed or no baseline, fall back to time window.
+  if (rangeOutput === null || rangeFailed) {
+    if (startedAt && !isNaN(new Date(startedAt).getTime())) {
+      rangeOutput = await _execGit(executionManager, agentId, `git log --format="%H %s" --since="${new Date(startedAt).toISOString()}" -30`);
+    } else {
+      return [];
+    }
   }
-  if (!output || /^fatal:/im.test(output)) return [];
+
+  if (!rangeOutput || /^fatal:/im.test(rangeOutput)) return [];
 
   const commits: DetectedCommit[] = [];
-  for (const line of output.split('\n')) {
+  for (const line of rangeOutput.split('\n')) {
     const m = line.match(/^([a-f0-9]{40})\s*(.*)/);
     if (m) commits.push({ hash: m[1], msg: (m[2] || '').slice(0, 200) });
   }
@@ -91,15 +137,10 @@ export async function detectCommitsSinceBaseline(
   // Unpushed set: commits on any local branch that no remote-tracking ref
   // contains. A successful `git push` from this clone updates the local
   // remote-tracking ref, so no network fetch is needed for an accurate answer.
-  try {
-    const r = await executionManager.exec(agentId, 'git log --branches --not --remotes --format=%H -100', { timeout: 10000 });
-    const raw = ((r.stdout || '') + (r.stderr || '')).trim();
-    if (!/^fatal:/im.test(raw)) {
-      const unpushed = new Set(raw.split('\n').map(s => s.trim()).filter(s => /^[a-f0-9]{40}$/.test(s)));
-      for (const c of commits) c.pushed = !unpushed.has(c.hash);
-    }
-  } catch {
-    /* pushed flags stay undefined (unknown) */
+  const unpushedOutput = await _execGit(executionManager, agentId, 'git log --branches --not --remotes --format=%H -100');
+  if (unpushedOutput && !/^fatal:/im.test(unpushedOutput)) {
+    const unpushed = new Set(unpushedOutput.split('\n').map(s => s.trim()).filter(s => /^[a-f0-9]{40}$/.test(s)));
+    for (const c of commits) c.pushed = !unpushed.has(c.hash);
   }
   return commits;
 }
