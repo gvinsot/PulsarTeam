@@ -21,6 +21,7 @@
  *     without losing context. The runner reaps idle sessions on its end.
  */
 import type { Server as HttpServer, IncomingMessage } from 'http';
+import type { Duplex } from 'stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import jwt from 'jsonwebtoken';
 import { URL } from 'url';
@@ -30,21 +31,25 @@ import { getAgentById } from '../services/database.js';
 import { getLlmConfig } from '../services/database/llmConfigs.js';
 import { getGitHubCredentialsForAgent } from './github.js';
 import { buildRepoCloneUrl } from '../services/repoUrl.js';
+import { isCliRunner } from '../services/runners.js';
+import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
 
-// Only these runners get a terminal — the others are LLM-providers or
-// non-CLI runtimes for which the chat UI is the correct interface.
-const TERMINAL_RUNNERS = new Set(['claudecode', 'codex', 'opencode', 'aider', 'openclaw', 'hermes']);
-
-const RUNNER_URLS: Record<string, string> = {
-  claudecode: process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
-  codex: process.env.CODEX_SERVICE_URL || 'http://codex-service:8000',
-  opencode: process.env.OPENCODE_SERVICE_URL || 'http://opencode-service:8000',
-  aider: process.env.AIDER_SERVICE_URL || 'http://aider-service:8000',
-  openclaw: process.env.OPENCLAW_SERVICE_URL || 'http://openclaw-service:8000',
-  hermes: process.env.HERMES_SERVICE_URL || 'http://hermes-service:8000',
-};
+// Which runners get a terminal is the single source of truth in runners.ts
+// (isCliRunner — recognises the deprecated 'coder' alias and lowercases). The
+// runner-service URL is resolved via the registry (runnerServiceUrlFor maps the
+// 'coder' alias to 'claudecode' and honours the legacy CODER_SERVICE_URL
+// fallback), so there are no local runner tables here to drift.
 
 const TERMINAL_PATH_RE = /^\/ws\/agents\/([^\/]+)\/terminal$/;
+
+/**
+ * Reject a WebSocket upgrade with a raw HTTP status line and tear down the
+ * socket. Consolidates the auth/authz failure paths in the upgrade handler.
+ */
+function rejectUpgrade(socket: Duplex, statusLine: string, body = ''): void {
+  socket.write(`HTTP/1.1 ${statusLine}\r\n\r\n${body}`);
+  socket.destroy();
+}
 
 // ─── Console-activity → agent.status ──────────────────────────────────────
 //
@@ -174,8 +179,7 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
       decoded = jwt.verify(token, getJwtSecret()) as DecodedToken;
     } catch {
       // 4401 = "auth failed". Browsers expose the close code to JS.
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
+      rejectUpgrade(socket, '401 Unauthorized');
       return;
     }
 
@@ -185,26 +189,22 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
     try {
       agent = await getAgentById(agentId);
     } catch (err: any) {
-      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
-      socket.destroy();
+      rejectUpgrade(socket, '500 Internal Server Error');
       return;
     }
     if (!agent) {
-      socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-      socket.destroy();
+      rejectUpgrade(socket, '404 Not Found');
       return;
     }
     const runner = String(agent.runner || '');
-    if (!TERMINAL_RUNNERS.has(runner)) {
-      socket.write('HTTP/1.1 400 Bad Request\r\n\r\nAgent is not a CLI runner');
-      socket.destroy();
+    if (!isCliRunner(agent)) {
+      rejectUpgrade(socket, '400 Bad Request', 'Agent is not a CLI runner');
       return;
     }
     const isOwner = agent.ownerId && decoded.userId && agent.ownerId === decoded.userId;
     const isAdmin = decoded.role === 'admin';
     if (!isOwner && !isAdmin) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-      socket.destroy();
+      rejectUpgrade(socket, '403 Forbidden');
       return;
     }
 
@@ -212,8 +212,7 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
     try {
       runnerContext = await buildRunnerContext(agent);
     } catch (err: any) {
-      socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
-      socket.destroy();
+      rejectUpgrade(socket, '500 Internal Server Error');
       return;
     }
 
@@ -274,7 +273,7 @@ function wireProxy(
   context: TerminalRunnerContext = {},
   agentManager?: any,
 ): void {
-  const baseUrl = RUNNER_URLS[runner];
+  const baseUrl = runnerServiceUrlFor(runner);
   if (!baseUrl) {
     clientWs.close(1011, 'No runner URL configured');
     return;

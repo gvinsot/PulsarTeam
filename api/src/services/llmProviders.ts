@@ -2,7 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { claudeRateLimiter } from './rateLimiter.js';
 import { readSecret } from '../secrets.js';
-import { runnerServiceUrl, type RunnerServiceType } from './execution/runnerRegistry.js';
+import { runnerServiceUrl, resolveRunnerService } from './execution/runnerRegistry.js';
+import { isCliRunner } from './runners.js';
 
 // Helper: returns { temperature } object if temperature is set, or empty object to omit it
 function tempParam(options: { temperature?: number | null }): { temperature?: number } {
@@ -1007,12 +1008,17 @@ export class MistralProvider {
 // exact same VLLMProvider wiring, differing only in the service URL — resolved
 // from the runner registry. ('sandbox' and 'claude-paid' are excluded: sandbox
 // is execution-only and claude-paid has bespoke model/llmConfig handling.)
-const CLI_RUNNERS = new Set<RunnerServiceType>(['opencode', 'aider', 'openclaw', 'hermes', 'codex', 'claudecode']);
+//
+// The CLI-runner identity is the single source of truth in runners.ts
+// (isCliRunner — includes the deprecated 'coder' alias and lowercases), and the
+// service URL is resolved via the registry (resolveRunnerService maps
+// 'coder' → 'claudecode').
 
 export function createProvider(config: any): any {
-  if (CLI_RUNNERS.has(config.provider)) {
+  const cliServiceType = resolveRunnerService(config.provider);
+  if (isCliRunner({ runner: config.provider }) && cliServiceType) {
     return new VLLMProvider(
-      runnerServiceUrl(config.provider as RunnerServiceType),
+      runnerServiceUrl(cliServiceType),
       config.model,
       readSecret('CODER_API_KEY'),
       config.agentId || null,

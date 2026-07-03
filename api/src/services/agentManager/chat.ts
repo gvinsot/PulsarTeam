@@ -1,6 +1,7 @@
 // ─── Chat: sendMessage, _cleanMarkdown, _buildSystemPrompt, _assembleMessages,
 //     _streamAndContinue, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
+import { isCliRunner } from '../runners.js';
 import { saveAgent, saveTaskToDb, getBoardById, getTasksByAgent, getTasksByAssignee, getActiveTaskForExecutor, getTaskByActionRunningAgent, updateTaskFields } from '../database.js';
 import { TOOL_DEFINITIONS } from '../agentTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
@@ -931,9 +932,11 @@ export const chatMethods = {
     // codex, claudecode), route the chat call through the runner-service so
     // the CLI is the one talking to the LLM with the user-selected
     // provider/model/apiKey forwarded via X-LLM-Config. Falls back to the
-    // direct provider when no CLI runner is set.
-    const CLI_RUNNERS = new Set(['opencode', 'openclaw', 'hermes', 'codex', 'claudecode', 'aider']);
-    const useCliRunner = agent.runner && CLI_RUNNERS.has(agent.runner);
+    // direct provider when no CLI runner is set. CLI-runner identity is the
+    // single source of truth in runners.ts (isCliRunner — recognises the
+    // deprecated 'coder' alias and lowercases the runner id); createProvider
+    // resolves the alias to the runner-service URL.
+    const useCliRunner = isCliRunner(agent);
     const provider = createProvider({
       provider: useCliRunner ? agent.runner : llmConfig.provider,
       model: llmConfig.model,

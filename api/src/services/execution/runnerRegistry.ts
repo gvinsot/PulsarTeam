@@ -33,3 +33,24 @@ export function runnerServiceUrl(type: RunnerServiceType): string {
     || (type === 'claudecode' ? process.env.CODER_SERVICE_URL : undefined)
     || entry.defaultUrl;
 }
+
+/**
+ * Normalise a runner id to its runner-service key. The id is lowercased so DB
+ * rows with legacy casing still resolve, and the deprecated 'coder' alias maps
+ * to 'claudecode' (its current runner service). Returns undefined for ids that
+ * have no runner service (e.g. LLM-only providers).
+ */
+export function resolveRunnerService(runnerId: string): RunnerServiceType | undefined {
+  const id = String(runnerId || '').toLowerCase();
+  const mapped = id === 'coder' ? 'claudecode' : id;
+  return (mapped in RUNNER_SERVICES) ? (mapped as RunnerServiceType) : undefined;
+}
+
+/**
+ * Resolve the base URL for a runner id (accepts the 'coder' alias and legacy
+ * casing). Returns undefined when the id has no runner service.
+ */
+export function runnerServiceUrlFor(runnerId: string): string | undefined {
+  const type = resolveRunnerService(runnerId);
+  return type ? runnerServiceUrl(type) : undefined;
+}
