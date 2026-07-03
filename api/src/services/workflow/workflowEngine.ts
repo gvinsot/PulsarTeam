@@ -501,6 +501,23 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
     console.log(`[WorkflowEngine] Ignoring stale completedActionIdx=${rawIdx} (pendingFor="${pendingFor}" != current="${originalStatus}") — starting fresh`);
   }
 
+  // A manual move can carry retry markers from the previous column into the new
+  // on_enter chain (e.g. nextsprint skipped, then user drags to code). Ignore
+  // was not enough: the stale DB markers were re-saved by subsequent actions and
+  // could leave the card looking busy or pending forever.
+  if (pendingFor && pendingFor !== originalStatus) {
+    const actualTask = await _chainTask(agentManager, task);
+    if (actualTask && actualTask._pendingOnEnter === pendingFor) {
+      delete actualTask._pendingOnEnter;
+      if (typeof actualTask.completedActionIdx === 'number') {
+        actualTask.completedActionIdx = null;
+      }
+      await saveTaskToDb({ ...actualTask, agentId: task.agentId });
+    }
+    delete task._pendingOnEnter;
+    if (typeof task.completedActionIdx === 'number') task.completedActionIdx = null;
+  }
+
   let hadSkippedAction = false;
 
   for (let i = startIdx; i < actions.length; i++) {

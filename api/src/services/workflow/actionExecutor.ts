@@ -9,8 +9,9 @@
  * own the workflow orchestration logic — that stays in WorkflowEngine.
  */
 
-import { ActionType, AgentMode, columnExists } from './taskStateMachine.js';
+import { ActionType, AgentMode, AUTO_ROLE, columnExists } from './taskStateMachine.js';
 import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
+import { resolveAutoRole } from './roleRouter.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields, getTaskById } from '../database.js';
 import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
@@ -189,6 +190,23 @@ export function stripToolCalls(text) {
  * @returns {Promise<ActionResult>}
  */
 export async function executeAction(action, task, context) {
+  // Automatic role selection: a run_agent / assign_agent action may defer its
+  // role choice to the admin-configured Role Router LLM by setting
+  // role === AUTO_ROLE. Resolve it to a concrete role BEFORE dispatch so the
+  // handlers below stay unchanged. On failure we return an { error } result and
+  // let WorkflowEngine._executeActionChain mark the task in error — which also
+  // stops the chain, so the on_enter/condition retry won't re-invoke the LLM.
+  if ((action.type === ActionType.RUN_AGENT || action.type === ActionType.ASSIGN_AGENT)
+      && action.role === AUTO_ROLE) {
+    try {
+      const resolvedRole = await resolveAutoRole(task, context);
+      action = { ...action, role: resolvedRole };
+    } catch (err) {
+      console.error(`[ActionExecutor] auto-role: resolution failed for task="${task.id}": ${err.message}`);
+      return { executed: false, error: true, message: err.message };
+    }
+  }
+
   switch (action.type) {
     case ActionType.ASSIGN_AGENT:
       return executeAssignAgent(action, task, context);
@@ -260,8 +278,8 @@ async function executeAssignAgentIndividual(action, task, { agentManager, io }) 
   // action and spamming task:updated events when the target matches current.
   if (prev === targetAgentId) {
     const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
-    console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change, skipping`);
-    return { executed: false, skipped: true, reason: 'no-change' };
+    console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change`);
+    return { executed: true };
   }
   mutable.assignee = targetAgentId;
   recordReassign(mutable, targetAgentId);
@@ -405,6 +423,7 @@ async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
 /** Persist + emit the cleared running flag for a board-level task (see above). */
 async function _clearActionRunningBoardLevel(agentManager, task) {
   task.actionRunning = false;
+  task.startedAt = null;
   delete task.actionRunningAgentId;
   delete task.actionRunningMode;
   try {
@@ -412,6 +431,7 @@ async function _clearActionRunningBoardLevel(agentManager, task) {
       actionRunning: false,
       actionRunningAgentId: null,
       actionRunningMode: null,
+      startedAt: null,
     });
   } catch { /* best-effort */ }
   emitTaskUpdated(agentManager, { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
@@ -680,13 +700,20 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     releaseLock(lockKey);
     clearAgentBusy(agent.id);
     let cleanupMutated = false;
-    // Clear actionRunning flag (in-memory only — the chain's next action or
-    // cleanup will persist the final state to DB, avoiding a race where this
-    // fire-and-forget save could overwrite the chain's change_status save).
+    const cleanupFields: any = {};
+    // Clear actionRunning with a targeted DB update. The chain reads the task
+    // fresh from the DB after this function returns; if the durable row still
+    // says action_running=true, skipped/no-decision actions get re-saved as
+    // "busy" forever and the recheck loop will ignore them.
     if (actualTask && actualTask.actionRunning) {
       actualTask.actionRunning = false;
+      actualTask.startedAt = null;
       delete actualTask.actionRunningAgentId;
       delete actualTask.actionRunningMode;
+      cleanupFields.actionRunning = false;
+      cleanupFields.actionRunningAgentId = null;
+      cleanupFields.actionRunningMode = null;
+      cleanupFields.startedAt = null;
       cleanupMutated = true;
     }
     // Workflow action modes (decide, refine, title, set_type) should not leave
@@ -694,17 +721,19 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // the task to the wrong agent if the next workflow action is delayed.
     if (actualTask && actualTask.assignee === agent.id) {
       actualTask.assignee = null;
+      cleanupFields.assignee = null;
       cleanupMutated = true;
     }
     // Notify the UI that the action is no longer running. Without this, the
     // frontend keeps the task card in "spinner / undraggable" state until a
     // page refresh, because no later event in the chain may emit a fresh
     // task:updated payload (e.g. when the chain has no change_status action
-    // after run_agent). We deliberately do NOT save here — the chain's next
-    // action or its final save persists the cleared flags. The emit alone is
-    // enough for the realtime UI, since the frontend merges by timestamp and
-    // any subsequent emit (change_status, agent:updated → loadTasks) wins.
+    // after run_agent). Persist only the execution/assignee cleanup fields so a
+    // concurrent status/text update cannot be overwritten by a stale task copy.
     if (cleanupMutated && actualTask) {
+      if (Object.keys(cleanupFields).length > 0) {
+        await updateTaskFields(actualTask.id, cleanupFields);
+      }
       emitTaskUpdated(agentManager, { ...actualTask, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
     }
     // Board-level task: no in-memory copy, and board-level moves bypass

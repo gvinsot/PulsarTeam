@@ -35,6 +35,12 @@ export const AgentMode = Object.freeze({
   SET_TYPE: 'set_type',
 });
 
+// ── Automatic role selection ────────────────────────────────────────────────
+// Sentinel role value on a run_agent / assign_agent action. When present, the
+// role is not fixed: the admin-configured Role Router LLM reads the task and
+// picks the best-fit role at execution time (see workflow/roleRouter.ts).
+export const AUTO_ROLE = '__auto__';
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

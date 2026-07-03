@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../api';
 import {
-  AVAILABLE_COLORS, ACTION_OPTIONS, createAction, getActionKey, validTransition,
+  AVAILABLE_COLORS, ACTION_OPTIONS, AUTO_ROLE, createAction, getActionKey, validTransition,
 } from './taskConstants';
 
 // ── Condition value widget ───────────────────────────────────────────────────
@@ -367,12 +367,16 @@ export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                               {ACTION_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
 
-                            {/* Role selector for assign_agent and run_agent */}
+                            {/* Role selector for assign_agent and run_agent.
+                                AUTO_ROLE lets the admin-configured Role Router
+                                LLM pick the best role at run time. */}
                             {(action.type === 'assign_agent' || action.type === 'run_agent') && (
                               <select value={action.role || ''}
                                 onChange={e => updateAction(idx, ai, { role: e.target.value })}
-                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
+                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200"
+                                title={action.role === AUTO_ROLE ? 'The Role Router LLM (Admin Settings) picks the best role for each task' : undefined}>
                                 <option value="">Role...</option>
+                                <option value={AUTO_ROLE}>🤖 Automatic (AI picks role)</option>
                                 {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
                               </select>
                             )}

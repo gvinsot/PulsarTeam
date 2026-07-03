@@ -13,6 +13,11 @@ const DEFAULTS = {
   // unknown Y/N or list prompt appears in the TUI. Empty = use safe defaults
   // ("y" for Y/N, "1" for list).
   claudeFallbackLlmConfigId: '',
+  // LLM config id used to automatically pick the best agent role for a workflow
+  // action whose role is set to "automatic" (role === '__auto__'). The model
+  // reads the task + the available roles and returns the best-fit one. Empty =
+  // automatic role selection is unavailable (such actions fail with a hint).
+  roleRouterLlmConfigId: '',
   // External voice agent — Speech-to-Text service (HighSpeedToText style)
   sttServiceUrl: '',
   sttApiKey: '',

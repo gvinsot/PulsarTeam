@@ -281,6 +281,35 @@ export default function SettingsTab({ active, showToast }) {
           </select>
         </div>
 
+        {/* Workflow Role Router LLM */}
+        <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
+          <div>
+            <h4 className="text-sm font-semibold text-dark-200 flex items-center gap-2">
+              <Cpu className="w-4 h-4 text-emerald-400" />
+              Workflow Role Router LLM
+            </h4>
+            <p className="text-xs text-dark-400 mt-1">
+              Model used when a workflow action's role is set to
+              {' '}<span className="text-emerald-300">🤖 Automatic</span>. It reads the
+              task and the roles available on the board, then picks the best-fit
+              role to run the action. When unset, such actions fail with a hint
+              (unless the board has a single role, which is used directly).
+            </p>
+          </div>
+          <select
+            value={settings.roleRouterLlmConfigId || ''}
+            onChange={e => setSettings(s => ({ ...s, roleRouterLlmConfigId: e.target.value }))}
+            className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="">— None (automatic role selection disabled) —</option>
+            {llmConfigs.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.provider}/{c.model})
+              </option>
+            ))}
+          </select>
+        </div>
+
         {/* Claude Paid Plan — Fallback LLM */}
         <div className="p-5 bg-dark-800 rounded-xl border border-dark-700 space-y-3">
           <div>

@@ -187,6 +187,19 @@ const TEST_WORKFLOW = {
   ],
 };
 
+function replaceWorkflow(next) {
+  const previous = {
+    columns: TEST_WORKFLOW.columns,
+    transitions: TEST_WORKFLOW.transitions,
+  };
+  TEST_WORKFLOW.columns = next.columns;
+  TEST_WORKFLOW.transitions = next.transitions;
+  return () => {
+    TEST_WORKFLOW.columns = previous.columns;
+    TEST_WORKFLOW.transitions = previous.transitions;
+  };
+}
+
 mock.module('../configManager.js', {
   namedExports: {
     getWorkflowForBoard: async () => TEST_WORKFLOW,
@@ -202,6 +215,7 @@ mock.module('../configManager.js', {
 
 // Now import the module under test
 const { AgentManager } = await import('../agentManager.js');
+const { processColumnEntry } = await import('../workflow/index.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -302,6 +316,76 @@ test('single task flows through entire pipeline: todo → done', async () => {
   const statuses = final.history.filter(h => h.from !== undefined).map(h => h.status);
   for (const step of ['todo', 'step1', 'step2', 'step3', 'step4', 'done']) {
     assert.ok(statuses.includes(step), `Missing transition to "${step}"`);
+  }
+});
+
+test('skipped decide action clears actionRunning before saving retry state', async () => {
+  const restore = replaceWorkflow({
+    columns: [
+      { id: 'backlog', color: '#6b7280', label: 'Backlog' },
+      { id: 'code', color: '#3b82f6', label: 'Code' },
+      { id: 'done', color: '#22c55e', label: 'Done' },
+    ],
+    transitions: [
+      {
+        from: 'code', trigger: 'on_enter', conditions: [],
+        actions: [{ type: 'run_agent', mode: 'decide', role: 'assistant', instructions: '' }],
+      },
+    ],
+  });
+
+  try {
+    const mgr = await setup([{ name: 'Architect', role: 'assistant' }]);
+    const { task, agentId } = createTask(mgr, 'Needs instructions');
+
+    await mgr.setTaskStatus(agentId, task.id, 'code', { by: 'user' });
+
+    let final = taskRows.get(task.id);
+    const started = Date.now();
+    while (Date.now() - started < 1000) {
+      final = taskRows.get(task.id);
+      if (final?._pendingOnEnter === 'code') break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    assert.equal(final?._pendingOnEnter, 'code');
+    assert.equal(final?.completedActionIdx, -1);
+    assert.equal(final?.actionRunning, false);
+    assert.equal(final?.actionRunningAgentId ?? null, null);
+    assert.equal(final?.actionRunningMode ?? null, null);
+    assert.equal(final?.startedAt ?? null, null);
+  } finally {
+    restore();
+  }
+});
+
+test('assign_agent_individual no-change does not arm an on_enter retry', async () => {
+  const restore = replaceWorkflow({
+    columns: [
+      { id: 'backlog', color: '#6b7280', label: 'Backlog' },
+      { id: 'nextsprint', color: '#3b82f6', label: 'Next sprint' },
+      { id: 'done', color: '#22c55e', label: 'Done' },
+    ],
+    transitions: [
+      {
+        from: 'nextsprint', trigger: 'on_enter', conditions: [],
+        actions: [{ type: 'assign_agent_individual', agentId: null }],
+      },
+    ],
+  });
+
+  try {
+    const mgr = await setup([{ name: 'Architect', role: 'assistant' }]);
+    const { task, agentId } = createTask(mgr, 'No-op assignment', 'nextsprint');
+
+    await processColumnEntry({ ...task, agentId }, mgr, { by: 'test' });
+
+    const final = taskRows.get(task.id);
+    assert.equal(final?._pendingOnEnter, undefined);
+    assert.equal(final?.completedActionIdx ?? null, null);
+    assert.equal(final?.actionRunning, false);
+  } finally {
+    restore();
   }
 });
 

@@ -204,6 +204,11 @@ export const AVAILABLE_COLORS = [
 
 // ── Action type helpers ──────────────────────────────────────────────────────
 
+// Sentinel role value for a run_agent / assign_agent action whose role is picked
+// automatically at run time by the admin-configured Role Router LLM. Kept in
+// sync with AUTO_ROLE in api/src/services/workflow/taskStateMachine.ts.
+export const AUTO_ROLE = '__auto__';
+
 export const ACTION_OPTIONS = [
   { value: 'assign_agent', label: 'Assign to agent (by role)' },
   { value: 'assign_agent_individual', label: 'Assign to agent (individually)' },
