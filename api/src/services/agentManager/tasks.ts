@@ -3,7 +3,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getAllTaskIds, getActiveTasksByAgent, getActiveTaskForExecutor, getTasksByAssignee, getTaskByActionRunningAgent, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
 import { isActiveStatus, getWorkflowManagedStatuses, getReassigningStatuses, markTaskError, isUserStopError, reArmInterruptedChains } from '../workflow/index.js';
-import { enrichAssignee } from '../taskMutations.js';
+import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
+import { snapshotGitBaseline, reconcileTaskCommits } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
@@ -470,7 +471,7 @@ export const tasksMethods = {
     return null;
   },
 
-  async addTaskCommit(this: any, agentId: string, taskId: string, hash: string, message: string): Promise<any> {
+  async addTaskCommit(this: any, agentId: string, taskId: string, hash: string, message: string, meta: { pushed?: boolean } = {}): Promise<any> {
     const task: any = await getTaskById(taskId);
     if (!task) return null;
     const ownerAgentId: string = task.agentId;
@@ -482,18 +483,38 @@ export const tasksMethods = {
     );
     if (existingIdx !== -1) {
       const existing = task.commits[existingIdx];
+      let mutated = false;
       // Upgrade: if the new hash is longer (full), replace the short one
       if (hash.length > existing.hash.length) {
         existing.hash = hash;
         if (message && !existing.message) existing.message = message;
+        mutated = true;
+      }
+      // Refresh the pushed flag on re-link (a mid-run sweep links the commit as
+      // unpushed; the end-of-run reconcile upgrades it once the CLI pushed it).
+      if (meta.pushed !== undefined && existing.pushed !== meta.pushed) {
+        existing.pushed = meta.pushed;
+        mutated = true;
+      }
+      if (mutated) {
         await saveTaskToDb({ ...task, agentId: ownerAgentId });
+        emitTaskUpdated(this, { ...task, agentId: ownerAgentId }, { emitAgent: false, stampUpdatedAt: true });
       }
       return task;
     }
-    task.commits.push({ hash, message: message || '', date: new Date().toISOString() });
+    task.commits.push({
+      hash,
+      message: message || '',
+      date: new Date().toISOString(),
+      ...(meta.pushed !== undefined ? { pushed: meta.pushed } : {}),
+    });
     await saveTaskToDb({ ...task, agentId: ownerAgentId });
     const agent = ownerAgentId ? this.agents.get(ownerAgentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
+    // Also emit the task itself so the kanban card shows the commit live —
+    // commits linked by the terminal-independent reconcile have no other
+    // event to piggyback on (no @run_command result, no status move).
+    emitTaskUpdated(this, { ...task, agentId: ownerAgentId }, { emitAgent: false, stampUpdatedAt: true });
     return task;
   },
 
@@ -921,6 +942,9 @@ export const tasksMethods = {
 
   async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
     const terminalDriven = Boolean(options.terminalDriven);
+    // HEAD snapshot taken by executeRunAgent before the run started — anchors
+    // the terminal-independent commit sweep below (see gitReconcile.ts).
+    const gitBaselineHead: string | null = options.gitBaselineHead || null;
     const freshTask = await getTaskById(taskId);
     // The column this wait started on. A workflow transition is finished as soon
     // as the agent moves the task OFF this column — even to another ACTIVE column
@@ -1075,6 +1099,21 @@ export const tasksMethods = {
         return 'stopped';
       }
 
+      // Terminal-independent commit sweep for CLI runners: a runner commits
+      // silently inside its PTY (nothing parseable ever reaches the terminal),
+      // so poll the repo itself and link what appeared since the baseline.
+      // Requires the baseline anchor — the time-window fallback is reserved
+      // for the end-of-run reconcile, where recordTaskCompletion's heuristics
+      // already bound the risk of over-linking.
+      if (terminalDriven && gitBaselineHead) {
+        try {
+          await reconcileTaskCommits(this, executorId, taskId, {
+            baselineHead: gitBaselineHead,
+            label: 'MidRunSweep',
+          });
+        } catch { /* best-effort — the end-of-run reconcile catches up */ }
+      }
+
       const currentExecutor = this.agents.get(executorId);
       if (!currentExecutor || currentExecutor.status === 'busy') {
         console.log(`🔔 [Execution] Executor "${executorName}" is busy — skipping reminder`);
@@ -1177,6 +1216,7 @@ export const tasksMethods = {
 
     let startMsgIdx = executor.conversationHistory.length;
     let executionStartedAt = new Date().toISOString();
+    let gitBaselineHead: string | null = null;
     // Ensure startedAt is set for managesContext history scoping
     if (!task.startedAt) {
       task.startedAt = executionStartedAt;
@@ -1243,6 +1283,13 @@ export const tasksMethods = {
       // sendMessage), regardless of the transient agent.status — the runner
       // gates the inject on the TUI being input-ready (PTY-is-free).
       const terminalDriven = isCliRunner(executor) && this.executionManager?.sendTerminalInput;
+
+      // Snapshot the repo HEAD before the run: the wait-loop sweep and the
+      // finally reconcile below diff baseline..HEAD to link every commit the
+      // executor makes — the only detection that works for CLI runners, whose
+      // git activity happens silently inside their PTY.
+      gitBaselineHead = await snapshotGitBaseline(this.executionManager, executorId);
+
       if (terminalDriven) {
         await bindAgentRunner(this, executor);
         await this.executionManager.sendTerminalInput(executorId, messageToSend, { submit: true });
@@ -1265,6 +1312,7 @@ export const tasksMethods = {
 
       const waitResult = await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text, {
         terminalDriven,
+        gitBaselineHead,
       });
 
       // A detected CLI auth failure (or other hard error) must fail the task
@@ -1349,6 +1397,21 @@ export const tasksMethods = {
         this.setStatus(executorId, 'idle', 'Auto-recovered after resume error');
       }
     } finally {
+      // End-of-run commit/push reconcile — mirrors executeRunAgent's finally.
+      // Catches commits a CLI runner made silently in its PTY regardless of
+      // how the run ended (completion, move, stop, error, timeout). Idempotent.
+      try {
+        // Time-window fallback uses THIS run's start (not task.startedAt, which
+        // can be days old and would sweep in other agents' commits that the
+        // ensure's fetch+reset pulled into the clone's history).
+        await reconcileTaskCommits(this, executorId, task.id, {
+          baselineHead: gitBaselineHead,
+          startedAt: gitBaselineHead ? null : executionStartedAt,
+          label: 'ResumeEndReconcile',
+        });
+      } catch (reconcileErr: any) {
+        console.warn(`🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`);
+      }
       this._emit('agent:stream:end', { agentId: executorId });
       this._emit('agent:updated', this._sanitize(executor));
     }

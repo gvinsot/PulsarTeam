@@ -19,6 +19,7 @@ import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { isCliRunner } from '../runners.js';
+import { snapshotGitBaseline, reconcileTaskCommits } from '../agentManager/tools/gitReconcile.js';
 
 async function bindAgentRunner(agentManager, agent) {
   if (!agentManager.executionManager?.bindAgent || !agent?.id) return;
@@ -45,11 +46,14 @@ async function bindAgentRunner(agentManager, agent) {
  * (submitting it), then wait for the terminal-driven execution to complete.
  * Returns the wait result string (e.g. 'completed', 'error').
  */
-async function _runViaCliTerminal(agentManager, agent, task, prompt) {
+async function _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead = null) {
   await bindAgentRunner(agentManager, agent);
   await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
   return agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
     terminalDriven: true,
+    // Anchor for the terminal-independent commit sweep inside the wait loop —
+    // a CLI runner's git activity never surfaces as parseable terminal output.
+    gitBaselineHead,
   });
 }
 
@@ -618,6 +622,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   let actualTask;
   let execStartMsgIdx;
   let execStartedAt;
+  let gitBaselineHead = null;
   try {
 
   // Set actionRunning flag on the task
@@ -637,6 +642,15 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   execStartMsgIdx = (agent.conversationHistory || []).length;
   execStartedAt = new Date().toISOString();
 
+  // Snapshot the repo HEAD before a decide run (the only mode that executes
+  // code). The finally below diffs baseline..HEAD to link every commit made
+  // during the run — the only detection that works for CLI runners, whose
+  // git activity happens inside their PTY and never reaches the @run_command
+  // parser (and often isn't even rendered by the CLI's TUI).
+  if (mode === AgentMode.DECIDE) {
+    gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
+  }
+
     let result;
     switch (mode) {
       case AgentMode.TITLE:
@@ -649,7 +663,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
         result = await _runRefineMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
         break;
       case AgentMode.DECIDE:
-        result = await _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt, gitBaselineHead });
         break;
       default:
         console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
@@ -715,6 +729,24 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   } finally {
     releaseLock(lockKey);
     clearAgentBusy(agent.id);
+    // End-of-run commit/push reconcile — runs whichever way the run ended
+    // (update_task completion, status-only move, no-decision retry, error,
+    // user stop). This is the safety net that catches commits a CLI runner
+    // made silently in its PTY: the update_task path only detects commits
+    // when the runner sends a completion comment, and a status-only move
+    // detects nothing at all. Idempotent (prefix-aware dedup), so overlap
+    // with the mid-run sweep and recordTaskCompletion is harmless.
+    if (mode === AgentMode.DECIDE && execStartedAt) {
+      try {
+        await reconcileTaskCommits(agentManager, agent.id, task.id, {
+          baselineHead: gitBaselineHead,
+          startedAt: gitBaselineHead ? null : execStartedAt,
+          label: 'RunEndReconcile',
+        });
+      } catch (reconcileErr) {
+        console.warn(`[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr.message}`);
+      }
+    }
     let cleanupMutated = false;
     const cleanupFields: any = {};
     // Clear actionRunning with a targeted DB update. The chain reads the task
@@ -890,7 +922,7 @@ async function _runRefineMode(agent, task, instructions, { agentManager, io, exe
 // actionable error instead of spinning.
 const MAX_DECIDE_NO_DECISION = 4;
 
-async function _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+async function _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt, gitBaselineHead = null }) {
   if (!instructions) {
     console.log(`[ActionExecutor] decide: no instructions — skipping`);
     return { executed: false, skipped: true, reason: 'no-instructions' };
@@ -916,7 +948,7 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   // which the before/after comparison below detects.
   if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
     console.log(`[ActionExecutor] decide: injecting prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
-    const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt);
+    const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead);
     _throwIfWaitError(agentManager, task, waitResult, 'Claude Code CLI ended in an authentication or runtime error');
     agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
   } else {

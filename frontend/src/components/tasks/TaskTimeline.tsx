@@ -58,6 +58,14 @@ export default function TaskTimeline({ history, commits, createdAt, onOpenEntry,
                 >
                   <GitCommit className="w-2.5 h-2.5 text-amber-400 flex-shrink-0" />
                   <code className="text-amber-300 font-mono hover:text-amber-200 transition-colors flex-shrink-0">{item.c.hash?.slice(0, 7)}</code>
+                  {item.c.pushed === false && (
+                    <span
+                      className="px-1 py-px rounded text-[9px] font-medium bg-orange-500/15 text-orange-400 border border-orange-500/30 flex-shrink-0"
+                      title="This commit exists only in the agent's local clone — it has not been pushed to any remote yet"
+                    >
+                      not pushed
+                    </span>
+                  )}
                   {item.c.message && (
                     <span className="text-dark-300 truncate">{item.c.message}</span>
                   )}

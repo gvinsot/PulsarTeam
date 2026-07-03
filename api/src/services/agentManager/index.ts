@@ -113,7 +113,7 @@ export interface AgentManager {
   _isActiveTaskStatus(status: string): boolean;
   _getFirstColumnStatus(boardId: string): Promise<string>;
   _findTaskForCommitLink(agentId: string): Promise<{ task: any; ownerAgentId: string } | null>;
-  addTaskCommit(agentId: string, taskId: string, hash: string, message: string): Promise<any | null>;
+  addTaskCommit(agentId: string, taskId: string, hash: string, message: string, meta?: { pushed?: boolean }): Promise<any | null>;
   removeTaskCommit(agentId: string, taskId: string, hash: string): Promise<any | null>;
   setTaskAssignee(agentId: string, taskId: string, assigneeId: string): Promise<any | null>;
   deleteTask(agentId: string | null, taskId: string): Promise<boolean>;
