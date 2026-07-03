@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { X, Edit3, User, Loader2, Save } from 'lucide-react';
+import { AUTO_ROLE } from './taskConstants';
 
 export default function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onSave }) {
   const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
@@ -52,8 +53,10 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
                     value={item.role || ''}
                     onChange={e => updateField(idx, 'role', e.target.value)}
                     className="px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
+                    title={item.role === AUTO_ROLE ? 'The Role Router LLM (Admin Settings) picks the best role for each task' : undefined}
                   >
                     <option value="">Any agent</option>
+                    <option value={AUTO_ROLE}>🤖 Automatic (AI picks role)</option>
                     {roles.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>

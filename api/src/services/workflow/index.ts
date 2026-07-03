@@ -47,4 +47,4 @@ export { executeAction, stripToolCalls } from './actionExecutor.js';
 export { markTaskError, isUserStopError } from './taskErrors.js';
 
 // Orchestration — main entry points
-export { processColumnEntry, recheckPendingTransitions, reArmInterruptedChains } from './workflowEngine.js';
+export { processColumnEntry, recheckPendingTransitions, reArmInterruptedChains, reconcileStaleActionRunning } from './workflowEngine.js';

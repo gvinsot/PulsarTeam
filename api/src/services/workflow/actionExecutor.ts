@@ -370,20 +370,32 @@ async function executeChangeStatus(action, task, { agentManager, workflow }) {
  * flags, stamp startedAt, (re)assign the agent recording history, then save and
  * emit (deferred so loadTasks() reads the committed row).
  */
-function _markActionRunning(actualTask, agent, mode, agentManager, agentId) {
+async function _markActionRunning(actualTask, agent, mode, agentManager, agentId) {
   actualTask.actionRunning = true;
   actualTask.actionRunningAgentId = agent.id;
   actualTask.actionRunningMode = mode;
   if (!actualTask.startedAt) actualTask.startedAt = new Date().toISOString();
+  // Persist ONLY the execution fields via a targeted, awaited column update —
+  // NOT a fire-and-forget full-row upsert. The full upsert wrote every column
+  // from a snapshot, so a late-landing save (under DB contention, e.g. a rolling
+  // redeploy) could resurrect actionRunning=true AFTER the finally's targeted
+  // clear, stranding the task: action_running=true makes it invisible to
+  // getActiveWorkflowTasks and the recheck loop never retries it. Mirrors
+  // _markActionRunningBoardLevel. Awaiting also guarantees the committed row is
+  // in place before the chain proceeds (same read-your-write intent as before).
+  const fields: any = {
+    actionRunning: true,
+    actionRunningAgentId: agent.id,
+    actionRunningMode: mode,
+    startedAt: actualTask.startedAt,
+  };
   if (actualTask.assignee !== agent.id) {
     actualTask.assignee = agent.id;
     recordReassign(actualTask, agent.id);
+    fields.assignee = agent.id;
+    fields.history = actualTask.history;
   }
-  // Defer emit until after DB save so that any loadTasks() triggered by the
-  // concurrent agent:updated event reads the committed row with actionRunning=true.
-  // Without this, the frontend's loadTasks() can overwrite the real-time update
-  // with stale DB data (same pattern as setTaskStatus in tasks.js).
-  persistThenEmit(agentManager, actualTask);
+  await persistThenEmit(agentManager, actualTask, { fields });
 }
 
 /**
@@ -607,7 +619,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   // Set actionRunning flag on the task
   actualTask = task.agentId ? await getTaskById(task.id) : null;
   if (actualTask) {
-    _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
+    await _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
   } else {
     // Board-level task (created unassigned via MCP add_task): not in the
     // in-memory store, so mark + persist the running flag directly — otherwise
