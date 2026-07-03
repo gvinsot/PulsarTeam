@@ -592,3 +592,60 @@ test('chain-continuation advances columns immediately, without waiting for the p
     restore();
   }
 });
+
+test('run_agent finally emits the current column, not the stale pre-run one', async () => {
+  const restore = replaceWorkflow({
+    columns: [
+      { id: 'backlog', color: '#6b7280', label: 'Backlog' },
+      { id: 'work', color: '#3b82f6', label: 'Work' },
+      { id: 'review', color: '#6b7280', label: 'Review' },
+      { id: 'done', color: '#22c55e', label: 'Done' },
+    ],
+    transitions: [
+      { from: 'work', trigger: 'on_enter', conditions: [],
+        actions: [{ type: 'run_agent', mode: 'decide', role: 'assistant', instructions: 'do the work' }] },
+    ],
+  });
+
+  try {
+    const mgr = await setup([{ name: 'Mover', role: 'assistant' }]);
+    const { task, agentId } = createTask(mgr, 'agent moves me forward');
+
+    // The decide agent moves the task to "review" DURING its run — like a real
+    // agent advancing the card via update_task/change_status.
+    mgr.sendMessage = async (aid: any) => {
+      await mgr.setTaskStatus(agentId, task.id, 'review', { by: 'agent' });
+      const a = mgr.agents.get(aid); if (a) a.status = 'idle';
+      return 'moved';
+    };
+
+    // Observe every task:updated emitted for this task (call through to preserve behavior).
+    const emitted: string[] = [];
+    const origEmit = mgr._emit.bind(mgr);
+    mgr._emit = (event: string, payload: any) => {
+      if (event === 'task:updated' && payload?.task?.id === task.id) emitted.push(payload.task.status);
+      return origEmit(event, payload);
+    };
+
+    await mgr.setTaskStatus(agentId, task.id, 'work', { by: 'user' });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const t = taskRows.get(task.id);
+      if (t?.status === 'review' && !t?.actionRunning) break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    await new Promise(r => setTimeout(r, 40)); // let any trailing finally emit flush
+
+    assert.equal(taskRows.get(task.id)?.status, 'review', 'DB ended at review');
+    // The bug: the finally re-emits the captured (work) status, bouncing the card
+    // back. After the move to review, no emit may carry the stale "work" again.
+    const afterMove = emitted.slice(emitted.indexOf('review'));
+    assert.ok(emitted.includes('review'), `expected a review emit, got [${emitted.join(', ')}]`);
+    assert.ok(!afterMove.includes('work'),
+      `no stale "work" emit after reaching review — got [${emitted.join(', ')}]`);
+    assert.equal(emitted.at(-1), 'review', `last emit must be the current column, got [${emitted.join(', ')}]`);
+  } finally {
+    restore();
+  }
+});

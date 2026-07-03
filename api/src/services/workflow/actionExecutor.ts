@@ -438,15 +438,19 @@ async function _clearActionRunningBoardLevel(agentManager, task) {
   task.startedAt = null;
   delete task.actionRunningAgentId;
   delete task.actionRunningMode;
+  let updated: any = null;
   try {
-    await updateTaskFields(task.id, {
+    updated = await updateTaskFields(task.id, {
       actionRunning: false,
       actionRunningAgentId: null,
       actionRunningMode: null,
       startedAt: null,
     });
   } catch { /* best-effort */ }
-  emitTaskUpdated(agentManager, { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
+  // Emit the fresh row (current status), not the captured `task`: a decide agent
+  // may have moved this board-level task to its next column during the run, so
+  // `task.status` is stale and would bounce the card back a column.
+  emitTaskUpdated(agentManager, updated ? { ...updated, agentId: task.agentId } : { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
 }
 
 /**
@@ -743,10 +747,21 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // after run_agent). Persist only the execution/assignee cleanup fields so a
     // concurrent status/text update cannot be overwritten by a stale task copy.
     if (cleanupMutated && actualTask) {
-      if (Object.keys(cleanupFields).length > 0) {
-        await updateTaskFields(actualTask.id, cleanupFields);
-      }
-      emitTaskUpdated(agentManager, { ...actualTask, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
+      // Emit the FRESH row returned by the update, not the captured actualTask: a
+      // decide agent may have moved the task to its next column DURING the run, so
+      // actualTask.status is stale. Emitting it with a new timestamp bounces the
+      // card back to the previous column — mid-flow it self-corrects in ~0.5s when
+      // the next column emits, but on the FINAL action nothing corrects it, so the
+      // card sticks a column back until a reload. cleanupFields is non-empty
+      // whenever cleanupMutated, so the update runs and returns the current row.
+      const updated = Object.keys(cleanupFields).length > 0
+        ? await updateTaskFields(actualTask.id, cleanupFields)
+        : null;
+      emitTaskUpdated(
+        agentManager,
+        updated ? { ...updated, agentId: task.agentId } : { ...actualTask, agentId: task.agentId },
+        { emitAgent: false, stampUpdatedAt: true },
+      );
     }
     // Board-level task: no in-memory copy, and board-level moves bypass
     // setTaskStatus, so nothing else will persist the cleared flag — do it here
