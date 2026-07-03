@@ -71,8 +71,8 @@ export const toolsMethods = {
     // The completion signal consumed by _waitForExecutionComplete only makes
     // sense outside a workflow action mode: decide/refine waits advance on the
     // status move, and a stray signal there could be consumed elsewhere. Fire the
-    // signal (and link commits) only when no action mode is running; append the
-    // summary in any mode.
+    // signal only when no action mode is running. Commit linking and the summary
+    // append happen in EVERY mode (see below) — they are not gated by fireSignal.
     const fireSignal = !inProgressTask.actionRunningMode;
 
     if (fireSignal) {
@@ -91,9 +91,17 @@ export const toolsMethods = {
     // ownerAgentId was captured while resolving inProgressTask above.
 
     // Link commits if provided (format: "hash:message, hash:message").
-    // Commit linking is part of execute-mode completion only (see fireSignal).
+    // Commit linking runs in ALL modes — including the workflow action modes
+    // (decide/execute) that CLI runners complete through. A CLI runner commits
+    // inside its own interactive PTY, so its `git commit`/`git push` never flows
+    // through the @run_command tool and the real-time detector in
+    // commitDetection.ts never sees it. The runner then finishes by calling
+    // update_task while actionRunningMode is still set (fireSignal === false), so
+    // gating commit linking on fireSignal stranded EVERY CLI-runner commit — it
+    // was associated with neither detection path. Decoupling it here is safe:
+    // addTaskCommit is idempotent (prefix-aware dedup), so re-linking is a no-op.
     let linkedCommitCount = 0;
-    if (fireSignal && commitsArg) {
+    if (commitsArg) {
       const commitEntries = commitsArg.split(/,\s*(?=[a-f0-9])/).map((s: string) => s.trim()).filter(Boolean);
       for (const entry of commitEntries) {
         const colonIdx = entry.indexOf(':');
@@ -112,8 +120,11 @@ export const toolsMethods = {
     // - The agent forgot to pass commit hashes
     // - The execution was retried and commits were made in a previous round
     // - The auto-detection during @run_command(git push) failed
+    // Terminal-independent detection: this queries the real git repo via
+    // `git log` (not the terminal output), so it catches commits a CLI runner
+    // made silently inside its PTY that never rendered as parseable text.
     const existingCommits = inProgressTask.commits || [];
-    if (fireSignal && linkedCommitCount === 0 && existingCommits.length === 0 && this.executionManager?.hasEnvironment(agentId)) {
+    if (linkedCommitCount === 0 && existingCommits.length === 0 && this.executionManager?.hasEnvironment(agentId)) {
       try {
         // Use %aI (ISO author date) so we can filter by task time window in code
         // and avoid relying solely on git's --since (which is fuzzy on edge cases).
