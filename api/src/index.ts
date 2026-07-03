@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { setCurrentEnvironmentFromHost } from './lib/environment.js';
+import { ZodError } from 'zod';
+import { formatZodError } from './lib/validate.js';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { authRouter, authenticateToken, requireRole, getJwtSecret, ensureAdminSeeded } from './middleware/auth.js';
@@ -299,6 +301,23 @@ app.get('/api/health/details', authenticateToken, (req, res) => {
       unassigned,
     }
   });
+});
+
+// Central error handler — must be registered after every route/middleware
+// above. Catches errors forwarded by asyncHandler() (see lib/asyncHandler.ts)
+// so individual routes no longer need their own try/catch just to shape a
+// response. ZodError (thrown by inline schema.parse() calls, as opposed to
+// the validateBody()/validateQuery() middleware which handles its own 400s)
+// maps to 400 with the same {error, details} shape as the validate middleware;
+// everything else maps to 500. Routes that need a different status (403, 409,
+// 502, ...) still catch and respond for themselves before it gets here.
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) return next(err);
+  if (err instanceof ZodError) {
+    return res.status(400).json(formatZodError(err));
+  }
+  console.error(`[Error] ${req.method} ${req.originalUrl}:`, err?.message || err);
+  res.status(500).json({ error: err?.message || 'Internal server error' });
 });
 
 io.use((socket, next) => {

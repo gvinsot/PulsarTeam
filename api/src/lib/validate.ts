@@ -15,7 +15,7 @@ export interface ValidationErrorBody {
   details: { path: string; message: string; code: string }[];
 }
 
-function formatZodError(err: ZodError): ValidationErrorBody {
+export function formatZodError(err: ZodError): ValidationErrorBody {
   return {
     error: 'Validation failed',
     details: err.issues.map(i => ({

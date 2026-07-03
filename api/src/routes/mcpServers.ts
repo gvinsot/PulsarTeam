@@ -1,5 +1,6 @@
 import express from 'express';
 import { z } from 'zod';
+import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
 
 // Schema for creating an MCP server
@@ -40,54 +41,32 @@ export function mcpServerRoutes(mcpManager) {
   });
 
   // Create MCP server (admin only — global setting affecting all agents)
-  router.post('/', requireRole('admin'), async (req, res) => {
-    try {
-      const parsed = createMcpServerSchema.parse(req.body);
-      const server = await mcpManager.create(parsed);
-      res.status(201).json(sanitize(server));
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Validation failed', details: err.issues });
-      }
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.post('/', requireRole('admin'), asyncHandler(async (req, res) => {
+    const parsed = createMcpServerSchema.parse(req.body);
+    const server = await mcpManager.create(parsed);
+    res.status(201).json(sanitize(server));
+  }));
 
   // Update MCP server (admin only)
-  router.put('/:id', requireRole('admin'), async (req, res) => {
-    try {
-      const parsed = updateMcpServerSchema.parse(req.body);
-      const server = await mcpManager.update(req.params.id, parsed);
-      if (!server) return res.status(404).json({ error: 'MCP server not found' });
-      res.json(sanitize(server));
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Validation failed', details: err.issues });
-      }
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.put('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
+    const parsed = updateMcpServerSchema.parse(req.body);
+    const server = await mcpManager.update(req.params.id, parsed);
+    if (!server) return res.status(404).json({ error: 'MCP server not found' });
+    res.json(sanitize(server));
+  }));
 
   // Delete MCP server (admin only)
-  router.delete('/:id', requireRole('admin'), async (req, res) => {
-    try {
-      const success = await mcpManager.delete(req.params.id);
-      if (!success) return res.status(404).json({ error: 'MCP server not found' });
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.delete('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
+    const success = await mcpManager.delete(req.params.id);
+    if (!success) return res.status(404).json({ error: 'MCP server not found' });
+    res.json({ success: true });
+  }));
 
   // Force reconnect & refresh tools (admin only)
-  router.post('/:id/connect', requireRole('admin'), async (req, res) => {
-    try {
-      const server = await mcpManager.connect(req.params.id);
-      res.json(sanitize(server));
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.post('/:id/connect', requireRole('admin'), asyncHandler(async (req, res) => {
+    const server = await mcpManager.connect(req.params.id);
+    res.json(sanitize(server));
+  }));
 
   // Test MCP connection by server ID (without persisting state changes)
   // Accepts optional { apiKey } in body to test with a specific key

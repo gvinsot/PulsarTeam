@@ -1,4 +1,5 @@
 import express from 'express';
+import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess, checkProjectAccess } from '../middleware/authz.js';
 import {
@@ -125,121 +126,85 @@ export function projectRoutes() {
     }
   });
 
-  router.get('/:id', uuidOnly(async (req: any, res: any) => {
-    try {
-      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role || 'basic', 'read');
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      const project = access.project;
-      const userId = req.user?.userId || null;
-      const role = req.user?.role || 'basic';
-      const boards = await getBoardsForProject(project.id, userId, role);
-      const repos = await getReposForProject(project.id, userId, role);
-      const storages = await getStoragesForProject(project.id, userId, role);
-      res.json({ ...project, boards, repos, storages });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  }));
+  router.get('/:id', uuidOnly(asyncHandler(async (req: any, res: any) => {
+    const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role || 'basic', 'read');
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+    const project = access.project;
+    const userId = req.user?.userId || null;
+    const role = req.user?.role || 'basic';
+    const boards = await getBoardsForProject(project.id, userId, role);
+    const repos = await getReposForProject(project.id, userId, role);
+    const storages = await getStoragesForProject(project.id, userId, role);
+    res.json({ ...project, boards, repos, storages });
+  })));
 
   // Mutations require advanced/admin — basic users may not create/modify projects globally.
-  router.post('/', requireRole('admin', 'advanced'), validateBody(createProjectSchema), async (req: any, res) => {
-    try {
-      const body = req.body;
-      const existing = await getProjectByName(body.name);
-      if (existing) return res.status(409).json({ error: 'A project with this name already exists' });
-      const project = await createProject(body.name, body.description, body.rules, req.user?.userId || null);
-      res.status(201).json(project);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  router.put('/:id', requireRole('admin', 'advanced'), validateBody(updateProjectSchema), uuidOnly(async (req: any, res: any) => {
-    try {
-      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      const updated = await updateProject(req.params.id, req.body);
-      if (!updated) return res.status(404).json({ error: 'Project not found' });
-      res.json(updated);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
+  router.post('/', requireRole('admin', 'advanced'), validateBody(createProjectSchema), asyncHandler(async (req: any, res) => {
+    const body = req.body;
+    const existing = await getProjectByName(body.name);
+    if (existing) return res.status(409).json({ error: 'A project with this name already exists' });
+    const project = await createProject(body.name, body.description, body.rules, req.user?.userId || null);
+    res.status(201).json(project);
   }));
 
-  router.delete('/:id', requireRole('admin', 'advanced'), uuidOnly(async (req: any, res: any) => {
-    try {
-      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'admin');
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      const ok = await deleteProject(req.params.id);
-      if (!ok) return res.status(404).json({ error: 'Project not found' });
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  }));
+  router.put('/:id', requireRole('admin', 'advanced'), validateBody(updateProjectSchema), uuidOnly(asyncHandler(async (req: any, res: any) => {
+    const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+    const updated = await updateProject(req.params.id, req.body);
+    if (!updated) return res.status(404).json({ error: 'Project not found' });
+    res.json(updated);
+  })));
+
+  router.delete('/:id', requireRole('admin', 'advanced'), uuidOnly(asyncHandler(async (req: any, res: any) => {
+    const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'admin');
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+    const ok = await deleteProject(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Project not found' });
+    res.json({ success: true });
+  })));
 
   // ── Project ↔ Board linking ──────────────────────────────────────────────
 
-  router.get('/:id/boards', uuidOnly(async (req: any, res: any) => {
-    try {
-      const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'read');
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      const boards = await getBoardsForProject(req.params.id, req.user?.userId || null, req.user?.role || 'basic');
-      res.json(boards);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  }));
+  router.get('/:id/boards', uuidOnly(asyncHandler(async (req: any, res: any) => {
+    const access = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'read');
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+    const boards = await getBoardsForProject(req.params.id, req.user?.userId || null, req.user?.role || 'basic');
+    res.json(boards);
+  })));
 
-  router.post('/:id/boards/:boardId', uuidOnly(async (req: any, res: any) => {
-    try {
-      // Linking requires edit on both the project AND admin on the board.
-      const projectAccess = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
-      if (!projectAccess.ok) return res.status(projectAccess.status || 403).json({ error: projectAccess.error });
-      const boardAccess = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'admin');
-      if (!boardAccess.ok) return res.status(boardAccess.status || 403).json({ error: boardAccess.error });
-      await setBoardProject(req.params.boardId, req.params.id);
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  }));
+  router.post('/:id/boards/:boardId', uuidOnly(asyncHandler(async (req: any, res: any) => {
+    // Linking requires edit on both the project AND admin on the board.
+    const projectAccess = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
+    if (!projectAccess.ok) return res.status(projectAccess.status || 403).json({ error: projectAccess.error });
+    const boardAccess = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'admin');
+    if (!boardAccess.ok) return res.status(boardAccess.status || 403).json({ error: boardAccess.error });
+    await setBoardProject(req.params.boardId, req.params.id);
+    res.json({ success: true });
+  })));
 
-  router.delete('/:id/boards/:boardId', uuidOnly(async (req: any, res: any) => {
-    try {
-      const projectAccess = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
-      if (!projectAccess.ok) return res.status(projectAccess.status || 403).json({ error: projectAccess.error });
-      const boardAccess = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'admin');
-      if (!boardAccess.ok) return res.status(boardAccess.status || 403).json({ error: boardAccess.error });
-      await setBoardProject(req.params.boardId, null);
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  }));
+  router.delete('/:id/boards/:boardId', uuidOnly(asyncHandler(async (req: any, res: any) => {
+    const projectAccess = await checkProjectAccess(req.params.id, req.user?.userId, req.user?.role, 'edit');
+    if (!projectAccess.ok) return res.status(projectAccess.status || 403).json({ error: projectAccess.error });
+    const boardAccess = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'admin');
+    if (!boardAccess.ok) return res.status(boardAccess.status || 403).json({ error: boardAccess.error });
+    await setBoardProject(req.params.boardId, null);
+    res.json({ success: true });
+  })));
 
   // ── Board storages (mounted under /projects for cohesion) ───────────────
   // Repos used on a board are derived from tasks (see /boards/:id/repos below).
 
-  router.get('/boards/:boardId/repos', async (req: any, res) => {
-    try {
-      const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      res.json(await getReposForBoard(req.params.boardId));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.get('/boards/:boardId/repos', asyncHandler(async (req: any, res) => {
+    const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+    res.json(await getReposForBoard(req.params.boardId));
+  }));
 
-  router.get('/boards/:boardId/storages', async (req: any, res) => {
-    try {
-      const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      res.json(await getStoragesForBoard(req.params.boardId));
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
+  router.get('/boards/:boardId/storages', asyncHandler(async (req: any, res) => {
+    const access = await checkBoardAccess(req.params.boardId, req.user?.userId, req.user?.role, 'read');
+    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+    res.json(await getStoragesForBoard(req.params.boardId));
+  }));
 
   // ── (Global) repos pool used by agent pickers (Add Agent, Broadcast) ─────
   // Returns the distinct union of repos used by tasks on boards the user can access.
