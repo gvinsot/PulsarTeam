@@ -36,13 +36,21 @@ test('provisionNewUser creates the default workflow and developer plugins', asyn
   assert.equal(createdBoard.name, 'My board');
   assert.deepEqual(createdBoard.filters, {});
 
-  const inProgress = createdBoard.workflow.columns.find((column: any) => column.id === 'in_progress');
-  const done = createdBoard.workflow.columns.find((column: any) => column.id === 'done');
-  for (const column of [inProgress, done]) {
-    assert.equal(column.showAgent, true);
-    assert.equal(column.showProject, true);
-    assert.equal(column.showTaskType, true);
-  }
+  assert.deepEqual(createdBoard.workflow.columns, [
+    { id: 'todo', label: 'Todo', color: '#6b7280' },
+    { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
+    { id: 'done', label: 'Done', color: '#22c55e' },
+  ]);
+  assert.deepEqual(createdBoard.workflow.transitions, [
+    {
+      from: 'in_progress',
+      trigger: 'on_enter',
+      conditions: [],
+      actions: [
+        { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+      ],
+    },
+  ]);
 
   assert.equal(createdAgent.name, 'Developer');
   assert.equal(createdAgent.runner, 'opencode');

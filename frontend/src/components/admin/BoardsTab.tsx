@@ -53,8 +53,8 @@ export default function BoardsTab({ active, showToast }) {
     setBoardForm({
       name: '',
       columns: [
-        { id: 'backlog', label: 'Backlog', color: '#6b7280' },
-        { id: 'in_progress', label: 'In Progress', color: '#eab308' },
+        { id: 'todo', label: 'Todo', color: '#6b7280' },
+        { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
         { id: 'done', label: 'Done', color: '#22c55e' },
       ],
       transitions: [
@@ -63,8 +63,7 @@ export default function BoardsTab({ active, showToast }) {
           trigger: 'on_enter',
           conditions: [],
           actions: [
-            { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
-            { type: 'change_status', target: '__next__' },
+            { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
           ],
         },
       ],

@@ -559,3 +559,36 @@ test('reconcileStaleActionRunning heals stranded tasks but spares live/fresh run
     assert.equal(pending(r) ?? null, null, `${t.text}: not re-armed`);
   }
 });
+
+test('chain-continuation advances columns immediately, without waiting for the poll', async () => {
+  const restore = replaceWorkflow({
+    columns: [
+      { id: 'backlog', color: '#6b7280', label: 'Backlog' },
+      { id: 'a', color: '#3b82f6', label: 'A' },
+      { id: 'b', color: '#6b7280', label: 'B' },
+      { id: 'done', color: '#22c55e', label: 'Done' },
+    ],
+    transitions: [
+      { from: 'a', trigger: 'on_enter', conditions: [], actions: [{ type: 'change_status', target: 'b' }] },
+      { from: 'b', trigger: 'on_enter', conditions: [], actions: [{ type: 'change_status', target: 'done' }] },
+    ],
+  });
+
+  try {
+    const mgr = await setup([{ name: 'Bot', role: 'assistant' }]);
+    const { task, agentId } = createTask(mgr, 'flows via continuation');
+
+    await mgr.setTaskStatus(agentId, task.id, 'a', { by: 'user' });
+
+    // Deliberately do NOT drive the poll (_recheckConditionalTransitions): reaching
+    // 'done' proves the detached chain-continuation walked a → b → done on its own.
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && taskRows.get(task.id)?.status !== 'done') {
+      await new Promise(r => setTimeout(r, 10));
+    }
+
+    assert.equal(taskRows.get(task.id)?.status, 'done', 'reached done via continuation without the poll');
+  } finally {
+    restore();
+  }
+});

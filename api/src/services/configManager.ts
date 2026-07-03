@@ -101,19 +101,20 @@ export async function getReminderConfig() {
 // ── Workflow configuration (database-backed) ──────────────────────────────────
 
 const DEFAULT_COLUMNS = [
-  { id: 'idea', label: 'Ideas', color: '#a855f7' },
-  { id: 'backlog', label: 'Backlog', color: '#6b7280' },
-  { id: 'pending', label: 'Pending', color: '#3b82f6' },
-  { id: 'in_progress', label: 'In Progress', color: '#eab308' },
+  { id: 'todo', label: 'Todo', color: '#6b7280' },
+  { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
   { id: 'done', label: 'Done', color: '#22c55e' },
 ];
 
 const DEFAULT_TRANSITIONS = [
-  { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'product-manager', mode: 'refine', instructions: 'Refine this idea into a clear, actionable task description. Add acceptance criteria and technical considerations.' }] },
-  { from: 'backlog', trigger: 'on_enter', actions: [] },
-  { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'decide', instructions: 'Execute this task end to end. Explore the project to orient yourself, make the necessary changes, then commit and push. When done, move this task to its final column with a short summary of what you did.' }] },
-  { from: 'in_progress', trigger: 'on_enter', actions: [] },
-  { from: 'done', trigger: 'on_enter', actions: [] },
+  {
+    from: 'in_progress',
+    trigger: 'on_enter',
+    conditions: [],
+    actions: [
+      { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+    ],
+  },
 ];
 
 const DEFAULT_WORKFLOW = {

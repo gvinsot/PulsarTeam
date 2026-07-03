@@ -12,8 +12,7 @@ export const DEFAULT_BOARD_WORKFLOW = {
       trigger: 'on_enter',
       conditions: [],
       actions: [
-        { type: 'run_agent', mode: 'decide', role: '', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
-        { type: 'change_status', target: '__next__' },
+        { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
       ],
     },
   ],
@@ -23,8 +22,8 @@ export const DEFAULT_BOARD_WORKFLOW = {
 export const NEW_USER_BOARD_WORKFLOW = {
   columns: [
     { id: 'todo', label: 'Todo', color: '#6b7280' },
-    { id: 'in_progress', label: 'In Progress', color: '#3b82f6', showAgent: true, showProject: true, showTaskType: true },
-    { id: 'done', label: 'Done', color: '#22c55e', showAgent: true, showProject: true, showTaskType: true },
+    { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
+    { id: 'done', label: 'Done', color: '#22c55e' },
   ],
   transitions: [
     {
@@ -32,8 +31,7 @@ export const NEW_USER_BOARD_WORKFLOW = {
       trigger: 'on_enter',
       conditions: [],
       actions: [
-        { type: 'run_agent', mode: 'decide', role: 'developer', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
-        { type: 'change_status', target: '__next__' },
+        { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
       ],
     },
   ],

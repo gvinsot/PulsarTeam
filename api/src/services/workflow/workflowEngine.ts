@@ -115,6 +115,7 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
     return;
   }
   _processingTasks.set(task.id, task.status);
+  const enteredStatus = task.status;
 
   try {
 
@@ -186,6 +187,22 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
 
   } finally {
     _processingTasks.delete(task.id);
+  }
+
+  // Chain continuation: an action advanced the task to a new column, whose nested
+  // processColumnEntry was deferred while we held the per-task lock (see the
+  // deferral guard above). Kick that column off NOW — detached, on this replica,
+  // exactly like the top-level entry (_checkAutoRefine) — so its actions (e.g.
+  // run_agent) fire immediately instead of waiting for the next ~5s poll tick.
+  // This also shrinks the window in which a stale loadTasks() can momentarily
+  // show the card back in its previous column (the "bounce"). The nested
+  // pending_on_enter marker remains as the durable fallback if this replica dies
+  // before the continuation runs.
+  if (!_processingTasks.has(task.id)
+      && task.status && task.status !== enteredStatus
+      && task.status !== 'error' && task.status !== 'done') {
+    processColumnEntry({ ...task }, agentManager, { by: 'chain-continue' })
+      .catch(err => console.error(`[WorkflowEngine] chain-continue error:`, err.message));
   }
 }
 
