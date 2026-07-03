@@ -215,7 +215,7 @@ mock.module('../configManager.js', {
 
 // Now import the module under test
 const { AgentManager } = await import('../agentManager.js');
-const { processColumnEntry } = await import('../workflow/index.js');
+const { processColumnEntry, reconcileStaleActionRunning } = await import('../workflow/index.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -504,4 +504,58 @@ test('10 tasks fired rapidly with 3 agents all complete', async () => {
 
   const stuck = results.filter(r => r.status !== 'done');
   assert.equal(stuck.length, 0, `${stuck.length} task(s) stuck`);
+});
+
+test('reconcileStaleActionRunning heals stranded tasks but spares live/fresh runs', async () => {
+  const { acquireLock, releaseLock } = await import('../workflow/agentSelector.js');
+  const mgr = await setup([{ name: 'Dev', role: 'assistant' }]);
+  const [agentId] = mgr.agents.keys();
+
+  const mkStranded = (label: string, startedAt: string | null, status = 'code') => {
+    const id = `stale-${label}-${Math.random().toString(36).slice(2, 8)}`;
+    const t: any = {
+      id, agentId, text: label, title: null, status, boardId: 'board-test',
+      assignee: null, taskType: null, history: [], commits: [], error: null,
+      startedAt, completedAt: null, executionStatus: null, completedActionIdx: null,
+      actionRunning: true, actionRunningAgentId: agentId, actionRunningMode: 'title',
+      environment: 'prod', createdAt: new Date().toISOString(),
+    };
+    taskRows.set(id, t);
+    return t;
+  };
+
+  const old = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const corrupt = mkStranded('corrupt', null);                    // no startedAt → heal
+  const stale   = mkStranded('stale', old);                       // > 20min old → heal
+  const fresh   = mkStranded('fresh', new Date().toISOString());  // just started → spare
+  const live    = mkStranded('live', old);                        // old but a run is live → spare
+
+  // Hold a live execution lock for the "live" task (mirrors executeRunAgent).
+  const token = acquireLock(`${agentId}:${live.id}:decide`);
+  try {
+    await reconcileStaleActionRunning(mgr, 'prod');
+  } finally {
+    releaseLock(`${agentId}:${live.id}:decide`, token);
+  }
+
+  // The fake's updateTaskFields assigns the field key verbatim; the real accessor
+  // maps pendingOnEnter → pending_on_enter → _pendingOnEnter on read.
+  const pending = (t: any) => t._pendingOnEnter ?? t.pendingOnEnter;
+
+  // Healed: flag cleared + on_enter re-armed → visible to the recheck loop again.
+  for (const t of [corrupt, stale]) {
+    const r = taskRows.get(t.id);
+    assert.equal(r.actionRunning, false, `${t.text}: actionRunning cleared`);
+    assert.equal(r.actionRunningAgentId ?? null, null, `${t.text}: agent cleared`);
+    assert.equal(r.actionRunningMode ?? null, null, `${t.text}: mode cleared`);
+    assert.equal(r.startedAt ?? null, null, `${t.text}: startedAt cleared`);
+    assert.equal(pending(r), 'code', `${t.text}: on_enter re-armed`);
+  }
+
+  // Spared: still busy, not re-armed (clearing them would double-run an in-flight action).
+  for (const t of [fresh, live]) {
+    const r = taskRows.get(t.id);
+    assert.equal(r.actionRunning, true, `${t.text}: left running`);
+    assert.equal(pending(r) ?? null, null, `${t.text}: not re-armed`);
+  }
 });

@@ -30,7 +30,7 @@ import {
   columnExists,
   Trigger,
 } from './taskStateMachine.js';
-import { findAgentForAssignment, hasLockForTask, hasIdleAgentWithRole } from './agentSelector.js';
+import { findAgentForAssignment, hasLockForTask, hasIdleAgentWithRole, clearAgentBusy } from './agentSelector.js';
 
 // ── Progressive cooldown for on_enter retries ──────────────────────────────
 // Starts at 200ms and doubles each retry up to a 2s cap: 200ms, 400ms, 800ms, 1.6s, 2s…
@@ -443,6 +443,78 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
   }
 }
 
+// ── Stale action_running reconciler ─────────────────────────────────────────
+// reArmInterruptedChains + clearAllStaleActionRunning run ONCE per process (see
+// _startupReArmDone / _staleActionCleanupDone). A task that acquires a stale
+// action_running=true AFTER that one-shot — classically a rolling redeploy whose
+// draining replica commits the flag after the new replica already swept, or a
+// run_agent chain interrupted mid-flight — is then excluded from
+// getActiveWorkflowTasks forever and never retried, so it sits "busy" and no
+// agent ever picks it up. This periodic pass heals such rows: clear the flag and
+// re-arm the column's on_enter — but ONLY for tasks proven NOT to be executing
+// (no live local execution lock, no sibling-replica advisory lock) and either
+// corrupt (no startedAt) or stale past an age that exceeds any real action.
+let _lastStaleReconcile = 0;
+const STALE_RECONCILE_INTERVAL_MS = 60_000;      // run the sweep at most once a minute
+// Only heal runs older than this (or with no startedAt). Kept ABOVE the execution
+// lock TTL (agentSelector LOCK_TTL_MS = 15 min): a live run's lock is not
+// refreshed, so past 15 min the lock system itself already treats the task as
+// free-to-reassign — acting here at 20 min never removes protection the rest of
+// the engine still relied on. The real-world stranding (torn write, startedAt=null)
+// bypasses this gate and heals immediately.
+const STALE_ACTION_MIN_AGE_MS = 20 * 60 * 1000;
+
+export async function reconcileStaleActionRunning(agentManager, ownEnv) {
+  const now = Date.now();
+  let candidates;
+  try {
+    candidates = await getInterruptedChainTasks(ownEnv);
+  } catch (err: any) {
+    console.error(`[WorkflowEngine] stale action_running sweep: query failed:`, err.message);
+    return;
+  }
+
+  for (const task of candidates) {
+    // getInterruptedChainTasks also returns completed_action_idx-only rows.
+    if (!task.actionRunning) continue;
+    if (task.environment !== ownEnv) continue;
+    if (task.status === 'error' || task.status === 'done') continue;
+    // A run genuinely live on THIS replica holds executeRunAgent's execution lock.
+    if (hasLockForTask(`${task.agentId}:${task.id}:`)) continue;
+    // Only heal corrupt rows (no startedAt) or ones stale past the max plausible
+    // action duration — never a fresh initial run still settling.
+    const startedMs = task.startedAt ? Date.parse(task.startedAt) : 0;
+    if (task.startedAt && now - startedMs < STALE_ACTION_MIN_AGE_MS) continue;
+    // Cross-replica: only proceed if no replica is processing the task's chain.
+    // Holding the advisory lock also fences out a concurrent _dispatchUnderLock.
+    const locked = await tryAcquireTaskLock(task.id);
+    if (!locked) continue;
+    try {
+      // Re-read FRESH under the lock — the flag may have cleared or the task
+      // advanced/errored since the query.
+      const fresh = await getTaskById(task.id);
+      if (!fresh || !fresh.actionRunning) continue;
+      if (fresh.status === 'error' || fresh.status === 'done') continue;
+      if (hasLockForTask(`${fresh.agentId}:${fresh.id}:`)) continue;
+      const strandedAgent = fresh.actionRunningAgentId;
+      const strandedMode = fresh.actionRunningMode;
+      await updateTaskFields(fresh.id, {
+        actionRunning: false,
+        actionRunningAgentId: null,
+        actionRunningMode: null,
+        startedAt: null,
+        pendingOnEnter: fresh.status,   // re-arm the column's on_enter for the recheck pass below
+      });
+      if (strandedAgent) clearAgentBusy(strandedAgent);
+      console.warn(`[WorkflowEngine] Reconciled stale action_running: task="${fresh.id}" status="${fresh.status}" (was agent=${strandedAgent || '?'} mode=${strandedMode || '?'}) — cleared + re-armed on_enter`);
+    } catch (err: any) {
+      console.error(`[WorkflowEngine] stale action_running reconcile failed for task="${task.id}":`, err.message);
+    } finally {
+      await releaseTaskLock(task.id);
+    }
+  }
+}
+
 /**
  * Recheck all pending conditional transitions and on_enter retries.
  *
@@ -460,6 +532,14 @@ export async function recheckPendingTransitions(agentManager) {
   // Skip tasks created by a sibling replica when several deployments share
   // the DB.
   const ownEnv = getCurrentEnvironment();
+
+  // Self-heal tasks stranded with a stale action_running flag (throttled here).
+  // Runs before the active-task pass so a just-cleared task is retried this tick.
+  const nowTick = Date.now();
+  if (nowTick - _lastStaleReconcile >= STALE_RECONCILE_INTERVAL_MS) {
+    _lastStaleReconcile = nowTick;
+    await reconcileStaleActionRunning(agentManager, ownEnv);
+  }
 
   // All workflow-bearing tasks (owned AND board-level) come from the DB — the
   // single source of truth. getActiveWorkflowTasks excludes action_running tasks,
