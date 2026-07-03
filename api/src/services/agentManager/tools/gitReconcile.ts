@@ -34,14 +34,22 @@ export interface DetectedCommit {
  * for ANY non-zero git exit, which the provider turns into a THROWN Error
  * (with the real output stashed on err.stdout). This helper recovers the
  * output and logs every failure so prod issues are visible.
+ *
+ * Returns the command output on success (which may be the empty string — a
+ * legitimate result, e.g. `git log --branches --not --remotes` when every
+ * commit is pushed) and `null` only when the command could not run at all
+ * (no environment, or a throw with no recoverable output). Callers must
+ * distinguish these: empty output = "successful, empty result"; null =
+ * "unknown". Collapsing the two would let an exec failure masquerade as an
+ * empty unpushed set and wrongly mark commits as pushed.
  */
 async function _execGit(
   executionManager: any,
   agentId: string,
   command: string,
   timeout: number = 10000,
-): Promise<string> {
-  if (typeof executionManager?.exec !== 'function') return '';
+): Promise<string | null> {
+  if (typeof executionManager?.exec !== 'function') return null;
   try {
     const r = await executionManager.exec(agentId, command, { timeout });
     // Pick one stream (provider sets stdout==stderr for CLI runners) to avoid
@@ -56,7 +64,7 @@ async function _execGit(
       return recovered;
     }
     console.warn(`⚠️  [git-reconcile] exec exception for agent ${agentId}: ${command} → ${err?.message || 'unknown'}`);
-    return '';
+    return null;
   }
 }
 
@@ -138,7 +146,11 @@ export async function detectCommitsSinceBaseline(
   // contains. A successful `git push` from this clone updates the local
   // remote-tracking ref, so no network fetch is needed for an accurate answer.
   const unpushedOutput = await _execGit(executionManager, agentId, 'git log --branches --not --remotes --format=%H -100');
-  if (unpushedOutput && !/^fatal:/im.test(unpushedOutput)) {
+  // null = query failed (leave pushed undefined/unknown). Empty string = query
+  // succeeded with no unpushed commits → every detected commit IS pushed. The
+  // end-of-run reconcile relies on this to upgrade a mid-run "unpushed" flag to
+  // pushed once the CLI runner has pushed and the unpushed set drains to empty.
+  if (unpushedOutput !== null && !/^fatal:/im.test(unpushedOutput)) {
     const unpushed = new Set(unpushedOutput.split('\n').map(s => s.trim()).filter(s => /^[a-f0-9]{40}$/.test(s)));
     for (const c of commits) c.pushed = !unpushed.has(c.hash);
   }
