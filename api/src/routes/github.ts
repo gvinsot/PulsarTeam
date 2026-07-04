@@ -79,24 +79,42 @@ export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
 }
 
 /**
- * Resolve GitHub credentials for an agent (agent → board → user fallback).
- * Returns null if no GitHub plugin is connected for any of those scopes.
- * Used to inject the access token into the runner container so the agent
- * can perform `git clone/pull/push` via HTTPS against the connected repo.
+ * Resolve GitHub credentials for an agent. Resolution order:
+ *   agent → board → user OAuth token  →  server-wide GITHUB_TOKEN fallback.
+ * Returns null only when NO source yields a token. Used to inject the access
+ * token into the runner container so the agent can `git clone/pull/push` via
+ * HTTPS.
+ *
+ * The GITHUB_TOKEN fallback is what fixes the "some agents can push, some
+ * can't" inconsistency: without it, an agent whose board never connected the
+ * GitHub plugin gets NO credentials and every push dies with "could not read
+ * Username", while an agent on a connected board succeeds. A per-scope OAuth
+ * token always wins; the server token only fills the gap when none exists.
  */
 export async function getGitHubCredentialsForAgent(
   agentId: string | null,
   boardId: string | null = null,
 ): Promise<{ token: string; login: string | null; provider: 'github' } | null> {
   const hit = await resolveOAuthTokenRecord('github', agentId, boardId);
-  if (!hit) return null;
-  return {
-    token: hit.accessToken,
-    // User-scope fallback deliberately reports login: null (the token may
-    // belong to any user); agent/board scopes surface the stored login.
-    login: hit.scopeType === 'user' ? null : (hit.record.meta as any)?.login || null,
-    provider: 'github',
-  };
+  if (hit) {
+    return {
+      token: hit.accessToken,
+      // User-scope fallback deliberately reports login: null (the token may
+      // belong to any user); agent/board scopes surface the stored login.
+      login: hit.scopeType === 'user' ? null : (hit.record.meta as any)?.login || null,
+      provider: 'github',
+    };
+  }
+  // Server-wide fallback: GITHUB_TOKEN (documented in .env.example, mountable
+  // as a Docker secret via readSecret). GITHUB_USER is the matching username;
+  // it defaults to `x-access-token` in the runner when unset, which GitHub
+  // accepts for PAT/installation tokens.
+  const envToken = readSecret('GITHUB_TOKEN', '').trim();
+  if (envToken) {
+    const envUser = (process.env.GITHUB_USER || '').trim();
+    return { token: envToken, login: envUser || null, provider: 'github' };
+  }
+  return null;
 }
 
 async function handleOAuthRedirect(req, res) {
