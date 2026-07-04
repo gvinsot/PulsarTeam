@@ -144,3 +144,13 @@ export function authorizeProjectAccess(
     }
   };
 }
+
+// Attached by authorizeProjectAccess so downstream handlers can reuse the
+// loaded project without a second checkProjectAccess round-trip.
+declare global {
+  namespace Express {
+    interface Request {
+      projectAccess?: { project?: any; isOwner?: boolean };
+    }
+  }
+}

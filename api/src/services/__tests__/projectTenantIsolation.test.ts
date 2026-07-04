@@ -66,12 +66,19 @@ mock.module('../../middleware/auth.js', {
   },
 });
 
-// Authorization helpers were split out of auth.js into authz.js; routes now
-// import check* from there, so they must be stubbed on the authz module.
+// Authorization helpers were split out of auth.js into authz.js. tasks.ts still
+// calls checkBoardAccess directly, while projects.ts mounts the middleware
+// factories authorizeProjectAccess/authorizeBoardAccess — all must be stubbed
+// on the authz module. The middleware stubs deny access (403) so the isolation
+// tests observe the same "no leakage" behavior the real checks enforce.
+const denyMiddleware = (_req: any, res: any) =>
+  res.status(403).json({ error: 'Access denied' });
 mock.module('../../middleware/authz.js', {
   namedExports: {
     checkBoardAccess: async () => ({ ok: false, status: 403, error: 'Access denied' }),
     checkProjectAccess: async () => ({ ok: false, status: 403, error: 'Access denied' }),
+    authorizeBoardAccess: () => denyMiddleware,
+    authorizeProjectAccess: () => denyMiddleware,
   },
 });
 
