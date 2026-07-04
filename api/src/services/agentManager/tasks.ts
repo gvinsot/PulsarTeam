@@ -940,137 +940,130 @@ export const tasksMethods = {
     clearTaskSignal(taskId, 'stopped');
   },
 
-  async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
-    const terminalDriven = Boolean(options.terminalDriven);
-    // HEAD snapshot taken by executeRunAgent before the run started — anchors
-    // the terminal-independent commit sweep below (see gitReconcile.ts).
-    const gitBaselineHead: string | null = options.gitBaselineHead || null;
-    const freshTask = await getTaskById(taskId);
-    // The column this wait started on. A workflow transition is finished as soon
-    // as the agent moves the task OFF this column — even to another ACTIVE column
-    // (e.g. a decide moving testclaudepaid → testopencode). The checks below
-    // otherwise only catch a move to an INACTIVE status, so an active→active move
-    // was invisible and the transition blocked until the 15-min stale-lock
-    // eviction — holding the per-task processing lock + agent busy flag and
-    // starving the next column / every other assignment ("no idle agent").
-    const startStatus: string | undefined = freshTask?.status;
-    const movedAway = (s: any): boolean =>
-      typeof s === 'string' && startStatus !== undefined && s !== startStatus;
-    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} completionSignal=${Boolean(getTaskSignal(taskId, 'completed'))} status=${freshTask?.status}`);
-
-    // Helper: check if task was completed via update_task's signal.
-    const _checkCompleted = async (): Promise<string | null> => {
-      if (getTaskSignal(taskId, 'completed')) {
-        const comment = getTaskSignal(taskId, 'comment') || '';
-        clearTaskSignal(taskId, 'completed');
-        clearTaskSignal(taskId, 'comment');
-        console.log(`✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`);
-        return 'completed';
-      }
-      return null;
-    };
-
-    // Early exit if the executor was stopped (e.g. user pressed Stop) before we
-    // got here — otherwise we'd hold the workflow lock through the 10-min
-    // reminder loop while the agent is already idle.
+  /**
+   * The ONE canonical "is this wait finished?" check, used at every poll site in
+   * the execution wait. Returns the verdict in a FIXED priority order —
+   * completed > stopped > deleted > moved — or null when the task is still
+   * active on its start column. Consuming the 'completed'/'stopped' signals here
+   * (read-and-clear) keeps the clearing behavior identical everywhere, which is
+   * what the four hand-ordered copies used to get subtly wrong ("task stuck" /
+   * "resumed twice"). `startStatus` is the column the wait began on, so an
+   * active→active move (off that column) still counts as 'moved'.
+   */
+  async _pollTaskVerdict(this: any, taskId: string, taskText: string, startStatus: string | undefined): Promise<'completed' | 'stopped' | 'moved' | 'deleted' | null> {
+    if (getTaskSignal(taskId, 'completed')) {
+      const comment = getTaskSignal(taskId, 'comment') || '';
+      clearTaskSignal(taskId, 'completed');
+      clearTaskSignal(taskId, 'comment');
+      console.log(`✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+      return 'completed';
+    }
     if (getTaskSignal(taskId, 'stopped')) {
       clearTaskSignal(taskId, 'stopped');
-      console.log(`🛑 [Execution] Task ${taskId} "${taskText.slice(0, 60)}" was stopped before wait started — exiting`);
       return 'stopped';
     }
+    const task = await getTaskById(taskId);
+    if (!task) return 'deleted';
+    const status = (task as any).status;
+    const movedAway = typeof status === 'string' && startStatus !== undefined && status !== startStatus;
+    if (!this._isActiveTaskStatus(status) || movedAway) return 'moved';
+    return null;
+  },
 
-    // Check immediate completion
-    if (freshTask?.status === 'error') {
-      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
-      return 'error';
+  /**
+   * Stream-wrapped prompt send shared by the immediate-retry and the reminder
+   * loop: agent:stream:start → send → agent:stream:end + agent:updated, with the
+   * send failure swallowed (logged) so the wait continues. Uses the CLI
+   * terminal-input path for terminal-driven CLI runners, else sendMessage.
+   */
+  async _sendPromptStreamed(this: any, executorId: string, executor: any, prompt: string, { terminalDriven = false, label = 'Send' }: { terminalDriven?: boolean; label?: string } = {}): Promise<void> {
+    this._emit('agent:stream:start', { agentId: executorId });
+    try {
+      if (terminalDriven && isCliRunner(executor) && this.executionManager?.sendTerminalInput) {
+        await bindAgentRunner(this, executor);
+        await this.executionManager.sendTerminalInput(executorId, prompt, { submit: true });
+      } else {
+        await this.sendMessage(
+          executorId,
+          prompt,
+          (chunk: any) => {
+            this._emit('agent:stream:chunk', { agentId: executorId, chunk });
+            this._emit('agent:thinking', { agentId: executorId, thinking: executor.currentThinking || '' });
+          }
+        );
+      }
+      // _saveExecutionLog moved to caller — captures full conversation including retries/reminders
+    } catch (err: any) {
+      console.error(`🔁 [Execution] ${label} failed: ${err.message}`);
     }
+    this._emit('agent:stream:end', { agentId: executorId });
+    this._emit('agent:updated', this._sanitize(executor));
+  },
 
-    const immediateResult = await _checkCompleted();
-    if (immediateResult) return immediateResult;
-    if (freshTask && !this._isActiveTaskStatus(freshTask.status)) {
-      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved to "${freshTask.status}" — accepting`);
-      return 'moved';
-    }
-
-    // Mark task as watching so the task loop doesn't re-send
-    setTaskSignal(taskId, 'watching', true);
-    updateTaskExecutionStatus(taskId, 'watching');
-
-    // ── Terminal-driven auth/error probe ──────────────────────────────────
-    // CLI runners (claudecode, …) execute inside a shared PTY. An auth failure
-    // (expired token, "Please run /login", invalid key) renders to the
-    // terminal and then the CLI goes quiet — which otherwise looks identical
-    // to a finished task, so the workflow would advance as if it succeeded.
-    // Poll the runner's session status for the latched auth_error; it surfaces
-    // within the first seconds after injection.
-    if (terminalDriven) {
-      const AUTH_PROBE_ATTEMPTS = 8;
-      const AUTH_PROBE_INTERVAL_MS = 3000;
-      for (let i = 0; i < AUTH_PROBE_ATTEMPTS; i++) {
-        await new Promise(resolve => setTimeout(resolve, AUTH_PROBE_INTERVAL_MS));
-        const probeCompleted = await _checkCompleted();
-        if (probeCompleted) return probeCompleted;
-        if (getTaskSignal(taskId, 'stopped')) { clearTaskSignal(taskId, 'stopped'); return 'stopped'; }
-        const probeTask = await getTaskById(taskId);
-        if (!probeTask) return 'deleted';
-        if (!this._isActiveTaskStatus((probeTask as any).status) || movedAway((probeTask as any).status)) return 'moved';
-        const authErr = await this._checkTerminalAuthError(executorId);
-        if (authErr) {
-          setTaskSignal(taskId, 'authError', authErr);
-          console.warn(`🔐 [Execution] CLI auth failure for "${executorName}" on task ${taskId} "${taskText.slice(0, 60)}": ${authErr}`);
-          return 'error';
-        }
+  /**
+   * Terminal-driven auth/error probe phase. CLI runners (claudecode, …) execute
+   * inside a shared PTY. An auth failure (expired token, "Please run /login",
+   * invalid key) renders to the terminal and then the CLI goes quiet — which
+   * otherwise looks identical to a finished task, so the workflow would advance
+   * as if it succeeded. Poll the runner's session status for the latched
+   * auth_error; it surfaces within the first seconds after injection. Returns a
+   * terminal verdict ('completed'|'stopped'|'moved'|'deleted'|'error') or null
+   * to continue to the reminder loop.
+   */
+  async _probeCliAuth(this: any, taskId: string, executorId: string, executorName: string, taskText: string, startStatus: string | undefined): Promise<string | null> {
+    const AUTH_PROBE_ATTEMPTS = 8;
+    const AUTH_PROBE_INTERVAL_MS = 3000;
+    for (let i = 0; i < AUTH_PROBE_ATTEMPTS; i++) {
+      await new Promise(resolve => setTimeout(resolve, AUTH_PROBE_INTERVAL_MS));
+      const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
+      if (verdict) return verdict;
+      const authErr = await this._checkTerminalAuthError(executorId);
+      if (authErr) {
+        setTaskSignal(taskId, 'authError', authErr);
+        console.warn(`🔐 [Execution] CLI auth failure for "${executorName}" on task ${taskId} "${taskText.slice(0, 60)}": ${authErr}`);
+        return 'error';
       }
     }
+    return null;
+  },
 
-    // ── Immediate retry: if the agent went idle without producing any output
-    // (empty response from coder-service, e.g. session corruption), re-send
-    // the task immediately instead of waiting for the slow reminder loop.
-    // Check if executor is already idle (not busy from another concurrent task).
-    const immediateExecutor = this.agents.get(executorId);
-    if (!terminalDriven && immediateExecutor && immediateExecutor.status === 'idle' && !getTaskSignal(taskId, 'stopped')) {
-      // Brief delay to let any in-flight state settle (e.g. socket events)
-      await new Promise(resolve => setTimeout(resolve, 5000));
+  /**
+   * Immediate-retry phase (non-terminal runners only): if the agent went idle
+   * without producing any output (empty response from coder-service, e.g.
+   * session corruption), re-send the task immediately instead of waiting for the
+   * slow reminder loop. Returns a terminal verdict or null to continue.
+   */
+  async _immediateIdleRetry(this: any, taskId: string, executorId: string, executorName: string, taskText: string, startStatus: string | undefined): Promise<string | null> {
+    const executor = this.agents.get(executorId);
+    if (!(executor && executor.status === 'idle' && !getTaskSignal(taskId, 'stopped'))) return null;
 
-      // Re-check signals after the short wait
-      const earlyCompleted = await _checkCompleted();
-      if (earlyCompleted) return earlyCompleted;
-      const earlyTask = await getTaskById(taskId);
-      if (!earlyTask || !this._isActiveTaskStatus((earlyTask as any).status) || movedAway((earlyTask as any).status)) {
-        return earlyTask ? 'moved' : 'deleted';
-      }
-      if (getTaskSignal(taskId, 'stopped')) {
-        clearTaskSignal(taskId, 'stopped');
-        return 'stopped';
-      }
+    // Brief delay to let any in-flight state settle (e.g. socket events)
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
-      if (immediateExecutor.status === 'idle') {
-        console.log(`🔄 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — retrying immediately`);
-        this._emit('agent:stream:start', { agentId: executorId });
-        try {
-          const retryStartIdx = immediateExecutor.conversationHistory.length;
-          const retryStartedAt = new Date().toISOString();
-          await this.sendMessage(
-            executorId,
-            `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, call @update_task(taskId, <final column>, summary) to move it to its final column and finish it.`,
-            (chunk: any) => {
-              this._emit('agent:stream:chunk', { agentId: executorId, chunk });
-              this._emit('agent:thinking', { agentId: executorId, thinking: immediateExecutor.currentThinking || '' });
-            }
-          );
-          // _saveExecutionLog moved to caller — captures full conversation including retries
-        } catch (retryErr: any) {
-          console.error(`🔄 [Execution] Immediate retry failed: ${retryErr.message}`);
-        }
-        this._emit('agent:stream:end', { agentId: executorId });
-        this._emit('agent:updated', this._sanitize(immediateExecutor));
+    const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
+    if (verdict) return verdict;
 
-        // Check if the immediate retry completed the task
-        const retryResult = await _checkCompleted();
-        if (retryResult) return retryResult;
-      }
+    if (executor.status === 'idle') {
+      console.log(`🔄 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — retrying immediately`);
+      await this._sendPromptStreamed(
+        executorId,
+        executor,
+        `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, call @update_task(taskId, <final column>, summary) to move it to its final column and finish it.`,
+        { label: 'Immediate retry' },
+      );
+      const retryResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
+      if (retryResult) return retryResult;
     }
+    return null;
+  },
 
+  /**
+   * Reminder-loop phase: periodically nudge the executor until it completes,
+   * moves, or the reminder budget is exhausted. Owns the 'watching' lifecycle
+   * finally (set by the caller) — always clears the flag and, unless the task
+   * was explicitly stopped, resets executionStatus so the task loop can resume.
+   */
+  async _reminderLoop(this: any, taskId: string, executorId: string, executorName: string, taskText: string, startStatus: string | undefined, { terminalDriven = false, gitBaselineHead = null }: { terminalDriven?: boolean; gitBaselineHead?: string | null } = {}): Promise<string> {
     const reminderConfig = await getReminderConfig();
     console.log(`🔔 [Execution] Agent "${executorName}" still idle after immediate retry for task ${taskId} "${taskText.slice(0, 60)}" — falling back to reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
     const { intervalMs: REMINDER_INTERVAL_MS, maxReminders: MAX_REMINDERS, cooldownMs: COOLDOWN_MS } = reminderConfig;
@@ -1081,22 +1074,10 @@ export const tasksMethods = {
     while (reminded < MAX_REMINDERS) {
       await new Promise(resolve => setTimeout(resolve, REMINDER_INTERVAL_MS));
 
-      const currentTask = await getTaskById(taskId);
-      if (!currentTask) {
-        console.log(`🔔 [Execution] Task deleted during reminder wait — exiting loop`);
-        return 'deleted';
-      }
-      // Check signals first (reliable in-memory coordination set by tool handler)
-      const completedResult = await _checkCompleted();
-      if (completedResult) return completedResult;
-      if (!this._isActiveTaskStatus((currentTask as any).status) || movedAway((currentTask as any).status)) {
-        console.log(`🔔 [Execution] Task status changed to "${(currentTask as any).status}" — exiting loop`);
-        return 'moved';
-      }
-      if (getTaskSignal(taskId, 'stopped')) {
-        console.log(`🛑 [Execution] Task was manually stopped — exiting reminder loop`);
-        clearTaskSignal(taskId, 'stopped');
-        return 'stopped';
+      const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
+      if (verdict) {
+        console.log(`🔔 [Execution] Task ${taskId} verdict "${verdict}" during reminder wait — exiting loop`);
+        return verdict;
       }
 
       // Terminal-independent commit sweep for CLI runners: a runner commits
@@ -1147,35 +1128,10 @@ export const tasksMethods = {
       lastReminderSentAt = now;
       console.log(`🔔 [Execution] Reminding "${executorName}" to complete task (attempt ${reminded}/${MAX_REMINDERS})`);
 
-      this._emit('agent:stream:start', { agentId: executorId });
-      try {
-        const reminderStartIdx = currentExecutor.conversationHistory.length;
-        const reminderStartedAt = new Date().toISOString();
+      const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @update_task(taskId, <final column>, summary of what was done) — moving it to its final column with a summary signals completion.\n\nIf you have already finished all the work, call @update_task now to move the task to its final column with a summary of what was accomplished.`;
+      await this._sendPromptStreamed(executorId, currentExecutor, reminderPrompt, { terminalDriven, label: 'Reminder' });
 
-        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @update_task(taskId, <final column>, summary of what was done) — moving it to its final column with a summary signals completion.\n\nIf you have already finished all the work, call @update_task now to move the task to its final column with a summary of what was accomplished.`;
-
-        if (terminalDriven && isCliRunner(currentExecutor) && this.executionManager?.sendTerminalInput) {
-          await bindAgentRunner(this, currentExecutor);
-          await this.executionManager.sendTerminalInput(executorId, reminderPrompt, { submit: true });
-        } else {
-          await this.sendMessage(
-            executorId,
-            reminderPrompt,
-            (chunk: any) => {
-              this._emit('agent:stream:chunk', { agentId: executorId, chunk });
-              this._emit('agent:thinking', { agentId: executorId, thinking: currentExecutor.currentThinking || '' });
-            }
-          );
-        }
-
-        // _saveExecutionLog moved to caller — captures full conversation including reminders
-      } catch (reminderErr: any) {
-        console.error(`🔔 [Execution] Reminder failed: ${reminderErr.message}`);
-      }
-      this._emit('agent:stream:end', { agentId: executorId });
-      this._emit('agent:updated', this._sanitize(currentExecutor));
-
-      const afterResult = await _checkCompleted();
+      const afterResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
       if (afterResult) return afterResult;
     }
 
@@ -1201,6 +1157,66 @@ export const tasksMethods = {
         updateTaskExecutionStatus(taskId, null);
       }
     }
+  },
+
+  async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
+    const terminalDriven = Boolean(options.terminalDriven);
+    // HEAD snapshot taken by executeRunAgent before the run started — anchors
+    // the terminal-independent commit sweep in the reminder loop (gitReconcile.ts).
+    const gitBaselineHead: string | null = options.gitBaselineHead || null;
+    const freshTask = await getTaskById(taskId);
+    // The column this wait started on. A workflow transition is finished as soon
+    // as the agent moves the task OFF this column — even to another ACTIVE column
+    // (e.g. a decide moving testclaudepaid → testopencode). Verdict checks that
+    // only caught a move to an INACTIVE status would leave an active→active move
+    // invisible, blocking the transition until the 15-min stale-lock eviction —
+    // holding the per-task processing lock + agent busy flag and starving the
+    // next column / every other assignment ("no idle agent"). `startStatus`
+    // threads into _pollTaskVerdict so an off-column move always reads as 'moved'.
+    const startStatus: string | undefined = freshTask?.status;
+    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} completionSignal=${Boolean(getTaskSignal(taskId, 'completed'))} status=${freshTask?.status}`);
+
+    // Early exit if the executor was stopped (e.g. user pressed Stop) before we
+    // got here — otherwise we'd hold the workflow lock through the reminder loop
+    // while the agent is already idle.
+    if (getTaskSignal(taskId, 'stopped')) {
+      clearTaskSignal(taskId, 'stopped');
+      console.log(`🛑 [Execution] Task ${taskId} "${taskText.slice(0, 60)}" was stopped before wait started — exiting`);
+      return 'stopped';
+    }
+    // Task already failed — block the transition (checked before the verdict poll
+    // because 'error' is an inactive status the poll would otherwise read as 'moved').
+    if (freshTask?.status === 'error') {
+      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
+      return 'error';
+    }
+    // Immediate completion / already-moved.
+    const immediate = await this._pollTaskVerdict(taskId, taskText, startStatus);
+    if (immediate) {
+      if (immediate === 'moved') console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved — accepting`);
+      return immediate;
+    }
+
+    // Mark task as watching so the task loop doesn't re-send. Cleared by
+    // _reminderLoop's finally (early returns from the probe/retry phases below
+    // exit before that, matching the prior behavior).
+    setTaskSignal(taskId, 'watching', true);
+    updateTaskExecutionStatus(taskId, 'watching');
+
+    // ── Phase 1: terminal-driven auth/error probe ──────────────────────────
+    if (terminalDriven) {
+      const probeVerdict = await this._probeCliAuth(taskId, executorId, executorName, taskText, startStatus);
+      if (probeVerdict) return probeVerdict;
+    }
+
+    // ── Phase 2: immediate idle retry (non-terminal runners) ───────────────
+    if (!terminalDriven) {
+      const retryVerdict = await this._immediateIdleRetry(taskId, executorId, executorName, taskText, startStatus);
+      if (retryVerdict) return retryVerdict;
+    }
+
+    // ── Phase 3: reminder loop (owns the watching finally lifecycle) ───────
+    return this._reminderLoop(taskId, executorId, executorName, taskText, startStatus, { terminalDriven, gitBaselineHead });
   },
 
   async _resumeActiveTask(this: any, agentId: string, agent: any, task: any): Promise<void> {
