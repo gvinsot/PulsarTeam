@@ -117,6 +117,39 @@ def test_clear_then_set_auth_error_roundtrip():
     assert session.auth_error == "Please run /login"
 
 
+def _detect(data: bytes):
+    session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
+    session._maybe_detect_auth_error(data)
+    return session.auth_error
+
+
+@pytest.mark.parametrize("blob", [
+    b"Please run /login to continue",
+    b"Invalid API key",
+    b"OAuth token has expired",
+    b"Invalid authentication credentials",
+])
+def test_detects_real_cli_auth_sentinels(blob):
+    assert _detect(blob) is not None
+
+
+def test_bare_authentication_error_without_401_does_not_latch():
+    # The agent's OWN output / a tool result mentioning the API error type must
+    # NOT spuriously fail the task and demand re-authentication.
+    assert _detect(b'the API returns {"type":"authentication_error"} on bad keys') is None
+    assert _detect(b"grep -rn authentication_error src/") is None
+
+
+def test_authentication_error_with_401_latches():
+    # A genuine CLI auth failure prints the type alongside an HTTP 401.
+    assert _detect(b'API error 401: {"type":"authentication_error","message":"..."}') is not None
+
+
+def test_401_alone_without_authentication_error_does_not_latch():
+    # A 401 from some unrelated HTTP call the agent made is not an auth failure.
+    assert _detect(b"HTTP/1.1 401 Unauthorized from https://example.com/api") is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("cmd", "expected_sequence", "expected_label"),

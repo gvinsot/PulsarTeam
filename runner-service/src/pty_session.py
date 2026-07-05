@@ -137,10 +137,19 @@ _AUTH_ERROR_RE = re.compile(
     r"|please\s+run\s+/login"
     r"|run\s+/login\s+to\s+(authenticate|log\s*in)"
     r"|oauth\s+token\s+(has\s+)?expired"
-    r"|invalid\s+authentication\s+credentials"
-    r"|authentication_error)",
+    r"|invalid\s+authentication\s+credentials)",
     re.IGNORECASE,
 )
+# `authentication_error` is the Anthropic API error *type* string, not a
+# distinctive CLI phrase — on its own it shows up in the agent's OWN streamed
+# output, tool/command results, logs and source it reads (this repo included),
+# which would spuriously latch an auth failure and fail a perfectly
+# authenticated task with "please re-authenticate". So we only treat it as an
+# auth failure when a real HTTP 401 accompanies it in the same tail — mirroring
+# the headless driver (claude_code.run_sync), which already gates on
+# `authentication_error` AND `401` together.
+_AUTH_ERROR_401_RE = re.compile(r"authentication_error", re.IGNORECASE)
+_HTTP_401_RE = re.compile(r"(?<!\d)401(?!\d)")
 
 # Banner sentinels that mean the TUI is ready to accept a typed prompt. A
 # workflow-injected prompt is only pasted once the input box exists — not while
@@ -764,12 +773,17 @@ class PtySession:
         # alone would lag one chunk behind.
         tail = _strip_ansi((bytes(self._auto_answer_buf) + data).decode("utf-8", errors="replace"))[-4096:]
         m = _AUTH_ERROR_RE.search(tail)
+        # `authentication_error` only counts when a 401 is present in the same
+        # tail (see _AUTH_ERROR_401_RE) — the 401 may sit on a different line, so
+        # this is a whole-tail co-occurrence check, not a per-line one.
+        if not m and _AUTH_ERROR_401_RE.search(tail) and _HTTP_401_RE.search(tail):
+            m = _AUTH_ERROR_401_RE.search(tail)
         if not m:
             return
         # Capture the line carrying the match for a useful API-side message.
         line = ""
         for raw_line in tail.splitlines():
-            if _AUTH_ERROR_RE.search(raw_line):
+            if _AUTH_ERROR_RE.search(raw_line) or _AUTH_ERROR_401_RE.search(raw_line):
                 line = raw_line.strip()
         self.auth_error = (line or m.group(0)).strip()[:300]
         logger.warning(
