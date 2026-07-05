@@ -5,7 +5,7 @@ import { checkBoardAccess } from '../middleware/authz.js';
 import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
-import { enrichAssignee, emitTaskUpdated, clearExecutionOnMove } from '../services/taskMutations.js';
+import { enrichAssignee, emitTaskUpdated, applyTaskMove } from '../services/taskMutations.js';
 import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRepos.js';
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
@@ -110,6 +110,98 @@ function requestTaskCliInterrupt(mgr, task): void {
     });
 }
 
+
+/**
+ * PUT /tasks/:id field-edit phase — apply every NON-move field on the request
+ * body to `task` in place and collect the names of the fields that actually
+ * changed. Move semantics (board/column/assignee-on-move) live in
+ * applyTaskMove; this owns the plain editable attributes only.
+ *
+ * Returns `{ ok: true, editedFields }` on success, or `{ ok: false, status,
+ * error }` when an assignee validation fails so the caller can surface the HTTP
+ * error before anything is persisted.
+ */
+async function applyTaskFieldEdits(mgr, task, body, user) {
+  const {
+    title, description, agentId, type, taskType, priority, dueDate,
+    isManual, recurrence, repoFullName, repoProvider,
+    secondaryRepos, storagePath, storageProvider, position,
+  } = body;
+  const now = new Date().toISOString();
+  const editedFields: string[] = [];
+
+  if (title !== undefined && title !== task.title) { task.title = title; editedFields.push('title'); }
+  if (description !== undefined && description !== task.text) { task.text = description; editedFields.push('description'); }
+  if (agentId !== undefined && agentId !== task.assignee) {
+    if (agentId) {
+      const assignee = mgr.agents.get(agentId);
+      if (!assignee) return { ok: false, status: 404, error: 'Assignee agent not found' };
+      if (user.role !== 'admin' && assignee.boardId) {
+        const access = await checkBoardAccess(assignee.boardId, user.userId, user.role, 'edit');
+        if (!access.ok) return { ok: false, status: access.status || 403, error: access.error || 'Access denied to assignee agent' };
+      }
+    }
+    task.assignee = agentId;
+    if (!editedFields.includes('assignee')) editedFields.push('assignee');
+  }
+  const nextTaskType = taskType !== undefined ? taskType : type;
+  if (nextTaskType !== undefined && nextTaskType !== task.taskType) {
+    task.taskType = nextTaskType || null;
+    editedFields.push('taskType');
+  }
+  if (priority !== undefined && priority !== task.priority) { task.priority = priority; editedFields.push('priority'); }
+  if (dueDate !== undefined && dueDate !== task.dueDate) { task.dueDate = dueDate; editedFields.push('dueDate'); }
+  if (isManual !== undefined && isManual !== task.isManual) { task.isManual = !!isManual; editedFields.push('isManual'); }
+  if (recurrence !== undefined) {
+    const oldValue = task.recurrence || null;
+    if (recurrence && recurrence.enabled) {
+      task.recurrence = {
+        enabled: true,
+        period: recurrence.period || 'daily',
+        intervalMinutes: recurrence.intervalMinutes || 1440,
+        originalStatus: recurrence.originalStatus || oldValue?.originalStatus || 'backlog',
+        historyRetentionDays: recurrence.historyRetentionDays || null,
+        lastResetAt: oldValue?.lastResetAt || now,
+      };
+    } else {
+      task.recurrence = null;
+    }
+    if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null)) editedFields.push('recurrence');
+  }
+  if (repoFullName !== undefined) {
+    const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
+    if (value !== (task.repoFullName || null)) {
+      task.repoFullName = value;
+      task.repoProvider = value ? (repoProvider || task.repoProvider || 'github') : null;
+      task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
+      editedFields.push('repoFullName');
+    } else if (value && repoProvider !== undefined && repoProvider !== task.repoProvider) {
+      task.repoProvider = repoProvider || 'github';
+      editedFields.push('repoProvider');
+    }
+  }
+  if (secondaryRepos !== undefined) {
+    const oldValue = JSON.stringify(task.secondaryRepos || []);
+    task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
+    if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
+  }
+  if (storagePath !== undefined) {
+    const value = typeof storagePath === 'string' && storagePath.trim().length > 0
+      ? storagePath.trim().slice(0, 500)
+      : null;
+    if (value !== (task.storagePath || null)) {
+      task.storagePath = value;
+      task.storageProvider = value ? (storageProvider || task.storageProvider || 'onedrive') : null;
+      editedFields.push('storagePath');
+    } else if (value && storageProvider !== undefined && storageProvider !== task.storageProvider) {
+      task.storageProvider = storageProvider || 'onedrive';
+      editedFields.push('storageProvider');
+    }
+  }
+  if (position !== undefined) { task.position = position; }
+
+  return { ok: true, editedFields };
+}
 
 // ── GET /tasks — list all tasks (from the tasks table) ─────────────────────
 router.get('/', asyncHandler(async (req, res) => {
@@ -218,11 +310,7 @@ router.put('/:id', validateBody(updateTaskSchema), asyncHandler(async (req, res)
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  const {
-    title, description, column, agentId, type, taskType, priority, dueDate,
-    boardId, position, isManual, recurrence, repoFullName, repoProvider,
-    secondaryRepos, storagePath, storageProvider,
-  } = req.body;
+  const { column, agentId, boardId } = req.body;
   const now = new Date().toISOString();
   const username = req.user?.username || 'user';
 
@@ -235,36 +323,29 @@ router.put('/:id', validateBody(updateTaskSchema), asyncHandler(async (req, res)
     stopTaskExecutor(mgr, task);
   }
 
-  // Track what changed for history / notifications
   const oldBoardId = task.boardId || null;
-  const oldStatus = task.status;
-  let boardChanged = false;
-  let statusChanged = false;
-  let oldBoardName = null;
-  let newBoardName = null;
-  const editedFields = [];
 
-  // ── Board move with permission check ───────────────────────────────────
+  // ── Resolve the move destination (board access + column validity) ──────
+  // These are the HTTP-facing validations; the mutation itself is delegated to
+  // applyTaskMove so PUT and bulk-move share one move core.
+  let targetBoard: { id: string; name: string | null; oldName: string | null } | null = null;
+  let targetColumn: string | undefined;
   if (boardId !== undefined && boardId !== oldBoardId) {
     const access = await validateBoardAccess(boardId, req.user.userId, req.user.role);
     if (!access.ok) return res.status(access.status).json({ error: access.error });
 
+    let oldBoardName = null;
     if (oldBoardId) {
       const oldBoard = await getBoardById(oldBoardId);
       oldBoardName = oldBoard?.name || null;
     }
-    newBoardName = access.board?.name || null;
-    boardChanged = true;
-    task.boardId = boardId;
+    targetBoard = { id: boardId, name: access.board?.name || null, oldName: oldBoardName };
 
-    // Validate/reset column for the new board
+    // Validate/reset column for the new board.
     if (column !== undefined && access.board) {
-      task.status = validateColumn(access.board, column);
+      targetColumn = validateColumn(access.board, column);
     } else if (access.board) {
-      task.status = access.board.workflow?.columns?.[0]?.id || task.status;
-    }
-    if (task.status !== oldStatus) {
-      statusChanged = true;
+      targetColumn = access.board.workflow?.columns?.[0]?.id || task.status;
     }
   } else if (column !== undefined && column !== task.status) {
     // Validate the requested column exists in the task's current board
@@ -281,140 +362,21 @@ router.put('/:id', validateBody(updateTaskSchema), asyncHandler(async (req, res)
         });
       }
     }
-    statusChanged = true;
-    task.status = column;
+    targetColumn = column;
   }
 
-  const previousAssignee = statusChanged && agentId === undefined ? (task.assignee || null) : null;
-  if (previousAssignee) {
-    task.assignee = null;
-    editedFields.push('assignee');
-  }
+  // ── Field-edit phase (plain editable attributes) ───────────────────────
+  const edits = await applyTaskFieldEdits(mgr, task, req.body, req.user);
+  if (!edits.ok) return res.status(edits.status).json({ error: edits.error });
+  const editedFields = edits.editedFields;
 
-  // ── Update other fields ────────────────────────────────────────────────
-  if (title !== undefined && title !== task.title) { task.title = title; editedFields.push('title'); }
-  if (description !== undefined && description !== task.text) { task.text = description; editedFields.push('description'); }
-  if (agentId !== undefined && agentId !== task.assignee) {
-    if (agentId) {
-      const assignee = mgr.agents.get(agentId);
-      if (!assignee) return res.status(404).json({ error: 'Assignee agent not found' });
-      if (req.user.role !== 'admin' && assignee.boardId) {
-        const access = await checkBoardAccess(assignee.boardId, req.user.userId, req.user.role, 'edit');
-        if (!access.ok) return res.status(access.status || 403).json({ error: access.error || 'Access denied to assignee agent' });
-      }
-    }
-    task.assignee = agentId;
-    if (!editedFields.includes('assignee')) editedFields.push('assignee');
-  }
-  const nextTaskType = taskType !== undefined ? taskType : type;
-  if (nextTaskType !== undefined && nextTaskType !== task.taskType) {
-    task.taskType = nextTaskType || null;
-    editedFields.push('taskType');
-  }
-  if (priority !== undefined && priority !== task.priority) { task.priority = priority; editedFields.push('priority'); }
-  if (dueDate !== undefined && dueDate !== task.dueDate) { task.dueDate = dueDate; editedFields.push('dueDate'); }
-  if (isManual !== undefined && isManual !== task.isManual) { task.isManual = !!isManual; editedFields.push('isManual'); }
-  if (recurrence !== undefined) {
-    const oldValue = task.recurrence || null;
-    if (recurrence && recurrence.enabled) {
-      task.recurrence = {
-        enabled: true,
-        period: recurrence.period || 'daily',
-        intervalMinutes: recurrence.intervalMinutes || 1440,
-        originalStatus: recurrence.originalStatus || oldValue?.originalStatus || 'backlog',
-        historyRetentionDays: recurrence.historyRetentionDays || null,
-        lastResetAt: oldValue?.lastResetAt || now,
-      };
-    } else {
-      task.recurrence = null;
-    }
-    if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null)) editedFields.push('recurrence');
-  }
-  if (repoFullName !== undefined) {
-    const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
-    if (value !== (task.repoFullName || null)) {
-      task.repoFullName = value;
-      task.repoProvider = value ? (repoProvider || task.repoProvider || 'github') : null;
-      task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
-      editedFields.push('repoFullName');
-    } else if (value && repoProvider !== undefined && repoProvider !== task.repoProvider) {
-      task.repoProvider = repoProvider || 'github';
-      editedFields.push('repoProvider');
-    }
-  }
-  if (secondaryRepos !== undefined) {
-    const oldValue = JSON.stringify(task.secondaryRepos || []);
-    task.secondaryRepos = normalizeSecondaryRepos(secondaryRepos, task.repoFullName || null);
-    if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
-  }
-  if (storagePath !== undefined) {
-    const value = typeof storagePath === 'string' && storagePath.trim().length > 0
-      ? storagePath.trim().slice(0, 500)
-      : null;
-    if (value !== (task.storagePath || null)) {
-      task.storagePath = value;
-      task.storageProvider = value ? (storageProvider || task.storageProvider || 'onedrive') : null;
-      editedFields.push('storagePath');
-    } else if (value && storageProvider !== undefined && storageProvider !== task.storageProvider) {
-      task.storageProvider = storageProvider || 'onedrive';
-      editedFields.push('storageProvider');
-    }
-  }
-  if (position !== undefined) { task.position = position; }
-  task.updatedAt = now;
-
-  // Clear execution state on a status change so the moved task doesn't resume.
-  // clearExecutionOnMove keeps the persisted completedActionIdx/_pendingOnEnter
-  // (so an interrupted chain can still resume) — a full reset would wipe them
-  // from the DB row that saveTaskDirectly writes.
-  if (statusChanged) {
-    clearExecutionOnMove(task, { toStatus: task.status, now });
-  }
-
-  // ── History entry ──────────────────────────────────────────────────────
-  const hasChanges = boardChanged || statusChanged || editedFields.length > 0;
-  if (hasChanges) {
-    if (!task.history) task.history = [];
-    const entry: any = {
-      at: now,
-      by: username,
-      type: boardChanged ? 'board_move' : 'edit',
-      status: task.status,
-      fields: [...editedFields],
-    };
-    if (boardChanged) {
-      entry.fromBoard = oldBoardId;
-      entry.toBoard = task.boardId;
-      entry.fromBoardName = oldBoardName;
-      entry.toBoardName = newBoardName;
-    }
-    if (statusChanged) {
-      entry.from = oldStatus;
-      if (previousAssignee) {
-        entry.previousAssignee = previousAssignee;
-        entry.assignee = null;
-      }
-      entry.fields.push('status');
-    }
-    task.history.push(entry);
-  }
-
-  // When status changed by a user move, signal the reminder loop / execution
-  // wait to exit — the agent should no longer work on this task. (All field
-  // changes, incl. the execution-state clear above, are already on `task`,
-  // which saveTaskDirectly persists — the DB is the single source of truth.)
-  if (statusChanged) {
-    setTaskSignal(req.params.id as string, 'stopped', true);
-  }
-
-  await mgr.saveTaskDirectly(task);
-
-  // ── Trigger workflow processing when status changed ────
-  if (statusChanged) {
-    if (task.status !== 'error') {
-      mgr._checkAutoRefine({ ...task }, { by: username });
-    }
-  }
+  // ── Apply the move (mutate + history + persist + signal + auto-refine) ──
+  const { statusChanged, boardChanged } = await applyTaskMove(mgr, task, {
+    targetBoard, targetColumn, username, now, bulk: false,
+    editedFields,
+    unassignOnStatusChange: agentId === undefined,
+    setTaskSignal,
+  });
 
   // ── Notifications ──────────────────────────────────────────────────────
   if (boardChanged) {
@@ -422,8 +384,8 @@ router.put('/:id', validateBody(updateTaskSchema), asyncHandler(async (req, res)
       taskId: task.id,
       fromBoard: oldBoardId,
       toBoard: task.boardId,
-      fromBoardName: oldBoardName,
-      toBoardName: newBoardName,
+      fromBoardName: targetBoard?.oldName ?? null,
+      toBoardName: targetBoard?.name ?? null,
       column: task.status,
       movedBy: username,
     });
@@ -466,50 +428,17 @@ router.post('/bulk-move', validateBody(bulkMoveSchema), asyncHandler(async (req,
       stopTaskExecutor(mgr, task);
     }
 
-    const oldBoardId = task.boardId;
-    const oldStatus = task.status;
-    const previousAssignee = task.assignee || null;
+    const oldBoardId = task.boardId || null;
     let oldBoardName = null;
     if (oldBoardId) { const ob = await getBoardById(oldBoardId); oldBoardName = ob?.name || null; }
 
-    task.boardId = boardId;
-    task.status = targetColumn;
-    if (oldStatus !== targetColumn && previousAssignee) {
-      task.assignee = null;
-    }
-    // Clear execution state on a status change so the moved task doesn't
-    // resume (same SHORTER reset as the single-task PUT — keep the persisted
-    // completedActionIdx/_pendingOnEnter so an interrupted chain can resume).
-    if (oldStatus !== targetColumn) {
-      clearExecutionOnMove(task, { toStatus: targetColumn, now });
-    }
-    task.updatedAt = now;
-    const changedFields = ['boardId', 'status'];
-    if (oldStatus !== targetColumn && previousAssignee) changedFields.push('assignee');
-    if (!task.history) task.history = [];
-    const historyEntry: any = {
-      at: now, by: username, type: 'board_move',
-      fromBoard: oldBoardId, toBoard: boardId,
-      fromBoardName: oldBoardName, toBoardName: access.board?.name || null,
-      from: oldStatus, status: targetColumn,
-      fields: changedFields, bulk: true,
-    };
-    if (oldStatus !== targetColumn && previousAssignee) {
-      historyEntry.previousAssignee = previousAssignee;
-      historyEntry.assignee = null;
-    }
-    task.history.push(historyEntry);
-
-    await mgr.saveTaskDirectly(task);
-
-    // Trigger workflow / signal the reminder loop if status changed.
-    if (oldStatus !== targetColumn) {
-      // Signal the reminder loop / execution wait to exit
-      setTaskSignal(taskId, 'stopped', true);
-      if (targetColumn !== 'error') {
-        mgr._checkAutoRefine({ ...task }, { by: username });
-      }
-    }
+    // Same move core as PUT /tasks/:id — mutate, record history, persist, and
+    // fire the stop-signal / auto-refine side-effects. Only the emit stays here.
+    await applyTaskMove(mgr, task, {
+      targetBoard: { id: boardId, name: access.board?.name || null, oldName: oldBoardName },
+      targetColumn, username, now, bulk: true,
+      setTaskSignal,
+    });
 
     emitTaskUpdated(mgr, task);
     results.moved.push({ taskId: task.id, title: task.title || task.text?.slice(0, 60) });
