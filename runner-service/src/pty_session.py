@@ -131,25 +131,15 @@ _AUTO_ANSWER_COOLDOWN_S = 1.0
 # "task finished". We latch the first match into `PtySession.auth_error` and
 # expose it via the session status endpoint so the API can fail the task.
 # Patterns are kept tight (distinctive CLI phrasings) to avoid latching on the
-# agent's own output that merely *mentions* authentication.
-_AUTH_ERROR_RE = re.compile(
-    r"(invalid\s+api\s+key"
-    r"|please\s+run\s+/login"
-    r"|run\s+/login\s+to\s+(authenticate|log\s*in)"
-    r"|oauth\s+token\s+(has\s+)?expired"
-    r"|invalid\s+authentication\s+credentials)",
-    re.IGNORECASE,
+# agent's own output that merely *mentions* authentication. The patterns live
+# in the shared `auth_error_detect` module so the headless sync driver
+# (claude_code.run_sync) keys on exactly the same signals and the two can't
+# drift.
+from auth_error_detect import (
+    AUTH_ERROR_RE as _AUTH_ERROR_RE,
+    AUTH_ERROR_401_RE as _AUTH_ERROR_401_RE,
+    HTTP_401_RE as _HTTP_401_RE,
 )
-# `authentication_error` is the Anthropic API error *type* string, not a
-# distinctive CLI phrase — on its own it shows up in the agent's OWN streamed
-# output, tool/command results, logs and source it reads (this repo included),
-# which would spuriously latch an auth failure and fail a perfectly
-# authenticated task with "please re-authenticate". So we only treat it as an
-# auth failure when a real HTTP 401 accompanies it in the same tail — mirroring
-# the headless driver (claude_code.run_sync), which already gates on
-# `authentication_error` AND `401` together.
-_AUTH_ERROR_401_RE = re.compile(r"authentication_error", re.IGNORECASE)
-_HTTP_401_RE = re.compile(r"(?<!\d)401(?!\d)")
 
 # Banner sentinels that mean the TUI is ready to accept a typed prompt. A
 # workflow-injected prompt is only pasted once the input box exists — not while

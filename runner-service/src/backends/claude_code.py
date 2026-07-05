@@ -44,6 +44,11 @@ from .claude_oauth import (
 )
 from .claude_interactive import run_interactive
 from .runner_mcp_config import configure_claude_mcp, claude_mcp_config_path
+from auth_error_detect import (
+    AUTH_ERROR_RE as _AUTH_ERROR_RE,
+    AUTH_ERROR_401_RE as _AUTH_ERROR_401_RE,
+    HTTP_401_RE as _HTTP_401_RE,
+)
 from .runner_instructions_config import configure_claude_instructions
 
 
@@ -654,6 +659,7 @@ class ClaudeCodeBackend(RunnerBackend):
         task_id: Optional[str] = None,
         session_id: Optional[str] = None,
         messages: Optional[list] = None,
+        _auth_retry: int = 0,
     ) -> dict:
         exchange_result = await try_exchange_code_from_prompt(prompt, agent_id=agent_id, owner_id=owner_id)
         if exchange_result is not None:
@@ -778,13 +784,47 @@ class ClaudeCodeBackend(RunnerBackend):
         stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
 
         combined = f"{stdout} {stderr}".lower()
-        if "token has expired" in combined or ("authentication_error" in combined and "401" in combined):
+
+        # Auth-failure detection. `stdout` here is the JSON envelope whose
+        # `result` field carries the agent's OWN reply text (see
+        # `_run_sync_proc`). That reply routinely quotes the very strings we key
+        # on — "token has expired", "authentication_error", "401" — whenever the
+        # agent works on auth code or on a task whose description mentions them.
+        # A naive substring scan of `combined` therefore latches a phantom auth
+        # failure and, because the refresh path re-invokes `run_sync`, recurses
+        # into an infinite re-auth loop that blocks the agent.
+        #
+        # So we split the signal by channel:
+        #   * distinctive CLI/login banners (AUTH_ERROR_RE) — safe anywhere in
+        #     the CLI output; they don't appear verbatim in a normal reply, and
+        #     the interactive TUI renders its auth banner into stdout;
+        #   * the weak `authentication_error` + word-boundaried `401`
+        #     co-occurrence — restricted to `stderr` (the CLI's own diagnostic
+        #     channel) so the agent's reply text can never trip it.
+        # A single retry guard (`_auth_retry`) is the backstop: even a genuine,
+        # persistent auth failure refreshes-and-retries at most once.
+        auth_banner = _AUTH_ERROR_RE.search(combined)
+        auth_api_401 = bool(_AUTH_ERROR_401_RE.search(stderr) and _HTTP_401_RE.search(stderr))
+        if auth_banner or auth_api_401:
+            signal = auth_banner.group(0) if auth_banner else "authentication_error+401"
+            if _auth_retry:
+                logger.warning(f"Claude Code auth error persists after refresh+retry ({signal!r}); surfacing re-auth prompt")
+                if agent_user:
+                    login_url = initiate_owner_login(agent_user['owner_id']) if agent_user.get('owner_id') else initiate_agent_login(agent_id)
+                else:
+                    login_url = await get_login_url()
+                return {
+                    "status": "auth_required",
+                    "output": "",
+                    "error": f"OAuth token expired and refresh failed. Please re-authenticate: {login_url}",
+                    "login_url": login_url,
+                }
             if agent_user:
-                logger.warning(f"Agent {agent_user['username']} auth error: token expired, attempting refresh...")
+                logger.warning(f"Agent {agent_user['username']} auth error ({signal!r}): attempting token refresh...")
                 refreshed = await refresh_agent_token(agent_user)
                 if refreshed:
                     logger.info("Agent token refreshed, retrying request...")
-                    return await self.run_sync(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, session_id=session_id, messages=messages)
+                    return await self.run_sync(prompt, system_prompt, agent_id=agent_id, owner_id=owner_id, task_id=task_id, session_id=session_id, messages=messages, _auth_retry=1)
                 login_url = initiate_owner_login(agent_user['owner_id']) if agent_user.get('owner_id') else initiate_agent_login(agent_id)
                 return {
                     "status": "auth_required",
@@ -793,11 +833,11 @@ class ClaudeCodeBackend(RunnerBackend):
                     "login_url": login_url,
                 }
             else:
-                logger.warning("Claude Code auth error: token expired, attempting refresh...")
+                logger.warning(f"Claude Code auth error ({signal!r}): attempting token refresh...")
                 refreshed = await refresh_oauth_token()
                 if refreshed:
                     logger.info("Token refreshed, retrying request...")
-                    return await self.run_sync(prompt, system_prompt, task_id=task_id, session_id=session_id, messages=messages)
+                    return await self.run_sync(prompt, system_prompt, task_id=task_id, session_id=session_id, messages=messages, _auth_retry=1)
                 login_url = await get_login_url()
                 return {
                     "status": "auth_required",
