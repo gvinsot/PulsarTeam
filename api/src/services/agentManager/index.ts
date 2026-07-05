@@ -32,6 +32,10 @@ export interface AgentManager {
   // ── status.ts ──
   _tasksByAgentMap(): Promise<Map<string, any[]>>;
   _buildAgentStatus(agent: any, todoList: any[]): any;
+  _countTasks(todoList: any[]): { waiting: number; active: number; done: number; error: number; total: number };
+  _applyTokenFloor(agent: any, db: { input: number; output: number } | undefined): void;
+  _enrichAllAgentsStats(): Promise<void>;
+  _enrichAgentStats(agentId: string): Promise<void>;
   getAgentStatus(id: string): Promise<any | null>;
   getAllStatuses(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any[]>;
   getAgentsByProject(projectName: string, userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any[]>;
@@ -222,7 +226,7 @@ export class AgentManager {
     this.codeIndexService = codeIndexService;
     this._updateTimers = new Map();
     this._updatePending = new Map();
-    this.wsEmitter = new WsEmitter(io, this.agents, this._sanitize.bind(this));
+    this.wsEmitter = new WsEmitter(io, this.agents, this._sanitize.bind(this), this._enrichAgentStats.bind(this));
     this._conditionProcessing = new Map();
     this._decideNoDecisionCounts = new Map();
     this.llmConfigs = new Map();
@@ -406,6 +410,10 @@ export class AgentManager {
       }
     }
     const sanitized: any = { ...rest, mcpAuth: sanitizedMcpAuth, credentials: sanitizedCredentials };
+    // The agents view renders per-agent task counts. `agent.tasks` is a cached
+    // snapshot refreshed by _enrichAgentStats/_enrichAllAgentsStats on the emit
+    // paths; default it so the shape is stable before the first refresh.
+    sanitized.tasks = agent.tasks || { waiting: 0, active: 0, done: 0, error: 0, total: 0 };
     if (agent.llmConfigId) {
       const config = this.llmConfigs.get(agent.llmConfigId);
       if (config) {

@@ -42,6 +42,56 @@ export async function recordTokenUsage(agentId, agentName, provider, model, inpu
   }
 }
 
+/**
+ * All-time token totals grouped by agent_id. Returns a Map keyed by agent id
+ * with `{ input, output }` sums from token_usage_log — the same source of
+ * truth the budget dashboard reads. Used to surface an agent's lifetime token
+ * consumption on the agents view, including CLI runners that report usage
+ * out-of-band (via the internal token-usage endpoint) rather than inline on
+ * the chat stream.
+ */
+export async function getTotalTokensByAgentId(): Promise<Map<string, { input: number; output: number }>> {
+  const pool = getPool();
+  const out = new Map<string, { input: number; output: number }>();
+  if (!pool) return out;
+  try {
+    const result = await pool.query(
+      `SELECT agent_id,
+              COALESCE(SUM(input_tokens), 0)  AS input,
+              COALESCE(SUM(output_tokens), 0) AS output
+       FROM token_usage_log
+       WHERE agent_id IS NOT NULL
+       GROUP BY agent_id`
+    );
+    for (const row of result.rows) {
+      out.set(row.agent_id, { input: Number(row.input) || 0, output: Number(row.output) || 0 });
+    }
+  } catch (err) {
+    console.error('Failed to get total tokens by agent:', err.message);
+  }
+  return out;
+}
+
+/** All-time token totals for a single agent from token_usage_log. */
+export async function getTotalTokensForAgent(agentId): Promise<{ input: number; output: number }> {
+  const pool = getPool();
+  if (!pool || !agentId) return { input: 0, output: 0 };
+  try {
+    const result = await pool.query(
+      `SELECT COALESCE(SUM(input_tokens), 0)  AS input,
+              COALESCE(SUM(output_tokens), 0) AS output
+       FROM token_usage_log
+       WHERE agent_id = $1`,
+      [agentId]
+    );
+    const row = result.rows[0] || {};
+    return { input: Number(row.input) || 0, output: Number(row.output) || 0 };
+  } catch (err) {
+    console.error('Failed to get total tokens for agent:', err.message);
+    return { input: 0, output: 0 };
+  }
+}
+
 export function getTokenUsageSummary(days = 1) {
   const pool = getPool();
   if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };

@@ -63,6 +63,11 @@ export function internalTokenUsageRoutes(agentManager) {
         agent.metrics.totalTokensIn = (agent.metrics.totalTokensIn || 0) + inputTokens;
         agent.metrics.totalTokensOut = (agent.metrics.totalTokensOut || 0) + outputTokens;
         agent.metrics.lastActiveAt = new Date().toISOString();
+        // Push a refreshed snapshot to the agents view so CLI-runner token
+        // counts update live. The emit re-enriches from token_usage_log (this
+        // record is already persisted above), keeping the card in sync with
+        // the budget dashboard.
+        agentManager.wsEmitter?.agentUpdated?.(agent.id);
       } catch {
         // Metrics are best-effort; never fail the recording call.
       }

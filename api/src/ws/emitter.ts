@@ -10,11 +10,23 @@ export class WsEmitter {
   private _updateTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private _updatePending: Map<string, boolean> = new Map();
   private sanitize: (agent: any) => any;
+  private enrich?: (agentId: string) => Promise<void>;
 
-  constructor(io: any, agents: Map<string, any>, sanitize: (agent: any) => any) {
+  constructor(io: any, agents: Map<string, any>, sanitize: (agent: any) => any, enrich?: (agentId: string) => Promise<void>) {
     this.io = io;
     this.agents = agents;
     this.sanitize = sanitize;
+    this.enrich = enrich;
+  }
+
+  /** Refresh the agent's cached runtime stats (task counts + token totals) then
+   * emit the sanitized snapshot. Enrichment failures never block the emit. */
+  private async _enrichAndEmit(event: string, agentId: string) {
+    if (this.enrich) {
+      try { await this.enrich(agentId); } catch { /* best-effort — emit stale */ }
+    }
+    const agent = this.agents.get(agentId);
+    if (agent) this._emitScoped(event, this.sanitize(agent));
   }
 
   /** Emit an event scoped to the board of the given agent (falls back to broadcast). */
@@ -65,11 +77,8 @@ export class WsEmitter {
       this._updateTimers.delete(agentId);
       const wasPending = this._updatePending.has(agentId);
       this._updatePending.delete(agentId);
-      if (wasPending) {
-        const agent = this.agents.get(agentId);
-        if (agent) {
-          this._emitScoped(event, this.sanitize(agent));
-        }
+      if (wasPending && this.agents.get(agentId)) {
+        void this._enrichAndEmit(event, agentId);
       }
     }, 300);
     this._updateTimers.set(agentId, timer);
@@ -84,11 +93,8 @@ export class WsEmitter {
     }
     const wasPending = this._updatePending.has(agentId);
     this._updatePending.delete(agentId);
-    if (wasPending && this.io) {
-      const agent = this.agents.get(agentId);
-      if (agent) {
-        this._emitScoped(WsEvents.AGENT_UPDATED, this.sanitize(agent));
-      }
+    if (wasPending && this.io && this.agents.get(agentId)) {
+      void this._enrichAndEmit(WsEvents.AGENT_UPDATED, agentId);
     }
   }
 

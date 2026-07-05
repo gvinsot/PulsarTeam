@@ -1,5 +1,5 @@
 // ─── Agent Status: getAgentStatus, swarm status, setStatus, stopAgent ───────
-import { saveAgent, clearActionRunningForAgent, saveTaskToDb, getTasksByAgent, getAllTasks, getTasksByAssignee, getTaskByActionRunningAgent } from '../database.js';
+import { saveAgent, clearActionRunningForAgent, saveTaskToDb, getTasksByAgent, getAllTasks, getTasksByAssignee, getTaskByActionRunningAgent, getTotalTokensByAgentId, getTotalTokensForAgent } from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 import { isCliRunner } from '../runners.js';
 
@@ -56,6 +56,73 @@ export const statusMethods = {
       list.push(t);
     }
     return byAgent;
+  },
+
+  /** Reduce a todoList to the { waiting, active, done, error, total } counts
+   * the agents view shows. Shares the "active" definition with
+   * _buildAgentStatus so the card and the REST/MCP status stay in agreement. */
+  _countTasks(this: any, todoList: any[]): { waiting: number; active: number; done: number; error: number; total: number } {
+    const list = todoList || [];
+    return {
+      waiting: list.filter((t: any) => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length,
+      active: list.filter((t: any) => this._isActiveTaskStatus(t.status)).length,
+      done: list.filter((t: any) => t.status === 'done').length,
+      error: list.filter((t: any) => t.status === 'error').length,
+      total: list.length,
+    };
+  },
+
+  /** Raise an agent's in-memory token metrics to at least the persisted
+   * token_usage_log totals. The card reads agent.metrics, but CLI runners only
+   * ever record their spend in token_usage_log (out-of-band), leaving the live
+   * metrics at zero. Using max() keeps the value monotonic and consistent with
+   * the budget dashboard without ever double-counting inline (chat-stream)
+   * usage, since both paths advance the same underlying total. */
+  _applyTokenFloor(this: any, agent: any, db: { input: number; output: number } | undefined): void {
+    if (!agent) return;
+    agent.metrics = agent.metrics || {};
+    const dbIn = db?.input || 0;
+    const dbOut = db?.output || 0;
+    if (dbIn > (agent.metrics.totalTokensIn || 0)) agent.metrics.totalTokensIn = dbIn;
+    if (dbOut > (agent.metrics.totalTokensOut || 0)) agent.metrics.totalTokensOut = dbOut;
+  },
+
+  /** Refresh the cached runtime stats (task counts + token totals) that the
+   * agents view renders, for every in-memory agent. Runs two bulk DB queries
+   * total (all tasks + token sums grouped by agent) so the AGENTS_LIST snapshot
+   * is accurate without an N+1. Results are stored back on the agent objects so
+   * _sanitize surfaces them on every socket payload. */
+  async _enrichAllAgentsStats(this: any): Promise<void> {
+    let byAgent: Map<string, any[]>;
+    let tokens: Map<string, { input: number; output: number }>;
+    try {
+      [byAgent, tokens] = await Promise.all([this._tasksByAgentMap(), getTotalTokensByAgentId()]);
+    } catch (err: any) {
+      console.warn(`⚠️ [Stats] enrichAllAgentsStats failed: ${err?.message || err}`);
+      return;
+    }
+    for (const agent of this.agents.values()) {
+      agent.tasks = this._countTasks(byAgent.get(agent.id) || []);
+      this._applyTokenFloor(agent, tokens.get(agent.id));
+    }
+  },
+
+  /** Refresh the cached runtime stats for a single agent (used on the
+   * per-agent agent:updated emit path). Cheap targeted queries so the debounced
+   * update stays light. */
+  async _enrichAgentStats(this: any, agentId: string): Promise<void> {
+    const agent = this.agents.get(agentId);
+    if (!agent) return;
+    try {
+      const [todoList, tokens] = await Promise.all([
+        getTasksByAgent(agentId),
+        getTotalTokensForAgent(agentId),
+      ]);
+      agent.tasks = this._countTasks(todoList);
+      this._applyTokenFloor(agent, tokens);
+    } catch (err: any) {
+      console.warn(`⚠️ [Stats] enrichAgentStats failed for ${agentId}: ${err?.message || err}`);
+    }
   },
 
   async getAgentStatus(this: any, id: string): Promise<any> {

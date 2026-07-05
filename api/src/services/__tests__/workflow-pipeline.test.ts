@@ -79,6 +79,8 @@ mock.module('../database.js', {
     getTokenUsageByAgent: async () => [],
     getTokenUsageTimeline: async () => [],
     getDailyTokenUsage: async () => [],
+    getTotalTokensByAgentId: async () => new Map(),
+    getTotalTokensForAgent: async () => ({ input: 0, output: 0 }),
     refreshTokenSummaryCache: noop,
     // users
     getAllUsers: async () => [],

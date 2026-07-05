@@ -24,6 +24,7 @@ export { getSetting, getSettingAsync, setSetting, loadSettingsCache } from './da
 export {
   recordTokenUsage, getTokenUsageSummary, getTokenUsageSummaryAsync,
   getTokenUsageByAgent, getTokenUsageTimeline, getDailyTokenUsage,
+  getTotalTokensByAgentId, getTotalTokensForAgent,
   refreshTokenSummaryCache,
 } from './database/tokenUsage.js';
 export {

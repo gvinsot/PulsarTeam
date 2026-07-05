@@ -49,6 +49,9 @@ export function agentRoutes(agentManager) {
   // List agents (filtered by board access — each user sees agents on their boards + unscoped)
   router.get('/', async (req, res) => {
     const userBoardIds = await getUserBoardIds(req.user.userId);
+    // Refresh cached task counts + token totals so the agents view shows
+    // accurate tasks-in-progress and lifetime tokens on the initial HTTP load.
+    await agentManager._enrichAllAgentsStats();
     const agents = agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds);
     res.json(agents.map(sanitizeAgent));
   });

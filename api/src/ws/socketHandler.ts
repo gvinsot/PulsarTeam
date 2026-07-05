@@ -116,6 +116,9 @@ export function setupSocketHandlers(io, agentManager) {
 
     const ws = agentManager.wsEmitter;
 
+    // Refresh cached task counts + token totals so the initial agents-view
+    // snapshot is accurate (tasks-in-progress and lifetime tokens per agent).
+    await agentManager._enrichAllAgentsStats();
     socket.emit(WsEvents.AGENTS_LIST, agentManager.getAllForUser(userId, userRole, userBoardIds));
 
     function canAccessAgent(agentId) {
@@ -309,7 +312,8 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Ping agent status ─────────────────────────────────────────────
-    socket.on(WsEvents.REQ_REFRESH, () => {
+    socket.on(WsEvents.REQ_REFRESH, async () => {
+      await agentManager._enrichAllAgentsStats();
       socket.emit(WsEvents.AGENTS_LIST, agentManager.getAllForUser(userId, userRole, userBoardIds));
     });
 
