@@ -79,6 +79,31 @@ export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
 }
 
 /**
+ * Best-effort liveness check for a GitHub token: `GET /user` with the token and
+ * report whether GitHub *definitively* rejected it (HTTP 401). Any other outcome
+ * — 200, a 403 rate-limit, a 5xx, or a network failure that survives the retry
+ * budget — returns `true` (usable): an ambiguous result must never cause us to
+ * throw away a token that might be perfectly good. Only a clear 401 is treated
+ * as dead, since that's what an expired/revoked OAuth token returns.
+ */
+async function isGitHubTokenUsable(token: string): Promise<boolean> {
+  try {
+    const res = await fetchWithRetry('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'PulsarTeam',
+      },
+    }, 2);
+    return res.status !== 401;
+  } catch {
+    // Network error / timeout after retries — can't prove the token is dead, so
+    // keep it rather than falling back on a transient blip.
+    return true;
+  }
+}
+
+/**
  * Resolve GitHub credentials for an agent. Resolution order:
  *   agent → board → user OAuth token  →  server-wide GITHUB_TOKEN fallback.
  * Returns null only when NO source yields a token. Used to inject the access
@@ -86,30 +111,52 @@ export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
  * HTTPS.
  *
  * The GITHUB_TOKEN fallback is what fixes the "some agents can push, some
- * can't" inconsistency: without it, an agent whose board never connected the
- * GitHub plugin gets NO credentials and every push dies with "could not read
- * Username", while an agent on a connected board succeeds. A per-scope OAuth
- * token always wins; the server token only fills the gap when none exists.
+ * can't" inconsistency. Two failure modes are covered:
+ *   1. No plugin connected at any scope → no OAuth token → server token fills
+ *      the gap (otherwise every push dies with "could not read Username").
+ *   2. A plugin IS connected but its OAuth token is expired/revoked → the token
+ *      is present yet every push is rejected with HTTP 401, and previously we
+ *      returned it anyway with NO fallback. We now validate a resolved OAuth
+ *      token against the GitHub API *when a server fallback exists* and, if it
+ *      is definitively dead, fall through to the server token instead of
+ *      shipping credentials that cannot push.
+ *
+ * A *usable* per-scope OAuth token always wins; the server token only fills the
+ * gap when none exists or the resolved one is dead. Validation is skipped when
+ * there is no server fallback (nothing better to switch to) so the common path
+ * pays no extra network round-trip.
  */
 export async function getGitHubCredentialsForAgent(
   agentId: string | null,
   boardId: string | null = null,
 ): Promise<{ token: string; login: string | null; provider: 'github' } | null> {
   const hit = await resolveOAuthTokenRecord('github', agentId, boardId);
-  if (hit) {
-    return {
-      token: hit.accessToken,
-      // User-scope fallback deliberately reports login: null (the token may
-      // belong to any user); agent/board scopes surface the stored login.
-      login: hit.scopeType === 'user' ? null : (hit.record.meta as any)?.login || null,
-      provider: 'github',
-    };
-  }
   // Server-wide fallback: GITHUB_TOKEN (documented in .env.example, mountable
   // as a Docker secret via readSecret). GITHUB_USER is the matching username;
   // it defaults to `x-access-token` in the runner when unset, which GitHub
   // accepts for PAT/installation tokens.
   const envToken = readSecret('GITHUB_TOKEN', '').trim();
+
+  if (hit) {
+    const oauthCreds = {
+      token: hit.accessToken,
+      // User-scope fallback deliberately reports login: null (the token may
+      // belong to any user); agent/board scopes surface the stored login.
+      login: hit.scopeType === 'user' ? null : (hit.record.meta as any)?.login || null,
+      provider: 'github' as const,
+    };
+    // No server fallback to switch to → return the OAuth token unchecked (a
+    // dead token is still the best — and only — thing we have).
+    if (!envToken) return oauthCreds;
+    // A server fallback exists: only ship the OAuth token if it can still auth.
+    if (await isGitHubTokenUsable(oauthCreds.token)) return oauthCreds;
+    console.warn(
+      `[GitHub] Resolved OAuth token (scope=${hit.scopeType}) was rejected by GitHub (401); ` +
+      `falling back to server GITHUB_TOKEN so the agent can still push.`,
+    );
+    // fall through to the server token
+  }
+
   if (envToken) {
     const envUser = (process.env.GITHUB_USER || '').trim();
     return { token: envToken, login: envUser || null, provider: 'github' };
