@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getSlackAccessTokenForAgent } from '../routes/slack.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
@@ -103,7 +104,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
 
       const channels = data.channels || [];
       if (channels.length === 0) {
-        return { content: [{ type: 'text', text: 'No channels found.' }] };
+        return text('No channels found.');
       }
 
       const summary = channels.map((ch, i) => {
@@ -113,9 +114,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. ${prefix} ${ch.name} (ID: ${ch.id}, ${members} members)${topic}`;
       }).join('\n');
 
-      return {
-        content: [{ type: 'text', text: `Found ${channels.length} channel(s):\n\n${summary}` }],
-      };
+      return text(`Found ${channels.length} channel(s):\n\n${summary}`);
     }
   );
 
@@ -136,7 +135,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
 
       const messages = (data.messages || []).map(formatMessage);
       if (messages.length === 0) {
-        return { content: [{ type: 'text', text: 'No messages found in this channel.' }] };
+        return text('No messages found in this channel.');
       }
 
       const summary = messages.map((m, i) => {
@@ -144,9 +143,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. [${m.timestamp}] <${m.user}>: ${m.text}${thread}\n   ts: ${m.ts}`;
       }).join('\n\n');
 
-      return {
-        content: [{ type: 'text', text: `Last ${messages.length} message(s) in <#${channel}>:\n\n${summary}` }],
-      };
+      return text(`Last ${messages.length} message(s) in <#${channel}>:\n\n${summary}`);
     }
   );
 
@@ -172,9 +169,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. [${m.timestamp}] <${m.user}>: ${m.text}`;
       }).join('\n\n');
 
-      return {
-        content: [{ type: 'text', text: `Thread (${messages.length} message(s)):\n\n${summary}` }],
-      };
+      return text(`Thread (${messages.length} message(s)):\n\n${summary}`);
     }
   );
 
@@ -241,7 +236,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
 
       const members = (data.members || []).filter(u => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT');
       if (members.length === 0) {
-        return { content: [{ type: 'text', text: 'No users found.' }] };
+        return text('No users found.');
       }
 
       const summary = members.map((u, i) => {
@@ -251,9 +246,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. ${name} (ID: ${u.id})${admin}${status}`;
       }).join('\n');
 
-      return {
-        content: [{ type: 'text', text: `${members.length} workspace member(s):\n\n${summary}` }],
-      };
+      return text(`${members.length} workspace member(s):\n\n${summary}`);
     }
   );
 
@@ -278,7 +271,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
 
         const matches = data.messages?.matches || [];
         if (matches.length === 0) {
-          return { content: [{ type: 'text', text: `No messages found for query: "${query}"` }] };
+          return text(`No messages found for query: "${query}"`);
         }
 
         const summary = matches.map((m, i) => {
@@ -329,9 +322,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         `Archived: ${ch.is_archived ? 'Yes' : 'No'}`,
       ];
 
-      return {
-        content: [{ type: 'text', text: info.join('\n') }],
-      };
+      return text(info.join('\n'));
     }
   );
 
@@ -351,9 +342,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         name,
       });
 
-      return {
-        content: [{ type: 'text', text: `Reaction :${name}: added to message ${timestamp}` }],
-      };
+      return text(`Reaction :${name}: added to message ${timestamp}`);
     }
   );
 

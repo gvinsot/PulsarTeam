@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
@@ -33,8 +34,8 @@ export function createBrowserMcpServer() {
     },
     async ({ query }) => {
       const result = await browserRequest('/search_web', { query });
-      const text = result?.content ?? result?.error ?? 'No content.';
-      return { content: [{ type: 'text', text }] };
+      const out = result?.content ?? result?.error ?? 'No content.';
+      return text(out);
     }
   );
 
@@ -47,8 +48,8 @@ export function createBrowserMcpServer() {
     },
     async ({ url, word_count_threshold = 10 }) => {
       const result = await browserRequest('/crawl', { url, word_count_threshold });
-      const text = result?.content ?? result?.error ?? 'No content.';
-      return { content: [{ type: 'text', text }] };
+      const out = result?.content ?? result?.error ?? 'No content.';
+      return text(out);
     }
   );
 
@@ -62,10 +63,10 @@ export function createBrowserMcpServer() {
     async ({ urls, word_count_threshold = 10 }) => {
       const result = await browserRequest('/crawl_many', { urls, word_count_threshold });
       const pages = result?.pages ?? [];
-      const text = pages.length
+      const out = pages.length
         ? pages.map((p: any) => `## ${p.url}\n\n${p.content || p.error || ''}`).join('\n\n---\n\n')
         : (result?.error ?? 'No pages.');
-      return { content: [{ type: 'text', text }] };
+      return text(out);
     }
   );
 
@@ -77,8 +78,8 @@ export function createBrowserMcpServer() {
     },
     async ({ url }) => {
       const result = await browserRequest('/get_links', { url });
-      const text = result?.error ? result.error : JSON.stringify(result?.links ?? {}, null, 2);
-      return { content: [{ type: 'text', text }] };
+      const out = result?.error ? result.error : JSON.stringify(result?.links ?? {}, null, 2);
+      return text(out);
     }
   );
 
@@ -92,8 +93,8 @@ export function createBrowserMcpServer() {
     },
     async ({ url, instruction, schema_json = '' }) => {
       const result = await browserRequest('/extract', { url, instruction, schema_json });
-      const text = result?.content ?? result?.error ?? 'No content.';
-      return { content: [{ type: 'text', text }] };
+      const out = result?.content ?? result?.error ?? 'No content.';
+      return text(out);
     }
   );
 

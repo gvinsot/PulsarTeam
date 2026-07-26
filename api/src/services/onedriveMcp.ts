@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getOnedriveAccessTokenForAgent } from '../routes/onedrive.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
@@ -89,9 +90,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         return `${icon} ${i.name} (${meta})`;
       }).join('\n');
 
-      return {
-        content: [{ type: 'text', text: `Found ${items.length} item(s) in "${path || '/'}":\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}` }],
-      };
+      return text(`Found ${items.length} item(s) in "${path || '/'}":\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}`);
     }
   );
 
@@ -115,9 +114,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         return `${icon} ${i.path} (${i.size})`;
       }).join('\n');
 
-      return {
-        content: [{ type: 'text', text: `Search "${query}" found ${items.length} result(s):\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}` }],
-      };
+      return text(`Search "${query}" found ${items.length} result(s):\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}`);
     }
   );
 
@@ -140,21 +137,15 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       if (!meta.folder && meta.size > MAX_READ_BYTES) {
         const dest = meta['@microsoft.graph.downloadUrl'] || meta.webUrl;
         if (!isText) {
-          return {
-            content: [{ type: 'text', text: `File "${meta.name}" is a binary file (${mimeType}, ${(meta.size / 1024).toFixed(1)} KB). Download URL: ${dest}` }],
-          };
+          return text(`File "${meta.name}" is a binary file (${mimeType}, ${(meta.size / 1024).toFixed(1)} KB). Download URL: ${dest}`);
         }
-        return {
-          content: [{ type: 'text', text: `File "${meta.name}" is too large to read directly (${(meta.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_READ_BYTES / 1024 / 1024} MB). Use the download URL instead: ${dest}` }],
-        };
+        return text(`File "${meta.name}" is too large to read directly (${(meta.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_READ_BYTES / 1024 / 1024} MB). Use the download URL instead: ${dest}`);
       }
 
       // Download content
       const downloadUrl = meta['@microsoft.graph.downloadUrl'];
       if (!downloadUrl) {
-        return {
-          content: [{ type: 'text', text: `Cannot read "${meta.name}": no download URL available. Web URL: ${meta.webUrl}` }],
-        };
+        return text(`Cannot read "${meta.name}": no download URL available. Web URL: ${meta.webUrl}`);
       }
 
       const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(120_000) });
@@ -167,9 +158,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       // absent, and an unbounded read of a huge file would blow up the heap.
       const content = (await readBodyCapped(response, MAX_READ_BYTES)).toString('utf8');
 
-      return {
-        content: [{ type: 'text', text: `File: ${meta.name}\nSize: ${(meta.size / 1024).toFixed(1)} KB\nType: ${mimeType}\nModified: ${meta.lastModifiedDateTime}\n\n--- Content ---\n${content}` }],
-      };
+      return text(`File: ${meta.name}\nSize: ${(meta.size / 1024).toFixed(1)} KB\nType: ${mimeType}\nModified: ${meta.lastModifiedDateTime}\n\n--- Content ---\n${content}`);
     }
   );
 
@@ -184,9 +173,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const meta = await graphFetch(`/me/drive/root:/${encodePath(path)}`, agentId, boardId);
       const info = formatItem(meta);
 
-      return {
-        content: [{ type: 'text', text: `File info for "${path}":\n${JSON.stringify(info, null, 2)}\n\nFull metadata:\n${JSON.stringify(meta, null, 2)}` }],
-      };
+      return text(`File info for "${path}":\n${JSON.stringify(info, null, 2)}\n\nFull metadata:\n${JSON.stringify(meta, null, 2)}`);
     }
   );
 
@@ -215,9 +202,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         }),
       });
 
-      return {
-        content: [{ type: 'text', text: `Folder "${name}" created successfully in "${parentPath}".\nID: ${result.id}\nWeb URL: ${result.webUrl}` }],
-      };
+      return text(`Folder "${name}" created successfully in "${parentPath}".\nID: ${result.id}\nWeb URL: ${result.webUrl}`);
     }
   );
 
@@ -249,9 +234,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       }
 
       const result = await res.json();
-      return {
-        content: [{ type: 'text', text: `File uploaded to "${path}".\nID: ${result.id}\nSize: ${(result.size / 1024).toFixed(1)} KB\nWeb URL: ${result.webUrl}` }],
-      };
+      return text(`File uploaded to "${path}".\nID: ${result.id}\nSize: ${(result.size / 1024).toFixed(1)} KB\nWeb URL: ${result.webUrl}`);
     }
   );
 
@@ -277,9 +260,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         throw new Error(`Delete failed ${res.status}: ${text}`);
       }
 
-      return {
-        content: [{ type: 'text', text: `"${path}" has been deleted (moved to recycle bin).` }],
-      };
+      return text(`"${path}" has been deleted (moved to recycle bin).`);
     }
   );
 
@@ -305,9 +286,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         }
       );
 
-      return {
-        content: [{ type: 'text', text: `Share link for "${path}" (${type}):\n${result.link?.webUrl || JSON.stringify(result)}` }],
-      };
+      return text(`Share link for "${path}" (${type}):\n${result.link?.webUrl || JSON.stringify(result)}`);
     }
   );
 

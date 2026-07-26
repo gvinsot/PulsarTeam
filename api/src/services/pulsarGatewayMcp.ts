@@ -4,6 +4,7 @@ import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { applyTaskUpdate } from './swarmApiMcp.js';
 import { BUILTIN_MCP_SERVERS } from '../data/mcpServers.js';
 import { getBoardById, getTaskByActionRunningAgent, getTasksByAssignee, getActiveTasksByAgent } from './database.js';
+import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 
 /**
  * Pulsar Gateway MCP — the SINGLE MCP server injected into every CLI runner
@@ -31,17 +32,6 @@ import { getBoardById, getTaskByActionRunningAgent, getTasksByAssignee, getActiv
  * native MCP config at spawn (the gateway is declared agentContext:true in
  * INTERNAL_MCP_SERVERS so those headers always flow).
  */
-
-/** Success envelope: pretty-printed JSON text content. */
-const jsonOk = (obj: unknown) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }],
-});
-
-/** Error envelope: compact `{ error }` JSON text content flagged isError. */
-const jsonError = (error: string) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify({ error }) }],
-  isError: true as const,
-});
 
 /** The gateway's own server id — never list/proxy itself. */
 const GATEWAY_SERVER_ID = 'mcp-pulsar-gateway';
@@ -133,14 +123,7 @@ export function createPulsarGatewayMcpServer(
     'update_task',
     'Update YOUR current task AND/OR mark it finished. The task is auto-detected from your active assignment — task_id is optional. Move it to a board column with `status` (e.g. "In Review", "Done"), and/or record completion with a `comment` summary (plus optional `commits`). To finish a task, move it to its next column with a comment: update_task({ status: "Done", comment: "what you did" }). Commit and push your code first.',
     {
-      status: z.string().optional().describe('Target column — workflow column label preferred (e.g. "In Review", "Done"); the column id is also accepted.'),
-      comment: z.string().optional().describe('Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished.'),
-      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
-      done: z.boolean().optional().describe('Set true to signal the task is finished when you have no status change or comment to add (rarely needed — a status move or comment already finishes it).'),
-      repo_full_name: z.string().optional().describe('New repository in "owner/repo" format. Empty string clears the binding.'),
-      repo_provider: z.string().optional().describe('Repository provider — defaults to "github" when repo_full_name is set.'),
-      storage_path: z.string().optional().describe('New storage location (e.g. OneDrive folder path). Empty string clears the binding.'),
-      storage_provider: z.string().optional().describe('Storage provider — defaults to "onedrive" when storage_path is set.'),
+      ...taskMutationSharedShape,
       task_id: z.string().optional().describe('Optional — target a specific task instead of your auto-detected current one.'),
     },
     async ({ status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider, task_id }) => {

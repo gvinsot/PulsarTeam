@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { WsEvents } from '../ws/events.js';
 import { getDesktopSocketsForUser } from '../ws/socketHandler.js';
+import { jsonError } from './mcpResponses.js';
 
 /**
  * Local Folder MCP — gives any configured LLM read/edit/generate access to a
@@ -24,10 +25,6 @@ import { getDesktopSocketsForUser } from '../ws/socketHandler.js';
 
 const okEnvelope = (result: unknown) => ({
   content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }],
-});
-const jsonError = (error: string) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify({ error }) }],
-  isError: true as const,
 });
 
 const NO_DESKTOP =

@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getGmailAccessTokenForAgent } from '../routes/gmail.js';
 import {
@@ -368,7 +369,7 @@ export function createGmailMcpServer(
       const messages = list.messages || [];
 
       if (messages.length === 0) {
-        return { content: [{ type: 'text', text: 'No emails found matching the criteria.' }] };
+        return text('No emails found matching the criteria.');
       }
 
       const summary = await fetchMessageSummaries(messages, limit, agentId, boardId, { withStar: true });
@@ -401,7 +402,7 @@ export function createGmailMcpServer(
       const messages = list.messages || [];
 
       if (messages.length === 0) {
-        return { content: [{ type: 'text', text: `No emails found for query: "${query}"` }] };
+        return text(`No emails found for query: "${query}"`);
       }
 
       const summary = await fetchMessageSummaries(messages, limit, agentId, boardId);
@@ -644,7 +645,7 @@ export function createGmailMcpServer(
       const removeIds = removeLabelIds ? removeLabelIds.split(',').map(l => l.trim()) : [];
 
       if (addIds.length === 0 && removeIds.length === 0) {
-        return { content: [{ type: 'text', text: 'No label changes specified.' }] };
+        return text('No label changes specified.');
       }
 
       const result = await gmailFetch(`/users/me/messages/${messageId}/modify`, agentId, boardId, {
@@ -680,9 +681,7 @@ export function createGmailMcpServer(
         method: 'POST',
       });
 
-      return {
-        content: [{ type: 'text', text: `Email ${messageId} moved to trash.` }],
-      };
+      return text(`Email ${messageId} moved to trash.`);
     }
   );
 

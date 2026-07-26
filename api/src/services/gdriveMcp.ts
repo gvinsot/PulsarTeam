@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getGdriveAccessTokenForAgent } from '../routes/gdrive.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
@@ -224,7 +225,7 @@ export function createGdriveMcpServer(
       const items = (result.files || []).map(formatItem);
 
       if (items.length === 0) {
-        return { content: [{ type: 'text', text: `Folder "${parentName}" is empty.` }] };
+        return text(`Folder "${parentName}" is empty.`);
       }
 
       const lines = items.map((it: any) => {
@@ -272,7 +273,7 @@ export function createGdriveMcpServer(
       const items = (result.files || []).map(formatItem);
 
       if (items.length === 0) {
-        return { content: [{ type: 'text', text: `No results for query: ${query}` }] };
+        return text(`No results for query: ${query}`);
       }
 
       const lines = items.map((it: any) => {
@@ -281,9 +282,7 @@ export function createGdriveMcpServer(
         return `${icon} ${it.name}   [${it.mimeType || it.type}]${meta ? ` — ${meta}` : ''}\n     id: ${it.id}`;
       });
 
-      return {
-        content: [{ type: 'text', text: `${items.length} result(s) for "${query}":\n\n${lines.join('\n\n')}` }],
-      };
+      return text(`${items.length} result(s) for "${query}":\n\n${lines.join('\n\n')}`);
     }
   );
 
@@ -506,18 +505,14 @@ export function createGdriveMcpServer(
 
       if (permanent) {
         await driveFetch(`/files/${encodeURIComponent(resolved.id)}`, agentId, boardId, { method: 'DELETE' });
-        return {
-          content: [{ type: 'text', text: `Permanently deleted: ${resolved.name || resolved.id}` }],
-        };
+        return text(`Permanently deleted: ${resolved.name || resolved.id}`);
       }
 
       await driveFetch(`/files/${encodeURIComponent(resolved.id)}?fields=id,trashed`, agentId, boardId, {
         method: 'PATCH',
         body: JSON.stringify({ trashed: true }),
       });
-      return {
-        content: [{ type: 'text', text: `Moved to trash: ${resolved.name || resolved.id}` }],
-      };
+      return text(`Moved to trash: ${resolved.name || resolved.id}`);
     }
   );
 

@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getJiraCredentialsForAgent } from '../routes/jira.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
@@ -92,9 +93,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
       const list = (Array.isArray(projects) ? projects : []).map(p =>
         `- ${p.key}: ${p.name} (${p.projectTypeKey})${p.description ? ` — ${p.description.slice(0, 100)}` : ''}`
       ).join('\n');
-      return {
-        content: [{ type: 'text', text: `Jira Projects (${projects.length}):\n${list || '(none)'}` }],
-      };
+      return text(`Jira Projects (${projects.length}):\n${list || '(none)'}`);
     }
   );
 
@@ -115,15 +114,13 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
       );
       const issues = data.issues || [];
       if (issues.length === 0) {
-        return { content: [{ type: 'text', text: `No issues found for JQL: "${jql}"` }] };
+        return text(`No issues found for JQL: "${jql}"`);
       }
       const list = issues.map((i: any, idx: number) => {
         const f = i.fields;
         return `${idx + 1}. ${i.key}: ${f.summary}\n   Status: ${f.status?.name || 'Unknown'} | Type: ${f.issuetype?.name || '?'} | Priority: ${f.priority?.name || '?'}\n   Assignee: ${f.assignee?.displayName || 'Unassigned'} | Updated: ${f.updated || '?'}`;
       }).join('\n\n');
-      return {
-        content: [{ type: 'text', text: `Found ${data.total || issues.length} issue(s) (showing ${issues.length}):\n\n${list}` }],
-      };
+      return text(`Found ${data.total || issues.length} issue(s) (showing ${issues.length}):\n\n${list}`);
     }
   );
 
@@ -201,9 +198,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         body: JSON.stringify({ fields }),
       });
 
-      return {
-        content: [{ type: 'text', text: `Issue created: ${result.key}\nURL: https://${getJiraCredentialsForAgent(agentId)?.domain}/browse/${result.key}` }],
-      };
+      return text(`Issue created: ${result.key}\nURL: https://${getJiraCredentialsForAgent(agentId)?.domain}/browse/${result.key}`);
     }
   );
 
@@ -233,9 +228,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         body: JSON.stringify({ fields }),
       });
 
-      return {
-        content: [{ type: 'text', text: `Issue ${issueKey} updated successfully.` }],
-      };
+      return text(`Issue ${issueKey} updated successfully.`);
     }
   );
 
@@ -252,9 +245,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         method: 'POST',
         body: JSON.stringify({ body: textToAdf(comment) }),
       });
-      return {
-        content: [{ type: 'text', text: `Comment added to ${issueKey} (${comment.length} chars).` }],
-      };
+      return text(`Comment added to ${issueKey} (${comment.length} chars).`);
     }
   );
 
@@ -274,16 +265,12 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         const list = transitions.map((t: any) =>
           `  - ID: ${t.id} → "${t.name}" (to: ${t.to?.name || '?'})`
         ).join('\n');
-        return {
-          content: [{ type: 'text', text: `Available transitions for ${issueKey}:\n${list || '(none)'}` }],
-        };
+        return text(`Available transitions for ${issueKey}:\n${list || '(none)'}`);
       }
 
       const match = transitions.find((t: any) => t.id === transitionId);
       if (!match) {
-        return {
-          content: [{ type: 'text', text: `Transition ID "${transitionId}" not available. Available: ${transitions.map((t: any) => `${t.id}="${t.name}"`).join(', ')}` }],
-        };
+        return text(`Transition ID "${transitionId}" not available. Available: ${transitions.map((t: any) => `${t.id}="${t.name}"`).join(', ')}`);
       }
 
       await jiraFetch(agentId, pulsarBoardId, `/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`, {
@@ -291,9 +278,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         body: JSON.stringify({ transition: { id: transitionId } }),
       });
 
-      return {
-        content: [{ type: 'text', text: `Issue ${issueKey} transitioned via "${match.name}" → ${match.to?.name || 'new status'}.` }],
-      };
+      return text(`Issue ${issueKey} transitioned via "${match.name}" → ${match.to?.name || 'new status'}.`);
     }
   );
 
@@ -310,9 +295,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
       const list = boards.map((b: any) =>
         `  - ID: ${b.id} | "${b.name}" (${b.type}) — ${b.location?.displayName || b.location?.projectKey || '?'}`
       ).join('\n');
-      return {
-        content: [{ type: 'text', text: `Jira Boards (${boards.length}):\n${list || '(none)'}` }],
-      };
+      return text(`Jira Boards (${boards.length}):\n${list || '(none)'}`);
     }
   );
 
@@ -329,9 +312,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         const statuses = (col.statuses || []).map((s: any) => s.id).join(',');
         return `  - "${col.name}" (status IDs: ${statuses || 'none'})`;
       }).join('\n');
-      return {
-        content: [{ type: 'text', text: `Board ${boardId} "${config.name || '?'}" columns:\n${columns || '(none)'}` }],
-      };
+      return text(`Board ${boardId} "${config.name || '?'}" columns:\n${columns || '(none)'}`);
     }
   );
 
@@ -346,7 +327,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
       const data = await jiraFetch(agentId, pulsarBoardId, `/rest/agile/1.0/board/${boardId}/sprint?state=active`);
       const sprints = data.values || [];
       if (sprints.length === 0) {
-        return { content: [{ type: 'text', text: `No active sprint found for board ${boardId}.` }] };
+        return text(`No active sprint found for board ${boardId}.`);
       }
       const sprint = sprints[0];
       let issueText = '';
@@ -380,9 +361,7 @@ export function createJiraMcpServer(agentId: string | null = null, pulsarBoardId
         method: 'PUT',
         body: JSON.stringify({ accountId: accountId === 'unassigned' ? null : accountId || null }),
       });
-      return {
-        content: [{ type: 'text', text: accountId && accountId !== 'unassigned' ? `Issue ${issueKey} assigned to ${accountId}.` : `Issue ${issueKey} unassigned.` }],
-      };
+      return text(accountId && accountId !== 'unassigned' ? `Issue ${issueKey} assigned to ${accountId}.` : `Issue ${issueKey} unassigned.`);
     }
   );
 

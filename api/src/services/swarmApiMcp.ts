@@ -7,17 +7,7 @@ import { emitTaskUpdated, clearExecutionOnMove } from './taskMutations.js';
 import { getReposForBoard } from './database/boardRepos.js';
 import { resolveWorkflowStatus } from './workflow/columnIds.js';
 import { normalizeRepoFullName, normalizeStoragePath } from './taskRepos.js';
-
-/** Success envelope: pretty-printed JSON text content. */
-const jsonOk = (obj: unknown) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify(obj, null, 2) }],
-});
-
-/** Error envelope: compact `{ error }` JSON text content flagged isError. */
-const jsonError = (error: string) => ({
-  content: [{ type: 'text' as const, text: JSON.stringify({ error }) }],
-  isError: true as const,
-});
+import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 
 /** Resolve an agent by UUID (agent_id) or case-insensitive name (agent_name). */
 function findAgent(
@@ -503,14 +493,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       agent_id: z.string().optional().describe('Agent UUID owning the task'),
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id)'),
       task_id: z.string().describe('Task UUID to update'),
-      status: z.string().optional().describe('New status (workflow column label preferred, column ID also accepted, e.g. "Backlog", "in_progress", "Done")'),
-      comment: z.string().optional().describe('Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished (commit and push your code first).'),
-      commits: z.string().optional().describe('Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'),
-      done: z.boolean().optional().describe('Set true to signal the task is finished when you have no status change or comment to add (rarely needed — a status move or comment already finishes it).'),
-      repo_full_name: z.string().optional().describe('New repository in "owner/repo" format. Pass an empty string to unbind the task from any repo.'),
-      repo_provider: z.string().optional().describe('Repository provider — defaults to "github" when repo_full_name is set.'),
-      storage_path: z.string().optional().describe('New storage location (e.g. OneDrive folder path). Pass an empty string to unbind the task from any storage.'),
-      storage_provider: z.string().optional().describe('Storage provider — defaults to "onedrive" when storage_path is set.'),
+      ...taskMutationSharedShape,
     },
     async ({ agent_id, agent_name, task_id, status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider }) => {
       const r = await applyTaskUpdate(agentManager, {

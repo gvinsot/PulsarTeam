@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
@@ -20,12 +21,12 @@ export function createAutoLearnMcpServer() {
     async () => {
       const skills = await getAllAgentSkills();
       if (!skills.length) {
-        return { content: [{ type: 'text', text: 'No skills in the library yet. Use create_skill to add one.' }] };
+        return text('No skills in the library yet. Use create_skill to add one.');
       }
       const summary = skills.map((s: any) =>
         `- **${s.name}** (${s.id}) [${s.category || 'general'}] — ${s.description || 'No description'}`
       ).join('\n');
-      return { content: [{ type: 'text', text: `${skills.length} skill(s) in the library:\n\n${summary}` }] };
+      return text(`${skills.length} skill(s) in the library:\n\n${summary}`);
     }
   );
 
@@ -38,12 +39,12 @@ export function createAutoLearnMcpServer() {
     async ({ query }) => {
       const skills = await searchAgentSkills(query);
       if (!skills.length) {
-        return { content: [{ type: 'text', text: `No skills found matching "${query}".` }] };
+        return text(`No skills found matching "${query}".`);
       }
       const summary = skills.map((s: any) =>
         `- **${s.name}** (${s.id}) [${s.category || 'general'}] — ${s.description || 'No description'}`
       ).join('\n');
-      return { content: [{ type: 'text', text: `Found ${skills.length} skill(s) matching "${query}":\n\n${summary}` }] };
+      return text(`Found ${skills.length} skill(s) matching "${query}":\n\n${summary}`);
     }
   );
 
@@ -56,9 +57,9 @@ export function createAutoLearnMcpServer() {
     async ({ skill_id }) => {
       const skill = await getAgentSkillById(skill_id);
       if (!skill) {
-        return { content: [{ type: 'text', text: `Skill "${skill_id}" not found.` }] };
+        return text(`Skill "${skill_id}" not found.`);
       }
-      return { content: [{ type: 'text', text: JSON.stringify(skill, null, 2) }] };
+      return text(JSON.stringify(skill, null, 2));
     }
   );
 
@@ -123,7 +124,7 @@ export function createAutoLearnMcpServer() {
     async ({ skill_id, name, description, category, instructions }, extra) => {
       const existing = await getAgentSkillById(skill_id);
       if (!existing) {
-        return { content: [{ type: 'text', text: `Skill "${skill_id}" not found. Use list_skills or search_skills to find the correct ID.` }] };
+        return text(`Skill "${skill_id}" not found. Use list_skills or search_skills to find the correct ID.`);
       }
 
       if (name !== undefined) existing.name = name;
@@ -153,12 +154,10 @@ export function createAutoLearnMcpServer() {
     async ({ skill_id }) => {
       const existing = await getAgentSkillById(skill_id);
       if (!existing) {
-        return { content: [{ type: 'text', text: `Skill "${skill_id}" not found.` }] };
+        return text(`Skill "${skill_id}" not found.`);
       }
       await deleteAgentSkillFromDb(skill_id);
-      return {
-        content: [{ type: 'text', text: `Skill "${existing.name}" (${skill_id}) has been deleted.` }],
-      };
+      return text(`Skill "${existing.name}" (${skill_id}) has been deleted.`);
     }
   );
 

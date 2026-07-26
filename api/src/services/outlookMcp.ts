@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getOutlookAccessTokenForAgent } from '../routes/outlook.js';
 import {
@@ -202,7 +203,7 @@ export function createOutlookMcpServer(
       const messages: any[] = list.value || [];
 
       if (messages.length === 0) {
-        return { content: [{ type: 'text', text: 'No emails found matching the criteria.' }] };
+        return text('No emails found matching the criteria.');
       }
 
       const summary = messages
@@ -237,7 +238,7 @@ export function createOutlookMcpServer(
       const messages: any[] = list.value || [];
 
       if (messages.length === 0) {
-        return { content: [{ type: 'text', text: `No emails found for query: "${query}"` }] };
+        return text(`No emails found for query: "${query}"`);
       }
 
       const summary = messages
@@ -571,9 +572,7 @@ export function createOutlookMcpServer(
         method: 'POST',
         body: JSON.stringify({ destinationId: 'deleteditems' }),
       });
-      return {
-        content: [{ type: 'text', text: `Email ${messageId} moved to Deleted Items.` }],
-      };
+      return text(`Email ${messageId} moved to Deleted Items.`);
     },
   );
 
@@ -625,7 +624,7 @@ export function createOutlookMcpServer(
       const messages: any[] = list.value || [];
 
       if (messages.length === 0) {
-        return { content: [{ type: 'text', text: `No messages found for conversation: ${conversationId}` }] };
+        return text(`No messages found for conversation: ${conversationId}`);
       }
 
       const formatted = messages.map((m, i) => {

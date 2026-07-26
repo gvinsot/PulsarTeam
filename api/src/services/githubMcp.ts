@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { getGitHubAccessTokenForAgent } from '../routes/github.js';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
@@ -62,7 +63,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const repos = await githubFetch(`/user/repos?${params}`, agentId, boardId);
 
       if (!repos.length) {
-        return { content: [{ type: 'text', text: 'No repositories found.' }] };
+        return text('No repositories found.');
       }
 
       const list = repos.map((r, i) => {
@@ -70,7 +71,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. ${vis} ${r.full_name} — ${r.description || 'No description'}\n   ⭐ ${r.stargazers_count} | 🍴 ${r.forks_count} | Lang: ${r.language || 'N/A'} | Updated: ${r.updated_at?.slice(0, 10)}`;
       }).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Repositories (${repos.length}):\n\n${list}` }] };
+      return text(`Repositories (${repos.length}):\n\n${list}`);
     }
   );
 
@@ -119,7 +120,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const filtered = issues.filter(i => !i.pull_request);
 
       if (!filtered.length) {
-        return { content: [{ type: 'text', text: `No issues found for ${owner}/${repo} (state: ${state}).` }] };
+        return text(`No issues found for ${owner}/${repo} (state: ${state}).`);
       }
 
       const list = filtered.map((issue, i) => {
@@ -127,7 +128,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. #${issue.number} [${issue.state}] ${issue.title}\n   Assignee: ${issue.assignee?.login || 'Unassigned'} | Labels: ${labels || 'None'} | Comments: ${issue.comments}\n   Created: ${issue.created_at?.slice(0, 10)} | Updated: ${issue.updated_at?.slice(0, 10)}`;
       }).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Issues for ${owner}/${repo} (${filtered.length}):\n\n${list}` }] };
+      return text(`Issues for ${owner}/${repo} (${filtered.length}):\n\n${list}`);
     }
   );
 
@@ -275,7 +276,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const prs = await githubFetch(`/repos/${owner}/${repo}/pulls?${params}`, agentId, boardId);
 
       if (!prs.length) {
-        return { content: [{ type: 'text', text: `No pull requests found for ${owner}/${repo} (state: ${state}).` }] };
+        return text(`No pull requests found for ${owner}/${repo} (state: ${state}).`);
       }
 
       const list = prs.map((pr, i) => {
@@ -283,7 +284,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. #${pr.number} [${reviewStatus}] ${pr.title}\n   ${pr.head?.ref} → ${pr.base?.ref} | Author: ${pr.user?.login}\n   Created: ${pr.created_at?.slice(0, 10)} | Updated: ${pr.updated_at?.slice(0, 10)}`;
       }).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Pull Requests for ${owner}/${repo} (${prs.length}):\n\n${list}` }] };
+      return text(`Pull Requests for ${owner}/${repo} (${prs.length}):\n\n${list}`);
     }
   );
 
@@ -363,7 +364,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         `${i + 1}. ${b.name}${b.protected ? ' 🔒' : ''} — ${b.commit?.sha?.slice(0, 7)}`
       ).join('\n');
 
-      return { content: [{ type: 'text', text: `Branches for ${owner}/${repo} (${branches.length}):\n\n${list}` }] };
+      return text(`Branches for ${owner}/${repo} (${branches.length}):\n\n${list}`);
     }
   );
 
@@ -385,16 +386,16 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         const items = data.map(item =>
           `${item.type === 'dir' ? '📁' : '📄'} ${item.name} (${item.type}, ${item.size || 0} bytes)`
         ).join('\n');
-        return { content: [{ type: 'text', text: `Directory listing for ${path}:\n\n${items}` }] };
+        return text(`Directory listing for ${path}:\n\n${items}`);
       }
 
       if (data.encoding === 'base64' && data.content) {
         const content = Buffer.from(data.content, 'base64').toString('utf-8');
         const truncated = content.length > 10000 ? content.slice(0, 10000) + '\n\n... (truncated)' : content;
-        return { content: [{ type: 'text', text: `File: ${data.path} (${data.size} bytes)\nSHA: ${data.sha}\n\n${truncated}` }] };
+        return text(`File: ${data.path} (${data.size} bytes)\nSHA: ${data.sha}\n\n${truncated}`);
       }
 
-      return { content: [{ type: 'text', text: `File: ${data.path}\nType: ${data.type}\nSize: ${data.size}\nSHA: ${data.sha}\nDownload URL: ${data.download_url}` }] };
+      return text(`File: ${data.path}\nType: ${data.type}\nSize: ${data.size}\nSHA: ${data.sha}\nDownload URL: ${data.download_url}`);
     }
   );
 
@@ -415,14 +416,14 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const items = result.items || [];
 
       if (!items.length) {
-        return { content: [{ type: 'text', text: `No code results for: "${query}"` }] };
+        return text(`No code results for: "${query}"`);
       }
 
       const list = items.map((item, i) =>
         `${i + 1}. ${item.repository?.full_name}/${item.path}\n   Score: ${item.score?.toFixed(2)} | SHA: ${item.sha?.slice(0, 7)}`
       ).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Code search "${query}" — ${result.total_count} result(s):\n\n${list}` }] };
+      return text(`Code search "${query}" — ${result.total_count} result(s):\n\n${list}`);
     }
   );
 
@@ -447,7 +448,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. ${c.sha?.slice(0, 7)} — ${msg}\n   Author: ${c.commit?.author?.name} | Date: ${c.commit?.author?.date?.slice(0, 10)}`;
       }).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Commits for ${owner}/${repo} (${commits.length}):\n\n${list}` }] };
+      return text(`Commits for ${owner}/${repo} (${commits.length}):\n\n${list}`);
     }
   );
 
@@ -464,14 +465,14 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const workflows = data.workflows || [];
 
       if (!workflows.length) {
-        return { content: [{ type: 'text', text: `No workflows found for ${owner}/${repo}.` }] };
+        return text(`No workflows found for ${owner}/${repo}.`);
       }
 
       const list = workflows.map((w, i) =>
         `${i + 1}. ${w.name} (${w.state})\n   Path: ${w.path} | ID: ${w.id}`
       ).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Workflows for ${owner}/${repo} (${workflows.length}):\n\n${list}` }] };
+      return text(`Workflows for ${owner}/${repo} (${workflows.length}):\n\n${list}`);
     }
   );
 
@@ -493,7 +494,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const runs = data.workflow_runs || [];
 
       if (!runs.length) {
-        return { content: [{ type: 'text', text: `No workflow runs found for ${owner}/${repo}.` }] };
+        return text(`No workflow runs found for ${owner}/${repo}.`);
       }
 
       const list = runs.map((r, i) => {
@@ -501,7 +502,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         return `${i + 1}. ${icon} ${r.name} #${r.run_number}\n   Status: ${r.status} | Conclusion: ${r.conclusion || 'pending'}\n   Branch: ${r.head_branch} | Commit: ${r.head_sha?.slice(0, 7)}\n   Started: ${r.created_at?.slice(0, 19)} | URL: ${r.html_url}`;
       }).join('\n\n');
 
-      return { content: [{ type: 'text', text: `Workflow runs for ${owner}/${repo} (${data.total_count} total):\n\n${list}` }] };
+      return text(`Workflow runs for ${owner}/${repo} (${data.total_count} total):\n\n${list}`);
     }
   );
 

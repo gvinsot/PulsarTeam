@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
@@ -58,9 +59,7 @@ export function createGandiDnsMcpServer(mcpManager) {
       const summary = domains.length
         ? domains.map((d) => `- ${d.fqdn}`).join('\n')
         : 'No domains found.';
-      return {
-        content: [{ type: 'text', text: `${summary}\n\nJSON:\n${JSON.stringify(domains, null, 2)}` }],
-      };
+      return text(`${summary}\n\nJSON:\n${JSON.stringify(domains, null, 2)}`);
     }
   );
 
@@ -78,9 +77,7 @@ export function createGandiDnsMcpServer(mcpManager) {
       const summary = records.length
         ? records.map((r) => `${r.rrset_name}\t${r.rrset_type}\t${r.rrset_ttl}\t${r.rrset_values.join(', ')}`).join('\n')
         : 'No records found.';
-      return {
-        content: [{ type: 'text', text: `Records for ${domain}:\n${summary}\n\nJSON:\n${JSON.stringify(records, null, 2)}` }],
-      };
+      return text(`Records for ${domain}:\n${summary}\n\nJSON:\n${JSON.stringify(records, null, 2)}`);
     }
   );
 
@@ -100,9 +97,7 @@ export function createGandiDnsMcpServer(mcpManager) {
         pat,
         `/domains/${encodeURIComponent(domain)}/records/${encodeURIComponent(name)}/${encodeURIComponent(type)}`
       );
-      return {
-        content: [{ type: 'text', text: `${name}.${domain} ${type}:\n${JSON.stringify(record, null, 2)}` }],
-      };
+      return text(`${name}.${domain} ${type}:\n${JSON.stringify(record, null, 2)}`);
     }
   );
 

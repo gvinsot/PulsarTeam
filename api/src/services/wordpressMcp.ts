@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { text } from './mcpResponses.js';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -188,9 +189,7 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       const list = (Array.isArray(posts) ? posts : []).map((p: any) =>
         `- [${p.id}] "${p.title?.rendered || p.title?.raw || '(untitled)'}" [${p.status}] — ${p.link}`
       ).join('\n');
-      return {
-        content: [{ type: 'text', text: `WordPress Posts (${Array.isArray(posts) ? posts.length : 0}):\n${list || '(none)'}` }],
-      };
+      return text(`WordPress Posts (${Array.isArray(posts) ? posts.length : 0}):\n${list || '(none)'}`);
     }
   );
 
@@ -292,7 +291,7 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       if (tags !== undefined) body.tags = await resolveTermIds(agentId, pulsarBoardId, 'tags', tags);
 
       if (Object.keys(body).length === 0) {
-        return { content: [{ type: 'text', text: 'No fields supplied to update.' }] };
+        return text('No fields supplied to update.');
       }
 
       const updated = await wpFetch(agentId, pulsarBoardId, `/wp/v2/posts/${postId}`, {
@@ -371,7 +370,7 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       const list = (Array.isArray(pages) ? pages : []).map((p: any) =>
         `- [${p.id}] "${p.title?.rendered || '(untitled)'}" [${p.status}] — ${p.link}`
       ).join('\n');
-      return { content: [{ type: 'text', text: `WordPress Pages (${Array.isArray(pages) ? pages.length : 0}):\n${list || '(none)'}` }] };
+      return text(`WordPress Pages (${Array.isArray(pages) ? pages.length : 0}):\n${list || '(none)'}`);
     }
   );
 
@@ -492,7 +491,7 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       const list = (Array.isArray(cats) ? cats : []).map((c: any) =>
         `- [${c.id}] "${c.name}" (slug: ${c.slug}) — ${c.count} posts`
       ).join('\n');
-      return { content: [{ type: 'text', text: `WordPress Categories (${Array.isArray(cats) ? cats.length : 0}):\n${list || '(none)'}` }] };
+      return text(`WordPress Categories (${Array.isArray(cats) ? cats.length : 0}):\n${list || '(none)'}`);
     }
   );
 
@@ -512,7 +511,7 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       const list = (Array.isArray(tags) ? tags : []).map((t: any) =>
         `- [${t.id}] "${t.name}" (slug: ${t.slug}) — ${t.count} posts`
       ).join('\n');
-      return { content: [{ type: 'text', text: `WordPress Tags (${Array.isArray(tags) ? tags.length : 0}):\n${list || '(none)'}` }] };
+      return text(`WordPress Tags (${Array.isArray(tags) ? tags.length : 0}):\n${list || '(none)'}`);
     }
   );
 

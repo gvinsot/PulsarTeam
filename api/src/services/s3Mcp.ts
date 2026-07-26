@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import {
   S3Client,
@@ -56,9 +57,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       }));
 
       const summary = buckets.map(b => `- ${b.name} (created: ${b.created || 'unknown'})`).join('\n');
-      return {
-        content: [{ type: 'text', text: `Found ${buckets.length} bucket(s):\n\n${summary}\n\nJSON:\n${JSON.stringify(buckets, null, 2)}` }],
-      };
+      return text(`Found ${buckets.length} bucket(s):\n\n${summary}\n\nJSON:\n${JSON.stringify(buckets, null, 2)}`);
     }
   );
 
@@ -122,9 +121,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       const size = head.ContentLength || 0;
 
       if (size > 5 * 1024 * 1024) {
-        return {
-          content: [{ type: 'text', text: `Object "${key}" is too large to read directly (${formatSize(size)}, type: ${contentType}). Use get_presigned_url to get a download link.` }],
-        };
+        return text(`Object "${key}" is too large to read directly (${formatSize(size)}, type: ${contentType}). Use get_presigned_url to get a download link.`);
       }
 
       const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -157,9 +154,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
         ContentType: content_type || 'text/plain',
       }));
 
-      return {
-        content: [{ type: 'text', text: `Object uploaded: s3://${bucket}/${key} (${formatSize(Buffer.byteLength(content, 'utf8'))}, ${content_type})` }],
-      };
+      return text(`Object uploaded: s3://${bucket}/${key} (${formatSize(Buffer.byteLength(content, 'utf8'))}, ${content_type})`);
     }
   );
 
@@ -174,9 +169,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       const client = createS3Client(agentId, boardId);
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
 
-      return {
-        content: [{ type: 'text', text: `Object deleted: s3://${bucket}/${key}` }],
-      };
+      return text(`Object deleted: s3://${bucket}/${key}`);
     }
   );
 
@@ -197,9 +190,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
         Key: dest_key,
       }));
 
-      return {
-        content: [{ type: 'text', text: `Copied s3://${source_bucket}/${source_key} → s3://${dest_bucket}/${dest_key}` }],
-      };
+      return text(`Copied s3://${source_bucket}/${source_key} → s3://${dest_bucket}/${dest_key}`);
     }
   );
 
@@ -226,9 +217,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
         metadata: head.Metadata || {},
       };
 
-      return {
-        content: [{ type: 'text', text: `Object info for s3://${bucket}/${key}:\n${JSON.stringify(info, null, 2)}` }],
-      };
+      return text(`Object info for s3://${bucket}/${key}:\n${JSON.stringify(info, null, 2)}`);
     }
   );
 
@@ -249,9 +238,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
 
       const url = await getSignedUrl(client, command, { expiresIn: Math.min(expires_in || 3600, 86400) });
 
-      return {
-        content: [{ type: 'text', text: `Presigned ${operation.toUpperCase()} URL for s3://${bucket}/${key} (valid ${expires_in}s):\n${url}` }],
-      };
+      return text(`Presigned ${operation.toUpperCase()} URL for s3://${bucket}/${key} (valid ${expires_in}s):\n${url}`);
     }
   );
 
@@ -274,9 +261,7 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
         } : {}),
       }));
 
-      return {
-        content: [{ type: 'text', text: `Bucket "${bucket}" created in ${bucketRegion}.` }],
-      };
+      return text(`Bucket "${bucket}" created in ${bucketRegion}.`);
     }
   );
 
