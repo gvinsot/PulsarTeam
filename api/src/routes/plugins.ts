@@ -36,7 +36,7 @@ function sanitizeMcp(mcp) {
     ...mcp,
     authMode: mcp.authMode || (mcp.apiKey ? 'bearer' : 'none'),
     hasApiKey: !!mcp.apiKey,
-    apiKey: mcp.apiKey ? '••••••••' : '',
+    apiKey: mcp.apiKey ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : '',
   };
 }
 
@@ -59,20 +59,39 @@ export function pluginRoutes(skillManager, mcpManager) {
     };
   }
 
+  /**
+   * Middleware factory that authenticates the user, loads the plugin by :id,
+   * enforces view/manage access (with masked-404 for unviewable plugins),
+   * and attaches the loaded plugin as req.plugin.
+   * Mirrors the agentAccess pattern in agents.ts.
+   */
+  const requirePlugin = (level, message) => (req, res, next) => {
+    const { userId, isAdmin } = currentUser(req);
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const plugin = skillManager.getById(req.params.id);
+    if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
+
+    if (!skillManager.canView(plugin, userId, isAdmin)) {
+      return res.status(404).json({ error: 'Plugin not found' });
+    }
+
+    if (level === 'manage' && !skillManager.canManage(plugin, userId, isAdmin)) {
+      return res.status(403).json({ error: message ?? 'Only the plugin owner can manage this plugin' });
+    }
+
+    req.plugin = plugin;
+    next();
+  };
+
   router.get('/', (req, res) => {
     const { userId, isAdmin } = currentUser(req);
     const plugins = skillManager.getAll(userId, isAdmin).map(sanitizePlugin);
     res.json(plugins);
   });
 
-  router.get('/:id', (req, res) => {
-    const plugin = skillManager.getById(req.params.id);
-    if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-    const { userId, isAdmin } = currentUser(req);
-    if (!skillManager.canView(plugin, userId, isAdmin)) {
-      return res.status(404).json({ error: 'Plugin not found' });
-    }
-    res.json(sanitizePlugin(plugin));
+  router.get('/:id', requirePlugin('view'), (req, res) => {
+    res.json(sanitizePlugin(req.plugin));
   });
 
   // Any authenticated user can create their own plugin.
@@ -84,20 +103,12 @@ export function pluginRoutes(skillManager, mcpManager) {
     res.status(201).json(sanitizePlugin(plugin));
   }));
 
-  // Update — full config edit allowed only for the owner (or admin).
+  // Update - full config edit allowed only for the owner (or admin).
   // Non-owners with view access (shared plugins) can only update userConfig
   // and per-mcp credentials (apiKey/authMode) at activation time.
-  router.put('/:id', asyncHandler(async (req, res) => {
+  router.put('/:id', requirePlugin('view'), asyncHandler(async (req, res) => {
     const { userId, isAdmin } = currentUser(req);
-    if (!userId) return res.status(401).json({ error: 'Authentication required' });
-
-    const current = skillManager.getById(req.params.id);
-    if (!current) return res.status(404).json({ error: 'Plugin not found' });
-    if (!skillManager.canView(current, userId, isAdmin)) {
-      return res.status(404).json({ error: 'Plugin not found' });
-    }
-
-    const isManager = skillManager.canManage(current, userId, isAdmin);
+    const isManager = skillManager.canManage(req.plugin, userId, isAdmin);
 
     const parsed = updatePluginSchema.parse(req.body);
 
@@ -115,7 +126,7 @@ export function pluginRoutes(skillManager, mcpManager) {
       }
       // If they sent mcps, restrict the per-mcp changes to credentials only
       if (Array.isArray(parsed.mcps)) {
-        const currentMcps = Array.isArray(current.mcps) ? current.mcps : [];
+        const currentMcps = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
         parsed.mcps = parsed.mcps.map((m) => {
           const existing = currentMcps.find((cm) => cm.id === m.id);
           if (!existing) return existing; // ignore additions from non-owners
@@ -131,9 +142,9 @@ export function pluginRoutes(skillManager, mcpManager) {
 
     // Preserve existing API keys when the frontend sends the masked placeholder
     if (Array.isArray(parsed.mcps)) {
-      const currentMcps = Array.isArray(current.mcps) ? current.mcps : [];
+      const currentMcps = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
       for (const mcp of parsed.mcps) {
-        if (mcp.apiKey === '••••••••' && mcp.id) {
+        if (mcp.apiKey === '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' && mcp.id) {
           const existing = currentMcps.find(m => m.id === mcp.id);
           mcp.apiKey = existing ? existing.apiKey : '';
         }
@@ -143,7 +154,7 @@ export function pluginRoutes(skillManager, mcpManager) {
     const plugin = await skillManager.update(req.params.id, parsed);
     if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
 
-    // Sync MCP apiKeys to the MCP server registry (global key) — managers only.
+    // Sync MCP apiKeys to the MCP server registry (global key) - managers only.
     if (isManager && Array.isArray(parsed.mcps)) {
       for (const mcp of parsed.mcps) {
         if (mcp.id && mcpManager.getById(mcp.id)) {
@@ -159,57 +170,31 @@ export function pluginRoutes(skillManager, mcpManager) {
     res.json(sanitizePlugin(plugin));
   }));
 
-  // Toggle the "shared" flag — owner-only.
-  router.patch('/:id/share', asyncHandler(async (req, res) => {
-    const { userId, isAdmin } = currentUser(req);
-    if (!userId) return res.status(401).json({ error: 'Authentication required' });
-
-    const current = skillManager.getById(req.params.id);
-    if (!current) return res.status(404).json({ error: 'Plugin not found' });
-    if (!skillManager.canManage(current, userId, isAdmin)) {
-      return res.status(403).json({ error: 'Only the plugin owner can change sharing' });
-    }
-
+  // Toggle the "shared" flag - owner-only.
+  router.patch('/:id/share', requirePlugin('manage', 'Only the plugin owner can change sharing'), asyncHandler(async (req, res) => {
     const { shared } = shareSchema.parse(req.body);
     const updated = await skillManager.setShared(req.params.id, shared);
     res.json(sanitizePlugin(updated));
   }));
 
-  router.delete('/:id', asyncHandler(async (req, res) => {
-    const { userId, isAdmin } = currentUser(req);
-    if (!userId) return res.status(401).json({ error: 'Authentication required' });
-
-    const current = skillManager.getById(req.params.id);
-    if (!current) return res.status(404).json({ error: 'Plugin not found' });
-    if (!skillManager.canManage(current, userId, isAdmin)) {
-      return res.status(403).json({ error: 'Only the plugin owner can delete this plugin' });
-    }
-
+  router.delete('/:id', requirePlugin('manage', 'Only the plugin owner can delete this plugin'), asyncHandler(async (req, res) => {
     const success = await skillManager.delete(req.params.id);
     if (!success) return res.status(404).json({ error: 'Plugin not found' });
     res.json({ success: true });
   }));
 
-  router.post('/:id/mcps/:mcpId', asyncHandler(async (req, res) => {
-    const { userId, isAdmin } = currentUser(req);
-    if (!userId) return res.status(401).json({ error: 'Authentication required' });
-
-    const plugin = skillManager.getById(req.params.id);
-    if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-    if (!skillManager.canManage(plugin, userId, isAdmin)) {
-      return res.status(403).json({ error: 'Only the plugin owner can modify MCP wiring' });
-    }
+  router.post('/:id/mcps/:mcpId', requirePlugin('manage', 'Only the plugin owner can modify MCP wiring'), asyncHandler(async (req, res) => {
     const server = mcpManager.getById(req.params.mcpId);
     if (!server) return res.status(404).json({ error: 'MCP server not found' });
 
-    const mcps = Array.isArray(plugin.mcps) ? [...plugin.mcps] : [];
+    const mcps = Array.isArray(req.plugin.mcps) ? [...req.plugin.mcps] : [];
     if (!mcps.some((m) => m.id === server.id)) {
       mcps.push({
         id: server.id,
         name: server.name,
         url: server.url,
         description: server.description || '',
-        icon: server.icon || '🔌',
+        icon: server.icon || '\U0001f50c',
         enabled: server.enabled !== false,
         apiKey: server.apiKey || '',
         userConfig: {},
@@ -220,16 +205,8 @@ export function pluginRoutes(skillManager, mcpManager) {
     res.json(sanitizePlugin(updated));
   }));
 
-  router.delete('/:id/mcps/:mcpId', asyncHandler(async (req, res) => {
-    const { userId, isAdmin } = currentUser(req);
-    if (!userId) return res.status(401).json({ error: 'Authentication required' });
-
-    const plugin = skillManager.getById(req.params.id);
-    if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
-    if (!skillManager.canManage(plugin, userId, isAdmin)) {
-      return res.status(403).json({ error: 'Only the plugin owner can modify MCP wiring' });
-    }
-    const mcps = (Array.isArray(plugin.mcps) ? plugin.mcps : []).filter((m) => m.id !== req.params.mcpId);
+  router.delete('/:id/mcps/:mcpId', requirePlugin('manage', 'Only the plugin owner can modify MCP wiring'), asyncHandler(async (req, res) => {
+    const mcps = (Array.isArray(req.plugin.mcps) ? req.plugin.mcps : []).filter((m) => m.id !== req.params.mcpId);
     const updated = await skillManager.update(req.params.id, { mcps });
     res.json(sanitizePlugin(updated));
   }));
