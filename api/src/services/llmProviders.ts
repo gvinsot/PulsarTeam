@@ -48,6 +48,20 @@ function buildOpenAIContent(text: string, images?: ChatImage[]): any {
   return parts;
 }
 
+/**
+ * Map plain chat messages to the OpenAI chat-completions shape, preserving the
+ * role and converting multimodal `images` into OpenAI content parts. Shared by
+ * every OpenAI-compatible provider (Ollama, vLLM, Mistral) and the Responses
+ * API input builders. Callers that need role remapping (e.g. OpenAI reasoning
+ * models' system→developer) map roles themselves and don't use this helper.
+ */
+function mapOpenAIMessages(messages: any[]): any[] {
+  return messages.map(m => ({
+    role: m.role,
+    content: buildOpenAIContent(m.content, m.images),
+  }));
+}
+
 // ─── OpenAI-compatible stream consumption ───────────────────────────────────
 // Shared chunk-consumption loop for any OpenAI-compatible streaming response
 // (OpenAI chat completions, vLLM, Mistral). Yields {type:'text'} from
@@ -210,10 +224,7 @@ export class OllamaProvider {
   private _buildBody(messages: any[], options: any, stream: boolean): any {
     return {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role === 'system' ? 'system' : m.role,
-        content: buildOpenAIContent(m.content, m.images),
-      })),
+      messages: mapOpenAIMessages(messages),
       ...tempParam(options),
       max_tokens: options.maxTokens ?? 4096,
       stream,
@@ -575,9 +586,7 @@ export class OpenAIProvider {
 
   async _responsesChat(messages: any[], options: any = {}): Promise<any> {
     const systemMsg = messages.find((m: any) => m.role === 'system');
-    const input = messages
-      .filter((m: any) => m.role !== 'system')
-      .map((m: any) => ({ role: m.role, content: buildOpenAIContent(m.content, m.images) }));
+    const input = mapOpenAIMessages(messages.filter((m: any) => m.role !== 'system'));
 
     const params: any = {
       model: this.model,
@@ -677,9 +686,7 @@ export class OpenAIProvider {
 
   async *_responsesChatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const systemMsg = messages.find((m: any) => m.role === 'system');
-    const input = messages
-      .filter((m: any) => m.role !== 'system')
-      .map((m: any) => ({ role: m.role, content: buildOpenAIContent(m.content, m.images) }));
+    const input = mapOpenAIMessages(messages.filter((m: any) => m.role !== 'system'));
 
     const params: any = {
       model: this.model,
@@ -808,6 +815,9 @@ export class VLLMProvider {
   agentId: string | null;
   ownerId: string | null;
   client: OpenAI;
+  // Reported as `provider` in chat() responses; subclasses (e.g. Mistral)
+  // override it while reusing the identical OpenAI-compatible request wiring.
+  providerName = 'vllm';
 
   constructor(baseUrl: string, model: string, apiKey: string, agentId: string | null = null, ownerId: string | null = null, permissions: any = null, llmConfig: any = null) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -842,10 +852,7 @@ export class VLLMProvider {
   async chat(messages: any[], options: any = {}): Promise<any> {
     const params: any = {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: buildOpenAIContent(m.content, m.images),
-      })),
+      messages: mapOpenAIMessages(messages),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
     };
@@ -870,7 +877,7 @@ export class VLLMProvider {
     return {
       content: response.choices[0]?.message?.content || '',
       model: this.model,
-      provider: 'vllm',
+      provider: this.providerName,
       usage
     };
   }
@@ -878,10 +885,7 @@ export class VLLMProvider {
   async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const params: any = {
       model: this.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: buildOpenAIContent(m.content, m.images),
-      })),
+      messages: mapOpenAIMessages(messages),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
       stream: true,
@@ -932,61 +936,15 @@ export class VLLMProvider {
 }
 
 // ─── Mistral AI Provider ────────────────────────────────────────────────────
-export class MistralProvider {
-  client: OpenAI;
-  model: string;
-
+// Mistral speaks the same OpenAI-compatible protocol as vLLM, so it reuses
+// VLLMProvider's chat/chatStream wiring wholesale — differing only in the
+// fixed baseURL, default model, provider name, and an authenticated ping
+// (Mistral's /v1/models requires the API key, unlike an unauthenticated vLLM).
+// Mistral takes no agent/owner headers, which VLLMProvider treats as optional.
+export class MistralProvider extends VLLMProvider {
   constructor(apiKey: string, model?: string) {
-    this.client = new OpenAI({
-      apiKey: apiKey,
-      baseURL: 'https://api.mistral.ai/v1',
-    });
-    this.model = model || 'mistral-large-latest';
-  }
-
-  async chat(messages: any[], options: any = {}): Promise<any> {
-    const params: any = {
-      model: this.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: buildOpenAIContent(m.content, m.images),
-      })),
-      ...tempParam(options),
-      max_tokens: options.maxTokens || 4096,
-    };
-
-    const response = await this.client.chat.completions.create(params);
-
-    return {
-      content: response.choices[0]?.message?.content || '',
-      model: this.model,
-      provider: 'mistral',
-      usage: {
-        inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0
-      }
-    };
-  }
-
-  async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
-    const params: any = {
-      model: this.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: buildOpenAIContent(m.content, m.images),
-      })),
-      ...tempParam(options),
-      max_tokens: options.maxTokens || 4096,
-      stream: true,
-      stream_options: { include_usage: true },
-    };
-
-    const requestOpts: any = {};
-    if (options.signal) requestOpts.signal = options.signal;
-
-    const stream = await this.client.chat.completions.create(params, requestOpts);
-
-    yield* consumeOpenAIStream(stream as any, options.signal);
+    super('https://api.mistral.ai', model || 'mistral-large-latest', apiKey);
+    this.providerName = 'mistral';
   }
 
   async ping(): Promise<boolean> {
