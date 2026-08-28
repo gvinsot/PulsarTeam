@@ -26,6 +26,16 @@ const pluginSchema = z.object({
   shared: z.boolean().optional(),
 }).catchall(z.any());
 
+// Attached by requirePlugin so downstream handlers can reuse the loaded plugin
+// without a second getById round-trip.
+declare global {
+  namespace Express {
+    interface Request {
+      plugin?: any;
+    }
+  }
+}
+
 const createPluginSchema = pluginSchema;
 const updatePluginSchema = pluginSchema.partial();
 const shareSchema = z.object({ shared: z.boolean() });
@@ -65,7 +75,7 @@ export function pluginRoutes(skillManager, mcpManager) {
    * and attaches the loaded plugin as req.plugin.
    * Mirrors the agentAccess pattern in agents.ts.
    */
-  const requirePlugin = (level, message) => (req, res, next) => {
+  const requirePlugin = (level: 'view' | 'manage', message?: string) => (req, res, next) => {
     const { userId, isAdmin } = currentUser(req);
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
