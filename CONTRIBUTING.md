@@ -67,7 +67,7 @@ flag with its measured cost in a comment block. That block is the contract:
 
 The same contract covers `any`. `@typescript-eslint/no-explicit-any` is a
 _warning_, and `npm run lint` runs `--max-warnings <N>` with `N` pinned in
-`package.json` to the count at the time it was set (api: 1485, frontend: 139).
+`package.json` to the count at the time it was set (api: 1485, frontend: 137).
 So:
 
 - adding an `any` pushes the count over the ceiling and fails the lint run;
@@ -80,13 +80,30 @@ you do not have to rediscover it.
 
 ## Formatting
 
-Prettier is configured (`.prettierrc.json`) and available as `npm run format`,
-but **the codebase has deliberately not been reformatted**. A repo-wide pass
-would rewrite every file, bury real changes in review, and wreck `git blame`.
+Prettier owns formatting (`.prettierrc.json`: 100 columns, single quotes, es5
+trailing commas, LF). The codebase has been formatted repo-wide, so
+`npm run format:check` should pass before you push and `npm run format` fixes it
+if it does not.
 
-So: format the code you touch, not the files around it. If a full pass is ever
-worth doing, do it as its own commit and add that commit's SHA to a
-`.git-blame-ignore-revs` file.
+That pass is recorded in `.git-blame-ignore-revs`. Turn it on once per clone so
+`git blame` skips it and points at the commit that actually wrote each line:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+If another bulk-formatting commit ever becomes necessary, give it its own commit
+touching nothing else and add its SHA to that file.
+
+**One trap worth knowing.** Reformatting can move an
+`// eslint-disable-next-line` off the line it was suppressing — prettier splits
+`useCallback(fn, deps)` across lines, and a directive that sat above the closing
+`}, [deps]);` ends up above the bare `},` instead. The suppression silently
+stops working. ESLint 10 reports unused directives by default, which is the only
+reason this is visible rather than a rule quietly switching itself back on; if
+`npm run lint` grows an "Unused eslint-disable directive" after you format,
+that is what happened, and the fix is to move the directive down onto the line
+the rule actually reports.
 
 ## Commits and pull requests
 

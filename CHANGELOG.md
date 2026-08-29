@@ -53,9 +53,19 @@ added under `[Unreleased]` as work lands.
   pinned to the current count, so `any` can only decrease. `react-hooks` rules
   in the frontend.
 - `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md` and this file.
+- `.git-blame-ignore-revs`, recording the repo-wide Prettier pass so `git blame`
+  skips it. Enable locally with
+  `git config blame.ignoreRevsFile .git-blame-ignore-revs`; GitHub reads it
+  automatically.
 
 ### Changed
 
+- Prettier applied repo-wide (324 files). Reformatting displaced two
+  `eslint-disable-next-line react-hooks/exhaustive-deps` directives in
+  `ExternalVoiceChatTab.tsx` onto the wrong line, voiding the suppressions —
+  they are re-attached, and one of the two turned out to have been broken
+  already. The frontend `any` ceiling therefore drops 139 -> 137 with the `any`
+  count itself unchanged.
 - Both `tsconfig.json` files enable `strictFunctionTypes`, `strictBindCallApply`,
   `noImplicitThis`, `alwaysStrict`, `noFallthroughCasesInSwitch` and
   `noImplicitReturns`, and document every remaining strict flag with its
