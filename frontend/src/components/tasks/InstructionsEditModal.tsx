@@ -1,14 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { X, Edit3, User, Loader2, Save } from 'lucide-react';
-import { AUTO_ROLE } from './taskConstants';
+import RoleSelect from './RoleSelect';
 
-export default function InstructionsEditModal({ columnLabel, instructions, agents, onClose, onSave }) {
+export default function InstructionsEditModal({ columnLabel, instructions, agents, boardId = null, onClose, onSave }) {
   const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
   const [label, setLabel] = useState(columnLabel || '');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
-
-  const roles = useMemo(() => [...new Set<string>((agents || []).filter(a => a.enabled !== false).map(a => a.role).filter(Boolean))].sort(), [agents]);
 
   const updateField = (idx, field, value) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
 
@@ -49,16 +47,14 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <User className="w-3.5 h-3.5 text-dark-500" />
-                  <select
-                    value={item.role || ''}
-                    onChange={e => updateField(idx, 'role', e.target.value)}
+                  <RoleSelect
+                    value={item.role}
+                    onChange={v => updateField(idx, 'role', v)}
+                    agents={agents}
+                    boardId={boardId}
+                    emptyLabel="Any agent"
                     className="px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
-                    title={item.role === AUTO_ROLE ? 'The Role Router LLM (Admin Settings) picks the best role for each task' : undefined}
-                  >
-                    <option value="">Any agent</option>
-                    <option value={AUTO_ROLE}>🤖 Automatic (AI picks role)</option>
-                    {roles.map(r => <option key={r} value={r}>{r}</option>)}
-                  </select>
+                  />
                 </div>
                 <span className="text-dark-600 text-[10px]">Transition #{item.transitionIdx + 1}, Action #{item.actionIdx + 1}</span>
               </div>

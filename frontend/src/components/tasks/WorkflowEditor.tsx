@@ -5,12 +5,13 @@ import {
 } from 'lucide-react';
 import { api } from '../../api';
 import {
-  AVAILABLE_COLORS, ACTION_OPTIONS, AUTO_ROLE, createAction, getActionKey, validTransition,
+  AVAILABLE_COLORS, ACTION_OPTIONS, createAction, getActionKey, validTransition,
 } from './taskConstants';
+import RoleSelect from './RoleSelect';
 
 // ── Condition value widget ───────────────────────────────────────────────────
 
-function ConditionValueWidget({ cond, onChange, agents = [] }) {
+function ConditionValueWidget({ cond, onChange, agents = [], boardId = null }) {
   if (cond.field === 'assignee_status') {
     return (
       <select value={cond.value || 'idle'} onChange={e => onChange({ ...cond, value: e.target.value })}
@@ -22,13 +23,10 @@ function ConditionValueWidget({ cond, onChange, agents = [] }) {
     );
   }
   if (cond.field === 'idle_agent_available') {
-    const roles = [...new Set((agents || []).map(a => a.role).filter(Boolean))];
     return (
-      <select value={cond.value || roles[0] || ''} onChange={e => onChange({ ...cond, value: e.target.value })}
-        className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-        {roles.map(r => <option key={r} value={r}>{r}</option>)}
-        {roles.length === 0 && <option value="">no roles</option>}
-      </select>
+      <RoleSelect value={cond.value} onChange={v => onChange({ ...cond, value: v })}
+        agents={agents} boardId={boardId} allowAuto={false} emptyLabel="Select role..."
+        className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200" />
     );
   }
   if (cond.field === 'assignee_enabled' || cond.field === 'task_has_assignee') {
@@ -41,13 +39,10 @@ function ConditionValueWidget({ cond, onChange, agents = [] }) {
     );
   }
   if (cond.field === 'assignee_role') {
-    const roles = [...new Set((agents || []).map(a => a.role).filter(Boolean))];
     return (
-      <select value={cond.value || roles[0] || ''} onChange={e => onChange({ ...cond, value: e.target.value })}
-        className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
-        {roles.map(r => <option key={r} value={r}>{r}</option>)}
-        {roles.length === 0 && <option value="">no roles</option>}
-      </select>
+      <RoleSelect value={cond.value} onChange={v => onChange({ ...cond, value: v })}
+        agents={agents} boardId={boardId} allowAuto={false} emptyLabel="Select role..."
+        className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200" />
     );
   }
   return (
@@ -98,7 +93,7 @@ function ColorPicker({ value, onChange }) {
 
 // ── WorkflowEditor ──────────────────────────────────────────────────────────
 
-export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
+export default function WorkflowEditor({ workflow, agents, boardId = null, onClose, onSave }) {
   const [cols, setCols] = useState(() => JSON.parse(JSON.stringify(workflow.columns)));
   const [transitions, setTransitions] = useState(() => {
     const raw = JSON.parse(JSON.stringify(workflow.transitions));
@@ -110,8 +105,12 @@ export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState(null);
 
+  // `agents` is the full list the user can see — never pre-filter it by board
+  // here: role/agent pickers must offer everything the Agents view shows, with
+  // the edited board's own agents surfaced first (see workflowRoles.ts).
   const enabledAgents = (agents || []).filter(a => a.enabled !== false);
-  const availableRoles = [...new Set<string>(enabledAgents.map(a => a.role).filter(Boolean))].sort();
+  const boardAgents = boardId ? enabledAgents.filter(a => a.boardId === boardId) : enabledAgents;
+  const otherAgents = boardId ? enabledAgents.filter(a => a.boardId !== boardId) : [];
 
   const handleSave = async () => {
     setSaving(true);
@@ -335,7 +334,7 @@ export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                                 <option value="neq">is not</option>
                               </select>
                             )}
-                            <ConditionValueWidget cond={cond} onChange={c => updateCondition(idx, ci, c)} agents={agents} />
+                            <ConditionValueWidget cond={cond} onChange={c => updateCondition(idx, ci, c)} agents={agents} boardId={boardId} />
                             <button onClick={() => removeCondition(idx, ci)}
                               className="p-0.5 text-dark-500 hover:text-red-400">
                               <Trash2 className="w-2.5 h-2.5" />
@@ -371,14 +370,10 @@ export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                                 AUTO_ROLE lets the admin-configured Role Router
                                 LLM pick the best role at run time. */}
                             {(action.type === 'assign_agent' || action.type === 'run_agent') && (
-                              <select value={action.role || ''}
-                                onChange={e => updateAction(idx, ai, { role: e.target.value })}
-                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200"
-                                title={action.role === AUTO_ROLE ? 'The Role Router LLM (Admin Settings) picks the best role for each task' : undefined}>
-                                <option value="">Role...</option>
-                                <option value={AUTO_ROLE}>🤖 Automatic (AI picks role)</option>
-                                {availableRoles.map(r => <option key={r} value={r}>{r}</option>)}
-                              </select>
+                              <RoleSelect value={action.role}
+                                onChange={v => updateAction(idx, ai, { role: v })}
+                                agents={agents} boardId={boardId}
+                                className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200" />
                             )}
 
                             {/* Agent selector for assign_agent_individual */}
@@ -387,7 +382,12 @@ export default function WorkflowEditor({ workflow, agents, onClose, onSave }) {
                                 onChange={e => updateAction(idx, ai, { agentId: e.target.value })}
                                 className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200">
                                 <option value="">None (unassign)</option>
-                                {enabledAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                {boardAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                {otherAgents.length > 0 && (
+                                  <optgroup label="Agents on other boards">
+                                    {otherAgents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                  </optgroup>
+                                )}
                               </select>
                             )}
 

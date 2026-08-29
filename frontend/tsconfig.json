@@ -23,5 +23,8 @@
     "resolveJsonModule": true
   },
   "include": ["src"],
+  // Unit tests run on node's built-in runner (npm test) and import node: builtins,
+  // which the app has no @types/node for — keep them out of the app type-check.
+  "exclude": ["src/**/__tests__/**"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
