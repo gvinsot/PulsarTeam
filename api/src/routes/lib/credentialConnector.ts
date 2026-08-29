@@ -93,10 +93,11 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     const agentId = (req.query.agentId as string) || null;
     const boardId = (req.query.boardId as string) || null;
     if (!agentId && !boardId) {
-      return res.json({ connected: false, agentId: null, boardId: null });
+      res.json({ connected: false, agentId: null, boardId: null });
+      return;
     }
     const scope = resolveScope(agentId, boardId);
-    if (!scope) return res.json({ connected: false });
+    if (!scope) { res.json({ connected: false }); return; }
     const token = getOAuthToken(provider, scope.scopeType, scope.scopeId);
     res.json({
       connected: !!token,
@@ -113,7 +114,8 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     try {
       const result = await opts.connect(body);
       if (isFailure(result)) {
-        return res.status(result.status ?? 400).json({ error: result.error });
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
       }
 
       const scope = resolveScope(agentId, boardId)!;
@@ -139,7 +141,8 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     const agentId = req.body?.agentId || null;
     const boardId = req.body?.boardId || null;
     if (!agentId && !boardId) {
-      return res.status(400).json({ error: 'agentId or boardId is required' });
+      res.status(400).json({ error: 'agentId or boardId is required' });
+      return;
     }
     const scope = resolveScope(agentId, boardId)!;
     await deleteOAuthToken(provider, scope.scopeType, scope.scopeId);

@@ -33,7 +33,7 @@ export default function LocalFolderConnect(_props: { agentId?: string; boardId?:
   useEffect(() => {
     refresh();
     const socket = getSocket();
-    if (!socket) return;
+    if (!socket) return undefined;
     const onChange = (data: { connected: boolean; folders: string[] }) => {
       setStatus(prev => ({ ...prev, connected: !!data.connected, folders: data.folders || [] }));
     };

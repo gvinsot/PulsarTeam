@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { Loader2, AlertCircle, ArrowRightLeft, Play, ZoomIn, ZoomOut, Maximize2, Sparkles } from 'lucide-react';
 import mermaid from 'mermaid';
 import { api } from '../api';
+import { sanitizeSvg } from '../lib/sanitizeSvg';
 
 type Direction = 'ui-to-service' | 'service-to-ui';
 
@@ -19,11 +20,16 @@ interface GraphResult {
 let mermaidInited = false;
 function initMermaid() {
   if (mermaidInited) return;
+  // The diagram source is built from repository contents and may be rewritten
+  // by an LLM, so it is untrusted input. 'strict' makes Mermaid run its own
+  // DOMPurify pass and disables click/callback directives; htmlLabels is off
+  // because strict mode renders labels as SVG <text> rather than raw HTML.
+  // The rendered SVG then goes through sanitizeSvg() before it reaches the DOM.
   mermaid.initialize({
     startOnLoad: false,
     theme: 'dark',
-    securityLevel: 'loose',
-    flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' },
+    securityLevel: 'strict',
+    flowchart: { useMaxWidth: false, htmlLabels: false, curve: 'basis' },
   });
   mermaidInited = true;
 }
@@ -56,14 +62,14 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
 
   // Render mermaid → SVG when data changes.
   useEffect(() => {
-    if (!data?.mermaid) { setSvg(''); return; }
+    if (!data?.mermaid) { setSvg(''); return undefined; }
     initMermaid();
     let cancelled = false;
     (async () => {
       try {
         const id = `cg_${Math.random().toString(36).slice(2)}`;
         const { svg } = await mermaid.render(id, data.mermaid);
-        if (!cancelled) setSvg(svg);
+        if (!cancelled) setSvg(sanitizeSvg(svg));
       } catch (err: any) {
         if (!cancelled) setError(`Diagram render failed: ${err.message}`);
       }
@@ -214,6 +220,8 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
           <div
             className="absolute top-0 left-0 origin-top-left will-change-transform select-none"
             style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+            // `svg` only ever holds sanitizeSvg() output (see the render effect
+            // above) — never assign a raw mermaid.render() result here.
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         )}

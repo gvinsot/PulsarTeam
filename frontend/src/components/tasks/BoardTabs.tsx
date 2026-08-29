@@ -21,7 +21,7 @@ export default function BoardTabs({ boards, activeBoardId, onSelect, onCreate, o
   }, [renaming]);
 
   useEffect(() => {
-    if (!contextMenu) return;
+    if (!contextMenu) return undefined;
     const handler = (e) => {
       if (contextRef.current && !contextRef.current.contains(e.target)) setContextMenu(null);
     };

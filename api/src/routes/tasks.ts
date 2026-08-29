@@ -817,7 +817,7 @@ router.get('/:id/commits/:hash/diff', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Cannot determine GitHub repository for this task' });
   }
   // Defense-in-depth: also validate owner/repo segments derived from task data.
-  if (!/^[A-Za-z0-9_.\-]+$/.test(ownerRepo.owner) || !/^[A-Za-z0-9_.\-]+$/.test(ownerRepo.repo)) {
+  if (!/^[A-Za-z0-9_.-]+$/.test(ownerRepo.owner) || !/^[A-Za-z0-9_.-]+$/.test(ownerRepo.repo)) {
     return res.status(400).json({ error: 'Invalid GitHub repository identifier' });
   }
 

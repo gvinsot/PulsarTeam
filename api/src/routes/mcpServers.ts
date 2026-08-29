@@ -36,7 +36,7 @@ export function mcpServerRoutes(mcpManager) {
   // Get single MCP server
   router.get('/:id', (req, res) => {
     const server = mcpManager.getById(req.params.id);
-    if (!server) return res.status(404).json({ error: 'MCP server not found' });
+    if (!server) { res.status(404).json({ error: 'MCP server not found' }); return; }
     res.json(sanitize(server));
   });
 
@@ -51,14 +51,14 @@ export function mcpServerRoutes(mcpManager) {
   router.put('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
     const parsed = updateMcpServerSchema.parse(req.body);
     const server = await mcpManager.update(req.params.id, parsed);
-    if (!server) return res.status(404).json({ error: 'MCP server not found' });
+    if (!server) { res.status(404).json({ error: 'MCP server not found' }); return; }
     res.json(sanitize(server));
   }));
 
   // Delete MCP server (admin only)
   router.delete('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
     const success = await mcpManager.delete(req.params.id);
-    if (!success) return res.status(404).json({ error: 'MCP server not found' });
+    if (!success) { res.status(404).json({ error: 'MCP server not found' }); return; }
     res.json({ success: true });
   }));
 
@@ -73,7 +73,7 @@ export function mcpServerRoutes(mcpManager) {
   router.post('/:id/test', async (req, res) => {
     try {
       const server = mcpManager.getById(req.params.id);
-      if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      if (!server) { res.status(404).json({ error: 'MCP server not found' }); return; }
 
       const { MCPClient } = await import('../services/mcpClient.js');
       const { resolveInternalMcpConfig } = await import('../services/mcpManager.js');

@@ -11,16 +11,37 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
-    "strict": false,
-    "noImplicitAny": false,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
     "allowJs": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+
+    // ── Strictness ratchet ────────────────────────────────────────────────
+    // Same contract as api/tsconfig.json: `strict` is off, but every flag it
+    // implies is listed with its measured cost so the next step is a decision.
+    // Counts are `npx tsc --noEmit --<flag>` as of the commit that added this.
+    // Turn one on, fix its errors, move its line up. Never move a line back.
+    "strict": false,
+
+    // Enabled: clean today.
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Enabled: 12 useEffect callbacks now `return undefined` on their early
+    // path instead of falling off the end next to a cleanup return.
+    "noImplicitReturns": true,
+
+    // Not yet, cheapest first:
+    //   "useUnknownInCatchVariables": 62 errors (`err.message` on unknown).
+    //   "strictNullChecks": 797 errors.
+    //   "noImplicitAny": 1283 errors — do it after strictNullChecks.
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitAny": false
   },
   "include": ["src"],
   // Unit tests run on node's built-in runner (npm test) and import node: builtins,

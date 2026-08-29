@@ -10,9 +10,9 @@ function ownerIdFor(req: any, paramOwnerId: string): string | null {
 }
 router.get("/:ownerId/status", async (req, res) => {
   const ownerId = ownerIdFor(req, req.params.ownerId);
-  if (!ownerId) return res.status(403).json({ error: "Forbidden" });
+  if (!ownerId) { res.status(403).json({ error: "Forbidden" }); return; }
   const record = await fetchOAuthTokenWithDbFallback(PROVIDER, SCOPE_TYPE, ownerId);
-  if (!record) return res.json({ authenticated: false, ownerId });
+  if (!record) { res.json({ authenticated: false, ownerId }); return; }
   let plan = "unknown"; let updatedAt: number | null = null;
   try {
     const parsed = JSON.parse(record.accessToken || "{}");
@@ -24,22 +24,23 @@ router.get("/:ownerId/status", async (req, res) => {
 });
 router.post("/:ownerId", async (req, res) => {
   const ownerId = ownerIdFor(req, req.params.ownerId);
-  if (!ownerId) return res.status(403).json({ error: "Forbidden" });
+  if (!ownerId) { res.status(403).json({ error: "Forbidden" }); return; }
   const { authJson } = req.body || {};
-  if (!authJson || typeof authJson !== "object") return res.status(400).json({ error: "authJson required" });
+  if (!authJson || typeof authJson !== "object") { res.status(400).json({ error: "authJson required" }); return; }
   const hasTokens = !!(authJson?.tokens?.access_token || authJson?.tokens?.id_token);
   const hasApiKey = typeof authJson?.OPENAI_API_KEY === "string" && authJson.OPENAI_API_KEY.length > 0;
-  if (!hasTokens && !hasApiKey) return res.status(400).json({ error: "Invalid auth.json" });
+  if (!hasTokens && !hasApiKey) { res.status(400).json({ error: "Invalid auth.json" }); return; }
   try {
     await storeOAuthToken({ provider: PROVIDER, scopeType: SCOPE_TYPE, scopeId: ownerId, accessToken: JSON.stringify(authJson), expiresAt: null }, { throwOnPersistError: true });
   } catch {
-    return res.status(500).json({ error: "failed to persist token" });
+    res.status(500).json({ error: "failed to persist token" });
+    return;
   }
   res.json({ ok: true });
 });
 router.delete("/:ownerId", async (req, res) => {
   const ownerId = ownerIdFor(req, req.params.ownerId);
-  if (!ownerId) return res.status(403).json({ error: "Forbidden" });
+  if (!ownerId) { res.status(403).json({ error: "Forbidden" }); return; }
   await deleteOAuthToken(PROVIDER, SCOPE_TYPE, ownerId);
   res.json({ ok: true });
 });

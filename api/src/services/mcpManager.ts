@@ -381,7 +381,7 @@ export class MCPManager {
       }
 
       const internalConfig = resolveInternalMcpConfig(server.url);
-      let connectUrl = internalConfig.url;
+      const connectUrl = internalConfig.url;
 
       if (Object.keys(internalConfig.headers).length > 0) {
         connectOpts.headers = {

@@ -20,7 +20,7 @@ export function useClickOutside(
   useEffect(() => { cb.current = onOutside; });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) return undefined;
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) cb.current();
     };
@@ -35,7 +35,7 @@ export function useEscapeKey(onEscape: () => void, enabled = true) {
   useEffect(() => { cb.current = onEscape; });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) return undefined;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') cb.current(); };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);

@@ -135,7 +135,7 @@ export async function resolveAutoRole(task: any, { agentManager, ownerId }: any)
   const raw = (resp?.content || '').trim().replace(/^["'`]+|["'`.]+$/g, '').trim();
   const lower = raw.toLowerCase();
   // Exact match first; then tolerate the model echoing extra words around it.
-  let picked = roles.find(r => r.toLowerCase() === lower)
+  const picked = roles.find(r => r.toLowerCase() === lower)
     || roles.find(r => lower.includes(r.toLowerCase()));
   if (!picked) {
     throw new Error(`Automatic role selection: the Role Router LLM returned "${raw}", which is not one of the available roles (${roles.join(', ')}).`);

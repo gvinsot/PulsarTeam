@@ -14,7 +14,7 @@ function useBoardList(boardId, fetcher, fallbackMsg) {
   // from a spinner.
   const [loading, setLoading] = useState(false);
   useEffect(() => {
-    if (!boardId) { setItems([]); setError(null); setLoading(false); return; }
+    if (!boardId) { setItems([]); setError(null); setLoading(false); return undefined; }
     let cancelled = false;
     setError(null);
     setLoading(true);

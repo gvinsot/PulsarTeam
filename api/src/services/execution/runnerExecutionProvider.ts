@@ -523,6 +523,6 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   _sh(value: any): string {
-    return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+    return `'${String(value).replace(/'/g, `'"'"'`)}'`;
   }
 }

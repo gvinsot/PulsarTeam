@@ -114,7 +114,16 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   const activeAgentIdRef = useRef(activeAgentId);
   const responseBufferRef = useRef('');
   const transcriptBufferRef = useRef('');
-  const pendingResultsRef = useRef(new Set());
+  // Typed so the cleanup pass below survives strictFunctionTypes: an
+  // untyped `new Set()` is a Set<unknown>, and its forEach callback cannot
+  // destructure these fields.
+  type PendingResult = {
+    sock: any;
+    event: string;
+    handler: ((data: any) => void) | null;
+    timer: ReturnType<typeof setTimeout> | null;
+  };
+  const pendingResultsRef = useRef(new Set<PendingResult>());
   const connectSeqRef = useRef(0);
 
   useEffect(() => {

@@ -39,10 +39,10 @@ export const createToken = (payload) => {
 
   await fs.writeFile(path.join(repoDir, 'src', 'parser.py'), `
 class Parser:
-    \"\"\"Parser utilities for source files.\"\"\"
+    """Parser utilities for source files."""
 
     def parse_text(self, value):
-        \"\"\"Parse source text.\"\"\"
+        """Parse source text."""
         return value.strip()
 `.trimStart());
 

@@ -63,7 +63,7 @@ export function setupSocketHandlers(io, agentManager) {
     const userId = socket.user?.userId;
     const userRole = socket.user?.role;
 
-    let userBoardIds = new Set<string>();
+    const userBoardIds = new Set<string>();
     if (userId) {
       let boards = await getBoardsByUser(userId);
       // getBoardsByUser swallows query errors and returns []. An empty list

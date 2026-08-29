@@ -57,7 +57,8 @@ export function swarmApiRoutes(agentManager: any) {
       );
 
     if (!agent) {
-      return res.status(404).json({ error: 'Agent not found' });
+      res.status(404).json({ error: 'Agent not found' });
+      return;
     }
 
     res.json({
@@ -113,9 +114,11 @@ export function swarmApiRoutes(agentManager: any) {
     } catch (err) {
       console.warn(`\u26A0\uFE0F [SwarmAPI] Task validation failed for agent "${req.params.id}":`, err instanceof z.ZodError ? err.issues : err.message);
       if (err instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Validation failed', details: err.issues });
+        res.status(400).json({ error: 'Validation failed', details: err.issues });
+        return;
       }
-      return res.status(400).json({ error: 'Invalid request body' });
+      res.status(400).json({ error: 'Invalid request body' });
+      return;
     }
 
     const agent: any = agentManager.agents.get(req.params.id)
@@ -125,7 +128,8 @@ export function swarmApiRoutes(agentManager: any) {
 
     if (!agent) {
       console.warn(`\u26A0\uFE0F [SwarmAPI] Agent not found: "${req.params.id}"`);
-      return res.status(404).json({ error: 'Agent not found' });
+      res.status(404).json({ error: 'Agent not found' });
+      return;
     }
 
     // Auto-assign agent to the project if different from current assignment
@@ -159,7 +163,8 @@ export function swarmApiRoutes(agentManager: any) {
     } else {
       const board = await getBoardById(resolvedBoardId);
       if (!board) {
-        return res.status(404).json({ error: `Board not found: ${resolvedBoardId}` });
+        res.status(404).json({ error: `Board not found: ${resolvedBoardId}` });
+        return;
       }
     }
 

@@ -126,7 +126,7 @@ test('validation uses crypto.timingSafeEqual on equal-length buffers', async () 
   // Spy on crypto.timingSafeEqual to confirm it is the comparator in use.
   const original = crypto.timingSafeEqual;
   let calls = 0;
-  let lengths: number[] = [];
+  const lengths: number[] = [];
   (crypto as any).timingSafeEqual = (a: Buffer, b: Buffer) => {
     calls++;
     lengths.push(a.length, b.length);

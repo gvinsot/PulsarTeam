@@ -528,7 +528,7 @@ export function createGmailMcpServer(
       const references = getHeader(headers, 'References') || '';
 
       // Reply goes to the original sender
-      let replyTo = from;
+      const replyTo = from;
       let replyCc = '';
       if (replyAll) {
         // Include original To and Cc, excluding ourselves

@@ -125,7 +125,8 @@ export function oauthProviderRoutes<TConfig extends { clientId: string; clientSe
   router.get('/auth-url', (req, res) => {
     const config = spec.getConfig();
     if (!config) {
-      return res.status(500).json({ error: spec.notConfiguredError });
+      res.status(500).json({ error: spec.notConfiguredError });
+      return;
     }
 
     const agentId = (req.query.agentId as string | undefined) || null;

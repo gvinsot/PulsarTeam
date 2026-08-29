@@ -30,6 +30,7 @@ import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { readSecret, validateProductionSecrets } from './secrets.js';
 import { buildCorsOptions, getCorsOrigins, isOriginAllowed, logRejectedOrigin, validateCorsConfig } from './middleware/corsConfig.js';
+import { cookieSecurity } from './middleware/cookieSecurity.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected, getPool } from './services/database.js';
 import { onedriveRoutes } from './routes/onedrive.js';
@@ -129,6 +130,13 @@ app.set('agentManager', agentManager);
 installTerminalProxy(httpServer, executionManager, agentManager);
 
 app.use(cors(buildCorsOptions(corsOrigins)));
+
+// Rewrites every outgoing Set-Cookie to carry HttpOnly + SameSite + (in prod)
+// Secure. The API authenticates with bearer JWTs and issues no cookies of its
+// own, so this is a guard rail: neither a future endpoint nor a third-party
+// dependency can ship an unprotected cookie. Mounted before the routes so it
+// wraps res.setHeader for every request.
+app.use(cookieSecurity());
 
 // Security headers — defense-in-depth when accessed without a reverse proxy
 app.use((req, res, next) => {

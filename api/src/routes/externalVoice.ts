@@ -37,9 +37,10 @@ export function externalVoiceRoutes(agentManager) {
   // backend — only credentials and per-agent voice config.
   router.get('/config/:agentId', async (req, res) => {
     const agent = agentManager.agents.get(req.params.agentId);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
     if (!agent.isVoice || agent.voiceMode !== 'external') {
-      return res.status(400).json({ error: 'Agent is not an external voice agent' });
+      res.status(400).json({ error: 'Agent is not an external voice agent' });
+      return;
     }
 
     const settings = await getSettings();
@@ -47,9 +48,10 @@ export function externalVoiceRoutes(agentManager) {
     const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
 
     if (!sttUrl || !ttsUrl) {
-      return res.status(503).json({
+      res.status(503).json({
         error: 'STT/TTS services are not configured. Set sttServiceUrl and ttsServiceUrl in Admin Settings.',
       });
+      return;
     }
 
     res.json({
@@ -147,7 +149,8 @@ export function externalVoiceRoutes(agentManager) {
   router.post('/test/:service', async (req, res) => {
     const service = String(req.params.service || '').toLowerCase();
     if (service !== 'stt' && service !== 'tts') {
-      return res.status(400).json({ ok: false, error: 'Service must be "stt" or "tts"' });
+      res.status(400).json({ ok: false, error: 'Service must be "stt" or "tts"' });
+      return;
     }
     const settings = await getSettings();
     const url =
@@ -164,11 +167,13 @@ export function externalVoiceRoutes(agentManager) {
           : settings.ttsApiKey;
 
     if (!url) {
-      return res.status(400).json({ ok: false, error: `${service.toUpperCase()} URL is not set` });
+      res.status(400).json({ ok: false, error: `${service.toUpperCase()} URL is not set` });
+      return;
     }
     const fullUrl = buildWsUrl(url, apiKey || '');
     if (!fullUrl) {
-      return res.status(400).json({ ok: false, error: 'Could not build a valid WebSocket URL' });
+      res.status(400).json({ ok: false, error: 'Could not build a valid WebSocket URL' });
+      return;
     }
     const result = await probeWebSocket(fullUrl);
     res.json(result);

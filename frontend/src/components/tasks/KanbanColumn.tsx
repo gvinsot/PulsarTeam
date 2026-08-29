@@ -21,7 +21,7 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
 
   // Close batch menu on outside click
   useEffect(() => {
-    if (!showBatchMenu) return;
+    if (!showBatchMenu) return undefined;
     const handleClick = (e) => {
       if (batchMenuRef.current && !batchMenuRef.current.contains(e.target)) {
         setShowBatchMenu(false);

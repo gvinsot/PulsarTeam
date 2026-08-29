@@ -117,7 +117,8 @@ services:
       - /var/cache/nginx:size=64M,mode=0755
       - /var/run:size=8M,mode=0755
     ports:
-      - "80:80"
+      # The image runs nginx unprivileged, so the container listens on 8080.
+      - "80:8080"
     networks:
       - internal
     depends_on:

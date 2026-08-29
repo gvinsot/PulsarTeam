@@ -204,7 +204,7 @@ export function pluginRoutes(skillManager, mcpManager) {
         name: server.name,
         url: server.url,
         description: server.description || '',
-        icon: server.icon || '\U0001f50c',
+        icon: server.icon || '\u{1f50c}',
         enabled: server.enabled !== false,
         apiKey: server.apiKey || '',
         userConfig: {},

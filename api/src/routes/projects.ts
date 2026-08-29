@@ -213,7 +213,8 @@ export function projectRoutes() {
         // No GitHub plugin connected on this board is a normal state, not an
         // error — the picker simply has no repos to offer. Return an empty
         // list (200) so the frontend doesn't log a noisy 400 in the console.
-        return res.json([]);
+        res.json([]);
+        return;
       }
 
       // Fetch repos accessible to the connected GitHub user/installation.
@@ -234,7 +235,8 @@ export function projectRoutes() {
         if (!ghRes.ok) {
           const body = await ghRes.text();
           console.error(`[GitHub] /user/repos failed (${ghRes.status}):`, body.slice(0, 200));
-          return res.status(502).json({ error: `GitHub API ${ghRes.status}` });
+          res.status(502).json({ error: `GitHub API ${ghRes.status}` });
+          return;
         }
         const data = await ghRes.json();
         if (!Array.isArray(data) || data.length === 0) break;
@@ -270,7 +272,8 @@ export function projectRoutes() {
         // such a board log a console error. Return an empty list (200) instead.
         // When a drive IS connected the list always contains at least the Drive
         // root below, so the frontend reads an empty result as "no drive".
-        return res.json([]);
+        res.json([]);
+        return;
       }
 
       const headers = {
@@ -288,7 +291,8 @@ export function projectRoutes() {
       if (!ghRes.ok) {
         const body = await ghRes.text();
         console.error(`[OneDrive] /me/drive/root/children failed (${ghRes.status}):`, body.slice(0, 200));
-        return res.status(502).json({ error: `OneDrive API ${ghRes.status}` });
+        res.status(502).json({ error: `OneDrive API ${ghRes.status}` });
+        return;
       }
       const data = await ghRes.json();
       const items = Array.isArray(data?.value) ? data.value : [];
@@ -431,7 +435,7 @@ export function projectRoutes() {
 
     const { owner, repo, ref } = req.params;
     const filePath = (req.params as any)[0];
-    if (!filePath) return res.status(400).json({ error: 'File path required' });
+    if (!filePath) { res.status(400).json({ error: 'File path required' }); return; }
 
     const cacheKey = `file:${req.query.boardId}:${owner}/${repo}:${ref}:${filePath}`;
 
@@ -489,7 +493,8 @@ export function projectRoutes() {
     const cacheKey = `cg:${req.query.boardId}:${owner}/${repo}:${ref}:${direction}`;
     const cached = _codeGraphCache.get(cacheKey);
     if (!refresh && cached && Date.now() - cached.time < CODE_GRAPH_CACHE_TTL) {
-      return res.json(cached.data);
+      res.json(cached.data);
+      return;
     }
 
     try {
@@ -501,7 +506,8 @@ export function projectRoutes() {
       if (!treeRes.ok) {
         const text = await treeRes.text();
         console.error(`[CodeGraph] tree fetch ${treeRes.status}: ${text.slice(0, 200)}`);
-        return res.status(502).json({ error: `GitHub tree fetch failed (${treeRes.status})` });
+        res.status(502).json({ error: `GitHub tree fetch failed (${treeRes.status})` });
+        return;
       }
       const treeData = await treeRes.json();
       const treeFiles = (treeData.tree || []).map((it: any) => ({

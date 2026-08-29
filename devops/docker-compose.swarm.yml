@@ -171,7 +171,7 @@ services:
         failure_action: rollback
       labels:
         - "traefik.enable=true"
-        - "traefik.http.services.pulsarteam-frontend.loadbalancer.server.port=80"
+        - "traefik.http.services.pulsarteam-frontend.loadbalancer.server.port=8080"
         - "traefik.http.routers.pulsarteam-frontend.rule=Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)"
         - "traefik.http.routers.pulsarteam-frontend.entrypoints=websecure"
         - "traefik.http.routers.pulsarteam-frontend.tls.certresolver=letsencrypt"

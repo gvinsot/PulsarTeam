@@ -171,28 +171,31 @@ export function codeIndexRoutes(codeIndexService) {
   // Auto-index a project by name — looks up REPOS_BASE_DIR/projectName locally
   router.post('/index-project', async (req, res) => {
     const { projectName } = req.body || {};
-    if (!projectName) return res.status(400).json({ error: 'projectName required' });
+    if (!projectName) { res.status(400).json({ error: 'projectName required' }); return; }
 
     // Strict validation: only safe alphanumeric names, no path separators or traversal
     if (!/^[a-zA-Z0-9._-]{1,100}$/.test(projectName)) {
-      return res.status(400).json({ error: 'Invalid project name' });
+      res.status(400).json({ error: 'Invalid project name' });
+      return;
     }
 
     const reposBaseDir = process.env.REPOS_BASE_DIR;
-    if (!reposBaseDir) return res.status(400).json({ error: 'REPOS_BASE_DIR not configured on server' });
+    if (!reposBaseDir) { res.status(400).json({ error: 'REPOS_BASE_DIR not configured on server' }); return; }
 
     const resolvedBase = path.resolve(reposBaseDir);
     const folderPath = path.resolve(resolvedBase, projectName);
 
     // Guard against path traversal — ensure resolved path stays within REPOS_BASE_DIR
     if (!folderPath.startsWith(resolvedBase + path.sep) && folderPath !== resolvedBase) {
-      return res.status(403).json({ error: 'Access denied' });
+      res.status(403).json({ error: 'Access denied' });
+      return;
     }
 
     try {
       await fs.access(folderPath);
     } catch {
-      return res.status(404).json({ error: 'Project folder not found' });
+      res.status(404).json({ error: 'Project folder not found' });
+      return;
     }
 
     // Fire and forget — respond immediately, indexing runs in background
@@ -208,10 +211,12 @@ export function codeIndexRoutes(codeIndexService) {
       const params = repoParamsSchema.parse(req.params);
       const { files } = req.body || {};
       if (!Array.isArray(files) || files.length === 0) {
-        return res.status(400).json({ error: 'files array required (each entry: { path: string, content?: string })' });
+        res.status(400).json({ error: 'files array required (each entry: { path: string, content?: string })' });
+        return;
       }
       if (files.length > 100) {
-        return res.status(400).json({ error: 'Maximum 100 files per update' });
+        res.status(400).json({ error: 'Maximum 100 files per update' });
+        return;
       }
       const fileEntries = files.map(f => ({
         path: String(f.path || ''),

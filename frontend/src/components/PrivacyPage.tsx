@@ -158,7 +158,11 @@ export default function PrivacyPage({ onBack }: { onBack?: () => void }) {
 
   const handleBack = () => {
     if (onBack) return onBack();
-    window.history.length > 1 ? window.history.back() : (window.location.href = '/');
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.location.href = '/';
+    }
   };
 
   return (

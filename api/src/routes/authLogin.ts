@@ -208,7 +208,8 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
   try {
     const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
     if (!checkLoginRateLimit(clientIp)) {
-      return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+      res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+      return;
     }
 
     const { username, password } = req.body;
@@ -222,17 +223,20 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
     // can fix it.
     if (!isDatabaseConnected()) {
       console.error('Login attempted while database is not connected — check DATABASE_CONNECTION_STRING.');
-      return res.status(503).json({ error: 'Authentication backend unavailable. Please contact the administrator.' });
+      res.status(503).json({ error: 'Authentication backend unavailable. Please contact the administrator.' });
+      return;
     }
 
     const user = await getUserByUsername(username);
     if (!user || !user.password) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
     }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
     }
 
     sendLoginResponse(res, user);
@@ -245,14 +249,14 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
 // Verify token
 router.get('/verify', async (req, res) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'No token provided' });
+  if (!authHeader) { res.status(401).json({ error: 'No token provided' }); return; }
 
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, getJwtSecret()) as any;
     // Fetch fresh user data from DB to catch role changes
     const user = await getUserById(decoded.userId);
-    if (!user) return res.status(401).json({ error: 'User not found' });
+    if (!user) { res.status(401).json({ error: 'User not found' }); return; }
 
     const responseUser: any = {
       userId: user.id,
@@ -279,12 +283,14 @@ router.post('/impersonate/:userId', authenticateToken, validateParams(impersonat
   try {
     const adminUser = req.user;
     if (!adminUser || adminUser.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
+      res.status(403).json({ error: 'Admin access required' });
+      return;
     }
 
     const targetUser = await getUserById(req.params.userId);
     if (!targetUser) {
-      return res.status(404).json({ error: 'User not found' });
+      res.status(404).json({ error: 'User not found' });
+      return;
     }
 
     const token = jwt.sign(
@@ -623,12 +629,14 @@ function handleUrl(spec: LoginProviderSpec) {
   return (req: express.Request, res: express.Response) => {
     const cfg = spec.getConfig();
     if (!cfg) {
-      return res.status(501).json({ error: `${spec.label} OAuth not configured` });
+      res.status(501).json({ error: `${spec.label} OAuth not configured` });
+      return;
     }
 
     const redirectUri = resolveLoginRedirectUri(req.query.redirect_uri as string);
     if (!redirectUri) {
-      return res.status(400).json({ error: 'redirect_uri query parameter required' });
+      res.status(400).json({ error: 'redirect_uri query parameter required' });
+      return;
     }
 
     res.json({ url: spec.buildAuthUrl(cfg, redirectUri), redirect_uri: redirectUri });
@@ -640,14 +648,16 @@ function handleCallback(spec: LoginProviderSpec) {
   return async (req: express.Request, res: express.Response) => {
     const cfg = spec.getConfig();
     if (!cfg) {
-      return res.status(501).json({ error: `${spec.label} OAuth not configured` });
+      res.status(501).json({ error: `${spec.label} OAuth not configured` });
+      return;
     }
 
     const { code, redirect_uri } = req.body;
 
     const canonicalRedirectUri = resolveLoginRedirectUri(redirect_uri);
     if (!canonicalRedirectUri) {
-      return res.status(400).json({ error: 'redirect_uri required' });
+      res.status(400).json({ error: 'redirect_uri required' });
+      return;
     }
 
     try {
@@ -669,7 +679,8 @@ function handleCallback(spec: LoginProviderSpec) {
       // LoginError carries each provider's exact wire status/message; anything
       // else is an unexpected fault → generic 500 (matching the old per-provider catch).
       if (err instanceof LoginError) {
-        return res.status(err.status).json({ error: err.message });
+        res.status(err.status).json({ error: err.message });
+        return;
       }
       console.error(`${spec.label} OAuth error:`, (err as any).message);
       res.status(500).json({ error: 'Internal server error' });
@@ -688,7 +699,7 @@ for (const spec of LOGIN_PROVIDERS) {
 router.post('/accept-terms', authenticateToken, async (req, res) => {
   try {
     const row = await acceptTerms(req.user.userId);
-    if (!row) return res.status(404).json({ error: 'User not found' });
+    if (!row) { res.status(404).json({ error: 'User not found' }); return; }
     res.json({ termsAcceptedAt: row.terms_accepted_at });
   } catch (err) {
     console.error('Accept terms error:', err.message);
@@ -700,7 +711,7 @@ router.post('/accept-terms', authenticateToken, async (req, res) => {
 router.post('/complete-tutorial', authenticateToken, async (req, res) => {
   try {
     const row = await completeTutorial(req.user.userId);
-    if (!row) return res.status(404).json({ error: 'User not found' });
+    if (!row) { res.status(404).json({ error: 'User not found' }); return; }
     res.json({ tutorialCompletedAt: row.tutorial_completed_at });
   } catch (err) {
     console.error('Complete tutorial error:', err.message);

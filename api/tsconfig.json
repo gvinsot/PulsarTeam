@@ -5,7 +5,6 @@
     "moduleResolution": "NodeNext",
     "outDir": "./dist",
     "rootDir": "./src",
-    "strict": false,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "skipLibCheck": true,
@@ -14,10 +13,41 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+
+    // ── Strictness ratchet ────────────────────────────────────────────────
+    // `strict` stays off, but not as a blanket exemption: every flag it implies
+    // is listed below with its real cost, so the next step is a decision rather
+    // than an archaeology exercise. Counts are `npx tsc --noEmit --<flag>` on
+    // the tree as of the commit that added this block.
+    //
+    // Turn one on, fix its errors, delete its line from the "not yet" group.
+    // Never move a line back — `npm run lint` and the build are the gate.
+    "strict": false,
+
+    // Enabled: currently clean, so they are free and permanent.
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Enabled: 68 route handlers were fixed to satisfy this (the Express
+    // `if (bad) return res.status(400).json(...)` idiom became
+    // `if (bad) { res.status(400).json(...); return; }`).
+    "noImplicitReturns": true,
+
+    // Not yet — each is a standalone piece of work, ordered cheapest first:
+    //   "useUnknownInCatchVariables": 135 errors, all `err.message` on unknown.
+    //     Wants a shared `errorMessage(e: unknown): string` helper.
+    //   "noUnusedLocals": 27 errors.
+    //   "noUnusedParameters": 90 errors (mostly `_`-prefixable).
+    //   "strictNullChecks": 442 errors. The big one, and the one that would
+    //     actually catch bugs; also unlocks strictPropertyInitialization (1).
+    //   "noImplicitAny": 969 errors. Do it after strictNullChecks — a lot of
+    //     these disappear once the null-checked types propagate.
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noImplicitAny": false,
-    "noImplicitReturns": false
+    "noImplicitAny": false
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]

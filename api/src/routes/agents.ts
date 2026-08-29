@@ -76,11 +76,12 @@ export function agentRoutes(agentManager) {
 
   // ── Admin: reset instructions for all agents of a role to default template ──
   router.post('/reset-instructions/:role', async (req, res) => {
-    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    if (req.user.role !== 'admin') { res.status(403).json({ error: 'Admin only' }); return; }
     const { role } = req.params;
     const result = await agentManager.resetInstructionsByRole(role);
     if (result.error === 'no_template') {
-      return res.status(404).json({ error: `No default template found for role "${role}"` });
+      res.status(404).json({ error: `No default template found for role "${role}"` });
+      return;
     }
     res.json({ success: true, role, resetCount: result.reset.length, agentIds: result.reset });
   });
@@ -88,14 +89,14 @@ export function agentRoutes(agentManager) {
   // Get single agent detailed status (lightweight, includes project + currentTask)
   router.get('/:id/status', requireAgentAccess, (req, res) => {
     const status = agentManager.getAgentStatus(req.params.id);
-    if (!status) return res.status(404).json({ error: 'Agent not found' });
+    if (!status) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json(status);
   });
 
   // Get single agent
   router.get('/:id', requireAgentAccess, (req, res) => {
     const agent = agentManager.getById(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json(sanitizeAgent(agent));
   });
 
@@ -146,10 +147,11 @@ export function agentRoutes(agentManager) {
   // Delete agent (basic users cannot delete, ownership enforced by middleware)
   router.delete('/:id', requireAgentEditAccess, async (req, res) => {
     if (req.user.role === 'basic') {
-      return res.status(403).json({ error: 'Basic users cannot delete agents' });
+      res.status(403).json({ error: 'Basic users cannot delete agents' });
+      return;
     }
     const success = await agentManager.delete(req.params.id);
-    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    if (!success) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true });
   });
 
@@ -176,9 +178,9 @@ export function agentRoutes(agentManager) {
   // beyond what this replica has in memory.
   router.post('/:id/history/reload', requireAgentAccess, async (req, res) => {
     const agent = agentManager.agents.get(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
     const fresh = await getAgentById(req.params.id);
-    if (!fresh) return res.status(404).json({ error: 'Agent not found in database' });
+    if (!fresh) { res.status(404).json({ error: 'Agent not found in database' }); return; }
     agent.conversationHistory = Array.isArray(fresh.conversationHistory) ? fresh.conversationHistory : [];
     // History diverged from whatever the runner's JSONL holds — force a fresh
     // CLI session on next call so the model sees the reloaded history.
@@ -192,14 +194,14 @@ export function agentRoutes(agentManager) {
   // Stop agent
   router.post('/:id/stop', requireAgentEditAccess, (req, res) => {
     const stopped = agentManager.stopAgent(req.params.id);
-    if (stopped === false) return res.status(404).json({ error: 'Agent not found' });
+    if (stopped === false) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ ok: true, stopped });
   });
 
   // Clear conversation history
   router.delete('/:id/history', requireAgentEditAccess, async (req, res) => {
     const success = await agentManager.clearHistory(req.params.id);
-    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    if (!success) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true });
   });
 
@@ -210,7 +212,7 @@ export function agentRoutes(agentManager) {
   // next message.
   router.post('/:id/reload-context', requireAgentEditAccess, async (req, res) => {
     const success = await agentManager.reloadContext(req.params.id);
-    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    if (!success) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true });
   });
 
@@ -220,21 +222,21 @@ export function agentRoutes(agentManager) {
   // where it left off with any pending config change applied.
   router.post('/:id/restart', requireAgentEditAccess, async (req, res) => {
     const success = await agentManager.restartRuntime(req.params.id);
-    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    if (!success) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true });
   });
 
   // Truncate conversation history after a specific message index
   router.delete('/:id/history/after/:index', requireAgentEditAccess, (req, res) => {
     const result = agentManager.truncateHistory(req.params.id, req.params.index);
-    if (result === null) return res.status(404).json({ error: 'Agent not found or invalid index' });
+    if (result === null) { res.status(404).json({ error: 'Agent not found or invalid index' }); return; }
     res.json(result);
   });
 
   // Clear action logs
   router.delete('/:id/action-logs', requireAgentEditAccess, (req, res) => {
     const success = agentManager.clearActionLogs(req.params.id);
-    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    if (!success) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true });
   });
 
@@ -242,7 +244,8 @@ export function agentRoutes(agentManager) {
   router.post('/:id/handoff', requireAgentEditAccess, asyncHandler(async (req, res) => {
     const { targetAgentId, context } = req.body;
     if (!targetAgentId || !context) {
-      return res.status(400).json({ error: 'targetAgentId and context required' });
+      res.status(400).json({ error: 'targetAgentId and context required' });
+      return;
     }
     const response = await agentManager.handoff(req.params.id, targetAgentId, context);
     res.json({ response });
@@ -251,7 +254,7 @@ export function agentRoutes(agentManager) {
   // Broadcast message to all agents
   router.post('/broadcast/all', asyncHandler(async (req, res) => {
     const { message } = req.body;
-    if (!message) return res.status(400).json({ error: 'Message required' });
+    if (!message) { res.status(400).json({ error: 'Message required' }); return; }
 
     const userBoardIds = await getUserBoardIds(req.user.userId);
     const visibleIds = new Set(agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds).map(a => a.id));
@@ -262,7 +265,7 @@ export function agentRoutes(agentManager) {
   // Update project for all user's agents
   router.put('/project/all', asyncHandler(async (req, res) => {
     const { project } = req.body;
-    if (project === undefined) return res.status(400).json({ error: 'Project required' });
+    if (project === undefined) { res.status(400).json({ error: 'Project required' }); return; }
     const userBoardIds = await getUserBoardIds(req.user.userId);
     const visibleIds = new Set(agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds).map(a => a.id));
     const updated = await agentManager.updateAllProjects(project, visibleIds);
@@ -272,9 +275,9 @@ export function agentRoutes(agentManager) {
   // ── Task endpoints ──────────────────────────────────────────────────────
   router.post('/:id/tasks', requireAgentEditAccess, asyncHandler(async (req, res) => {
     const { text, source, status, boardId, repoFullName, repoProvider, secondaryRepos, storageProvider, storagePath, recurrence, taskType, isManual } = req.body;
-    if (!text) return res.status(400).json({ error: 'Text required' });
+    if (!text) { res.status(400).json({ error: 'Text required' }); return; }
     const agent = agentManager.agents.get(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
     const resolvedSource = source || { type: 'user', name: req.user?.username || undefined };
     let resolvedStatus = status && typeof status === 'string' ? status : undefined;
     let resolvedBoardId = boardId || undefined;
@@ -330,7 +333,7 @@ export function agentRoutes(agentManager) {
       isManual: isManual || false,
       environment,
     });
-    if (!task) return res.status(404).json({ error: 'Agent not found' });
+    if (!task) { res.status(404).json({ error: 'Agent not found' }); return; }
     console.log(`[CreateTask] Task created: id=${task.id} status="${task.status}" boardId="${task.boardId}"`);
     res.status(201).json(task);
   }));
@@ -340,7 +343,8 @@ export function agentRoutes(agentManager) {
       const { status, text, title, repoFullName, repoProvider, secondaryRepos, storageProvider, storagePath, source, recurrence, taskType, isManual } = req.body || {};
       // Source is immutable once set at creation — reject any attempt to change it
       if (source !== undefined) {
-        return res.status(400).json({ error: 'Source cannot be modified after creation' });
+        res.status(400).json({ error: 'Source cannot be modified after creation' });
+        return;
       }
       // Capture old status before any update
       const agent = agentManager.agents.get(req.params.id);
@@ -379,7 +383,7 @@ export function agentRoutes(agentManager) {
       // preserving today's behavior where e.g. {text,status} applies text and
       // silently ignores status.
       if (text !== undefined) {
-        if (!text.trim()) return res.status(400).json({ error: 'Text cannot be empty' });
+        if (!text.trim()) { res.status(400).json({ error: 'Text cannot be empty' }); return; }
         await agentManager.updateTaskText(req.params.id, req.params.taskId, text.trim());
       } else if (repoFullName !== undefined) {
         // Format check only — the picker is sourced from the board's GitHub plugin.
@@ -409,7 +413,7 @@ export function agentRoutes(agentManager) {
         ? await getMemTask(agentManager, req.params.id, req.params.taskId)
         : await agentManager.toggleTask(req.params.id, req.params.taskId);
 
-      if (!task) return res.status(404).json({ error: 'Not found' });
+      if (!task) { res.status(404).json({ error: 'Not found' }); return; }
       res.json(task);
     } catch (err) {
       console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
@@ -423,7 +427,7 @@ export function agentRoutes(agentManager) {
 
   router.delete('/:id/tasks', requireAgentEditAccess, (req, res) => {
     const success = agentManager.clearTasks(req.params.id);
-    if (!success) return res.status(404).json({ error: 'Agent not found' });
+    if (!success) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true });
   });
 
@@ -432,30 +436,32 @@ export function agentRoutes(agentManager) {
     const taskToDelete = await getMemTask(agentManager, req.params.id, req.params.taskId);
     // Block deletion of tasks being executed — user must stop the agent first
     if (taskToDelete?.startedAt && agentManager._isActiveTaskStatus(taskToDelete.status) && agent?.status === 'busy') {
-      return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
+      res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
+      return;
     }
     const success = await agentManager.deleteTask(req.params.id, req.params.taskId);
-    if (!success) return res.status(404).json({ error: 'Not found' });
+    if (!success) { res.status(404).json({ error: 'Not found' }); return; }
     res.json({ success: true });
   });
 
   router.post('/:id/tasks/:taskId/transfer', requireAgentEditAccess, async (req, res) => {
     const { targetAgentId } = req.body;
-    if (!targetAgentId) return res.status(400).json({ error: 'targetAgentId required' });
+    if (!targetAgentId) { res.status(400).json({ error: 'targetAgentId required' }); return; }
     // Verify the requesting user also has access to the target agent — otherwise a user
     // could push tasks into agents on boards they don't own.
     if (req.user.role !== 'admin') {
       const target = agentManager.agents.get(targetAgentId);
-      if (!target) return res.status(404).json({ error: 'Target agent not found' });
+      if (!target) { res.status(404).json({ error: 'Target agent not found' }); return; }
       if (target.boardId) {
         const userBoardIds = await getUserBoardIds(req.user.userId);
         if (!userBoardIds.has(target.boardId)) {
-          return res.status(403).json({ error: 'Access denied to target agent' });
+          res.status(403).json({ error: 'Access denied to target agent' });
+          return;
         }
       }
     }
     const task = await agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
-    if (!task) return res.status(404).json({ error: 'Agent or task not found' });
+    if (!task) { res.status(404).json({ error: 'Agent or task not found' }); return; }
     res.status(201).json(task);
   });
 
@@ -463,41 +469,42 @@ export function agentRoutes(agentManager) {
     const { assigneeId } = req.body;
     // assigneeId can be null to unassign
     if (assigneeId && !agentManager.agents.get(assigneeId)) {
-      return res.status(404).json({ error: 'Assignee agent not found' });
+      res.status(404).json({ error: 'Assignee agent not found' });
+      return;
     }
     const task = await agentManager.setTaskAssignee(req.params.id, req.params.taskId, assigneeId || null);
-    if (!task) return res.status(404).json({ error: 'Agent or task not found' });
+    if (!task) { res.status(404).json({ error: 'Agent or task not found' }); return; }
     res.json(task);
   });
 
   // ── Task commit association ────────────────────────────────────────
   router.post('/:id/tasks/:taskId/commits', requireAgentEditAccess, async (req, res) => {
     const { hash, message } = req.body;
-    if (!hash) return res.status(400).json({ error: 'Commit hash required' });
+    if (!hash) { res.status(400).json({ error: 'Commit hash required' }); return; }
     const task = await agentManager.addTaskCommit(req.params.id, req.params.taskId, hash, message || '');
-    if (!task) return res.status(404).json({ error: 'Agent or task not found' });
+    if (!task) { res.status(404).json({ error: 'Agent or task not found' }); return; }
     res.status(201).json(task);
   });
 
   router.delete('/:id/tasks/:taskId/commits/:hash', requireAgentEditAccess, async (req, res) => {
     const task = await agentManager.removeTaskCommit(req.params.id, req.params.taskId, req.params.hash);
-    if (!task) return res.status(404).json({ error: 'Not found' });
+    if (!task) { res.status(404).json({ error: 'Not found' }); return; }
     res.json(task);
   });
 
   // ── On-demand AI refinement (synchronous — waits for result) ────────
   router.post('/:id/tasks/:taskId/refine', requireAgentEditAccess, asyncHandler(async (req, res) => {
     const { refineAgentId } = req.body;
-    if (!refineAgentId) return res.status(400).json({ error: 'refineAgentId required' });
+    if (!refineAgentId) { res.status(400).json({ error: 'refineAgentId required' }); return; }
 
     const agent = agentManager.agents.get(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
     const task = await getMemTask(agentManager, req.params.id, req.params.taskId);
-    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!task) { res.status(404).json({ error: 'Task not found' }); return; }
 
     const refineAgent = agentManager.agents.get(refineAgentId);
-    if (!refineAgent) return res.status(404).json({ error: 'Refine agent not found' });
-    if (refineAgent.status !== 'idle') return res.status(409).json({ error: 'Agent is busy' });
+    if (!refineAgent) { res.status(404).json({ error: 'Refine agent not found' }); return; }
+    if (refineAgent.status !== 'idle') { res.status(409).json({ error: 'Agent is busy' }); return; }
 
     const prompt = `Refine the following task description. Make it clearer, more actionable, and add acceptance criteria if missing.\n\nTask: ${task.text}\n\nReply ONLY with the improved description (no preamble, no explanation).`;
     const result = await agentManager.sendMessage(refineAgentId, prompt, () => {});
@@ -511,19 +518,19 @@ export function agentRoutes(agentManager) {
   // ── RAG Document endpoints ─────────────────────────────────────────
   router.post('/:id/rag', requireAgentEditAccess, (req, res) => {
     const { name, content } = req.body;
-    if (!name || !content) return res.status(400).json({ error: 'Name and content required' });
+    if (!name || !content) { res.status(400).json({ error: 'Name and content required' }); return; }
     const doc = agentManager.addRagDocument(req.params.id, name, content);
-    if (!doc) return res.status(404).json({ error: 'Agent not found' });
+    if (!doc) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.status(201).json(doc);
   });
 
   router.post('/:id/rag/url', requireAgentEditAccess, async (req, res) => {
     try {
       const { name, url } = req.body;
-      if (!name || !url) return res.status(400).json({ error: 'Name and url required' });
-      try { new URL(url); } catch { return res.status(400).json({ error: 'Invalid URL' }); }
+      if (!name || !url) { res.status(400).json({ error: 'Name and url required' }); return; }
+      try { new URL(url); } catch { { res.status(400).json({ error: 'Invalid URL' }); return; } }
       const doc = await agentManager.addRagUrlDocument(req.params.id, name, url);
-      if (!doc) return res.status(404).json({ error: 'Agent not found' });
+      if (!doc) { res.status(404).json({ error: 'Agent not found' }); return; }
       res.status(201).json(doc);
     } catch (err: any) {
       res.status(502).json({ error: `Failed to fetch URL: ${err.message}` });
@@ -533,7 +540,7 @@ export function agentRoutes(agentManager) {
   router.post('/:id/rag/:docId/refresh', requireAgentEditAccess, async (req, res) => {
     try {
       const doc = await agentManager.refreshRagUrlDocument(req.params.id, req.params.docId);
-      if (!doc) return res.status(404).json({ error: 'URL document not found' });
+      if (!doc) { res.status(404).json({ error: 'URL document not found' }); return; }
       res.json(doc);
     } catch (err: any) {
       res.status(502).json({ error: `Failed to refresh: ${err.message}` });
@@ -542,22 +549,22 @@ export function agentRoutes(agentManager) {
 
   router.delete('/:id/rag/:docId', requireAgentEditAccess, (req, res) => {
     const success = agentManager.deleteRagDocument(req.params.id, req.params.docId);
-    if (!success) return res.status(404).json({ error: 'Not found' });
+    if (!success) { res.status(404).json({ error: 'Not found' }); return; }
     res.json({ success: true });
   });
 
   // ── Plugin (skill) assignment endpoints ──────────────────────────
   const pluginAssignHandler = (req, res) => {
     const pluginId = req.body.skillId || req.body.pluginId;
-    if (!pluginId) return res.status(400).json({ error: 'pluginId required' });
+    if (!pluginId) { res.status(400).json({ error: 'pluginId required' }); return; }
     const result = agentManager.assignSkill(req.params.id, pluginId);
-    if (result === null) return res.status(404).json({ error: 'Agent not found' });
+    if (result === null) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true, plugins: result });
   };
   const pluginRemoveHandler = (req, res) => {
     const pluginId = req.params.skillId || req.params.pluginId;
     const success = agentManager.removeSkill(req.params.id, pluginId);
-    if (!success) return res.status(404).json({ error: 'Not found' });
+    if (!success) { res.status(404).json({ error: 'Not found' }); return; }
     res.json({ success: true });
   };
   router.post('/:id/plugins', requireAgentEditAccess, pluginAssignHandler);
@@ -592,11 +599,12 @@ export function agentRoutes(agentManager) {
 
   router.get("/tasks/:id/history", async (req, res) => {
     const task = await agentManager.getTask(req.params.id);
-    if (!task) return res.status(404).json({ error: "Not found" });
+    if (!task) { res.status(404).json({ error: "Not found" }); return; }
     if (req.user.role !== 'admin') {
       const userBoardIds = await getUserBoardIds(req.user.userId);
       if (task.boardId && !userBoardIds.has(task.boardId)) {
-        return res.status(403).json({ error: "Access denied" });
+        res.status(403).json({ error: "Access denied" });
+        return;
       }
     }
     res.json(task.history || []);
@@ -607,15 +615,15 @@ export function agentRoutes(agentManager) {
   // ── MCP server assignment endpoints (backward compat) ───────────
   router.post('/:id/mcp-servers', requireAgentEditAccess, (req, res) => {
     const { serverId } = req.body;
-    if (!serverId) return res.status(400).json({ error: 'serverId required' });
+    if (!serverId) { res.status(400).json({ error: 'serverId required' }); return; }
     const result = agentManager.assignMcpServer(req.params.id, serverId);
-    if (result === null) return res.status(404).json({ error: 'Agent not found' });
+    if (result === null) { res.status(404).json({ error: 'Agent not found' }); return; }
     res.json({ success: true, mcpServers: result });
   });
 
   router.delete('/:id/mcp-servers/:serverId', requireAgentEditAccess, (req, res) => {
     const success = agentManager.removeMcpServer(req.params.id, req.params.serverId);
-    if (!success) return res.status(404).json({ error: 'Not found' });
+    if (!success) { res.status(404).json({ error: 'Not found' }); return; }
     res.json({ success: true });
   });
 

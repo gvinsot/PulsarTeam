@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText, RefreshCw, Network } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
 import { useEscapeKey, useBodyScrollLock } from '../hooks/useDismiss';
@@ -329,7 +330,7 @@ function RepoExplorer({ owner, repo, boardId }) {
 
   // Load tree when branch changes
   useEffect(() => {
-    if (!selectedBranch) return;
+    if (!selectedBranch) return undefined;
     let cancelled = false;
     setLoadingTree(true);
     setTree(null);
@@ -511,7 +512,7 @@ function RepoExplorer({ owner, repo, boardId }) {
 
 /* ── Markdown components (dark theme) ────────────────────────────────────── */
 
-const mdComponents = {
+const mdComponents: Components = {
   pre: ({ children }) => <pre className="bg-dark-900 rounded-lg p-3 overflow-x-auto my-2 border border-dark-600">{children}</pre>,
   code: ({ children }) => !String(children).includes('\n')
     ? <code className="bg-dark-700 px-1.5 py-0.5 rounded text-purple-300 text-xs">{children}</code>

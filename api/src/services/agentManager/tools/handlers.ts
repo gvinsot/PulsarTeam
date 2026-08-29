@@ -108,7 +108,7 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   const [taskId, rawStatus, comment, commits] = call.args;
   // Resolve DB-first (by id or unique prefix), regardless of owner.
   const found = await mgr._resolveTaskRef(taskId);
-  let task: any = found?.task || null;
+  const task: any = found?.task || null;
   const taskAgentId: string | null = found?.agentId ?? null;
 
   // Board-level task (no owner) → delegate to applyTaskUpdate, which owns the

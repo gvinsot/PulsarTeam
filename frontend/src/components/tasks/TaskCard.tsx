@@ -144,7 +144,7 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   // (mobile browsers sometimes don't deliver touchend to the original element).
   useEffect(() => {
     const el = cardRef.current;
-    if (!el) return;
+    if (!el) return undefined;
 
     const handleTouchStart = (e) => {
       if (taskRef.current?.actionRunning) return;

@@ -94,7 +94,7 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
   }, [responses]);
 
   useEffect(() => {
-    if (!socket) return;
+    if (!socket) return undefined;
 
     const handleComplete = (data) => {
       setResponses(data.results || []);

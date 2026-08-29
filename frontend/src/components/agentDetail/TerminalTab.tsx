@@ -250,7 +250,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // ── xterm.js setup ────────────────────────────────────────────────────
   useEffect(() => {
     aliveRef.current = true;
-    if (!containerRef.current) return;
+    if (!containerRef.current) return undefined;
 
     // Smaller font on phones so more columns fit the narrow width (a 14px grid
     // only fits ~40 cols at 360px; 12px fits ~50), reducing how much a wide TUI
@@ -415,7 +415,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // Connect once on mount, reconnect on close. Kept in its own effect so
   // changing `agent.id` or `token` reopens cleanly.
   useEffect(() => {
-    if (!agent.id || !token) return;
+    if (!agent.id || !token) return undefined;
 
     const connect = () => {
       if (!aliveRef.current) return;

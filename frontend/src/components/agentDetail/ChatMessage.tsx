@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   ChevronDown, ChevronRight, ArrowRight, Clock, Scissors,
@@ -116,7 +117,7 @@ function linkifyRawUrls(text) {
 }
 
 // Make all links open in a new tab
-const markdownLinkNewTab = { a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> };
+const markdownLinkNewTab: Components = { a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> };
 
 /** Renders assistant content with @delegate blocks styled as cards */
 export function RichAssistantContent({ text }) {

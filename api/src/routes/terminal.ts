@@ -40,7 +40,7 @@ import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
 // 'coder' alias to 'claudecode' and honours the legacy CODER_SERVICE_URL
 // fallback), so there are no local runner tables here to drift.
 
-const TERMINAL_PATH_RE = /^\/ws\/agents\/([^\/]+)\/terminal$/;
+const TERMINAL_PATH_RE = /^\/ws\/agents\/([^/]+)\/terminal$/;
 
 /**
  * Reject a WebSocket upgrade with a raw HTTP status line and tear down the

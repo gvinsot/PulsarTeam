@@ -660,7 +660,7 @@ export const chatMethods = {
     const earlyLlmConfig = this.resolveLlmConfig(agent);
     const managesContext = earlyLlmConfig.managesContext || false;
     if (managesContext) {
-      console.log(`🧠 [Managed Context] "${agent.name}": model manages its own memory/compaction — skipping history \& compaction`);
+      console.log(`🧠 [Managed Context] "${agent.name}": model manages its own memory/compaction — skipping history & compaction`);
     }
 
     const contextLimit = earlyLlmConfig.contextLength || agent.contextLength || 8192;

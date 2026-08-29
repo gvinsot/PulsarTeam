@@ -25,7 +25,8 @@ export function contactRoutes(agentManager: any) {
       // because international phone formats vary.
       const phoneDigits = phone.replace(/\D/g, '');
       if (phoneDigits.length < 6) {
-        return res.status(400).json({ error: 'Invalid phone number.' });
+        res.status(400).json({ error: 'Invalid phone number.' });
+        return;
       }
 
       // Sanitize inputs (prevent injection in task text)
@@ -88,7 +89,8 @@ export function contactRoutes(agentManager: any) {
       }
 
       if (!targetAgentId) {
-        return res.status(503).json({ error: 'No agents available to receive the request.' });
+        res.status(503).json({ error: 'No agents available to receive the request.' });
+        return;
       }
 
       const source = { type: 'website', name: sName };
@@ -102,7 +104,8 @@ export function contactRoutes(agentManager: any) {
       );
 
       if (!task) {
-        return res.status(500).json({ error: 'Failed to create the request.' });
+        res.status(500).json({ error: 'Failed to create the request.' });
+        return;
       }
 
       res.json({ success: true, message: 'Your request has been submitted successfully.' });

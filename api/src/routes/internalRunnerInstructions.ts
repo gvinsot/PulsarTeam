@@ -19,7 +19,7 @@ export function internalRunnerInstructionsRoutes(agentManager) {
   router.get('/agents/:agentId', async (req, res) => {
     try {
       const agent = agentManager.getById(req.params.agentId);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
 
       const instructions = await agentManager.buildRunnerInstructions(req.params.agentId);
       res.json({

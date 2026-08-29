@@ -159,6 +159,17 @@ docker compose up -d --build   # Build & start all services
 
 Open **http://localhost** — login: `admin` / `swarm2026`
 
+## Contributing
+
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, the type-check/lint/test
+  gates, the TypeScript strictness ratchet, and what to know before touching a
+  Dockerfile
+- **[SECURITY.md](SECURITY.md)** — how to report a vulnerability privately, the
+  security model in place, and the known limitations
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** — Contributor Covenant 2.1
+- **[CHANGELOG.md](CHANGELOG.md)** — notable changes, including the
+  deploy-affecting ones
+
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.

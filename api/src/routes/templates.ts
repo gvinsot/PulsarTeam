@@ -10,7 +10,7 @@ export function templateRoutes() {
 
   router.get('/:id', (req, res) => {
     const template = AGENT_TEMPLATES.find(t => t.id === req.params.id);
-    if (!template) return res.status(404).json({ error: 'Template not found' });
+    if (!template) { res.status(404).json({ error: 'Template not found' }); return; }
     res.json(template);
   });
 

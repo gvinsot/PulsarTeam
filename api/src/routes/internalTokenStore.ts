@@ -63,22 +63,22 @@ export function internalTokenRoutes(provider: OAuthProvider, shape: TokenStoreSh
 
   router.get('/:ownerId', async (req, res) => {
     const { ownerId } = req.params;
-    if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
+    if (!ownerId) { res.status(400).json({ error: 'ownerId required' }); return; }
 
     // DB fallback so a sibling deployment that wrote the token a moment ago
     // (or that this replica started before) is still resolvable.
     const record = await fetchOAuthTokenWithDbFallback(provider, SCOPE_TYPE, ownerId);
-    if (!record) return res.status(404).json({ error: 'Token not found' });
+    if (!record) { res.status(404).json({ error: 'Token not found' }); return; }
 
     res.json(shape.serialize(record));
   });
 
   router.post('/:ownerId', async (req, res) => {
     const { ownerId } = req.params;
-    if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
+    if (!ownerId) { res.status(400).json({ error: 'ownerId required' }); return; }
 
     const parsed = shape.parse(req.body || {});
-    if (!parsed) return res.status(400).json({ error: 'accessToken required' });
+    if (!parsed) { res.status(400).json({ error: 'accessToken required' }); return; }
 
     await storeOAuthToken({
       provider,
@@ -92,7 +92,8 @@ export function internalTokenRoutes(provider: OAuthProvider, shape: TokenStoreSh
 
     // Read back to verify durable persistence so the runner can retry.
     if (!(await verifyPersisted(provider, ownerId, parsed.accessToken))) {
-      return res.status(500).json({ error: 'failed to persist token' });
+      res.status(500).json({ error: 'failed to persist token' });
+      return;
     }
 
     res.json({ ok: true });
@@ -100,7 +101,7 @@ export function internalTokenRoutes(provider: OAuthProvider, shape: TokenStoreSh
 
   router.delete('/:ownerId', async (req, res) => {
     const { ownerId } = req.params;
-    if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
+    if (!ownerId) { res.status(400).json({ error: 'ownerId required' }); return; }
 
     await deleteOAuthToken(provider, SCOPE_TYPE, ownerId);
     res.json({ ok: true });
