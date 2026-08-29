@@ -23,7 +23,7 @@ export type RunnerExecBridge = {
   exec: (
     agentId: string,
     command: string,
-    options?: { cwd?: string; timeout?: number; maxOutput?: number },
+    options?: { cwd?: string; timeout?: number; maxOutput?: number }
   ) => Promise<{ stdout: string; stderr: string }>;
 };
 
@@ -130,7 +130,7 @@ export async function readAttachmentViaRunner(
   bridge: RunnerExecBridge,
   agentId: string,
   filePath: string,
-  opts: AttachmentLimits,
+  opts: AttachmentLimits
 ): Promise<Buffer> {
   const limitLabel = opts.limitLabel || 'limit';
   // Probe size and file type first so we can fail fast with a useful message
@@ -138,7 +138,7 @@ export async function readAttachmentViaRunner(
   const probe = await bridge.exec(
     agentId,
     `if [ ! -e ${shQuote(filePath)} ]; then echo "MISSING"; elif [ ! -f ${shQuote(filePath)} ]; then echo "NOT_A_FILE"; elif [ ! -r ${shQuote(filePath)} ]; then echo "UNREADABLE"; else stat -c %s ${shQuote(filePath)}; fi`,
-    { timeout: 10000 },
+    { timeout: 10000 }
   );
   const probeOut = (probe.stdout || '').trim();
   if (probeOut === 'MISSING') {
@@ -148,16 +148,20 @@ export async function readAttachmentViaRunner(
     throw new Error(`Attachment path "${filePath}" is not a regular file`);
   }
   if (probeOut === 'UNREADABLE') {
-    throw new Error(`Cannot read attachment "${filePath}": permission denied (cross-agent access is blocked)`);
+    throw new Error(
+      `Cannot read attachment "${filePath}": permission denied (cross-agent access is blocked)`
+    );
   }
   const size = parseInt(probeOut, 10);
   if (!Number.isFinite(size) || size < 0) {
-    throw new Error(`Cannot stat attachment "${filePath}" via runner: ${probe.stderr || probeOut || 'unknown error'}`);
+    throw new Error(
+      `Cannot stat attachment "${filePath}" via runner: ${probe.stderr || probeOut || 'unknown error'}`
+    );
   }
   if (size > opts.maxBytes) {
     throw new Error(
       `Attachment "${filePath}" is ${(size / 1024 / 1024).toFixed(1)} MB, ` +
-      `which exceeds the ${opts.maxBytes / 1024 / 1024} MB ${limitLabel}.`
+        `which exceeds the ${opts.maxBytes / 1024 / 1024} MB ${limitLabel}.`
     );
   }
 
@@ -165,11 +169,10 @@ export async function readAttachmentViaRunner(
   // a maxOutput covering that overhead so the runner does not silently
   // truncate the output. (A previous default of 10 000 chars caused
   // attachments to be cut to ~7.3 KB after decoding.)
-  const res = await bridge.exec(
-    agentId,
-    `base64 -w0 ${shQuote(filePath)}`,
-    { timeout: 120000, maxOutput: opts.maxOutput },
-  );
+  const res = await bridge.exec(agentId, `base64 -w0 ${shQuote(filePath)}`, {
+    timeout: 120000,
+    maxOutput: opts.maxOutput,
+  });
   const b64 = (res.stdout || '').replace(/\s+/g, '');
   if (!b64) {
     throw new Error(`Empty content reading "${filePath}" via runner: ${res.stderr || 'no output'}`);
@@ -181,7 +184,7 @@ export async function readAttachmentViaRunner(
   if (buf.length !== size) {
     throw new Error(
       `Attachment "${filePath}" was truncated during transfer ` +
-      `(expected ${size} bytes, got ${buf.length}).`,
+        `(expected ${size} bytes, got ${buf.length}).`
     );
   }
   return buf;
@@ -204,9 +207,9 @@ export async function resolveAttachmentInput(
   opts: AttachmentLimits & {
     agentId?: string | null;
     runnerBridge?: RunnerExecBridge | null;
-  },
+  }
 ): Promise<ResolvedAttachment> {
-  if (!att || (typeof att !== 'object')) {
+  if (!att || typeof att !== 'object') {
     throw new Error('Each attachment must be an object.');
   }
 
@@ -238,7 +241,7 @@ export async function resolveAttachmentInput(
       if (stat.size > opts.maxBytes) {
         throw new Error(
           `Attachment "${userPath}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, ` +
-          `which exceeds the ${opts.maxBytes / 1024 / 1024} MB ${limitLabel}.`
+            `which exceeds the ${opts.maxBytes / 1024 / 1024} MB ${limitLabel}.`
         );
       }
       buf = await fs.readFile(absPath);
@@ -304,12 +307,34 @@ export function buildAttachmentsSchema(extraDescription = '') {
   return z
     .array(
       z.object({
-        path: z.string().optional().describe('Path to the file on the server filesystem. The MCP reads the file and base64-encodes it. Recommended way to attach files.'),
-        filename: z.string().optional().describe('Display filename for the attachment, including extension. Defaults to the basename of "path" when not provided.'),
-        mimeType: z.string().optional().describe('MIME type (e.g. "application/pdf"). Auto-detected from the extension when not provided.'),
-        content: z.string().optional().describe('Optional base64-encoded content (alternative to "path"). Requires "filename".'),
+        path: z
+          .string()
+          .optional()
+          .describe(
+            'Path to the file on the server filesystem. The MCP reads the file and base64-encodes it. Recommended way to attach files.'
+          ),
+        filename: z
+          .string()
+          .optional()
+          .describe(
+            'Display filename for the attachment, including extension. Defaults to the basename of "path" when not provided.'
+          ),
+        mimeType: z
+          .string()
+          .optional()
+          .describe(
+            'MIME type (e.g. "application/pdf"). Auto-detected from the extension when not provided.'
+          ),
+        content: z
+          .string()
+          .optional()
+          .describe(
+            'Optional base64-encoded content (alternative to "path"). Requires "filename".'
+          ),
       })
     )
     .optional()
-    .describe(`Optional list of file attachments. Specify each via "path" (preferred — file is read from disk) or pre-encoded "content".${extraDescription}`);
+    .describe(
+      `Optional list of file attachments. Specify each via "path" (preferred — file is read from disk) or pre-encoded "content".${extraDescription}`
+    );
 }

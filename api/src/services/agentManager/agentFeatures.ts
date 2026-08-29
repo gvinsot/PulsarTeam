@@ -71,7 +71,11 @@ function isPrivateIPv6(ip: string): boolean {
 }
 async function assertPublicUrl(url: string): Promise<void> {
   let parsed: URL;
-  try { parsed = new URL(url); } catch { throw new Error('Invalid URL'); }
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid URL');
+  }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Only http(s) URLs are allowed');
   }
@@ -99,7 +103,10 @@ async function fetchUrlContent(url: string): Promise<string> {
     const res = await fetch(url, {
       signal: controller.signal,
       redirect: 'manual', // prevent cross-host redirect bypassing the SSRF guard
-      headers: { 'User-Agent': 'PulsarTeam/1.0', 'Accept': 'text/plain, text/html, text/markdown, application/json, */*' },
+      headers: {
+        'User-Agent': 'PulsarTeam/1.0',
+        Accept: 'text/plain, text/html, text/markdown, application/json, */*',
+      },
     });
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location');
@@ -110,18 +117,25 @@ async function fetchUrlContent(url: string): Promise<string> {
         const r2 = await fetch(next, {
           signal: controller.signal,
           redirect: 'manual',
-          headers: { 'User-Agent': 'PulsarTeam/1.0', 'Accept': 'text/plain, text/html, text/markdown, application/json, */*' },
+          headers: {
+            'User-Agent': 'PulsarTeam/1.0',
+            Accept: 'text/plain, text/html, text/markdown, application/json, */*',
+          },
         });
         if (!r2.ok) throw new Error(`HTTP ${r2.status} ${r2.statusText}`);
         const text = await r2.text();
         const maxChars = 200_000;
-        return text.length > maxChars ? text.slice(0, maxChars) + '\n\n[... truncated at 200k chars]' : text;
+        return text.length > maxChars
+          ? text.slice(0, maxChars) + '\n\n[... truncated at 200k chars]'
+          : text;
       }
     }
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     const text = await res.text();
     const maxChars = 200_000;
-    return text.length > maxChars ? text.slice(0, maxChars) + '\n\n[... truncated at 200k chars]' : text;
+    return text.length > maxChars
+      ? text.slice(0, maxChars) + '\n\n[... truncated at 200k chars]'
+      : text;
   } finally {
     clearTimeout(timeout);
   }
@@ -129,12 +143,17 @@ async function fetchUrlContent(url: string): Promise<string> {
 
 /** @this {import('./index.js').AgentManager} */
 export const agentFeaturesMethods = {
-
   // ─── RAG Document Management ───────────────────────────────────────
   addRagDocument(this: any, agentId: string, name: string, content: string): any {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
-    const doc = { id: uuidv4(), name, content, type: 'text' as const, addedAt: new Date().toISOString() };
+    const doc = {
+      id: uuidv4(),
+      name,
+      content,
+      type: 'text' as const,
+      addedAt: new Date().toISOString(),
+    };
     agent.ragDocuments.push(doc);
     saveAgent(agent);
     this._emit('agent:updated', this._sanitize(agent));
@@ -146,7 +165,10 @@ export const agentFeaturesMethods = {
     if (!agent) return null;
     const content = await fetchUrlContent(url);
     const doc = {
-      id: uuidv4(), name, url, content,
+      id: uuidv4(),
+      name,
+      url,
+      content,
       type: 'url' as const,
       addedAt: new Date().toISOString(),
       lastFetched: new Date().toISOString(),

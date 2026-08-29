@@ -4,8 +4,13 @@ import { saveAgent, saveTaskToDb, getTaskById, getTasksByAssignee } from '../dat
 
 /** @this {import('./index.js').AgentManager} */
 export const actionLogsMethods = {
-
-  async addActionLog(this: any, agentId: string, type: string, message: string, errorDetail: any = null): Promise<any> {
+  async addActionLog(
+    this: any,
+    agentId: string,
+    type: string,
+    message: string,
+    errorDetail: any = null
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
 
@@ -25,7 +30,7 @@ export const actionLogsMethods = {
       error: errorDetail,
       taskId: null,
       taskTitle: null,
-      timestamp: now.toISOString()
+      timestamp: now.toISOString(),
     };
 
     agent.actionLogs.push(entry);
@@ -43,14 +48,18 @@ export const actionLogsMethods = {
     // its own unassigned task). DB-sourced now that there is no in-memory store;
     // patch the entry + re-emit only when one is found.
     try {
-      const active = (await getTasksByAssignee(agentId)).find((t: any) => this._isActiveTaskStatus(t.status));
+      const active = (await getTasksByAssignee(agentId)).find((t: any) =>
+        this._isActiveTaskStatus(t.status)
+      );
       if (active && !entry.taskId) {
         entry.taskId = active.id;
         entry.taskTitle = active.text?.slice(0, 200) || null;
         saveAgent(agent);
         this._emit('agent:updated', this._sanitize(agent));
       }
-    } catch { /* best-effort task linkage */ }
+    } catch {
+      /* best-effort task linkage */
+    }
 
     return entry;
   },
@@ -64,7 +73,16 @@ export const actionLogsMethods = {
     return true;
   },
 
-  async _saveExecutionLog(this: any, creatorAgentId: string, taskId: string, executorId: string, startMsgIdx: number, startedAt: string, success: boolean = true, actionMode: string = 'decide'): Promise<void> {
+  async _saveExecutionLog(
+    this: any,
+    creatorAgentId: string,
+    taskId: string,
+    executorId: string,
+    startMsgIdx: number,
+    startedAt: string,
+    success: boolean = true,
+    actionMode: string = 'decide'
+  ): Promise<void> {
     const executor = this.agents.get(executorId);
     const creatorAgent = this.agents.get(creatorAgentId);
     if (!executor || !creatorAgent) return;
@@ -97,6 +115,9 @@ export const actionLogsMethods = {
     });
 
     await saveTaskToDb({ ...task, agentId: creatorAgentId });
-    this._emit('task:updated', { agentId: creatorAgentId, task: { ...task, agentId: creatorAgentId } });
+    this._emit('task:updated', {
+      agentId: creatorAgentId,
+      task: { ...task, agentId: creatorAgentId },
+    });
   },
 };

@@ -21,14 +21,26 @@ export default function RoleSelect({
       value={value || ''}
       onChange={e => onChange(e.target.value)}
       className={className}
-      title={value === AUTO_ROLE ? 'The Role Router LLM (Admin Settings) picks the best role for each task' : undefined}
+      title={
+        value === AUTO_ROLE
+          ? 'The Role Router LLM (Admin Settings) picks the best role for each task'
+          : undefined
+      }
     >
       <option value="">{emptyLabel}</option>
       {allowAuto && <option value={AUTO_ROLE}>🤖 Automatic (AI picks role)</option>}
-      {boardRoles.map(r => <option key={r} value={r}>{r}</option>)}
+      {boardRoles.map(r => (
+        <option key={r} value={r}>
+          {r}
+        </option>
+      ))}
       {otherRoles.length > 0 && (
         <optgroup label="Agents on other boards">
-          {otherRoles.map(r => <option key={r} value={r}>{r}</option>)}
+          {otherRoles.map(r => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
         </optgroup>
       )}
     </select>

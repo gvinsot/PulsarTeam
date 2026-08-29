@@ -1,6 +1,18 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Plus, Trash2, FileText, ArrowRightLeft, AlertCircle, BarChart3, Globe, RefreshCw, Link, Save, ScrollText } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  FileText,
+  ArrowRightLeft,
+  AlertCircle,
+  BarChart3,
+  Globe,
+  RefreshCw,
+  Link,
+  Save,
+  ScrollText,
+} from 'lucide-react';
 import { api } from '../../api';
 import { WsEvents } from '../../socketEvents';
 
@@ -56,7 +68,12 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
   // Detaches the in-flight handoff's socket listeners + timeout, so they
   // don't leak (and fire setState) after unmount or consume a later handoff.
   const handoffCleanupRef = useRef(null);
-  useEffect(() => () => { handoffCleanupRef.current?.(); }, []);
+  useEffect(
+    () => () => {
+      handoffCleanupRef.current?.();
+    },
+    []
+  );
 
   const otherAgents = agents.filter(a => a.id !== agent.id && a.enabled !== false);
 
@@ -130,17 +147,17 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
     }
   };
 
-  const handleDelete = async (docId) => {
+  const handleDelete = async docId => {
     if (!confirm('Remove this document?')) return;
     await api.deleteRagDoc(agent.id, docId);
     onRefresh();
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = e => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = ev => {
       setDocName(file.name);
       setDocContent(ev.target?.result as string);
       setShowAdd(true);
@@ -166,14 +183,14 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
           if (timer) clearTimeout(timer);
           handoffCleanupRef.current = null;
         };
-        const onComplete = (data) => {
+        const onComplete = data => {
           // Ignore completions belonging to a different handoff request.
           if (data?.fromId && data?.toId && (data.fromId !== fromId || data.toId !== toId)) return;
           cleanup();
           setResult({ success: true, response: data?.response });
           setSending(false);
         };
-        const onError = (data) => {
+        const onError = data => {
           cleanup();
           setResult({ success: false, error: data?.error || 'Handoff failed' });
           setSending(false);
@@ -200,7 +217,7 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
     }
   };
 
-  const formatNumber = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  const formatNumber = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
   return (
     <div className="p-4 space-y-6">
@@ -212,7 +229,10 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
         </h3>
         <textarea
           value={instructions}
-          onChange={(e) => { setInstructions(e.target.value); setInstructionsSaved(false); }}
+          onChange={e => {
+            setInstructions(e.target.value);
+            setInstructionsSaved(false);
+          }}
           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono resize-none"
           rows={10}
           placeholder="Enter system instructions for this agent..."
@@ -231,7 +251,9 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
             ) : instructionsSaved ? (
               <span className="text-emerald-300">&#10003; Saved</span>
             ) : (
-              <><Save className="w-3 h-3" /> Save</>
+              <>
+                <Save className="w-3 h-3" /> Save
+              </>
             )}
           </button>
         </div>
@@ -250,14 +272,23 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
           </div>
           <div className="p-2.5 bg-dark-800/50 rounded-lg border border-dark-700/50 text-center">
             <p className="text-lg font-bold text-indigo-400">{formatNumber(stats.docsTokens)}</p>
-            <p className="text-[10px] text-dark-500 uppercase tracking-wider">Docs ({stats.docsCount}{stats.urlCount > 0 ? `, ${stats.urlCount} URL` : ''})</p>
+            <p className="text-[10px] text-dark-500 uppercase tracking-wider">
+              Docs ({stats.docsCount}
+              {stats.urlCount > 0 ? `, ${stats.urlCount} URL` : ''})
+            </p>
           </div>
           <div className="p-2.5 bg-dark-800/50 rounded-lg border border-dark-700/50 text-center">
-            <p className="text-lg font-bold text-emerald-400">{formatNumber(stats.historyTokens)}</p>
-            <p className="text-[10px] text-dark-500 uppercase tracking-wider">Chat ({stats.historyMessages} msgs)</p>
+            <p className="text-lg font-bold text-emerald-400">
+              {formatNumber(stats.historyTokens)}
+            </p>
+            <p className="text-[10px] text-dark-500 uppercase tracking-wider">
+              Chat ({stats.historyMessages} msgs)
+            </p>
           </div>
           <div className="p-2.5 bg-dark-800/50 rounded-lg border border-dark-700/50 text-center">
-            <p className="text-lg font-bold text-amber-400">{formatNumber(stats.systemPromptTokens)}</p>
+            <p className="text-lg font-bold text-amber-400">
+              {formatNumber(stats.systemPromptTokens)}
+            </p>
             <p className="text-[10px] text-dark-500 uppercase tracking-wider">System prompt</p>
           </div>
         </div>
@@ -274,17 +305,28 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
           <div className="flex gap-2">
             <label className="px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg text-xs cursor-pointer transition-colors">
               Upload File
-              <input type="file" className="hidden" accept=".txt,.md,.json,.csv,.xml,.yaml,.yml" onChange={handleFileUpload} />
+              <input
+                type="file"
+                className="hidden"
+                accept=".txt,.md,.json,.csv,.xml,.yaml,.yml"
+                onChange={handleFileUpload}
+              />
             </label>
             <button
-              onClick={() => { setShowAddUrl(!showAddUrl); setShowAdd(false); }}
+              onClick={() => {
+                setShowAddUrl(!showAddUrl);
+                setShowAdd(false);
+              }}
               className="flex items-center gap-1 px-3 py-1.5 bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg text-xs transition-colors"
             >
               <Globe className="w-3 h-3" />
               URL
             </button>
             <button
-              onClick={() => { setShowAdd(!showAdd); setShowAddUrl(false); }}
+              onClick={() => {
+                setShowAdd(!showAdd);
+                setShowAddUrl(false);
+              }}
               className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -297,19 +339,22 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
             <input
               type="text"
               value={docName}
-              onChange={(e) => setDocName(e.target.value)}
+              onChange={e => setDocName(e.target.value)}
               className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
               placeholder="Document name"
             />
             <textarea
               value={docContent}
-              onChange={(e) => setDocContent(e.target.value)}
+              onChange={e => setDocContent(e.target.value)}
               className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono resize-none"
               placeholder="Document content..."
               rows={6}
             />
             <div className="flex gap-2 justify-end">
-              <button onClick={() => setShowAdd(false)} className="px-3 py-1.5 text-dark-400 hover:text-dark-200 text-sm">
+              <button
+                onClick={() => setShowAdd(false)}
+                className="px-3 py-1.5 text-dark-400 hover:text-dark-200 text-sm"
+              >
                 Cancel
               </button>
               <button
@@ -328,7 +373,7 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
             <input
               type="text"
               value={docName}
-              onChange={(e) => setDocName(e.target.value)}
+              onChange={e => setDocName(e.target.value)}
               className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
               placeholder="Document name (e.g. API Reference)"
             />
@@ -337,13 +382,14 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
               <input
                 type="url"
                 value={docUrl}
-                onChange={(e) => setDocUrl(e.target.value)}
+                onChange={e => setDocUrl(e.target.value)}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
                 placeholder="https://example.com/docs/api.md"
               />
             </div>
             <p className="text-[10px] text-dark-500">
-              The URL content will be fetched now and automatically refreshed every hour during agent sessions.
+              The URL content will be fetched now and automatically refreshed every hour during
+              agent sessions.
             </p>
             {urlError && (
               <p className="text-xs text-red-400 flex items-center gap-1">
@@ -351,7 +397,13 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
               </p>
             )}
             <div className="flex gap-2 justify-end">
-              <button onClick={() => { setShowAddUrl(false); setUrlError(''); }} className="px-3 py-1.5 text-dark-400 hover:text-dark-200 text-sm">
+              <button
+                onClick={() => {
+                  setShowAddUrl(false);
+                  setUrlError('');
+                }}
+                className="px-3 py-1.5 text-dark-400 hover:text-dark-200 text-sm"
+              >
                 Cancel
               </button>
               <button
@@ -360,9 +412,14 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
                 className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-40 flex items-center gap-1.5"
               >
                 {urlLoading ? (
-                  <><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /> Fetching...</>
+                  <>
+                    <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />{' '}
+                    Fetching...
+                  </>
                 ) : (
-                  <><Globe className="w-3 h-3" /> Add URL</>
+                  <>
+                    <Globe className="w-3 h-3" /> Add URL
+                  </>
                 )}
               </button>
             </div>
@@ -374,13 +431,25 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
             const isUrl = doc.type === 'url';
             const isRefreshing = refreshingDocId === doc.id;
             return (
-              <div key={doc.id} className="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 group">
+              <div
+                key={doc.id}
+                className="p-3 bg-dark-800/50 rounded-lg border border-dark-700/50 group"
+              >
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-2 min-w-0">
-                    {isUrl ? <Globe className="w-4 h-4 text-cyan-400 flex-shrink-0" /> : <FileText className="w-4 h-4 text-indigo-400 flex-shrink-0" />}
+                    {isUrl ? (
+                      <Globe className="w-4 h-4 text-cyan-400 flex-shrink-0" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-indigo-400 flex-shrink-0" />
+                    )}
                     <span className="text-sm font-medium text-dark-200 truncate">{doc.name}</span>
                     {isUrl && (
-                      <a href={doc.url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-cyan-400/70 hover:text-cyan-400 truncate max-w-[200px]">
+                      <a
+                        href={doc.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-cyan-400/70 hover:text-cyan-400 truncate max-w-[200px]"
+                      >
                         {doc.url}
                       </a>
                     )}
@@ -393,7 +462,9 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
                         className="p-1 text-dark-500 hover:text-cyan-400 disabled:opacity-40"
                         title="Refresh from URL"
                       >
-                        <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+                        />
                       </button>
                     )}
                     <button
@@ -406,8 +477,12 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
                 </div>
                 <p className="text-xs text-dark-400 font-mono line-clamp-3">{doc.content}</p>
                 <p className="text-[10px] text-dark-500 mt-1">
-                  {doc.content?.length || 0} chars · ~{formatNumber(estimateTokens(doc.content || ''))} tokens · Added {new Date(doc.addedAt).toLocaleDateString()}
-                  {isUrl && doc.lastFetched && <> · Fetched {new Date(doc.lastFetched).toLocaleString()}</>}
+                  {doc.content?.length || 0} chars · ~
+                  {formatNumber(estimateTokens(doc.content || ''))} tokens · Added{' '}
+                  {new Date(doc.addedAt).toLocaleDateString()}
+                  {isUrl && doc.lastFetched && (
+                    <> · Fetched {new Date(doc.lastFetched).toLocaleString()}</>
+                  )}
                 </p>
               </div>
             );
@@ -418,7 +493,9 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
           <div className="text-center py-6">
             <FileText className="w-7 h-7 mx-auto mb-2 text-dark-500 opacity-30" />
             <p className="text-dark-500 text-sm">No documents attached</p>
-            <p className="text-dark-600 text-xs mt-1">Add reference documents for context-aware responses</p>
+            <p className="text-dark-600 text-xs mt-1">
+              Add reference documents for context-aware responses
+            </p>
           </div>
         )}
       </div>
@@ -444,12 +521,14 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
               <label className="block text-xs text-dark-400 mb-1.5">Target Agent</label>
               <select
                 value={targetId}
-                onChange={(e) => setTargetId(e.target.value)}
+                onChange={e => setTargetId(e.target.value)}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
               >
                 <option value="">Select an agent...</option>
                 {otherAgents.map(a => (
-                  <option key={a.id} value={a.id}>{a.icon} {a.name} ({a.role})</option>
+                  <option key={a.id} value={a.id}>
+                    {a.icon} {a.name} ({a.role})
+                  </option>
                 ))}
               </select>
             </div>
@@ -458,7 +537,7 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
               <label className="block text-xs text-dark-400 mb-1.5">Handoff Context</label>
               <textarea
                 value={context}
-                onChange={(e) => setContext(e.target.value)}
+                onChange={e => setContext(e.target.value)}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 resize-none"
                 placeholder="Describe what the next agent should continue working on..."
                 rows={4}
@@ -484,11 +563,13 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
             </button>
 
             {result && (
-              <div className={`p-3 rounded-lg border text-sm animate-fadeIn ${
-                result.success
-                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                  : 'bg-red-500/10 border-red-500/20 text-red-400'
-              }`}>
+              <div
+                className={`p-3 rounded-lg border text-sm animate-fadeIn ${
+                  result.success
+                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    : 'bg-red-500/10 border-red-500/20 text-red-400'
+                }`}
+              >
                 {result.success ? (
                   <div>
                     <p className="font-medium mb-1">Handoff successful!</p>

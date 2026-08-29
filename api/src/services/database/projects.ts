@@ -117,7 +117,10 @@ export async function deleteProject(id: string): Promise<boolean> {
   return (result.rowCount ?? 0) > 0;
 }
 
-export async function hasProjectBoardAccess(projectId: string, userId: string | null): Promise<boolean> {
+export async function hasProjectBoardAccess(
+  projectId: string,
+  userId: string | null
+): Promise<boolean> {
   const pool = getPool();
   if (!pool || !userId) return false;
   const result = await pool.query(
@@ -142,9 +145,10 @@ export async function getBoardsForProject(projectId: string, userId: string | nu
   const pool = getPool();
   if (!pool) return [];
   if (role !== 'admin' && !userId) return [];
-  const accessFilter = role === 'admin'
-    ? ''
-    : ` AND (
+  const accessFilter =
+    role === 'admin'
+      ? ''
+      : ` AND (
           user_id = $2
           OR EXISTS (
             SELECT 1 FROM board_shares bs

@@ -63,8 +63,8 @@ for why, and do not remove it.
 **Container hardening.** Every service in `docker-compose.yml` runs with
 `cap_drop: ALL`, a minimal `cap_add`, `no-new-privileges:true`, and tmpfs for
 writable paths. As of the image-hardening pass, `api`, `frontend`,
-`mcp-browser` and `office-service` also drop to an unprivileged UID *in the
-image*, so they stay unprivileged when deployed without this compose file.
+`mcp-browser` and `office-service` also drop to an unprivileged UID _in the
+image_, so they stay unprivileged when deployed without this compose file.
 
 **Transport and headers.** HSTS, `X-Content-Type-Options`, `X-Frame-Options`,
 `Referrer-Policy` and a CSP are set in `api/src/index.ts`. Outgoing cookies are

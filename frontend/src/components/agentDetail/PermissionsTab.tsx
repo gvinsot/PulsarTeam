@@ -1,5 +1,21 @@
 import { useState, useEffect } from 'react';
-import { Save, Shield, Globe, HardDrive, Terminal, User, FolderLock, KeyRound, Eye, EyeOff, Trash2, ShieldCheck, Plus, AlertTriangle, Ban } from 'lucide-react';
+import {
+  Save,
+  Shield,
+  Globe,
+  HardDrive,
+  Terminal,
+  User,
+  FolderLock,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Trash2,
+  ShieldCheck,
+  Plus,
+  AlertTriangle,
+  Ban,
+} from 'lucide-react';
 import { api } from '../../api';
 
 const DEFAULT_PERMISSIONS = {
@@ -28,7 +44,9 @@ function ToggleSwitch({ enabled, onChange, disabled = false }) {
       disabled={disabled}
       className={`relative w-10 h-5 rounded-full transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${enabled ? 'bg-indigo-500' : 'bg-dark-600'}`}
     >
-      <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${enabled ? 'translate-x-5' : ''}`} />
+      <span
+        className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${enabled ? 'translate-x-5' : ''}`}
+      />
     </button>
   );
 }
@@ -40,12 +58,8 @@ function PermissionCard({ icon: Icon, title, description, children }) {
         <Icon className="w-4 h-4 text-indigo-400" />
         <h4 className="text-sm font-medium text-dark-200">{title}</h4>
       </div>
-      {description && (
-        <p className="text-[11px] text-dark-500 mb-3">{description}</p>
-      )}
-      <div className="space-y-3">
-        {children}
-      </div>
+      {description && <p className="text-[11px] text-dark-500 mb-3">{description}</p>}
+      <div className="space-y-3">{children}</div>
     </div>
   );
 }
@@ -57,9 +71,7 @@ function PermissionRow({ label, description, children }) {
         <span className="text-sm text-dark-300">{label}</span>
         {description && <p className="text-[11px] text-dark-500 mt-0.5">{description}</p>}
       </div>
-      <div className="flex-shrink-0">
-        {children}
-      </div>
+      <div className="flex-shrink-0">{children}</div>
     </div>
   );
 }
@@ -75,7 +87,7 @@ function TagInput({ tags, onChange, placeholder }) {
     setInput('');
   };
 
-  const removeTag = (idx) => {
+  const removeTag = idx => {
     onChange(tags.filter((_, i) => i !== idx));
   };
 
@@ -83,9 +95,17 @@ function TagInput({ tags, onChange, placeholder }) {
     <div>
       <div className="flex gap-1.5 flex-wrap mb-2">
         {tags.map((tag, i) => (
-          <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 bg-dark-700 text-dark-300 text-xs rounded-md">
+          <span
+            key={i}
+            className="inline-flex items-center gap-1 px-2 py-0.5 bg-dark-700 text-dark-300 text-xs rounded-md"
+          >
             {tag}
-            <button onClick={() => removeTag(i)} className="text-dark-500 hover:text-red-400 ml-0.5">&times;</button>
+            <button
+              onClick={() => removeTag(i)}
+              className="text-dark-500 hover:text-red-400 ml-0.5"
+            >
+              &times;
+            </button>
           </span>
         ))}
       </div>
@@ -93,8 +113,8 @@ function TagInput({ tags, onChange, placeholder }) {
         <input
           type="text"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), addTag())}
           placeholder={placeholder}
           className="flex-1 px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500"
         />
@@ -125,23 +145,44 @@ function CredentialInput({ name, hasValue, onSave, onDelete }) {
             <input
               type={visible ? 'text' : 'password'}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && value.trim()) { onSave(name, value.trim()); setValue(''); setEditing(false); } }}
+              onChange={e => setValue(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && value.trim()) {
+                  onSave(name, value.trim());
+                  setValue('');
+                  setEditing(false);
+                }
+              }}
               placeholder="Enter value..."
               className="flex-1 px-2 py-1 bg-dark-700 border border-dark-500 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500"
               autoFocus
             />
-            <button onClick={() => setVisible(!visible)} className="text-dark-500 hover:text-dark-300">
+            <button
+              onClick={() => setVisible(!visible)}
+              className="text-dark-500 hover:text-dark-300"
+            >
               {visible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
             </button>
             <button
-              onClick={() => { if (value.trim()) { onSave(name, value.trim()); setValue(''); setEditing(false); } }}
+              onClick={() => {
+                if (value.trim()) {
+                  onSave(name, value.trim());
+                  setValue('');
+                  setEditing(false);
+                }
+              }}
               disabled={!value.trim()}
               className="px-2 py-1 bg-indigo-500 hover:bg-indigo-600 text-white text-xs rounded disabled:opacity-40 transition-colors"
             >
               Save
             </button>
-            <button onClick={() => { setValue(''); setEditing(false); }} className="px-2 py-1 bg-dark-600 hover:bg-dark-500 text-dark-300 text-xs rounded transition-colors">
+            <button
+              onClick={() => {
+                setValue('');
+                setEditing(false);
+              }}
+              className="px-2 py-1 bg-dark-600 hover:bg-dark-500 text-dark-300 text-xs rounded transition-colors"
+            >
               Cancel
             </button>
           </>
@@ -151,10 +192,16 @@ function CredentialInput({ name, hasValue, onSave, onDelete }) {
               {hasValue ? '••••••••' : 'not set'}
             </span>
             <div className="ml-auto flex items-center gap-1">
-              <button onClick={() => setEditing(true)} className="px-2 py-1 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs rounded transition-colors">
+              <button
+                onClick={() => setEditing(true)}
+                className="px-2 py-1 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs rounded transition-colors"
+              >
                 {hasValue ? 'Update' : 'Set'}
               </button>
-              <button onClick={() => onDelete(name)} className="p-1 text-dark-500 hover:text-red-400 transition-colors">
+              <button
+                onClick={() => onDelete(name)}
+                className="p-1 text-dark-500 hover:text-red-400 transition-colors"
+              >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -166,16 +213,96 @@ function CredentialInput({ name, hasValue, onSave, onDelete }) {
 }
 
 const BUILTIN_RULES = [
-  { id: 'block-drop-database', name: 'Block DROP DATABASE', enabled: true, pattern: 'DROP\\s+DATABASE', action: 'block' as const, tools: ['run_command', 'mcp_call'], description: 'Prevents dropping entire databases' },
-  { id: 'block-drop-table', name: 'Block DROP TABLE', enabled: true, pattern: 'DROP\\s+TABLE', action: 'block' as const, tools: ['run_command', 'mcp_call'], description: 'Prevents dropping database tables' },
-  { id: 'block-truncate-table', name: 'Block TRUNCATE TABLE', enabled: true, pattern: 'TRUNCATE\\s+TABLE', action: 'block' as const, tools: ['run_command', 'mcp_call'], description: 'Prevents truncating database tables' },
-  { id: 'block-rm-rf-root', name: 'Block rm -rf /', enabled: true, pattern: 'rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive)\\s+(/|/\\*|~|\\$HOME)', action: 'block' as const, tools: ['run_command'], description: 'Prevents recursive deletion of root or home directory' },
-  { id: 'block-format-disk', name: 'Block disk formatting', enabled: true, pattern: '(mkfs|fdisk|dd\\s+if=|wipefs)', action: 'block' as const, tools: ['run_command'], description: 'Prevents disk formatting operations' },
-  { id: 'block-delete-all-rows', name: 'Block DELETE without WHERE', enabled: true, pattern: 'DELETE\\s+FROM\\s+\\S+\\s*;', action: 'block' as const, tools: ['run_command', 'mcp_call'], description: 'Prevents DELETE statements without a WHERE clause' },
-  { id: 'warn-sudo', name: 'Warn on sudo usage', enabled: false, pattern: '\\bsudo\\b', action: 'warn' as const, tools: ['run_command'], description: 'Warns when commands use sudo' },
-  { id: 'block-docker-system-prune', name: 'Block docker system prune', enabled: false, pattern: 'docker\\s+(system|volume)\\s+prune', action: 'block' as const, tools: ['run_command'], description: 'Prevents docker system/volume prune operations' },
-  { id: 'block-git-force-push', name: 'Block git force push', enabled: false, pattern: 'git\\s+push\\s+.*--force', action: 'block' as const, tools: ['run_command'], description: 'Prevents force-pushing to git remotes' },
-  { id: 'block-chmod-777', name: 'Block chmod 777', enabled: false, pattern: 'chmod\\s+777', action: 'warn' as const, tools: ['run_command'], description: 'Warns when setting world-writable permissions' },
+  {
+    id: 'block-drop-database',
+    name: 'Block DROP DATABASE',
+    enabled: true,
+    pattern: 'DROP\\s+DATABASE',
+    action: 'block' as const,
+    tools: ['run_command', 'mcp_call'],
+    description: 'Prevents dropping entire databases',
+  },
+  {
+    id: 'block-drop-table',
+    name: 'Block DROP TABLE',
+    enabled: true,
+    pattern: 'DROP\\s+TABLE',
+    action: 'block' as const,
+    tools: ['run_command', 'mcp_call'],
+    description: 'Prevents dropping database tables',
+  },
+  {
+    id: 'block-truncate-table',
+    name: 'Block TRUNCATE TABLE',
+    enabled: true,
+    pattern: 'TRUNCATE\\s+TABLE',
+    action: 'block' as const,
+    tools: ['run_command', 'mcp_call'],
+    description: 'Prevents truncating database tables',
+  },
+  {
+    id: 'block-rm-rf-root',
+    name: 'Block rm -rf /',
+    enabled: true,
+    pattern: 'rm\\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive)\\s+(/|/\\*|~|\\$HOME)',
+    action: 'block' as const,
+    tools: ['run_command'],
+    description: 'Prevents recursive deletion of root or home directory',
+  },
+  {
+    id: 'block-format-disk',
+    name: 'Block disk formatting',
+    enabled: true,
+    pattern: '(mkfs|fdisk|dd\\s+if=|wipefs)',
+    action: 'block' as const,
+    tools: ['run_command'],
+    description: 'Prevents disk formatting operations',
+  },
+  {
+    id: 'block-delete-all-rows',
+    name: 'Block DELETE without WHERE',
+    enabled: true,
+    pattern: 'DELETE\\s+FROM\\s+\\S+\\s*;',
+    action: 'block' as const,
+    tools: ['run_command', 'mcp_call'],
+    description: 'Prevents DELETE statements without a WHERE clause',
+  },
+  {
+    id: 'warn-sudo',
+    name: 'Warn on sudo usage',
+    enabled: false,
+    pattern: '\\bsudo\\b',
+    action: 'warn' as const,
+    tools: ['run_command'],
+    description: 'Warns when commands use sudo',
+  },
+  {
+    id: 'block-docker-system-prune',
+    name: 'Block docker system prune',
+    enabled: false,
+    pattern: 'docker\\s+(system|volume)\\s+prune',
+    action: 'block' as const,
+    tools: ['run_command'],
+    description: 'Prevents docker system/volume prune operations',
+  },
+  {
+    id: 'block-git-force-push',
+    name: 'Block git force push',
+    enabled: false,
+    pattern: 'git\\s+push\\s+.*--force',
+    action: 'block' as const,
+    tools: ['run_command'],
+    description: 'Prevents force-pushing to git remotes',
+  },
+  {
+    id: 'block-chmod-777',
+    name: 'Block chmod 777',
+    enabled: false,
+    pattern: 'chmod\\s+777',
+    action: 'warn' as const,
+    tools: ['run_command'],
+    description: 'Warns when setting world-writable permissions',
+  },
 ];
 
 const TOOL_OPTIONS = ['run_command', 'write_file', 'append_file', 'mcp_call'];
@@ -212,13 +339,21 @@ export default function PermissionsTab({ agent, onRefresh }) {
   const [saved, setSaved] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
-  const [credentials, setCredentials] = useState<Record<string, { hasValue: boolean }>>(() => agent.credentials || {});
+  const [credentials, setCredentials] = useState<Record<string, { hasValue: boolean }>>(
+    () => agent.credentials || {}
+  );
   const [newCredName, setNewCredName] = useState('');
 
   const [hooksEnabled, setHooksEnabled] = useState(() => agent.toolHooks?.enabled ?? false);
   const [hookRules, setHookRules] = useState(() => buildHookRules(agent));
   const [showNewRule, setShowNewRule] = useState(false);
-  const [newRule, setNewRule] = useState({ name: '', pattern: '', action: 'block' as 'block' | 'warn', tools: ['run_command'], description: '' });
+  const [newRule, setNewRule] = useState({
+    name: '',
+    pattern: '',
+    action: 'block' as 'block' | 'warn',
+    tools: ['run_command'],
+    description: '',
+  });
 
   useEffect(() => {
     setPerms(buildPerms(agent));
@@ -229,7 +364,10 @@ export default function PermissionsTab({ agent, onRefresh }) {
     setSaved(false);
   }, [agent.id]);
 
-  const markDirty = () => { setHasChanges(true); setSaved(false); };
+  const markDirty = () => {
+    setHasChanges(true);
+    setSaved(false);
+  };
 
   const update = (section, key, value) => {
     setPerms(prev => ({
@@ -270,7 +408,11 @@ export default function PermissionsTab({ agent, onRefresh }) {
   const handleDeleteCredential = async (name: string) => {
     try {
       await api.updateAgent(agent.id, { credentials: { [name]: '' } });
-      setCredentials(prev => { const next = { ...prev }; delete next[name]; return next; });
+      setCredentials(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
       onRefresh();
     } catch (err) {
       console.error('Failed to delete credential:', err);
@@ -278,7 +420,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
   };
 
   const toggleHookRule = (id: string) => {
-    setHookRules(prev => prev.map(r => r.id === id ? { ...r, enabled: !r.enabled } : r));
+    setHookRules(prev => prev.map(r => (r.id === id ? { ...r, enabled: !r.enabled } : r)));
     markDirty();
   };
 
@@ -330,9 +472,13 @@ export default function PermissionsTab({ agent, onRefresh }) {
           {saving ? (
             <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
           ) : saved ? (
-            <><span>&#10003;</span> Saved</>
+            <>
+              <span>&#10003;</span> Saved
+            </>
           ) : (
-            <><Save className="w-3.5 h-3.5" /> Save</>
+            <>
+              <Save className="w-3.5 h-3.5" /> Save
+            </>
           )}
         </button>
       </div>
@@ -349,7 +495,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
         >
           <ToggleSwitch
             enabled={perms.linuxUser.runAsRoot}
-            onChange={(v) => update('linuxUser', 'runAsRoot', v)}
+            onChange={v => update('linuxUser', 'runAsRoot', v)}
           />
         </PermissionRow>
       </PermissionCard>
@@ -366,23 +512,30 @@ export default function PermissionsTab({ agent, onRefresh }) {
         >
           <ToggleSwitch
             enabled={perms.network.internetAccess}
-            onChange={(v) => update('network', 'internetAccess', v)}
+            onChange={v => update('network', 'internetAccess', v)}
           />
         </PermissionRow>
         {!perms.network.internetAccess && (
           <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-            <p className="text-[11px] text-amber-400">With internet disabled, the agent cannot: install packages, push/pull from git remotes, call external APIs, or access MCP servers over HTTP.</p>
+            <p className="text-[11px] text-amber-400">
+              With internet disabled, the agent cannot: install packages, push/pull from git
+              remotes, call external APIs, or access MCP servers over HTTP.
+            </p>
           </div>
         )}
         {perms.network.internetAccess && (
           <div>
-            <label className="block text-xs text-dark-400 mb-1.5">Allowed domains (empty = all)</label>
+            <label className="block text-xs text-dark-400 mb-1.5">
+              Allowed domains (empty = all)
+            </label>
             <TagInput
               tags={perms.network.allowedDomains}
-              onChange={(v) => update('network', 'allowedDomains', v)}
+              onChange={v => update('network', 'allowedDomains', v)}
               placeholder="e.g. github.com, api.anthropic.com"
             />
-            <p className="text-[10px] text-dark-500 mt-1">Restrict outbound connections to specific domains. Leave empty to allow all.</p>
+            <p className="text-[10px] text-dark-500 mt-1">
+              Restrict outbound connections to specific domains. Leave empty to allow all.
+            </p>
           </div>
         )}
       </PermissionCard>
@@ -399,7 +552,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
         >
           <ToggleSwitch
             enabled={perms.filesystem.readAccess}
-            onChange={(v) => update('filesystem', 'readAccess', v)}
+            onChange={v => update('filesystem', 'readAccess', v)}
           />
         </PermissionRow>
         <PermissionRow
@@ -408,7 +561,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
         >
           <ToggleSwitch
             enabled={perms.filesystem.writeAccess}
-            onChange={(v) => update('filesystem', 'writeAccess', v)}
+            onChange={v => update('filesystem', 'writeAccess', v)}
           />
         </PermissionRow>
         <div>
@@ -418,10 +571,12 @@ export default function PermissionsTab({ agent, onRefresh }) {
           </label>
           <TagInput
             tags={perms.filesystem.restrictedPaths}
-            onChange={(v) => update('filesystem', 'restrictedPaths', v)}
+            onChange={v => update('filesystem', 'restrictedPaths', v)}
             placeholder="e.g. /etc, /var/log, ~/.ssh"
           />
-          <p className="text-[10px] text-dark-500 mt-1">Paths the agent is not allowed to access. Applied on top of read/write permissions.</p>
+          <p className="text-[10px] text-dark-500 mt-1">
+            Paths the agent is not allowed to access. Applied on top of read/write permissions.
+          </p>
         </div>
       </PermissionCard>
 
@@ -437,7 +592,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
         >
           <ToggleSwitch
             enabled={perms.execution.shellAccess}
-            onChange={(v) => update('execution', 'shellAccess', v)}
+            onChange={v => update('execution', 'shellAccess', v)}
           />
         </PermissionRow>
         <PermissionRow
@@ -446,12 +601,16 @@ export default function PermissionsTab({ agent, onRefresh }) {
         >
           <ToggleSwitch
             enabled={perms.execution.dangerousSkipPermissions}
-            onChange={(v) => update('execution', 'dangerousSkipPermissions', v)}
+            onChange={v => update('execution', 'dangerousSkipPermissions', v)}
           />
         </PermissionRow>
         {!perms.execution.dangerousSkipPermissions && (
           <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-            <p className="text-[11px] text-amber-400">Without --dangerously-skip-permissions, Claude Code will prompt for approval on each tool call, which blocks autonomous execution. Only disable this for interactive/supervised agents.</p>
+            <p className="text-[11px] text-amber-400">
+              Without --dangerously-skip-permissions, Claude Code will prompt for approval on each
+              tool call, which blocks autonomous execution. Only disable this for
+              interactive/supervised agents.
+            </p>
           </div>
         )}
       </PermissionCard>
@@ -466,16 +625,16 @@ export default function PermissionsTab({ agent, onRefresh }) {
           label="Enable tool hooks"
           description="When enabled, all tool calls are checked against the rules below"
         >
-          <ToggleSwitch
-            enabled={hooksEnabled}
-            onChange={toggleHooksEnabled}
-          />
+          <ToggleSwitch enabled={hooksEnabled} onChange={toggleHooksEnabled} />
         </PermissionRow>
 
         {hooksEnabled && (
           <div className="space-y-2 mt-2">
             {hookRules.map(rule => (
-              <div key={rule.id} className={`flex items-start gap-2 p-2.5 rounded-lg border ${rule.enabled ? 'bg-dark-800 border-dark-600/50' : 'bg-dark-800/30 border-dark-700/30 opacity-60'}`}>
+              <div
+                key={rule.id}
+                className={`flex items-start gap-2 p-2.5 rounded-lg border ${rule.enabled ? 'bg-dark-800 border-dark-600/50' : 'bg-dark-800/30 border-dark-700/30 opacity-60'}`}
+              >
                 <div className="mt-0.5">
                   <ToggleSwitch enabled={rule.enabled} onChange={() => toggleHookRule(rule.id)} />
                 </div>
@@ -487,7 +646,9 @@ export default function PermissionsTab({ agent, onRefresh }) {
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                     )}
                     <span className="text-sm text-dark-200 font-medium">{rule.name}</span>
-                    <span className={`px-1.5 py-0.5 text-[10px] rounded ${rule.action === 'block' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                    <span
+                      className={`px-1.5 py-0.5 text-[10px] rounded ${rule.action === 'block' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'}`}
+                    >
                       {rule.action}
                     </span>
                   </div>
@@ -495,12 +656,17 @@ export default function PermissionsTab({ agent, onRefresh }) {
                     <p className="text-[11px] text-dark-500 mt-0.5">{rule.description}</p>
                   )}
                   <div className="flex items-center gap-2 mt-1">
-                    <code className="text-[10px] text-dark-400 bg-dark-700/50 px-1.5 py-0.5 rounded font-mono">{rule.pattern}</code>
+                    <code className="text-[10px] text-dark-400 bg-dark-700/50 px-1.5 py-0.5 rounded font-mono">
+                      {rule.pattern}
+                    </code>
                     <span className="text-[10px] text-dark-500">on {rule.tools.join(', ')}</span>
                   </div>
                 </div>
                 {!BUILTIN_RULE_IDS.has(rule.id) && (
-                  <button onClick={() => deleteHookRule(rule.id)} className="p-1 text-dark-500 hover:text-red-400 transition-colors flex-shrink-0">
+                  <button
+                    onClick={() => deleteHookRule(rule.id)}
+                    className="p-1 text-dark-500 hover:text-red-400 transition-colors flex-shrink-0"
+                  >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 )}
@@ -512,28 +678,30 @@ export default function PermissionsTab({ agent, onRefresh }) {
                 <input
                   type="text"
                   value={newRule.name}
-                  onChange={(e) => setNewRule(prev => ({ ...prev, name: e.target.value }))}
+                  onChange={e => setNewRule(prev => ({ ...prev, name: e.target.value }))}
                   placeholder="Rule name"
                   className="w-full px-2 py-1.5 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500"
                 />
                 <input
                   type="text"
                   value={newRule.pattern}
-                  onChange={(e) => setNewRule(prev => ({ ...prev, pattern: e.target.value }))}
+                  onChange={e => setNewRule(prev => ({ ...prev, pattern: e.target.value }))}
                   placeholder="Regex pattern (e.g. DROP\s+INDEX)"
                   className="w-full px-2 py-1.5 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200 font-mono focus:outline-none focus:border-indigo-500"
                 />
                 <input
                   type="text"
                   value={newRule.description}
-                  onChange={(e) => setNewRule(prev => ({ ...prev, description: e.target.value }))}
+                  onChange={e => setNewRule(prev => ({ ...prev, description: e.target.value }))}
                   placeholder="Description (optional)"
                   className="w-full px-2 py-1.5 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200 focus:outline-none focus:border-indigo-500"
                 />
                 <div className="flex gap-2">
                   <select
                     value={newRule.action}
-                    onChange={(e) => setNewRule(prev => ({ ...prev, action: e.target.value as 'block' | 'warn' }))}
+                    onChange={e =>
+                      setNewRule(prev => ({ ...prev, action: e.target.value as 'block' | 'warn' }))
+                    }
                     className="px-2 py-1.5 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200 focus:outline-none"
                   >
                     <option value="block">Block</option>
@@ -541,14 +709,19 @@ export default function PermissionsTab({ agent, onRefresh }) {
                   </select>
                   <div className="flex-1 flex flex-wrap gap-1">
                     {TOOL_OPTIONS.map(tool => (
-                      <label key={tool} className="flex items-center gap-1 text-[11px] text-dark-400">
+                      <label
+                        key={tool}
+                        className="flex items-center gap-1 text-[11px] text-dark-400"
+                      >
                         <input
                           type="checkbox"
                           checked={newRule.tools.includes(tool)}
-                          onChange={(e) => {
+                          onChange={e => {
                             setNewRule(prev => ({
                               ...prev,
-                              tools: e.target.checked ? [...prev.tools, tool] : prev.tools.filter(t => t !== tool),
+                              tools: e.target.checked
+                                ? [...prev.tools, tool]
+                                : prev.tools.filter(t => t !== tool),
                             }));
                           }}
                           className="rounded border-dark-600"
@@ -559,10 +732,17 @@ export default function PermissionsTab({ agent, onRefresh }) {
                   </div>
                 </div>
                 <div className="flex gap-1.5 justify-end">
-                  <button onClick={() => setShowNewRule(false)} className="px-2.5 py-1 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs rounded transition-colors">Cancel</button>
+                  <button
+                    onClick={() => setShowNewRule(false)}
+                    className="px-2.5 py-1 bg-dark-700 hover:bg-dark-600 text-dark-300 text-xs rounded transition-colors"
+                  >
+                    Cancel
+                  </button>
                   <button
                     onClick={addCustomRule}
-                    disabled={!newRule.name.trim() || !newRule.pattern.trim() || newRule.tools.length === 0}
+                    disabled={
+                      !newRule.name.trim() || !newRule.pattern.trim() || newRule.tools.length === 0
+                    }
                     className="px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 text-white text-xs rounded disabled:opacity-40 transition-colors"
                   >
                     Add Rule
@@ -602,8 +782,8 @@ export default function PermissionsTab({ agent, onRefresh }) {
           <input
             type="text"
             value={newCredName}
-            onChange={(e) => setNewCredName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddCredential())}
+            onChange={e => setNewCredName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddCredential())}
             placeholder="Credential name (e.g. GITHUB_TOKEN)"
             className="flex-1 px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500"
           />
@@ -616,7 +796,9 @@ export default function PermissionsTab({ agent, onRefresh }) {
           </button>
         </div>
         {Object.keys(credentials).length === 0 && (
-          <p className="text-[11px] text-dark-500 italic">No credentials configured. Add a credential above to inject secrets into plugins.</p>
+          <p className="text-[11px] text-dark-500 italic">
+            No credentials configured. Add a credential above to inject secrets into plugins.
+          </p>
         )}
       </PermissionCard>
 
@@ -625,38 +807,70 @@ export default function PermissionsTab({ agent, onRefresh }) {
         <h4 className="text-xs font-medium text-dark-400 mb-2">Active Configuration Summary</h4>
         <div className="grid grid-cols-2 gap-2 text-[11px]">
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${perms.linuxUser.runAsRoot ? 'bg-red-500' : 'bg-emerald-500'}`} />
-            <span className="text-dark-400">User: {perms.linuxUser.runAsRoot ? 'root' : 'agent (default)'}</span>
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${perms.linuxUser.runAsRoot ? 'bg-red-500' : 'bg-emerald-500'}`}
+            />
+            <span className="text-dark-400">
+              User: {perms.linuxUser.runAsRoot ? 'root' : 'agent (default)'}
+            </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${perms.network.internetAccess ? 'bg-emerald-500' : 'bg-red-500'}`} />
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${perms.network.internetAccess ? 'bg-emerald-500' : 'bg-red-500'}`}
+            />
             <span className="text-dark-400">
-              Internet: {perms.network.internetAccess
-                ? (perms.network.allowedDomains.length > 0 ? `${perms.network.allowedDomains.length} domains` : 'unrestricted')
+              Internet:{' '}
+              {perms.network.internetAccess
+                ? perms.network.allowedDomains.length > 0
+                  ? `${perms.network.allowedDomains.length} domains`
+                  : 'unrestricted'
                 : 'disabled'}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${perms.filesystem.readAccess && perms.filesystem.writeAccess ? 'bg-emerald-500' : perms.filesystem.readAccess ? 'bg-amber-500' : 'bg-red-500'}`} />
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${perms.filesystem.readAccess && perms.filesystem.writeAccess ? 'bg-emerald-500' : perms.filesystem.readAccess ? 'bg-amber-500' : 'bg-red-500'}`}
+            />
             <span className="text-dark-400">
-              Filesystem: {perms.filesystem.readAccess && perms.filesystem.writeAccess ? 'read/write' : perms.filesystem.readAccess ? 'read-only' : 'no access'}
-              {perms.filesystem.restrictedPaths.length > 0 ? ` (${perms.filesystem.restrictedPaths.length} restricted)` : ''}
+              Filesystem:{' '}
+              {perms.filesystem.readAccess && perms.filesystem.writeAccess
+                ? 'read/write'
+                : perms.filesystem.readAccess
+                  ? 'read-only'
+                  : 'no access'}
+              {perms.filesystem.restrictedPaths.length > 0
+                ? ` (${perms.filesystem.restrictedPaths.length} restricted)`
+                : ''}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${perms.execution.shellAccess ? 'bg-emerald-500' : 'bg-red-500'}`} />
-            <span className="text-dark-400">Shell: {perms.execution.shellAccess ? 'enabled' : 'disabled'}</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${hooksEnabled ? 'bg-emerald-500' : 'bg-dark-500'}`} />
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${perms.execution.shellAccess ? 'bg-emerald-500' : 'bg-red-500'}`}
+            />
             <span className="text-dark-400">
-              Tool hooks: {hooksEnabled ? `${hookRules.filter(r => r.enabled).length} active rules` : 'disabled'}
+              Shell: {perms.execution.shellAccess ? 'enabled' : 'disabled'}
             </span>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${Object.keys(credentials).length > 0 ? 'bg-emerald-500' : 'bg-dark-500'}`} />
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${hooksEnabled ? 'bg-emerald-500' : 'bg-dark-500'}`}
+            />
             <span className="text-dark-400">
-              Credentials: {Object.keys(credentials).length > 0 ? `${Object.keys(credentials).length} configured` : 'none'}
+              Tool hooks:{' '}
+              {hooksEnabled
+                ? `${hookRules.filter(r => r.enabled).length} active rules`
+                : 'disabled'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${Object.keys(credentials).length > 0 ? 'bg-emerald-500' : 'bg-dark-500'}`}
+            />
+            <span className="text-dark-400">
+              Credentials:{' '}
+              {Object.keys(credentials).length > 0
+                ? `${Object.keys(credentials).length} configured`
+                : 'none'}
             </span>
           </div>
         </div>

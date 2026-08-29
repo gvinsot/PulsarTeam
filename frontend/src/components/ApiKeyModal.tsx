@@ -48,7 +48,7 @@ export default function ApiKeyModal({ onClose, showToast }) {
     }
   };
 
-  const handleCopy = async (text) => {
+  const handleCopy = async text => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
@@ -89,7 +89,9 @@ export default function ApiKeyModal({ onClose, showToast }) {
           <div className="space-y-3">
             <label className="block text-sm font-medium text-dark-300">MCP Endpoints</label>
             <div>
-              <span className="text-xs text-dark-500 mb-1 block">Streamable HTTP (modern clients)</span>
+              <span className="text-xs text-dark-500 mb-1 block">
+                Streamable HTTP (modern clients)
+              </span>
               <div className="flex items-center gap-2">
                 <code className="flex-1 bg-dark-800 border border-dark-700 rounded-lg px-3 py-2 text-sm text-dark-200 font-mono truncate">
                   {mcpEndpoint}
@@ -171,7 +173,8 @@ export default function ApiKeyModal({ onClose, showToast }) {
           ) : (
             <div className="space-y-3">
               <p className="text-sm text-dark-400">
-                No API key configured. Generate one to allow external MCP clients to access your swarm.
+                No API key configured. Generate one to allow external MCP clients to access your
+                swarm.
               </p>
               <button
                 onClick={handleGenerate}
@@ -205,19 +208,31 @@ export default function ApiKeyModal({ onClose, showToast }) {
           {/* REST API */}
           <div className="border-t border-dark-700 pt-4">
             <h3 className="text-sm font-medium text-dark-300 mb-2">REST API</h3>
-            <p className="text-xs text-dark-500 mb-2">Same API key, same header: <code className="text-dark-400">Authorization: Bearer &lt;key&gt;</code></p>
+            <p className="text-xs text-dark-500 mb-2">
+              Same API key, same header:{' '}
+              <code className="text-dark-400">Authorization: Bearer &lt;key&gt;</code>
+            </p>
             <ul className="space-y-1.5 text-xs text-dark-400">
               <li className="flex items-start gap-2">
                 <span className="text-emerald-400 font-mono mt-0.5">GET</span>
-                <span><code className="text-dark-300">/api/swarm/agents</code> — List agents (query: ?project=X&status=idle)</span>
+                <span>
+                  <code className="text-dark-300">/api/swarm/agents</code> — List agents (query:
+                  ?project=X&status=idle)
+                </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-emerald-400 font-mono mt-0.5">GET</span>
-                <span><code className="text-dark-300">/api/swarm/agents/:id</code> — Agent details (id or name)</span>
+                <span>
+                  <code className="text-dark-300">/api/swarm/agents/:id</code> — Agent details (id
+                  or name)
+                </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-amber-400 font-mono mt-0.5">POST</span>
-                <span><code className="text-dark-300">/api/swarm/agents/:id/tasks</code> — Add task {"{"}"task": "...", "project": "...", "status": "backlog|pending"{"}"}</span>
+                <span>
+                  <code className="text-dark-300">/api/swarm/agents/:id/tasks</code> — Add task{' '}
+                  {'{'}"task": "...", "project": "...", "status": "backlog|pending"{'}'}
+                </span>
               </li>
             </ul>
           </div>
@@ -227,7 +242,7 @@ export default function ApiKeyModal({ onClose, showToast }) {
             <h3 className="text-sm font-medium text-dark-300 mb-2">MCP Client Config</h3>
             <p className="text-xs text-dark-500 mb-2">Streamable HTTP (Claude, Cursor, etc.)</p>
             <pre className="bg-dark-800 border border-dark-700 rounded-lg p-3 text-xs font-mono text-dark-300 overflow-x-auto whitespace-pre">
-{`{
+              {`{
   "mcpServers": {
     "pulsar-team": {
       "url": "${mcpEndpoint}",

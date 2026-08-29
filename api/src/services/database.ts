@@ -3,65 +3,147 @@
 
 export { getPool, isDatabaseConnected } from './database/connection.js';
 export { initDatabase } from './database/schema.js';
-export { getAllAgents, getAgentById, saveAgent, deleteAgentFromDb, getAgentsByBoard } from './database/agents.js';
+export {
+  getAllAgents,
+  getAgentById,
+  saveAgent,
+  deleteAgentFromDb,
+  getAgentsByBoard,
+} from './database/agents.js';
 export { getAllSkills, saveSkill, deleteSkillFromDb } from './database/skills.js';
-export { getAllAgentSkills, searchAgentSkills, getAgentSkillById, saveAgentSkill, deleteAgentSkillFromDb } from './database/agentSkills.js';
+export {
+  getAllAgentSkills,
+  searchAgentSkills,
+  getAgentSkillById,
+  saveAgentSkill,
+  deleteAgentSkillFromDb,
+} from './database/agentSkills.js';
 export { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database/mcpServers.js';
 export {
-  getAllProjects, getProjectsForUser, getProjectById, getProjectByName, createProject, updateProject, deleteProject,
-  hasProjectBoardAccess, getBoardsForProject, setBoardProject,
+  getAllProjects,
+  getProjectsForUser,
+  getProjectById,
+  getProjectByName,
+  createProject,
+  updateProject,
+  deleteProject,
+  hasProjectBoardAccess,
+  getBoardsForProject,
+  setBoardProject,
 } from './database/projects.js';
 export type { Project } from './database/projects.js';
 export {
-  getReposForBoard, getReposForProject, getAccessibleBoardRepos,
+  getReposForBoard,
+  getReposForProject,
+  getAccessibleBoardRepos,
 } from './database/boardRepos.js';
 export type { DerivedRepo } from './database/boardRepos.js';
-export {
-  getStoragesForBoard, getStoragesForProject,
-} from './database/boardStorages.js';
+export { getStoragesForBoard, getStoragesForProject } from './database/boardStorages.js';
 export type { DerivedStorage } from './database/boardStorages.js';
 export { getSetting, getSettingAsync, setSetting, loadSettingsCache } from './database/settings.js';
 export {
-  recordTokenUsage, getTokenUsageSummary, getTokenUsageSummaryAsync,
-  getTokenUsageByAgent, getTokenUsageTimeline, getDailyTokenUsage,
-  getTotalTokensByAgentId, getTotalTokensForAgent,
+  recordTokenUsage,
+  getTokenUsageSummary,
+  getTokenUsageSummaryAsync,
+  getTokenUsageByAgent,
+  getTokenUsageTimeline,
+  getDailyTokenUsage,
+  getTotalTokensByAgentId,
+  getTotalTokensForAgent,
   refreshTokenSummaryCache,
 } from './database/tokenUsage.js';
 export {
-  getAllUsers, getUserById, getUserByUsername, createUser, updateUser, deleteUser,
-  getUserByGoogleId, createGoogleUser, linkGoogleId,
-  getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
-  getUserByGitHubId, createGitHubUser, linkGitHubId,
-  countUsers, updateLastSeen, acceptTerms, completeTutorial,
+  getAllUsers,
+  getUserById,
+  getUserByUsername,
+  createUser,
+  updateUser,
+  deleteUser,
+  getUserByGoogleId,
+  createGoogleUser,
+  linkGoogleId,
+  getUserByMicrosoftId,
+  createMicrosoftUser,
+  linkMicrosoftId,
+  getUserByGitHubId,
+  createGitHubUser,
+  linkGitHubId,
+  countUsers,
+  updateLastSeen,
+  acceptTerms,
+  completeTutorial,
 } from './database/users.js';
-export { getAllLlmConfigs, getLlmConfig, saveLlmConfig, deleteLlmConfig } from './database/llmConfigs.js';
+export {
+  getAllLlmConfigs,
+  getLlmConfig,
+  saveLlmConfig,
+  deleteLlmConfig,
+} from './database/llmConfigs.js';
 export { getRunnerConfig, saveRunnerConfig, deleteRunnerConfig } from './database/runnerConfigs.js';
 export {
-  getAllBoards, getBoardsByUser, getBoardById, createBoard, updateBoard, deleteBoard,
+  getAllBoards,
+  getBoardsByUser,
+  getBoardById,
+  createBoard,
+  updateBoard,
+  deleteBoard,
   removeLegacyDefaultBoards,
 } from './database/boards.js';
 export {
-  getBoardShares, getBoardShare, createBoardShare, updateBoardShare, deleteBoardShare,
-  getSharedBoardsForUser, logBoardAudit, getBoardAuditLogs,
+  getBoardShares,
+  getBoardShare,
+  createBoardShare,
+  updateBoardShare,
+  deleteBoardShare,
+  getSharedBoardsForUser,
+  logBoardAudit,
+  getBoardAuditLogs,
 } from './database/boardSharing.js';
 export {
-  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken,
-  deleteOAuthTokensByScope, getOAuthTokensByScope, resolveAccessToken,
-  resolveOAuthTokenRecord, loadOAuthTokens, getOAuthTokenCache,
+  storeOAuthToken,
+  getOAuthToken,
+  hasOAuthToken,
+  deleteOAuthToken,
+  deleteOAuthTokensByScope,
+  getOAuthTokensByScope,
+  resolveAccessToken,
+  resolveOAuthTokenRecord,
+  loadOAuthTokens,
+  getOAuthTokenCache,
 } from './database/oauthTokens.js';
 export type { OAuthProvider, ScopeType, OAuthTokenRecord } from './database/oauthTokens.js';
 export {
   rowToTask,
-  getTasksByAgent, getAllTasks, getAllTaskIds, getTaskById, getTaskByIdPrefix, saveTaskToDb,
-  deleteTaskFromDb, hardDeleteTaskFromDb, restoreTaskFromDb,
-  getDeletedTasks, getDeletedTaskById, deleteTasksByAgent,
-  getTasksForResume, getActiveWorkflowTasks, getInterruptedChainTasks, clearTaskExecutionFlags, updateTaskExecutionStatus,
-  clearActionRunningForAgent, clearAllStaleActionRunning,
-  getActiveTasksByAgent, getTasksByBoard, getBoardWithMostTasksForProject,
-  getTasksByAssignee, getTaskByActionRunningAgent, getActiveTaskForExecutor, hasActiveTask,
-  countActiveTasksForAgent, getRecurringTasks,
-  updateTaskFields, getTasksByStatusAndBoard, searchTasks,
+  getTasksByAgent,
+  getAllTasks,
+  getAllTaskIds,
+  getTaskById,
+  getTaskByIdPrefix,
+  saveTaskToDb,
+  deleteTaskFromDb,
+  hardDeleteTaskFromDb,
+  restoreTaskFromDb,
+  getDeletedTasks,
+  getDeletedTaskById,
+  deleteTasksByAgent,
+  getTasksForResume,
+  getActiveWorkflowTasks,
+  getInterruptedChainTasks,
+  clearTaskExecutionFlags,
+  updateTaskExecutionStatus,
+  clearActionRunningForAgent,
+  clearAllStaleActionRunning,
+  getActiveTasksByAgent,
+  getTasksByBoard,
+  getBoardWithMostTasksForProject,
+  getTasksByAssignee,
+  getTaskByActionRunningAgent,
+  getActiveTaskForExecutor,
+  hasActiveTask,
+  countActiveTasksForAgent,
+  getRecurringTasks,
+  updateTaskFields,
+  getTasksByStatusAndBoard,
+  searchTasks,
 } from './database/tasks.js';
-export {
-  tryAcquireTaskLock, releaseTaskLock, heldTaskLockCount,
-} from './database/locks.js';
+export { tryAcquireTaskLock, releaseTaskLock, heldTaskLockCount } from './database/locks.js';

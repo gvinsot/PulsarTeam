@@ -1,5 +1,8 @@
 import express from 'express';
-import { getMicrosoftOAuthConfig, MICROSOFT_PLUGIN_REDIRECT_PATH } from '../services/microsoftOAuthConfig.js';
+import {
+  getMicrosoftOAuthConfig,
+  MICROSOFT_PLUGIN_REDIRECT_PATH,
+} from '../services/microsoftOAuthConfig.js';
 import type { MicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
 import { sendOAuthResult } from './oauthHelper.js';
 import { runOAuthCodeExchange } from './oauthCallback.js';
@@ -38,7 +41,7 @@ export function generateMicrosoftOAuthState(
   username: string,
   agentId: string | null = null,
   boardId: string | null = null,
-  consumerFlow: boolean = false,
+  consumerFlow: boolean = false
 ): string {
   return oauthStates.generate({ service, username, agentId, boardId, consumerFlow });
 }
@@ -81,9 +84,12 @@ const OAUTH_CALLBACK_MESSAGE_TYPE = 'microsoft-oauth-callback';
 // Best-effort service recovery for errors that arrive before state
 // verification, so the opener can route the message to the right widget.
 // Reads the (signed) state payload without requiring a valid flow.
-function peekServiceFromState(state: string | undefined): { service: MicrosoftService } | undefined {
+function peekServiceFromState(
+  state: string | undefined
+): { service: MicrosoftService } | undefined {
   const entry = oauthStates.peek(state);
-  if (entry?.service === 'onedrive' || entry?.service === 'outlook') return { service: entry.service };
+  if (entry?.service === 'onedrive' || entry?.service === 'outlook')
+    return { service: entry.service };
   // untaggable — the popup itself still displays the error
   return undefined;
 }
@@ -99,15 +105,24 @@ export async function handleMicrosoftOAuthCallback(req: express.Request, res: ex
     tokenUrl: (state, config) =>
       `https://login.microsoftonline.com/${state.consumerFlow ? 'consumers' : config.tenantId}/oauth2/v2.0/token`,
     redirectPath: MICROSOFT_PLUGIN_REDIRECT_PATH,
-    logLabel: (state) => PROVIDER_LABEL[state.service] || 'Microsoft',
-    fetchProfileEmail: (accessToken) => fetchUserEmail(accessToken),
+    logLabel: state => PROVIDER_LABEL[state.service] || 'Microsoft',
+    fetchProfileEmail: accessToken => fetchUserEmail(accessToken),
     buildMeta: (state, email) => ({ email, consumerFlow: state.consumerFlow || undefined }),
     sendSuccess: (res2, state, email) =>
-      sendOAuthResult(res2, PROVIDER_LABEL[state.service] || 'Microsoft', OAUTH_CALLBACK_MESSAGE_TYPE, true, null, { service: state.service, email }),
+      sendOAuthResult(
+        res2,
+        PROVIDER_LABEL[state.service] || 'Microsoft',
+        OAUTH_CALLBACK_MESSAGE_TYPE,
+        true,
+        null,
+        { service: state.service, email }
+      ),
     sendError: (res2, stage, consumed, rawState, error) => {
       if (consumed) {
         const providerLabel = PROVIDER_LABEL[consumed.service] || 'Microsoft';
-        return sendOAuthResult(res2, providerLabel, OAUTH_CALLBACK_MESSAGE_TYPE, false, error, { service: consumed.service });
+        return sendOAuthResult(res2, providerLabel, OAUTH_CALLBACK_MESSAGE_TYPE, false, error, {
+          service: consumed.service,
+        });
       }
       // Early errors: best-effort service recovery via the unverified peek so
       // the opener can route the popup message — EXCEPT on bad_state, which is

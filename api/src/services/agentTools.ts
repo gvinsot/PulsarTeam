@@ -100,7 +100,8 @@ function sanitizeArg(arg) {
   if (!arg) return arg;
   arg = arg.trim();
   if (arg.length >= 2) {
-    const first = arg[0], last = arg[arg.length - 1];
+    const first = arg[0],
+      last = arg[arg.length - 1];
     if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
       arg = arg.slice(1, -1);
     }
@@ -112,14 +113,19 @@ function sanitizeArg(arg) {
 function normalizePath(pathArg) {
   let p = sanitizeArg(pathArg);
   // Decode any URL-encoded characters that could bypass path checks
-  try { p = decodeURIComponent(p); } catch {}
+  try {
+    p = decodeURIComponent(p);
+  } catch {}
   // Strip /workspace/<project>/ or /projects/<project>/ prefixes
   p = p.replace(/^\/workspace\/[^/]+\//, '');
   p = p.replace(/^\/projects\/[^/]+\//, '');
   // Strip any remaining leading slashes
   if (p.startsWith('/')) p = p.replace(/^\/+/, '');
   // Remove ALL path traversal segments (.. in any form)
-  p = p.split('/').filter(seg => seg !== '..' && seg !== '.').join('/');
+  p = p
+    .split('/')
+    .filter(seg => seg !== '..' && seg !== '.')
+    .join('/');
   // Block null bytes (classic injection vector)
   p = p.replace(/\0/g, '');
   // Validate the result stays within project — no absolute paths after normalization
@@ -132,21 +138,36 @@ function normalizePath(pathArg) {
 
 // Blocked shell command patterns — prevent agents from escaping sandbox or exfiltrating data
 const BLOCKED_COMMAND_PATTERNS = [
-  /\bshutdown\b/, /\breboot\b/, /\bpoweroff\b/, /\bhalt\b/,
-  /\bmkfs\b/, /\bfdisk\b/,
-  /\biptables\b/, /\bnft\b/, /\bufw\b/,
-  /\buseradd\b/, /\buserdel\b/, /\busermod\b/, /\bpasswd\b/,
+  /\bshutdown\b/,
+  /\breboot\b/,
+  /\bpoweroff\b/,
+  /\bhalt\b/,
+  /\bmkfs\b/,
+  /\bfdisk\b/,
+  /\biptables\b/,
+  /\bnft\b/,
+  /\bufw\b/,
+  /\buseradd\b/,
+  /\buserdel\b/,
+  /\busermod\b/,
+  /\bpasswd\b/,
   /\bcrontab\b/,
-  /\bsystemctl\b/, /\bservice\s/,
+  /\bsystemctl\b/,
+  /\bservice\s/,
   /\/proc\/self\/environ/,
   /\/proc\/\d+\/environ/,
   /\/dev\/tcp\//,
   /\/dev\/udp\//,
   /\bbash\s+-i\s+>&/,
-  /\bnc\s+-l/, /\bncat\s+-l/, /\bsocat\s/,
-  /\bnmap\s/, /\bmasscan\s/,
-  /\btcpdump\b/, /\btshark\b/,
-  /\bmkfifo\s/, /\bmknod\s/,
+  /\bnc\s+-l/,
+  /\bncat\s+-l/,
+  /\bsocat\s/,
+  /\bnmap\s/,
+  /\bmasscan\s/,
+  /\btcpdump\b/,
+  /\btshark\b/,
+  /\bmkfifo\s/,
+  /\bmknod\s/,
 ];
 
 function validateCommand(command: string): string | null {
@@ -178,28 +199,46 @@ export async function executeTool(toolName, args, projectPath, provider, agentId
     try {
       await provider.ensureProject(agentId, projectPath || null);
     } catch (initErr) {
-      console.error(`⚠️  [Tool] Provider lazy init failed for agent ${agentId.slice(0, 8)}: ${initErr.message}`);
+      console.error(
+        `⚠️  [Tool] Provider lazy init failed for agent ${agentId.slice(0, 8)}: ${initErr.message}`
+      );
     }
     if (!provider.hasEnvironment(agentId)) {
-      return { success: false, error: 'Execution environment is not available. Please report this error.' };
+      return {
+        success: false,
+        error: 'Execution environment is not available. Please report this error.',
+      };
     }
   }
 
   // Verify execution environment matches the expected project
   const envProject = provider.getProject(agentId);
   if (projectPath && envProject && envProject !== projectPath) {
-    console.error(`🚫 [Tool] Project mismatch! Agent ${agentId.slice(0, 8)} expects "${projectPath}" but execution env has "${envProject}". Blocking tool to prevent wrong-project execution.`);
-    return { success: false, error: `Project mismatch: expected "${projectPath}" but execution environment is on "${envProject}". The task cannot safely execute. Please report this error.` };
+    console.error(
+      `🚫 [Tool] Project mismatch! Agent ${agentId.slice(0, 8)} expects "${projectPath}" but execution env has "${envProject}". Blocking tool to prevent wrong-project execution.`
+    );
+    return {
+      success: false,
+      error: `Project mismatch: expected "${projectPath}" but execution environment is on "${envProject}". The task cannot safely execute. Please report this error.`,
+    };
   }
 
   const cleanArgs = args.map(a => sanitizeArg(a));
 
-  console.log(`🔧 [Tool] ${toolName}(${cleanArgs.map(a => a?.length > 100 ? a.slice(0, 100) + '...' : a).join(', ')}) | agent=${agentId.slice(0, 8)} project=${projectPath}`);
+  console.log(
+    `🔧 [Tool] ${toolName}(${cleanArgs.map(a => (a?.length > 100 ? a.slice(0, 100) + '...' : a)).join(', ')}) | agent=${agentId.slice(0, 8)} project=${projectPath}`
+  );
 
   try {
     switch (toolName) {
       case 'read_file':
-        return await toolReadFile(provider, agentId, normalizePath(cleanArgs[0]), cleanArgs[1], cleanArgs[2]);
+        return await toolReadFile(
+          provider,
+          agentId,
+          normalizePath(cleanArgs[0]),
+          cleanArgs[1],
+          cleanArgs[2]
+        );
 
       case 'write_file':
         return await toolWriteFile(provider, agentId, normalizePath(cleanArgs[0]), cleanArgs[1]);
@@ -226,7 +265,16 @@ export async function executeTool(toolName, args, projectPath, provider, agentId
 
 // ─── Tool implementations (all via execution provider) ──────────────────
 
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']);
+const IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.bmp',
+  '.ico',
+]);
 
 function getFileExtension(path) {
   const dot = path.lastIndexOf('.');
@@ -240,21 +288,37 @@ async function toolReadFile(provider, agentId, filePath, startLineArg, endLineAr
   try {
     const ext = getFileExtension(filePath);
     if (IMAGE_EXTENSIONS.has(ext) && ext !== '.svg') {
-      const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp', '.ico': 'image/x-icon' };
+      const mimeMap = {
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.ico': 'image/x-icon',
+      };
       const mediaType = mimeMap[ext] || 'image/png';
       try {
-        const result = await provider.exec(agentId, `base64 -w0 "${filePath.replace(/"/g, '\\"')}"`, { timeout: 30000 });
+        const result = await provider.exec(
+          agentId,
+          `base64 -w0 "${filePath.replace(/"/g, '\\"')}"`,
+          { timeout: 30000 }
+        );
         const b64 = ((result.stdout || '') + (result.stderr || '')).trim();
         if (b64 && b64.length < 10 * 1024 * 1024) {
           return {
             success: true,
-            result: `[Image file: ${filePath} (${mediaType}, ${Math.round(b64.length * 3 / 4 / 1024)}KB)]`,
+            result: `[Image file: ${filePath} (${mediaType}, ${Math.round((b64.length * 3) / 4 / 1024)}KB)]`,
             images: [{ data: b64, mediaType }],
-            meta: { path: filePath, isImage: true }
+            meta: { path: filePath, isImage: true },
           };
         }
       } catch {}
-      return { success: true, result: `[Binary image file: ${filePath} — too large to display or base64 failed]`, meta: { path: filePath, isImage: true } };
+      return {
+        success: true,
+        result: `[Binary image file: ${filePath} — too large to display or base64 failed]`,
+        meta: { path: filePath, isImage: true },
+      };
     }
 
     const content = await provider.readFile(agentId, filePath);
@@ -266,12 +330,15 @@ async function toolReadFile(provider, agentId, filePath, startLineArg, endLineAr
 
     if (!isNaN(startLine) && startLine > 0) {
       const start = Math.max(0, startLine - 1);
-      const end = !isNaN(endLine) && endLine >= startLine ? Math.min(endLine, allLines.length) : allLines.length;
+      const end =
+        !isNaN(endLine) && endLine >= startLine
+          ? Math.min(endLine, allLines.length)
+          : allLines.length;
       const sliced = allLines.slice(start, end);
       return {
         success: true,
         result: sliced.join('\n'),
-        meta: { path: filePath, startLine, endLine: end, totalLines: allLines.length }
+        meta: { path: filePath, startLine, endLine: end, totalLines: allLines.length },
       };
     }
 
@@ -282,14 +349,14 @@ async function toolReadFile(provider, agentId, filePath, startLineArg, endLineAr
       return {
         success: true,
         result: `${truncated}\n\n--- TRUNCATED: showing ${MAX_LINES}/${allLines.length} lines. Use @read_file(${filePath}, startLine, endLine) to read specific sections. ---`,
-        meta: { path: filePath, size: content.length, lines: allLines.length, truncated: true }
+        meta: { path: filePath, size: content.length, lines: allLines.length, truncated: true },
       };
     }
 
     return {
       success: true,
       result: content,
-      meta: { path: filePath, size: content.length, lines: allLines.length }
+      meta: { path: filePath, size: content.length, lines: allLines.length },
     };
   } catch (err) {
     if (err.message.includes('No such file')) {
@@ -307,7 +374,7 @@ async function toolWriteFile(provider, agentId, filePath, content) {
   return {
     success: true,
     result: `File written: ${filePath} (${content.length} bytes)`,
-    meta: { path: filePath, size: content.length }
+    meta: { path: filePath, size: content.length },
   };
 }
 
@@ -316,7 +383,7 @@ async function toolListDir(provider, agentId, dirPath) {
   return {
     success: true,
     result: output || '(empty directory)',
-    meta: { path: dirPath }
+    meta: { path: dirPath },
   };
 }
 
@@ -325,7 +392,7 @@ async function toolSearchFiles(provider, agentId, pattern, query) {
   return {
     success: true,
     result: output || 'No matches found',
-    meta: { query }
+    meta: { query },
   };
 }
 
@@ -335,35 +402,38 @@ async function toolSearchFiles(provider, agentId, pattern, query) {
 
 const RTK_REWRITE_RULES = [
   // git commands (read-only)
-  { pattern: /^git\s+status\b/, rewrite: (cmd) => cmd.replace(/^git\s+status/, 'rtk git status') },
-  { pattern: /^git\s+diff\b/, rewrite: (cmd) => cmd.replace(/^git\s+diff/, 'rtk git diff') },
-  { pattern: /^git\s+log\b/, rewrite: (cmd) => cmd.replace(/^git\s+log/, 'rtk git log') },
+  { pattern: /^git\s+status\b/, rewrite: cmd => cmd.replace(/^git\s+status/, 'rtk git status') },
+  { pattern: /^git\s+diff\b/, rewrite: cmd => cmd.replace(/^git\s+diff/, 'rtk git diff') },
+  { pattern: /^git\s+log\b/, rewrite: cmd => cmd.replace(/^git\s+log/, 'rtk git log') },
   // file listing
-  { pattern: /^ls\b/, rewrite: (cmd) => cmd.replace(/^ls/, 'rtk ls') },
-  { pattern: /^tree\b/, rewrite: (cmd) => cmd.replace(/^tree/, 'rtk ls') },
+  { pattern: /^ls\b/, rewrite: cmd => cmd.replace(/^ls/, 'rtk ls') },
+  { pattern: /^tree\b/, rewrite: cmd => cmd.replace(/^tree/, 'rtk ls') },
   // search
-  { pattern: /^grep\s/, rewrite: (cmd) => cmd.replace(/^grep/, 'rtk grep') },
-  { pattern: /^rg\s/, rewrite: (cmd) => cmd.replace(/^rg/, 'rtk grep') },
+  { pattern: /^grep\s/, rewrite: cmd => cmd.replace(/^grep/, 'rtk grep') },
+  { pattern: /^rg\s/, rewrite: cmd => cmd.replace(/^rg/, 'rtk grep') },
   // find
-  { pattern: /^find\s/, rewrite: (cmd) => cmd.replace(/^find/, 'rtk find') },
+  { pattern: /^find\s/, rewrite: cmd => cmd.replace(/^find/, 'rtk find') },
   // test runners — failures-only output
-  { pattern: /^(npm\s+test|npx\s+jest|npx\s+vitest|npx\s+mocha|pytest|cargo\s+test|go\s+test)\b/, rewrite: (cmd) => `rtk test ${cmd}` },
+  {
+    pattern: /^(npm\s+test|npx\s+jest|npx\s+vitest|npx\s+mocha|pytest|cargo\s+test|go\s+test)\b/,
+    rewrite: cmd => `rtk test ${cmd}`,
+  },
   // build commands
-  { pattern: /^(npm\s+run\s+build|cargo\s+build|go\s+build|make)\b/, rewrite: (cmd) => `rtk ${cmd}` },
+  { pattern: /^(npm\s+run\s+build|cargo\s+build|go\s+build|make)\b/, rewrite: cmd => `rtk ${cmd}` },
   // linting
-  { pattern: /^(npx\s+eslint|eslint|golangci-lint)\b/, rewrite: (cmd) => `rtk lint ${cmd}` },
+  { pattern: /^(npx\s+eslint|eslint|golangci-lint)\b/, rewrite: cmd => `rtk lint ${cmd}` },
 ];
 
 // Commands that should NEVER be rewritten (write operations, interactive, piped)
 const RTK_SKIP_PATTERNS = [
-  /\|/,              // piped commands — RTK can't wrap pipelines
-  /&&/,              // chained commands
-  /;/,               // sequential commands
+  /\|/, // piped commands — RTK can't wrap pipelines
+  /&&/, // chained commands
+  /;/, // sequential commands
   /^git\s+(add|commit|push|pull|merge|rebase|checkout|reset|stash|clone)\b/,
   /^(npm\s+install|npm\s+ci|yarn|pnpm|pip|apt|apk)\b/,
   /^(docker|kubectl|curl|wget)\b/,
   /^(cat|head|tail|echo|printf|mkdir|rm|cp|mv|touch|chmod|chown)\b/,
-  /^rtk\b/,          // already rewritten
+  /^rtk\b/, // already rewritten
 ];
 
 /**
@@ -403,24 +473,38 @@ async function toolRunCommand(provider, agentId, command) {
   }
 
   try {
-    const { stdout, stderr } = await provider.exec(agentId, effectiveCommand, { timeout: COMMAND_TIMEOUT });
+    const { stdout, stderr } = await provider.exec(agentId, effectiveCommand, {
+      timeout: COMMAND_TIMEOUT,
+    });
     const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(0, 10000);
     return {
       success: true,
       result: output,
-      meta: { command, rtk: useRtk, truncated: (stdout || '').length > 10000 }
+      meta: { command, rtk: useRtk, truncated: (stdout || '').length > 10000 },
     };
   } catch (err) {
     // If RTK command failed, retry with original command
     if (useRtk) {
-      console.log(`⚡ [RTK] Rewritten command failed, falling back to original: "${command.slice(0, 80)}"`);
+      console.log(
+        `⚡ [RTK] Rewritten command failed, falling back to original: "${command.slice(0, 80)}"`
+      );
       try {
-        const { stdout, stderr } = await provider.exec(agentId, command, { timeout: COMMAND_TIMEOUT });
-        const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(0, 10000);
+        const { stdout, stderr } = await provider.exec(agentId, command, {
+          timeout: COMMAND_TIMEOUT,
+        });
+        const output = ([stdout, stderr].filter(Boolean).join('\n') || '(no output)').slice(
+          0,
+          10000
+        );
         return {
           success: true,
           result: output,
-          meta: { command, rtk: false, rtkFallback: true, truncated: (stdout || '').length > 10000 }
+          meta: {
+            command,
+            rtk: false,
+            rtkFallback: true,
+            truncated: (stdout || '').length > 10000,
+          },
         };
       } catch (fallbackErr) {
         const output = (fallbackErr.stdout || '') + (fallbackErr.stderr || '');
@@ -428,7 +512,7 @@ async function toolRunCommand(provider, agentId, command) {
           return {
             success: true,
             result: output.slice(0, 10000),
-            meta: { command, exitCode: fallbackErr.code || 1 }
+            meta: { command, exitCode: fallbackErr.code || 1 },
           };
         }
         return { success: false, error: fallbackErr.message, result: '' };
@@ -440,13 +524,13 @@ async function toolRunCommand(provider, agentId, command) {
       return {
         success: true,
         result: output.slice(0, 10000),
-        meta: { command, exitCode: err.code || 1 }
+        meta: { command, exitCode: err.code || 1 },
       };
     }
     return {
       success: false,
       error: err.message,
-      result: ''
+      result: '',
     };
   }
 }
@@ -459,7 +543,7 @@ async function toolAppendFile(provider, agentId, filePath, content) {
   return {
     success: true,
     result: `Content appended to: ${filePath}`,
-    meta: { path: filePath }
+    meta: { path: filePath },
   };
 }
 
@@ -482,40 +566,94 @@ async function toolAppendFile(provider, agentId, filePath, content) {
 //    The `||` alias chains are copied verbatim (do NOT switch to ?? — a numeric
 //    0 start_line must still coerce to '').
 type ToolArity = 'single' | 'read' | 'multi' | 'three';
-interface ToolSpec { arity: ToolArity; fromJson?: (args: any) => any[] }
+interface ToolSpec {
+  arity: ToolArity;
+  fromJson?: (args: any) => any[];
+}
 
 const TOOL_SPECS: Record<string, ToolSpec> = {
-  read_file:               { arity: 'read',   fromJson: a => [a.path || a.file || a.filename || '', a.start_line || a.startLine || '', a.end_line || a.endLine || ''] },
-  list_dir:                { arity: 'single', fromJson: a => [a.path || a.directory || a.dir || '.'] },
-  run_command:             { arity: 'single', fromJson: a => [a.command || a.cmd || ''] },
-  write_file:              { arity: 'multi',  fromJson: a => [a.path || a.file || '', a.content || ''] },
-  append_file:             { arity: 'multi',  fromJson: a => [a.path || a.file || '', a.content || ''] },
-  search_files:            { arity: 'multi',  fromJson: a => [a.pattern || a.glob || '*', a.query || a.search || ''] },
-  report_error:            { arity: 'single', fromJson: a => [a.description || a.message || a.error || ''] },
-  update_task:             { arity: 'three',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.status || '', a.comment || a.details || a.detail || a.message || '', a.commits || ''] },
-  move_task_to_board:      { arity: 'multi',  fromJson: a => [a.taskId || a.task_id || a.id || '', a.boardId || a.board_id || ''] },
-  delete_task:             { arity: 'single', fromJson: a => [a.taskId || a.task_id || a.id || ''] },
-  list_boards:             { arity: 'single', fromJson: () => [] },
-  list_tasks:              { arity: 'multi',  fromJson: a => [a.status || '', a.boardId || a.board_id || ''] },
-  list_my_tasks:           { arity: 'single', fromJson: () => [] },
-  list_projects:           { arity: 'single' },
-  check_status:            { arity: 'single', fromJson: () => [] },
-  mcp_call:                { arity: 'three',  fromJson: a => [a.server || a.serverName || '', a.tool || a.toolName || '', JSON.stringify(a.arguments || a.args || {})] },
+  read_file: {
+    arity: 'read',
+    fromJson: a => [
+      a.path || a.file || a.filename || '',
+      a.start_line || a.startLine || '',
+      a.end_line || a.endLine || '',
+    ],
+  },
+  list_dir: { arity: 'single', fromJson: a => [a.path || a.directory || a.dir || '.'] },
+  run_command: { arity: 'single', fromJson: a => [a.command || a.cmd || ''] },
+  write_file: { arity: 'multi', fromJson: a => [a.path || a.file || '', a.content || ''] },
+  append_file: { arity: 'multi', fromJson: a => [a.path || a.file || '', a.content || ''] },
+  search_files: {
+    arity: 'multi',
+    fromJson: a => [a.pattern || a.glob || '*', a.query || a.search || ''],
+  },
+  report_error: { arity: 'single', fromJson: a => [a.description || a.message || a.error || ''] },
+  update_task: {
+    arity: 'three',
+    fromJson: a => [
+      a.taskId || a.task_id || a.id || '',
+      a.status || '',
+      a.comment || a.details || a.detail || a.message || '',
+      a.commits || '',
+    ],
+  },
+  move_task_to_board: {
+    arity: 'multi',
+    fromJson: a => [a.taskId || a.task_id || a.id || '', a.boardId || a.board_id || ''],
+  },
+  delete_task: { arity: 'single', fromJson: a => [a.taskId || a.task_id || a.id || ''] },
+  list_boards: { arity: 'single', fromJson: () => [] },
+  list_tasks: { arity: 'multi', fromJson: a => [a.status || '', a.boardId || a.board_id || ''] },
+  list_my_tasks: { arity: 'single', fromJson: () => [] },
+  list_projects: { arity: 'single' },
+  check_status: { arity: 'single', fromJson: () => [] },
+  mcp_call: {
+    arity: 'three',
+    fromJson: a => [
+      a.server || a.serverName || '',
+      a.tool || a.toolName || '',
+      JSON.stringify(a.arguments || a.args || {}),
+    ],
+  },
   // Convenience aliases for PulsarCD tools — single @-arg, whole JSON in JSON form.
-  get_action_status:       { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  build_stack:             { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  test_stack:              { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  deploy_stack:            { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  list_stacks:             { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  list_containers:         { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  list_computers:          { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  search_logs:             { arity: 'single', fromJson: a => [JSON.stringify(a)] },
-  get_log_metadata:        { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  get_action_status: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  build_stack: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  test_stack: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  deploy_stack: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  list_stacks: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  list_containers: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  list_computers: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  search_logs: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
+  get_log_metadata: { arity: 'single', fromJson: a => [JSON.stringify(a)] },
   // Agent skills management tools.
-  search_skill:            { arity: 'single', fromJson: a => [a.query || a.search || a.keyword || ''] },
-  create_skill:            { arity: 'multi',  fromJson: a => [a.name || '', JSON.stringify({ description: a.description || '', category: a.category || 'general', instructions: a.instructions || '', mcpServerIds: a.mcpServerIds || [] })] },
-  update_skill:            { arity: 'multi',  fromJson: a => [a.id || '', JSON.stringify({ name: a.name, description: a.description, category: a.category, instructions: a.instructions, mcpServerIds: a.mcpServerIds })] },
-  delete_skill:            { arity: 'single', fromJson: a => [a.id || ''] },
+  search_skill: { arity: 'single', fromJson: a => [a.query || a.search || a.keyword || ''] },
+  create_skill: {
+    arity: 'multi',
+    fromJson: a => [
+      a.name || '',
+      JSON.stringify({
+        description: a.description || '',
+        category: a.category || 'general',
+        instructions: a.instructions || '',
+        mcpServerIds: a.mcpServerIds || [],
+      }),
+    ],
+  },
+  update_skill: {
+    arity: 'multi',
+    fromJson: a => [
+      a.id || '',
+      JSON.stringify({
+        name: a.name,
+        description: a.description,
+        category: a.category,
+        instructions: a.instructions,
+        mcpServerIds: a.mcpServerIds,
+      }),
+    ],
+  },
+  delete_skill: { arity: 'single', fromJson: a => [a.id || ''] },
 };
 
 // Phase-1 (<tool_call> JSON) gate: only tools that define a JSON mapping.
@@ -538,13 +676,30 @@ function _findBalancedClose(text, start) {
 
   for (let i = start; i < text.length; i++) {
     if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
-      if (inTripleQuote) { inTripleQuote = false; i += 2; continue; }
-      if (!inDoubleQuote && !inSingleQuote) { inTripleQuote = true; i += 2; continue; }
+      if (inTripleQuote) {
+        inTripleQuote = false;
+        i += 2;
+        continue;
+      }
+      if (!inDoubleQuote && !inSingleQuote) {
+        inTripleQuote = true;
+        i += 2;
+        continue;
+      }
     }
     if (inTripleQuote) continue;
-    if (text[i] === '\\' && (inDoubleQuote || inSingleQuote) && i + 1 < text.length) { i++; continue; }
-    if (text[i] === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; continue; }
-    if (text[i] === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; continue; }
+    if (text[i] === '\\' && (inDoubleQuote || inSingleQuote) && i + 1 < text.length) {
+      i++;
+      continue;
+    }
+    if (text[i] === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+    if (text[i] === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
     if (!inDoubleQuote && !inSingleQuote) {
       if (text[i] === '(') depth++;
       else if (text[i] === ')') {
@@ -565,16 +720,35 @@ function _findBalancedClose(text, start) {
 // that would otherwise be dropped (a drop executes nothing → no continuation →
 // a decide/execute loop stalls until it errors out).
 function _recoverToolCallClose(text, argsStart) {
-  let inTriple = false, inDouble = false, inSingle = false;
+  let inTriple = false,
+    inDouble = false,
+    inSingle = false;
   for (let i = argsStart; i < text.length; i++) {
     if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
-      if (inTriple) { inTriple = false; i += 2; continue; }
-      if (!inDouble && !inSingle) { inTriple = true; i += 2; continue; }
+      if (inTriple) {
+        inTriple = false;
+        i += 2;
+        continue;
+      }
+      if (!inDouble && !inSingle) {
+        inTriple = true;
+        i += 2;
+        continue;
+      }
     }
     if (inTriple) continue;
-    if (text[i] === '\\' && (inDouble || inSingle) && i + 1 < text.length) { i++; continue; }
-    if (text[i] === '"' && !inSingle) { inDouble = !inDouble; continue; }
-    if (text[i] === "'" && !inDouble) { inSingle = !inSingle; continue; }
+    if (text[i] === '\\' && (inDouble || inSingle) && i + 1 < text.length) {
+      i++;
+      continue;
+    }
+    if (text[i] === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (text[i] === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
   }
   if (inTriple || inDouble || inSingle) return text.length;
   const lineEnd = text.indexOf('\n', argsStart);
@@ -591,13 +765,30 @@ function _findTopLevelComma(text) {
 
   for (let i = 0; i < text.length; i++) {
     if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
-      if (inTripleQuote) { inTripleQuote = false; i += 2; continue; }
-      if (!inDoubleQuote && !inSingleQuote) { inTripleQuote = true; i += 2; continue; }
+      if (inTripleQuote) {
+        inTripleQuote = false;
+        i += 2;
+        continue;
+      }
+      if (!inDoubleQuote && !inSingleQuote) {
+        inTripleQuote = true;
+        i += 2;
+        continue;
+      }
     }
     if (inTripleQuote) continue;
-    if (text[i] === '\\' && (inDoubleQuote || inSingleQuote)) { i++; continue; }
-    if (text[i] === '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; continue; }
-    if (text[i] === "'" && !inDoubleQuote) { inSingleQuote = !inSingleQuote; continue; }
+    if (text[i] === '\\' && (inDoubleQuote || inSingleQuote)) {
+      i++;
+      continue;
+    }
+    if (text[i] === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+    if (text[i] === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
     if (!inDoubleQuote && !inSingleQuote) {
       if (text[i] === '(') parenDepth++;
       else if (text[i] === ')') parenDepth--;
@@ -626,12 +817,18 @@ export function parseToolCalls(response) {
       const name = parsed.name || parsed.function?.name || parsed.tool;
       let args = parsed.arguments || parsed.function?.arguments || parsed.parameters || {};
       if (typeof args === 'string') {
-        try { args = JSON.parse(args); } catch { args = {}; }
+        try {
+          args = JSON.parse(args);
+        } catch {
+          args = {};
+        }
       }
       if (name && KNOWN_TOOLS.includes(name)) {
         const tc = jsonToToolCall(name, args);
         if (tc) {
-          console.log(`🔧 [ToolParse] Matched <tool_call> JSON: ${name}(${JSON.stringify(args).slice(0, 80)})`);
+          console.log(
+            `🔧 [ToolParse] Matched <tool_call> JSON: ${name}(${JSON.stringify(args).slice(0, 80)})`
+          );
           toolCalls.push(tc);
         }
       }
@@ -741,7 +938,10 @@ export function parseToolCalls(response) {
           // truncated/missing-close @write_file. Strip the opening fence (and a
           // leading newline) so the content isn't written with a literal `"""`
           // prefix; drop a trailing fence too if one happens to be present.
-          second = second.slice(3).replace(/^\r?\n/, '').replace(/\s*"""\s*$/, '');
+          second = second
+            .slice(3)
+            .replace(/^\r?\n/, '')
+            .replace(/\s*"""\s*$/, '');
         }
         args = [sanitizeArg(first), second];
       } else {
@@ -749,9 +949,7 @@ export function parseToolCalls(response) {
       }
     }
 
-    const isDuplicate = toolCalls.some(
-      tc => tc.tool === toolName && tc.args[0] === args[0]
-    );
+    const isDuplicate = toolCalls.some(tc => tc.tool === toolName && tc.args[0] === args[0]);
     if (!isDuplicate) {
       toolCalls.push({ tool: toolName, args });
     }
@@ -760,12 +958,19 @@ export function parseToolCalls(response) {
 
   // Log summary
   if (toolCalls.length > 0) {
-    console.log(`🔧 [ToolParse] Found ${toolCalls.length} tool call(s): ${toolCalls.map(t => `@${t.tool}(${(t.args[0] || '').slice(0, 60)}${(t.args[0] || '').length > 60 ? '...' : ''})`).join(', ')}`);
+    console.log(
+      `🔧 [ToolParse] Found ${toolCalls.length} tool call(s): ${toolCalls.map(t => `@${t.tool}(${(t.args[0] || '').slice(0, 60)}${(t.args[0] || '').length > 60 ? '...' : ''})`).join(', ')}`
+    );
   } else {
-    const rawToolMentions = (response.match(/@(read_file|write_file|list_dir|search_files|run_command|append_file)/gi) || []).length;
+    const rawToolMentions = (
+      response.match(/@(read_file|write_file|list_dir|search_files|run_command|append_file)/gi) ||
+      []
+    ).length;
     const toolCallTags = (response.match(/<tool_call>/gi) || []).length;
     if (rawToolMentions > 0 || toolCallTags > 0) {
-      console.warn(`⚠️  [ToolParse] Response contains ${rawToolMentions} @tool mention(s) and ${toolCallTags} <tool_call> tag(s) but no tool calls were parsed. Response preview:\n${response.slice(0, 500)}`);
+      console.warn(
+        `⚠️  [ToolParse] Response contains ${rawToolMentions} @tool mention(s) and ${toolCallTags} <tool_call> tag(s) but no tool calls were parsed. Response preview:\n${response.slice(0, 500)}`
+      );
     }
   }
 

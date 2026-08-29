@@ -1,7 +1,4 @@
-import {
-  credentialConnectorRoutes,
-  getProviderCredentials,
-} from './lib/credentialConnector.js';
+import { credentialConnectorRoutes, getProviderCredentials } from './lib/credentialConnector.js';
 
 /**
  * WordPress per-agent/board authentication routes.
@@ -17,7 +14,7 @@ import {
  */
 
 export interface WordPressCredentials {
-  siteUrl: string;          // normalised, with scheme and no trailing slash
+  siteUrl: string; // normalised, with scheme and no trailing slash
   username: string;
   applicationPassword: string;
 }
@@ -31,20 +28,24 @@ function normaliseSiteUrl(input: string): string {
 
 export const getWordPressCredentialsForAgent = (
   agentId: string | null,
-  boardId: string | null = null,
-): WordPressCredentials | null => getProviderCredentials<WordPressCredentials>('wordpress', agentId, boardId);
+  boardId: string | null = null
+): WordPressCredentials | null =>
+  getProviderCredentials<WordPressCredentials>('wordpress', agentId, boardId);
 
 export function wordpressRoutes() {
   return credentialConnectorRoutes({
     provider: 'wordpress',
     label: 'WordPress',
-    statusFields: (meta) => ({
+    statusFields: meta => ({
       siteUrl: meta?.siteUrl || null,
       username: meta?.username || null,
     }),
     connect: async ({ agentId, boardId, siteUrl, username, applicationPassword }) => {
       if ((!agentId && !boardId) || !siteUrl || !username || !applicationPassword) {
-        return { error: 'agentId or boardId, siteUrl, username, and applicationPassword are required', status: 400 };
+        return {
+          error: 'agentId or boardId, siteUrl, username, and applicationPassword are required',
+          status: 400,
+        };
       }
 
       const cleanUrl = normaliseSiteUrl(siteUrl);
@@ -62,7 +63,10 @@ export function wordpressRoutes() {
 
       if (!testRes.ok) {
         const body = await testRes.text().catch(() => '');
-        return { error: `WordPress authentication failed (${testRes.status}): ${body.slice(0, 200)}`, status: 400 };
+        return {
+          error: `WordPress authentication failed (${testRes.status}): ${body.slice(0, 200)}`,
+          status: 400,
+        };
       }
 
       const me = await testRes.json();
@@ -73,9 +77,12 @@ export function wordpressRoutes() {
         logSuffix: `→ ${cleanUrl} (${me.name || username})`,
       };
     },
-    onError: (err) => {
+    onError: err => {
       if (err?.name === 'TimeoutError') {
-        return { status: 504, message: 'WordPress site did not respond within 15s — check the site URL' };
+        return {
+          status: 504,
+          message: 'WordPress site did not respond within 15s — check the site URL',
+        };
       }
       return { status: 500, message: `Connection failed: ${err.message}` };
     },

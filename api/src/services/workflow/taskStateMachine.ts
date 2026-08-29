@@ -109,9 +109,7 @@ export function evaluateCondition(cond, task, getAgent) {
       fieldValue = '';
   }
 
-  return cond.operator === 'neq'
-    ? fieldValue !== cond.value
-    : fieldValue === cond.value;
+  return cond.operator === 'neq' ? fieldValue !== cond.value : fieldValue === cond.value;
 }
 
 /**
@@ -140,9 +138,7 @@ export function evaluateAllConditions(conditions, task, getAgent, hasIdleAgentWi
  */
 export function getMatchingTransitions(workflow, status) {
   if (!workflow?.transitions) return [];
-  return workflow.transitions
-    .filter(isValidTransition)
-    .filter(t => t.from === status);
+  return workflow.transitions.filter(isValidTransition).filter(t => t.from === status);
 }
 
 /**
@@ -189,7 +185,7 @@ const ASSIGNING_ACTIONS = new Set([
 export function getReassigningStatuses(allBoardWorkflows) {
   const reassigning = new Set();
   for (const { workflow } of allBoardWorkflows) {
-    for (const t of (workflow.transitions || [])) {
+    for (const t of workflow.transitions || []) {
       if (!isValidTransition(t)) continue;
       if ((t.actions || []).some(a => ASSIGNING_ACTIONS.has(a.type))) {
         reassigning.add(t.from);

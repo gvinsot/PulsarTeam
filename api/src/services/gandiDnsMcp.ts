@@ -49,19 +49,14 @@ export function createGandiDnsMcpServer(mcpManager) {
 
   // ── List domains ──────────────────────────────────────────────────────
 
-  server.tool(
-    'list_domains',
-    'List all domains managed by Gandi LiveDNS.',
-    {},
-    async () => {
-      const pat = getPat();
-      const domains = await gandiRequest(pat, '/domains');
-      const summary = domains.length
-        ? domains.map((d) => `- ${d.fqdn}`).join('\n')
-        : 'No domains found.';
-      return text(`${summary}\n\nJSON:\n${JSON.stringify(domains, null, 2)}`);
-    }
-  );
+  server.tool('list_domains', 'List all domains managed by Gandi LiveDNS.', {}, async () => {
+    const pat = getPat();
+    const domains = await gandiRequest(pat, '/domains');
+    const summary = domains.length
+      ? domains.map(d => `- ${d.fqdn}`).join('\n')
+      : 'No domains found.';
+    return text(`${summary}\n\nJSON:\n${JSON.stringify(domains, null, 2)}`);
+  });
 
   // ── List records ──────────────────────────────────────────────────────
 
@@ -75,9 +70,15 @@ export function createGandiDnsMcpServer(mcpManager) {
       const pat = getPat();
       const records = await gandiRequest(pat, `/domains/${encodeURIComponent(domain)}/records`);
       const summary = records.length
-        ? records.map((r) => `${r.rrset_name}\t${r.rrset_type}\t${r.rrset_ttl}\t${r.rrset_values.join(', ')}`).join('\n')
+        ? records
+            .map(
+              r => `${r.rrset_name}\t${r.rrset_type}\t${r.rrset_ttl}\t${r.rrset_values.join(', ')}`
+            )
+            .join('\n')
         : 'No records found.';
-      return text(`Records for ${domain}:\n${summary}\n\nJSON:\n${JSON.stringify(records, null, 2)}`);
+      return text(
+        `Records for ${domain}:\n${summary}\n\nJSON:\n${JSON.stringify(records, null, 2)}`
+      );
     }
   );
 
@@ -110,8 +111,16 @@ export function createGandiDnsMcpServer(mcpManager) {
       domain: z.string().describe('Fully qualified domain name, e.g. "example.com"'),
       name: z.string().describe('Record name (subdomain), e.g. "api", "www", or "@" for apex'),
       type: z.string().describe('Record type: A, AAAA, CNAME, MX, TXT, SRV, NS, etc.'),
-      values: z.array(z.string()).describe('Record values, e.g. ["1.2.3.4"] for A, ["target.example.com."] for CNAME'),
-      ttl: z.number().int().min(300).max(2592000).optional().describe('TTL in seconds (default 300)'),
+      values: z
+        .array(z.string())
+        .describe('Record values, e.g. ["1.2.3.4"] for A, ["target.example.com."] for CNAME'),
+      ttl: z
+        .number()
+        .int()
+        .min(300)
+        .max(2592000)
+        .optional()
+        .describe('TTL in seconds (default 300)'),
     },
     async ({ domain, name, type, values, ttl = 300 }) => {
       const pat = getPat();
@@ -126,10 +135,12 @@ export function createGandiDnsMcpServer(mcpManager) {
         body: JSON.stringify(body),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `✅ Created ${type} record: ${name}.${domain} → ${values.join(', ')} (TTL ${ttl}s)\n\n${JSON.stringify(result, null, 2)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `✅ Created ${type} record: ${name}.${domain} → ${values.join(', ')} (TTL ${ttl}s)\n\n${JSON.stringify(result, null, 2)}`,
+          },
+        ],
       };
     }
   );

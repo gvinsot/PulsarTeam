@@ -32,7 +32,10 @@ export interface OAuthProviderConfig {
   /** Hint below the connect button; varies between agent-scoped and global use. */
   connectHint: (agentId?: string) => string;
   /** Extra actions rendered next to the connect button (e.g. OneDrive 'personal'). */
-  extraConnectActions?: (props: { connect: (opts?: any) => void; connecting: boolean }) => ReactNode;
+  extraConnectActions?: (props: {
+    connect: (opts?: any) => void;
+    connecting: boolean;
+  }) => ReactNode;
   api: {
     getStatus: (agentId?: string, boardId?: string) => Promise<ConnectStatus>;
     getAuthUrl: (agentId?: string, boardId?: string, opts?: any) => Promise<{ authUrl: string }>;
@@ -40,15 +43,25 @@ export interface OAuthProviderConfig {
   };
 }
 
-export default function OAuthConnectWidget({ config, agentId, boardId, onStatusChange }: {
+export default function OAuthConnectWidget({
+  config,
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
   config: OAuthProviderConfig;
   agentId?: string;
   boardId?: string;
   onStatusChange?: (status: ConnectStatus) => void;
 }) {
   const { name, Icon, IconOff, IconDisconnect } = config;
-  const { status, loading, statusError, fetchStatus, retry } =
-    useConnectStatus(name, config.api.getStatus, agentId, boardId, onStatusChange);
+  const { status, loading, statusError, fetchStatus, retry } = useConnectStatus(
+    name,
+    config.api.getStatus,
+    agentId,
+    boardId,
+    onStatusChange
+  );
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState(null);
@@ -58,7 +71,7 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
 
   // Listen for OAuth callback messages from the popup window
   useEffect(() => {
-    const handleMessage = async (event) => {
+    const handleMessage = async event => {
       if (event.data?.type !== config.messageType) return;
       // Shared-client dispatchers (e.g. the unified Microsoft OAuth redirect)
       // include a `service` field so each widget only reacts to its own callback.
@@ -82,7 +95,11 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
     setError(null);
     setConnecting(true);
     try {
-      const { authUrl } = await config.api.getAuthUrl(agentId || undefined, boardId || undefined, opts);
+      const { authUrl } = await config.api.getAuthUrl(
+        agentId || undefined,
+        boardId || undefined,
+        opts
+      );
 
       // Open OAuth popup
       const width = 600;
@@ -112,7 +129,6 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
           setConnecting(false);
         }
       }, 500);
-
     } catch (err) {
       setError(err.message);
       setConnecting(false);
@@ -147,7 +163,9 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
           <div className="flex items-center gap-2">
             <IconOff className="w-4 h-4 text-dark-500" />
             <span className="text-sm font-medium text-dark-300">{name}</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">status check failed</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">
+              status check failed
+            </span>
           </div>
           <button
             onClick={retry}
@@ -170,11 +188,11 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
         <div className="flex items-center gap-2 mb-1.5">
           <IconOff className="w-4 h-4 text-dark-500" />
           <span className="text-sm font-medium text-dark-300">{name}</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">not configured</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">
+            not configured
+          </span>
         </div>
-        <p className="text-xs text-dark-500">
-          {config.configuredHint}
-        </p>
+        <p className="text-xs text-dark-500">{config.configuredHint}</p>
       </div>
     );
   }
@@ -195,11 +213,13 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
   );
 
   return (
-    <div className={`p-3 rounded-lg border transition-colors ${
-      status.connected
-        ? 'bg-emerald-500/5 border-emerald-500/20'
-        : 'bg-dark-800/30 border-dark-700/30'
-    }`}>
+    <div
+      className={`p-3 rounded-lg border transition-colors ${
+        status.connected
+          ? 'bg-emerald-500/5 border-emerald-500/20'
+          : 'bg-dark-800/30 border-dark-700/30'
+      }`}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Icon className={`w-4 h-4 ${status.connected ? 'text-emerald-400' : 'text-dark-400'}`} />
@@ -222,7 +242,11 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
             disabled={disconnecting}
             className="flex items-center gap-1 px-2.5 py-1 text-xs text-dark-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-40"
           >
-            {disconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <IconDisconnect className="w-3 h-3" />}
+            {disconnecting ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <IconDisconnect className="w-3 h-3" />
+            )}
             Disconnect
           </button>
         ) : config.extraConnectActions ? (
@@ -243,9 +267,7 @@ export default function OAuthConnectWidget({ config, agentId, boardId, onStatusC
       )}
 
       {!status.connected && (
-        <p className="mt-2 text-[11px] text-dark-500">
-          {config.connectHint(agentId)}
-        </p>
+        <p className="mt-2 text-[11px] text-dark-500">{config.connectHint(agentId)}</p>
       )}
     </div>
   );

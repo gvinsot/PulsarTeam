@@ -83,9 +83,7 @@ export async function analyzeRepoCallGraph(opts: AnalyzeOptions): Promise<CodeGr
 
   const allSources = treeFiles.filter(f => f.type === 'blob' && isSourceFile(f.path));
 
-  const uiCandidates = allSources
-    .filter(f => looksLikeUi(f.path))
-    .slice(0, MAX_FILES_PER_LAYER);
+  const uiCandidates = allSources.filter(f => looksLikeUi(f.path)).slice(0, MAX_FILES_PER_LAYER);
 
   const serviceCandidates = allSources
     .filter(f => looksLikeService(f.path))
@@ -128,8 +126,10 @@ export async function analyzeRepoCallGraph(opts: AnalyzeOptions): Promise<CodeGr
 
 function isSourceFile(path: string): boolean {
   const lower = path.toLowerCase();
-  if (lower.includes('node_modules/') || lower.includes('dist/') || lower.includes('build/')) return false;
-  if (lower.endsWith('.test.ts') || lower.endsWith('.test.tsx') || lower.endsWith('.test.js')) return false;
+  if (lower.includes('node_modules/') || lower.includes('dist/') || lower.includes('build/'))
+    return false;
+  if (lower.endsWith('.test.ts') || lower.endsWith('.test.tsx') || lower.endsWith('.test.js'))
+    return false;
   return SOURCE_EXTS.some(ext => lower.endsWith(ext));
 }
 
@@ -147,7 +147,7 @@ function looksLikeService(path: string): boolean {
 
 async function downloadBatch(
   files: FileMeta[],
-  fetchFile: (path: string) => Promise<string | null>,
+  fetchFile: (path: string) => Promise<string | null>
 ): Promise<{ path: string; content: string }[]> {
   const results: { path: string; content: string }[] = [];
   const concurrency = 8;
@@ -159,7 +159,11 @@ async function downloadBatch(
       const f = files[idx];
       if (f.size > MAX_FILE_BYTES) continue;
       try {
-        const content = await withTimeout(fetchFile(f.path), FETCH_FILE_TIMEOUT_MS, `fetch ${f.path}`);
+        const content = await withTimeout(
+          fetchFile(f.path),
+          FETCH_FILE_TIMEOUT_MS,
+          `fetch ${f.path}`
+        );
         if (content != null) results.push({ path: f.path, content });
       } catch {
         /* ignore individual file errors */
@@ -232,16 +236,16 @@ function extractRoutes(serviceFiles: { path: string; content: string }[]) {
  */
 function linkClientToRoute(
   apiCalls: Map<string, Set<string>>,
-  routes: ReturnType<typeof extractRoutes>,
+  routes: ReturnType<typeof extractRoutes>
 ) {
-  const links: { method: string; route: typeof routes[number] }[] = [];
+  const links: { method: string; route: (typeof routes)[number] }[] = [];
   const methodNames = new Set<string>();
   for (const set of apiCalls.values()) for (const m of set) methodNames.add(m);
 
   for (const method of methodNames) {
     // Skip raw URL entries (start with '/')
     if (method.startsWith('/')) continue;
-    let best: { score: number; route: typeof routes[number] } | null = null;
+    let best: { score: number; route: (typeof routes)[number] } | null = null;
     const mTokens = tokenize(method);
     for (const route of routes) {
       const rTokens = tokenize(`${route.method} ${route.path} ${route.service}`);
@@ -260,7 +264,7 @@ function buildGraph(
   apiCalls: Map<string, Set<string>>,
   routes: ReturnType<typeof extractRoutes>,
   links: ReturnType<typeof linkClientToRoute>,
-  stats: CodeGraph['stats'],
+  stats: CodeGraph['stats']
 ): CodeGraph {
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
@@ -333,21 +337,36 @@ function dedupEdges(edges: GraphEdge[]): GraphEdge[] {
 // order that the classDef/class sections emit regardless of direction.
 const LAYER_STYLE: Record<GraphNode['layer'], { label: string; cls: string; def: string }> = {
   ui: { label: 'UI Features', cls: 'ui', def: 'fill:#7c3aed22,stroke:#7c3aed,color:#e9d5ff' },
-  'api-client': { label: 'API Client', cls: 'apiclient', def: 'fill:#0ea5e922,stroke:#0ea5e9,color:#bae6fd' },
-  route: { label: 'Backend Routes', cls: 'route', def: 'fill:#22c55e22,stroke:#22c55e,color:#bbf7d0' },
-  service: { label: 'Services', cls: 'service', def: 'fill:#f59e0b22,stroke:#f59e0b,color:#fde68a' },
+  'api-client': {
+    label: 'API Client',
+    cls: 'apiclient',
+    def: 'fill:#0ea5e922,stroke:#0ea5e9,color:#bae6fd',
+  },
+  route: {
+    label: 'Backend Routes',
+    cls: 'route',
+    def: 'fill:#22c55e22,stroke:#22c55e,color:#bbf7d0',
+  },
+  service: {
+    label: 'Services',
+    cls: 'service',
+    def: 'fill:#f59e0b22,stroke:#f59e0b,color:#fde68a',
+  },
 };
 
 function toMermaid(
   direction: 'ui-to-service' | 'service-to-ui',
   nodes: GraphNode[],
-  edges: GraphEdge[],
+  edges: GraphEdge[]
 ): string {
   const lines: string[] = ['flowchart LR'];
 
   // Group nodes by layer once — drives both the subgraphs and the class assignments.
   const layers: Record<GraphNode['layer'], GraphNode[]> = {
-    ui: [], 'api-client': [], route: [], service: [],
+    ui: [],
+    'api-client': [],
+    route: [],
+    service: [],
   };
   for (const n of nodes) layers[n.layer].push(n);
 
@@ -375,7 +394,7 @@ function toMermaid(
   }
   for (const [layer, style] of Object.entries(LAYER_STYLE)) {
     if (layers[layer].length) {
-      lines.push(`  class ${layers[layer].map((n) => safeId(n.id)).join(',')} ${style.cls};`);
+      lines.push(`  class ${layers[layer].map(n => safeId(n.id)).join(',')} ${style.cls};`);
     }
   }
 
@@ -399,11 +418,22 @@ function tokenize(s: string): Set<string> {
       .replace(/[_/{}\-:.]/g, ' ')
       .split(/\s+/)
       .map(t => t.replace(/[^a-z0-9]/g, ''))
-      .filter(t => t.length > 1 && !STOP_TOKENS.has(t)),
+      .filter(t => t.length > 1 && !STOP_TOKENS.has(t))
   );
 }
 
-const STOP_TOKENS = new Set(['api', 'get', 'post', 'put', 'patch', 'delete', 'id', 'by', 'the', 'a']);
+const STOP_TOKENS = new Set([
+  'api',
+  'get',
+  'post',
+  'put',
+  'patch',
+  'delete',
+  'id',
+  'by',
+  'the',
+  'a',
+]);
 
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
@@ -459,19 +489,26 @@ async function refineWithLlm(graph: CodeGraph, llmConfigId: string) {
   const signal = AbortSignal.timeout(LLM_REFINE_TIMEOUT_MS);
 
   const resp = await withTimeout<any>(
-    provider.chat([
-      { role: 'system', content: sys },
-      { role: 'user', content: user },
-    ], { maxTokens: 4000, temperature: cfg.temperature ?? 0.1, signal }),
+    provider.chat(
+      [
+        { role: 'system', content: sys },
+        { role: 'user', content: user },
+      ],
+      { maxTokens: 4000, temperature: cfg.temperature ?? 0.1, signal }
+    ),
     LLM_REFINE_TIMEOUT_MS,
-    'LLM graph refinement',
+    'LLM graph refinement'
   );
 
   const content = (resp?.content || '').trim();
   const jsonMatch = content.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
   let parsed: any;
-  try { parsed = JSON.parse(jsonMatch[0]); } catch { return null; }
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch {
+    return null;
+  }
   if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
 
   // Filter to ids that still appear in input or stay as-is — but allow new merged labels.

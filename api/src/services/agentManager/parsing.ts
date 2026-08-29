@@ -3,7 +3,6 @@ import { getAccessibleBoardRepos } from '../database/boardRepos.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const parsingMethods = {
-
   _parseAskCommands(this: any, text: string): Array<{ agentName: string; question: string }> {
     const codeBlockRanges: Array<{ start: number; end: number }> = [];
     const cbRe = /```[\s\S]*?```|`[^`]*`/g;
@@ -11,7 +10,8 @@ export const parsingMethods = {
     while ((cbMatch = cbRe.exec(text)) !== null) {
       codeBlockRanges.push({ start: cbMatch.index, end: cbMatch.index + cbMatch[0].length });
     }
-    const isInsideCodeBlock = (pos: number) => codeBlockRanges.some(r => pos >= r.start && pos < r.end);
+    const isInsideCodeBlock = (pos: number) =>
+      codeBlockRanges.some(r => pos >= r.start && pos < r.end);
 
     const asks: Array<{ agentName: string; question: string }> = [];
     const askRe = /@ask\s*\(/gi;
@@ -63,7 +63,10 @@ export const parsingMethods = {
   async _listAvailableProjects(this: any): Promise<string[]> {
     try {
       const repos = await getAccessibleBoardRepos(null, 'admin');
-      return repos.map((r: any) => r.full_name).filter(Boolean).sort();
+      return repos
+        .map((r: any) => r.full_name)
+        .filter(Boolean)
+        .sort();
     } catch {
       return [];
     }

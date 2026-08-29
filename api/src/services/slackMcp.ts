@@ -25,7 +25,12 @@ const SLACK_GET_METHODS = new Set([
  * Helper to call the Slack Web API.
  * Uses agent-specific tokens when agentId is provided.
  */
-async function slackApi(method: string, agentId: string | null = null, boardId: string | null = null, params: Record<string, any> = {}) {
+async function slackApi(
+  method: string,
+  agentId: string | null = null,
+  boardId: string | null = null,
+  params: Record<string, any> = {}
+) {
   const token = await getSlackAccessTokenForAgent(agentId, boardId);
   const isGet = SLACK_GET_METHODS.has(method) || Object.keys(params).length === 0;
 
@@ -58,7 +63,9 @@ async function slackApi(method: string, agentId: string | null = null, boardId: 
 
   const data = await res.json();
   if (!data.ok) {
-    throw new Error(`Slack API error: ${data.error}${data.needed ? ` (needs scope: ${data.needed})` : ''}`);
+    throw new Error(
+      `Slack API error: ${data.error}${data.needed ? ` (needs scope: ${data.needed})` : ''}`
+    );
   }
 
   return data;
@@ -92,8 +99,16 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
     'list_channels',
     'List Slack channels the bot has access to. Returns channel names, IDs, topics, and member counts.',
     {
-      types: z.string().optional().default('public_channel').describe('Comma-separated channel types: public_channel, private_channel, mpim, im'),
-      limit: z.number().optional().default(100).describe('Max channels to return (default 100, max 200)'),
+      types: z
+        .string()
+        .optional()
+        .default('public_channel')
+        .describe('Comma-separated channel types: public_channel, private_channel, mpim, im'),
+      limit: z
+        .number()
+        .optional()
+        .default(100)
+        .describe('Max channels to return (default 100, max 200)'),
     },
     async ({ types, limit }) => {
       const data = await slackApi('conversations.list', agentId, boardId, {
@@ -107,12 +122,14 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         return text('No channels found.');
       }
 
-      const summary = channels.map((ch, i) => {
-        const prefix = ch.is_private ? '🔒' : '#';
-        const members = ch.num_members || 0;
-        const topic = ch.topic?.value ? ` — ${ch.topic.value.slice(0, 80)}` : '';
-        return `${i + 1}. ${prefix} ${ch.name} (ID: ${ch.id}, ${members} members)${topic}`;
-      }).join('\n');
+      const summary = channels
+        .map((ch, i) => {
+          const prefix = ch.is_private ? '🔒' : '#';
+          const members = ch.num_members || 0;
+          const topic = ch.topic?.value ? ` — ${ch.topic.value.slice(0, 80)}` : '';
+          return `${i + 1}. ${prefix} ${ch.name} (ID: ${ch.id}, ${members} members)${topic}`;
+        })
+        .join('\n');
 
       return text(`Found ${channels.length} channel(s):\n\n${summary}`);
     }
@@ -124,7 +141,11 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
     'Read recent messages from a Slack channel. Returns messages with timestamps, users, and text.',
     {
       channel: z.string().describe('Channel ID (e.g. C01234ABCDE)'),
-      limit: z.number().optional().default(20).describe('Number of messages to return (default 20, max 100)'),
+      limit: z
+        .number()
+        .optional()
+        .default(20)
+        .describe('Number of messages to return (default 20, max 100)'),
     },
     async ({ channel, limit }) => {
       const count = Math.min(limit || 20, 100);
@@ -138,10 +159,12 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         return text('No messages found in this channel.');
       }
 
-      const summary = messages.map((m, i) => {
-        const thread = m.replyCount > 0 ? ` [${m.replyCount} replies]` : '';
-        return `${i + 1}. [${m.timestamp}] <${m.user}>: ${m.text}${thread}\n   ts: ${m.ts}`;
-      }).join('\n\n');
+      const summary = messages
+        .map((m, i) => {
+          const thread = m.replyCount > 0 ? ` [${m.replyCount} replies]` : '';
+          return `${i + 1}. [${m.timestamp}] <${m.user}>: ${m.text}${thread}\n   ts: ${m.ts}`;
+        })
+        .join('\n\n');
 
       return text(`Last ${messages.length} message(s) in <#${channel}>:\n\n${summary}`);
     }
@@ -165,9 +188,11 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
       });
 
       const messages = (data.messages || []).map(formatMessage);
-      const summary = messages.map((m, i) => {
-        return `${i + 1}. [${m.timestamp}] <${m.user}>: ${m.text}`;
-      }).join('\n\n');
+      const summary = messages
+        .map((m, i) => {
+          return `${i + 1}. [${m.timestamp}] <${m.user}>: ${m.text}`;
+        })
+        .join('\n\n');
 
       return text(`Thread (${messages.length} message(s)):\n\n${summary}`);
     }
@@ -189,10 +214,12 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
       const data = await slackApi('chat.postMessage', agentId, boardId, params);
 
       return {
-        content: [{
-          type: 'text',
-          text: `Message sent to <#${channel}>!\nTimestamp: ${data.ts}\n${thread_ts ? `Thread: ${thread_ts}` : 'New message'}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Message sent to <#${channel}>!\nTimestamp: ${data.ts}\n${thread_ts ? `Thread: ${thread_ts}` : 'New message'}`,
+          },
+        ],
       };
     }
   );
@@ -214,10 +241,12 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
       });
 
       return {
-        content: [{
-          type: 'text',
-          text: `Reply sent in thread ${thread_ts}!\nTimestamp: ${data.ts}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Reply sent in thread ${thread_ts}!\nTimestamp: ${data.ts}`,
+          },
+        ],
       };
     }
   );
@@ -234,17 +263,21 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         limit: Math.min(limit || 100, 200),
       });
 
-      const members = (data.members || []).filter(u => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT');
+      const members = (data.members || []).filter(
+        u => !u.deleted && !u.is_bot && u.id !== 'USLACKBOT'
+      );
       if (members.length === 0) {
         return text('No users found.');
       }
 
-      const summary = members.map((u, i) => {
-        const name = u.profile?.display_name || u.profile?.real_name || u.name;
-        const status = u.profile?.status_text ? ` — "${u.profile.status_text}"` : '';
-        const admin = u.is_admin ? ' [admin]' : '';
-        return `${i + 1}. ${name} (ID: ${u.id})${admin}${status}`;
-      }).join('\n');
+      const summary = members
+        .map((u, i) => {
+          const name = u.profile?.display_name || u.profile?.real_name || u.name;
+          const status = u.profile?.status_text ? ` — "${u.profile.status_text}"` : '';
+          const admin = u.is_admin ? ' [admin]' : '';
+          return `${i + 1}. ${name} (ID: ${u.id})${admin}${status}`;
+        })
+        .join('\n');
 
       return text(`${members.length} workspace member(s):\n\n${summary}`);
     }
@@ -255,7 +288,9 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
     'search_messages',
     'Search for messages across the workspace. Requires a query string.',
     {
-      query: z.string().describe('Search query (supports Slack search operators: in:#channel, from:@user, etc.)'),
+      query: z
+        .string()
+        .describe('Search query (supports Slack search operators: in:#channel, from:@user, etc.)'),
       count: z.number().optional().default(20).describe('Number of results (default 20, max 100)'),
     },
     async ({ query, count }) => {
@@ -274,25 +309,31 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
           return text(`No messages found for query: "${query}"`);
         }
 
-        const summary = matches.map((m, i) => {
-          const ts = m.ts ? new Date(parseFloat(m.ts) * 1000).toISOString() : '';
-          const channel = m.channel?.name ? `#${m.channel.name}` : '';
-          return `${i + 1}. [${ts}] ${channel} <${m.user || m.username || 'unknown'}>: ${(m.text || '').slice(0, 200)}`;
-        }).join('\n\n');
+        const summary = matches
+          .map((m, i) => {
+            const ts = m.ts ? new Date(parseFloat(m.ts) * 1000).toISOString() : '';
+            const channel = m.channel?.name ? `#${m.channel.name}` : '';
+            return `${i + 1}. [${ts}] ${channel} <${m.user || m.username || 'unknown'}>: ${(m.text || '').slice(0, 200)}`;
+          })
+          .join('\n\n');
 
         return {
-          content: [{
-            type: 'text',
-            text: `Found ${data.messages.total} result(s) for "${query}":\n\n${summary}`
-          }],
+          content: [
+            {
+              type: 'text',
+              text: `Found ${data.messages.total} result(s) for "${query}":\n\n${summary}`,
+            },
+          ],
         };
       } catch (err: any) {
         if (err.message?.includes('missing_scope') || err.message?.includes('not_allowed')) {
           return {
-            content: [{
-              type: 'text',
-              text: `Search is not available with the current bot token scopes. To search messages, the Slack app needs the "search:read" user scope. Use read_channel to browse specific channels instead.`
-            }],
+            content: [
+              {
+                type: 'text',
+                text: `Search is not available with the current bot token scopes. To search messages, the Slack app needs the "search:read" user scope. Use read_channel to browse specific channels instead.`,
+              },
+            ],
           };
         }
         throw err;
@@ -333,7 +374,9 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
     {
       channel: z.string().describe('Channel ID'),
       timestamp: z.string().describe('Message timestamp (ts)'),
-      name: z.string().describe('Emoji name without colons (e.g. "thumbsup", "eyes", "white_check_mark")'),
+      name: z
+        .string()
+        .describe('Emoji name without colons (e.g. "thumbsup", "eyes", "white_check_mark")'),
     },
     async ({ channel, timestamp, name }) => {
       await slackApi('reactions.add', agentId, boardId, {
@@ -359,10 +402,12 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
       });
 
       return {
-        content: [{
-          type: 'text',
-          text: `DM channel opened!\nChannel ID: ${data.channel?.id}\nUse this channel ID to send direct messages.`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `DM channel opened!\nChannel ID: ${data.channel?.id}\nUse this channel ID to send direct messages.`,
+          },
+        ],
       };
     }
   );
@@ -376,5 +421,6 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
  */
 export function createSlackMcpHandler() {
   return createMcpHttpHandler('Slack', ({ agentId, boardId }) =>
-    createSlackMcpServer(agentId, boardId));
+    createSlackMcpServer(agentId, boardId)
+  );
 }

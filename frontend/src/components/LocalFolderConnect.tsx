@@ -15,14 +15,26 @@ type Status = { connected: boolean; folders: string[]; downloadUrl: string | nul
  * Status is per-user, so agentId/boardId are accepted (to match the connector
  * widget interface) but not used.
  */
-export default function LocalFolderConnect(_props: { agentId?: string; boardId?: string; onStatusChange?: () => void }) {
-  const [status, setStatus] = useState<Status>({ connected: false, folders: [], downloadUrl: null });
+export default function LocalFolderConnect(_props: {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: () => void;
+}) {
+  const [status, setStatus] = useState<Status>({
+    connected: false,
+    folders: [],
+    downloadUrl: null,
+  });
   const [loading, setLoading] = useState(true);
 
   const refresh = async () => {
     try {
       const s = await api.getLocalFolderStatus();
-      setStatus({ connected: !!s.connected, folders: s.folders || [], downloadUrl: s.downloadUrl || null });
+      setStatus({
+        connected: !!s.connected,
+        folders: s.folders || [],
+        downloadUrl: s.downloadUrl || null,
+      });
     } catch {
       setStatus(prev => ({ ...prev, connected: false }));
     } finally {
@@ -38,7 +50,9 @@ export default function LocalFolderConnect(_props: { agentId?: string; boardId?:
       setStatus(prev => ({ ...prev, connected: !!data.connected, folders: data.folders || [] }));
     };
     socket.on(WsEvents.BRIDGE_FOLDER_CHANGED, onChange);
-    return () => { socket.off(WsEvents.BRIDGE_FOLDER_CHANGED, onChange); };
+    return () => {
+      socket.off(WsEvents.BRIDGE_FOLDER_CHANGED, onChange);
+    };
   }, []);
 
   return (
@@ -50,7 +64,11 @@ export default function LocalFolderConnect(_props: { agentId?: string; boardId?:
           <MonitorX className="w-4 h-4 text-dark-400 flex-shrink-0" />
         )}
         <span className={status.connected ? 'text-emerald-400 font-medium' : 'text-dark-300'}>
-          {loading ? 'Checking desktop app…' : status.connected ? 'Desktop app connected' : 'Desktop app not running'}
+          {loading
+            ? 'Checking desktop app…'
+            : status.connected
+              ? 'Desktop app connected'
+              : 'Desktop app not running'}
         </span>
         <button
           onClick={refresh}
@@ -65,11 +83,15 @@ export default function LocalFolderConnect(_props: { agentId?: string; boardId?:
         status.folders.length > 0 ? (
           <ul className="mt-2 space-y-1">
             {status.folders.map((f, i) => (
-              <li key={i} className="text-xs text-dark-300 font-mono truncate" title={f}>📁 {f}</li>
+              <li key={i} className="text-xs text-dark-300 font-mono truncate" title={f}>
+                📁 {f}
+              </li>
             ))}
           </ul>
         ) : (
-          <p className="mt-2 text-xs text-dark-400">No folder shared yet — pick one in the desktop app.</p>
+          <p className="mt-2 text-xs text-dark-400">
+            No folder shared yet — pick one in the desktop app.
+          </p>
         )
       ) : (
         <div className="mt-2 space-y-2">

@@ -3,11 +3,21 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
-  getUserByUsername, getUserById, createUser, countUsers,
-  getUserByGoogleId, createGoogleUser, linkGoogleId,
-  getUserByMicrosoftId, createMicrosoftUser, linkMicrosoftId,
-  getUserByGitHubId, createGitHubUser, linkGitHubId,
-  acceptTerms, completeTutorial,
+  getUserByUsername,
+  getUserById,
+  createUser,
+  countUsers,
+  getUserByGoogleId,
+  createGoogleUser,
+  linkGoogleId,
+  getUserByMicrosoftId,
+  createMicrosoftUser,
+  linkMicrosoftId,
+  getUserByGitHubId,
+  createGitHubUser,
+  linkGitHubId,
+  acceptTerms,
+  completeTutorial,
   isDatabaseConnected,
 } from '../services/database.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
@@ -57,7 +67,11 @@ function checkLoginRateLimit(ip) {
 // attacker from supplying ?redirect_uri=https://evil.com to steal authorization codes.
 function getAllowedOriginList(): string[] {
   const env = process.env.CORS_ORIGINS;
-  if (env) return env.split(',').map(s => s.trim()).filter(Boolean);
+  if (env)
+    return env
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
   return ['http://localhost:5173', 'http://localhost:3000'];
 }
 
@@ -126,7 +140,13 @@ function sendLoginResponse(res, user, extra: { avatarUrl?: string | null } = {})
 async function findOrCreateOAuthUser(opts: {
   getByProviderId: (id: string) => Promise<any>;
   linkProviderId: (userId: string, id: string, avatarUrl: string | null) => Promise<any>;
-  createUser: (id: string, loginUsername: string, displayName: string, avatarUrl: string | null, role: string) => Promise<any>;
+  createUser: (
+    id: string,
+    loginUsername: string,
+    displayName: string,
+    avatarUrl: string | null,
+    role: string
+  ) => Promise<any>;
   providerId: string;
   loginUsername: string;
   displayName: string;
@@ -145,7 +165,13 @@ async function findOrCreateOAuthUser(opts: {
   // Determine role — first user gets admin, others get advanced
   const userCount = await countUsers();
   const role = userCount === 0 ? 'admin' : 'advanced';
-  user = await opts.createUser(opts.providerId, opts.loginUsername, opts.displayName, opts.avatarUrl, role);
+  user = await opts.createUser(
+    opts.providerId,
+    opts.loginUsername,
+    opts.displayName,
+    opts.avatarUrl,
+    role
+  );
   await provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
   return user;
 }
@@ -222,8 +248,12 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
     // "Invalid credentials" branch. Surface the real cause so the operator
     // can fix it.
     if (!isDatabaseConnected()) {
-      console.error('Login attempted while database is not connected — check DATABASE_CONNECTION_STRING.');
-      res.status(503).json({ error: 'Authentication backend unavailable. Please contact the administrator.' });
+      console.error(
+        'Login attempted while database is not connected — check DATABASE_CONNECTION_STRING.'
+      );
+      res
+        .status(503)
+        .json({ error: 'Authentication backend unavailable. Please contact the administrator.' });
       return;
     }
 
@@ -249,14 +279,20 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
 // Verify token
 router.get('/verify', async (req, res) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader) { res.status(401).json({ error: 'No token provided' }); return; }
+  if (!authHeader) {
+    res.status(401).json({ error: 'No token provided' });
+    return;
+  }
 
   const token = authHeader.split(' ')[1];
   try {
     const decoded = jwt.verify(token, getJwtSecret()) as any;
     // Fetch fresh user data from DB to catch role changes
     const user = await getUserById(decoded.userId);
-    if (!user) { res.status(401).json({ error: 'User not found' }); return; }
+    if (!user) {
+      res.status(401).json({ error: 'User not found' });
+      return;
+    }
 
     const responseUser: any = {
       userId: user.id,
@@ -279,44 +315,49 @@ router.get('/verify', async (req, res) => {
 });
 
 // Impersonate user (admin only) — authenticateToken applied inline
-router.post('/impersonate/:userId', authenticateToken, validateParams(impersonateParamsSchema), async (req, res) => {
-  try {
-    const adminUser = req.user;
-    if (!adminUser || adminUser.role !== 'admin') {
-      res.status(403).json({ error: 'Admin access required' });
-      return;
-    }
+router.post(
+  '/impersonate/:userId',
+  authenticateToken,
+  validateParams(impersonateParamsSchema),
+  async (req, res) => {
+    try {
+      const adminUser = req.user;
+      if (!adminUser || adminUser.role !== 'admin') {
+        res.status(403).json({ error: 'Admin access required' });
+        return;
+      }
 
-    const targetUser = await getUserById(req.params.userId);
-    if (!targetUser) {
-      res.status(404).json({ error: 'User not found' });
-      return;
-    }
+      const targetUser = await getUserById(req.params.userId);
+      if (!targetUser) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
 
-    const token = jwt.sign(
-      {
-        userId: targetUser.id,
+      const token = jwt.sign(
+        {
+          userId: targetUser.id,
+          username: targetUser.username,
+          role: targetUser.role,
+          impersonatedBy: adminUser.username,
+        },
+        getJwtSecret(),
+        { expiresIn: '24h' }
+      );
+
+      res.json({
+        token,
         username: targetUser.username,
         role: targetUser.role,
+        userId: targetUser.id,
+        displayName: targetUser.display_name,
         impersonatedBy: adminUser.username,
-      },
-      getJwtSecret(),
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      token,
-      username: targetUser.username,
-      role: targetUser.role,
-      userId: targetUser.id,
-      displayName: targetUser.display_name,
-      impersonatedBy: adminUser.username,
-    });
-  } catch (err) {
-    console.error('Impersonate error:', err.message);
-    res.status(500).json({ error: 'Internal server error' });
+      });
+    } catch (err) {
+      console.error('Impersonate error:', err.message);
+      res.status(500).json({ error: 'Internal server error' });
+    }
   }
-});
+);
 
 // ── Table-driven OAuth login providers ────────────────────────────────────────
 // Google, Microsoft and GitHub previously carried three structurally identical
@@ -369,7 +410,13 @@ interface LoginProviderSpec<TConfig = any> {
   // DB hooks — the provider-specific columns findOrCreateOAuthUser touches.
   getByProviderId(id: string): Promise<any>;
   linkProviderId(userId: string, id: string, avatarUrl: string | null): Promise<any>;
-  createUser(id: string, loginUsername: string, displayName: string, avatarUrl: string | null, role: string): Promise<any>;
+  createUser(
+    id: string,
+    loginUsername: string,
+    displayName: string,
+    avatarUrl: string | null,
+    role: string
+  ): Promise<any>;
 }
 
 // ── Google ────────────────────────────────────────────────────────────────────
@@ -453,18 +500,21 @@ const microsoftSpec: LoginProviderSpec = {
     return `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/authorize?${params}`;
   },
   async exchangeToken(code, redirectUri, cfg) {
-    const tokenRes = await fetch(`https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: cfg.clientId,
-        client_secret: cfg.clientSecret,
-        code,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code',
-        scope: 'openid email profile User.Read',
-      }),
-    });
+    const tokenRes = await fetch(
+      `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/token`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: cfg.clientId,
+          client_secret: cfg.clientSecret,
+          code,
+          redirect_uri: redirectUri,
+          grant_type: 'authorization_code',
+          scope: 'openid email profile User.Read',
+        }),
+      }
+    );
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok) {
       console.error('Microsoft token exchange failed:', tokenData);
@@ -586,7 +636,9 @@ const githubSpec: LoginProviderSpec = {
         if (emailsRes.ok) {
           const emails = await emailsRes.json();
           if (Array.isArray(emails)) {
-            const primary = emails.find((e: any) => e.primary && e.verified) || emails.find((e: any) => e.verified);
+            const primary =
+              emails.find((e: any) => e.primary && e.verified) ||
+              emails.find((e: any) => e.verified);
             if (primary?.email) email = primary.email;
           }
         }
@@ -691,7 +743,11 @@ function handleCallback(spec: LoginProviderSpec) {
 for (const spec of LOGIN_PROVIDERS) {
   router.get(`/${spec.provider}/status`, handleStatus(spec));
   router.get(`/${spec.provider}/url`, validateQuery(oauthUrlQuerySchema), handleUrl(spec));
-  router.post(`/${spec.provider}/callback`, validateBody(oauthCallbackSchema), handleCallback(spec));
+  router.post(
+    `/${spec.provider}/callback`,
+    validateBody(oauthCallbackSchema),
+    handleCallback(spec)
+  );
 }
 
 // ── Terms & onboarding ─────────────────────────────────────────────────────
@@ -699,7 +755,10 @@ for (const spec of LOGIN_PROVIDERS) {
 router.post('/accept-terms', authenticateToken, async (req, res) => {
   try {
     const row = await acceptTerms(req.user.userId);
-    if (!row) { res.status(404).json({ error: 'User not found' }); return; }
+    if (!row) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
     res.json({ termsAcceptedAt: row.terms_accepted_at });
   } catch (err) {
     console.error('Accept terms error:', err.message);
@@ -711,7 +770,10 @@ router.post('/accept-terms', authenticateToken, async (req, res) => {
 router.post('/complete-tutorial', authenticateToken, async (req, res) => {
   try {
     const row = await completeTutorial(req.user.userId);
-    if (!row) { res.status(404).json({ error: 'User not found' }); return; }
+    if (!row) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
     res.json({ tutorialCompletedAt: row.tutorial_completed_at });
   } catch (err) {
     console.error('Complete tutorial error:', err.message);

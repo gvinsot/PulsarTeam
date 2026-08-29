@@ -17,9 +17,7 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div
-        className="bg-dark-900 border border-dark-700 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl"
-      >
+      <div className="bg-dark-900 border border-dark-700 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-dark-700">
           <div className="flex items-center gap-3">
@@ -31,7 +29,10 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }) {
               <p className="text-xs text-dark-400">Administration & Configuration</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
+          <button
+            onClick={onClose}
+            className="p-2 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>

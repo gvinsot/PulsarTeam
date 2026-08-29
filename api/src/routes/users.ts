@@ -2,7 +2,11 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import {
-  getAllUsers, getUserById, createUser, updateUser, deleteUser
+  getAllUsers,
+  getUserById,
+  createUser,
+  updateUser,
+  deleteUser,
 } from '../services/database.js';
 import { getConnectedUserIds } from '../ws/socketHandler.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
@@ -13,19 +17,26 @@ export function userRoutes() {
   const router = express.Router();
 
   // List all users (admin only — enforced by requireRole in index.js)
-  router.get('/', asyncHandler(async (req, res) => {
-    const users = await getAllUsers();
-    const connected = getConnectedUserIds();
-    res.json(users.map(u => ({ ...u, is_online: connected.has(u.id) })));
-  }));
+  router.get(
+    '/',
+    asyncHandler(async (req, res) => {
+      const users = await getAllUsers();
+      const connected = getConnectedUserIds();
+      res.json(users.map(u => ({ ...u, is_online: connected.has(u.id) })));
+    })
+  );
 
   // Get single user
-  router.get('/:id', validateParams(userIdParamsSchema), asyncHandler(async (req, res) => {
-    const user = await getUserById(req.params.id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const { password, ...safe } = user;
-    res.json(safe);
-  }));
+  router.get(
+    '/:id',
+    validateParams(userIdParamsSchema),
+    asyncHandler(async (req, res) => {
+      const user = await getUserById(req.params.id);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      const { password, ...safe } = user;
+      res.json(safe);
+    })
+  );
 
   // Create user
   router.post('/', validateBody(createUserSchema), async (req, res) => {
@@ -38,7 +49,9 @@ export function userRoutes() {
         parsed.role,
         parsed.displayName || parsed.username
       );
-      await provisionNewUser(user.id).catch(err => console.error('Provisioning error:', err.message));
+      await provisionNewUser(user.id).catch(err =>
+        console.error('Provisioning error:', err.message)
+      );
       res.status(201).json(user);
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -46,34 +59,46 @@ export function userRoutes() {
   });
 
   // Update user
-  router.put('/:id', validateParams(userIdParamsSchema), validateBody(updateUserSchema), async (req, res) => {
-    try {
-      const parsed = req.body as any;
-      const fields: Record<string, any> = {};
-      if (parsed.username) fields.username = parsed.username;
-      if (parsed.role) fields.role = parsed.role;
-      if (parsed.displayName !== undefined) fields.display_name = parsed.displayName;
-      if (parsed.password) {
-        fields.password = await bcrypt.hash(parsed.password, 10);
+  router.put(
+    '/:id',
+    validateParams(userIdParamsSchema),
+    validateBody(updateUserSchema),
+    async (req, res) => {
+      try {
+        const parsed = req.body as any;
+        const fields: Record<string, any> = {};
+        if (parsed.username) fields.username = parsed.username;
+        if (parsed.role) fields.role = parsed.role;
+        if (parsed.displayName !== undefined) fields.display_name = parsed.displayName;
+        if (parsed.password) {
+          fields.password = await bcrypt.hash(parsed.password, 10);
+        }
+        const user = await updateUser(req.params.id, fields);
+        if (!user) {
+          res.status(404).json({ error: 'User not found' });
+          return;
+        }
+        res.json(user);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
       }
-      const user = await updateUser(req.params.id, fields);
-      if (!user) { res.status(404).json({ error: 'User not found' }); return; }
-      res.json(user);
-    } catch (err) {
-      res.status(400).json({ error: err.message });
     }
-  });
+  );
 
   // Delete user
-  router.delete('/:id', validateParams(userIdParamsSchema), asyncHandler(async (req, res) => {
-    // Prevent self-deletion
-    if (req.params.id === req.user.userId) {
-      return res.status(400).json({ error: 'Cannot delete your own account' });
-    }
-    const success = await deleteUser(req.params.id);
-    if (!success) return res.status(404).json({ error: 'User not found' });
-    res.json({ success: true });
-  }));
+  router.delete(
+    '/:id',
+    validateParams(userIdParamsSchema),
+    asyncHandler(async (req, res) => {
+      // Prevent self-deletion
+      if (req.params.id === req.user.userId) {
+        return res.status(400).json({ error: 'Cannot delete your own account' });
+      }
+      const success = await deleteUser(req.params.id);
+      if (!success) return res.status(404).json({ error: 'User not found' });
+      res.json({ success: true });
+    })
+  );
 
   return router;
 }

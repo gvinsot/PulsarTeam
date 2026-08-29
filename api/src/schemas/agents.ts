@@ -17,9 +17,14 @@ export const createAgentSchema = z.object({
   ragDocuments: z.array(z.any()).optional(),
   skills: z.array(z.string()).optional(),
   mcpServers: z.array(z.string()).optional(),
-  mcpAuth: z.record(z.string(), z.object({
-    apiKey: z.string().max(500).optional(),
-  })).optional(),
+  mcpAuth: z
+    .record(
+      z.string(),
+      z.object({
+        apiKey: z.string().max(500).optional(),
+      })
+    )
+    .optional(),
   handoffTargets: z.array(z.string()).optional(),
   project: z.string().max(200).nullable().optional(),
   enabled: z.boolean().optional(),
@@ -41,39 +46,57 @@ export const createAgentSchema = z.object({
   copyApiKeyFromAgent: z.string().uuid().optional(),
   llmConfigId: z.string().max(200).nullable().optional(),
   boardId: z.string().uuid().nullable().optional(),
-  permissions: z.object({
-    linuxUser: z.object({
-      runAsRoot: z.boolean().optional(),
-    }).optional(),
-    network: z.object({
-      internetAccess: z.boolean().optional(),
-      allowedDomains: z.array(z.string().max(200)).optional(),
-    }).optional(),
-    filesystem: z.object({
-      readAccess: z.boolean().optional(),
-      writeAccess: z.boolean().optional(),
-      restrictedPaths: z.array(z.string().max(500)).optional(),
-    }).optional(),
-    execution: z.object({
-      shellAccess: z.boolean().optional(),
-      dangerousSkipPermissions: z.boolean().optional(),
-    }).optional(),
-  }).optional(),
+  permissions: z
+    .object({
+      linuxUser: z
+        .object({
+          runAsRoot: z.boolean().optional(),
+        })
+        .optional(),
+      network: z
+        .object({
+          internetAccess: z.boolean().optional(),
+          allowedDomains: z.array(z.string().max(200)).optional(),
+        })
+        .optional(),
+      filesystem: z
+        .object({
+          readAccess: z.boolean().optional(),
+          writeAccess: z.boolean().optional(),
+          restrictedPaths: z.array(z.string().max(500)).optional(),
+        })
+        .optional(),
+      execution: z
+        .object({
+          shellAccess: z.boolean().optional(),
+          dangerousSkipPermissions: z.boolean().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   credentials: z.record(z.string().max(100), z.string().max(2000)).optional(),
-  toolHooks: z.object({
-    enabled: z.boolean().optional(),
-    rules: z.array(z.object({
-      id: z.string().max(100),
-      name: z.string().max(200),
-      enabled: z.boolean(),
-      pattern: z.string().max(2000),
-      action: z.enum(['block', 'warn']),
-      tools: z.array(z.string().max(50)),
-      description: z.string().max(500).optional(),
-    })).optional(),
-  }).optional(),
+  toolHooks: z
+    .object({
+      enabled: z.boolean().optional(),
+      rules: z
+        .array(
+          z.object({
+            id: z.string().max(100),
+            name: z.string().max(200),
+            enabled: z.boolean(),
+            pattern: z.string().max(2000),
+            action: z.enum(['block', 'warn']),
+            tools: z.array(z.string().max(50)),
+            description: z.string().max(500).optional(),
+          })
+        )
+        .optional(),
+    })
+    .optional(),
   // 'coder' is a deprecated alias for 'claudecode' (kept for backward compat with stored agents)
-  runner: z.enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'aider', 'codex']).optional(),
+  runner: z
+    .enum(['sandbox', 'claudecode', 'coder', 'openclaw', 'hermes', 'opencode', 'aider', 'codex'])
+    .optional(),
   // Batch creation: when batchSize > 1, the server creates that many agents
   // sharing the same configuration and a common batchId. Names are auto
   // suffixed `#1`, `#2`, … so each agent stays uniquely identifiable.

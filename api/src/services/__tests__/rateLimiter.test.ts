@@ -46,9 +46,10 @@ test('errors in scheduled functions are propagated', async () => {
   const limiter = new RateLimiter(50, 'test4');
 
   await assert.rejects(
-    () => limiter.schedule(async () => {
-      throw new Error('Test error');
-    }),
+    () =>
+      limiter.schedule(async () => {
+        throw new Error('Test error');
+      }),
     { message: 'Test error' }
   );
 });

@@ -18,14 +18,16 @@ export function useConnectStatus(
   getStatus: (agentId?: string, boardId?: string) => Promise<ConnectStatus>,
   agentId?: string,
   boardId?: string,
-  onStatusChange?: (status: ConnectStatus) => void,
+  onStatusChange?: (status: ConnectStatus) => void
 ) {
   const [status, setStatus] = useState<ConnectStatus>({ configured: false, connected: false });
   const [loading, setLoading] = useState(true);
   const [statusError, setStatusError] = useState(null);
 
   const onStatusChangeRef = useRef(onStatusChange);
-  useEffect(() => { onStatusChangeRef.current = onStatusChange; }, [onStatusChange]);
+  useEffect(() => {
+    onStatusChangeRef.current = onStatusChange;
+  }, [onStatusChange]);
 
   const fetchStatus = useCallback(async () => {
     setStatusError(null);

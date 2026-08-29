@@ -6,7 +6,7 @@
 import { execFile } from 'child_process';
 
 function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     execFile(cmd, args, { timeout: 120_000, windowsHide: true }, (err, stdout) => {
       if (err) return resolve('');
       resolve((stdout || '').trim());

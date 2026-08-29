@@ -47,7 +47,7 @@ async function _execGit(
   executionManager: any,
   agentId: string,
   command: string,
-  timeout: number = 10000,
+  timeout: number = 10000
 ): Promise<string | null> {
   if (typeof executionManager?.exec !== 'function') return null;
   try {
@@ -60,10 +60,14 @@ async function _execGit(
     // The provider throws on non-zero exit, but the real output is on the error.
     const recovered = (err?.stdout || err?.stderr || err?.message || '').trim();
     if (recovered) {
-      console.warn(`⚠️  [git-reconcile] exec error for agent ${agentId}: ${command} → ${recovered.slice(0, 200)}`);
+      console.warn(
+        `⚠️  [git-reconcile] exec error for agent ${agentId}: ${command} → ${recovered.slice(0, 200)}`
+      );
       return recovered;
     }
-    console.warn(`⚠️  [git-reconcile] exec exception for agent ${agentId}: ${command} → ${err?.message || 'unknown'}`);
+    console.warn(
+      `⚠️  [git-reconcile] exec exception for agent ${agentId}: ${command} → ${err?.message || 'unknown'}`
+    );
     return null;
   }
 }
@@ -78,7 +82,10 @@ async function _execGit(
  *  detection forever. exec() → runner /exec-shell resolves the agent's project
  *  dir server-side and works regardless; a non-repo answers "fatal:" which we
  *  filter. (This same gate is why recordTaskCompletion's detection could miss.) */
-export async function snapshotGitBaseline(executionManager: any, agentId: string): Promise<string | null> {
+export async function snapshotGitBaseline(
+  executionManager: any,
+  agentId: string
+): Promise<string | null> {
   if (typeof executionManager?.exec !== 'function') return null;
   const output = await _execGit(executionManager, agentId, 'git rev-parse HEAD');
   if (!output) return null;
@@ -90,7 +97,9 @@ export async function snapshotGitBaseline(executionManager: any, agentId: string
       return trimmed;
     }
   }
-  console.warn(`⚠️  [git-reconcile] Could not parse HEAD for agent ${agentId}: ${output.slice(0, 100)}`);
+  console.warn(
+    `⚠️  [git-reconcile] Could not parse HEAD for agent ${agentId}: ${output.slice(0, 100)}`
+  );
   return null;
 }
 
@@ -108,7 +117,7 @@ export async function snapshotGitBaseline(executionManager: any, agentId: string
 export async function detectCommitsSinceBaseline(
   executionManager: any,
   agentId: string,
-  { baselineHead, startedAt }: { baselineHead?: string | null; startedAt?: string | null } = {},
+  { baselineHead, startedAt }: { baselineHead?: string | null; startedAt?: string | null } = {}
 ): Promise<DetectedCommit[]> {
   if (typeof executionManager?.exec !== 'function') return [];
 
@@ -116,7 +125,11 @@ export async function detectCommitsSinceBaseline(
   let rangeOutput: string | null = null;
   let rangeFailed = false;
   if (baselineHead && /^[a-f0-9]{7,40}$/.test(baselineHead)) {
-    rangeOutput = await _execGit(executionManager, agentId, `git log --format="%H %s" ${baselineHead}..HEAD`);
+    rangeOutput = await _execGit(
+      executionManager,
+      agentId,
+      `git log --format="%H %s" ${baselineHead}..HEAD`
+    );
     // If the range query returned output, check if it's a real result or a fatal
     if (rangeOutput && /^fatal:/im.test(rangeOutput)) {
       rangeFailed = true;
@@ -127,7 +140,11 @@ export async function detectCommitsSinceBaseline(
   // If range failed or no baseline, fall back to time window.
   if (rangeOutput === null || rangeFailed) {
     if (startedAt && !isNaN(new Date(startedAt).getTime())) {
-      rangeOutput = await _execGit(executionManager, agentId, `git log --format="%H %s" --since="${new Date(startedAt).toISOString()}" -30`);
+      rangeOutput = await _execGit(
+        executionManager,
+        agentId,
+        `git log --format="%H %s" --since="${new Date(startedAt).toISOString()}" -30`
+      );
     } else {
       return [];
     }
@@ -145,13 +162,22 @@ export async function detectCommitsSinceBaseline(
   // Unpushed set: commits on any local branch that no remote-tracking ref
   // contains. A successful `git push` from this clone updates the local
   // remote-tracking ref, so no network fetch is needed for an accurate answer.
-  const unpushedOutput = await _execGit(executionManager, agentId, 'git log --branches --not --remotes --format=%H -100');
+  const unpushedOutput = await _execGit(
+    executionManager,
+    agentId,
+    'git log --branches --not --remotes --format=%H -100'
+  );
   // null = query failed (leave pushed undefined/unknown). Empty string = query
   // succeeded with no unpushed commits → every detected commit IS pushed. The
   // end-of-run reconcile relies on this to upgrade a mid-run "unpushed" flag to
   // pushed once the CLI runner has pushed and the unpushed set drains to empty.
   if (unpushedOutput !== null && !/^fatal:/im.test(unpushedOutput)) {
-    const unpushed = new Set(unpushedOutput.split('\n').map(s => s.trim()).filter(s => /^[a-f0-9]{40}$/.test(s)));
+    const unpushed = new Set(
+      unpushedOutput
+        .split('\n')
+        .map(s => s.trim())
+        .filter(s => /^[a-f0-9]{40}$/.test(s))
+    );
     for (const c of commits) c.pushed = !unpushed.has(c.hash);
   }
   return commits;
@@ -170,11 +196,16 @@ export async function reconcileTaskCommits(
   agentManager: any,
   executorAgentId: string,
   taskId: string,
-  { baselineHead, startedAt, label = 'Reconcile' }:
-    { baselineHead?: string | null; startedAt?: string | null; label?: string } = {},
+  {
+    baselineHead,
+    startedAt,
+    label = 'Reconcile',
+  }: { baselineHead?: string | null; startedAt?: string | null; label?: string } = {}
 ): Promise<number> {
   const detected = await detectCommitsSinceBaseline(
-    agentManager.executionManager, executorAgentId, { baselineHead, startedAt },
+    agentManager.executionManager,
+    executorAgentId,
+    { baselineHead, startedAt }
   );
   if (detected.length === 0) return 0;
 
@@ -193,11 +224,15 @@ export async function reconcileTaskCommits(
 
   if (fresh > 0) {
     const preview = detected.map(c => c.hash.slice(0, 7)).join(', ');
-    console.log(`🔗 [${label}] Linked ${fresh} new commit(s) [${preview}] to task ${taskId} (baseline=${baselineHead ? baselineHead.slice(0, 7) : 'time-window'})`);
+    console.log(
+      `🔗 [${label}] Linked ${fresh} new commit(s) [${preview}] to task ${taskId} (baseline=${baselineHead ? baselineHead.slice(0, 7) : 'time-window'})`
+    );
   }
   const unpushedCount = detected.filter(c => c.pushed === false).length;
   if (unpushedCount > 0) {
-    console.warn(`⚠️  [${label}] ${unpushedCount}/${detected.length} commit(s) on task ${taskId} are NOT pushed to any remote yet`);
+    console.warn(
+      `⚠️  [${label}] ${unpushedCount}/${detected.length} commit(s) on task ${taskId} are NOT pushed to any remote yet`
+    );
   }
   return fresh;
 }

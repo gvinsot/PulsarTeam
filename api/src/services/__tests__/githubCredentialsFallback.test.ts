@@ -55,8 +55,12 @@ function setEnvToken(token: string | undefined, user?: string) {
   invalidateSecret('GITHUB_TOKEN'); // readSecret caches — clear between cases
 }
 
-test('a usable per-scope OAuth token wins over the server GITHUB_TOKEN', async (t) => {
-  dbState.hit = { accessToken: 'oauth-tok', scopeType: 'board', record: { meta: { login: 'octocat' } } };
+test('a usable per-scope OAuth token wins over the server GITHUB_TOKEN', async t => {
+  dbState.hit = {
+    accessToken: 'oauth-tok',
+    scopeType: 'board',
+    record: { meta: { login: 'octocat' } },
+  };
   setEnvToken('server-pat', 'serverbot');
   stubTokenCheck(200); // GitHub accepts the OAuth token
   t.after(restoreFetch);
@@ -64,8 +68,12 @@ test('a usable per-scope OAuth token wins over the server GITHUB_TOKEN', async (
   assert.deepEqual(creds, { token: 'oauth-tok', login: 'octocat', provider: 'github' });
 });
 
-test('a dead OAuth token falls back to the server GITHUB_TOKEN', async (t) => {
-  dbState.hit = { accessToken: 'expired-tok', scopeType: 'board', record: { meta: { login: 'octocat' } } };
+test('a dead OAuth token falls back to the server GITHUB_TOKEN', async t => {
+  dbState.hit = {
+    accessToken: 'expired-tok',
+    scopeType: 'board',
+    record: { meta: { login: 'octocat' } },
+  };
   setEnvToken('server-pat', 'serverbot');
   stubTokenCheck(401); // GitHub rejects the expired OAuth token
   t.after(restoreFetch);
@@ -73,18 +81,28 @@ test('a dead OAuth token falls back to the server GITHUB_TOKEN', async (t) => {
   assert.deepEqual(creds, { token: 'server-pat', login: 'serverbot', provider: 'github' });
 });
 
-test('a dead OAuth token is kept when there is no server fallback (best we have)', async (t) => {
-  dbState.hit = { accessToken: 'expired-tok', scopeType: 'board', record: { meta: { login: 'octocat' } } };
+test('a dead OAuth token is kept when there is no server fallback (best we have)', async t => {
+  dbState.hit = {
+    accessToken: 'expired-tok',
+    scopeType: 'board',
+    record: { meta: { login: 'octocat' } },
+  };
   setEnvToken(undefined); // no server token → nothing better to switch to
   // With no fallback we must NOT even make the liveness call — assert that.
-  globalThis.fetch = (async () => { throw new Error('should not validate without a fallback'); }) as typeof fetch;
+  globalThis.fetch = (async () => {
+    throw new Error('should not validate without a fallback');
+  }) as typeof fetch;
   t.after(restoreFetch);
   const creds = await getGitHubCredentialsForAgent('agent-1c', 'board-1c');
   assert.deepEqual(creds, { token: 'expired-tok', login: 'octocat', provider: 'github' });
 });
 
-test('a transient liveness-check failure keeps the OAuth token (no false fallback)', async (t) => {
-  dbState.hit = { accessToken: 'oauth-tok', scopeType: 'board', record: { meta: { login: 'octocat' } } };
+test('a transient liveness-check failure keeps the OAuth token (no false fallback)', async t => {
+  dbState.hit = {
+    accessToken: 'oauth-tok',
+    scopeType: 'board',
+    record: { meta: { login: 'octocat' } },
+  };
   setEnvToken('server-pat', 'serverbot');
   stubTokenCheck('network'); // check itself errors out — token is not proven dead
   t.after(restoreFetch);

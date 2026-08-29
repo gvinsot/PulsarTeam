@@ -2,9 +2,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import {
-  ChevronDown, ChevronRight, ArrowRight, Clock, Scissors,
-} from 'lucide-react';
+import { ChevronDown, ChevronRight, ArrowRight, Clock, Scissors } from 'lucide-react';
 
 const markdownRemarkPlugins = [remarkGfm];
 import { cleanToolSyntax } from './cleanToolSyntax';
@@ -83,16 +81,21 @@ function DelegationCallBlock({ agent, task }) {
       >
         <ArrowRight className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0" />
         <span className="text-xs font-semibold text-indigo-300">Delegate to</span>
-        <span className="text-xs font-bold text-indigo-200 bg-indigo-500/20 px-1.5 py-0.5 rounded">{agent}</span>
-        {needsExpand && (
-          expanded
-            ? <ChevronDown className="w-3 h-3 text-dark-400 ml-auto" />
-            : <ChevronRight className="w-3 h-3 text-dark-400 ml-auto" />
-        )}
+        <span className="text-xs font-bold text-indigo-200 bg-indigo-500/20 px-1.5 py-0.5 rounded">
+          {agent}
+        </span>
+        {needsExpand &&
+          (expanded ? (
+            <ChevronDown className="w-3 h-3 text-dark-400 ml-auto" />
+          ) : (
+            <ChevronRight className="w-3 h-3 text-dark-400 ml-auto" />
+          ))}
       </div>
       <div className="px-3 pb-2">
         <div className="markdown-content text-xs text-dark-300 leading-relaxed">
-          <ReactMarkdown remarkPlugins={markdownRemarkPlugins}>{expanded || !needsExpand ? task : preview}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={markdownRemarkPlugins}>
+            {expanded || !needsExpand ? task : preview}
+          </ReactMarkdown>
         </div>
       </div>
     </div>
@@ -113,11 +116,17 @@ function formatDuration(ms) {
 function linkifyRawUrls(text) {
   if (typeof text !== 'string') return text;
   const reconstructed = reconstructWrappedOAuthUrlsInText(text);
-  return reconstructed.replace(/(https?:\/\/[^\s,)"']+)/g, (url) => `[${url}](${url})`);
+  return reconstructed.replace(/(https?:\/\/[^\s,)"']+)/g, url => `[${url}](${url})`);
 }
 
 // Make all links open in a new tab
-const markdownLinkNewTab: Components = { a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> };
+const markdownLinkNewTab: Components = {
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+};
 
 /** Renders assistant content with @delegate blocks styled as cards */
 export function RichAssistantContent({ text }) {
@@ -125,14 +134,26 @@ export function RichAssistantContent({ text }) {
   const segments = parseDelegationBlocks(cleaned);
   // If there are no delegation blocks, fast-path to plain markdown
   if (segments.length === 1 && segments[0].type === 'text') {
-    return <ReactMarkdown remarkPlugins={markdownRemarkPlugins} components={markdownLinkNewTab}>{linkifyRawUrls(segments[0].content)}</ReactMarkdown>;
+    return (
+      <ReactMarkdown remarkPlugins={markdownRemarkPlugins} components={markdownLinkNewTab}>
+        {linkifyRawUrls(segments[0].content)}
+      </ReactMarkdown>
+    );
   }
   return (
     <>
       {segments.map((seg, i) =>
-        seg.type === 'delegation'
-          ? <DelegationCallBlock key={i} agent={seg.agent} task={seg.task} />
-          : <ReactMarkdown key={i} remarkPlugins={markdownRemarkPlugins} components={markdownLinkNewTab}>{linkifyRawUrls(seg.content)}</ReactMarkdown>
+        seg.type === 'delegation' ? (
+          <DelegationCallBlock key={i} agent={seg.agent} task={seg.task} />
+        ) : (
+          <ReactMarkdown
+            key={i}
+            remarkPlugins={markdownRemarkPlugins}
+            components={markdownLinkNewTab}
+          >
+            {linkifyRawUrls(seg.content)}
+          </ReactMarkdown>
+        )
       )}
     </>
   );
@@ -158,10 +179,12 @@ function TruncateButton({ isLast, onTruncate, index }) {
 export default function ChatMessage({ message, index, isLast, onTruncate }) {
   const isUser = message.role === 'user';
   const isToolResult = message.type === 'tool-result';
-  const isDelegationTask = message.type === 'delegation-task'
-    || (!message.type && isUser && message.content?.startsWith('[TASK from '));
-  const isNudge = message.type === 'nudge'
-    || (!message.type && isUser && message.content?.startsWith('[SYSTEM]'));
+  const isDelegationTask =
+    message.type === 'delegation-task' ||
+    (!message.type && isUser && message.content?.startsWith('[TASK from '));
+  const isNudge =
+    message.type === 'nudge' ||
+    (!message.type && isUser && message.content?.startsWith('[SYSTEM]'));
 
   // Hide internal nudge messages from chat
   if (isNudge) return null;
@@ -178,7 +201,8 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
 
   // Render delegation tasks with special attribution
   if (isDelegationTask) {
-    const fromAgent = message.fromAgent || message.content?.match(/^\[TASK from (.+?)\]/)?.[1] || 'Leader';
+    const fromAgent =
+      message.fromAgent || message.content?.match(/^\[TASK from (.+?)\]/)?.[1] || 'Leader';
     // Extract just the task text (remove the [TASK from ...]: prefix)
     const taskText = message.content?.replace(/^\[TASK from .+?\]:\s*/, '') || message.content;
     return (
@@ -207,16 +231,22 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
 
   return (
     <div className={`group relative flex gap-3 ${isUser ? '' : ''}`}>
-      <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-xs font-bold ${
-        isUser
-          ? 'bg-dark-700 text-dark-300'
-          : 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white'
-      }`}>
+      <div
+        className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-xs font-bold ${
+          isUser
+            ? 'bg-dark-700 text-dark-300'
+            : 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white'
+        }`}
+      >
         {isUser ? 'You' : 'AI'}
       </div>
-      <div className={`flex-1 rounded-xl p-3 ${
-        isUser ? 'bg-dark-700/50 border border-dark-600/50' : 'bg-dark-800/50 border border-dark-700/50'
-      }`}>
+      <div
+        className={`flex-1 rounded-xl p-3 ${
+          isUser
+            ? 'bg-dark-700/50 border border-dark-600/50'
+            : 'bg-dark-800/50 border border-dark-700/50'
+        }`}
+      >
         {/* Show attached images for user messages and tool results */}
         {message.images && message.images.length > 0 && (
           <div className="flex gap-2 mb-2 flex-wrap">
@@ -226,16 +256,19 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
                 src={img.preview || `data:${img.mediaType};base64,${img.data}`}
                 alt={`Attached ${i + 1}`}
                 className="max-w-48 max-h-48 rounded-lg border border-dark-600 object-contain cursor-pointer hover:opacity-80 transition-opacity"
-                onClick={() => window.open(img.preview || `data:${img.mediaType};base64,${img.data}`, '_blank')}
+                onClick={() =>
+                  window.open(img.preview || `data:${img.mediaType};base64,${img.data}`, '_blank')
+                }
               />
             ))}
           </div>
         )}
         <div className="markdown-content text-sm text-dark-200">
-          {isUser
-            ? <ReactMarkdown remarkPlugins={markdownRemarkPlugins}>{message.content}</ReactMarkdown>
-            : <RichAssistantContent text={message.content} />
-          }
+          {isUser ? (
+            <ReactMarkdown remarkPlugins={markdownRemarkPlugins}>{message.content}</ReactMarkdown>
+          ) : (
+            <RichAssistantContent text={message.content} />
+          )}
         </div>
         {message.timestamp && (
           <p className="text-[10px] text-dark-500 mt-2 flex items-center gap-2 flex-wrap">
@@ -247,26 +280,24 @@ export default function ChatMessage({ message, index, isLast, onTruncate }) {
               <>
                 <span className="text-dark-600">·</span>
                 {message.durationMs != null && (
-                  <span title="Response duration">
-                    {formatDuration(message.durationMs)}
-                  </span>
+                  <span title="Response duration">{formatDuration(message.durationMs)}</span>
                 )}
                 {message.outputTokens != null && (
                   <>
                     <span className="text-dark-600">·</span>
-                    <span title="Output tokens">
-                      {message.outputTokens.toLocaleString()} tok
-                    </span>
+                    <span title="Output tokens">{message.outputTokens.toLocaleString()} tok</span>
                   </>
                 )}
-                {message.durationMs != null && message.outputTokens != null && message.durationMs > 0 && (
-                  <>
-                    <span className="text-dark-600">·</span>
-                    <span title="Tokens per second">
-                      {(message.outputTokens / (message.durationMs / 1000)).toFixed(1)} tok/s
-                    </span>
-                  </>
-                )}
+                {message.durationMs != null &&
+                  message.outputTokens != null &&
+                  message.durationMs > 0 && (
+                    <>
+                      <span className="text-dark-600">·</span>
+                      <span title="Tokens per second">
+                        {(message.outputTokens / (message.durationMs / 1000)).toFixed(1)} tok/s
+                      </span>
+                    </>
+                  )}
               </>
             )}
           </p>

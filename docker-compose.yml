@@ -10,7 +10,7 @@ services:
     networks:
       - internal
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U swarm_prod_app -d swarm_prod"]
+      test: ['CMD-SHELL', 'pg_isready -U swarm_prod_app -d swarm_prod']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -84,7 +84,7 @@ services:
     tmpfs:
       - /tmp:size=256M,mode=1777
     ports:
-      - "3001:3001"
+      - '3001:3001'
     networks:
       - internal
       - sandbox-net
@@ -92,7 +92,8 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      test:
+        ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:3001/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -118,7 +119,7 @@ services:
       - /var/run:size=8M,mode=0755
     ports:
       # The image runs nginx unprivileged, so the container listens on 8080.
-      - "80:8080"
+      - '80:8080'
     networks:
       - internal
     depends_on:
@@ -179,7 +180,7 @@ services:
     tmpfs:
       - /tmp:size=512M,mode=1777
     ports:
-      - "8000:8000"
+      - '8000:8000'
     networks:
       - sandbox-net
     depends_on:
@@ -193,7 +194,7 @@ services:
           cpus: '2'
           memory: 4G
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -249,7 +250,7 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -306,7 +307,7 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -369,7 +370,7 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -429,7 +430,7 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -485,7 +486,7 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -526,7 +527,7 @@ services:
     depends_on:
       - api
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -566,11 +567,11 @@ services:
     tmpfs:
       - /tmp:size=128M,mode=1777
     ports:
-      - "8010:8000"
+      - '8010:8000'
     networks:
       - sandbox-net
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -597,7 +598,13 @@ services:
       - sandbox-net
       - backend
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')"]
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://localhost:8191/health')",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -631,7 +638,7 @@ services:
     depends_on:
       - flaresolverr
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -662,7 +669,7 @@ services:
     networks:
       - sandbox-net
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ['CMD', 'curl', '-sf', 'http://localhost:8000/health']
       interval: 30s
       timeout: 10s
       retries: 3

@@ -9,7 +9,7 @@ import type { ScopeType } from '../services/database.js';
 export function resolveScope(
   agentId: string | null,
   boardId: string | null,
-  username: string | undefined,
+  username: string | undefined
 ): { scopeType: ScopeType; scopeId: string } {
   if (agentId) return { scopeType: 'agent', scopeId: agentId };
   if (boardId) return { scopeType: 'board', scopeId: boardId };
@@ -22,12 +22,12 @@ export function sendOAuthResult(
   messageType: string,
   success: boolean,
   error?: string | null,
-  extraData?: Record<string, any>,
+  extraData?: Record<string, any>
 ) {
   const nonce = crypto.randomBytes(16).toString('base64');
   res.setHeader(
     'Content-Security-Policy',
-    `default-src 'self'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'`,
+    `default-src 'self'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'`
   );
   res.send(oauthResultPage(provider, messageType, success, error, extraData, nonce));
 }
@@ -38,7 +38,7 @@ function oauthResultPage(
   success: boolean,
   error?: string | null,
   extraData?: Record<string, any>,
-  nonce?: string,
+  nonce?: string
 ): string {
   const statusClass = success ? 'success' : 'error';
   const message = success

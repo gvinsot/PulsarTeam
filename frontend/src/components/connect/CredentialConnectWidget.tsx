@@ -65,7 +65,11 @@ export interface CredentialProviderConfig {
   requiredError: string;
   /** Optional node rendered at form level, between the fields and the submit button. */
   formFooter?: ReactNode;
-  connect: (agentId: string, boardId: string | undefined, values: Record<string, string>) => Promise<any>;
+  connect: (
+    agentId: string,
+    boardId: string | undefined,
+    values: Record<string, string>
+  ) => Promise<any>;
   api: {
     getStatus: (agentId?: string, boardId?: string) => Promise<ConnectStatus>;
     disconnect: (agentId?: string, boardId?: string) => Promise<any>;
@@ -77,7 +81,12 @@ export interface CredentialProviderConfig {
 const initialValues = (fields: CredentialField[]) =>
   Object.fromEntries(fields.map(f => [f.key, f.initial ?? '']));
 
-export default function CredentialConnectWidget({ config, agentId, boardId, onStatusChange }: {
+export default function CredentialConnectWidget({
+  config,
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
   config: CredentialProviderConfig;
   agentId?: string;
   boardId?: string;
@@ -86,8 +95,13 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
   const { name, Icon, IconDisconnect } = config;
   const statusName = config.statusName || name;
   const colors = COLOR_CLASSES[config.color];
-  const { status, loading, statusError, fetchStatus, retry } =
-    useConnectStatus(statusName, config.api.getStatus, agentId, boardId, onStatusChange);
+  const { status, loading, statusError, fetchStatus, retry } = useConnectStatus(
+    statusName,
+    config.api.getStatus,
+    agentId,
+    boardId,
+    onStatusChange
+  );
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +157,9 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
           <div className="flex items-center gap-2">
             <Icon className="w-4 h-4 text-dark-500" />
             <span className="text-sm font-medium text-dark-300">{name}</span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">status check failed</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400 border border-red-500/30">
+              status check failed
+            </span>
           </div>
           <button
             onClick={retry}
@@ -161,17 +177,19 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
   }
 
   return (
-    <div className={`p-3 rounded-lg border transition-colors ${
-      status.connected
-        ? colors.card
-        : 'bg-dark-800/30 border-dark-700/30'
-    }`}>
+    <div
+      className={`p-3 rounded-lg border transition-colors ${
+        status.connected ? colors.card : 'bg-dark-800/30 border-dark-700/30'
+      }`}
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Icon className={`w-4 h-4 ${status.connected ? colors.icon : 'text-dark-400'}`} />
           <span className="text-sm font-medium text-dark-200">{name}</span>
           {status.connected ? (
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${colors.badge} flex items-center gap-1`}>
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full ${colors.badge} flex items-center gap-1`}
+            >
               <CheckCircle className="w-2.5 h-2.5" />
               {config.badgeDetail(status)}
             </span>
@@ -188,7 +206,11 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
             disabled={disconnecting}
             className="flex items-center gap-1 px-2.5 py-1 text-xs text-dark-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-40"
           >
-            {disconnecting ? <Loader2 className="w-3 h-3 animate-spin" /> : <IconDisconnect className="w-3 h-3" />}
+            {disconnecting ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <IconDisconnect className="w-3 h-3" />
+            )}
             Disconnect
           </button>
         ) : (
@@ -210,15 +232,11 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
               <input
                 type={field.type || 'text'}
                 value={values[field.key]}
-                onChange={(e) => setValues(v => ({ ...v, [field.key]: e.target.value }))}
+                onChange={e => setValues(v => ({ ...v, [field.key]: e.target.value }))}
                 placeholder={field.placeholder}
                 className={`w-full px-2.5 py-1.5 text-xs bg-dark-900 border border-dark-600 rounded-lg text-dark-200 placeholder-dark-500 ${colors.inputFocus} focus:outline-none`}
               />
-              {field.help && (
-                <p className="text-[10px] text-dark-500 mt-1">
-                  {field.help}
-                </p>
-              )}
+              {field.help && <p className="text-[10px] text-dark-500 mt-1">{field.help}</p>}
             </div>
           ))}
           {config.formFooter}
@@ -227,7 +245,11 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
             disabled={connecting || requiredMissing}
             className={`flex items-center gap-1.5 px-3 py-1.5 ${colors.button} text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-40 w-full justify-center`}
           >
-            {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {connecting ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Save className="w-3.5 h-3.5" />
+            )}
             {connecting ? 'Connecting...' : 'Save & Test Connection'}
           </button>
         </div>
@@ -241,9 +263,7 @@ export default function CredentialConnectWidget({ config, agentId, boardId, onSt
       )}
 
       {!status.connected && !showForm && (
-        <p className="mt-2 text-[11px] text-dark-500">
-          {config.connectHint}
-        </p>
+        <p className="mt-2 text-[11px] text-dark-500">{config.connectHint}</p>
       )}
     </div>
   );

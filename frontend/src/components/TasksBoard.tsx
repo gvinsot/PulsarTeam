@@ -1,8 +1,12 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import { Search, X, GitCommit, Plus, Settings, ArrowUpDown, Archive, Puzzle } from 'lucide-react';
 import {
-  Search, X, GitCommit, Plus, Settings, ArrowUpDown, Archive, Puzzle,
-} from 'lucide-react';
-import { api, deleteTask as deleteTaskById, updateTask as updateTaskById, reorderTasks, clearTaskStopped } from '../api';
+  api,
+  deleteTask as deleteTaskById,
+  updateTask as updateTaskById,
+  reorderTasks,
+  clearTaskStopped,
+} from '../api';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
 import GitHubActivityModal from './GitHubActivityModal';
 import ShareBoardModal from './ShareBoardModal';
@@ -22,7 +26,14 @@ import BoardPluginsTab from './tasks/BoardPluginsTab';
 
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
-export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent, onBoardChange, projectFilter = '' }) {
+export default function TasksBoard({
+  agents,
+  onRefresh,
+  user,
+  onNavigateToAgent,
+  onBoardChange,
+  projectFilter = '',
+}) {
   const [repoFilter, setRepoFilter] = useState(() => safeGet('tasks_repoFilter') || '');
   const [agentFilter, setAgentFilter] = useState(() => safeGet('tasks_agentFilter') || '');
   const [search, setSearch] = useState(() => safeGet('tasks_search') || '');
@@ -71,7 +82,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       }
     }
     loadBoards();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Persist active board selection and notify parent
@@ -83,10 +96,18 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   }, [activeBoardId, onBoardChange]);
 
   // Persist filter state
-  useEffect(() => { safeSet('tasks_repoFilter', repoFilter); }, [repoFilter]);
-  useEffect(() => { safeSet('tasks_agentFilter', agentFilter); }, [agentFilter]);
-  useEffect(() => { safeSet('tasks_search', search); }, [search]);
-  useEffect(() => { safeSet('tasks_sortBy', sortBy); }, [sortBy]);
+  useEffect(() => {
+    safeSet('tasks_repoFilter', repoFilter);
+  }, [repoFilter]);
+  useEffect(() => {
+    safeSet('tasks_agentFilter', agentFilter);
+  }, [agentFilter]);
+  useEffect(() => {
+    safeSet('tasks_search', search);
+  }, [search]);
+  useEffect(() => {
+    safeSet('tasks_sortBy', sortBy);
+  }, [sortBy]);
 
   // When a global project filter is set, only show boards attached to that project
   const visibleBoards = useMemo(() => {
@@ -109,7 +130,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
 
   // Active board data — resolved against the full boards list so we keep state
   // even if a board is temporarily hidden by the filter.
-  const activeBoard = useMemo(() => boards.find(b => b.id === activeBoardId) || null, [boards, activeBoardId]);
+  const activeBoard = useMemo(
+    () => boards.find(b => b.id === activeBoardId) || null,
+    [boards, activeBoardId]
+  );
 
   // Permission checks for shared boards
   const boardPermission = activeBoard?.share_permission || 'admin';
@@ -122,8 +146,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     [activeBoard]
   );
 
-  const columns = useMemo(() => workflow ? buildColumns(workflow.columns) : [], [workflow]);
-  const statusOptions = useMemo(() => workflow ? buildStatusOptions(workflow.columns) : [], [workflow]);
+  const columns = useMemo(() => (workflow ? buildColumns(workflow.columns) : []), [workflow]);
+  const statusOptions = useMemo(
+    () => (workflow ? buildStatusOptions(workflow.columns) : []),
+    [workflow]
+  );
 
   // Map column IDs to their "Instructions (agent)" decide actions from transitions
   const columnInstructionsMap = useMemo(() => {
@@ -131,7 +158,8 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     const map = {};
     workflow.transitions.forEach((tr, tIdx) => {
       (tr.actions || []).forEach((act, aIdx) => {
-        if (act.type === 'run_agent' && (act.mode === 'decide' || act.mode === 'execute')) { // execute = legacy, still shown
+        if (act.type === 'run_agent' && (act.mode === 'decide' || act.mode === 'execute')) {
+          // execute = legacy, still shown
           const colId = tr.from;
           if (!map[colId]) map[colId] = [];
           map[colId].push({
@@ -207,20 +235,27 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     }
   }, [activeBoardId]);
 
-  useEffect(() => { loadTasks(); }, [loadTasks]);
+  useEffect(() => {
+    loadTasks();
+  }, [loadTasks]);
 
   // Re-fetch tasks when agents update (status changes, etc.)
   const agentRevision = agents.map(a => `${a.id}:${a.status}`).join(',');
-  useEffect(() => { loadTasks(); }, [agentRevision]);
+  useEffect(() => {
+    loadTasks();
+  }, [agentRevision]);
 
   // Re-fetch tasks and board data when the browser tab becomes visible again
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
         loadTasks();
-        api.getBoards().then(boardList => {
-          if (boardList.length > 0) setBoards(boardList);
-        }).catch(() => {});
+        api
+          .getBoards()
+          .then(boardList => {
+            if (boardList.length > 0) setBoards(boardList);
+          })
+          .catch(() => {});
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
@@ -230,7 +265,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // Keep a ref to activeBoardId so the WebSocket handler can filter new tasks
   // without re-subscribing on every board change.
   const activeBoardIdRef = useRef(activeBoardId);
-  useEffect(() => { activeBoardIdRef.current = activeBoardId; }, [activeBoardId]);
+  useEffect(() => {
+    activeBoardIdRef.current = activeBoardId;
+  }, [activeBoardId]);
 
   // Real-time task updates via WebSocket.
   // Handles both updates to existing tasks AND insertion of newly created tasks.
@@ -285,16 +322,19 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // When called with a newly created task, optimistically insert it into
   // state so it appears immediately — even if the DB write hasn't committed
   // by the time the subsequent loadTasks() query runs.
-  const refreshAll = useCallback((newTask?: { id?: string }) => {
-    if (newTask?.id) {
-      setDbTasks(prev => {
-        if (prev.some(t => t.id === newTask.id)) return prev;
-        return [...prev, newTask];
-      });
-    }
-    loadTasks();
-    onRefresh();
-  }, [loadTasks, onRefresh]);
+  const refreshAll = useCallback(
+    (newTask?: { id?: string }) => {
+      if (newTask?.id) {
+        setDbTasks(prev => {
+          if (prev.some(t => t.id === newTask.id)) return prev;
+          return [...prev, newTask];
+        });
+      }
+      loadTasks();
+      onRefresh();
+    },
+    [loadTasks, onRefresh]
+  );
 
   const allTasks = dbTasks;
 
@@ -310,7 +350,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     for (const t of allTasks) {
       if (t.deletedAt || !t.repoFullName) continue;
       if (!seen.has(t.repoFullName)) {
-        seen.set(t.repoFullName, { fullName: t.repoFullName, provider: t.repoProvider || 'github' });
+        seen.set(t.repoFullName, {
+          fullName: t.repoFullName,
+          provider: t.repoProvider || 'github',
+        });
       }
     }
     return Array.from(seen.values()).sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -362,14 +405,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       if (repoFilter && t.repoFullName !== repoFilter) return false;
       if (q) {
         const agentName = agentNameById.get(t.agentId) || '';
-        const haystack = [
-          t.text,
-          t.details,
-          t.repoFullName,
-          t.storagePath,
-          t.project,
-          agentName,
-        ].filter(Boolean).join(' ').toLowerCase();
+        const haystack = [t.text, t.details, t.repoFullName, t.storagePath, t.project, agentName]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
         if (!haystack.includes(q)) return false;
       }
       return true;
@@ -388,26 +427,29 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   // when a buggy backend path sets errorFromStatus to 'error' itself. We
   // always fall back to the first column, logging once so the underlying
   // data bug can still be diagnosed.
-  const resolveTaskColumnId = useCallback((t) => {
-    const fallbackColId = columns[0]?.id;
-    const validColIds = new Set(columns.map(c => c.id));
-    // For tasks whose status maps to a column (col.statuses = [col.id] in
-    // taskConstants.buildColumns), pick that column.
-    if (t.status !== 'error' && validColIds.has(t.status)) return t.status;
-    // Errored tasks render in their originating column.
-    if (t.status === 'error' && t.errorFromStatus && validColIds.has(t.errorFromStatus)) {
-      return t.errorFromStatus;
-    }
-    if (fallbackColId) {
-      console.warn(
-        `[TasksBoard] Task ${t.id} has unresolvable column ` +
-        `(status="${t.status}", errorFromStatus="${t.errorFromStatus}") — ` +
-        `pinning to fallback column "${fallbackColId}" so it stays visible.`
-      );
-      return fallbackColId;
-    }
-    return null;
-  }, [columns]);
+  const resolveTaskColumnId = useCallback(
+    t => {
+      const fallbackColId = columns[0]?.id;
+      const validColIds = new Set(columns.map(c => c.id));
+      // For tasks whose status maps to a column (col.statuses = [col.id] in
+      // taskConstants.buildColumns), pick that column.
+      if (t.status !== 'error' && validColIds.has(t.status)) return t.status;
+      // Errored tasks render in their originating column.
+      if (t.status === 'error' && t.errorFromStatus && validColIds.has(t.errorFromStatus)) {
+        return t.errorFromStatus;
+      }
+      if (fallbackColId) {
+        console.warn(
+          `[TasksBoard] Task ${t.id} has unresolvable column ` +
+            `(status="${t.status}", errorFromStatus="${t.errorFromStatus}") — ` +
+            `pinning to fallback column "${fallbackColId}" so it stays visible.`
+        );
+        return fallbackColId;
+      }
+      return null;
+    },
+    [columns]
+  );
 
   // Group by column — error is an internal state, not a workflow column.
   // Use errorFromStatus to keep error tasks visible in their originating column.
@@ -426,196 +468,222 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
     return groups;
   }, [filteredTasks, columns, sortBy, resolveTaskColumnId]);
 
-  const handleDelete = useCallback(async (task) => {
-    await deleteTaskById(task.id);
-    refreshAll();
-  }, [refreshAll]);
+  const handleDelete = useCallback(
+    async task => {
+      await deleteTaskById(task.id);
+      refreshAll();
+    },
+    [refreshAll]
+  );
 
-  const handleStopAction = useCallback(async (task) => {
-    const agentId = task.actionRunningAgentId || task.assignee;
-    try {
-      if (agentId) {
-        await api.stopAgent(agentId);
-      } else {
-        // No executor recorded — fall back to a direct task-level stop so
-        // the user isn't stuck staring at a Stop button that does nothing.
-        await api.stopTask(task.id);
+  const handleStopAction = useCallback(
+    async task => {
+      const agentId = task.actionRunningAgentId || task.assignee;
+      try {
+        if (agentId) {
+          await api.stopAgent(agentId);
+        } else {
+          // No executor recorded — fall back to a direct task-level stop so
+          // the user isn't stuck staring at a Stop button that does nothing.
+          await api.stopTask(task.id);
+        }
+      } catch (err) {
+        // Executor may have been recycled (404) or permission denied — try
+        // the task-level stop as a fallback so the user can always unstick.
+        console.warn('stopAgent failed, falling back to stopTask:', err);
+        try {
+          await api.stopTask(task.id);
+        } catch (e) {
+          console.warn('stopTask failed:', e);
+        }
       }
-    } catch (err) {
-      // Executor may have been recycled (404) or permission denied — try
-      // the task-level stop as a fallback so the user can always unstick.
-      console.warn('stopAgent failed, falling back to stopTask:', err);
-      try { await api.stopTask(task.id); } catch (e) { console.warn('stopTask failed:', e); }
-    }
-    refreshAll();
-  }, [refreshAll]);
+      refreshAll();
+    },
+    [refreshAll]
+  );
 
-  const handleResumeTask = useCallback((task) => {
+  const handleResumeTask = useCallback(task => {
     const socket = getSocket();
     const agentId = task.agentId || task.assignee;
     if (!socket || !agentId) return;
     socket.emit(WsEvents.REQ_TASK_EXECUTE, { agentId, taskId: task.id });
   }, []);
 
-  const handleClearStopped = useCallback(async (task) => {
+  const handleClearStopped = useCallback(async task => {
     await clearTaskStopped(task.id);
   }, []);
 
   // Helper: reorder tasks in a column after a drop, updating positions via API
-  const reorderColumnTasks = useCallback(async (colId, draggedTaskId, dropIdx) => {
-    // Get current tasks in this column (sorted by current sort)
-    const currentTasks = tasksByColumn[colId] || [];
-    // When dragging downward within the same column, the dragged card is still
-    // in the DOM so computeDropIndex counts it. After removing it from the array,
-    // all items below the original position shift up by one — compensate here.
-    const originalIdx = currentTasks.findIndex(t => t.id === draggedTaskId);
-    let adjustedDropIdx = dropIdx;
-    if (originalIdx !== -1 && originalIdx < dropIdx) {
-      adjustedDropIdx = dropIdx - 1;
-    }
-    // Remove the dragged task if already in this column
-    const without = currentTasks.filter(t => t.id !== draggedTaskId);
-    // Insert at the drop index (clamp)
-    const idx = Math.min(Math.max(0, adjustedDropIdx), without.length);
-    const reordered = [...without.slice(0, idx), { id: draggedTaskId }, ...without.slice(idx)];
-    const orderedIds = reordered.map(t => t.id);
-    // Optimistic UI: update positions in local state
-    setDbTasks(prev => {
-      const posMap = new Map(orderedIds.map((id, i) => [id, i]));
-      return prev.map(t => posMap.has(t.id) ? { ...t, position: posMap.get(t.id) } : t);
-    });
-    // Persist
-    try {
-      await reorderTasks(orderedIds);
-    } catch (err) {
-      console.error('[TasksBoard] Reorder failed:', err.message);
-      refreshAll();
-    }
-  }, [tasksByColumn, refreshAll]);
+  const reorderColumnTasks = useCallback(
+    async (colId, draggedTaskId, dropIdx) => {
+      // Get current tasks in this column (sorted by current sort)
+      const currentTasks = tasksByColumn[colId] || [];
+      // When dragging downward within the same column, the dragged card is still
+      // in the DOM so computeDropIndex counts it. After removing it from the array,
+      // all items below the original position shift up by one — compensate here.
+      const originalIdx = currentTasks.findIndex(t => t.id === draggedTaskId);
+      let adjustedDropIdx = dropIdx;
+      if (originalIdx !== -1 && originalIdx < dropIdx) {
+        adjustedDropIdx = dropIdx - 1;
+      }
+      // Remove the dragged task if already in this column
+      const without = currentTasks.filter(t => t.id !== draggedTaskId);
+      // Insert at the drop index (clamp)
+      const idx = Math.min(Math.max(0, adjustedDropIdx), without.length);
+      const reordered = [...without.slice(0, idx), { id: draggedTaskId }, ...without.slice(idx)];
+      const orderedIds = reordered.map(t => t.id);
+      // Optimistic UI: update positions in local state
+      setDbTasks(prev => {
+        const posMap = new Map(orderedIds.map((id, i) => [id, i]));
+        return prev.map(t => (posMap.has(t.id) ? { ...t, position: posMap.get(t.id) } : t));
+      });
+      // Persist
+      try {
+        await reorderTasks(orderedIds);
+      } catch (err) {
+        console.error('[TasksBoard] Reorder failed:', err.message);
+        refreshAll();
+      }
+    },
+    [tasksByColumn, refreshAll]
+  );
 
   // Optimistic cross-column move shared by mouse and touch drops. Same-column
   // handling stays in the callers (drop reorders, touch drop is a no-op), as
   // do the isReadOnly/actionRunning guards and the outer try/catch.
-  const moveTaskToColumn = useCallback(async (task, col, insertIdx, errLabel) => {
-    const taskId = task.id;
-    const prevStatus = task.status;
-    // Optimistic: change status only. Don't stamp updatedAt with the
-    // client clock — server-emitted task:updated events use server time
-    // and would be rejected by the timestamp merge if the client clock
-    // is ahead, leaving the UI stuck (no actionRunning spinner, etc.).
-    inFlightTaskIds.current.add(taskId);
-    setDbTasks(prev => prev.map(t =>
-      t.id === taskId ? { ...t, status: col.dropStatus } : t
-    ));
-    try {
-      const updated = await updateTaskById(taskId, { column: col.dropStatus });
-      // Apply server's authoritative response so updatedAt is server-sourced.
-      if (updated?.id) {
-        setDbTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...updated } : t));
-      }
-      // After status change, reorder within the target column at the drop position
-      if (insertIdx !== undefined) {
-        await reorderColumnTasks(col.id, taskId, insertIdx);
-      }
-      refreshAll();
-    } catch (apiErr) {
-      console.error(`[TasksBoard] ${errLabel} API failed, reverting:`, apiErr.message);
-      setDbTasks(prev => prev.map(t =>
-        t.id === taskId ? { ...t, status: prevStatus } : t
-      ));
-    } finally {
-      // Hold the in-flight guard briefly to cover the window where
-      // task:updated events from workflow processing are still arriving.
-      setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
-    }
-  }, [reorderColumnTasks, refreshAll]);
-
-  const handleDrop = useCallback(async (e, col, dropIdx) => {
-    if (isReadOnly) return;
-    let agentId, taskId;
-    try {
-      ({ agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json')));
-    } catch { return; }
-    try {
-      let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
-      if (!task) task = allTasks.find(t => t.id === taskId);
-      if (!task) return;
-      if (task.actionRunning) return;
-
-      if (resolveTaskColumnId(task) === col.id) {
-        // Same column — just reorder
-        if (dropIdx !== undefined) {
-          await reorderColumnTasks(col.id, taskId, dropIdx);
+  const moveTaskToColumn = useCallback(
+    async (task, col, insertIdx, errLabel) => {
+      const taskId = task.id;
+      const prevStatus = task.status;
+      // Optimistic: change status only. Don't stamp updatedAt with the
+      // client clock — server-emitted task:updated events use server time
+      // and would be rejected by the timestamp merge if the client clock
+      // is ahead, leaving the UI stuck (no actionRunning spinner, etc.).
+      inFlightTaskIds.current.add(taskId);
+      setDbTasks(prev => prev.map(t => (t.id === taskId ? { ...t, status: col.dropStatus } : t)));
+      try {
+        const updated = await updateTaskById(taskId, { column: col.dropStatus });
+        // Apply server's authoritative response so updatedAt is server-sourced.
+        if (updated?.id) {
+          setDbTasks(prev => prev.map(t => (t.id === taskId ? { ...t, ...updated } : t)));
         }
+        // After status change, reorder within the target column at the drop position
+        if (insertIdx !== undefined) {
+          await reorderColumnTasks(col.id, taskId, insertIdx);
+        }
+        refreshAll();
+      } catch (apiErr) {
+        console.error(`[TasksBoard] ${errLabel} API failed, reverting:`, apiErr.message);
+        setDbTasks(prev => prev.map(t => (t.id === taskId ? { ...t, status: prevStatus } : t)));
+      } finally {
+        // Hold the in-flight guard briefly to cover the window where
+        // task:updated events from workflow processing are still arriving.
+        setTimeout(() => inFlightTaskIds.current.delete(taskId), 2000);
+      }
+    },
+    [reorderColumnTasks, refreshAll]
+  );
+
+  const handleDrop = useCallback(
+    async (e, col, dropIdx) => {
+      if (isReadOnly) return;
+      let agentId, taskId;
+      try {
+        ({ agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json')));
+      } catch {
         return;
       }
+      try {
+        let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+        if (!task) task = allTasks.find(t => t.id === taskId);
+        if (!task) return;
+        if (task.actionRunning) return;
 
-      await moveTaskToColumn(task, col, dropIdx, 'Drop');
-    } catch (err) {
-      console.error('[TasksBoard] Drop status change failed:', err.message);
-    }
-  }, [allTasks, columns, isReadOnly, reorderColumnTasks, resolveTaskColumnId, moveTaskToColumn]);
+        if (resolveTaskColumnId(task) === col.id) {
+          // Same column — just reorder
+          if (dropIdx !== undefined) {
+            await reorderColumnTasks(col.id, taskId, dropIdx);
+          }
+          return;
+        }
+
+        await moveTaskToColumn(task, col, dropIdx, 'Drop');
+      } catch (err) {
+        console.error('[TasksBoard] Drop status change failed:', err.message);
+      }
+    },
+    [allTasks, columns, isReadOnly, reorderColumnTasks, resolveTaskColumnId, moveTaskToColumn]
+  );
 
   // Touch drag-and-drop handler
-  const handleTouchDrop = useCallback(async (agentId, taskId, targetColumnId) => {
-    if (isReadOnly) return;
-    try {
-      let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
-      if (!task) task = allTasks.find(t => t.id === taskId);
-      if (!task) {
-        console.warn('[TasksBoard] Touch drop: task not found', { agentId, taskId });
-        return;
-      }
-      if (task.actionRunning) return;
-      const col = columns.find(c => c.id === targetColumnId);
-      if (!col) {
-        console.warn('[TasksBoard] Touch drop: column not found', targetColumnId);
-        return;
-      }
-      // Same column — silent no-op (no reorder on touch)
-      if (resolveTaskColumnId(task) === col.id) return;
+  const handleTouchDrop = useCallback(
+    async (agentId, taskId, targetColumnId) => {
+      if (isReadOnly) return;
+      try {
+        let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
+        if (!task) task = allTasks.find(t => t.id === taskId);
+        if (!task) {
+          console.warn('[TasksBoard] Touch drop: task not found', { agentId, taskId });
+          return;
+        }
+        if (task.actionRunning) return;
+        const col = columns.find(c => c.id === targetColumnId);
+        if (!col) {
+          console.warn('[TasksBoard] Touch drop: column not found', targetColumnId);
+          return;
+        }
+        // Same column — silent no-op (no reorder on touch)
+        if (resolveTaskColumnId(task) === col.id) return;
 
-      // Touch drop appends to end of target column
-      await moveTaskToColumn(task, col, (tasksByColumn[col.id] || []).length, 'Touch drop');
-    } catch (err) {
-      console.error('[TasksBoard] Touch drop failed:', err.message);
-    }
-  }, [allTasks, columns, isReadOnly, tasksByColumn, resolveTaskColumnId, moveTaskToColumn]);
+        // Touch drop appends to end of target column
+        await moveTaskToColumn(task, col, (tasksByColumn[col.id] || []).length, 'Touch drop');
+      } catch (err) {
+        console.error('[TasksBoard] Touch drop failed:', err.message);
+      }
+    },
+    [allTasks, columns, isReadOnly, tasksByColumn, resolveTaskColumnId, moveTaskToColumn]
+  );
 
   // Batch move all tasks from one column to another
-  const handleBatchMove = useCallback(async (sourceColId, targetColId, tasks) => {
-    if (isReadOnly || !tasks.length) return;
-    const targetCol = columns.find(c => c.id === targetColId);
-    if (!targetCol) return;
-    // Optimistic update — see handleDrop for why we don't stamp client-clock updatedAt.
-    const taskIds = tasks.map(t => t.id);
-    taskIds.forEach(id => inFlightTaskIds.current.add(id));
-    setDbTasks(prev => prev.map(t =>
-      taskIds.includes(t.id) ? { ...t, status: targetCol.dropStatus } : t
-    ));
-    try {
-      await Promise.all(tasks.map(t => updateTaskById(t.id, { column: targetCol.dropStatus })));
-      refreshAll();
-    } catch (err) {
-      console.error('[TasksBoard] Batch move failed:', err.message);
-      refreshAll();
-    } finally {
-      setTimeout(() => taskIds.forEach(id => inFlightTaskIds.current.delete(id)), 2000);
-    }
-  }, [columns, refreshAll, isReadOnly]);
+  const handleBatchMove = useCallback(
+    async (sourceColId, targetColId, tasks) => {
+      if (isReadOnly || !tasks.length) return;
+      const targetCol = columns.find(c => c.id === targetColId);
+      if (!targetCol) return;
+      // Optimistic update — see handleDrop for why we don't stamp client-clock updatedAt.
+      const taskIds = tasks.map(t => t.id);
+      taskIds.forEach(id => inFlightTaskIds.current.add(id));
+      setDbTasks(prev =>
+        prev.map(t => (taskIds.includes(t.id) ? { ...t, status: targetCol.dropStatus } : t))
+      );
+      try {
+        await Promise.all(tasks.map(t => updateTaskById(t.id, { column: targetCol.dropStatus })));
+        refreshAll();
+      } catch (err) {
+        console.error('[TasksBoard] Batch move failed:', err.message);
+        refreshAll();
+      } finally {
+        setTimeout(() => taskIds.forEach(id => inFlightTaskIds.current.delete(id)), 2000);
+      }
+    },
+    [columns, refreshAll, isReadOnly]
+  );
 
-  const handleBatchDelete = useCallback(async (colId, tasks) => {
-    if (isReadOnly || !tasks.length) return;
-    const taskIds = tasks.map(t => t.id);
-    setDbTasks(prev => prev.filter(t => !taskIds.includes(t.id)));
-    try {
-      await Promise.all(tasks.map(t => deleteTaskById(t.id)));
-      refreshAll();
-    } catch (err) {
-      console.error('[TasksBoard] Batch delete failed:', err.message);
-      refreshAll();
-    }
-  }, [refreshAll, isReadOnly]);
+  const handleBatchDelete = useCallback(
+    async (colId, tasks) => {
+      if (isReadOnly || !tasks.length) return;
+      const taskIds = tasks.map(t => t.id);
+      setDbTasks(prev => prev.filter(t => !taskIds.includes(t.id)));
+      try {
+        await Promise.all(tasks.map(t => deleteTaskById(t.id)));
+        refreshAll();
+      } catch (err) {
+        console.error('[TasksBoard] Batch delete failed:', err.message);
+        refreshAll();
+      }
+    },
+    [refreshAll, isReadOnly]
+  );
 
   const activeFilters = [agentFilter, repoFilter, search].filter(Boolean).length;
 
@@ -645,74 +713,95 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
   const handleRenameBoard = useCallback(async (boardId, newName) => {
     try {
       const updated = await api.updateBoard(boardId, { name: newName });
-      setBoards(prev => prev.map(b => b.id === boardId ? updated : b));
+      setBoards(prev => prev.map(b => (b.id === boardId ? updated : b)));
     } catch (err) {
       console.error('Failed to rename board:', err.message);
     }
   }, []);
 
-  const handleDeleteBoard = useCallback(async (boardId) => {
-    if (boards.length <= 1) return;
-    try {
-      await api.deleteBoard(boardId);
-      setBoards(prev => {
-        const remaining = prev.filter(b => b.id !== boardId);
-        if (activeBoardId === boardId && remaining.length > 0) {
-          setActiveBoardId(remaining[0].id);
-        }
-        return remaining;
-      });
-    } catch (err) {
-      console.error('Failed to delete board:', err.message);
-    }
-  }, [boards.length, activeBoardId]);
+  const handleDeleteBoard = useCallback(
+    async boardId => {
+      if (boards.length <= 1) return;
+      try {
+        await api.deleteBoard(boardId);
+        setBoards(prev => {
+          const remaining = prev.filter(b => b.id !== boardId);
+          if (activeBoardId === boardId && remaining.length > 0) {
+            setActiveBoardId(remaining[0].id);
+          }
+          return remaining;
+        });
+      } catch (err) {
+        console.error('Failed to delete board:', err.message);
+      }
+    },
+    [boards.length, activeBoardId]
+  );
 
-  const handleSaveWorkflow = useCallback(async (updated) => {
-    if (!activeBoardId) return;
-    const updatedBoard = await api.updateBoardWorkflow(activeBoardId, updated);
-    setBoards(prev => prev.map(b => b.id === activeBoardId ? updatedBoard : b));
-  }, [activeBoardId]);
+  const handleSaveWorkflow = useCallback(
+    async updated => {
+      if (!activeBoardId) return;
+      const updatedBoard = await api.updateBoardWorkflow(activeBoardId, updated);
+      setBoards(prev => prev.map(b => (b.id === activeBoardId ? updatedBoard : b)));
+    },
+    [activeBoardId]
+  );
 
   // Track which column is being dragged (for column reorder, distinct from task drag)
   const [draggingColumnId, setDraggingColumnId] = useState(null);
 
   // Reorder columns within the workflow (does not edit any other workflow setting)
-  const handleReorderColumns = useCallback(async (draggedColId, targetColId, position) => {
-    if (!workflow || !activeBoardId) return;
-    if (draggedColId === targetColId) return;
-    const cols = workflow.columns;
-    const fromIdx = cols.findIndex(c => c.id === draggedColId);
-    const targetIdx = cols.findIndex(c => c.id === targetColId);
-    if (fromIdx === -1 || targetIdx === -1) return;
-    const without = cols.filter(c => c.id !== draggedColId);
-    let insertIdx = without.findIndex(c => c.id === targetColId);
-    if (position === 'after') insertIdx += 1;
-    const reordered = [...without.slice(0, insertIdx), cols[fromIdx], ...without.slice(insertIdx)];
-    if (reordered.map(c => c.id).join('|') === cols.map(c => c.id).join('|')) return;
-    const updated = {
-      columns: reordered,
-      transitions: workflow.transitions,
-      version: workflow.version,
-    };
-    // Optimistic update on local boards state
-    setBoards(prev => prev.map(b => b.id === activeBoardId
-      ? { ...b, workflow: { ...(b.workflow || {}), ...updated } }
-      : b));
-    try {
-      await handleSaveWorkflow(updated);
-    } catch (err) {
-      console.error('[TasksBoard] Column reorder failed:', err.message);
-      // Reload boards on failure
+  const handleReorderColumns = useCallback(
+    async (draggedColId, targetColId, position) => {
+      if (!workflow || !activeBoardId) return;
+      if (draggedColId === targetColId) return;
+      const cols = workflow.columns;
+      const fromIdx = cols.findIndex(c => c.id === draggedColId);
+      const targetIdx = cols.findIndex(c => c.id === targetColId);
+      if (fromIdx === -1 || targetIdx === -1) return;
+      const without = cols.filter(c => c.id !== draggedColId);
+      let insertIdx = without.findIndex(c => c.id === targetColId);
+      if (position === 'after') insertIdx += 1;
+      const reordered = [
+        ...without.slice(0, insertIdx),
+        cols[fromIdx],
+        ...without.slice(insertIdx),
+      ];
+      if (reordered.map(c => c.id).join('|') === cols.map(c => c.id).join('|')) return;
+      const updated = {
+        columns: reordered,
+        transitions: workflow.transitions,
+        version: workflow.version,
+      };
+      // Optimistic update on local boards state
+      setBoards(prev =>
+        prev.map(b =>
+          b.id === activeBoardId ? { ...b, workflow: { ...(b.workflow || {}), ...updated } } : b
+        )
+      );
       try {
-        const list = await api.getBoards();
-        if (list.length > 0) setBoards(list);
-      } catch { /* no-op */ }
-    }
-  }, [workflow, activeBoardId, handleSaveWorkflow]);
+        await handleSaveWorkflow(updated);
+      } catch (err) {
+        console.error('[TasksBoard] Column reorder failed:', err.message);
+        // Reload boards on failure
+        try {
+          const list = await api.getBoards();
+          if (list.length > 0) setBoards(list);
+        } catch {
+          /* no-op */
+        }
+      }
+    },
+    [workflow, activeBoardId, handleSaveWorkflow]
+  );
 
   const handleAddColumn = useCallback(async () => {
     if (!workflow || !activeBoardId) return;
-    const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'step';
+    const slugify = name =>
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_|_$/g, '') || 'step';
     const baseName = 'New Step';
     let name = baseName;
     let suffix = 2;
@@ -757,7 +846,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         <BoardTabs
           boards={visibleBoards}
           activeBoardId={activeBoardId}
-          onSelect={(id) => { setActiveBoardId(id); setAgentFilter(''); }}
+          onSelect={id => {
+            setActiveBoardId(id);
+            setAgentFilter('');
+          }}
           onCreate={handleCreateBoard}
           onRename={handleRenameBoard}
           onDelete={handleDeleteBoard}
@@ -766,9 +858,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       )}
       {projectFilter && visibleBoards.length === 0 && boardsLoaded && (
         <div className="px-4 py-8 flex flex-col items-center gap-3 text-center">
-          <p className="text-sm text-dark-400">
-            No boards attached to the selected project yet.
-          </p>
+          <p className="text-sm text-dark-400">No boards attached to the selected project yet.</p>
           <button
             onClick={handleCreateBoard}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm font-medium
@@ -798,8 +888,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               placeholder-dark-500 focus:outline-none focus:border-indigo-500 transition-colors"
           />
           {search && (
-            <button onClick={() => setSearch('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200">
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-400 hover:text-dark-200"
+            >
               <X className="w-3.5 h-3.5" />
             </button>
           )}
@@ -813,9 +905,13 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
             focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
         >
           <option value="">All agents</option>
-          {agents.filter(a => a.enabled !== false && a.boardId === activeBoardId).map(a => (
-            <option key={a.id} value={a.id}>{a.name}</option>
-          ))}
+          {agents
+            .filter(a => a.enabled !== false && a.boardId === activeBoardId)
+            .map(a => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
         </select>
 
         {/* Repo filter */}
@@ -827,7 +923,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               focus:outline-none focus:border-indigo-500 transition-colors flex-shrink-0"
           >
             <option value="">All repos</option>
-            {boardRepos.map(r => <option key={r.fullName} value={r.fullName}>{r.fullName}</option>)}
+            {boardRepos.map(r => (
+              <option key={r.fullName} value={r.fullName}>
+                {r.fullName}
+              </option>
+            ))}
           </select>
         )}
 
@@ -841,7 +941,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               focus:outline-none focus:border-indigo-500 transition-colors"
           >
             {SORT_OPTIONS.map(opt => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
             ))}
           </select>
         </div>
@@ -849,7 +951,11 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
         {/* Clear filters */}
         {activeFilters > 0 && (
           <button
-            onClick={() => { setAgentFilter(''); setRepoFilter(''); setSearch(''); }}
+            onClick={() => {
+              setAgentFilter('');
+              setRepoFilter('');
+              setSearch('');
+            }}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-amber-400 bg-amber-500/10
               border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors flex-shrink-0 whitespace-nowrap"
           >
@@ -918,10 +1024,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       </div>
 
       {/* Board */}
-      <div
-        ref={boardScrollRef}
-        className="flex-1 min-h-0 overflow-auto scrollbar-always-visible"
-      >
+      <div ref={boardScrollRef} className="flex-1 min-h-0 overflow-auto scrollbar-always-visible">
         <div className="flex gap-4 p-6 min-w-max items-stretch">
           {columns.map((col, colIdx) => (
             <KanbanColumn
@@ -934,7 +1037,14 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
               onClearStopped={handleClearStopped}
               onDrop={handleDrop}
               onOpen={setSelectedTask}
-              onAddTask={isReadOnly ? undefined : () => { setCreateDefaultStatus(col.id); setCreateOpen(true); }}
+              onAddTask={
+                isReadOnly
+                  ? undefined
+                  : () => {
+                      setCreateDefaultStatus(col.id);
+                      setCreateOpen(true);
+                    }
+              }
               onEditInstructions={setEditInstructionsCol}
               hasInstructions={!!columnInstructionsMap[col.id]}
               showAgent={col.showAgent}
@@ -974,7 +1084,9 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
       {/* Instructions edit modal */}
       {editInstructionsCol && columnInstructionsMap[editInstructionsCol] && (
         <InstructionsEditModal
-          columnLabel={columns.find(c => c.id === editInstructionsCol)?.label || editInstructionsCol}
+          columnLabel={
+            columns.find(c => c.id === editInstructionsCol)?.label || editInstructionsCol
+          }
           instructions={columnInstructionsMap[editInstructionsCol]}
           agents={agents}
           boardId={activeBoardId}
@@ -1031,7 +1143,10 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
           statusOptions={statusOptions}
           defaultStatus={createDefaultStatus}
           boardId={activeBoardId}
-          onClose={() => { setCreateOpen(false); setCreateDefaultStatus(null); }}
+          onClose={() => {
+            setCreateOpen(false);
+            setCreateDefaultStatus(null);
+          }}
           onCreated={refreshAll}
         />
       )}
@@ -1049,10 +1164,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
 
       {/* Deleted tasks panel */}
       {showDeletedTasks && (
-        <DeletedTasksPanel
-          onClose={() => setShowDeletedTasks(false)}
-          onRestored={refreshAll}
-        />
+        <DeletedTasksPanel onClose={() => setShowDeletedTasks(false)} onRestored={refreshAll} />
       )}
 
       {/* Share board modal */}
@@ -1088,10 +1200,7 @@ export default function TasksBoard({ agents, onRefresh, user, onNavigateToAgent,
 
       {/* Board Plugins modal */}
       {showBoardPlugins && activeBoard && (
-        <BoardPluginsTab
-          board={activeBoard}
-          onClose={() => setShowBoardPlugins(false)}
-        />
+        <BoardPluginsTab board={activeBoard} onClose={() => setShowBoardPlugins(false)} />
       )}
     </div>
   );

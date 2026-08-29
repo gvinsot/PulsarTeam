@@ -12,13 +12,15 @@ import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 /** Resolve an agent by UUID (agent_id) or case-insensitive name (agent_name). */
 function findAgent(
   agentManager,
-  { agent_id, agent_name }: { agent_id?: string; agent_name?: string },
+  { agent_id, agent_name }: { agent_id?: string; agent_name?: string }
 ) {
   if (agent_id) return agentManager.agents.get(agent_id) ?? null;
   if (agent_name) {
-    return (Array.from(agentManager.agents.values()) as any[]).find(
-      (a: any) => a.name.toLowerCase() === agent_name.toLowerCase()
-    ) ?? null;
+    return (
+      (Array.from(agentManager.agents.values()) as any[]).find(
+        (a: any) => a.name.toLowerCase() === agent_name.toLowerCase()
+      ) ?? null
+    );
   }
   return null;
 }
@@ -28,12 +30,18 @@ function findAgent(
  * first so callers can pass the user-facing column name; IDs remain the
  * fallback for compatibility.
  */
-function resolveBoardStatus(board: any, boardLabel: string, status: string): { status?: string; error?: string } {
+function resolveBoardStatus(
+  board: any,
+  boardLabel: string,
+  status: string
+): { status?: string; error?: string } {
   const columns = board?.workflow?.columns || [];
   const match = resolveWorkflowStatus(columns, status);
   if (match) return { status: match.id };
   const validIds = columns.map((c: any) => c.id).join(', ');
-  return { error: `Invalid status "${status}" for board "${board?.name || boardLabel}". Valid columns: ${validIds}` };
+  return {
+    error: `Invalid status "${status}" for board "${board?.name || boardLabel}". Valid columns: ${validIds}`,
+  };
 }
 
 /**
@@ -50,7 +58,7 @@ function resolveBoardStatus(board: any, boardLabel: string, status: string): { s
  */
 async function locateTask(
   agentManager,
-  { agent_id, agent_name, task_id }: { agent_id?: string; agent_name?: string; task_id: string },
+  { agent_id, agent_name, task_id }: { agent_id?: string; agent_name?: string; task_id: string }
 ): Promise<{ task: any; agent: any; boardLevel: boolean }> {
   // DB-first resolution by full id OR unique prefix (the short-id form agents
   // pass), regardless of owner — the DB is the single source of truth.
@@ -73,21 +81,41 @@ async function locateTask(
 async function applyBoardLevelUpdate(
   agentManager,
   task: any,
-  { repoUpdate, storageUpdate, status }: {
+  {
+    repoUpdate,
+    storageUpdate,
+    status,
+  }: {
     repoUpdate?: { value: string | null; provider: string | null };
     storageUpdate?: { value: string | null; provider: string | null };
     status?: string;
-  },
+  }
 ): Promise<any> {
   const now = new Date().toISOString();
   if (!task.history) task.history = [];
   if (repoUpdate) {
-    task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'repoFullName', oldValue: task.repoFullName || null, newValue: repoUpdate.value });
+    task.history.push({
+      status: task.status,
+      at: now,
+      by: 'mcp',
+      type: 'edit',
+      field: 'repoFullName',
+      oldValue: task.repoFullName || null,
+      newValue: repoUpdate.value,
+    });
     task.repoFullName = repoUpdate.value;
     task.repoProvider = repoUpdate.value ? repoUpdate.provider : null;
   }
   if (storageUpdate) {
-    task.history.push({ status: task.status, at: now, by: 'mcp', type: 'edit', field: 'storagePath', oldValue: task.storagePath || null, newValue: storageUpdate.value });
+    task.history.push({
+      status: task.status,
+      at: now,
+      by: 'mcp',
+      type: 'edit',
+      field: 'storagePath',
+      oldValue: task.storagePath || null,
+      newValue: storageUpdate.value,
+    });
     task.storagePath = storageUpdate.value;
     task.storageProvider = storageUpdate.value ? storageUpdate.provider : null;
   }
@@ -141,28 +169,65 @@ async function applyBoardLevelUpdate(
  */
 export async function applyTaskUpdate(
   agentManager,
-  { agent_id, agent_name, task_id, status, repo_full_name, repo_provider, storage_path, storage_provider, comment, commits, done }:
-    {
-      agent_id?: string; agent_name?: string; task_id: string; status?: string;
-      repo_full_name?: string; repo_provider?: string; storage_path?: string; storage_provider?: string;
-      comment?: string; commits?: string; done?: boolean;
-    },
-): Promise<{ ok: boolean; task?: any; agent?: any; boardLevel?: boolean; completed?: boolean; error?: string }> {
+  {
+    agent_id,
+    agent_name,
+    task_id,
+    status,
+    repo_full_name,
+    repo_provider,
+    storage_path,
+    storage_provider,
+    comment,
+    commits,
+    done,
+  }: {
+    agent_id?: string;
+    agent_name?: string;
+    task_id: string;
+    status?: string;
+    repo_full_name?: string;
+    repo_provider?: string;
+    storage_path?: string;
+    storage_provider?: string;
+    comment?: string;
+    commits?: string;
+    done?: boolean;
+  }
+): Promise<{
+  ok: boolean;
+  task?: any;
+  agent?: any;
+  boardLevel?: boolean;
+  completed?: boolean;
+  error?: string;
+}> {
   // Resolve the agent (either parameter form is accepted, mirroring add_task)
   // and the task, with DB fallback/rehydration for unassigned or
   // not-yet-in-memory tasks.
-  const { task, agent, boardLevel } = await locateTask(agentManager, { agent_id, agent_name, task_id });
+  const { task, agent, boardLevel } = await locateTask(agentManager, {
+    agent_id,
+    agent_name,
+    task_id,
+  });
   if (!task) {
     return { ok: false, error: `Task not found: ${task_id}` };
   }
 
-  const hasMutation = status !== undefined || repo_full_name !== undefined || storage_path !== undefined;
-  const wantsCompletion = Boolean((comment && comment.trim()) || (commits && commits.trim()) || done);
+  const hasMutation =
+    status !== undefined || repo_full_name !== undefined || storage_path !== undefined;
+  const wantsCompletion = Boolean(
+    (comment && comment.trim()) || (commits && commits.trim()) || done
+  );
 
   // Validate at least one actionable field is provided. We treat "" as a valid
   // clear-signal for repo/storage, so explicitly check for undefined.
   if (!hasMutation && !wantsCompletion) {
-    return { ok: false, error: 'Nothing to update. Provide a status, repo_full_name, storage_path, a comment, or done:true.' };
+    return {
+      ok: false,
+      error:
+        'Nothing to update. Provide a status, repo_full_name, storage_path, a comment, or done:true.',
+    };
   }
 
   // Resolve status against the task's board workflow when provided. We fail
@@ -175,7 +240,10 @@ export async function applyTaskUpdate(
     }
     const board = await getBoardById(task.boardId);
     if (!board?.workflow?.columns?.length) {
-      return { ok: false, error: `Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.` };
+      return {
+        ok: false,
+        error: `Cannot update status: board "${board?.name || task.boardId}" has no workflow columns configured.`,
+      };
     }
     const statusResolution = resolveBoardStatus(board, task.boardId, status);
     if (statusResolution.error) {
@@ -193,7 +261,10 @@ export async function applyTaskUpdate(
     } else {
       const normalized = normalizeRepoFullName(repo_full_name);
       if (!normalized) {
-        return { ok: false, error: `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format or empty string to clear.` };
+        return {
+          ok: false,
+          error: `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format or empty string to clear.`,
+        };
       }
       repoUpdate = { value: normalized, provider: repo_provider || 'github' };
     }
@@ -209,7 +280,9 @@ export async function applyTaskUpdate(
     }
   }
 
-  console.log(`📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}, completion: ${wantsCompletion ? 'yes' : 'no'}`);
+  console.log(
+    `📝 [SwarmMCP] update_task — task ${task_id}, status: ${resolvedStatus ?? '(unchanged)'}, repo: ${repoUpdate ? (repoUpdate.value ?? '(cleared)') : '(unchanged)'}, storage: ${storageUpdate ? (storageUpdate.value ?? '(cleared)') : '(unchanged)'}, completion: ${wantsCompletion ? 'yes' : 'no'}`
+  );
 
   // Completion FIRST (before the status move) so the task is still active when
   // the execute-mode wait / commit auto-detection inspect it. For an assigned
@@ -239,7 +312,15 @@ export async function applyTaskUpdate(
       const detailBlock = `**[${actorName}]** ${comment.trim()}`;
       task.text = (task.text || '') + '\n\n---\n' + detailBlock;
       if (!task.history) task.history = [];
-      task.history.push({ status: task.status, at: now, by: actorName, type: 'edit', field: 'text', oldValue: null, newValue: detailBlock });
+      task.history.push({
+        status: task.status,
+        at: now,
+        by: actorName,
+        type: 'edit',
+        field: 'text',
+        oldValue: null,
+        newValue: detailBlock,
+      });
       task.updatedAt = now;
       await agentManager.saveTaskDirectly({ ...task, agentId: task.agentId || null });
       agentManager._emit('task:updated', { agentId: task.agentId || null, task });
@@ -251,17 +332,36 @@ export async function applyTaskUpdate(
   // mutations regardless of which fields were provided.
   let updated: any = task;
   if (boardLevel) {
-    updated = await applyBoardLevelUpdate(agentManager, task, { repoUpdate, storageUpdate, status: resolvedStatus });
+    updated = await applyBoardLevelUpdate(agentManager, task, {
+      repoUpdate,
+      storageUpdate,
+      status: resolvedStatus,
+    });
   } else {
     if (repoUpdate) {
-      updated = await agentManager.updateTaskRepo(agent.id, task_id, repoUpdate.value, repoUpdate.provider) || updated;
+      updated =
+        (await agentManager.updateTaskRepo(
+          agent.id,
+          task_id,
+          repoUpdate.value,
+          repoUpdate.provider
+        )) || updated;
     }
     if (storageUpdate) {
-      updated = await agentManager.updateTaskStorage(agent.id, task_id, storageUpdate.value, storageUpdate.provider) || updated;
+      updated =
+        (await agentManager.updateTaskStorage(
+          agent.id,
+          task_id,
+          storageUpdate.value,
+          storageUpdate.provider
+        )) || updated;
     }
     if (resolvedStatus !== undefined) {
       // First arg is the owner; credit the status-change history to the caller.
-      updated = await agentManager.setTaskStatus(agent.id, task_id, resolvedStatus, { by: callerAgent?.name }) || updated;
+      updated =
+        (await agentManager.setTaskStatus(agent.id, task_id, resolvedStatus, {
+          by: callerAgent?.name,
+        })) || updated;
     }
   }
 
@@ -381,23 +481,25 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // Hydrate each board with the distinct repos already in use on it. This
       // gives MCP callers a useful picker of valid repo_full_name values
       // without having to scan tasks themselves.
-      const result = await Promise.all(boards.map(async (b: any) => {
-        let repos: { provider: string; fullName: string }[] = [];
-        try {
-          const derived = await getReposForBoard(b.id);
-          repos = derived.map(r => ({ provider: r.provider, fullName: r.fullName }));
-        } catch {
-          // best-effort — surface the board even if repo derivation fails
-        }
-        return {
-          id: b.id,
-          name: b.name,
-          user: b.display_name || b.username || null,
-          user_id: b.user_id,
-          columns: (b.workflow?.columns || []).map((c: any) => ({ id: c.id, label: c.label })),
-          repos,
-        };
-      }));
+      const result = await Promise.all(
+        boards.map(async (b: any) => {
+          let repos: { provider: string; fullName: string }[] = [];
+          try {
+            const derived = await getReposForBoard(b.id);
+            repos = derived.map(r => ({ provider: r.provider, fullName: r.fullName }));
+          } catch {
+            // best-effort — surface the board even if repo derivation fails
+          }
+          return {
+            id: b.id,
+            name: b.name,
+            user: b.display_name || b.username || null,
+            user_id: b.user_id,
+            columns: (b.workflow?.columns || []).map((c: any) => ({ id: c.id, label: c.label })),
+            repos,
+          };
+        })
+      );
 
       return jsonOk({ count: result.length, boards: result });
     }
@@ -410,24 +512,63 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
     {
       task: z.string().describe('The task description'),
       project: z.string().optional().describe('Optional project to assign the task to'),
-      status: z.string().optional().describe('Initial task status (workflow column label preferred, column ID also accepted; defaults to the board first column/backlog)'),
-      board_id: z.string().describe('REQUIRED. Board UUID to place the task on. Use list_boards to discover board IDs.'),
-      repo_full_name: z.string().optional().describe('Repository the task targets, in "owner/repo" format (e.g. "myorg/myapp").'),
-      repo_provider: z.string().optional().describe('Repository provider \u2014 defaults to "github" when repo_full_name is set.'),
-      storage_path: z.string().optional().describe('Storage location (e.g. OneDrive folder path) the task should target.'),
-      storage_provider: z.string().optional().describe('Storage provider \u2014 defaults to "onedrive" when storage_path is set.'),
+      status: z
+        .string()
+        .optional()
+        .describe(
+          'Initial task status (workflow column label preferred, column ID also accepted; defaults to the board first column/backlog)'
+        ),
+      board_id: z
+        .string()
+        .describe(
+          'REQUIRED. Board UUID to place the task on. Use list_boards to discover board IDs.'
+        ),
+      repo_full_name: z
+        .string()
+        .optional()
+        .describe('Repository the task targets, in "owner/repo" format (e.g. "myorg/myapp").'),
+      repo_provider: z
+        .string()
+        .optional()
+        .describe('Repository provider \u2014 defaults to "github" when repo_full_name is set.'),
+      storage_path: z
+        .string()
+        .optional()
+        .describe('Storage location (e.g. OneDrive folder path) the task should target.'),
+      storage_provider: z
+        .string()
+        .optional()
+        .describe('Storage provider \u2014 defaults to "onedrive" when storage_path is set.'),
     },
-    async ({ task, project, status, board_id, repo_full_name, repo_provider, storage_path, storage_provider }) => {
+    async ({
+      task,
+      project,
+      status,
+      board_id,
+      repo_full_name,
+      repo_provider,
+      storage_path,
+      storage_provider,
+    }) => {
       // Validate repo / storage upfront so we return a clear error instead of
       // silently dropping the value (the REST endpoint coerces invalid repos
       // to null, but for the MCP an explicit failure is friendlier to LLMs).
       const repoFullName = normalizeRepoFullName(repo_full_name);
-      if (repo_full_name !== undefined && repo_full_name !== null && repo_full_name !== '' && !repoFullName) {
-        return jsonError(`Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format.`);
+      if (
+        repo_full_name !== undefined &&
+        repo_full_name !== null &&
+        repo_full_name !== '' &&
+        !repoFullName
+      ) {
+        return jsonError(
+          `Invalid repo_full_name: "${repo_full_name}". Expected "owner/repo" format.`
+        );
       }
       const storagePath = normalizeStoragePath(storage_path);
 
-      console.log(`\u{1F4E5} [SwarmMCP] add_task called \u2014 project: ${project || '(none)'}, status: ${status || '(default)'}, board_id: ${board_id}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}, task: ${task.slice(0, 100)}`);
+      console.log(
+        `\u{1F4E5} [SwarmMCP] add_task called \u2014 project: ${project || '(none)'}, status: ${status || '(default)'}, board_id: ${board_id}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}, task: ${task.slice(0, 100)}`
+      );
 
       // board_id is now mandatory — validate it exists. We no longer auto-pick
       // the "best" board for the project: the caller must choose explicitly so
@@ -438,7 +579,9 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       const resolvedBoardId: string = board_id;
       const resolvedBoard: any = await getBoardById(resolvedBoardId);
       if (!resolvedBoard) {
-        return jsonError(`Board not found: ${resolvedBoardId}. Use list_boards to discover valid IDs.`);
+        return jsonError(
+          `Board not found: ${resolvedBoardId}. Use list_boards to discover valid IDs.`
+        );
       }
 
       // Resolve status against the resolved board's workflow columns. The
@@ -459,19 +602,22 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       // (e.g. an external API caller). skipAutoRefine preserves the prior
       // behaviour of NOT auto-running the workflow on creation — the task still
       // waits to be moved/picked up, it's just now owned + in memory.
-      const ownerId = callerAgentId && agentManager.agents.get(callerAgentId) ? callerAgentId : null;
+      const ownerId =
+        callerAgentId && agentManager.agents.get(callerAgentId) ? callerAgentId : null;
       const newTask = await agentManager.addTask(ownerId, task, { type: 'mcp' }, resolvedStatus, {
         boardId: resolvedBoardId,
         repoFullName,
-        repoProvider: repoFullName ? (repo_provider || 'github') : null,
+        repoProvider: repoFullName ? repo_provider || 'github' : null,
         storagePath,
-        storageProvider: storagePath ? (storage_provider || 'onedrive') : null,
+        storageProvider: storagePath ? storage_provider || 'onedrive' : null,
         skipAutoRefine: true,
       });
       if (!newTask) {
         return jsonError('Failed to create task. Verify board_id is valid.');
       }
-      console.log(`\u2705 [SwarmMCP] add_task \u2014 Task created (owner=${ownerId || 'none'}, unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${resolvedStatus || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`);
+      console.log(
+        `\u2705 [SwarmMCP] add_task \u2014 Task created (owner=${ownerId || 'none'}, unassigned) \u2014 task: ${newTask.id}, project: ${project || '(none)'}, status: ${resolvedStatus || '(default)'}, board: ${resolvedBoardId}, repo: ${repoFullName || '(none)'}, storage: ${storagePath || '(none)'}`
+      );
 
       return jsonOk({
         success: true,
@@ -495,9 +641,31 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
       task_id: z.string().describe('Task UUID to update'),
       ...taskMutationSharedShape,
     },
-    async ({ agent_id, agent_name, task_id, status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider }) => {
+    async ({
+      agent_id,
+      agent_name,
+      task_id,
+      status,
+      comment,
+      commits,
+      done,
+      repo_full_name,
+      repo_provider,
+      storage_path,
+      storage_provider,
+    }) => {
       const r = await applyTaskUpdate(agentManager, {
-        agent_id, agent_name, task_id, status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider,
+        agent_id,
+        agent_name,
+        task_id,
+        status,
+        comment,
+        commits,
+        done,
+        repo_full_name,
+        repo_provider,
+        storage_path,
+        storage_provider,
       });
       if (r.ok) {
         return jsonOk({
@@ -517,26 +685,70 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
     'search_tasks',
     'Search the task history with optional free-text query and filters (agent, project, board, status, repo, date ranges). Returns up to `limit` tasks (default 50, max 200) ordered newest-first, with a `total` count of matches. Use to find what an agent has done, dig up similar past tasks, audit completion, or trace a bug across history.',
     {
-      query: z.string().optional().describe('Free-text search applied case-insensitively to task title, body, and error message.'),
-      agent_id: z.string().optional().describe('Restrict to tasks owned by or assigned to this agent UUID.'),
+      query: z
+        .string()
+        .optional()
+        .describe(
+          'Free-text search applied case-insensitively to task title, body, and error message.'
+        ),
+      agent_id: z
+        .string()
+        .optional()
+        .describe('Restrict to tasks owned by or assigned to this agent UUID.'),
       agent_name: z.string().optional().describe('Agent name (alternative to agent_id).'),
-      project: z.string().optional().describe('Filter by project name (case-insensitive exact match).'),
+      project: z
+        .string()
+        .optional()
+        .describe('Filter by project name (case-insensitive exact match).'),
       board_id: z.string().optional().describe('Filter by board UUID.'),
-      status: z.string().optional().describe('Filter by workflow column ID (e.g. "done", "in_progress").'),
+      status: z
+        .string()
+        .optional()
+        .describe('Filter by workflow column ID (e.g. "done", "in_progress").'),
       repo_full_name: z.string().optional().describe('Filter by repository in "owner/repo" form.'),
-      created_after: z.string().optional().describe('ISO timestamp — only tasks created at or after this moment.'),
-      created_before: z.string().optional().describe('ISO timestamp — only tasks created at or before this moment.'),
-      completed_after: z.string().optional().describe('ISO timestamp — only tasks completed at or after this moment.'),
-      completed_before: z.string().optional().describe('ISO timestamp — only tasks completed at or before this moment.'),
-      only_completed: z.boolean().optional().describe('If true, only return tasks that have a completion timestamp.'),
-      include_deleted: z.boolean().optional().describe('If true, also include soft-deleted tasks (default: false).'),
+      created_after: z
+        .string()
+        .optional()
+        .describe('ISO timestamp — only tasks created at or after this moment.'),
+      created_before: z
+        .string()
+        .optional()
+        .describe('ISO timestamp — only tasks created at or before this moment.'),
+      completed_after: z
+        .string()
+        .optional()
+        .describe('ISO timestamp — only tasks completed at or after this moment.'),
+      completed_before: z
+        .string()
+        .optional()
+        .describe('ISO timestamp — only tasks completed at or before this moment.'),
+      only_completed: z
+        .boolean()
+        .optional()
+        .describe('If true, only return tasks that have a completion timestamp.'),
+      include_deleted: z
+        .boolean()
+        .optional()
+        .describe('If true, also include soft-deleted tasks (default: false).'),
       limit: z.number().optional().describe('Max rows returned (1–200, default 50).'),
       offset: z.number().optional().describe('Skip first N rows for pagination (default 0).'),
     },
     async ({
-      query, agent_id, agent_name, project, board_id, status, repo_full_name,
-      created_after, created_before, completed_after, completed_before,
-      only_completed, include_deleted, limit, offset,
+      query,
+      agent_id,
+      agent_name,
+      project,
+      board_id,
+      status,
+      repo_full_name,
+      created_after,
+      created_before,
+      completed_after,
+      completed_before,
+      only_completed,
+      include_deleted,
+      limit,
+      offset,
     }) => {
       // Resolve agent_name → agent_id when only the name was given. An
       // unknown agent_id is deliberately passed straight through to
@@ -581,7 +793,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
         agent_id: t.agentId,
         agent_name: agentNameById.get(t.agentId) || null,
         assignee_id: t.assignee || null,
-        assignee_name: t.assignee ? (agentNameById.get(t.assignee) || null) : null,
+        assignee_name: t.assignee ? agentNameById.get(t.assignee) || null : null,
         project: t.project || null,
         board_id: t.boardId || null,
         repo_full_name: t.repoFullName || null,
@@ -612,5 +824,6 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
  */
 export function createSwarmApiMcpHandler(agentManager) {
   return createMcpHttpHandler('Swarm API', ({ agentId }) =>
-    createSwarmApiMcpServer(agentManager, agentId));
+    createSwarmApiMcpServer(agentManager, agentId)
+  );
 }

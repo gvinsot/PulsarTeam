@@ -47,7 +47,13 @@ test('provisionNewUser creates the default workflow and developer plugins', asyn
       trigger: 'on_enter',
       conditions: [],
       actions: [
-        { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+        {
+          type: 'run_agent',
+          mode: 'decide',
+          role: '__auto__',
+          instructions:
+            'Execute the task fully, and when you are finished, update the task to next state.',
+        },
       ],
     },
   ]);

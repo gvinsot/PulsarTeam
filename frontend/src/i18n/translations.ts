@@ -7,7 +7,10 @@ const translations = {
   'nav.signIn': { en: 'Sign In', fr: 'Connexion' },
 
   // Hero
-  'hero.badge': { en: 'Multi-Agent Orchestration Platform', fr: 'Plateforme d\'orchestration multi-agents' },
+  'hero.badge': {
+    en: 'Multi-Agent Orchestration Platform',
+    fr: "Plateforme d'orchestration multi-agents",
+  },
   'hero.title.part1': { en: 'Your AI Team,', fr: 'Votre équipe IA,' },
   'hero.title.highlight': { en: 'Orchestrated', fr: 'Orchestrée' },
   'hero.subtitle': {
@@ -19,7 +22,7 @@ const translations = {
   'cta.contact.title': { en: 'Free to Test', fr: 'Essai gratuit' },
   'cta.contact.desc': {
     en: 'Try PulsarTeam free for 15 days with 1 AI agent. Just log in — no credit card required.',
-    fr: 'Essayez PulsarTeam gratuitement pendant 15 jours avec 1 agent IA. Connectez-vous, c\'est tout — aucune carte bancaire requise.',
+    fr: "Essayez PulsarTeam gratuitement pendant 15 jours avec 1 agent IA. Connectez-vous, c'est tout — aucune carte bancaire requise.",
   },
   'cta.contact.descShort': {
     en: '15 days free with 1 AI agent. Just log in!',
@@ -41,14 +44,17 @@ const translations = {
   },
   'cta.support.descShort': {
     en: 'Get expert help for your instance.',
-    fr: 'Obtenez l\'aide d\'experts pour votre instance.',
+    fr: "Obtenez l'aide d'experts pour votre instance.",
   },
   'cta.contactUs': { en: 'Contact us', fr: 'Nous contacter' },
   'cta.getStarted': { en: 'Get started', fr: 'Commencer' },
   'cta.tryFree': { en: 'Try it free', fr: 'Essayer gratuitement' },
 
   // Features section
-  'features.title': { en: 'Everything you need to run an AI team', fr: 'Tout ce qu\'il faut pour gérer une équipe IA' },
+  'features.title': {
+    en: 'Everything you need to run an AI team',
+    fr: "Tout ce qu'il faut pour gérer une équipe IA",
+  },
   'features.subtitle': {
     en: 'From agent management to cost monitoring, PulsarTeam gives you full control over your autonomous workforce.',
     fr: 'De la gestion des agents au suivi des coûts, PulsarTeam vous donne un contrôle total sur vos agents autonomes.',
@@ -71,7 +77,7 @@ const translations = {
   'features.budget.title': { en: 'Budget Control', fr: 'Contrôle budgétaire' },
   'features.budget.desc': {
     en: 'Set spending limits per model. Track daily costs, token breakdown, and usage trends with real-time dashboards.',
-    fr: 'Définissez des limites de dépenses par modèle. Suivez les coûts quotidiens et l\'utilisation des tokens avec des tableaux de bord en temps réel.',
+    fr: "Définissez des limites de dépenses par modèle. Suivez les coûts quotidiens et l'utilisation des tokens avec des tableaux de bord en temps réel.",
   },
   'features.swarm.title': { en: 'Swarm Orchestration', fr: 'Orchestration en essaim' },
   'features.swarm.desc': {
@@ -81,7 +87,7 @@ const translations = {
   'features.multiProvider.title': { en: 'Multi-Provider', fr: 'Multi-fournisseur' },
   'features.multiProvider.desc': {
     en: 'Connect any LLM provider: Anthropic Claude, OpenAI GPT, Mistral, Ollama, vLLM, Google. Switch models per agent without code changes.',
-    fr: 'Connectez n\'importe quel fournisseur LLM : Anthropic Claude, OpenAI GPT, Mistral, Ollama, vLLM, Google. Changez de modèle par agent sans modifier le code.',
+    fr: "Connectez n'importe quel fournisseur LLM : Anthropic Claude, OpenAI GPT, Mistral, Ollama, vLLM, Google. Changez de modèle par agent sans modifier le code.",
   },
   'features.sandbox.title': { en: 'Sandboxed Execution', fr: 'Exécution isolée' },
   'features.sandbox.desc': {
@@ -113,7 +119,7 @@ const translations = {
   'screenshots.tasks.label': { en: 'Kanban Board', fr: 'Tableau Kanban' },
   'screenshots.tasks.caption': {
     en: 'Organize work across customizable boards with drag-and-drop columns and agent assignments.',
-    fr: 'Organisez le travail sur des tableaux personnalisables avec des colonnes drag-and-drop et l\'assignation d\'agents.',
+    fr: "Organisez le travail sur des tableaux personnalisables avec des colonnes drag-and-drop et l'assignation d'agents.",
   },
   'screenshots.projects.label': { en: 'Project Analytics', fr: 'Analytique de projets' },
   'screenshots.projects.caption': {
@@ -123,7 +129,7 @@ const translations = {
   'screenshots.budget.label': { en: 'Cost Control', fr: 'Contrôle des coûts' },
   'screenshots.budget.caption': {
     en: 'Monitor spending by model, track daily costs against budgets, and optimize token usage.',
-    fr: 'Surveillez les dépenses par modèle, suivez les coûts quotidiens et optimisez l\'utilisation des tokens.',
+    fr: "Surveillez les dépenses par modèle, suivez les coûts quotidiens et optimisez l'utilisation des tokens.",
   },
 
   // How it works
@@ -145,7 +151,10 @@ const translations = {
   },
 
   // Bottom CTA
-  'bottomCta.title': { en: 'Ready to orchestrate your AI team?', fr: 'Prêt à orchestrer votre équipe IA ?' },
+  'bottomCta.title': {
+    en: 'Ready to orchestrate your AI team?',
+    fr: 'Prêt à orchestrer votre équipe IA ?',
+  },
   'bottomCta.subtitle': {
     en: 'Choose how you want to get started with PulsarTeam.',
     fr: 'Choisissez comment démarrer avec PulsarTeam.',
@@ -154,15 +163,15 @@ const translations = {
   // Footer
   'footer.tagline': {
     en: 'Open-source multi-agent orchestration platform. Licensed under AGPL-3.0.',
-    fr: 'Plateforme open-source d\'orchestration multi-agents. Sous licence AGPL-3.0.',
+    fr: "Plateforme open-source d'orchestration multi-agents. Sous licence AGPL-3.0.",
   },
   'footer.terms': { en: 'Terms and Conditions', fr: 'Conditions générales' },
   'footer.privacy': { en: 'Data & Privacy', fr: 'Données & Confidentialité' },
 
   // Login panel
   'login.title': { en: 'Sign In', fr: 'Connexion' },
-  'login.username': { en: 'Username', fr: 'Nom d\'utilisateur' },
-  'login.usernamePlaceholder': { en: 'Enter username', fr: 'Entrez votre nom d\'utilisateur' },
+  'login.username': { en: 'Username', fr: "Nom d'utilisateur" },
+  'login.usernamePlaceholder': { en: 'Enter username', fr: "Entrez votre nom d'utilisateur" },
   'login.password': { en: 'Password', fr: 'Mot de passe' },
   'login.passwordPlaceholder': { en: 'Enter password', fr: 'Entrez votre mot de passe' },
   'login.submit': { en: 'Sign In', fr: 'Se connecter' },
@@ -172,13 +181,16 @@ const translations = {
   'login.microsoft': { en: 'Sign in with Microsoft', fr: 'Se connecter avec Microsoft' },
   'login.github': { en: 'Sign in with GitHub', fr: 'Se connecter avec GitHub' },
   'login.oauthRedirecting': { en: 'Redirecting...', fr: 'Redirection...' },
-  'login.secure': { en: 'Secure multi-agent management interface', fr: 'Interface sécurisée de gestion multi-agents' },
+  'login.secure': {
+    en: 'Secure multi-agent management interface',
+    fr: 'Interface sécurisée de gestion multi-agents',
+  },
 
   // Contact form
   'contact.title': { en: 'Contact Us', fr: 'Nous contacter' },
   'contact.titleSupport': { en: 'Request Support', fr: 'Demander du support' },
   'contact.subtitle': {
-    en: 'Tell us about your needs and we\'ll help you set up PulsarTeam in your organization.',
+    en: "Tell us about your needs and we'll help you set up PulsarTeam in your organization.",
     fr: 'Décrivez vos besoins et nous vous aiderons à mettre en place PulsarTeam dans votre organisation.',
   },
   'contact.subtitleSupport': {
@@ -200,13 +212,13 @@ const translations = {
   },
   'contact.messagePlaceholderSupport': {
     en: 'Describe the issue you need help with...',
-    fr: 'Décrivez le problème pour lequel vous avez besoin d\'aide...',
+    fr: "Décrivez le problème pour lequel vous avez besoin d'aide...",
   },
   'contact.submit': { en: 'Submit', fr: 'Envoyer' },
   'contact.sending': { en: 'Sending...', fr: 'Envoi...' },
   'contact.successTitle': { en: 'Request Submitted!', fr: 'Demande envoyée !' },
   'contact.successMessage': {
-    en: 'We\'ll get back to you as soon as possible.',
+    en: "We'll get back to you as soon as possible.",
     fr: 'Nous vous recontacterons dès que possible.',
   },
   'contact.close': { en: 'Close', fr: 'Fermer' },
@@ -222,9 +234,15 @@ const translations = {
     en: 'Configure the columns that appear on this board.',
     fr: 'Configurez les colonnes qui apparaissent sur ce tableau.',
   },
-  'boardSettings.newColumnPlaceholder': { en: 'New column title', fr: 'Titre de la nouvelle colonne' },
+  'boardSettings.newColumnPlaceholder': {
+    en: 'New column title',
+    fr: 'Titre de la nouvelle colonne',
+  },
   'boardSettings.addColumn': { en: 'Add column', fr: 'Ajouter une colonne' },
-  'boardSettings.newColumnColorAria': { en: 'New column color', fr: 'Couleur de la nouvelle colonne' },
+  'boardSettings.newColumnColorAria': {
+    en: 'New column color',
+    fr: 'Couleur de la nouvelle colonne',
+  },
   'boardSettings.columnColorAriaPrefix': { en: 'Color for', fr: 'Couleur pour' },
 } as const;
 

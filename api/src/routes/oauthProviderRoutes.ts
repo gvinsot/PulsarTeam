@@ -1,6 +1,9 @@
 import express from 'express';
 import {
-  storeOAuthToken, getOAuthToken, hasOAuthToken, deleteOAuthToken,
+  storeOAuthToken,
+  getOAuthToken,
+  hasOAuthToken,
+  deleteOAuthToken,
 } from '../services/database.js';
 import type { OAuthProvider, OAuthTokenRecord } from '../services/database.js';
 import { resolveScope } from './oauthHelper.js';
@@ -29,9 +32,18 @@ export interface OAuthProviderSpec<TConfig extends { clientId: string; clientSec
   /** Builds the provider consent URL for GET /auth-url (scopes/endpoint/extras live here). */
   buildAuthUrl(req: express.Request, config: TConfig, state: string): string;
   /** Issues the HMAC-signed OAuth state. `req` lets onedrive read its consumer-flow flag. */
-  generateState(username: string, agentId: string | null, boardId: string | null, req: express.Request): string;
+  generateState(
+    username: string,
+    agentId: string | null,
+    boardId: string | null,
+    req: express.Request
+  ): string;
   /** Provider-specific identity field(s) merged into the /status JSON — preserves each wire format. */
-  statusFields(token: OAuthTokenRecord | null, connected: boolean, username?: string): Record<string, unknown>;
+  statusFields(
+    token: OAuthTokenRecord | null,
+    connected: boolean,
+    username?: string
+  ): Record<string, unknown>;
   /**
    * Connected predicate for /status. Defaults to hasOAuthToken, which treats
    * expired-but-refreshable tokens as connected (the access token only lasts
@@ -47,7 +59,7 @@ export interface OAuthProviderSpec<TConfig extends { clientId: string; clientSec
  * transient failures (429, 5xx) must keep the token so the next call retries.
  */
 export function makeRefresh<TConfig extends { clientId: string; clientSecret: string }>(
-  spec: OAuthProviderSpec<TConfig>,
+  spec: OAuthProviderSpec<TConfig>
 ): (record: OAuthTokenRecord) => Promise<string> {
   return async function refreshToken(record: OAuthTokenRecord): Promise<string> {
     const config = spec.getConfig();
@@ -75,9 +87,14 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
       if (data.error === 'invalid_grant') {
         await deleteOAuthToken(spec.provider, record.scopeType, record.scopeId);
       } else {
-        console.warn(`⚠️ [${spec.label}] Token refresh failed (HTTP ${response.status}) for ${record.scopeType}:${record.scopeId} — keeping token for retry:`, data.error || 'no error body');
+        console.warn(
+          `⚠️ [${spec.label}] Token refresh failed (HTTP ${response.status}) for ${record.scopeType}:${record.scopeId} — keeping token for retry:`,
+          data.error || 'no error body'
+        );
       }
-      throw new Error(data.error_description || data.error || `Token refresh failed (HTTP ${response.status})`);
+      throw new Error(
+        data.error_description || data.error || `Token refresh failed (HTTP ${response.status})`
+      );
     }
 
     await storeOAuthToken({
@@ -97,7 +114,7 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
 
 /** The /status, /auth-url, and /disconnect handlers shared by every provider. */
 export function oauthProviderRoutes<TConfig extends { clientId: string; clientSecret: string }>(
-  spec: OAuthProviderSpec<TConfig>,
+  spec: OAuthProviderSpec<TConfig>
 ): express.Router {
   const router = express.Router();
 

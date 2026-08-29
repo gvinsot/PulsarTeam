@@ -13,7 +13,8 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
   const connectionString = readSecretOptional('DATABASE_CONNECTION_STRING');
 
   if (!connectionString) {
-    const msg = 'DATABASE_CONNECTION_STRING is not set — agents will not be persisted and authentication will fail (no users table to query).';
+    const msg =
+      'DATABASE_CONNECTION_STRING is not set — agents will not be persisted and authentication will fail (no users table to query).';
     if (process.env.NODE_ENV === 'production') {
       console.error('❌ ' + msg);
     } else {

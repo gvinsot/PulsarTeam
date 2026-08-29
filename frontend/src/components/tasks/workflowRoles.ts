@@ -56,7 +56,7 @@ export function collectRoles(agents: RoleAgent[] = []): string[] {
 export function buildRoleOptions(
   agents: RoleAgent[] = [],
   boardId: string | null = null,
-  currentRole: string = '',
+  currentRole: string = ''
 ): RoleOptions {
   const list = Array.isArray(agents) ? agents : [];
   const onBoard = boardId ? list.filter(a => a?.boardId === boardId) : list;

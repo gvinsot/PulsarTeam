@@ -43,11 +43,13 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - **Global broadcast** (tmux-style): send a message to ALL agents simultaneously, view responses side-by-side
 
 ### Agent Handoffs (Swarm Pattern)
+
 - **Delegate tasks** between agents with `@delegate(AgentName, "task")`
 - Swarm Leader orchestrates multi-agent workflows: specs → delegation → result synthesis
 - File and context transfer between agent workspaces
 
 ### Plugins & MCP (Model Context Protocol)
+
 - **Plugin system** to extend agent capabilities with custom instructions and MCP tools
 - **Create custom plugins** with icon, description, instructions, user config, and MCP server bindings
 - **Plugin categories**: coding, devops, writing, security, analysis, general
@@ -61,6 +63,7 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
   - **Code Index** — codebase exploration and semantic search
 
 ### MCP Servers
+
 - Agents interact with external tools via the **Model Context Protocol**
 - Each plugin can bind one or more MCP servers (URL + optional bearer token auth)
 - **Built-in MCP servers**:
@@ -70,27 +73,32 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - **Custom MCP servers**: register any HTTP MCP endpoint with optional authentication
 
 ### Code Indexing (ZVEC)
+
 - Index local source folders and extract symbols (classes, functions, methods)
 - **Semantic search** via vector embeddings (ZVEC engine with in-memory fallback)
 - Supports JavaScript/TypeScript and Python
 - REST API: index, search symbols, semantic search, file tree, file outline
 
 ### RAG (Retrieval-Augmented Generation)
+
 - Attach reference documents to any agent (.txt, .md, .json, .csv, .yaml)
 - Documents injected into agent context for grounded responses
 
 ### Voice Chat
+
 - **Speech-to-speech** via OpenAI Realtime API (Voice Leader agent)
 - Live transcription, mute toggle, connection status
 - Voice-controlled task delegation to other agents
 
 ### Sandbox Execution
+
 - Isolated Docker container for agent code execution
 - One Linux user per agent with project-scoped workspaces
 - Git operations (clone, pull, push), file management, command execution
 - Pre-installed dev tools: Node.js, Python, Go, C/C++, Docker CLI, kubectl, Chromium
 
 ### Coder Service (Claude Code)
+
 - **FastAPI proxy** to Claude Code CLI running in headless mode
 - Autonomous code execution agent with access to project files
 - Full dev environment: Python 3.12, Node.js 22, Go, Docker CLI, PostgreSQL, Chromium
@@ -98,12 +106,14 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 - Configurable model, max turns, and timeout
 
 ### Swarm API (External Integration)
+
 - REST API for external systems to interact with the swarm (API key auth)
 - `GET /api/swarm/agents` — list agents with filters (project, status)
 - `GET /api/swarm/agents/:id` — detailed agent info
 - `POST /api/swarm/agents/:id/tasks` — submit tasks to agents
 
 ### Security
+
 - **JWT-based authentication** with login page
 - API key authentication for external Swarm API
 - OAuth PKCE for Claude Code CLI

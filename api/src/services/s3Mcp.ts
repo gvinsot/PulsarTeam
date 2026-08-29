@@ -19,7 +19,10 @@ import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 function createS3Client(agentId: string | null, boardId: string | null): S3Client {
   const creds = getS3CredentialsForAgent(agentId, boardId);
-  if (!creds) throw new Error('Not connected to AWS S3. Please configure S3 credentials for this agent first.');
+  if (!creds)
+    throw new Error(
+      'Not connected to AWS S3. Please configure S3 credentials for this agent first.'
+    );
 
   return new S3Client({
     region: creds.region || 'us-east-1',
@@ -44,40 +47,50 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
     version: '1.0.0',
   });
 
-  server.tool(
-    'list_buckets',
-    'List all S3 buckets in the account.',
-    {},
-    async () => {
-      const client = createS3Client(agentId, boardId);
-      const result = await client.send(new ListBucketsCommand({}));
-      const buckets = (result.Buckets || []).map(b => ({
-        name: b.Name,
-        created: b.CreationDate?.toISOString() || null,
-      }));
+  server.tool('list_buckets', 'List all S3 buckets in the account.', {}, async () => {
+    const client = createS3Client(agentId, boardId);
+    const result = await client.send(new ListBucketsCommand({}));
+    const buckets = (result.Buckets || []).map(b => ({
+      name: b.Name,
+      created: b.CreationDate?.toISOString() || null,
+    }));
 
-      const summary = buckets.map(b => `- ${b.name} (created: ${b.created || 'unknown'})`).join('\n');
-      return text(`Found ${buckets.length} bucket(s):\n\n${summary}\n\nJSON:\n${JSON.stringify(buckets, null, 2)}`);
-    }
-  );
+    const summary = buckets.map(b => `- ${b.name} (created: ${b.created || 'unknown'})`).join('\n');
+    return text(
+      `Found ${buckets.length} bucket(s):\n\n${summary}\n\nJSON:\n${JSON.stringify(buckets, null, 2)}`
+    );
+  });
 
   server.tool(
     'list_objects',
     'List objects (files) in an S3 bucket. Supports prefix filtering and pagination.',
     {
       bucket: z.string().describe('Bucket name'),
-      prefix: z.string().optional().default('').describe('Key prefix to filter (e.g. "uploads/" or "data/2024/")'),
-      max_keys: z.number().optional().default(100).describe('Max number of objects to return (default 100, max 1000)'),
-      continuation_token: z.string().optional().describe('Token for pagination (from previous response)'),
+      prefix: z
+        .string()
+        .optional()
+        .default('')
+        .describe('Key prefix to filter (e.g. "uploads/" or "data/2024/")'),
+      max_keys: z
+        .number()
+        .optional()
+        .default(100)
+        .describe('Max number of objects to return (default 100, max 1000)'),
+      continuation_token: z
+        .string()
+        .optional()
+        .describe('Token for pagination (from previous response)'),
     },
     async ({ bucket, prefix, max_keys, continuation_token }) => {
       const client = createS3Client(agentId, boardId);
-      const result = await client.send(new ListObjectsV2Command({
-        Bucket: bucket,
-        Prefix: prefix || undefined,
-        MaxKeys: Math.min(max_keys || 100, 1000),
-        ContinuationToken: continuation_token || undefined,
-      }));
+      const result = await client.send(
+        new ListObjectsV2Command({
+          Bucket: bucket,
+          Prefix: prefix || undefined,
+          MaxKeys: Math.min(max_keys || 100, 1000),
+          ContinuationToken: continuation_token || undefined,
+        })
+      );
 
       const objects = (result.Contents || []).map(obj => ({
         key: obj.Key,
@@ -89,19 +102,25 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
 
       const prefixes = (result.CommonPrefixes || []).map(p => p.Prefix);
 
-      const summary = objects.map(o => {
-        const icon = o.key?.endsWith('/') ? '📁' : '📄';
-        return `${icon} ${o.key} (${o.sizeFormatted})`;
-      }).join('\n');
+      const summary = objects
+        .map(o => {
+          const icon = o.key?.endsWith('/') ? '📁' : '📄';
+          return `${icon} ${o.key} (${o.sizeFormatted})`;
+        })
+        .join('\n');
 
       const nextToken = result.IsTruncated ? result.NextContinuationToken : null;
-      const pagination = nextToken ? `\n\nMore results available. Use continuation_token: "${nextToken}"` : '';
+      const pagination = nextToken
+        ? `\n\nMore results available. Use continuation_token: "${nextToken}"`
+        : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Bucket "${bucket}" prefix "${prefix || "/"}" — ${objects.length} object(s)${result.IsTruncated ? ` (truncated, ${result.KeyCount} shown)` : ""}:\n\n${summary}${prefixes.length ? `\n\nCommon prefixes: ${prefixes.join(", ")}` : ""}${pagination}\n\nJSON:\n${JSON.stringify(objects, null, 2)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Bucket "${bucket}" prefix "${prefix || '/'}" — ${objects.length} object(s)${result.IsTruncated ? ` (truncated, ${result.KeyCount} shown)` : ''}:\n\n${summary}${prefixes.length ? `\n\nCommon prefixes: ${prefixes.join(', ')}` : ''}${pagination}\n\nJSON:\n${JSON.stringify(objects, null, 2)}`,
+          },
+        ],
       };
     }
   );
@@ -121,17 +140,21 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       const size = head.ContentLength || 0;
 
       if (size > 5 * 1024 * 1024) {
-        return text(`Object "${key}" is too large to read directly (${formatSize(size)}, type: ${contentType}). Use get_presigned_url to get a download link.`);
+        return text(
+          `Object "${key}" is too large to read directly (${formatSize(size)}, type: ${contentType}). Use get_presigned_url to get a download link.`
+        );
       }
 
       const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-      const body = await result.Body?.transformToString() || '';
+      const body = (await result.Body?.transformToString()) || '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Object: ${key}\nBucket: ${bucket}\nSize: ${formatSize(size)}\nType: ${contentType}\nLast modified: ${head.LastModified?.toISOString() || 'unknown'}\n\n--- Content ---\n${body}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Object: ${key}\nBucket: ${bucket}\nSize: ${formatSize(size)}\nType: ${contentType}\nLast modified: ${head.LastModified?.toISOString() || 'unknown'}\n\n--- Content ---\n${body}`,
+          },
+        ],
       };
     }
   );
@@ -143,18 +166,26 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
       bucket: z.string().describe('Bucket name'),
       key: z.string().describe('Object key (path) — e.g. "data/report.json"'),
       content: z.string().describe('Text content to upload'),
-      content_type: z.string().optional().default('text/plain').describe('MIME type (default: text/plain)'),
+      content_type: z
+        .string()
+        .optional()
+        .default('text/plain')
+        .describe('MIME type (default: text/plain)'),
     },
     async ({ bucket, key, content, content_type }) => {
       const client = createS3Client(agentId, boardId);
-      await client.send(new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: content,
-        ContentType: content_type || 'text/plain',
-      }));
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          Body: content,
+          ContentType: content_type || 'text/plain',
+        })
+      );
 
-      return text(`Object uploaded: s3://${bucket}/${key} (${formatSize(Buffer.byteLength(content, 'utf8'))}, ${content_type})`);
+      return text(
+        `Object uploaded: s3://${bucket}/${key} (${formatSize(Buffer.byteLength(content, 'utf8'))}, ${content_type})`
+      );
     }
   );
 
@@ -184,11 +215,13 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
     },
     async ({ source_bucket, source_key, dest_bucket, dest_key }) => {
       const client = createS3Client(agentId, boardId);
-      await client.send(new CopyObjectCommand({
-        CopySource: `${source_bucket}/${source_key}`,
-        Bucket: dest_bucket,
-        Key: dest_key,
-      }));
+      await client.send(
+        new CopyObjectCommand({
+          CopySource: `${source_bucket}/${source_key}`,
+          Bucket: dest_bucket,
+          Key: dest_key,
+        })
+      );
 
       return text(`Copied s3://${source_bucket}/${source_key} → s3://${dest_bucket}/${dest_key}`);
     }
@@ -227,18 +260,30 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
     {
       bucket: z.string().describe('Bucket name'),
       key: z.string().describe('Object key (path)'),
-      operation: z.enum(['get', 'put']).default('get').describe('"get" for download URL, "put" for upload URL'),
-      expires_in: z.number().optional().default(3600).describe('URL validity in seconds (default: 3600 = 1 hour)'),
+      operation: z
+        .enum(['get', 'put'])
+        .default('get')
+        .describe('"get" for download URL, "put" for upload URL'),
+      expires_in: z
+        .number()
+        .optional()
+        .default(3600)
+        .describe('URL validity in seconds (default: 3600 = 1 hour)'),
     },
     async ({ bucket, key, operation, expires_in }) => {
       const client = createS3Client(agentId, boardId);
-      const command = operation === 'put'
-        ? new PutObjectCommand({ Bucket: bucket, Key: key })
-        : new GetObjectCommand({ Bucket: bucket, Key: key });
+      const command =
+        operation === 'put'
+          ? new PutObjectCommand({ Bucket: bucket, Key: key })
+          : new GetObjectCommand({ Bucket: bucket, Key: key });
 
-      const url = await getSignedUrl(client, command, { expiresIn: Math.min(expires_in || 3600, 86400) });
+      const url = await getSignedUrl(client, command, {
+        expiresIn: Math.min(expires_in || 3600, 86400),
+      });
 
-      return text(`Presigned ${operation.toUpperCase()} URL for s3://${bucket}/${key} (valid ${expires_in}s):\n${url}`);
+      return text(
+        `Presigned ${operation.toUpperCase()} URL for s3://${bucket}/${key} (valid ${expires_in}s):\n${url}`
+      );
     }
   );
 
@@ -247,19 +292,28 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
     'Create a new S3 bucket.',
     {
       bucket: z.string().describe('Bucket name (must be globally unique, lowercase, 3-63 chars)'),
-      region: z.string().optional().describe('AWS region for the bucket (uses configured region if omitted)'),
+      region: z
+        .string()
+        .optional()
+        .describe('AWS region for the bucket (uses configured region if omitted)'),
     },
     async ({ bucket, region }) => {
       const creds = getS3CredentialsForAgent(agentId, boardId);
       const client = createS3Client(agentId, boardId);
 
       const bucketRegion = region || creds?.region || 'us-east-1';
-      await client.send(new CreateBucketCommand({
-        Bucket: bucket,
-        ...(bucketRegion !== 'us-east-1' ? {
-          CreateBucketConfiguration: { LocationConstraint: bucketRegion as BucketLocationConstraint },
-        } : {}),
-      }));
+      await client.send(
+        new CreateBucketCommand({
+          Bucket: bucket,
+          ...(bucketRegion !== 'us-east-1'
+            ? {
+                CreateBucketConfiguration: {
+                  LocationConstraint: bucketRegion as BucketLocationConstraint,
+                },
+              }
+            : {}),
+        })
+      );
 
       return text(`Bucket "${bucket}" created in ${bucketRegion}.`);
     }
@@ -269,6 +323,5 @@ export function createS3McpServer(agentId: string | null = null, boardId: string
 }
 
 export function createS3McpHandler() {
-  return createMcpHttpHandler('S3', ({ agentId, boardId }) =>
-    createS3McpServer(agentId, boardId));
+  return createMcpHttpHandler('S3', ({ agentId, boardId }) => createS3McpServer(agentId, boardId));
 }

@@ -48,12 +48,21 @@ export async function startServer(): Promise<{ url: string; server: http.Server 
 
   // ── Local control endpoints (under /__local to never clash with /api) ──
   app.get('/__local/status', (_req, res) => {
-    res.json({ connected: bridge.connected, folders: bridge.folders, activityCount: bridge.activity.length });
+    res.json({
+      connected: bridge.connected,
+      folders: bridge.folders,
+      activityCount: bridge.activity.length,
+    });
   });
-  app.get('/__local/activity', (_req, res) => res.json({ activity: bridge.activity.slice(0, 100) }));
+  app.get('/__local/activity', (_req, res) =>
+    res.json({ activity: bridge.activity.slice(0, 100) })
+  );
   app.post('/__local/pick-folder', async (_req, res) => {
     const folder = await pickFolder();
-    if (!folder) { res.json({ folder: null }); return; }
+    if (!folder) {
+      res.json({ folder: null });
+      return;
+    }
     await bridge.setFolder(folder);
     res.json({ folder });
   });

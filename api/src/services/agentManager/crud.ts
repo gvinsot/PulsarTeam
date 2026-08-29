@@ -4,10 +4,38 @@ import { saveAgent, deleteAgentFromDb } from '../database.js';
 import { AGENT_TEMPLATES } from '../../data/templates.js';
 
 const AGENT_UPDATE_FIELDS = [
-  'name', 'role', 'description', 'instructions', 'temperature',
-  'maxTokens', 'contextLength', 'ragDocuments', 'skills', 'mcpServers', 'mcpAuth', 'handoffTargets',
-  'color', 'icon', 'project', 'isLeader', 'isVoice', 'isReasoning', 'voice', 'voiceMode', 'ttsVoiceId', 'ttsEnabled', 'enabled',
-  'costPerInputToken', 'costPerOutputToken', 'llmConfigId', 'ownerId', 'boardId', 'permissions', 'credentials', 'runner', 'toolHooks'
+  'name',
+  'role',
+  'description',
+  'instructions',
+  'temperature',
+  'maxTokens',
+  'contextLength',
+  'ragDocuments',
+  'skills',
+  'mcpServers',
+  'mcpAuth',
+  'handoffTargets',
+  'color',
+  'icon',
+  'project',
+  'isLeader',
+  'isVoice',
+  'isReasoning',
+  'voice',
+  'voiceMode',
+  'ttsVoiceId',
+  'ttsEnabled',
+  'enabled',
+  'costPerInputToken',
+  'costPerOutputToken',
+  'llmConfigId',
+  'ownerId',
+  'boardId',
+  'permissions',
+  'credentials',
+  'runner',
+  'toolHooks',
 ];
 
 const LLM_FIELDS = ['llmConfigId'];
@@ -16,10 +44,7 @@ const LLM_FIELDS = ['llmConfigId'];
 // member in the same batch; runtime state (history, sessions, metrics, tasks)
 // remains per-agent.
 const BATCH_SHARED_FIELDS = new Set(AGENT_UPDATE_FIELDS);
-const BATCH_CLONE_FIELDS = [
-  ...AGENT_UPDATE_FIELDS.filter((field) => field !== 'name'),
-  'template',
-];
+const BATCH_CLONE_FIELDS = [...AGENT_UPDATE_FIELDS.filter(field => field !== 'name'), 'template'];
 
 function _batchBaseName(name: string): string {
   return (name || 'Unnamed Agent').replace(/\s+#\d+$/, '');
@@ -30,7 +55,12 @@ function _cloneJson(value: any): any {
   return JSON.parse(JSON.stringify(value));
 }
 
-function _batchMemberConfigFromAgent(agent: any, batchId: string, batchIndex: number, name: string): any {
+function _batchMemberConfigFromAgent(
+  agent: any,
+  batchId: string,
+  batchIndex: number,
+  name: string
+): any {
   const config: any = { name, batchId, batchIndex };
   for (const field of BATCH_CLONE_FIELDS) {
     if (agent[field] !== undefined) config[field] = _cloneJson(agent[field]);
@@ -40,7 +70,6 @@ function _batchMemberConfigFromAgent(agent: any, batchId: string, batchIndex: nu
 
 /** @this {import('./index.js').AgentManager} */
 export const crudMethods = {
-
   async create(this: any, config: any): Promise<any> {
     const id = uuidv4();
     const agent = {
@@ -69,7 +98,7 @@ export const crudMethods = {
         totalTokensIn: 0,
         totalTokensOut: 0,
         lastActiveAt: null,
-        errors: 0
+        errors: 0,
       },
       handoffTargets: config.handoffTargets || [],
       project: config.project || null,
@@ -96,7 +125,7 @@ export const crudMethods = {
       color: config.color || this._randomColor(),
       icon: config.icon || '🤖',
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     };
 
     this.agents.set(id, agent);
@@ -199,14 +228,18 @@ export const crudMethods = {
           )
         : updates;
 
-      const llmChanged = LLM_FIELDS.some(f => effectiveUpdates[f] !== undefined && effectiveUpdates[f] !== target[f]);
+      const llmChanged = LLM_FIELDS.some(
+        f => effectiveUpdates[f] !== undefined && effectiveUpdates[f] !== target[f]
+      );
 
       if (llmChanged) {
         target.conversationHistory = [];
         target.runnerSessions = {};
         target.currentThinking = '';
         delete target._compactionArmed;
-        console.log(`🔄 [LLM Change] Reset session and history for "${target.name}" — LLM config changed`);
+        console.log(
+          `🔄 [LLM Change] Reset session and history for "${target.name}" — LLM config changed`
+        );
       }
 
       for (const key of AGENT_UPDATE_FIELDS) {
@@ -251,7 +284,9 @@ export const crudMethods = {
           const newProject = effectiveUpdates[key];
           // Stop any in-flight work before swapping the agent's repo so we
           // don't keep streaming/exec-ing against the old project's files.
-          try { this.stopAgent(target.id); } catch (e: any) {
+          try {
+            this.stopAgent(target.id);
+          } catch (e: any) {
             console.warn(`⚠️  [Project Change] stopAgent(${target.id}) failed:`, e?.message);
           }
           this._switchProjectContext(target, target.project, newProject);
@@ -271,12 +306,22 @@ export const crudMethods = {
               try {
                 const { buildRepoCloneUrl } = await import('../repoUrl.js');
                 const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
-                const gitCreds = await getGitHubCredentialsForAgent(targetIdForSync, boardIdForSync).catch(() => null);
+                const gitCreds = await getGitHubCredentialsForAgent(
+                  targetIdForSync,
+                  boardIdForSync
+                ).catch(() => null);
                 if (newProject) {
                   const gitUrl = buildRepoCloneUrl(newProject);
                   if (gitUrl) {
-                    await this.executionManager.switchProject(targetIdForSync, newProject, gitUrl, gitCreds);
-                    console.log(`🔄 [Project Change] Repo synced for "${targetNameForSync}" → "${newProject}"`);
+                    await this.executionManager.switchProject(
+                      targetIdForSync,
+                      newProject,
+                      gitUrl,
+                      gitCreds
+                    );
+                    console.log(
+                      `🔄 [Project Change] Repo synced for "${targetNameForSync}" → "${newProject}"`
+                    );
                   }
                 } else {
                   await this.executionManager.ensureProject(targetIdForSync, null, null, gitCreds);
@@ -289,15 +334,25 @@ export const crudMethods = {
                 try {
                   await this.restartRuntime(targetIdForSync);
                 } catch (restartErr: any) {
-                  console.warn(`🔄 [Project Change] restartRuntime failed for "${targetNameForSync}":`, restartErr?.message);
+                  console.warn(
+                    `🔄 [Project Change] restartRuntime failed for "${targetNameForSync}":`,
+                    restartErr?.message
+                  );
                 }
               } catch (err: any) {
-                console.error(`🔄 [Project Change] Repo sync failed for "${targetNameForSync}":`, err?.message);
+                console.error(
+                  `🔄 [Project Change] Repo sync failed for "${targetNameForSync}":`,
+                  err?.message
+                );
               } finally {
                 const synced = this.agents.get(targetIdForSync);
                 if (synced) {
                   synced.projectSwitching = false;
-                  try { await saveAgent(synced); } catch { /* best effort */ }
+                  try {
+                    await saveAgent(synced);
+                  } catch {
+                    /* best effort */
+                  }
                   this._emit('agent:updated', this._sanitize(synced));
                 }
               }
@@ -321,7 +376,10 @@ export const crudMethods = {
    * Reset instructions of all agents matching a role to their default template.
    * Returns the list of agent ids that were reset.
    */
-  async resetInstructionsByRole(this: any, role: string): Promise<{ error: string | null; reset: string[] }> {
+  async resetInstructionsByRole(
+    this: any,
+    role: string
+  ): Promise<{ error: string | null; reset: string[] }> {
     const template = (AGENT_TEMPLATES as any[]).find((t: any) => t.role === role);
     if (!template) return { error: 'no_template', reset: [] };
 
@@ -366,19 +424,29 @@ export const crudMethods = {
     return true;
   },
 
-  async updateAllProjects(this: any, project: string | null, agentIdFilter: Set<string> | null = null): Promise<any[]> {
+  async updateAllProjects(
+    this: any,
+    project: string | null,
+    agentIdFilter: Set<string> | null = null
+  ): Promise<any[]> {
     const updated: any[] = [];
     const toSync: Array<{ id: string; name: string; boardId: string | null }> = [];
     for (const agent of this.agents.values()) {
       if (agentIdFilter && !agentIdFilter.has((agent as any).id)) continue;
       const projectChanged = project !== (agent as any).project;
       if (projectChanged) {
-        try { this.stopAgent((agent as any).id); } catch (e: any) {
+        try {
+          this.stopAgent((agent as any).id);
+        } catch (e: any) {
           console.warn(`⚠️  [Project Change] stopAgent(${(agent as any).id}) failed:`, e?.message);
         }
         this._switchProjectContext(agent, (agent as any).project, project);
         (agent as any).projectChangedAt = project ? new Date().toISOString() : null;
-        toSync.push({ id: (agent as any).id, name: (agent as any).name, boardId: (agent as any).boardId || null });
+        toSync.push({
+          id: (agent as any).id,
+          name: (agent as any).name,
+          boardId: (agent as any).boardId || null,
+        });
       }
       (agent as any).project = project;
       (agent as any).updatedAt = new Date().toISOString();
@@ -393,7 +461,9 @@ export const crudMethods = {
           const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
           for (const t of toSync) {
             try {
-              const gitCreds = await getGitHubCredentialsForAgent(t.id, t.boardId).catch(() => null);
+              const gitCreds = await getGitHubCredentialsForAgent(t.id, t.boardId).catch(
+                () => null
+              );
               if (project) {
                 const gitUrl = buildRepoCloneUrl(project);
                 if (gitUrl) {

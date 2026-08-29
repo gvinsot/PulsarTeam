@@ -14,13 +14,15 @@ const GMAIL_CONFIG: OAuthProviderConfig = {
   messageType: 'gmail-oauth-callback',
   buttonClass: 'bg-blue-500 hover:bg-blue-600',
   connectLabel: 'Connect with Google',
-  badgeDetail: (status) => status.email || null,
+  badgeDetail: status => status.email || null,
   configuredHint: (
     <>
-      Set <code className="text-dark-400">GOOGLE_CLIENT_ID</code> and <code className="text-dark-400">GOOGLE_CLIENT_SECRET</code> — one OAuth client serves Gmail, Drive, and Google login.
+      Set <code className="text-dark-400">GOOGLE_CLIENT_ID</code> and{' '}
+      <code className="text-dark-400">GOOGLE_CLIENT_SECRET</code> — one OAuth client serves Gmail,
+      Drive, and Google login.
     </>
   ),
-  connectHint: (agentId) =>
+  connectHint: agentId =>
     agentId
       ? 'Click "Connect with Google" to authorize this agent to access Gmail.'
       : 'Click "Connect with Google" to authorize Gmail access. A popup will open for Google login.',
@@ -32,5 +34,12 @@ const GMAIL_CONFIG: OAuthProviderConfig = {
 };
 
 export default function GmailConnect({ agentId, boardId, onStatusChange }) {
-  return <OAuthConnectWidget config={GMAIL_CONFIG} agentId={agentId} boardId={boardId} onStatusChange={onStatusChange} />;
+  return (
+    <OAuthConnectWidget
+      config={GMAIL_CONFIG}
+      agentId={agentId}
+      boardId={boardId}
+      onStatusChange={onStatusChange}
+    />
+  );
 }

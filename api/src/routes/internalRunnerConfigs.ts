@@ -27,8 +27,14 @@ export function internalRunnerConfigsRoutes() {
 
   router.get('/:runner/agents/:agentId', async (req, res) => {
     const { runner, agentId } = req.params;
-    if (!ALLOWED_RUNNERS.has(runner)) { res.status(400).json({ error: 'unsupported runner' }); return; }
-    if (!agentId) { res.status(400).json({ error: 'agentId required' }); return; }
+    if (!ALLOWED_RUNNERS.has(runner)) {
+      res.status(400).json({ error: 'unsupported runner' });
+      return;
+    }
+    if (!agentId) {
+      res.status(400).json({ error: 'agentId required' });
+      return;
+    }
     const rec = await getRunnerConfig(runner, SCOPE_TYPE, agentId);
     if (!rec || !rec.files || Object.keys(rec.files).length === 0) {
       // getRunnerConfig also returns null on DB errors; probe so a transient
@@ -38,7 +44,7 @@ export function internalRunnerConfigsRoutes() {
         try {
           await pool.query(
             'SELECT 1 FROM runner_configs WHERE runner = $1 AND scope_type = $2 AND scope_id = $3',
-            [runner, SCOPE_TYPE, agentId],
+            [runner, SCOPE_TYPE, agentId]
           );
         } catch {
           res.status(500).json({ error: 'db error' });
@@ -53,8 +59,14 @@ export function internalRunnerConfigsRoutes() {
 
   router.put('/:runner/agents/:agentId', async (req, res) => {
     const { runner, agentId } = req.params;
-    if (!ALLOWED_RUNNERS.has(runner)) { res.status(400).json({ error: 'unsupported runner' }); return; }
-    if (!agentId) { res.status(400).json({ error: 'agentId required' }); return; }
+    if (!ALLOWED_RUNNERS.has(runner)) {
+      res.status(400).json({ error: 'unsupported runner' });
+      return;
+    }
+    if (!agentId) {
+      res.status(400).json({ error: 'agentId required' });
+      return;
+    }
     const files = (req.body || {}).files;
     if (!files || typeof files !== 'object' || Array.isArray(files)) {
       res.status(400).json({ error: 'files object required' });
@@ -65,12 +77,18 @@ export function internalRunnerConfigsRoutes() {
     for (const [k, v] of Object.entries(files)) {
       if (typeof k === 'string' && typeof v === 'string') clean[k] = v;
     }
-    if (Object.keys(clean).length === 0) { res.status(400).json({ error: 'no valid files' }); return; }
+    if (Object.keys(clean).length === 0) {
+      res.status(400).json({ error: 'no valid files' });
+      return;
+    }
     // A 2xx here stops the runner's retry/backoff loop, so never fake success:
     // saveRunnerConfig swallows DB errors (and no-ops without a pool) — answer
     // 5xx unless a read-back confirms the write actually landed.
     const pool = getPool();
-    if (!pool) { res.status(503).json({ error: 'database unavailable' }); return; }
+    if (!pool) {
+      res.status(503).json({ error: 'database unavailable' });
+      return;
+    }
     await saveRunnerConfig(runner, SCOPE_TYPE, agentId, clean);
     const saved = await getRunnerConfig(runner, SCOPE_TYPE, agentId);
     if (!saved || JSON.stringify(saved.files) !== JSON.stringify(clean)) {
@@ -82,8 +100,14 @@ export function internalRunnerConfigsRoutes() {
 
   router.delete('/:runner/agents/:agentId', async (req, res) => {
     const { runner, agentId } = req.params;
-    if (!ALLOWED_RUNNERS.has(runner)) { res.status(400).json({ error: 'unsupported runner' }); return; }
-    if (!agentId) { res.status(400).json({ error: 'agentId required' }); return; }
+    if (!ALLOWED_RUNNERS.has(runner)) {
+      res.status(400).json({ error: 'unsupported runner' });
+      return;
+    }
+    if (!agentId) {
+      res.status(400).json({ error: 'agentId required' });
+      return;
+    }
     await deleteRunnerConfig(runner, SCOPE_TYPE, agentId);
     res.json({ ok: true });
   });

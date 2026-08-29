@@ -1,5 +1,22 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, Trash2, RotateCw, Save, Shield, ShieldOff, Zap, CheckCircle, XCircle, Loader, Globe, Lock, KeyRound, Info } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Trash2,
+  RotateCw,
+  Save,
+  Shield,
+  ShieldOff,
+  Zap,
+  CheckCircle,
+  XCircle,
+  Loader,
+  Globe,
+  Lock,
+  KeyRound,
+  Info,
+} from 'lucide-react';
 import { api } from '../api';
 
 function createEmptyMcp() {
@@ -32,7 +49,9 @@ function parseKeyValueText(text) {
 }
 
 function stringifyKeyValue(obj) {
-  return Object.entries(obj || {}).map(([k, v]) => `${k}=${v ?? ''}`).join('\n');
+  return Object.entries(obj || {})
+    .map(([k, v]) => `${k}=${v ?? ''}`)
+    .join('\n');
 }
 
 /**
@@ -60,20 +79,26 @@ export default function PluginEditor({
   const isActivate = resolvedMode === 'activate';
   const effectiveSubmitLabel = submitLabel || (isActivate ? 'Activer le plugin' : 'Save Plugin');
 
-  const [expandedMcps, setExpandedMcps] = useState(() => new Set((value.mcps || []).map((_, i) => i)));
+  const [expandedMcps, setExpandedMcps] = useState(
+    () => new Set((value.mcps || []).map((_, i) => i))
+  );
   const [testResults, setTestResults] = useState({});
   const [testing, setTesting] = useState({});
   // Keep the raw textarea text in local state so typed newlines survive;
   // only reset it when the config changes from outside (e.g. another plugin).
-  const [userConfigText, setUserConfigText] = useState(() => stringifyKeyValue(value.userConfig || {}));
+  const [userConfigText, setUserConfigText] = useState(() =>
+    stringifyKeyValue(value.userConfig || {})
+  );
   useEffect(() => {
     const canonical = stringifyKeyValue(value.userConfig || {});
-    setUserConfigText(prev => (stringifyKeyValue(parseKeyValueText(prev)) === canonical ? prev : canonical));
+    setUserConfigText(prev =>
+      stringifyKeyValue(parseKeyValueText(prev)) === canonical ? prev : canonical
+    );
   }, [value.userConfig]);
 
-  const update = (patch) => onChange({ ...value, ...patch });
+  const update = patch => onChange({ ...value, ...patch });
 
-  const testMcp = async (mcp) => {
+  const testMcp = async mcp => {
     if (!mcp.id) return;
     setTesting(prev => ({ ...prev, [mcp.id]: true }));
     setTestResults(prev => ({ ...prev, [mcp.id]: undefined }));
@@ -99,7 +124,7 @@ export default function PluginEditor({
     update({ mcps });
   };
 
-  const removeMcp = (index) => {
+  const removeMcp = index => {
     const mcps = [...(value.mcps || [])];
     mcps.splice(index, 1);
     update({ mcps });
@@ -115,7 +140,7 @@ export default function PluginEditor({
   // ─────────────────────────────────────────────────────────────────
   if (isActivate) {
     const mcps = value.mcps || [];
-    const authMcps = mcps.filter((m) => {
+    const authMcps = mcps.filter(m => {
       const am = m.authMode || (m.hasApiKey || m.apiKey ? 'bearer' : 'none');
       return am === 'bearer';
     });
@@ -128,7 +153,9 @@ export default function PluginEditor({
           <span className="text-2xl flex-shrink-0">{value.icon || '🔧'}</span>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-dark-100">{value.name || 'Plugin sans nom'}</span>
+              <span className="text-sm font-semibold text-dark-100">
+                {value.name || 'Plugin sans nom'}
+              </span>
               {value.category && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-300 border border-dark-600">
                   {value.category}
@@ -150,9 +177,9 @@ export default function PluginEditor({
         <div className="flex items-start gap-2 p-2.5 rounded-lg bg-indigo-500/5 border border-indigo-500/20 text-[11px] text-dark-300">
           <Info className="w-3.5 h-3.5 text-indigo-400 flex-shrink-0 mt-0.5" />
           <span>
-            Vous activez un plugin créé par quelqu'un d'autre.
-            Seuls vos accès (clés d'API, OAuth) peuvent être configurés ici — la configuration du plugin
-            elle-même (instructions, URL du MCP, etc.) est gérée par son propriétaire.
+            Vous activez un plugin créé par quelqu'un d'autre. Seuls vos accès (clés d'API, OAuth)
+            peuvent être configurés ici — la configuration du plugin elle-même (instructions, URL du
+            MCP, etc.) est gérée par son propriétaire.
           </span>
         </div>
 
@@ -184,14 +211,19 @@ export default function PluginEditor({
               <span className="text-[11px] text-dark-500">({authMcps.length} requis)</span>
             </div>
             <div className="space-y-2">
-              {authMcps.map((mcp) => {
+              {authMcps.map(mcp => {
                 const index = mcps.indexOf(mcp);
                 return (
-                  <div key={mcp.id || index} className="rounded-lg border border-dark-700/50 bg-dark-900/30 p-3 space-y-2">
+                  <div
+                    key={mcp.id || index}
+                    className="rounded-lg border border-dark-700/50 bg-dark-900/30 p-3 space-y-2"
+                  >
                     <div className="flex items-center gap-2">
                       <span className="text-base">{mcp.icon || '🔌'}</span>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm text-dark-200 font-medium truncate">{mcp.name || 'MCP'}</p>
+                        <p className="text-sm text-dark-200 font-medium truncate">
+                          {mcp.name || 'MCP'}
+                        </p>
                         {mcp.description && (
                           <p className="text-[11px] text-dark-500 truncate">{mcp.description}</p>
                         )}
@@ -202,33 +234,52 @@ export default function PluginEditor({
                         className="p-1 text-dark-500 hover:text-amber-400 transition-colors disabled:opacity-30"
                         title="Tester la connexion"
                       >
-                        {testing[mcp.id] ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                        {testing[mcp.id] ? (
+                          <Loader className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Zap className="w-3.5 h-3.5" />
+                        )}
                       </button>
                     </div>
 
                     <div>
-                      <label className="block text-[11px] text-dark-400 mb-1">Clé d'API / Bearer token</label>
+                      <label className="block text-[11px] text-dark-400 mb-1">
+                        Clé d'API / Bearer token
+                      </label>
                       <input
                         type="password"
-                        value={mcp.apiKey === '••••••••' ? '' : (mcp.apiKey || '')}
-                        onChange={(e) => updateMcp(index, { apiKey: e.target.value, authMode: 'bearer' })}
+                        value={mcp.apiKey === '••••••••' ? '' : mcp.apiKey || ''}
+                        onChange={e =>
+                          updateMcp(index, { apiKey: e.target.value, authMode: 'bearer' })
+                        }
                         className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
-                        placeholder={mcp.hasApiKey ? 'Une clé est déjà configurée — laissez vide pour conserver' : 'Saisir votre clé d\'API'}
+                        placeholder={
+                          mcp.hasApiKey
+                            ? 'Une clé est déjà configurée — laissez vide pour conserver'
+                            : "Saisir votre clé d'API"
+                        }
                         autoComplete="off"
                       />
                     </div>
 
                     {testResults[mcp.id] && (
-                      <div className={`p-2 rounded text-[11px] border ${
-                        testResults[mcp.id].success
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                          : 'bg-red-500/10 border-red-500/30 text-red-400'
-                      }`}>
+                      <div
+                        className={`p-2 rounded text-[11px] border ${
+                          testResults[mcp.id].success
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            : 'bg-red-500/10 border-red-500/30 text-red-400'
+                        }`}
+                      >
                         <div className="flex items-center gap-1.5 font-medium">
-                          {testResults[mcp.id].success
-                            ? <><CheckCircle className="w-3 h-3" /> Connexion réussie</>
-                            : <><XCircle className="w-3 h-3" /> Échec — {testResults[mcp.id].error}</>
-                          }
+                          {testResults[mcp.id].success ? (
+                            <>
+                              <CheckCircle className="w-3 h-3" /> Connexion réussie
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="w-3 h-3" /> Échec — {testResults[mcp.id].error}
+                            </>
+                          )}
                         </div>
                       </div>
                     )}
@@ -240,7 +291,12 @@ export default function PluginEditor({
         )}
 
         <div className="flex gap-2 justify-end">
-          <button onClick={onCancel} className="px-3 py-2 text-dark-400 hover:text-dark-200 text-sm">Annuler</button>
+          <button
+            onClick={onCancel}
+            className="px-3 py-2 text-dark-400 hover:text-dark-200 text-sm"
+          >
+            Annuler
+          </button>
           <button
             onClick={onSubmit}
             disabled={!canSubmit}
@@ -263,20 +319,20 @@ export default function PluginEditor({
         <input
           type="text"
           value={value.icon}
-          onChange={(e) => update({ icon: e.target.value })}
+          onChange={e => update({ icon: e.target.value })}
           className="w-12 px-2 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-center focus:outline-none focus:border-indigo-500"
           placeholder="🔧"
         />
         <input
           type="text"
           value={value.name}
-          onChange={(e) => update({ name: e.target.value })}
+          onChange={e => update({ name: e.target.value })}
           className="flex-1 px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
           placeholder="Plugin name"
         />
         <select
           value={value.category}
-          onChange={(e) => update({ category: e.target.value })}
+          onChange={e => update({ category: e.target.value })}
           className="px-2 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500"
         >
           <option value="coding">coding</option>
@@ -291,7 +347,7 @@ export default function PluginEditor({
       <input
         type="text"
         value={value.description}
-        onChange={(e) => update({ description: e.target.value })}
+        onChange={e => update({ description: e.target.value })}
         className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500"
         placeholder="Short description"
       />
@@ -300,7 +356,7 @@ export default function PluginEditor({
         <label className="block text-xs text-dark-400 mb-1.5">Plugin instructions</label>
         <textarea
           value={value.instructions}
-          onChange={(e) => update({ instructions: e.target.value })}
+          onChange={e => update({ instructions: e.target.value })}
           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono resize-none"
           placeholder="Plugin instructions injected into the agent prompt..."
           rows={5}
@@ -317,7 +373,9 @@ export default function PluginEditor({
               ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
               : 'bg-dark-700/50 text-dark-300 border-dark-600 hover:border-dark-500'
           }`}
-          title={value.shared ? 'Partagé avec tous les utilisateurs' : 'Visible uniquement par vous'}
+          title={
+            value.shared ? 'Partagé avec tous les utilisateurs' : 'Visible uniquement par vous'
+          }
         >
           {value.shared ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
           {value.shared ? 'Partagé' : 'Privé'}
@@ -333,7 +391,7 @@ export default function PluginEditor({
         <label className="block text-xs text-dark-400 mb-1.5">User-specific configuration</label>
         <textarea
           value={userConfigText}
-          onChange={(e) => {
+          onChange={e => {
             setUserConfigText(e.target.value);
             update({ userConfig: parseKeyValueText(e.target.value) });
           }}
@@ -341,14 +399,18 @@ export default function PluginEditor({
           placeholder={'oauth_client_id=...\noauth_scopes=...\ntenant=...'}
           rows={4}
         />
-        <p className="text-[11px] text-dark-500 mt-1">Configuration propre a l'utilisateur, stockee avec le plugin. Format cle=valeur.</p>
+        <p className="text-[11px] text-dark-500 mt-1">
+          Configuration propre a l'utilisateur, stockee avec le plugin. Format cle=valeur.
+        </p>
       </div>
 
       <div className="border-t border-dark-700 pt-4">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h4 className="text-sm font-medium text-dark-200">MCP associe</h4>
-            <p className="text-[11px] text-dark-500">Configurez le serveur MCP dedie a ce plugin (URL, authentification).</p>
+            <p className="text-[11px] text-dark-500">
+              Configurez le serveur MCP dedie a ce plugin (URL, authentification).
+            </p>
           </div>
           {(value.mcps || []).length === 0 && (
             <button
@@ -366,22 +428,32 @@ export default function PluginEditor({
             const expanded = expandedMcps.has(index);
             const authMode = mcp.authMode || (mcp.hasApiKey || mcp.apiKey ? 'bearer' : 'none');
             return (
-              <div key={mcp.id || index} className="rounded-lg border border-dark-700/50 bg-dark-900/30">
+              <div
+                key={mcp.id || index}
+                className="rounded-lg border border-dark-700/50 bg-dark-900/30"
+              >
                 <div className="flex items-center gap-2 px-3 py-2">
                   <button
                     onClick={() => {
                       const next = new Set(expandedMcps);
-                      if (expanded) next.delete(index); else next.add(index);
+                      if (expanded) next.delete(index);
+                      else next.add(index);
                       setExpandedMcps(next);
                     }}
                     className="text-dark-400 hover:text-dark-200"
                   >
-                    {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    {expanded ? (
+                      <ChevronDown className="w-4 h-4" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4" />
+                    )}
                   </button>
                   <span className="text-lg">{mcp.icon || '🔌'}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-dark-200 truncate">{mcp.name || `MCP ${index + 1}`}</span>
+                      <span className="text-sm text-dark-200 truncate">
+                        {mcp.name || `MCP ${index + 1}`}
+                      </span>
                       {authMode === 'bearer' ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-0.5">
                           <Shield className="w-2.5 h-2.5" /> Bearer
@@ -392,7 +464,9 @@ export default function PluginEditor({
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-dark-500 truncate font-mono">{mcp.url || 'URL non configuree'}</div>
+                    <div className="text-[11px] text-dark-500 truncate font-mono">
+                      {mcp.url || 'URL non configuree'}
+                    </div>
                   </div>
                   <button
                     onClick={() => testMcp(mcp)}
@@ -400,7 +474,11 @@ export default function PluginEditor({
                     className="p-1 text-dark-500 hover:text-amber-400 transition-colors disabled:opacity-30"
                     title="Tester la connexion MCP"
                   >
-                    {testing[mcp.id] ? <Loader className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                    {testing[mcp.id] ? (
+                      <Loader className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Zap className="w-4 h-4" />
+                    )}
                   </button>
                   <button
                     onClick={() => removeMcp(index)}
@@ -420,7 +498,7 @@ export default function PluginEditor({
                         <input
                           type="text"
                           value={mcp.name}
-                          onChange={(e) => updateMcp(index, { name: e.target.value })}
+                          onChange={e => updateMcp(index, { name: e.target.value })}
                           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                           placeholder="Nom du serveur MCP"
                         />
@@ -430,7 +508,7 @@ export default function PluginEditor({
                         <input
                           type="text"
                           value={mcp.icon}
-                          onChange={(e) => updateMcp(index, { icon: e.target.value })}
+                          onChange={e => updateMcp(index, { icon: e.target.value })}
                           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 text-center focus:outline-none focus:border-indigo-500"
                         />
                       </div>
@@ -438,11 +516,13 @@ export default function PluginEditor({
 
                     {/* URL */}
                     <div>
-                      <label className="block text-xs text-dark-400 mb-1.5">URL du serveur MCP</label>
+                      <label className="block text-xs text-dark-400 mb-1.5">
+                        URL du serveur MCP
+                      </label>
                       <input
                         type="text"
                         value={mcp.url}
-                        onChange={(e) => updateMcp(index, { url: e.target.value })}
+                        onChange={e => updateMcp(index, { url: e.target.value })}
                         className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
                         placeholder="https://mcp-server.example.com/sse"
                       />
@@ -454,7 +534,7 @@ export default function PluginEditor({
                       <input
                         type="text"
                         value={mcp.description}
-                        onChange={(e) => updateMcp(index, { description: e.target.value })}
+                        onChange={e => updateMcp(index, { description: e.target.value })}
                         className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                         placeholder="Description du serveur MCP"
                       />
@@ -462,7 +542,9 @@ export default function PluginEditor({
 
                     {/* Auth mode */}
                     <div>
-                      <label className="block text-xs text-dark-400 mb-1.5">Mode d'authentification</label>
+                      <label className="block text-xs text-dark-400 mb-1.5">
+                        Mode d'authentification
+                      </label>
                       <div className="flex gap-2">
                         <button
                           onClick={() => updateMcp(index, { authMode: 'none' })}
@@ -488,8 +570,8 @@ export default function PluginEditor({
                         </button>
                       </div>
                       <p className="text-[11px] text-dark-500 mt-1.5">
-                        Le mode d'authentification est figé par le propriétaire du plugin.
-                        Les utilisateurs qui activent ce plugin saisiront leur propre clé.
+                        Le mode d'authentification est figé par le propriétaire du plugin. Les
+                        utilisateurs qui activent ce plugin saisiront leur propre clé.
                       </p>
                     </div>
 
@@ -501,15 +583,20 @@ export default function PluginEditor({
                         </label>
                         <input
                           type="password"
-                          value={mcp.apiKey === '••••••••' ? '' : (mcp.apiKey || '')}
-                          onChange={(e) => updateMcp(index, { apiKey: e.target.value })}
+                          value={mcp.apiKey === '••••••••' ? '' : mcp.apiKey || ''}
+                          onChange={e => updateMcp(index, { apiKey: e.target.value })}
                           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 font-mono text-xs"
-                          placeholder={mcp.hasApiKey ? 'Laisser vide pour conserver, ou saisir une nouvelle cle' : 'Laisser vide — chaque utilisateur saisira la sienne'}
+                          placeholder={
+                            mcp.hasApiKey
+                              ? 'Laisser vide pour conserver, ou saisir une nouvelle cle'
+                              : 'Laisser vide — chaque utilisateur saisira la sienne'
+                          }
                           autoComplete="off"
                         />
                         <p className="text-[11px] text-dark-500 mt-1">
-                          Si une clé est saisie ici, elle sert de valeur par défaut pour les utilisateurs qui activent le plugin.
-                          Sinon, chacun saisit sa propre clé au moment de l'activation.
+                          Si une clé est saisie ici, elle sert de valeur par défaut pour les
+                          utilisateurs qui activent le plugin. Sinon, chacun saisit sa propre clé au
+                          moment de l'activation.
                         </p>
                       </div>
                     )}
@@ -520,7 +607,7 @@ export default function PluginEditor({
                         <input
                           type="checkbox"
                           checked={mcp.enabled !== false}
-                          onChange={(e) => updateMcp(index, { enabled: e.target.checked })}
+                          onChange={e => updateMcp(index, { enabled: e.target.checked })}
                           className="w-4 h-4 rounded border-dark-600 bg-dark-700"
                         />
                         MCP active
@@ -529,16 +616,24 @@ export default function PluginEditor({
 
                     {/* Test result */}
                     {testResults[mcp.id] && (
-                      <div className={`p-2.5 rounded-lg border text-xs ${
-                        testResults[mcp.id].success
-                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                          : 'bg-red-500/10 border-red-500/30 text-red-400'
-                      }`}>
+                      <div
+                        className={`p-2.5 rounded-lg border text-xs ${
+                          testResults[mcp.id].success
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            : 'bg-red-500/10 border-red-500/30 text-red-400'
+                        }`}
+                      >
                         <div className="flex items-center gap-1.5 font-medium">
-                          {testResults[mcp.id].success
-                            ? <><CheckCircle className="w-3.5 h-3.5" /> Connexion reussie — {testResults[mcp.id].toolCount} tool(s)</>
-                            : <><XCircle className="w-3.5 h-3.5" /> Echec de connexion</>
-                          }
+                          {testResults[mcp.id].success ? (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5" /> Connexion reussie —{' '}
+                              {testResults[mcp.id].toolCount} tool(s)
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="w-3.5 h-3.5" /> Echec de connexion
+                            </>
+                          )}
                         </div>
                         {testResults[mcp.id].success && testResults[mcp.id].tools?.length > 0 && (
                           <div className="mt-1.5 text-[11px] text-dark-400 space-y-0.5">
@@ -551,7 +646,9 @@ export default function PluginEditor({
                           </div>
                         )}
                         {testResults[mcp.id].error && (
-                          <p className="mt-1 text-[11px] font-mono break-all">{testResults[mcp.id].error}</p>
+                          <p className="mt-1 text-[11px] font-mono break-all">
+                            {testResults[mcp.id].error}
+                          </p>
                         )}
                       </div>
                     )}
@@ -570,7 +667,9 @@ export default function PluginEditor({
       </div>
 
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-2 text-dark-400 hover:text-dark-200 text-sm">Annuler</button>
+        <button onClick={onCancel} className="px-3 py-2 text-dark-400 hover:text-dark-200 text-sm">
+          Annuler
+        </button>
         <button
           onClick={onSubmit}
           disabled={saving || !value.name.trim() || !value.instructions.trim()}

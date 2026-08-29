@@ -1,5 +1,15 @@
 // ─── Agent Status: getAgentStatus, swarm status, setStatus, stopAgent ───────
-import { saveAgent, clearActionRunningForAgent, saveTaskToDb, getTasksByAgent, getAllTasks, getTasksByAssignee, getTaskByActionRunningAgent, getTotalTokensByAgentId, getTotalTokensForAgent } from '../database.js';
+import {
+  saveAgent,
+  clearActionRunningForAgent,
+  saveTaskToDb,
+  getTasksByAgent,
+  getAllTasks,
+  getTasksByAssignee,
+  getTaskByActionRunningAgent,
+  getTotalTokensByAgentId,
+  getTotalTokensForAgent,
+} from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 import { isCliRunner } from '../runners.js';
 
@@ -8,8 +18,8 @@ function requestCliTerminalInterrupt(manager: any, agent: any): void {
   const provider = manager.executionManager.getProviderType?.(agent.id);
   if (!isCliRunner(agent) && (!provider || provider === 'sandbox')) return;
   const interrupt =
-    manager.executionManager.interruptCliTerminalSessions
-    || manager.executionManager.interruptTerminalSession;
+    manager.executionManager.interruptCliTerminalSessions ||
+    manager.executionManager.interruptTerminalSession;
   if (!interrupt) return;
   Promise.resolve(interrupt.call(manager.executionManager, agent.id))
     .then((sent: boolean) => {
@@ -18,13 +28,14 @@ function requestCliTerminalInterrupt(manager: any, agent: any): void {
       }
     })
     .catch((err: any) => {
-      console.warn(`⚠️ [Execution] CLI interrupt failed for ${(agent.name || agent.id)}: ${err?.message || err}`);
+      console.warn(
+        `⚠️ [Execution] CLI interrupt failed for ${agent.name || agent.id}: ${err?.message || err}`
+      );
     });
 }
 
 /** @this {import('./index.js').AgentManager} */
 export const statusMethods = {
-
   /** Apply the shared "mark task stopped" mutation: set executionStatus,
    * clear startedAt, push a {type:'stopped', by:'user'} history entry, and
    * persist. Does NOT set the task signal or emit task:updated — each stopAgent
@@ -52,7 +63,10 @@ export const statusMethods = {
     for (const t of all) {
       if (!t.agentId) continue;
       let list = byAgent.get(t.agentId);
-      if (!list) { list = []; byAgent.set(t.agentId, list); }
+      if (!list) {
+        list = [];
+        byAgent.set(t.agentId, list);
+      }
       list.push(t);
     }
     return byAgent;
@@ -61,10 +75,16 @@ export const statusMethods = {
   /** Reduce a todoList to the { waiting, active, done, error, total } counts
    * the agents view shows. Shares the "active" definition with
    * _buildAgentStatus so the card and the REST/MCP status stay in agreement. */
-  _countTasks(this: any, todoList: any[]): { waiting: number; active: number; done: number; error: number; total: number } {
+  _countTasks(
+    this: any,
+    todoList: any[]
+  ): { waiting: number; active: number; done: number; error: number; total: number } {
     const list = todoList || [];
     return {
-      waiting: list.filter((t: any) => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length,
+      waiting: list.filter(
+        (t: any) =>
+          !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error'
+      ).length,
       active: list.filter((t: any) => this._isActiveTaskStatus(t.status)).length,
       done: list.filter((t: any) => t.status === 'done').length,
       error: list.filter((t: any) => t.status === 'error').length,
@@ -136,13 +156,17 @@ export const statusMethods = {
    * without a per-agent await. */
   _buildAgentStatus(this: any, agent: any, todoList: any[]): any {
     const id = agent.id;
-    const waitingTasks = todoList.filter((t: any) => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
+    const waitingTasks = todoList.filter(
+      (t: any) => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error'
+    ).length;
     const activeTaskCount = todoList.filter((t: any) => this._isActiveTaskStatus(t.status)).length;
     const doneTasks = todoList.filter((t: any) => t.status === 'done').length;
     const errorTasks = todoList.filter((t: any) => t.status === 'error').length;
     const totalTasks = todoList.length;
     const msgCount = (agent.conversationHistory || []).length;
-    const hasSandbox = this.executionManager ? this.executionManager.hasEnvironment(agent.id) : false;
+    const hasSandbox = this.executionManager
+      ? this.executionManager.hasEnvironment(agent.id)
+      : false;
 
     const currentTaskEntry = todoList.find((t: any) => this._isActiveTaskStatus(t.status));
     const currentTask = agent.currentTask || (currentTaskEntry ? currentTaskEntry.text : null);
@@ -150,7 +174,12 @@ export const statusMethods = {
 
     const activeTasks = todoList
       .filter((t: any) => t.status !== 'done')
-      .map((t: any) => ({ id: t.id, text: t.text, status: t.status, startedAt: t.startedAt || null }));
+      .map((t: any) => ({
+        id: t.id,
+        text: t.text,
+        status: t.status,
+        startedAt: t.startedAt || null,
+      }));
 
     let projectDurationMs: number | null = null;
     if (agent.project && agent.projectChangedAt) {
@@ -179,7 +208,7 @@ export const statusMethods = {
         active: activeTaskCount,
         done: doneTasks,
         error: errorTasks,
-        total: totalTasks
+        total: totalTasks,
       },
       messages: msgCount,
       metrics: {
@@ -187,30 +216,62 @@ export const statusMethods = {
         totalTokensIn: agent.metrics?.totalTokensIn || 0,
         totalTokensOut: agent.metrics?.totalTokensOut || 0,
         lastActiveAt: agent.metrics?.lastActiveAt || null,
-        errors: agent.metrics?.errors || 0
+        errors: agent.metrics?.errors || 0,
       },
       createdAt: agent.createdAt || null,
-      updatedAt: agent.updatedAt || null
+      updatedAt: agent.updatedAt || null,
     };
   },
 
-  async getAllStatuses(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): Promise<any[]> {
-    const agents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
+  async getAllStatuses(
+    this: any,
+    userId: string | null = null,
+    role: string | null = null,
+    userBoardIds?: Set<string>
+  ): Promise<any[]> {
+    const agents =
+      userId && role
+        ? this._agentsForUser(userId, role, userBoardIds)
+        : Array.from(this.agents.values());
     const enabled = (agents as any[]).filter((a: any) => a.enabled !== false);
     const byAgent = await this._tasksByAgentMap();
-    return enabled.map((a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || [])).filter(Boolean);
+    return enabled
+      .map((a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || []))
+      .filter(Boolean);
   },
 
-  async getAgentsByProject(this: any, projectName: string, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): Promise<any[]> {
+  async getAgentsByProject(
+    this: any,
+    projectName: string,
+    userId: string | null = null,
+    role: string | null = null,
+    userBoardIds?: Set<string>
+  ): Promise<any[]> {
     if (!projectName) return [];
-    const agents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
-    const matched = (agents as any[]).filter((a: any) => a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase());
+    const agents =
+      userId && role
+        ? this._agentsForUser(userId, role, userBoardIds)
+        : Array.from(this.agents.values());
+    const matched = (agents as any[]).filter(
+      (a: any) =>
+        a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase()
+    );
     const byAgent = await this._tasksByAgentMap();
-    return matched.map((a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || [])).filter(Boolean);
+    return matched
+      .map((a: any) => this._buildAgentStatus(a, byAgent.get(a.id) || []))
+      .filter(Boolean);
   },
 
-  getProjectSummary(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): any {
-    const agents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
+  getProjectSummary(
+    this: any,
+    userId: string | null = null,
+    role: string | null = null,
+    userBoardIds?: Set<string>
+  ): any {
+    const agents =
+      userId && role
+        ? this._agentsForUser(userId, role, userBoardIds)
+        : Array.from(this.agents.values());
     const enabled = (agents as any[]).filter((a: any) => a.enabled !== false);
     const projectMap: Record<string, any> = {};
     const unassigned: any[] = [];
@@ -230,7 +291,7 @@ export const statusMethods = {
           name: agent.name,
           status: agent.status,
           role: agent.role || 'worker',
-          currentTask: agent.currentTask || null
+          currentTask: agent.currentTask || null,
         });
       } else {
         unassigned.push({
@@ -238,7 +299,7 @@ export const statusMethods = {
           name: agent.name,
           status: agent.status,
           role: agent.role || 'worker',
-          currentTask: agent.currentTask || null
+          currentTask: agent.currentTask || null,
         });
       }
     }
@@ -246,16 +307,24 @@ export const statusMethods = {
     return {
       projects: Object.entries(projectMap).map(([name, data]) => ({
         name,
-        ...data
+        ...data,
       })),
       unassigned,
       totalAgents: enabled.length,
-      totalProjects: Object.keys(projectMap).length
+      totalProjects: Object.keys(projectMap).length,
     };
   },
 
-  async getSwarmStatus(this: any, userId: string | null = null, role: string | null = null, userBoardIds?: Set<string>): Promise<any> {
-    const allAgents = (userId && role) ? this._agentsForUser(userId, role, userBoardIds) : Array.from(this.agents.values());
+  async getSwarmStatus(
+    this: any,
+    userId: string | null = null,
+    role: string | null = null,
+    userBoardIds?: Set<string>
+  ): Promise<any> {
+    const allAgents =
+      userId && role
+        ? this._agentsForUser(userId, role, userBoardIds)
+        : Array.from(this.agents.values());
     const enabled = (allAgents as any[]).filter((a: any) => a.enabled !== false);
     const disabled = (allAgents as any[]).filter((a: any) => a.enabled === false);
     const byAgent = await this._tasksByAgentMap();
@@ -286,8 +355,8 @@ export const statusMethods = {
           role: a.role,
           currentTask: a.currentTask || null,
           activeTasks: (a.activeTasks || []).length,
-          projectChangedAt: a.projectChangedAt || null
-        }))
+          projectChangedAt: a.projectChangedAt || null,
+        })),
       };
     }
 
@@ -301,12 +370,12 @@ export const statusMethods = {
         error: enabled.filter((a: any) => a.status === 'error').length,
         withProject: enabled.filter((a: any) => a.project).length,
         withoutProject: enabled.filter((a: any) => !a.project).length,
-        activeProjects: Object.keys(projectMap)
+        activeProjects: Object.keys(projectMap),
       },
       projectSummaries,
       projectAssignments: projectMap,
       unassignedAgents: unassigned,
-      agents: enabled.map((a: any) => statusOf(a))
+      agents: enabled.map((a: any) => statusOf(a)),
     };
   },
 
@@ -327,7 +396,7 @@ export const statusMethods = {
       role: agent.role || 'worker',
       project: agent.project || null,
       currentTask: agent.currentTask || null,
-      isLeader: agent.isLeader || false
+      isLeader: agent.isLeader || false,
     });
 
     if (status === 'busy' && prev !== 'busy') {
@@ -383,12 +452,21 @@ export const statusMethods = {
           }
           this._taskQueues.delete(subId);
           (subAgent as any).currentThinking = '';
-          this._emit('agent:thinking', { agentId: subId, agentName: (subAgent as any).name, project: (subAgent as any).project || null, thinking: '' });
+          this._emit('agent:thinking', {
+            agentId: subId,
+            agentName: (subAgent as any).name,
+            project: (subAgent as any).project || null,
+            thinking: '',
+          });
           (subAgent as any).currentTask = null;
           this._chatLocks.delete(subId);
           this.setStatus(subId, 'idle', 'Stopped by leader');
           saveAgent(subAgent);
-          this._emit('agent:stopped', { id: subId, name: (subAgent as any).name, project: (subAgent as any).project || null });
+          this._emit('agent:stopped', {
+            id: subId,
+            name: (subAgent as any).name,
+            project: (subAgent as any).project || null,
+          });
         }
       }
     }
@@ -399,10 +477,16 @@ export const statusMethods = {
     // idle below) isn't blocked on DB round-trips. Signals set here still reach
     // the polling _waitForExecutionComplete loops moments later.
     this._haltAgentTasks(id, stopTimestamp).catch((err: any) =>
-      console.warn(`⚠️ [stopAgent] halting tasks for ${id} failed: ${err?.message || err}`));
+      console.warn(`⚠️ [stopAgent] halting tasks for ${id} failed: ${err?.message || err}`)
+    );
 
     agent.currentThinking = '';
-    this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
+    this._emit('agent:thinking', {
+      agentId: id,
+      agentName: agent.name,
+      project: agent.project || null,
+      thinking: '',
+    });
     agent.currentTask = null;
     this._chatLocks.delete(id);
     this.setStatus(id, 'idle', 'Agent stopped by user');
@@ -425,9 +509,13 @@ export const statusMethods = {
     const running = await getTaskByActionRunningAgent(id);
     clearActionRunningForAgent(id);
 
-    const owned = (await getTasksByAgent(id)).filter((t: any) => this._isActiveTaskStatus(t.status));
-    const assigned = (await getTasksByAssignee(id)).filter((t: any) =>
-      this._isActiveTaskStatus(t.status) && (t.startedAt || getTaskSignal(t.id, 'watching')));
+    const owned = (await getTasksByAgent(id)).filter((t: any) =>
+      this._isActiveTaskStatus(t.status)
+    );
+    const assigned = (await getTasksByAssignee(id)).filter(
+      (t: any) =>
+        this._isActiveTaskStatus(t.status) && (t.startedAt || getTaskSignal(t.id, 'watching'))
+    );
 
     const halt = new Map<string, any>();
     for (const t of [...owned, ...assigned, ...(running ? [running] : [])]) {

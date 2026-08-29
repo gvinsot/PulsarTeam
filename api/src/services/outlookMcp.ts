@@ -57,7 +57,7 @@ type GraphAttachment = {
 async function resolveAttachment(
   att: AttachmentInput,
   agentId: string | null = null,
-  runnerBridge: RunnerExecBridge | null = null,
+  runnerBridge: RunnerExecBridge | null = null
 ): Promise<GraphAttachment> {
   const resolved = await resolveAttachmentInput(att, {
     agentId,
@@ -84,7 +84,9 @@ async function resolveAttachment(
   };
 }
 
-const attachmentsSchema = buildAttachmentsSchema(' Outlook inline-attachment limit ≈ 3 MB per file.');
+const attachmentsSchema = buildAttachmentsSchema(
+  ' Outlook inline-attachment limit ≈ 3 MB per file.'
+);
 
 function parseEmailList(value?: string): { emailAddress: { address: string } }[] | undefined {
   if (!value) return undefined;
@@ -150,7 +152,7 @@ function formatMessageSummary(msg: any): string {
 export function createOutlookMcpServer(
   agentId: string | null = null,
   boardId: string | null = null,
-  runnerBridge: RunnerExecBridge | null = null,
+  runnerBridge: RunnerExecBridge | null = null
 ) {
   const server = new McpServer({
     name: 'Outlook',
@@ -163,18 +165,24 @@ export function createOutlookMcpServer(
     'Get the connected Outlook account profile (email address, display name).',
     {},
     async () => {
-      const profile = await graphFetch('/me?$select=displayName,mail,userPrincipalName,id', agentId, boardId);
+      const profile = await graphFetch(
+        '/me?$select=displayName,mail,userPrincipalName,id',
+        agentId,
+        boardId
+      );
       return {
-        content: [{
-          type: 'text',
-          text:
-            `Outlook Profile:\n` +
-            `Display Name: ${profile.displayName || ''}\n` +
-            `Email: ${profile.mail || profile.userPrincipalName || ''}\n` +
-            `User ID: ${profile.id || ''}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Outlook Profile:\n` +
+              `Display Name: ${profile.displayName || ''}\n` +
+              `Email: ${profile.mail || profile.userPrincipalName || ''}\n` +
+              `User ID: ${profile.id || ''}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: list_emails ────────────────────────────────────────────────
@@ -182,16 +190,34 @@ export function createOutlookMcpServer(
     'list_emails',
     'List recent emails from an Outlook mail folder (default: Inbox). Returns subject, sender, date, and preview.',
     {
-      maxResults: z.number().optional().default(20).describe('Number of emails to return (default 20, max 100)'),
-      folder: z.string().optional().default('inbox').describe('Mail folder ID or well-known name: inbox, sentitems, drafts, deleteditems, junkemail, archive. Default: inbox.'),
-      query: z.string().optional().describe('Outlook search query (KQL-like, same as the Outlook search bar). E.g. "from:bob@example.com", "subject:meeting", "isread:false".'),
+      maxResults: z
+        .number()
+        .optional()
+        .default(20)
+        .describe('Number of emails to return (default 20, max 100)'),
+      folder: z
+        .string()
+        .optional()
+        .default('inbox')
+        .describe(
+          'Mail folder ID or well-known name: inbox, sentitems, drafts, deleteditems, junkemail, archive. Default: inbox.'
+        ),
+      query: z
+        .string()
+        .optional()
+        .describe(
+          'Outlook search query (KQL-like, same as the Outlook search bar). E.g. "from:bob@example.com", "subject:meeting", "isread:false".'
+        ),
       onlyUnread: z.boolean().optional().default(false).describe('Filter to unread messages only.'),
     },
     async ({ maxResults, folder, query, onlyUnread }) => {
       const limit = Math.min(maxResults || 20, 100);
       const params = new URLSearchParams();
       params.set('$top', String(limit));
-      params.set('$select', 'id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,isRead,hasAttachments,flag');
+      params.set(
+        '$select',
+        'id,subject,from,toRecipients,ccRecipients,receivedDateTime,bodyPreview,isRead,hasAttachments,flag'
+      );
       params.set('$orderby', 'receivedDateTime desc');
       if (onlyUnread) params.set('$filter', 'isRead eq false');
       if (query) params.set('$search', `"${query.replace(/"/g, '\\"')}"`);
@@ -206,17 +232,17 @@ export function createOutlookMcpServer(
         return text('No emails found matching the criteria.');
       }
 
-      const summary = messages
-        .map((m, i) => `${i + 1}. ${formatMessageSummary(m)}`)
-        .join('\n\n');
+      const summary = messages.map((m, i) => `${i + 1}. ${formatMessageSummary(m)}`).join('\n\n');
 
       return {
-        content: [{
-          type: 'text',
-          text: `Found ${messages.length} email(s):\n\n${summary}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Found ${messages.length} email(s):\n\n${summary}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: search_emails ──────────────────────────────────────────────
@@ -224,7 +250,11 @@ export function createOutlookMcpServer(
     'search_emails',
     'Search emails across the entire mailbox using Outlook/KQL search syntax (from:, to:, subject:, hasattachment:, received:, etc.).',
     {
-      query: z.string().describe('Outlook search query (e.g. "from:alice subject:report received:2024-01-01..2024-12-31")'),
+      query: z
+        .string()
+        .describe(
+          'Outlook search query (e.g. "from:alice subject:report received:2024-01-01..2024-12-31")'
+        ),
       maxResults: z.number().optional().default(20).describe('Max results (default 20, max 100)'),
     },
     async ({ query, maxResults }) => {
@@ -241,17 +271,17 @@ export function createOutlookMcpServer(
         return text(`No emails found for query: "${query}"`);
       }
 
-      const summary = messages
-        .map((m, i) => `${i + 1}. ${formatMessageSummary(m)}`)
-        .join('\n\n');
+      const summary = messages.map((m, i) => `${i + 1}. ${formatMessageSummary(m)}`).join('\n\n');
 
       return {
-        content: [{
-          type: 'text',
-          text: `Search "${query}" found ${messages.length} result(s):\n\n${summary}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Search "${query}" found ${messages.length} result(s):\n\n${summary}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: read_email ─────────────────────────────────────────────────
@@ -259,12 +289,21 @@ export function createOutlookMcpServer(
     'read_email',
     'Read the full content of a specific email by its ID. Returns headers, body text, and attachment info.',
     {
-      messageId: z.string().describe('The Outlook message ID (returned by list_emails or search_emails).'),
+      messageId: z
+        .string()
+        .describe('The Outlook message ID (returned by list_emails or search_emails).'),
     },
     async ({ messageId }) => {
       const params = new URLSearchParams();
-      params.set('$select', 'id,conversationId,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,isRead,hasAttachments,importance,internetMessageId');
-      const msg = await graphFetch(`/me/messages/${encodeURIComponent(messageId)}?${params}`, agentId, boardId);
+      params.set(
+        '$select',
+        'id,conversationId,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,isRead,hasAttachments,importance,internetMessageId'
+      );
+      const msg = await graphFetch(
+        `/me/messages/${encodeURIComponent(messageId)}?${params}`,
+        agentId,
+        boardId
+      );
 
       const from = formatRecipients(msg.from ? [msg.from] : []) || 'Unknown';
       const to = formatRecipients(msg.toRecipients) || '';
@@ -279,30 +318,35 @@ export function createOutlookMcpServer(
         const attachList = await graphFetch(
           `/me/messages/${encodeURIComponent(messageId)}/attachments?$select=id,name,contentType,size`,
           agentId,
-          boardId,
+          boardId
         );
         const attachments: any[] = attachList.value || [];
         if (attachments.length > 0) {
           attachInfo =
             `\n\nAttachments (${attachments.length}):\n` +
             attachments
-              .map(a => `  - ${a.name} (${a.contentType}, ${((a.size || 0) / 1024).toFixed(1)} KB, ID: ${a.id})`)
+              .map(
+                a =>
+                  `  - ${a.name} (${a.contentType}, ${((a.size || 0) / 1024).toFixed(1)} KB, ID: ${a.id})`
+              )
               .join('\n');
         }
       }
 
       return {
-        content: [{
-          type: 'text',
-          text:
-            `From: ${from}\nTo: ${to}${cc ? `\nCc: ${cc}` : ''}${bcc ? `\nBcc: ${bcc}` : ''}\n` +
-            `Subject: ${subject}\nDate: ${date}\nImportance: ${msg.importance || 'normal'}\n` +
-            `Message-ID: ${msg.internetMessageId || ''}\nConversation ID: ${msg.conversationId || ''}\n` +
-            `Read: ${msg.isRead ? 'yes' : 'no'}\n\n` +
-            `--- Body ---\n${body}${attachInfo}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `From: ${from}\nTo: ${to}${cc ? `\nCc: ${cc}` : ''}${bcc ? `\nBcc: ${bcc}` : ''}\n` +
+              `Subject: ${subject}\nDate: ${date}\nImportance: ${msg.importance || 'normal'}\n` +
+              `Message-ID: ${msg.internetMessageId || ''}\nConversation ID: ${msg.conversationId || ''}\n` +
+              `Read: ${msg.isRead ? 'yes' : 'no'}\n\n` +
+              `--- Body ---\n${body}${attachInfo}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: send_email ─────────────────────────────────────────────────
@@ -338,17 +382,20 @@ export function createOutlookMcpServer(
         body: JSON.stringify({ message, saveToSentItems: true }),
       });
 
-      const attachInfo = resolved && resolved.length > 0
-        ? `\nAttachments: ${resolved.map(a => a.name).join(', ')}`
-        : '';
+      const attachInfo =
+        resolved && resolved.length > 0
+          ? `\nAttachments: ${resolved.map(a => a.name).join(', ')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Email sent successfully!\nTo: ${to}\nSubject: ${subject}${attachInfo}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Email sent successfully!\nTo: ${to}\nSubject: ${subject}${attachInfo}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: reply_to_email ─────────────────────────────────────────────
@@ -358,7 +405,11 @@ export function createOutlookMcpServer(
     {
       messageId: z.string().describe('The Outlook message ID to reply to'),
       body: z.string().describe('Reply body (plain text)'),
-      replyAll: z.boolean().optional().default(false).describe('If true, reply to all recipients (default: false)'),
+      replyAll: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('If true, reply to all recipients (default: false)'),
       attachments: attachmentsSchema,
     },
     async ({ messageId, body, replyAll, attachments }) => {
@@ -379,7 +430,7 @@ export function createOutlookMcpServer(
           body: JSON.stringify({
             comment: body,
           }),
-        },
+        }
       );
 
       const draftId = draft?.id;
@@ -396,7 +447,7 @@ export function createOutlookMcpServer(
             {
               method: 'POST',
               body: JSON.stringify(att),
-            },
+            }
           );
         }
       }
@@ -405,17 +456,20 @@ export function createOutlookMcpServer(
         method: 'POST',
       });
 
-      const attachInfo = resolved && resolved.length > 0
-        ? `\nAttachments: ${resolved.map(a => a.name).join(', ')}`
-        : '';
+      const attachInfo =
+        resolved && resolved.length > 0
+          ? `\nAttachments: ${resolved.map(a => a.name).join(', ')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Reply sent successfully!\nDraft ID: ${draftId}\nIn-reply-to: ${messageId}${attachInfo}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Reply sent successfully!\nDraft ID: ${draftId}\nIn-reply-to: ${messageId}${attachInfo}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: create_draft ───────────────────────────────────────────────
@@ -451,17 +505,20 @@ export function createOutlookMcpServer(
         body: JSON.stringify(payload),
       });
 
-      const attachInfo = resolved && resolved.length > 0
-        ? `\nAttachments: ${resolved.map(a => a.name).join(', ')}`
-        : '';
+      const attachInfo =
+        resolved && resolved.length > 0
+          ? `\nAttachments: ${resolved.map(a => a.name).join(', ')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Draft created successfully!\nDraft ID: ${draft.id}\nTo: ${to}\nSubject: ${subject}${attachInfo}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Draft created successfully!\nDraft ID: ${draft.id}\nTo: ${to}\nSubject: ${subject}${attachInfo}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: list_folders ───────────────────────────────────────────────
@@ -477,14 +534,16 @@ export function createOutlookMcpServer(
         `  - ${f.displayName} (ID: ${f.id}, total: ${f.totalItemCount}, unread: ${f.unreadItemCount})`;
 
       return {
-        content: [{
-          type: 'text',
-          text:
-            `Outlook Folders (${folders.length} total):\n\n` +
-            (folders.length > 0 ? folders.map(format).join('\n') : '  (none)'),
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Outlook Folders (${folders.length} total):\n\n` +
+              (folders.length > 0 ? folders.map(format).join('\n') : '  (none)'),
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: mark_read ──────────────────────────────────────────────────
@@ -501,12 +560,14 @@ export function createOutlookMcpServer(
         body: JSON.stringify({ isRead }),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `Email ${messageId} marked as ${isRead ? 'read' : 'unread'}.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Email ${messageId} marked as ${isRead ? 'read' : 'unread'}.`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: flag_email ─────────────────────────────────────────────────
@@ -525,12 +586,14 @@ export function createOutlookMcpServer(
         }),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `Email ${messageId} ${flagged ? 'flagged' : 'unflagged'}.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Email ${messageId} ${flagged ? 'flagged' : 'unflagged'}.`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: move_email ─────────────────────────────────────────────────
@@ -539,7 +602,11 @@ export function createOutlookMcpServer(
     'Move an email to another folder (e.g. archive, deleteditems, or a custom folder ID).',
     {
       messageId: z.string().describe('The Outlook message ID'),
-      destinationFolder: z.string().describe('Destination folder: well-known name (archive, deleteditems, junkemail, inbox) or a folder ID.'),
+      destinationFolder: z
+        .string()
+        .describe(
+          'Destination folder: well-known name (archive, deleteditems, junkemail, inbox) or a folder ID.'
+        ),
     },
     async ({ messageId, destinationFolder }) => {
       const result = await graphFetch(
@@ -549,15 +616,17 @@ export function createOutlookMcpServer(
         {
           method: 'POST',
           body: JSON.stringify({ destinationId: destinationFolder }),
-        },
+        }
       );
       return {
-        content: [{
-          type: 'text',
-          text: `Email moved to "${destinationFolder}". New message ID: ${result?.id || '(unchanged)'}.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Email moved to "${destinationFolder}". New message ID: ${result?.id || '(unchanged)'}.`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: trash_email ────────────────────────────────────────────────
@@ -573,7 +642,7 @@ export function createOutlookMcpServer(
         body: JSON.stringify({ destinationId: 'deleteditems' }),
       });
       return text(`Email ${messageId} moved to Deleted Items.`);
-    },
+    }
   );
 
   // ── Tool: download_attachment ────────────────────────────────────────
@@ -588,7 +657,7 @@ export function createOutlookMcpServer(
       const att = await graphFetch(
         `/me/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`,
         agentId,
-        boardId,
+        boardId
       );
 
       const name = att?.name || 'attachment';
@@ -596,12 +665,14 @@ export function createOutlookMcpServer(
       const contentBytes = att?.contentBytes || '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Attachment downloaded (${name}).\nSize: ${(size / 1024).toFixed(1)} KB\nContent-Type: ${att?.contentType || 'application/octet-stream'}\n\nBase64 content:\n${contentBytes}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Attachment downloaded (${name}).\nSize: ${(size / 1024).toFixed(1)} KB\nContent-Type: ${att?.contentType || 'application/octet-stream'}\n\nBase64 content:\n${contentBytes}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   // ── Tool: get_conversation ───────────────────────────────────────────
@@ -609,8 +680,14 @@ export function createOutlookMcpServer(
     'get_conversation',
     'Get all messages in an Outlook conversation thread. Useful for reading entire email conversations.',
     {
-      conversationId: z.string().describe('The Outlook conversation ID (returned in message details)'),
-      maxResults: z.number().optional().default(50).describe('Max messages to return (default 50, max 200)'),
+      conversationId: z
+        .string()
+        .describe('The Outlook conversation ID (returned in message details)'),
+      maxResults: z
+        .number()
+        .optional()
+        .default(50)
+        .describe('Max messages to return (default 50, max 200)'),
     },
     async ({ conversationId, maxResults }) => {
       const limit = Math.min(maxResults || 50, 200);
@@ -638,12 +715,14 @@ export function createOutlookMcpServer(
       const subject = messages[0]?.subject || '(no subject)';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Conversation: ${subject}\nConversation ID: ${conversationId}\nMessages: ${messages.length}\n\n${formatted.join('\n\n')}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Conversation: ${subject}\nConversation ID: ${conversationId}\nMessages: ${messages.length}\n\n${formatted.join('\n\n')}`,
+          },
+        ],
       };
-    },
+    }
   );
 
   return server;
@@ -655,5 +734,6 @@ export function createOutlookMcpServer(
  */
 export function createOutlookMcpHandler(runnerBridge: RunnerExecBridge | null = null) {
   return createMcpHttpHandler('Outlook', ({ agentId, boardId }) =>
-    createOutlookMcpServer(agentId, boardId, runnerBridge));
+    createOutlookMcpServer(agentId, boardId, runnerBridge)
+  );
 }

@@ -17,7 +17,9 @@ import assert from 'node:assert/strict';
 const storedTokens: any[] = [];
 mock.module('../database.js', {
   namedExports: {
-    storeOAuthToken: async (record: any) => { storedTokens.push(record); },
+    storeOAuthToken: async (record: any) => {
+      storedTokens.push(record);
+    },
   },
 });
 
@@ -26,13 +28,17 @@ process.env.GOOGLE_CLIENT_SECRET = 'test-google-secret';
 process.env.MICROSOFT_CLIENT_ID = 'test-ms-client';
 process.env.MICROSOFT_CLIENT_SECRET = 'test-ms-secret';
 
-const { handleGoogleOAuthCallback, generateGoogleOAuthState } = await import('../../routes/googleOAuth.js');
-const { handleMicrosoftOAuthCallback, generateMicrosoftOAuthState } = await import('../../routes/microsoftOAuth.js');
+const { handleGoogleOAuthCallback, generateGoogleOAuthState } =
+  await import('../../routes/googleOAuth.js');
+const { handleMicrosoftOAuthCallback, generateMicrosoftOAuthState } =
+  await import('../../routes/microsoftOAuth.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const realFetch = globalThis.fetch;
-test.after(() => { globalThis.fetch = realFetch; });
+test.after(() => {
+  globalThis.fetch = realFetch;
+});
 
 function jsonResponse(ok: boolean, body: Record<string, any>, status = ok ? 200 : 400) {
   return { ok, status, json: async () => body } as any;
@@ -57,8 +63,12 @@ function fakeReq(query: Record<string, any>) {
 function fakeRes() {
   const out = { html: '' };
   const res = {
-    setHeader: () => { /* CSP header — not under test */ },
-    send: (html: string) => { out.html = html; },
+    setHeader: () => {
+      /* CSP header — not under test */
+    },
+    send: (html: string) => {
+      out.html = html;
+    },
   } as any;
   return { res, out };
 }
@@ -96,7 +106,7 @@ test('google callback: happy path stores the token and notifies the right widget
   storedTokens.length = 0;
   const calls = mockFetch(
     () => jsonResponse(true, { access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 }),
-    () => jsonResponse(true, { email: 'alice@example.com' }),
+    () => jsonResponse(true, { email: 'alice@example.com' })
   );
 
   const state = generateGoogleOAuthState('gdrive', 'alice', 'agent-1', null);
@@ -113,7 +123,10 @@ test('google callback: happy path stores the token and notifies the right widget
 
   assert.equal(calls[0].url, 'https://oauth2.googleapis.com/token');
   const exchangeBody = new URLSearchParams(calls[0].init.body);
-  assert.equal(exchangeBody.get('redirect_uri'), 'https://team.example.test/api/google/oauth-redirect');
+  assert.equal(
+    exchangeBody.get('redirect_uri'),
+    'https://team.example.test/api/google/oauth-redirect'
+  );
   assert.equal(exchangeBody.get('grant_type'), 'authorization_code');
 
   assert.equal(storedTokens.length, 1);
@@ -165,7 +178,7 @@ test('microsoft callback: consumer-flow happy path exchanges on /consumers/ and 
   storedTokens.length = 0;
   const calls = mockFetch(
     () => jsonResponse(true, { access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 }),
-    () => jsonResponse(true, { mail: 'bob@hotmail.com' }),
+    () => jsonResponse(true, { mail: 'bob@hotmail.com' })
   );
 
   const state = generateMicrosoftOAuthState('onedrive', 'bob', null, null, true);

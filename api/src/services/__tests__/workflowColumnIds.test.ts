@@ -20,9 +20,7 @@ test('resolveWorkflowStatus prefers column label before id', () => {
 });
 
 test('resolveWorkflowStatus falls back to column id', () => {
-  const columns = [
-    { id: 'in_progress', label: 'In Progress' },
-  ];
+  const columns = [{ id: 'in_progress', label: 'In Progress' }];
 
   const resolved = resolveWorkflowStatus(columns, 'in_progress');
 

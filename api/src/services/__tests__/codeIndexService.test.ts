@@ -19,7 +19,9 @@ async function writeFixtureRepo(rootDir) {
   const repoDir = path.join(rootDir, 'sample-repo');
   await fs.mkdir(path.join(repoDir, 'src'), { recursive: true });
 
-  await fs.writeFile(path.join(repoDir, 'src', 'auth.js'), `
+  await fs.writeFile(
+    path.join(repoDir, 'src', 'auth.js'),
+    `
 // Auth service for access control
 export class AuthService {
   // Validate an incoming token
@@ -35,22 +37,26 @@ export class AuthService {
 export const createToken = (payload) => {
   return 'tok_' + JSON.stringify(payload);
 };
-`.trimStart());
+`.trimStart()
+  );
 
-  await fs.writeFile(path.join(repoDir, 'src', 'parser.py'), `
+  await fs.writeFile(
+    path.join(repoDir, 'src', 'parser.py'),
+    `
 class Parser:
     """Parser utilities for source files."""
 
     def parse_text(self, value):
         """Parse source text."""
         return value.strip()
-`.trimStart());
+`.trimStart()
+  );
 
   return repoDir;
 }
 
 test('CodeIndexService indexes a folder and exposes outlines, trees and symbol retrieval', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),
@@ -70,22 +76,30 @@ test('CodeIndexService indexes a folder and exposes outlines, trees and symbol r
 
     const tree = await service.getFileTree(repo.id);
     assert.equal(tree.type, 'directory');
-    assert.ok(tree.children.some((child) => child.name === 'src'));
+    assert.ok(tree.children.some(child => child.name === 'src'));
 
     const outline = await service.getFileOutline(repo.id, 'src/auth.js');
     assert.equal(outline.file.path, 'src/auth.js');
-    assert.ok(outline.symbols.some((symbol) => symbol.qualifiedName === 'AuthService.validateToken'));
-    assert.ok(outline.symbols.some((symbol) => symbol.qualifiedName === 'createToken'));
+    assert.ok(outline.symbols.some(symbol => symbol.qualifiedName === 'AuthService.validateToken'));
+    assert.ok(outline.symbols.some(symbol => symbol.qualifiedName === 'createToken'));
 
     const symbolSearch = await service.searchSymbols(repo.id, { query: 'validateToken', topK: 5 });
     assert.ok(symbolSearch.length >= 1);
     assert.equal(symbolSearch[0].qualifiedName, 'AuthService.validateToken');
 
-    const semanticSearch = await service.searchSemantic(repo.id, { query: 'token validation', topK: 5 });
-    assert.ok(semanticSearch.some((result) => result.qualifiedName === 'AuthService.validateToken'));
+    const semanticSearch = await service.searchSemantic(repo.id, {
+      query: 'token validation',
+      topK: 5,
+    });
+    assert.ok(semanticSearch.some(result => result.qualifiedName === 'AuthService.validateToken'));
 
-    const targetSymbol = outline.symbols.find((symbol) => symbol.qualifiedName === 'AuthService.validateToken');
-    const symbol = await service.getSymbol(repo.id, targetSymbol.id, { verify: true, contextLines: 1 });
+    const targetSymbol = outline.symbols.find(
+      symbol => symbol.qualifiedName === 'AuthService.validateToken'
+    );
+    const symbol = await service.getSymbol(repo.id, targetSymbol.id, {
+      verify: true,
+      contextLines: 1,
+    });
     assert.equal(symbol.driftDetected, false);
     assert.ok(symbol.currentSource.includes('validateToken(token)'));
     assert.ok(symbol.source.includes('return token && token.startsWith'));
@@ -93,7 +107,7 @@ test('CodeIndexService indexes a folder and exposes outlines, trees and symbol r
 });
 
 test('CodeIndexService.updateFiles incrementally updates a single file with provided content', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),
@@ -150,7 +164,7 @@ export const revokeToken = (token) => false;
 });
 
 test('CodeIndexService.updateFiles adds a new file to the index', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),
@@ -180,7 +194,7 @@ test('CodeIndexService.updateFiles adds a new file to the index', async () => {
 });
 
 test('CodeIndexService.updateFiles removes file when content is empty or unsupported', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),
@@ -192,9 +206,7 @@ test('CodeIndexService.updateFiles removes file when content is empty or unsuppo
     assert.equal(repo.filesIndexed, 2);
 
     // "Remove" a file by providing empty content
-    const result = await service.updateFiles(repo.id, [
-      { path: 'src/auth.js', content: '' },
-    ]);
+    const result = await service.updateFiles(repo.id, [{ path: 'src/auth.js', content: '' }]);
 
     assert.equal(result.removed, 1);
     assert.equal(result.updated, 0);
@@ -206,7 +218,7 @@ test('CodeIndexService.updateFiles removes file when content is empty or unsuppo
 });
 
 test('CodeIndexService.updateFiles reads from disk when content is not provided', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),
@@ -217,14 +229,15 @@ test('CodeIndexService.updateFiles reads from disk when content is not provided'
     const repo = await service.indexFolder({ folderPath: repoDir, repoName: 'disk-read-test' });
 
     // Modify file on disk
-    await fs.writeFile(path.join(repoDir, 'src', 'auth.js'), `
+    await fs.writeFile(
+      path.join(repoDir, 'src', 'auth.js'),
+      `
 export function newDiskFunction() { return 42; }
-`.trimStart());
+`.trimStart()
+    );
 
     // Update without content — should read from disk
-    const result = await service.updateFiles(repo.id, [
-      { path: 'src/auth.js' },
-    ]);
+    const result = await service.updateFiles(repo.id, [{ path: 'src/auth.js' }]);
 
     assert.equal(result.updated, 1);
 
@@ -234,7 +247,7 @@ export function newDiskFunction() { return 42; }
 });
 
 test('CodeIndexService.findReposByProject matches repos by name', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),
@@ -254,7 +267,7 @@ test('CodeIndexService.findReposByProject matches repos by name', async () => {
 });
 
 test('CodeIndexService rejects folders outside allowed roots and invalidates repositories', async () => {
-  await withTempDir(async (tempDir) => {
+  await withTempDir(async tempDir => {
     const repoDir = await writeFixtureRepo(tempDir);
     const service = new CodeIndexService({
       storageRoot: path.join(tempDir, '.index-data'),

@@ -2,7 +2,6 @@
 
 /** @this {import('./index.js').AgentManager} */
 export const gettersMethods = {
-
   getAll(this: any): any[] {
     return Array.from(this.agents.values()).map((a: any) => this._sanitize(a));
   },
@@ -13,8 +12,7 @@ export const gettersMethods = {
    * @param userBoardIds - Set of board IDs the user has access to
    */
   getAllForUser(this: any, userId: string, role: string, userBoardIds?: Set<string>): any[] {
-    return this._agentsForUser(userId, role, userBoardIds)
-      .map((a: any) => this._sanitize(a));
+    return this._agentsForUser(userId, role, userBoardIds).map((a: any) => this._sanitize(a));
   },
 
   /**
@@ -22,15 +20,14 @@ export const gettersMethods = {
    * @param userBoardIds - Set of board IDs the user has access to
    */
   _agentsForUser(this: any, userId: string, role: string, userBoardIds?: Set<string>): any[] {
-    return Array.from(this.agents.values())
-      .filter((a: any) => {
-        // Agents without a board are visible to everyone
-        if (!a.boardId) return true;
-        // If we have board IDs, check membership
-        if (userBoardIds) return userBoardIds.has(a.boardId);
-        // Fallback: no board info means show all (admin-like)
-        return true;
-      });
+    return Array.from(this.agents.values()).filter((a: any) => {
+      // Agents without a board are visible to everyone
+      if (!a.boardId) return true;
+      // If we have board IDs, check membership
+      if (userBoardIds) return userBoardIds.has(a.boardId);
+      // Fallback: no board info means show all (admin-like)
+      return true;
+    });
   },
 
   getById(this: any, id: string): any {
@@ -53,7 +50,7 @@ export const gettersMethods = {
       role: m.role,
       content: m.content,
       timestamp: m.timestamp || null,
-      type: m.type || null
+      type: m.type || null,
     }));
 
     return {
@@ -64,7 +61,7 @@ export const gettersMethods = {
       totalMessages: history.length,
       returned: messages.length,
       limit: safeLimit,
-      messages
+      messages,
     };
   },
 

@@ -2,7 +2,13 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess } from '../middleware/authz.js';
-import { getPool, getBoardById, rowToTask, getOAuthToken, getTaskById } from '../services/database.js';
+import {
+  getPool,
+  getBoardById,
+  rowToTask,
+  getOAuthToken,
+  getTaskById,
+} from '../services/database.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
 import { enrichAssignee, emitTaskUpdated, applyTaskMove } from '../services/taskMutations.js';
@@ -10,11 +16,7 @@ import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRe
 import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { isCliRunner } from '../services/runners.js';
-import {
-  reorderTasksSchema,
-  updateTaskSchema,
-  bulkMoveSchema,
-} from '../schemas/tasks.js';
+import { reorderTasksSchema, updateTaskSchema, bulkMoveSchema } from '../schemas/tasks.js';
 
 const router = Router();
 
@@ -56,7 +58,11 @@ async function validateBoardAccess(boardId, userId, userRole) {
   if (!boardId) return { ok: true, board: null };
   const access = await checkBoardAccess(boardId, userId, userRole, 'edit');
   if (!access.ok) {
-    return { ok: false, error: access.error || 'No write access to destination board', status: access.status || 403 };
+    return {
+      ok: false,
+      error: access.error || 'No write access to destination board',
+      status: access.status || 403,
+    };
   }
   return { ok: true, board: access.board };
 }
@@ -96,20 +102,23 @@ function requestTaskCliInterrupt(mgr, task): void {
   const provider = mgr.executionManager.getProviderType?.(executorId);
   if (executor && !isCliRunner(executor) && (!provider || provider === 'sandbox')) return;
   const interrupt =
-    mgr.executionManager.interruptCliTerminalSessions
-    || mgr.executionManager.interruptTerminalSession;
+    mgr.executionManager.interruptCliTerminalSessions ||
+    mgr.executionManager.interruptTerminalSession;
   if (!interrupt) return;
   Promise.resolve(interrupt.call(mgr.executionManager, executorId))
     .then((sent: boolean) => {
       if (sent) {
-        console.log(`🛑 [Execution] Sent CLI interrupt to task executor ${executor?.name || executorId}`);
+        console.log(
+          `🛑 [Execution] Sent CLI interrupt to task executor ${executor?.name || executorId}`
+        );
       }
     })
     .catch((err: any) => {
-      console.warn(`⚠️ [Execution] CLI interrupt failed for task executor ${executorId}: ${err?.message || err}`);
+      console.warn(
+        `⚠️ [Execution] CLI interrupt failed for task executor ${executorId}: ${err?.message || err}`
+      );
     });
 }
-
 
 /**
  * PUT /tasks/:id field-edit phase — apply every NON-move field on the request
@@ -123,22 +132,45 @@ function requestTaskCliInterrupt(mgr, task): void {
  */
 async function applyTaskFieldEdits(mgr, task, body, user) {
   const {
-    title, description, agentId, type, taskType, priority, dueDate,
-    isManual, recurrence, repoFullName, repoProvider,
-    secondaryRepos, storagePath, storageProvider, position,
+    title,
+    description,
+    agentId,
+    type,
+    taskType,
+    priority,
+    dueDate,
+    isManual,
+    recurrence,
+    repoFullName,
+    repoProvider,
+    secondaryRepos,
+    storagePath,
+    storageProvider,
+    position,
   } = body;
   const now = new Date().toISOString();
   const editedFields: string[] = [];
 
-  if (title !== undefined && title !== task.title) { task.title = title; editedFields.push('title'); }
-  if (description !== undefined && description !== task.text) { task.text = description; editedFields.push('description'); }
+  if (title !== undefined && title !== task.title) {
+    task.title = title;
+    editedFields.push('title');
+  }
+  if (description !== undefined && description !== task.text) {
+    task.text = description;
+    editedFields.push('description');
+  }
   if (agentId !== undefined && agentId !== task.assignee) {
     if (agentId) {
       const assignee = mgr.agents.get(agentId);
       if (!assignee) return { ok: false, status: 404, error: 'Assignee agent not found' };
       if (user.role !== 'admin' && assignee.boardId) {
         const access = await checkBoardAccess(assignee.boardId, user.userId, user.role, 'edit');
-        if (!access.ok) return { ok: false, status: access.status || 403, error: access.error || 'Access denied to assignee agent' };
+        if (!access.ok)
+          return {
+            ok: false,
+            status: access.status || 403,
+            error: access.error || 'Access denied to assignee agent',
+          };
       }
     }
     task.assignee = agentId;
@@ -149,9 +181,18 @@ async function applyTaskFieldEdits(mgr, task, body, user) {
     task.taskType = nextTaskType || null;
     editedFields.push('taskType');
   }
-  if (priority !== undefined && priority !== task.priority) { task.priority = priority; editedFields.push('priority'); }
-  if (dueDate !== undefined && dueDate !== task.dueDate) { task.dueDate = dueDate; editedFields.push('dueDate'); }
-  if (isManual !== undefined && isManual !== task.isManual) { task.isManual = !!isManual; editedFields.push('isManual'); }
+  if (priority !== undefined && priority !== task.priority) {
+    task.priority = priority;
+    editedFields.push('priority');
+  }
+  if (dueDate !== undefined && dueDate !== task.dueDate) {
+    task.dueDate = dueDate;
+    editedFields.push('dueDate');
+  }
+  if (isManual !== undefined && isManual !== task.isManual) {
+    task.isManual = !!isManual;
+    editedFields.push('isManual');
+  }
   if (recurrence !== undefined) {
     const oldValue = task.recurrence || null;
     if (recurrence && recurrence.enabled) {
@@ -166,13 +207,14 @@ async function applyTaskFieldEdits(mgr, task, body, user) {
     } else {
       task.recurrence = null;
     }
-    if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null)) editedFields.push('recurrence');
+    if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null))
+      editedFields.push('recurrence');
   }
   if (repoFullName !== undefined) {
     const value = isValidRepoFullName(repoFullName) ? repoFullName : null;
     if (value !== (task.repoFullName || null)) {
       task.repoFullName = value;
-      task.repoProvider = value ? (repoProvider || task.repoProvider || 'github') : null;
+      task.repoProvider = value ? repoProvider || task.repoProvider || 'github' : null;
       task.secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos || [], value);
       editedFields.push('repoFullName');
     } else if (value && repoProvider !== undefined && repoProvider !== task.repoProvider) {
@@ -186,32 +228,37 @@ async function applyTaskFieldEdits(mgr, task, body, user) {
     if (JSON.stringify(task.secondaryRepos) !== oldValue) editedFields.push('secondaryRepos');
   }
   if (storagePath !== undefined) {
-    const value = typeof storagePath === 'string' && storagePath.trim().length > 0
-      ? storagePath.trim().slice(0, 500)
-      : null;
+    const value =
+      typeof storagePath === 'string' && storagePath.trim().length > 0
+        ? storagePath.trim().slice(0, 500)
+        : null;
     if (value !== (task.storagePath || null)) {
       task.storagePath = value;
-      task.storageProvider = value ? (storageProvider || task.storageProvider || 'onedrive') : null;
+      task.storageProvider = value ? storageProvider || task.storageProvider || 'onedrive' : null;
       editedFields.push('storagePath');
     } else if (value && storageProvider !== undefined && storageProvider !== task.storageProvider) {
       task.storageProvider = storageProvider || 'onedrive';
       editedFields.push('storageProvider');
     }
   }
-  if (position !== undefined) { task.position = position; }
+  if (position !== undefined) {
+    task.position = position;
+  }
 
   return { ok: true, editedFields };
 }
 
 // ── GET /tasks — list all tasks (from the tasks table) ─────────────────────
-router.get('/', asyncHandler(async (req, res) => {
-  const pool = getPool();
-  if (!pool) return res.json([]);
+router.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    if (!pool) return res.json([]);
 
-  const { board_id, agent_id, status, project, repo_full_name } = req.query;
-  // JOIN-based query: project name is derived from boards.project_id.
-  // Repo + storage live directly on the task row.
-  let query = `
+    const { board_id, agent_id, status, project, repo_full_name } = req.query;
+    // JOIN-based query: project name is derived from boards.project_id.
+    // Repo + storage live directly on the task row.
+    let query = `
     SELECT t.*,
            p.id   AS _project_id,
            p.name AS _project_name
@@ -219,421 +266,486 @@ router.get('/', asyncHandler(async (req, res) => {
     LEFT JOIN boards   b ON t.board_id = b.id
     LEFT JOIN projects p ON b.project_id = p.id
     WHERE t.deleted_at IS NULL`;
-  const params: any[] = [];
+    const params: any[] = [];
 
-  // Scope to user's accessible boards (admins see all)
-  if (req.user.role !== 'admin') {
-    const boardIds = await getUserBoardIdSet(req.user.userId);
-    if (boardIds.size === 0) return res.json([]);
-    params.push([...boardIds]);
-    query += ` AND t.board_id = ANY($${params.length})`;
-  }
+    // Scope to user's accessible boards (admins see all)
+    if (req.user.role !== 'admin') {
+      const boardIds = await getUserBoardIdSet(req.user.userId);
+      if (boardIds.size === 0) return res.json([]);
+      params.push([...boardIds]);
+      query += ` AND t.board_id = ANY($${params.length})`;
+    }
 
-  if (board_id) {
-    params.push(board_id);
-    query += ` AND t.board_id = $${params.length}`;
-  }
-  if (agent_id) {
-    params.push(agent_id);
-    query += ` AND t.agent_id = $${params.length}`;
-  }
-  if (status) {
-    params.push(status);
-    query += ` AND t.status = $${params.length}`;
-  }
-  if (project) {
-    // Filter by project name (derived through boards.project_id)
-    params.push(project);
-    query += ` AND p.name = $${params.length}`;
-  }
-  if (repo_full_name) {
-    params.push(repo_full_name);
-    query += ` AND t.repo_full_name = $${params.length}`;
-  }
+    if (board_id) {
+      params.push(board_id);
+      query += ` AND t.board_id = $${params.length}`;
+    }
+    if (agent_id) {
+      params.push(agent_id);
+      query += ` AND t.agent_id = $${params.length}`;
+    }
+    if (status) {
+      params.push(status);
+      query += ` AND t.status = $${params.length}`;
+    }
+    if (project) {
+      // Filter by project name (derived through boards.project_id)
+      params.push(project);
+      query += ` AND p.name = $${params.length}`;
+    }
+    if (repo_full_name) {
+      params.push(repo_full_name);
+      query += ` AND t.repo_full_name = $${params.length}`;
+    }
 
-  query += ' ORDER BY t.position ASC, t.created_at ASC';
-  const result = await pool.query(query, params);
+    query += ' ORDER BY t.position ASC, t.created_at ASC';
+    const result = await pool.query(query, params);
 
-  // Enrich with agent name
-  const mgr = req.app.get('agentManager');
-  const tasks = result.rows.map(row => {
-    const task: any = rowToTask(row);
-    const agent = mgr.agents.get(task.agentId);
-    task.agentName = agent?.name || null;
-    enrichAssignee(mgr, task);
-    return task;
-  });
+    // Enrich with agent name
+    const mgr = req.app.get('agentManager');
+    const tasks = result.rows.map(row => {
+      const task: any = rowToTask(row);
+      const agent = mgr.agents.get(task.agentId);
+      task.agentName = agent?.name || null;
+      enrichAssignee(mgr, task);
+      return task;
+    });
 
-  res.json(tasks);
-}));
+    res.json(tasks);
+  })
+);
 
 // ── PUT /tasks/reorder — update positions for tasks in a column ────────────
 // IMPORTANT: This must be defined BEFORE /:id to prevent Express from
 // matching '/reorder' as a task :id parameter.
-router.put('/reorder', validateBody(reorderTasksSchema), asyncHandler(async (req, res) => {
-  const { orderedIds } = req.body;
+router.put(
+  '/reorder',
+  validateBody(reorderTasksSchema),
+  asyncHandler(async (req, res) => {
+    const { orderedIds } = req.body;
 
-  const pool = getPool();
-  if (!pool) return res.status(500).json({ error: 'Database not available' });
+    const pool = getPool();
+    if (!pool) return res.status(500).json({ error: 'Database not available' });
 
-  const mgr = req.app.get('agentManager');
+    const mgr = req.app.get('agentManager');
 
-  // Verify user has access to at least the first task's board
-  if (req.user.role !== 'admin') {
-    const firstTask = await mgr.getTask(orderedIds[0]);
-    if (firstTask?.boardId) {
-      const access = await validateBoardAccess(firstTask.boardId, req.user.userId, req.user.role);
-      if (!access.ok) return res.status(access.status).json({ error: access.error });
-    }
-  }
-
-  // Update all positions in a single atomic statement so a mid-flight
-  // failure can't leave the board half-reordered. The DB is the source of
-  // truth — no in-memory positions to mirror.
-  const positions = orderedIds.map((_, index) => index);
-  await pool.query(
-    `UPDATE tasks SET position = u.pos, updated_at = NOW()
-     FROM unnest($1::uuid[], $2::bigint[]) AS u(id, pos)
-     WHERE tasks.id = u.id`,
-    [orderedIds, positions]
-  );
-
-  res.json({ ok: true, count: orderedIds.length });
-}));
-
-// ── PUT /tasks/:id — update a task ──────────────────────────────────────────
-router.put('/:id', validateBody(updateTaskSchema), asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const task = await getTaskById(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!await requireTaskAccess(mgr, task, req.user)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-
-  const { column, agentId, boardId } = req.body;
-  const now = new Date().toISOString();
-  const username = req.user?.username || 'user';
-
-  // ── Stop agent when task is moved to another column/board ───────────
-  const wantsColumnChange = column !== undefined && column !== task.status;
-  const wantsBoardChange = boardId !== undefined && boardId !== (task.boardId || null);
-  if (task.actionRunning && (wantsColumnChange || wantsBoardChange)) {
-    // Stop the executing agent so the task can be moved and clear
-    // actionRunning on our copy so it persists correctly.
-    stopTaskExecutor(mgr, task);
-  }
-
-  const oldBoardId = task.boardId || null;
-
-  // ── Resolve the move destination (board access + column validity) ──────
-  // These are the HTTP-facing validations; the mutation itself is delegated to
-  // applyTaskMove so PUT and bulk-move share one move core.
-  let targetBoard: { id: string; name: string | null; oldName: string | null } | null = null;
-  let targetColumn: string | undefined;
-  if (boardId !== undefined && boardId !== oldBoardId) {
-    const access = await validateBoardAccess(boardId, req.user.userId, req.user.role);
-    if (!access.ok) return res.status(access.status).json({ error: access.error });
-
-    let oldBoardName = null;
-    if (oldBoardId) {
-      const oldBoard = await getBoardById(oldBoardId);
-      oldBoardName = oldBoard?.name || null;
-    }
-    targetBoard = { id: boardId, name: access.board?.name || null, oldName: oldBoardName };
-
-    // Validate/reset column for the new board.
-    if (column !== undefined && access.board) {
-      targetColumn = validateColumn(access.board, column);
-    } else if (access.board) {
-      targetColumn = access.board.workflow?.columns?.[0]?.id || task.status;
-    }
-  } else if (column !== undefined && column !== task.status) {
-    // Validate the requested column exists in the task's current board
-    // workflow. Without this, callers could push tasks into arbitrary
-    // unknown columns, breaking board rendering and transitions.
-    const currentBoardId = task.boardId || null;
-    if (currentBoardId) {
-      const currentBoard = await getBoardById(currentBoardId);
-      const cols = currentBoard?.workflow?.columns;
-      if (cols?.length && !cols.some((c: any) => c.id === column)) {
-        const validIds = cols.map((c: any) => c.id).join(', ');
-        return res.status(400).json({
-          error: `Invalid column "${column}" for board "${currentBoard?.name || currentBoardId}". Valid columns: ${validIds}`,
-        });
+    // Verify user has access to at least the first task's board
+    if (req.user.role !== 'admin') {
+      const firstTask = await mgr.getTask(orderedIds[0]);
+      if (firstTask?.boardId) {
+        const access = await validateBoardAccess(firstTask.boardId, req.user.userId, req.user.role);
+        if (!access.ok) return res.status(access.status).json({ error: access.error });
       }
     }
-    targetColumn = column;
-  }
 
-  // ── Field-edit phase (plain editable attributes) ───────────────────────
-  const edits = await applyTaskFieldEdits(mgr, task, req.body, req.user);
-  if (!edits.ok) return res.status(edits.status).json({ error: edits.error });
-  const editedFields = edits.editedFields;
+    // Update all positions in a single atomic statement so a mid-flight
+    // failure can't leave the board half-reordered. The DB is the source of
+    // truth — no in-memory positions to mirror.
+    const positions = orderedIds.map((_, index) => index);
+    await pool.query(
+      `UPDATE tasks SET position = u.pos, updated_at = NOW()
+     FROM unnest($1::uuid[], $2::bigint[]) AS u(id, pos)
+     WHERE tasks.id = u.id`,
+      [orderedIds, positions]
+    );
 
-  // ── Apply the move (mutate + history + persist + signal + auto-refine) ──
-  const { statusChanged, boardChanged } = await applyTaskMove(mgr, task, {
-    targetBoard, targetColumn, username, now, bulk: false,
-    editedFields,
-    unassignOnStatusChange: agentId === undefined,
-    setTaskSignal,
-  });
+    res.json({ ok: true, count: orderedIds.length });
+  })
+);
 
-  // ── Notifications ──────────────────────────────────────────────────────
-  if (boardChanged) {
-    mgr._emit('task:moved', {
-      taskId: task.id,
-      fromBoard: oldBoardId,
-      toBoard: task.boardId,
-      fromBoardName: targetBoard?.oldName ?? null,
-      toBoardName: targetBoard?.name ?? null,
-      column: task.status,
-      movedBy: username,
-    });
-  }
-  emitTaskUpdated(mgr, task);
+// ── PUT /tasks/:id — update a task ──────────────────────────────────────────
+router.put(
+  '/:id',
+  validateBody(updateTaskSchema),
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-  await auditLog('update', req.params.id, req.user.userId, username, {
-    boardChanged, statusChanged,
-    editedFields,
-    fromBoard: boardChanged ? oldBoardId : undefined,
-    toBoard: boardChanged ? task.boardId : undefined,
-  });
+    const { column, agentId, boardId } = req.body;
+    const now = new Date().toISOString();
+    const username = req.user?.username || 'user';
 
-  res.json(task);
-}));
-
-// ── POST /tasks/bulk-move — move multiple tasks to another board/column ──────
-router.post('/bulk-move', validateBody(bulkMoveSchema), asyncHandler(async (req, res) => {
-  const { taskIds, boardId, column } = req.body;
-
-  const mgr = req.app.get('agentManager');
-  const username = req.user?.username || 'user';
-
-  const access = await validateBoardAccess(boardId, req.user.userId, req.user.role);
-  if (!access.ok) return res.status(access.status).json({ error: access.error });
-
-  const targetColumn = column
-    ? validateColumn(access.board, column)
-    : access.board?.workflow?.columns?.[0]?.id || 'todo';
-
-  const now = new Date().toISOString();
-  const results = { moved: [], failed: [] };
-
-  for (const taskId of taskIds) {
-    const task = await mgr.getTask(taskId);
-    if (!task) { results.failed.push({ taskId, error: 'Task not found' }); continue; }
-    if (!await requireTaskAccess(mgr, task, req.user)) { results.failed.push({ taskId, error: 'Access denied' }); continue; }
-    // Stop the executing agent if it's actively processing this task
-    if (task.actionRunning) {
+    // ── Stop agent when task is moved to another column/board ───────────
+    const wantsColumnChange = column !== undefined && column !== task.status;
+    const wantsBoardChange = boardId !== undefined && boardId !== (task.boardId || null);
+    if (task.actionRunning && (wantsColumnChange || wantsBoardChange)) {
+      // Stop the executing agent so the task can be moved and clear
+      // actionRunning on our copy so it persists correctly.
       stopTaskExecutor(mgr, task);
     }
 
     const oldBoardId = task.boardId || null;
-    let oldBoardName = null;
-    if (oldBoardId) { const ob = await getBoardById(oldBoardId); oldBoardName = ob?.name || null; }
 
-    // Same move core as PUT /tasks/:id — mutate, record history, persist, and
-    // fire the stop-signal / auto-refine side-effects. Only the emit stays here.
-    await applyTaskMove(mgr, task, {
-      targetBoard: { id: boardId, name: access.board?.name || null, oldName: oldBoardName },
-      targetColumn, username, now, bulk: true,
+    // ── Resolve the move destination (board access + column validity) ──────
+    // These are the HTTP-facing validations; the mutation itself is delegated to
+    // applyTaskMove so PUT and bulk-move share one move core.
+    let targetBoard: { id: string; name: string | null; oldName: string | null } | null = null;
+    let targetColumn: string | undefined;
+    if (boardId !== undefined && boardId !== oldBoardId) {
+      const access = await validateBoardAccess(boardId, req.user.userId, req.user.role);
+      if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+      let oldBoardName = null;
+      if (oldBoardId) {
+        const oldBoard = await getBoardById(oldBoardId);
+        oldBoardName = oldBoard?.name || null;
+      }
+      targetBoard = { id: boardId, name: access.board?.name || null, oldName: oldBoardName };
+
+      // Validate/reset column for the new board.
+      if (column !== undefined && access.board) {
+        targetColumn = validateColumn(access.board, column);
+      } else if (access.board) {
+        targetColumn = access.board.workflow?.columns?.[0]?.id || task.status;
+      }
+    } else if (column !== undefined && column !== task.status) {
+      // Validate the requested column exists in the task's current board
+      // workflow. Without this, callers could push tasks into arbitrary
+      // unknown columns, breaking board rendering and transitions.
+      const currentBoardId = task.boardId || null;
+      if (currentBoardId) {
+        const currentBoard = await getBoardById(currentBoardId);
+        const cols = currentBoard?.workflow?.columns;
+        if (cols?.length && !cols.some((c: any) => c.id === column)) {
+          const validIds = cols.map((c: any) => c.id).join(', ');
+          return res.status(400).json({
+            error: `Invalid column "${column}" for board "${currentBoard?.name || currentBoardId}". Valid columns: ${validIds}`,
+          });
+        }
+      }
+      targetColumn = column;
+    }
+
+    // ── Field-edit phase (plain editable attributes) ───────────────────────
+    const edits = await applyTaskFieldEdits(mgr, task, req.body, req.user);
+    if (!edits.ok) return res.status(edits.status).json({ error: edits.error });
+    const editedFields = edits.editedFields;
+
+    // ── Apply the move (mutate + history + persist + signal + auto-refine) ──
+    const { statusChanged, boardChanged } = await applyTaskMove(mgr, task, {
+      targetBoard,
+      targetColumn,
+      username,
+      now,
+      bulk: false,
+      editedFields,
+      unassignOnStatusChange: agentId === undefined,
       setTaskSignal,
     });
 
+    // ── Notifications ──────────────────────────────────────────────────────
+    if (boardChanged) {
+      mgr._emit('task:moved', {
+        taskId: task.id,
+        fromBoard: oldBoardId,
+        toBoard: task.boardId,
+        fromBoardName: targetBoard?.oldName ?? null,
+        toBoardName: targetBoard?.name ?? null,
+        column: task.status,
+        movedBy: username,
+      });
+    }
     emitTaskUpdated(mgr, task);
-    results.moved.push({ taskId: task.id, title: task.title || task.text?.slice(0, 60) });
-  }
 
-  mgr._emit('task:bulk-moved', {
-    boardId, boardName: access.board?.name || null,
-    column: targetColumn, count: results.moved.length, movedBy: username,
-  });
+    await auditLog('update', req.params.id, req.user.userId, username, {
+      boardChanged,
+      statusChanged,
+      editedFields,
+      fromBoard: boardChanged ? oldBoardId : undefined,
+      toBoard: boardChanged ? task.boardId : undefined,
+    });
 
-  await auditLog('bulk_move', null, req.user.userId, username, {
-    boardId, column: targetColumn, movedCount: results.moved.length, failedCount: results.failed.length,
-  });
+    res.json(task);
+  })
+);
 
-  res.json(results);
-}));
+// ── POST /tasks/bulk-move — move multiple tasks to another board/column ──────
+router.post(
+  '/bulk-move',
+  validateBody(bulkMoveSchema),
+  asyncHandler(async (req, res) => {
+    const { taskIds, boardId, column } = req.body;
+
+    const mgr = req.app.get('agentManager');
+    const username = req.user?.username || 'user';
+
+    const access = await validateBoardAccess(boardId, req.user.userId, req.user.role);
+    if (!access.ok) return res.status(access.status).json({ error: access.error });
+
+    const targetColumn = column
+      ? validateColumn(access.board, column)
+      : access.board?.workflow?.columns?.[0]?.id || 'todo';
+
+    const now = new Date().toISOString();
+    const results = { moved: [], failed: [] };
+
+    for (const taskId of taskIds) {
+      const task = await mgr.getTask(taskId);
+      if (!task) {
+        results.failed.push({ taskId, error: 'Task not found' });
+        continue;
+      }
+      if (!(await requireTaskAccess(mgr, task, req.user))) {
+        results.failed.push({ taskId, error: 'Access denied' });
+        continue;
+      }
+      // Stop the executing agent if it's actively processing this task
+      if (task.actionRunning) {
+        stopTaskExecutor(mgr, task);
+      }
+
+      const oldBoardId = task.boardId || null;
+      let oldBoardName = null;
+      if (oldBoardId) {
+        const ob = await getBoardById(oldBoardId);
+        oldBoardName = ob?.name || null;
+      }
+
+      // Same move core as PUT /tasks/:id — mutate, record history, persist, and
+      // fire the stop-signal / auto-refine side-effects. Only the emit stays here.
+      await applyTaskMove(mgr, task, {
+        targetBoard: { id: boardId, name: access.board?.name || null, oldName: oldBoardName },
+        targetColumn,
+        username,
+        now,
+        bulk: true,
+        setTaskSignal,
+      });
+
+      emitTaskUpdated(mgr, task);
+      results.moved.push({ taskId: task.id, title: task.title || task.text?.slice(0, 60) });
+    }
+
+    mgr._emit('task:bulk-moved', {
+      boardId,
+      boardName: access.board?.name || null,
+      column: targetColumn,
+      count: results.moved.length,
+      movedBy: username,
+    });
+
+    await auditLog('bulk_move', null, req.user.userId, username, {
+      boardId,
+      column: targetColumn,
+      movedCount: results.moved.length,
+      failedCount: results.failed.length,
+    });
+
+    res.json(results);
+  })
+);
 
 // ── POST /tasks/:id/stop — task-level stop (clears stuck actionRunning) ────
 // Used as a fallback when the executor agent has been recycled and the
 // agent-level stop endpoint returns 404. Clears actionRunning flags and
 // signals any waiting workflow loop, but does NOT relaunch the task.
-router.post('/:id/stop', asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const task = await mgr.getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!await requireTaskAccess(mgr, task, req.user)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+router.post(
+  '/:id/stop',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-  // Clear stuck flags on the DB-sourced task
-  const target = task;
-  requestTaskCliInterrupt(mgr, target);
-  target.actionRunning = false;
-  target.actionRunningAgentId = null;
-  target.actionRunningMode = null;
-  // Mark as stopped only for active-status tasks; error-status tasks keep
-  // their error state so the user sees the Resume button as recovery.
-  if (mgr._isActiveTaskStatus(target.status)) {
-    target.executionStatus = 'stopped';
-    target.startedAt = null;
-  }
+    // Clear stuck flags on the DB-sourced task
+    const target = task;
+    requestTaskCliInterrupt(mgr, target);
+    target.actionRunning = false;
+    target.actionRunningAgentId = null;
+    target.actionRunningMode = null;
+    // Mark as stopped only for active-status tasks; error-status tasks keep
+    // their error state so the user sees the Resume button as recovery.
+    if (mgr._isActiveTaskStatus(target.status)) {
+      target.executionStatus = 'stopped';
+      target.startedAt = null;
+    }
 
-  // Signal any pending workflow lock so it unblocks immediately
-  setTaskSignal(req.params.id, 'stopped', true);
+    // Signal any pending workflow lock so it unblocks immediately
+    setTaskSignal(req.params.id, 'stopped', true);
 
-  await saveTaskToDb({ ...target, agentId: task.agentId });
-  mgr._emit('task:updated', { agentId: task.agentId, task: { ...target, agentId: task.agentId } });
-  res.json({ ok: true });
-}));
+    await saveTaskToDb({ ...target, agentId: task.agentId });
+    mgr._emit('task:updated', {
+      agentId: task.agentId,
+      task: { ...target, agentId: task.agentId },
+    });
+    res.json({ ok: true });
+  })
+);
 
 // ── PATCH /tasks/:id/clear-stopped — clear the "stopped" execution status ───
-router.patch('/:id/clear-stopped', asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const task = await mgr.getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!await requireTaskAccess(mgr, task, req.user)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+router.patch(
+  '/:id/clear-stopped',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-  clearTaskSignal(req.params.id, 'stopped');
-  await updateTaskExecutionStatus(req.params.id, null);
+    clearTaskSignal(req.params.id, 'stopped');
+    await updateTaskExecutionStatus(req.params.id, null);
 
-  // Reset circuit breaker so the task loop doesn't skip this task
-  mgr._taskResumeFailures?.delete(req.params.id);
+    // Reset circuit breaker so the task loop doesn't skip this task
+    mgr._taskResumeFailures?.delete(req.params.id);
 
-  task.executionStatus = null;
-  const startedAt = new Date().toISOString();
+    task.executionStatus = null;
+    const startedAt = new Date().toISOString();
 
-  // If task is in 'error' status, restore it to the previous active status
-  // so the task loop picks it up for re-execution.
-  if (task.status === 'error') {
-    const restoreStatus = task.errorFromStatus || 'pending';
-    await mgr.setTaskStatus(task.agentId, task.id, restoreStatus, { by: 'user' });
-    // setTaskStatus clears startedAt — re-stamp it (persisted) so the DB-driven
-    // task loop resumes the task.
-    await updateTaskFields(req.params.id, { startedAt });
-    task.status = restoreStatus;
-  } else {
-    // For non-error tasks, persist startedAt (+ cleared executionStatus) so the
-    // DB-driven task loop resumes.
+    // If task is in 'error' status, restore it to the previous active status
+    // so the task loop picks it up for re-execution.
+    if (task.status === 'error') {
+      const restoreStatus = task.errorFromStatus || 'pending';
+      await mgr.setTaskStatus(task.agentId, task.id, restoreStatus, { by: 'user' });
+      // setTaskStatus clears startedAt — re-stamp it (persisted) so the DB-driven
+      // task loop resumes the task.
+      await updateTaskFields(req.params.id, { startedAt });
+      task.status = restoreStatus;
+    } else {
+      // For non-error tasks, persist startedAt (+ cleared executionStatus) so the
+      // DB-driven task loop resumes.
+      task.startedAt = startedAt;
+      await updateTaskFields(req.params.id, { startedAt, executionStatus: null });
+    }
     task.startedAt = startedAt;
-    await updateTaskFields(req.params.id, { startedAt, executionStatus: null });
-  }
-  task.startedAt = startedAt;
 
-  mgr._emit('task:updated', { agentId: task.agentId, task: { ...task, agentId: task.agentId } });
-  res.json({ ok: true });
-}));
+    mgr._emit('task:updated', { agentId: task.agentId, task: { ...task, agentId: task.agentId } });
+    res.json({ ok: true });
+  })
+);
 
 // ── DELETE /tasks/:id — soft delete ─────────────────────────────────────────
-router.delete('/:id', asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const task = await getTaskById(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!await requireTaskAccess(mgr, task, req.user)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+router.delete(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await getTaskById(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-  // Block deletion of tasks being executed by a busy agent
-  const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
-  if (task.startedAt && mgr._isActiveTaskStatus(task.status) && agent?.status === 'busy') {
-    return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
-  }
+    // Block deletion of tasks being executed by a busy agent
+    const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
+    if (task.startedAt && mgr._isActiveTaskStatus(task.status) && agent?.status === 'busy') {
+      return res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
+    }
 
-  const ok = await mgr.deleteTask(task.agentId, req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Task not found' });
+    const ok = await mgr.deleteTask(task.agentId, req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Task not found' });
 
-  // Record deleted_by in the database
-  const pool = getPool();
-  if (pool) {
-    await pool.query(
-      'UPDATE tasks SET deleted_by = $1 WHERE id = $2',
-      [req.user.userId, req.params.id]
-    ).catch(() => {});
-  }
+    // Record deleted_by in the database
+    const pool = getPool();
+    if (pool) {
+      await pool
+        .query('UPDATE tasks SET deleted_by = $1 WHERE id = $2', [req.user.userId, req.params.id])
+        .catch(() => {});
+    }
 
-  await auditLog('soft_delete', req.params.id, req.user.userId, req.user.username, {
-    taskTitle: task.title || task.text?.slice(0, 100),
-    agentId: task.agentId,
-  });
+    await auditLog('soft_delete', req.params.id, req.user.userId, req.user.username, {
+      taskTitle: task.title || task.text?.slice(0, 100),
+      agentId: task.agentId,
+    });
 
-  res.json({ ok: true });
-}));
+    res.json({ ok: true });
+  })
+);
 
 // ── GET /tasks/deleted — list soft-deleted tasks (admin only) ───────────────
-router.get('/deleted', requireRole('admin'), asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const deleted = await mgr.getDeletedTasks();
-  res.json(deleted);
-}));
+router.get(
+  '/deleted',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const deleted = await mgr.getDeletedTasks();
+    res.json(deleted);
+  })
+);
 
 // ── POST /tasks/:id/restore — restore a soft-deleted task (admin only) ──────
-router.post('/:id/restore', requireRole('admin'), asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const restored = await mgr.restoreTask(req.params.id);
-  if (!restored) return res.status(404).json({ error: 'Deleted task not found' });
+router.post(
+  '/:id/restore',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const restored = await mgr.restoreTask(req.params.id);
+    if (!restored) return res.status(404).json({ error: 'Deleted task not found' });
 
-  await auditLog('restore', req.params.id, req.user.userId, req.user.username, {
-    taskTitle: restored.title || restored.text?.slice(0, 100),
-    agentId: restored.agentId,
-  });
+    await auditLog('restore', req.params.id, req.user.userId, req.user.username, {
+      taskTitle: restored.title || restored.text?.slice(0, 100),
+      agentId: restored.agentId,
+    });
 
-  res.json(restored);
-}));
+    res.json(restored);
+  })
+);
 
 // ── DELETE /tasks/:id/permanent — permanently delete (admin only) ───────────
-router.delete('/:id/permanent', requireRole('admin'), asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
+router.delete(
+  '/:id/permanent',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
 
-  await auditLog('hard_delete', req.params.id, req.user.userId, req.user.username);
+    await auditLog('hard_delete', req.params.id, req.user.userId, req.user.username);
 
-  const ok = await mgr.hardDeleteTask(req.params.id);
-  if (!ok) return res.status(404).json({ error: 'Task not found' });
-  res.json({ ok: true });
-}));
+    const ok = await mgr.hardDeleteTask(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Task not found' });
+    res.json({ ok: true });
+  })
+);
 
 // ── GET /tasks/:id/history — view task modification history ─────────────────
-router.get('/:id/history', asyncHandler(async (req, res) => {
-  const mgr = req.app.get('agentManager');
-  const task = await mgr.getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!await requireTaskAccess(mgr, task, req.user)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
-  res.json(task.history || []);
-}));
+router.get(
+  '/:id/history',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const task = await mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    res.json(task.history || []);
+  })
+);
 
 // ── GET /tasks/project-stats — aggregated task stats per project (via boards) ─
-router.get('/project-stats', asyncHandler(async (req, res) => {
-  const pool = getPool();
-  if (!pool) return res.json({ projects: [] });
+router.get(
+  '/project-stats',
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    if (!pool) return res.json({ projects: [] });
 
-  const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
+    const days = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 90);
 
-  // Scope counts and project names to resources visible to the caller.
-  let boardFilter = '';
-  let projectFilter = '';
-  let summaryParams: any[] = [];
-  let dailyParams: any[] = [days];
-  let daysParamIdx = 1;
-  if (req.user.role !== 'admin') {
-    const boardIds = await getUserBoardIdSet(req.user.userId);
-    summaryParams = [[...boardIds], req.user.userId];
-    dailyParams = [[...boardIds], days];
-    daysParamIdx = 2;
-    boardFilter = ' AND t.board_id = ANY($1)';
-    projectFilter = `WHERE p.owner_id = $2
+    // Scope counts and project names to resources visible to the caller.
+    let boardFilter = '';
+    let projectFilter = '';
+    let summaryParams: any[] = [];
+    let dailyParams: any[] = [days];
+    let daysParamIdx = 1;
+    if (req.user.role !== 'admin') {
+      const boardIds = await getUserBoardIdSet(req.user.userId);
+      summaryParams = [[...boardIds], req.user.userId];
+      dailyParams = [[...boardIds], days];
+      daysParamIdx = 2;
+      boardFilter = ' AND t.board_id = ANY($1)';
+      projectFilter = `WHERE p.owner_id = $2
       OR EXISTS (
         SELECT 1 FROM boards visible_b
         WHERE visible_b.project_id = p.id AND visible_b.id = ANY($1)
       )`;
-  }
+    }
 
-  // 1. Per-project summary counts — join tasks → boards → projects
-  const summaryResult = await pool.query(`
+    // 1. Per-project summary counts — join tasks → boards → projects
+    const summaryResult = await pool.query(
+      `
     SELECT
       p.id AS project_id,
       p.name AS project_name,
@@ -649,10 +761,13 @@ router.get('/project-stats', asyncHandler(async (req, res) => {
     ${projectFilter}
     GROUP BY p.id, p.name
     ORDER BY p.name
-  `, summaryParams);
+  `,
+      summaryParams
+    );
 
-  // 2. Daily created/completed counts per project (last N days)
-  const dailyResult = await pool.query(`
+    // 2. Daily created/completed counts per project (last N days)
+    const dailyResult = await pool.query(
+      `
     SELECT project_id, day::date AS day, created, completed FROM (
       SELECT b.project_id, d.day,
         COUNT(*) FILTER (WHERE t.created_at::date = d.day)::int AS created,
@@ -671,103 +786,131 @@ router.get('/project-stats', asyncHandler(async (req, res) => {
     ) sub
     WHERE created > 0 OR completed > 0
     ORDER BY project_id, day
-  `, dailyParams);
+  `,
+      dailyParams
+    );
 
-  const dailyByProject: Record<string, { date: string; created: number; completed: number }[]> = {};
-  for (const row of dailyResult.rows) {
-    const key = row.project_id;
-    if (!dailyByProject[key]) dailyByProject[key] = [];
-    dailyByProject[key].push({
-      date: row.day instanceof Date ? row.day.toISOString().split('T')[0] : String(row.day).split('T')[0],
-      created: row.created,
-      completed: row.completed,
-    });
-  }
+    const dailyByProject: Record<string, { date: string; created: number; completed: number }[]> =
+      {};
+    for (const row of dailyResult.rows) {
+      const key = row.project_id;
+      if (!dailyByProject[key]) dailyByProject[key] = [];
+      dailyByProject[key].push({
+        date:
+          row.day instanceof Date
+            ? row.day.toISOString().split('T')[0]
+            : String(row.day).split('T')[0],
+        created: row.created,
+        completed: row.completed,
+      });
+    }
 
-  const projects = summaryResult.rows.map(r => ({
-    id: r.project_id,
-    name: r.project_name,
-    total: r.total,
-    done: r.done,
-    active: r.active,
-    waiting: r.waiting,
-    bugs: r.bugs,
-    features: r.features,
-    completion: r.total > 0 ? Math.round((r.done / r.total) * 100) : 0,
-    daily: dailyByProject[r.project_id] || [],
-  }));
+    const projects = summaryResult.rows.map(r => ({
+      id: r.project_id,
+      name: r.project_name,
+      total: r.total,
+      done: r.done,
+      active: r.active,
+      waiting: r.waiting,
+      bugs: r.bugs,
+      features: r.features,
+      completion: r.total > 0 ? Math.round((r.done / r.total) * 100) : 0,
+      daily: dailyByProject[r.project_id] || [],
+    }));
 
-  res.json({ projects });
-}));
+    res.json({ projects });
+  })
+);
 
 // ── GET /tasks/stats — task statistics ──────────────────────────────────────
-router.get('/stats', asyncHandler(async (req, res) => {
-  const pool = getPool();
-  if (!pool) return res.json({ total: 0, active: 0, deleted: 0, deletionRate: 0 });
+router.get(
+  '/stats',
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    if (!pool) return res.json({ total: 0, active: 0, deleted: 0, deletionRate: 0 });
 
-  let boardFilter = '';
-  const params: any[] = [];
-  if (req.user.role !== 'admin') {
-    const boardIds = await getUserBoardIdSet(req.user.userId);
-    if (boardIds.size === 0) return res.json({ total: 0, active: 0, deleted: 0, deletionRate30d: 0 });
-    params.push([...boardIds]);
-    boardFilter = ` AND board_id = ANY($1)`;
-  }
+    let boardFilter = '';
+    const params: any[] = [];
+    if (req.user.role !== 'admin') {
+      const boardIds = await getUserBoardIdSet(req.user.userId);
+      if (boardIds.size === 0)
+        return res.json({ total: 0, active: 0, deleted: 0, deletionRate30d: 0 });
+      params.push([...boardIds]);
+      boardFilter = ` AND board_id = ANY($1)`;
+    }
 
-  const [totalResult, activeResult, deletedResult, recentDeletedResult] = await Promise.all([
-    pool.query(`SELECT COUNT(*) as count FROM tasks WHERE 1=1${boardFilter}`, params),
-    pool.query(`SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NULL${boardFilter}`, params),
-    pool.query(`SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL${boardFilter}`, params),
-    pool.query(`SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at >= NOW() - INTERVAL '30 days'${boardFilter}`, params),
-  ]);
+    const [totalResult, activeResult, deletedResult, recentDeletedResult] = await Promise.all([
+      pool.query(`SELECT COUNT(*) as count FROM tasks WHERE 1=1${boardFilter}`, params),
+      pool.query(
+        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NULL${boardFilter}`,
+        params
+      ),
+      pool.query(
+        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL${boardFilter}`,
+        params
+      ),
+      pool.query(
+        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at >= NOW() - INTERVAL '30 days'${boardFilter}`,
+        params
+      ),
+    ]);
 
-  const total = parseInt(totalResult.rows[0].count, 10);
-  const active = parseInt(activeResult.rows[0].count, 10);
-  const deleted = parseInt(deletedResult.rows[0].count, 10);
-  const recentDeleted = parseInt(recentDeletedResult.rows[0].count, 10);
+    const total = parseInt(totalResult.rows[0].count, 10);
+    const active = parseInt(activeResult.rows[0].count, 10);
+    const deleted = parseInt(deletedResult.rows[0].count, 10);
+    const recentDeleted = parseInt(recentDeletedResult.rows[0].count, 10);
 
-  res.json({
-    total,
-    active,
-    deleted,
-    deletionRate30d: total > 0 ? Math.round((recentDeleted / total) * 10000) / 100 : 0,
-  });
-}));
+    res.json({
+      total,
+      active,
+      deleted,
+      deletionRate30d: total > 0 ? Math.round((recentDeleted / total) * 10000) / 100 : 0,
+    });
+  })
+);
 
 // ── GET /tasks/audit — view audit logs (admin only) ─────────────────────────
-router.get('/audit', requireRole('admin'), asyncHandler(async (req, res) => {
-  const pool = getPool();
-  if (!pool) return res.json([]);
+router.get(
+  '/audit',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    if (!pool) return res.json([]);
 
-  const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 200);
-  const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
-  const result = await pool.query(
-    `SELECT * FROM task_audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-    [limit, offset]
-  );
-  res.json(result.rows);
-}));
+    const result = await pool.query(
+      `SELECT * FROM task_audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    res.json(result.rows);
+  })
+);
 
 // ── POST /tasks/purge — purge tasks deleted more than 90 days ago (admin only)
-router.post('/purge', requireRole('admin'), asyncHandler(async (req, res) => {
-  const pool = getPool();
-  if (!pool) return res.json({ purged: 0 });
+router.post(
+  '/purge',
+  requireRole('admin'),
+  asyncHandler(async (req, res) => {
+    const pool = getPool();
+    if (!pool) return res.json({ purged: 0 });
 
-  const retentionDays = parseInt(req.query.days as string) || 90;
-  const result = await pool.query(
-    'DELETE FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL \'1 day\' * $1',
-    [retentionDays]
-  );
+    const retentionDays = parseInt(req.query.days as string) || 90;
+    const result = await pool.query(
+      "DELETE FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '1 day' * $1",
+      [retentionDays]
+    );
 
-  const purged = result.rowCount || 0;
-  await auditLog('bulk_purge', null, req.user.userId, req.user.username, {
-    retentionDays,
-    purgedCount: purged,
-  });
+    const purged = result.rowCount || 0;
+    await auditLog('bulk_purge', null, req.user.userId, req.user.username, {
+      retentionDays,
+      purgedCount: purged,
+    });
 
-  res.json({ purged });
-}));
+    res.json({ purged });
+  })
+);
 
 // ── Helper: extract owner/repo from task context ────────────────────────────
 async function resolveOwnerRepo(task, mgr) {
@@ -790,62 +933,75 @@ async function resolveOwnerRepo(task, mgr) {
 }
 
 // ── GET /tasks/:id/commits/:hash/diff — fetch commit diff from GitHub ───────
-router.get('/:id/commits/:hash/diff', asyncHandler(async (req, res) => {
-  // Validate the commit hash before using it in a URL — prevents path/header injection
-  // and accidental call to a different GitHub endpoint.
-  if (!/^[0-9a-f]{7,40}$/i.test(req.params.hash || '')) {
-    return res.status(400).json({ error: 'Invalid commit hash' });
-  }
+router.get(
+  '/:id/commits/:hash/diff',
+  asyncHandler(async (req, res) => {
+    // Validate the commit hash before using it in a URL — prevents path/header injection
+    // and accidental call to a different GitHub endpoint.
+    if (!/^[0-9a-f]{7,40}$/i.test(req.params.hash || '')) {
+      return res.status(400).json({ error: 'Invalid commit hash' });
+    }
 
-  const mgr = req.app.get('agentManager');
-  const task = await mgr.getTask(req.params.id);
-  if (!task) return res.status(404).json({ error: 'Task not found' });
-  if (!await requireTaskAccess(mgr, task, req.user)) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+    const mgr = req.app.get('agentManager');
+    const task = await mgr.getTask(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    if (!(await requireTaskAccess(mgr, task, req.user))) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-  if (!task.boardId) {
-    return res.status(400).json({ error: 'Task has no board — cannot resolve GitHub credentials' });
-  }
-  const tok = getOAuthToken('github', 'board', task.boardId);
-  if (!tok || !tok.accessToken) {
-    return res.status(400).json({ error: 'No GitHub plugin connected on this board', code: 'GITHUB_NOT_CONNECTED' });
-  }
+    if (!task.boardId) {
+      return res
+        .status(400)
+        .json({ error: 'Task has no board — cannot resolve GitHub credentials' });
+    }
+    const tok = getOAuthToken('github', 'board', task.boardId);
+    if (!tok || !tok.accessToken) {
+      return res
+        .status(400)
+        .json({ error: 'No GitHub plugin connected on this board', code: 'GITHUB_NOT_CONNECTED' });
+    }
 
-  const ownerRepo = await resolveOwnerRepo(task, mgr);
-  if (!ownerRepo) {
-    return res.status(400).json({ error: 'Cannot determine GitHub repository for this task' });
-  }
-  // Defense-in-depth: also validate owner/repo segments derived from task data.
-  if (!/^[A-Za-z0-9_.-]+$/.test(ownerRepo.owner) || !/^[A-Za-z0-9_.-]+$/.test(ownerRepo.repo)) {
-    return res.status(400).json({ error: 'Invalid GitHub repository identifier' });
-  }
+    const ownerRepo = await resolveOwnerRepo(task, mgr);
+    if (!ownerRepo) {
+      return res.status(400).json({ error: 'Cannot determine GitHub repository for this task' });
+    }
+    // Defense-in-depth: also validate owner/repo segments derived from task data.
+    if (!/^[A-Za-z0-9_.-]+$/.test(ownerRepo.owner) || !/^[A-Za-z0-9_.-]+$/.test(ownerRepo.repo)) {
+      return res.status(400).json({ error: 'Invalid GitHub repository identifier' });
+    }
 
-  const resp = await fetch(
-    `https://api.github.com/repos/${encodeURIComponent(ownerRepo.owner)}/${encodeURIComponent(ownerRepo.repo)}/commits/${encodeURIComponent(req.params.hash)}`,
-    { headers: { Authorization: `Bearer ${tok.accessToken}`, Accept: 'application/vnd.github.v3+json', 'User-Agent': 'PulsarTeam' } }
-  );
-  if (!resp.ok) {
-    if (resp.status === 404) return res.status(404).json({ error: 'Commit not found on GitHub' });
-    throw new Error(`GitHub API error: ${resp.status} ${resp.statusText}`);
-  }
-  const commit = await resp.json();
+    const resp = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(ownerRepo.owner)}/${encodeURIComponent(ownerRepo.repo)}/commits/${encodeURIComponent(req.params.hash)}`,
+      {
+        headers: {
+          Authorization: `Bearer ${tok.accessToken}`,
+          Accept: 'application/vnd.github.v3+json',
+          'User-Agent': 'PulsarTeam',
+        },
+      }
+    );
+    if (!resp.ok) {
+      if (resp.status === 404) return res.status(404).json({ error: 'Commit not found on GitHub' });
+      throw new Error(`GitHub API error: ${resp.status} ${resp.statusText}`);
+    }
+    const commit = await resp.json();
 
-  res.json({
-    sha: commit.sha,
-    message: commit.commit.message,
-    author: commit.commit.author?.name || commit.author?.login || 'unknown',
-    date: commit.commit.author?.date,
-    stats: commit.stats,
-    files: (commit.files || []).map(f => ({
-      filename: f.filename,
-      status: f.status,
-      additions: f.additions,
-      deletions: f.deletions,
-      changes: f.changes,
-      patch: f.patch || '',
-    })),
-  });
-}));
+    res.json({
+      sha: commit.sha,
+      message: commit.commit.message,
+      author: commit.commit.author?.name || commit.author?.login || 'unknown',
+      date: commit.commit.author?.date,
+      stats: commit.stats,
+      files: (commit.files || []).map(f => ({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        changes: f.changes,
+        patch: f.patch || '',
+      })),
+    });
+  })
+);
 
 export default router;

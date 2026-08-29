@@ -18,7 +18,15 @@
  */
 
 import { getWorkflowForBoard, getAllBoardWorkflows } from '../configManager.js';
-import { saveTaskToDb, getTaskById, getActiveWorkflowTasks, getInterruptedChainTasks, updateTaskFields, tryAcquireTaskLock, releaseTaskLock } from '../database.js';
+import {
+  saveTaskToDb,
+  getTaskById,
+  getActiveWorkflowTasks,
+  getInterruptedChainTasks,
+  updateTaskFields,
+  tryAcquireTaskLock,
+  releaseTaskLock,
+} from '../database.js';
 import { persistThenEmit } from '../taskMutations.js';
 import { executeAction, recordReassign } from './actionExecutor.js';
 import { markTaskError } from './taskErrors.js';
@@ -30,14 +38,19 @@ import {
   columnExists,
   Trigger,
 } from './taskStateMachine.js';
-import { findAgentForAssignment, hasLockForTask, hasIdleAgentWithRole, clearAgentBusy } from './agentSelector.js';
+import {
+  findAgentForAssignment,
+  hasLockForTask,
+  hasIdleAgentWithRole,
+  clearAgentBusy,
+} from './agentSelector.js';
 
 // ── Progressive cooldown for on_enter retries ──────────────────────────────
 // Starts at 200ms and doubles each retry up to a 2s cap: 200ms, 400ms, 800ms, 1.6s, 2s…
 // In production, the 5s task-loop poll interval dominates anyway, so the cooldown
 // only matters when called at higher frequency (e.g. tests poll every 100ms).
 const ON_ENTER_RETRY_INITIAL_MS = 200;
-const ON_ENTER_RETRY_MAX_MS     = 2_000;
+const ON_ENTER_RETRY_MAX_MS = 2_000;
 
 /**
  * The mutable task object for chain bookkeeping (completedActionIdx,
@@ -74,7 +87,9 @@ let _startupReArmDone = false;
 export async function processColumnEntry(task, agentManager, { by = null } = {}) {
   const io = agentManager.io;
 
-  console.log(`[WorkflowEngine] processColumnEntry: status="${task.status}" task="${task.id}" "${(task.title || task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`);
+  console.log(
+    `[WorkflowEngine] processColumnEntry: status="${task.status}" task="${task.id}" "${(task.title || task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`
+  );
 
   if (task.status === 'error') {
     console.log(`[WorkflowEngine] Skipping — task is in error status`);
@@ -105,7 +120,9 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
   // We defer the nested call so recheckPendingTransitions picks it up instead.
   if (_processingTasks.has(task.id)) {
     const currentlyProcessing = _processingTasks.get(task.id);
-    console.log(`[WorkflowEngine] processColumnEntry: already processing task="${task.id}" (status="${currentlyProcessing}") — deferring for status="${task.status}"`);
+    console.log(
+      `[WorkflowEngine] processColumnEntry: already processing task="${task.id}" (status="${currentlyProcessing}") — deferring for status="${task.status}"`
+    );
     // Flag for deferred on_enter so recheckPendingTransitions picks it up
     const actualTask = await _chainTask(agentManager, task);
     if (actualTask && task.status !== currentlyProcessing) {
@@ -118,73 +135,79 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
   const enteredStatus = task.status;
 
   try {
-
-  let workflow;
-  try {
-    workflow = await getWorkflowForBoard(task.boardId);
-  } catch (err) {
-    console.error(`[WorkflowEngine] Failed to load workflow:`, err.message);
-    return;
-  }
-
-  const ownerId = workflow.userId || agentManager.agents.get(task.agentId)?.ownerId || null;
-
-  // Auto-assign by column role
-  await _autoAssignByColumn(task, workflow, agentManager, ownerId, io);
-
-  // Find matching transitions for this column
-  const transitions = getMatchingTransitions(workflow, task.status);
-  if (transitions.length === 0) {
-    console.log(`[WorkflowEngine] No transitions for status="${task.status}" task="${task.id}"`);
-    return;
-  }
-
-  const originalStatus = task.status;
-
-  for (const transition of transitions) {
-    // If a previous action changed the status, stop processing
-    if (task.status !== originalStatus) {
-      console.log(`[WorkflowEngine] Task "${task.id}" moved from "${originalStatus}" to "${task.status}" — stopping`);
-      break;
+    let workflow;
+    try {
+      workflow = await getWorkflowForBoard(task.boardId);
+    } catch (err) {
+      console.error(`[WorkflowEngine] Failed to load workflow:`, err.message);
+      return;
     }
 
-    // Evaluate conditions for conditional triggers
-    if (transition.trigger === Trigger.CONDITION) {
-      const allMet = evaluateAllConditions(
-        transition.conditions || [],
-        task,
-        (agentId) => agentManager.agents.get(agentId),
-        (role) => hasIdleAgentWithRole(agentManager.agents, role)
+    const ownerId = workflow.userId || agentManager.agents.get(task.agentId)?.ownerId || null;
+
+    // Auto-assign by column role
+    await _autoAssignByColumn(task, workflow, agentManager, ownerId, io);
+
+    // Find matching transitions for this column
+    const transitions = getMatchingTransitions(workflow, task.status);
+    if (transitions.length === 0) {
+      console.log(`[WorkflowEngine] No transitions for status="${task.status}" task="${task.id}"`);
+      return;
+    }
+
+    const originalStatus = task.status;
+
+    for (const transition of transitions) {
+      // If a previous action changed the status, stop processing
+      if (task.status !== originalStatus) {
+        console.log(
+          `[WorkflowEngine] Task "${task.id}" moved from "${originalStatus}" to "${task.status}" — stopping`
+        );
+        break;
+      }
+
+      // Evaluate conditions for conditional triggers
+      if (transition.trigger === Trigger.CONDITION) {
+        const allMet = evaluateAllConditions(
+          transition.conditions || [],
+          task,
+          agentId => agentManager.agents.get(agentId),
+          role => hasIdleAgentWithRole(agentManager.agents, role)
+        );
+        if (!allMet) {
+          console.log(
+            `[WorkflowEngine] Conditions not met for transition from="${transition.from}"`
+          );
+          continue;
+        }
+      }
+
+      // Execute action chain
+      const actions = transition.actions || [];
+      console.log(
+        `[WorkflowEngine] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} actions) task="${task.id}"`
       );
-      if (!allMet) {
-        console.log(`[WorkflowEngine] Conditions not met for transition from="${transition.from}"`);
-        continue;
+
+      const chainResult = await _executeActionChain(actions, task, {
+        agentManager,
+        io,
+        ownerId,
+        workflow,
+        originalStatus,
+      });
+
+      // If an action in the chain was skipped (e.g., no idle agent), stop
+      // processing further transitions for this column. Without this, a
+      // subsequent transition could move the task forward (via change_status)
+      // before the skipped action (e.g., run_agent) gets a chance to execute,
+      // causing tasks to "jump" columns without being processed.
+      if (chainResult?.skipped) {
+        console.log(
+          `[WorkflowEngine] Chain had skipped actions — deferring remaining transitions for task="${task.id}"`
+        );
+        break;
       }
     }
-
-    // Execute action chain
-    const actions = transition.actions || [];
-    console.log(`[WorkflowEngine] Transition matched: from="${transition.from}" trigger="${transition.trigger}" (${actions.length} actions) task="${task.id}"`);
-
-    const chainResult = await _executeActionChain(actions, task, {
-      agentManager,
-      io,
-      ownerId,
-      workflow,
-      originalStatus,
-    });
-
-    // If an action in the chain was skipped (e.g., no idle agent), stop
-    // processing further transitions for this column. Without this, a
-    // subsequent transition could move the task forward (via change_status)
-    // before the skipped action (e.g., run_agent) gets a chance to execute,
-    // causing tasks to "jump" columns without being processed.
-    if (chainResult?.skipped) {
-      console.log(`[WorkflowEngine] Chain had skipped actions — deferring remaining transitions for task="${task.id}"`);
-      break;
-    }
-  }
-
   } finally {
     _processingTasks.delete(task.id);
   }
@@ -198,11 +221,16 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
   // show the card back in its previous column (the "bounce"). The nested
   // pending_on_enter marker remains as the durable fallback if this replica dies
   // before the continuation runs.
-  if (!_processingTasks.has(task.id)
-      && task.status && task.status !== enteredStatus
-      && task.status !== 'error' && task.status !== 'done') {
-    processColumnEntry({ ...task }, agentManager, { by: 'chain-continue' })
-      .catch(err => console.error(`[WorkflowEngine] chain-continue error:`, err.message));
+  if (
+    !_processingTasks.has(task.id) &&
+    task.status &&
+    task.status !== enteredStatus &&
+    task.status !== 'error' &&
+    task.status !== 'done'
+  ) {
+    processColumnEntry({ ...task }, agentManager, { by: 'chain-continue' }).catch(err =>
+      console.error(`[WorkflowEngine] chain-continue error:`, err.message)
+    );
   }
 }
 
@@ -248,7 +276,10 @@ function _sweepOnEnterRetryState(agentManager) {
  * Load the board → transitions map for transitions that are condition-based or
  * on_enter. Returns empty maps (so the caller early-returns) if the load fails.
  */
-async function _loadRelevantBoardTransitions(): Promise<{ transMap: Map<any, any>; workflowMap: Map<any, any> }> {
+async function _loadRelevantBoardTransitions(): Promise<{
+  transMap: Map<any, any>;
+  workflowMap: Map<any, any>;
+}> {
   const transMap = new Map();
   const workflowMap = new Map();
 
@@ -261,13 +292,11 @@ async function _loadRelevantBoardTransitions(): Promise<{ transMap: Map<any, any
   }
 
   for (const { boardId, workflow } of boardWorkflows) {
-    const relevant = workflow.transitions
-      .filter(isValidTransition)
-      .filter(t => {
-        if (t.trigger === Trigger.CONDITION && (t.conditions || []).length > 0) return true;
-        if (t.trigger === Trigger.ON_ENTER) return true;
-        return false;
-      });
+    const relevant = workflow.transitions.filter(isValidTransition).filter(t => {
+      if (t.trigger === Trigger.CONDITION && (t.conditions || []).length > 0) return true;
+      if (t.trigger === Trigger.ON_ENTER) return true;
+      return false;
+    });
     if (relevant.length > 0) {
       transMap.set(boardId, relevant);
       workflowMap.set(boardId, workflow);
@@ -301,12 +330,15 @@ export async function reArmInterruptedChains(agentManager, ownEnv) {
     if (_processingTasks.has(task.id)) continue;
     if (task.status === 'error' || task.isManual) continue;
     if (task.executionStatus === 'stopped') continue;
-    if (agentManager._isActiveTaskStatus && !agentManager._isActiveTaskStatus(task.status)) continue;
+    if (agentManager._isActiveTaskStatus && !agentManager._isActiveTaskStatus(task.status))
+      continue;
     if (task.environment !== ownEnv) continue;
     if (task._pendingOnEnter === task.status) continue;
     const idx = task.completedActionIdx;
     if (task.actionRunning !== true && typeof idx !== 'number') continue;
-    console.log(`[WorkflowEngine] Re-arming interrupted chain after restart: task="${task.id}" status="${task.status}"`);
+    console.log(
+      `[WorkflowEngine] Re-arming interrupted chain after restart: task="${task.id}" status="${task.status}"`
+    );
     // Persist pending_on_enter = status; also clear a stale 'watching' execution
     // status (the old in-memory path mirrored the startup sweep's reset).
     const fields: any = { pendingOnEnter: task.status };
@@ -329,7 +361,9 @@ function _dispatchUnderLock(taskId, run) {
   return (async () => {
     const locked = await tryAcquireTaskLock(taskId);
     if (!locked) {
-      console.log(`[WorkflowEngine] Skipping task=${taskId} — advisory lock held (sibling replica or local cap)`);
+      console.log(
+        `[WorkflowEngine] Skipping task=${taskId} — advisory lock held (sibling replica or local cap)`
+      );
       return;
     }
     try {
@@ -364,8 +398,9 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
   // Environment isolation: ignore tasks tagged for another deployment.
   if (task.environment !== ownEnv) return;
 
-  const transitions = boardTransMap.get(task.boardId)
-    || (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);
+  const transitions =
+    boardTransMap.get(task.boardId) ||
+    (boardTransMap.size === 1 ? [...boardTransMap.values()][0] : []);
   const matching = transitions.filter(t => t.from === task.status);
   if (matching.length === 0) return;
 
@@ -383,8 +418,8 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
     const allMet = evaluateAllConditions(
       transition.conditions || [],
       { ...task, agentId },
-      (id) => agentManager.agents.get(id),
-      (role) => hasIdleAgentWithRole(agentManager.agents, role)
+      id => agentManager.agents.get(id),
+      role => hasIdleAgentWithRole(agentManager.agents, role)
     );
     if (!allMet) continue;
 
@@ -409,7 +444,10 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
       const retryEntry = agentManager._onEnterRetry.get(retryKey);
       const retryCount = retryEntry?.count || 0;
 
-      const cooldown = Math.min(ON_ENTER_RETRY_MAX_MS, ON_ENTER_RETRY_INITIAL_MS * Math.pow(2, retryCount));
+      const cooldown = Math.min(
+        ON_ENTER_RETRY_MAX_MS,
+        ON_ENTER_RETRY_INITIAL_MS * Math.pow(2, retryCount)
+      );
       const lastRetry = retryEntry?.ts || 0;
       if (Date.now() - lastRetry < cooldown) {
         agentManager._conditionProcessing.delete(lockKey);
@@ -417,11 +455,15 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
       }
       agentManager._onEnterRetry.set(retryKey, { ts: Date.now(), count: retryCount + 1 });
 
-      console.log(`[WorkflowEngine] on_enter retry #${retryCount + 1} for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
+      console.log(
+        `[WorkflowEngine] on_enter retry #${retryCount + 1} for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`
+      );
 
       // Re-run via processColumnEntry to respect completedActionIdx, under the
       // cross-replica lock (acquired inside the detached promise).
-      _dispatchUnderLock(task.id, () => processColumnEntry({ ...task, agentId }, agentManager, { by: 'on-enter-retry' }))
+      _dispatchUnderLock(task.id, () =>
+        processColumnEntry({ ...task, agentId }, agentManager, { by: 'on-enter-retry' })
+      )
         .catch(err => console.error(`[WorkflowEngine] on_enter retry error:`, err.message))
         .finally(() => agentManager._conditionProcessing.delete(lockKey));
       return;
@@ -436,20 +478,29 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
       agentManager._conditionProcessing.delete(lockKey);
       return;
     }
-    console.log(`[WorkflowEngine] Condition met for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`);
+    console.log(
+      `[WorkflowEngine] Condition met for "${(task.text || '').slice(0, 60)}" in status="${task.status}"`
+    );
 
-    const wf = boardWorkflowMap.get(task.boardId)
-      || (boardWorkflowMap.size === 1 ? [...boardWorkflowMap.values()][0] : null);
+    const wf =
+      boardWorkflowMap.get(task.boardId) ||
+      (boardWorkflowMap.size === 1 ? [...boardWorkflowMap.values()][0] : null);
     const ownerId = wf?.userId || agent?.ownerId || null;
 
     _processingTasks.set(task.id, task.status);
-    _dispatchUnderLock(task.id, () => _executeActionChain(transition.actions || [], { ...task, agentId }, {
-      agentManager,
-      io,
-      ownerId,
-      workflow: wf,
-      originalStatus: task.status,
-    }))
+    _dispatchUnderLock(task.id, () =>
+      _executeActionChain(
+        transition.actions || [],
+        { ...task, agentId },
+        {
+          agentManager,
+          io,
+          ownerId,
+          workflow: wf,
+          originalStatus: task.status,
+        }
+      )
+    )
       .catch(err => console.error(`[WorkflowEngine] Condition action error:`, err.message))
       .finally(() => {
         _processingTasks.delete(task.id);
@@ -472,7 +523,7 @@ function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
 // (no live local execution lock, no sibling-replica advisory lock) and either
 // corrupt (no startedAt) or stale past an age that exceeds any real action.
 let _lastStaleReconcile = 0;
-const STALE_RECONCILE_INTERVAL_MS = 60_000;      // run the sweep at most once a minute
+const STALE_RECONCILE_INTERVAL_MS = 60_000; // run the sweep at most once a minute
 // Only heal runs older than this (or with no startedAt). Kept ABOVE the execution
 // lock TTL (agentSelector LOCK_TTL_MS = 15 min): a live run's lock is not
 // refreshed, so past 15 min the lock system itself already treats the task as
@@ -520,12 +571,17 @@ export async function reconcileStaleActionRunning(agentManager, ownEnv) {
         actionRunningAgentId: null,
         actionRunningMode: null,
         startedAt: null,
-        pendingOnEnter: fresh.status,   // re-arm the column's on_enter for the recheck pass below
+        pendingOnEnter: fresh.status, // re-arm the column's on_enter for the recheck pass below
       });
       if (strandedAgent) clearAgentBusy(strandedAgent);
-      console.warn(`[WorkflowEngine] Reconciled stale action_running: task="${fresh.id}" status="${fresh.status}" (was agent=${strandedAgent || '?'} mode=${strandedMode || '?'}) — cleared + re-armed on_enter`);
+      console.warn(
+        `[WorkflowEngine] Reconciled stale action_running: task="${fresh.id}" status="${fresh.status}" (was agent=${strandedAgent || '?'} mode=${strandedMode || '?'}) — cleared + re-armed on_enter`
+      );
     } catch (err: any) {
-      console.error(`[WorkflowEngine] stale action_running reconcile failed for task="${task.id}":`, err.message);
+      console.error(
+        `[WorkflowEngine] stale action_running reconcile failed for task="${task.id}":`,
+        err.message
+      );
     } finally {
       await releaseTaskLock(task.id);
     }
@@ -581,7 +637,11 @@ export async function recheckPendingTransitions(agentManager) {
  *
  * @returns {{ skipped: boolean }} — whether an action in the chain was skipped
  */
-async function _executeActionChain(actions, task, { agentManager, io, ownerId, workflow, originalStatus }) {
+async function _executeActionChain(
+  actions,
+  task,
+  { agentManager, io, ownerId, workflow, originalStatus }
+) {
   // Resume from last completed action ONLY if this is a retry for the same column.
   // _pendingOnEnter is set by the skipped-action path and tracks the status we were
   // retrying. If it doesn't match the current status, the saved index belongs to a
@@ -595,7 +655,9 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
   if (startIdx > 0) {
     console.log(`[WorkflowEngine] Resuming chain from action ${startIdx}/${actions.length}`);
   } else if (typeof rawIdx === 'number' && pendingFor !== originalStatus) {
-    console.log(`[WorkflowEngine] Ignoring stale completedActionIdx=${rawIdx} (pendingFor="${pendingFor}" != current="${originalStatus}") — starting fresh`);
+    console.log(
+      `[WorkflowEngine] Ignoring stale completedActionIdx=${rawIdx} (pendingFor="${pendingFor}" != current="${originalStatus}") — starting fresh`
+    );
   }
 
   // A manual move can carry retry markers from the previous column into the new
@@ -627,7 +689,9 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
       // The task stays in its originating column (via errorFromStatus) and
       // appears in red. markTaskError guarantees errorFromStatus stays valid
       // even when the task was already errored or the workflow was edited.
-      console.log(`[WorkflowEngine] Action ${i} errored: ${result.message} — setting task to error`);
+      console.log(
+        `[WorkflowEngine] Action ${i} errored: ${result.message} — setting task to error`
+      );
       const actualTask = await _chainTask(agentManager, task);
       if (actualTask) {
         const mutated = markTaskError(actualTask, result.message, {
@@ -642,7 +706,10 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
           const lastEntry = actualTask.history[actualTask.history.length - 1];
           if (lastEntry) lastEntry.actionType = action.type;
           await saveTaskToDb({ ...actualTask, agentId: task.agentId });
-          agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+          agentManager._emit('task:updated', {
+            agentId: task.agentId,
+            task: { ...actualTask, agentId: task.agentId },
+          });
         }
       }
       task.status = 'error';
@@ -701,7 +768,9 @@ async function _executeActionChain(actions, task, { agentManager, io, ownerId, w
     // agent moved the task via update_task — e.g. a decide that executed work
     // and then advanced the card to its final column).
     if (result.statusChanged || task.status !== originalStatus) {
-      console.log(`[WorkflowEngine] Task "${task.id}" status changed to "${task.status}" — stopping chain`);
+      console.log(
+        `[WorkflowEngine] Task "${task.id}" status changed to "${task.status}" — stopping chain`
+      );
       break;
     }
   }
@@ -741,7 +810,9 @@ async function _autoAssignByColumn(task, workflow, agentManager, ownerId, io) {
   ) as any;
 
   if (autoAgent) {
-    console.log(`[WorkflowEngine] Auto-assign: "${(task.text || '').slice(0, 60)}" → "${autoAgent.name}" (role: ${currentColumn.autoAssignRole})`);
+    console.log(
+      `[WorkflowEngine] Auto-assign: "${(task.text || '').slice(0, 60)}" → "${autoAgent.name}" (role: ${currentColumn.autoAssignRole})`
+    );
     task.assignee = autoAgent.id;
     const actualTask = await _chainTask(agentManager, task);
     if (actualTask) {

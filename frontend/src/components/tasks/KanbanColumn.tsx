@@ -3,7 +3,36 @@ import { Trash2, Edit3, Plus, ArrowRight, GripVertical } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import TaskCard from './TaskCard';
 
-export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, onClearStopped, onDrop, onOpen, onAddTask, onEditInstructions, hasInstructions, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits, columns, onBatchMove, onBatchDelete, canReorderColumns, draggingColumnId, onColumnDragStart, onColumnDragEnd, onColumnReorder, isFirstColumn, isLastColumn }) {
+export default function KanbanColumn({
+  col,
+  tasks,
+  onDelete,
+  onStop,
+  onResume,
+  onClearStopped,
+  onDrop,
+  onOpen,
+  onAddTask,
+  onEditInstructions,
+  hasInstructions,
+  showAgent,
+  showCreator,
+  showProject,
+  showTaskType,
+  onTouchDrop,
+  onNavigateToAgent,
+  onOpenCommits,
+  columns,
+  onBatchMove,
+  onBatchDelete,
+  canReorderColumns,
+  draggingColumnId,
+  onColumnDragStart,
+  onColumnDragEnd,
+  onColumnReorder,
+  isFirstColumn,
+  isLastColumn,
+}) {
   const { theme } = useTheme() as { theme?: string };
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
@@ -22,7 +51,7 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
   // Close batch menu on outside click
   useEffect(() => {
     if (!showBatchMenu) return undefined;
-    const handleClick = (e) => {
+    const handleClick = e => {
       if (batchMenuRef.current && !batchMenuRef.current.contains(e.target)) {
         setShowBatchMenu(false);
         setConfirmTrash(false);
@@ -32,16 +61,19 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showBatchMenu]);
 
-  const handleBatchMove = useCallback(async (targetColId) => {
-    if (!onBatchMove || batchMoving) return;
-    setBatchMoving(true);
-    setShowBatchMenu(false);
-    try {
-      await onBatchMove(col.id, targetColId, tasks);
-    } finally {
-      setBatchMoving(false);
-    }
-  }, [onBatchMove, col.id, tasks, batchMoving]);
+  const handleBatchMove = useCallback(
+    async targetColId => {
+      if (!onBatchMove || batchMoving) return;
+      setBatchMoving(true);
+      setShowBatchMenu(false);
+      try {
+        await onBatchMove(col.id, targetColId, tasks);
+      } finally {
+        setBatchMoving(false);
+      }
+    },
+    [onBatchMove, col.id, tasks, batchMoving]
+  );
 
   const handleBatchDelete = useCallback(async () => {
     if (!onBatchDelete || batchMoving) return;
@@ -56,47 +88,58 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
   }, [onBatchDelete, col.id, tasks, batchMoving]);
 
   // Compute which index the dragged item should be inserted at
-  const computeDropIndex = useCallback((e) => {
-    const container = dropZoneRef.current;
-    if (!container) return tasks.length;
-    const cards = container.querySelectorAll('[data-task-id]');
-    for (let i = 0; i < cards.length; i++) {
-      const rect = cards[i].getBoundingClientRect();
-      const midY = rect.top + rect.height / 2;
-      if (e.clientY < midY) return i;
-    }
-    return tasks.length; // drop at end
-  }, [tasks.length]);
+  const computeDropIndex = useCallback(
+    e => {
+      const container = dropZoneRef.current;
+      if (!container) return tasks.length;
+      const cards = container.querySelectorAll('[data-task-id]');
+      for (let i = 0; i < cards.length; i++) {
+        const rect = cards[i].getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (e.clientY < midY) return i;
+      }
+      return tasks.length; // drop at end
+    },
+    [tasks.length]
+  );
 
   // Handle column-reorder drag-over: decide left/right insertion based on cursor position
-  const handleColumnDragOver = useCallback((e) => {
-    if (!isColumnDragActive || !onColumnReorder) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const rect = e.currentTarget.getBoundingClientRect();
-    const midX = rect.left + rect.width / 2;
-    setColumnDropSide(e.clientX < midX ? 'left' : 'right');
-  }, [isColumnDragActive, onColumnReorder]);
+  const handleColumnDragOver = useCallback(
+    e => {
+      if (!isColumnDragActive || !onColumnReorder) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = e.currentTarget.getBoundingClientRect();
+      const midX = rect.left + rect.width / 2;
+      setColumnDropSide(e.clientX < midX ? 'left' : 'right');
+    },
+    [isColumnDragActive, onColumnReorder]
+  );
 
-  const handleColumnDrop = useCallback((e) => {
-    if (!isColumnDragActive || !onColumnReorder || !draggingColumnId) {
+  const handleColumnDrop = useCallback(
+    e => {
+      if (!isColumnDragActive || !onColumnReorder || !draggingColumnId) {
+        setColumnDropSide(null);
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      const side = columnDropSide || 'left';
       setColumnDropSide(null);
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    const side = columnDropSide || 'left';
-    setColumnDropSide(null);
-    onColumnReorder(draggingColumnId, col.id, side === 'left' ? 'before' : 'after');
-  }, [isColumnDragActive, onColumnReorder, draggingColumnId, columnDropSide, col.id]);
+      onColumnReorder(draggingColumnId, col.id, side === 'left' ? 'before' : 'after');
+    },
+    [isColumnDragActive, onColumnReorder, draggingColumnId, columnDropSide, col.id]
+  );
 
   return (
-    <div className={`flex flex-col min-w-[300px] w-[300px] max-h-[2500px] flex-shrink-0 group relative
+    <div
+      className={`flex flex-col min-w-[300px] w-[300px] max-h-[2500px] flex-shrink-0 group relative
       ${isDraggingThisColumn ? 'opacity-40' : ''}`}
       data-column-id={col.id}
-      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onDragOver={handleColumnDragOver}
-      onDragLeave={(e) => {
+      onDragLeave={e => {
         const related = e.relatedTarget instanceof Node ? e.relatedTarget : null;
         if (!e.currentTarget.contains(related)) setColumnDropSide(null);
       }}
@@ -111,19 +154,25 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
       )}
 
       {/* Column header */}
-      <div className={`flex items-center justify-between px-3 py-2.5 rounded-t-xl border border-b-2
+      <div
+        className={`flex items-center justify-between px-3 py-2.5 rounded-t-xl border border-b-2
         transition-colors mb-0 flex-shrink-0
-        ${dragOver
-          ? `bg-dark-750 ${col.headerActive} border-b-2`
-          : 'bg-dark-800/60 border-dark-700/50'
+        ${
+          dragOver
+            ? `bg-dark-750 ${col.headerActive} border-b-2`
+            : 'bg-dark-800/60 border-dark-700/50'
         }`}
         draggable={!!canReorderColumns}
-        onDragStart={(e) => {
+        onDragStart={e => {
           if (!canReorderColumns) return;
           e.dataTransfer.effectAllowed = 'move';
           // Carry a marker so the existing task drop zone (which expects
           // application/json) ignores this drag.
-          try { e.dataTransfer.setData('application/x-pulsar-column', col.id); } catch { /* no-op */ }
+          try {
+            e.dataTransfer.setData('application/x-pulsar-column', col.id);
+          } catch {
+            /* no-op */
+          }
           onColumnDragStart?.(col.id);
         }}
         onDragEnd={() => {
@@ -139,7 +188,11 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
             />
           )}
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${col.dot}`} />
-          <span className={`text-sm font-semibold truncate ${isLight ? col.headerTextLight : col.headerText}`}>{col.label}</span>
+          <span
+            className={`text-sm font-semibold truncate ${isLight ? col.headerTextLight : col.headerText}`}
+          >
+            {col.label}
+          </span>
         </div>
         <div className="flex items-center gap-1.5">
           {hasInstructions && (
@@ -153,31 +206,46 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
           )}
           <div className="relative" ref={batchMenuRef}>
             <button
-              onClick={() => { if (tasks.length > 0 && columns && (onBatchMove || onBatchDelete)) setShowBatchMenu(!showBatchMenu); }}
+              onClick={() => {
+                if (tasks.length > 0 && columns && (onBatchMove || onBatchDelete))
+                  setShowBatchMenu(!showBatchMenu);
+              }}
               className={`text-xs font-bold px-2 py-0.5 rounded-full transition-colors ${isLight ? col.countClsLight : col.countCls} ${tasks.length > 0 && columns && (onBatchMove || onBatchDelete) ? 'cursor-pointer hover:ring-1 hover:ring-white/30' : ''}`}
-              title={tasks.length > 0 && columns && (onBatchMove || onBatchDelete) ? 'Batch actions on tasks' : ''}
+              title={
+                tasks.length > 0 && columns && (onBatchMove || onBatchDelete)
+                  ? 'Batch actions on tasks'
+                  : ''
+              }
             >
               {batchMoving ? '...' : tasks.length}
             </button>
             {showBatchMenu && columns && (
-              <div className={`absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border min-w-[180px] py-1 ${isLight ? 'bg-white border-gray-200' : 'bg-dark-800 border-dark-600'}`}>
-                <div className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${isLight ? 'text-gray-400' : 'text-dark-500'}`}>
+              <div
+                className={`absolute right-0 top-full mt-1 z-50 rounded-lg shadow-xl border min-w-[180px] py-1 ${isLight ? 'bg-white border-gray-200' : 'bg-dark-800 border-dark-600'}`}
+              >
+                <div
+                  className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${isLight ? 'text-gray-400' : 'text-dark-500'}`}
+                >
                   Move all to...
                 </div>
-                {columns.filter(c => c.id !== col.id).map(targetCol => (
-                  <button
-                    key={targetCol.id}
-                    onClick={() => handleBatchMove(targetCol.id)}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${isLight ? 'hover:bg-gray-100 text-gray-700' : 'hover:bg-dark-700 text-dark-300'}`}
-                  >
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${targetCol.dot}`} />
-                    <span className="truncate">{targetCol.label}</span>
-                    <ArrowRight className="w-3 h-3 ml-auto opacity-40" />
-                  </button>
-                ))}
+                {columns
+                  .filter(c => c.id !== col.id)
+                  .map(targetCol => (
+                    <button
+                      key={targetCol.id}
+                      onClick={() => handleBatchMove(targetCol.id)}
+                      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${isLight ? 'hover:bg-gray-100 text-gray-700' : 'hover:bg-dark-700 text-dark-300'}`}
+                    >
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${targetCol.dot}`} />
+                      <span className="truncate">{targetCol.label}</span>
+                      <ArrowRight className="w-3 h-3 ml-auto opacity-40" />
+                    </button>
+                  ))}
                 {onBatchDelete && (
                   <>
-                    <div className={`my-1 border-t ${isLight ? 'border-gray-200' : 'border-dark-600'}`} />
+                    <div
+                      className={`my-1 border-t ${isLight ? 'border-gray-200' : 'border-dark-600'}`}
+                    />
                     {!confirmTrash ? (
                       <button
                         onClick={() => setConfirmTrash(true)}
@@ -208,25 +276,26 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
         ref={dropZoneRef}
         className={`flex flex-col gap-2 p-2 rounded-b-xl border border-t-0
           transition-all duration-150 flex-1 min-h-0 overflow-y-auto
-          ${dragOver
-            ? `ring-2 ring-inset ${col.dropRing} border-dark-600`
-            : 'bg-dark-800/20 border-dark-700/30'
+          ${
+            dragOver
+              ? `ring-2 ring-inset ${col.dropRing} border-dark-600`
+              : 'bg-dark-800/20 border-dark-700/30'
           }`}
-        onDragOver={(e) => {
+        onDragOver={e => {
           if (isColumnDragActive || isDraggingThisColumn) return; // let parent handle column reorder
           e.preventDefault();
           e.dataTransfer.dropEffect = 'move';
           setDragOver(true);
           setDropIndex(computeDropIndex(e));
         }}
-        onDragLeave={(e) => {
+        onDragLeave={e => {
           const related = e.relatedTarget instanceof Node ? e.relatedTarget : null;
           if (!e.currentTarget.contains(related)) {
             setDragOver(false);
             setDropIndex(-1);
           }
         }}
-        onDrop={(e) => {
+        onDrop={e => {
           if (isColumnDragActive || isDraggingThisColumn) return; // column reorder handled at column level
           e.preventDefault();
           const idx = computeDropIndex(e);
@@ -261,8 +330,10 @@ export default function KanbanColumn({ col, tasks, onDelete, onStop, onResume, o
           <div className="h-1 rounded-full bg-indigo-500/60 mx-2 transition-all" />
         )}
         {tasks.length === 0 && (
-          <div className={`flex items-center justify-center text-xs py-4
-            transition-colors ${dragOver ? 'text-dark-400' : 'text-dark-700'}`}>
+          <div
+            className={`flex items-center justify-center text-xs py-4
+            transition-colors ${dragOver ? 'text-dark-400' : 'text-dark-700'}`}
+          >
             {dragOver ? '↓ Drop here' : 'No tasks'}
           </div>
         )}

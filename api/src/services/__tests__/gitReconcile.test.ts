@@ -18,7 +18,12 @@ const { AgentManager } = await import('../agentManager.js');
 const { snapshotGitBaseline, detectCommitsSinceBaseline, reconcileTaskCommits } =
   await import('../agentManager/tools/gitReconcile.js');
 
-const mockIo = { emit() {}, to() { return { emit() {} }; } };
+const mockIo = {
+  emit() {},
+  to() {
+    return { emit() {} };
+  },
+};
 
 const HASH_A = 'a'.repeat(40);
 const HASH_B = 'b'.repeat(40);
@@ -70,7 +75,9 @@ test('snapshotGitBaseline returns HEAD hash, null on non-repo output', async () 
   const { env } = makeExecEnv([{ match: /rev-parse HEAD/, stdout: `${BASELINE}\n` }]);
   assert.equal(await snapshotGitBaseline(env, 'agent-1'), BASELINE);
 
-  const { env: badEnv } = makeExecEnv([{ match: /rev-parse HEAD/, stdout: 'fatal: not a git repository\n' }]);
+  const { env: badEnv } = makeExecEnv([
+    { match: /rev-parse HEAD/, stdout: 'fatal: not a git repository\n' },
+  ]);
   assert.equal(await snapshotGitBaseline(badEnv, 'agent-1'), null);
 
   assert.equal(await snapshotGitBaseline({ hasEnvironment: () => false }, 'agent-1'), null);
@@ -85,7 +92,10 @@ test('detectCommitsSinceBaseline diffs baseline..HEAD and flags unpushed commits
 
   const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
   assert.equal(commits.length, 2);
-  assert.ok(calls.some(c => c.includes(`${BASELINE}..HEAD`)), 'should use the exact rev-range');
+  assert.ok(
+    calls.some(c => c.includes(`${BASELINE}..HEAD`)),
+    'should use the exact rev-range'
+  );
   const byHash = Object.fromEntries(commits.map(c => [c.hash, c]));
   assert.equal(byHash[HASH_A].pushed, true);
   assert.equal(byHash[HASH_B].pushed, false);
@@ -101,7 +111,10 @@ test('detectCommitsSinceBaseline falls back to --since when no baseline', async 
 
   const commits = await detectCommitsSinceBaseline(env, 'agent-1', { startedAt });
   assert.equal(commits.length, 1);
-  assert.ok(calls.some(c => c.includes('--since')), 'should query by time window');
+  assert.ok(
+    calls.some(c => c.includes('--since')),
+    'should query by time window'
+  );
 
   // Neither anchor → no query at all.
   const { env: idleEnv, calls: idleCalls } = makeExecEnv([]);

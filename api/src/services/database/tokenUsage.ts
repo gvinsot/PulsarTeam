@@ -15,7 +15,18 @@ function parseNumericFields(row) {
 // Token summary cache (refreshed periodically)
 const _tokenSummaryCache = {};
 
-export async function recordTokenUsage(agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId = null, contextTokens = 0, idempotencyKey = null) {
+export async function recordTokenUsage(
+  agentId,
+  agentName,
+  provider,
+  model,
+  inputTokens,
+  outputTokens,
+  cost,
+  userId = null,
+  contextTokens = 0,
+  idempotencyKey = null
+) {
   const pool = getPool();
   if (!pool) return false;
   try {
@@ -26,14 +37,35 @@ export async function recordTokenUsage(agentId, agentName, provider, model, inpu
         `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens, idempotency_key)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
-        [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId, contextTokens || 0, idempotencyKey]
+        [
+          agentId,
+          agentName,
+          provider,
+          model,
+          inputTokens,
+          outputTokens,
+          cost,
+          userId,
+          contextTokens || 0,
+          idempotencyKey,
+        ]
       );
       return true;
     }
     await pool.query(
       `INSERT INTO token_usage_log (agent_id, agent_name, provider, model, input_tokens, output_tokens, cost, user_id, context_tokens)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [agentId, agentName, provider, model, inputTokens, outputTokens, cost, userId, contextTokens || 0]
+      [
+        agentId,
+        agentName,
+        provider,
+        model,
+        inputTokens,
+        outputTokens,
+        cost,
+        userId,
+        contextTokens || 0,
+      ]
     );
     return true;
   } catch (err) {
@@ -50,7 +82,9 @@ export async function recordTokenUsage(agentId, agentName, provider, model, inpu
  * out-of-band (via the internal token-usage endpoint) rather than inline on
  * the chat stream.
  */
-export async function getTotalTokensByAgentId(): Promise<Map<string, { input: number; output: number }>> {
+export async function getTotalTokensByAgentId(): Promise<
+  Map<string, { input: number; output: number }>
+> {
   const pool = getPool();
   const out = new Map<string, { input: number; output: number }>();
   if (!pool) return out;
@@ -95,14 +129,29 @@ export async function getTotalTokensForAgent(agentId): Promise<{ input: number; 
 export function getTokenUsageSummary(days = 1) {
   const pool = getPool();
   if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
-  return parseNumericFields(_tokenSummaryCache[days]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  return (
+    parseNumericFields(_tokenSummaryCache[days]) || {
+      total_cost: 0,
+      total_input: 0,
+      total_output: 0,
+      total_context: 0,
+    }
+  );
 }
 
 /** Async per-user (or global when userId is null) token usage summary */
 export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
   const pool = getPool();
   if (!pool) return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
-  if (!userId) return parseNumericFields(_tokenSummaryCache[days]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+  if (!userId)
+    return (
+      parseNumericFields(_tokenSummaryCache[days]) || {
+        total_cost: 0,
+        total_input: 0,
+        total_output: 0,
+        total_context: 0,
+      }
+    );
   try {
     const result = await pool.query(
       `SELECT COALESCE(SUM(cost), 0) as total_cost,
@@ -113,7 +162,14 @@ export async function getTokenUsageSummaryAsync(days = 1, userId = null) {
        WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1 AND user_id = $2`,
       [days, userId]
     );
-    return parseNumericFields(result.rows[0]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+    return (
+      parseNumericFields(result.rows[0]) || {
+        total_cost: 0,
+        total_input: 0,
+        total_output: 0,
+        total_context: 0,
+      }
+    );
   } catch (err) {
     console.error('Failed to get token summary for user:', err.message);
     return { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
@@ -204,7 +260,12 @@ export async function refreshTokenSummaryCache() {
          WHERE recorded_at >= NOW() - INTERVAL '1 day' * $1`,
         [days]
       );
-      _tokenSummaryCache[days] = parseNumericFields(result.rows[0]) || { total_cost: 0, total_input: 0, total_output: 0, total_context: 0 };
+      _tokenSummaryCache[days] = parseNumericFields(result.rows[0]) || {
+        total_cost: 0,
+        total_input: 0,
+        total_output: 0,
+        total_context: 0,
+      };
     } catch (err) {
       console.error('Failed to refresh token summary cache:', err.message);
     }

@@ -36,7 +36,7 @@ export interface OAuthStateStore<T extends object> {
 
 export function createOAuthStateStore<T extends object>(
   domain: string,
-  ttlMs: number = 10 * 60 * 1000,
+  ttlMs: number = 10 * 60 * 1000
 ): OAuthStateStore<T> {
   const consumedStates = new Map<string, number>();
 
@@ -51,7 +51,13 @@ export function createOAuthStateStore<T extends object>(
     if (jwt) {
       // Domain-separate from JWT signing and from the other providers' states.
       return Buffer.from(
-        crypto.hkdfSync('sha256', Buffer.from(jwt, 'utf-8'), Buffer.alloc(0), Buffer.from(`pulsarteam:oauth-state:${domain}:v1`, 'utf-8'), 32)
+        crypto.hkdfSync(
+          'sha256',
+          Buffer.from(jwt, 'utf-8'),
+          Buffer.alloc(0),
+          Buffer.from(`pulsarteam:oauth-state:${domain}:v1`, 'utf-8'),
+          32
+        )
       );
     }
     if (!fallbackStateSecret) fallbackStateSecret = crypto.randomBytes(32);
@@ -69,8 +75,12 @@ export function createOAuthStateStore<T extends object>(
         if (exp < now) consumedStates.delete(k);
       }
       const payload = Buffer.from(
-        JSON.stringify({ ...entry, expiresAt: now + ttlMs, nonce: crypto.randomBytes(8).toString('hex') }),
-        'utf-8',
+        JSON.stringify({
+          ...entry,
+          expiresAt: now + ttlMs,
+          nonce: crypto.randomBytes(8).toString('hex'),
+        }),
+        'utf-8'
       ).toString('base64url');
       return `${payload}.${signStatePayload(payload)}`;
     },
@@ -81,7 +91,8 @@ export function createOAuthStateStore<T extends object>(
       const payload = state.slice(0, dot);
       const signature = Buffer.from(state.slice(dot + 1));
       const expected = Buffer.from(signStatePayload(payload));
-      if (signature.length !== expected.length || !crypto.timingSafeEqual(signature, expected)) return null;
+      if (signature.length !== expected.length || !crypto.timingSafeEqual(signature, expected))
+        return null;
 
       let entry: Record<string, any>;
       try {
@@ -89,7 +100,8 @@ export function createOAuthStateStore<T extends object>(
       } catch {
         return null;
       }
-      if (!entry || typeof entry.expiresAt !== 'number' || entry.expiresAt < Date.now()) return null;
+      if (!entry || typeof entry.expiresAt !== 'number' || entry.expiresAt < Date.now())
+        return null;
       if (consumedStates.has(state)) return null;
       consumedStates.set(state, entry.expiresAt);
       return entry;

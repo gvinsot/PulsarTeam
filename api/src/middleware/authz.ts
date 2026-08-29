@@ -5,7 +5,12 @@
 // or a project. Without these checks an attacker who knows another tenant's
 // resource id could read or modify it (Insecure Direct Object Reference).
 
-import { getBoardById, getBoardShare, getProjectById, hasProjectBoardAccess } from '../services/database.js';
+import {
+  getBoardById,
+  getBoardShare,
+  getProjectById,
+  hasProjectBoardAccess,
+} from '../services/database.js';
 
 export type Permission = 'read' | 'edit' | 'admin';
 const PERMISSION_LEVELS: Record<Permission, number> = { read: 0, edit: 1, admin: 2 };
@@ -60,17 +65,18 @@ export async function checkBoardAccess(
  * to req.boardAccess so the handler can reuse the loaded board without a
  * second DB round-trip.
  */
-export function authorizeBoardAccess(
-  required: Permission = 'read',
-  paramName: string = 'id'
-) {
+export function authorizeBoardAccess(required: Permission = 'read', paramName: string = 'id') {
   return async (req: any, res: any, next: any) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     const boardId = (req.params?.[paramName] || req.query?.[paramName]) as string;
     try {
       const access = await checkBoardAccess(boardId, req.user.userId, req.user.role, required);
       if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      req.boardAccess = { board: access.board, permission: access.permission, isOwner: access.isOwner };
+      req.boardAccess = {
+        board: access.board,
+        permission: access.permission,
+        isOwner: access.isOwner,
+      };
       next();
     } catch (err: any) {
       return res.status(500).json({ error: 'Authorization check failed' });
@@ -117,7 +123,7 @@ export async function checkProjectAccess(
     return { ok: true, project, isOwner };
   }
   if (required === 'read') {
-    const canRead = isOwner || await hasProjectBoardAccess(projectId, userId);
+    const canRead = isOwner || (await hasProjectBoardAccess(projectId, userId));
     if (canRead) return { ok: true, project, isOwner };
     return { ok: false, status: 403, error: 'Access denied' };
   }
@@ -127,10 +133,7 @@ export async function checkProjectAccess(
   return { ok: true, project, isOwner: true };
 }
 
-export function authorizeProjectAccess(
-  required: Permission = 'read',
-  paramName: string = 'id'
-) {
+export function authorizeProjectAccess(required: Permission = 'read', paramName: string = 'id') {
   return async (req: any, res: any, next: any) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     const projectId = (req.params?.[paramName] || req.query?.[paramName]) as string;

@@ -23,11 +23,7 @@ export {
 } from './taskStateMachine.js';
 
 // Column/status ID helpers
-export {
-  slugifyColumnId,
-  resolveWorkflowStatus,
-  normalizeWorkflowColumnIds,
-} from './columnIds.js';
+export { slugifyColumnId, resolveWorkflowStatus, normalizeWorkflowColumnIds } from './columnIds.js';
 export type { StatusResolution, ColumnRename } from './columnIds.js';
 
 // Agent selection + locking
@@ -47,4 +43,9 @@ export { executeAction, stripToolCalls } from './actionExecutor.js';
 export { markTaskError, isUserStopError } from './taskErrors.js';
 
 // Orchestration — main entry points
-export { processColumnEntry, recheckPendingTransitions, reArmInterruptedChains, reconcileStaleActionRunning } from './workflowEngine.js';
+export {
+  processColumnEntry,
+  recheckPendingTransitions,
+  reArmInterruptedChains,
+  reconcileStaleActionRunning,
+} from './workflowEngine.js';

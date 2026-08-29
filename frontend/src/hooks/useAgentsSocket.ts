@@ -3,10 +3,19 @@ import { connectSocket, getSocket } from '../socket';
 import { WsEvents } from '../socketEvents';
 
 const SOCKET_EVENTS = [
-  WsEvents.AGENTS_LIST, WsEvents.AGENT_CREATED, WsEvents.AGENT_UPDATED, WsEvents.AGENT_DELETED,
-  WsEvents.AGENT_STATUS, WsEvents.AGENT_THINKING, WsEvents.STREAM_START, WsEvents.STREAM_CHUNK,
-  WsEvents.STREAM_END, WsEvents.STREAM_ERROR, WsEvents.STREAM_RESUME,
-  WsEvents.AGENT_ERROR_REPORT, WsEvents.AGENT_HANDOFF
+  WsEvents.AGENTS_LIST,
+  WsEvents.AGENT_CREATED,
+  WsEvents.AGENT_UPDATED,
+  WsEvents.AGENT_DELETED,
+  WsEvents.AGENT_STATUS,
+  WsEvents.AGENT_THINKING,
+  WsEvents.STREAM_START,
+  WsEvents.STREAM_CHUNK,
+  WsEvents.STREAM_END,
+  WsEvents.STREAM_ERROR,
+  WsEvents.STREAM_RESUME,
+  WsEvents.AGENT_ERROR_REPORT,
+  WsEvents.AGENT_HANDOFF,
 ];
 
 // Returns `obj` unchanged (same reference — lets React bail out of the
@@ -31,7 +40,7 @@ export function useAgentsSocket(showToastRef) {
   // Used as the source of truth for whether to keep a streamBuffer alive,
   // so we don't race against agent.status updates arriving out of order.
   const activeStreamAgents = useRef(new Set());
-  const lastAgentJson = useRef(new Map());    // Dedup: last JSON per agentId
+  const lastAgentJson = useRef(new Map()); // Dedup: last JSON per agentId
 
   // Safety: clear stale thinking state for agents that are no longer busy.
   // Handles edge cases where socket events (STREAM_END) were lost due to
@@ -54,26 +63,30 @@ export function useAgentsSocket(showToastRef) {
     });
   }, [agents]);
 
-  const initSocket = useCallback((token) => {
+  const initSocket = useCallback(token => {
     const sock = connectSocket(token);
 
-    const clearThinking = (agentId) => setThinkingMap(prev => withoutKey(prev, agentId));
-    const clearStreamBuffer = (agentId) => setStreamBuffers(prev => withoutKey(prev, agentId));
+    const clearThinking = agentId => setThinkingMap(prev => withoutKey(prev, agentId));
+    const clearStreamBuffer = agentId => setStreamBuffers(prev => withoutKey(prev, agentId));
 
     // Remove any previously registered listeners to prevent duplicates
     SOCKET_EVENTS.forEach(ev => sock.off(ev));
 
-    sock.on(WsEvents.AGENTS_LIST, (list) => setAgents(list));
-    sock.on(WsEvents.AGENT_CREATED, (agent) => setAgents(prev =>
-      prev.some(a => a.id === agent.id) ? prev.map(a => a.id === agent.id ? agent : a) : [...prev, agent]
-    ));
-    sock.on(WsEvents.AGENT_UPDATED, (agent) => {
+    sock.on(WsEvents.AGENTS_LIST, list => setAgents(list));
+    sock.on(WsEvents.AGENT_CREATED, agent =>
+      setAgents(prev =>
+        prev.some(a => a.id === agent.id)
+          ? prev.map(a => (a.id === agent.id ? agent : a))
+          : [...prev, agent]
+      )
+    );
+    sock.on(WsEvents.AGENT_UPDATED, agent => {
       // Dedup: skip if the payload is identical to the last one for this agent
       const json = JSON.stringify(agent);
       if (lastAgentJson.current.get(agent.id) === json) return;
       lastAgentJson.current.set(agent.id, json);
 
-      setAgents(prev => prev.map(a => a.id === agent.id ? agent : a));
+      setAgents(prev => prev.map(a => (a.id === agent.id ? agent : a)));
       // Safety net: clear thinking when agent data shows it's no longer busy.
       // This handles cases where agent:stream:end was missed (other clients,
       // workflow-triggered executions, socket reconnections).
@@ -87,7 +100,7 @@ export function useAgentsSocket(showToastRef) {
     });
     sock.on(WsEvents.AGENT_DELETED, ({ id }) => setAgents(prev => prev.filter(a => a.id !== id)));
     sock.on(WsEvents.AGENT_STATUS, ({ id, status }) => {
-      setAgents(prev => prev.map(a => a.id === id ? { ...a, status } : a));
+      setAgents(prev => prev.map(a => (a.id === id ? { ...a, status } : a)));
       // When agent goes idle or error, clear stale thinking state so the
       // card doesn't keep showing "busy" after the agent has finished.
       if (status !== 'busy') clearThinking(id);
@@ -110,7 +123,7 @@ export function useAgentsSocket(showToastRef) {
       activeStreamAgents.current.add(agentId);
       setStreamBuffers(prev => ({
         ...prev,
-        [agentId]: (prev[agentId] || '') + chunk
+        [agentId]: (prev[agentId] || '') + chunk,
       }));
     });
 
@@ -153,9 +166,18 @@ export function useAgentsSocket(showToastRef) {
       activeStreamAgents.current.delete(agentId);
       const errorLower = (error || '').toLowerCase();
       const isModelError = [
-        'context length', 'context_length', 'num_ctx', 'context window',
-        'too long', 'maximum context', 'exceeds', 'out of memory', 'oom',
-        'kv cache', 'model error', 'ollama error'
+        'context length',
+        'context_length',
+        'num_ctx',
+        'context window',
+        'too long',
+        'maximum context',
+        'exceeds',
+        'out of memory',
+        'oom',
+        'kv cache',
+        'model error',
+        'ollama error',
       ].some(kw => errorLower.includes(kw));
       showToastRef.current(
         error || 'An error occurred while streaming response',
@@ -174,7 +196,7 @@ export function useAgentsSocket(showToastRef) {
       showToastRef.current(`${prefix} ${agentName}: ${description.slice(0, 200)}`, 'error', 12000);
     });
 
-    sock.on(WsEvents.AGENT_HANDOFF, (data) => {
+    sock.on(WsEvents.AGENT_HANDOFF, data => {
       console.log('Handoff:', data);
     });
 

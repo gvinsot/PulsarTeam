@@ -1,7 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Chart as ChartJS, CategoryScale, LinearScale, LineElement,
-  PointElement, Title, Tooltip, Legend, Filler
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  LineElement,
+  PointElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
 } from 'chart.js';
 import type { ChartOptions } from 'chart.js';
 import { Line } from 'react-chartjs-2';
@@ -9,12 +16,33 @@ import { api } from '../api';
 import { Clock, Users, TrendingUp, RefreshCw } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 
-ChartJS.register(CategoryScale, LinearScale, LineElement, PointElement, Title, Tooltip, Legend, Filler);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  LineElement,
+  PointElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 const AGENT_COLORS = [
-  '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
-  '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
-  '#14b8a6', '#e879f9', '#22d3ee', '#a3e635', '#fb923c',
+  '#8b5cf6',
+  '#3b82f6',
+  '#10b981',
+  '#f59e0b',
+  '#ef4444',
+  '#ec4899',
+  '#06b6d4',
+  '#84cc16',
+  '#f97316',
+  '#6366f1',
+  '#14b8a6',
+  '#e879f9',
+  '#22d3ee',
+  '#a3e635',
+  '#fb923c',
 ];
 
 function formatDuration(ms) {
@@ -61,7 +89,9 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
     }
   }, [projectName, days]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   if (loading && !data) {
     return (
@@ -113,11 +143,11 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
       },
       tooltip: {
         callbacks: {
-          label: (ctx) => {
+          label: ctx => {
             const mins = ctx.parsed.y;
             return `${ctx.dataset.label}: ${formatDuration(mins * 60000)}`;
           },
-          footer: (items) => {
+          footer: items => {
             const total = items.reduce((sum, i) => sum + i.parsed.y, 0);
             return `Total: ${formatDuration(total * 60000)}`;
           },
@@ -133,7 +163,7 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
         ticks: {
           color: cc.tick,
           font: { size: 10 },
-          callback: (val) => formatDuration(Number(val) * 60000),
+          callback: val => formatDuration(Number(val) * 60000),
         },
         grid: { color: cc.grid },
         beginAtZero: true,

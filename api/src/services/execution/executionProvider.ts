@@ -62,7 +62,10 @@ export class ExecutionProvider {
    * remote runner forward this set on every ensure so the runner keeps them
    * instead of pruning. No-op by default.
    */
-  setSecondaryRepos(agentId: string, repos: Array<{ provider?: string; fullName: string }> | null): void {
+  setSecondaryRepos(
+    agentId: string,
+    repos: Array<{ provider?: string; fullName: string }> | null
+  ): void {
     // no-op
   }
 
@@ -81,7 +84,7 @@ export class ExecutionProvider {
     agentId: string,
     project: string | null = null,
     gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null,
+    gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     throw new Error('ensureProject() not implemented');
   }
@@ -93,7 +96,7 @@ export class ExecutionProvider {
     agentId: string,
     newProject: string,
     gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null,
+    gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     throw new Error('switchProject() not implemented');
   }
@@ -132,7 +135,11 @@ export class ExecutionProvider {
    * real CLI. This is intentionally narrow: workflow execute actions use it
    * to submit the task prompt to an idle CLI runner.
    */
-  async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
+  async sendTerminalInput(
+    agentId: string,
+    input: string,
+    options: { submit?: boolean } = {}
+  ): Promise<boolean> {
     return false;
   }
 
@@ -238,8 +245,11 @@ export class ExecutionProvider {
    * @param command
    * @param options
    */
-  async exec(agentId: string, command: string, options: { cwd?: string; timeout?: number } = {}): Promise<{ stdout: string; stderr: string }> {
+  async exec(
+    agentId: string,
+    command: string,
+    options: { cwd?: string; timeout?: number } = {}
+  ): Promise<{ stdout: string; stderr: string }> {
     throw new Error('exec() not implemented');
   }
-
 }

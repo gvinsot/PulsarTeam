@@ -23,9 +23,12 @@ export function createAutoLearnMcpServer() {
       if (!skills.length) {
         return text('No skills in the library yet. Use create_skill to add one.');
       }
-      const summary = skills.map((s: any) =>
-        `- **${s.name}** (${s.id}) [${s.category || 'general'}] — ${s.description || 'No description'}`
-      ).join('\n');
+      const summary = skills
+        .map(
+          (s: any) =>
+            `- **${s.name}** (${s.id}) [${s.category || 'general'}] — ${s.description || 'No description'}`
+        )
+        .join('\n');
       return text(`${skills.length} skill(s) in the library:\n\n${summary}`);
     }
   );
@@ -34,16 +37,23 @@ export function createAutoLearnMcpServer() {
     'search_skills',
     'Search the skill library by keyword. Use this to find existing skills before creating new ones.',
     {
-      query: z.string().describe('Search query — matches against skill name, description, category, and instructions'),
+      query: z
+        .string()
+        .describe(
+          'Search query — matches against skill name, description, category, and instructions'
+        ),
     },
     async ({ query }) => {
       const skills = await searchAgentSkills(query);
       if (!skills.length) {
         return text(`No skills found matching "${query}".`);
       }
-      const summary = skills.map((s: any) =>
-        `- **${s.name}** (${s.id}) [${s.category || 'general'}] — ${s.description || 'No description'}`
-      ).join('\n');
+      const summary = skills
+        .map(
+          (s: any) =>
+            `- **${s.name}** (${s.id}) [${s.category || 'general'}] — ${s.description || 'No description'}`
+        )
+        .join('\n');
       return text(`Found ${skills.length} skill(s) matching "${query}":\n\n${summary}`);
     }
   );
@@ -67,20 +77,41 @@ export function createAutoLearnMcpServer() {
     'create_skill',
     'Create a new skill in the shared library. A skill captures reusable knowledge: step-by-step procedures, best practices, debugging playbooks, code patterns, or any instructions an agent might need again.',
     {
-      name: z.string().min(1).max(200).describe('Short, descriptive name for the skill (e.g. "Deploy to Staging", "Fix CORS Issues")'),
-      description: z.string().max(2000).optional().describe('Brief description of when and why to use this skill'),
-      category: z.enum(['coding', 'devops', 'writing', 'security', 'analysis', 'general']).optional().describe('Skill category (default: general)'),
-      instructions: z.string().min(1).max(100000).describe('The full instructions, knowledge, or procedure that makes up this skill. Be detailed and include examples.'),
+      name: z
+        .string()
+        .min(1)
+        .max(200)
+        .describe(
+          'Short, descriptive name for the skill (e.g. "Deploy to Staging", "Fix CORS Issues")'
+        ),
+      description: z
+        .string()
+        .max(2000)
+        .optional()
+        .describe('Brief description of when and why to use this skill'),
+      category: z
+        .enum(['coding', 'devops', 'writing', 'security', 'analysis', 'general'])
+        .optional()
+        .describe('Skill category (default: general)'),
+      instructions: z
+        .string()
+        .min(1)
+        .max(100000)
+        .describe(
+          'The full instructions, knowledge, or procedure that makes up this skill. Be detailed and include examples.'
+        ),
     },
     async ({ name, description, category, instructions }, extra) => {
       const existing = await searchAgentSkills(name);
       const duplicate = existing.find((s: any) => s.name.toLowerCase() === name.toLowerCase());
       if (duplicate) {
         return {
-          content: [{
-            type: 'text',
-            text: `A skill named "${duplicate.name}" already exists (${duplicate.id}). Use update_skill to modify it instead.`,
-          }],
+          content: [
+            {
+              type: 'text',
+              text: `A skill named "${duplicate.name}" already exists (${duplicate.id}). Use update_skill to modify it instead.`,
+            },
+          ],
         };
       }
 
@@ -103,10 +134,12 @@ export function createAutoLearnMcpServer() {
 
       await saveAgentSkill(skill);
       return {
-        content: [{
-          type: 'text',
-          text: `Skill "${name}" created successfully.\nID: ${skill.id}\nCategory: ${skill.category}\n\nOther agents can now find and use this skill via search_skills.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Skill "${name}" created successfully.\nID: ${skill.id}\nCategory: ${skill.category}\n\nOther agents can now find and use this skill via search_skills.`,
+          },
+        ],
       };
     }
   );
@@ -118,13 +151,23 @@ export function createAutoLearnMcpServer() {
       skill_id: z.string().describe('The ID of the skill to update'),
       name: z.string().min(1).max(200).optional().describe('New name (optional)'),
       description: z.string().max(2000).optional().describe('New description (optional)'),
-      category: z.enum(['coding', 'devops', 'writing', 'security', 'analysis', 'general']).optional().describe('New category (optional)'),
-      instructions: z.string().min(1).max(100000).optional().describe('New instructions (optional — replaces the existing instructions entirely)'),
+      category: z
+        .enum(['coding', 'devops', 'writing', 'security', 'analysis', 'general'])
+        .optional()
+        .describe('New category (optional)'),
+      instructions: z
+        .string()
+        .min(1)
+        .max(100000)
+        .optional()
+        .describe('New instructions (optional — replaces the existing instructions entirely)'),
     },
     async ({ skill_id, name, description, category, instructions }, extra) => {
       const existing = await getAgentSkillById(skill_id);
       if (!existing) {
-        return text(`Skill "${skill_id}" not found. Use list_skills or search_skills to find the correct ID.`);
+        return text(
+          `Skill "${skill_id}" not found. Use list_skills or search_skills to find the correct ID.`
+        );
       }
 
       if (name !== undefined) existing.name = name;
@@ -137,10 +180,12 @@ export function createAutoLearnMcpServer() {
 
       await saveAgentSkill(existing);
       return {
-        content: [{
-          type: 'text',
-          text: `Skill "${existing.name}" (${existing.id}) updated successfully.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Skill "${existing.name}" (${existing.id}) updated successfully.`,
+          },
+        ],
       };
     }
   );

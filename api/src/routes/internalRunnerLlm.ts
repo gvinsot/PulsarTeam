@@ -55,13 +55,19 @@ export function internalRunnerLlmRoutes(agentManager) {
   router.get('/agents/:agentId', (req, res) => {
     try {
       const agent = agentManager.getById(req.params.agentId);
-      if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
 
       const cfg = agentManager.resolveLlmConfig(agent) || {};
       const model = (cfg.model || '').toString().trim();
       // No model resolved (no named config) → let the runner keep its
       // RUNNER_MODEL default instead of pinning an empty model.
-      if (!model) { res.json({ configured: false }); return; }
+      if (!model) {
+        res.json({ configured: false });
+        return;
+      }
 
       res.json({
         configured: true,
@@ -79,7 +85,10 @@ export function internalRunnerLlmRoutes(agentManager) {
     try {
       const settings = await getSettings();
       const id = (settings.claudeFallbackLlmConfigId || '').toString().trim();
-      if (!id) { res.json({ configured: false }); return; }
+      if (!id) {
+        res.json({ configured: false });
+        return;
+      }
 
       const cfg = await getLlmConfig(id);
       if (!cfg) {

@@ -81,7 +81,10 @@ export async function updateSettings(patch) {
 // Priority: env var > DB setting > default
 export async function getReminderConfig() {
   const settings = await getSettings();
-  const intOrDefault = (val, def) => { const n = parseInt(val, 10); return Number.isNaN(n) ? def : n; };
+  const intOrDefault = (val, def) => {
+    const n = parseInt(val, 10);
+    return Number.isNaN(n) ? def : n;
+  };
   const envInterval = process.env.TASK_REMINDER_INTERVAL_MINUTES;
   const intervalMinutes = envInterval
     ? intOrDefault(envInterval, 10)
@@ -112,7 +115,13 @@ const DEFAULT_TRANSITIONS = [
     trigger: 'on_enter',
     conditions: [],
     actions: [
-      { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+      {
+        type: 'run_agent',
+        mode: 'decide',
+        role: '__auto__',
+        instructions:
+          'Execute the task fully, and when you are finished, update the task to next state.',
+      },
     ],
   },
 ];

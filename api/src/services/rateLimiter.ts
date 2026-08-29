@@ -78,7 +78,7 @@ export class RateLimiter {
    * @returns {Promise<void>}
    */
   _delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
@@ -97,8 +97,8 @@ export class RateLimiter {
         if (waitTime > 0) {
           console.log(
             `[RateLimiter:${this.name}] Rate limit reached ` +
-            `(${this.timestamps.length}/${this.maxRequestsPerMinute} req/min). ` +
-            `Delaying next request by ${waitTime}ms. Queue depth: ${this.queue.length}`
+              `(${this.timestamps.length}/${this.maxRequestsPerMinute} req/min). ` +
+              `Delaying next request by ${waitTime}ms. Queue depth: ${this.queue.length}`
           );
           await this._delay(waitTime);
         }
@@ -146,7 +146,12 @@ export class RateLimiter {
    * Get the current status of the rate limiter.
    * @returns {{ requestsInWindow: number, maxRequestsPerMinute: number, queueDepth: number, isProcessing: boolean }}
    */
-  getStatus(): { requestsInWindow: number; maxRequestsPerMinute: number; queueDepth: number; isProcessing: boolean } {
+  getStatus(): {
+    requestsInWindow: number;
+    maxRequestsPerMinute: number;
+    queueDepth: number;
+    isProcessing: boolean;
+  } {
     this._pruneTimestamps();
     return {
       requestsInWindow: this.timestamps.length,
@@ -164,9 +169,6 @@ const CLAUDE_MAX_REQUESTS_PER_MINUTE = parseInt(
   10
 );
 
-export const claudeRateLimiter = new RateLimiter(
-  CLAUDE_MAX_REQUESTS_PER_MINUTE,
-  'claude'
-);
+export const claudeRateLimiter = new RateLimiter(CLAUDE_MAX_REQUESTS_PER_MINUTE, 'claude');
 
 export default claudeRateLimiter;

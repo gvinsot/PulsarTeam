@@ -44,7 +44,12 @@ export function createBrowserMcpServer() {
     'Crawl a single webpage and return its content as clean Markdown. Boilerplate (nav, footer, ads) is filtered out.',
     {
       url: z.string().describe('The URL to crawl'),
-      word_count_threshold: z.number().int().min(0).optional().describe('Minimum words per content block to keep (default 10)'),
+      word_count_threshold: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Minimum words per content block to keep (default 10)'),
     },
     async ({ url, word_count_threshold = 10 }) => {
       const result = await browserRequest('/crawl', { url, word_count_threshold });
@@ -58,7 +63,12 @@ export function createBrowserMcpServer() {
     'Crawl multiple webpages in parallel and return each page as clean Markdown.',
     {
       urls: z.array(z.string()).describe('List of URLs to crawl'),
-      word_count_threshold: z.number().int().min(0).optional().describe('Minimum words per content block to keep (default 10)'),
+      word_count_threshold: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Minimum words per content block to keep (default 10)'),
     },
     async ({ urls, word_count_threshold = 10 }) => {
       const result = await browserRequest('/crawl_many', { urls, word_count_threshold });
@@ -89,7 +99,10 @@ export function createBrowserMcpServer() {
     {
       url: z.string().describe('The URL to extract data from'),
       instruction: z.string().describe('Natural-language description of what to extract'),
-      schema_json: z.string().optional().describe('Optional JSON-schema string for structured output'),
+      schema_json: z
+        .string()
+        .optional()
+        .describe('Optional JSON-schema string for structured output'),
     },
     async ({ url, instruction, schema_json = '' }) => {
       const result = await browserRequest('/extract', { url, instruction, schema_json });

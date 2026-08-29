@@ -12,7 +12,13 @@ export const DEFAULT_BOARD_WORKFLOW = {
       trigger: 'on_enter',
       conditions: [],
       actions: [
-        { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+        {
+          type: 'run_agent',
+          mode: 'decide',
+          role: '__auto__',
+          instructions:
+            'Execute the task fully, and when you are finished, update the task to next state.',
+        },
       ],
     },
   ],
@@ -31,7 +37,13 @@ export const NEW_USER_BOARD_WORKFLOW = {
       trigger: 'on_enter',
       conditions: [],
       actions: [
-        { type: 'run_agent', mode: 'decide', role: '__auto__', instructions: 'Execute the task fully, and when you are finished, update the task to next state.' },
+        {
+          type: 'run_agent',
+          mode: 'decide',
+          role: '__auto__',
+          instructions:
+            'Execute the task fully, and when you are finished, update the task to next state.',
+        },
       ],
     },
   ],

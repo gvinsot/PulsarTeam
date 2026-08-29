@@ -45,22 +45,25 @@ export function normalizeStoragePath(value: any): string | null {
  * dedupe by fullName, and cap the count so clone time stays bounded. Always
  * returns an array (never null).
  */
-export function normalizeSecondaryRepos(input: any, primaryFullName?: string | null): Array<{ provider: string; fullName: string }> {
+export function normalizeSecondaryRepos(
+  input: any,
+  primaryFullName?: string | null
+): Array<{ provider: string; fullName: string }> {
   if (!Array.isArray(input)) return [];
   const primary = primaryFullName || null;
   const seen = new Set<string>();
   const out: Array<{ provider: string; fullName: string }> = [];
   for (const raw of input) {
-    const fullName = typeof raw === 'string'
-      ? raw
-      : (raw && typeof raw.fullName === 'string' ? raw.fullName : null);
+    const fullName =
+      typeof raw === 'string' ? raw : raw && typeof raw.fullName === 'string' ? raw.fullName : null;
     if (!fullName || !REPO_FULL_NAME_RE.test(fullName)) continue;
     if (primary && fullName === primary) continue;
     if (seen.has(fullName)) continue;
     seen.add(fullName);
-    const provider = (raw && typeof raw === 'object' && typeof raw.provider === 'string' && raw.provider)
-      ? raw.provider
-      : 'github';
+    const provider =
+      raw && typeof raw === 'object' && typeof raw.provider === 'string' && raw.provider
+        ? raw.provider
+        : 'github';
     out.push({ provider, fullName });
     if (out.length >= MAX_SECONDARY_REPOS) break;
   }

@@ -22,10 +22,13 @@ mock.module('../database.js', {
   namedExports: { ...realDb, getTaskById: async () => dbState.task },
 });
 
-const { tasksMethods, setTaskSignal, getTaskSignal, clearTaskSignals } = await import('../agentManager/tasks.js');
+const { tasksMethods, setTaskSignal, getTaskSignal, clearTaskSignals } =
+  await import('../agentManager/tasks.js');
 
 // Minimal `this`: only _isActiveTaskStatus is consulted by _pollTaskVerdict.
-const ctx = { _isActiveTaskStatus: (s: string) => ['refine', 'execute', 'code', 'verify'].includes(s) };
+const ctx = {
+  _isActiveTaskStatus: (s: string) => ['refine', 'execute', 'code', 'verify'].includes(s),
+};
 const poll = (taskId: string, startStatus: string | undefined) =>
   (tasksMethods as any)._pollTaskVerdict.call(ctx, taskId, 'some task text', startStatus);
 

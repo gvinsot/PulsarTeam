@@ -48,7 +48,8 @@ function decodeBase64Url(str) {
  * Encode content to base64url (used for sending emails).
  */
 function encodeBase64Url(str) {
-  return Buffer.from(str).toString('base64')
+  return Buffer.from(str)
+    .toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
@@ -86,7 +87,10 @@ function extractBody(payload) {
     if (htmlPart?.body?.data) {
       const html = decodeBase64Url(htmlPart.body.data);
       // Strip HTML tags for a readable text version
-      return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      return html
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
     }
 
     // Nested multipart (e.g. multipart/alternative inside multipart/mixed)
@@ -143,21 +147,29 @@ async function fetchMessageSummaries(
   limit: number,
   agentId: string | null,
   boardId: string | null,
-  { withStar = false } = {},
+  { withStar = false } = {}
 ): Promise<string> {
   // Fetch details for each message (headers + snippet)
   const details = await Promise.all(
-    messages.slice(0, limit).map(m =>
-      gmailFetch(`/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`, agentId, boardId)
-    )
+    messages
+      .slice(0, limit)
+      .map(m =>
+        gmailFetch(
+          `/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+          agentId,
+          boardId
+        )
+      )
   );
 
   const formatted = details.map(formatMessage);
-  return formatted.map((m, i) => {
-    const unread = m.isUnread ? '📩' : '📧';
-    const star = withStar && m.isStarred ? '⭐' : '';
-    return `${i + 1}. ${unread}${star} ${m.subject}\n   From: ${m.from}\n   Date: ${m.date}\n   ${m.snippet}\n   ID: ${m.id}`;
-  }).join('\n\n');
+  return formatted
+    .map((m, i) => {
+      const unread = m.isUnread ? '📩' : '📧';
+      const star = withStar && m.isStarred ? '⭐' : '';
+      return `${i + 1}. ${unread}${star} ${m.subject}\n   From: ${m.from}\n   Date: ${m.date}\n   ${m.snippet}\n   ID: ${m.id}`;
+    })
+    .join('\n\n');
 }
 
 /**
@@ -180,7 +192,7 @@ type EmailAttachment = {
 async function resolveAttachment(
   att: AttachmentInput,
   agentId: string | null = null,
-  runnerBridge: RunnerExecBridge | null = null,
+  runnerBridge: RunnerExecBridge | null = null
 ): Promise<EmailAttachment> {
   const resolved = await resolveAttachmentInput(att, {
     agentId,
@@ -316,7 +328,7 @@ const attachmentsSchema = buildAttachmentsSchema();
 export function createGmailMcpServer(
   agentId: string | null = null,
   boardId: string | null = null,
-  runnerBridge: RunnerExecBridge | null = null,
+  runnerBridge: RunnerExecBridge | null = null
 ) {
   const server = new McpServer({
     name: 'Gmail',
@@ -331,14 +343,17 @@ export function createGmailMcpServer(
     async () => {
       const profile = await gmailFetch('/users/me/profile', agentId, boardId);
       return {
-        content: [{
-          type: 'text',
-          text: `Gmail Profile:\n` +
-            `Email: ${profile.emailAddress}\n` +
-            `Total messages: ${profile.messagesTotal}\n` +
-            `Total threads: ${profile.threadsTotal}\n` +
-            `History ID: ${profile.historyId}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Gmail Profile:\n` +
+              `Email: ${profile.emailAddress}\n` +
+              `Total messages: ${profile.messagesTotal}\n` +
+              `Total threads: ${profile.threadsTotal}\n` +
+              `History ID: ${profile.historyId}`,
+          },
+        ],
       };
     }
   );
@@ -348,9 +363,24 @@ export function createGmailMcpServer(
     'list_emails',
     'List recent emails from Gmail inbox. Returns subject, sender, date, and snippet.',
     {
-      maxResults: z.number().optional().default(20).describe('Number of emails to return (default 20, max 100)'),
-      labelIds: z.string().optional().default('INBOX').describe('Comma-separated label IDs to filter (default: INBOX). Use INBOX, SENT, DRAFT, STARRED, UNREAD, etc.'),
-      query: z.string().optional().describe('Gmail search query (same syntax as Gmail search bar). E.g. "is:unread", "from:bob@example.com", "subject:meeting"'),
+      maxResults: z
+        .number()
+        .optional()
+        .default(20)
+        .describe('Number of emails to return (default 20, max 100)'),
+      labelIds: z
+        .string()
+        .optional()
+        .default('INBOX')
+        .describe(
+          'Comma-separated label IDs to filter (default: INBOX). Use INBOX, SENT, DRAFT, STARRED, UNREAD, etc.'
+        ),
+      query: z
+        .string()
+        .optional()
+        .describe(
+          'Gmail search query (same syntax as Gmail search bar). E.g. "is:unread", "from:bob@example.com", "subject:meeting"'
+        ),
     },
     async ({ maxResults, labelIds, query }) => {
       const limit = Math.min(maxResults || 20, 100);
@@ -372,13 +402,17 @@ export function createGmailMcpServer(
         return text('No emails found matching the criteria.');
       }
 
-      const summary = await fetchMessageSummaries(messages, limit, agentId, boardId, { withStar: true });
+      const summary = await fetchMessageSummaries(messages, limit, agentId, boardId, {
+        withStar: true,
+      });
 
       return {
-        content: [{
-          type: 'text',
-          text: `Found ${list.resultSizeEstimate || messages.length} email(s):\n\n${summary}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Found ${list.resultSizeEstimate || messages.length} email(s):\n\n${summary}`,
+          },
+        ],
       };
     }
   );
@@ -388,7 +422,9 @@ export function createGmailMcpServer(
     'search_emails',
     'Search emails using Gmail search syntax. Supports all Gmail operators: from:, to:, subject:, has:, is:, after:, before:, etc.',
     {
-      query: z.string().describe('Gmail search query (e.g. "from:alice subject:report after:2024/01/01")'),
+      query: z
+        .string()
+        .describe('Gmail search query (e.g. "from:alice subject:report after:2024/01/01")'),
       maxResults: z.number().optional().default(20).describe('Max results (default 20, max 100)'),
     },
     async ({ query, maxResults }) => {
@@ -408,10 +444,12 @@ export function createGmailMcpServer(
       const summary = await fetchMessageSummaries(messages, limit, agentId, boardId);
 
       return {
-        content: [{
-          type: 'text',
-          text: `Search "${query}" found ${list.resultSizeEstimate || messages.length} result(s):\n\n${summary}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Search "${query}" found ${list.resultSizeEstimate || messages.length} result(s):\n\n${summary}`,
+          },
+        ],
       };
     }
   );
@@ -421,7 +459,9 @@ export function createGmailMcpServer(
     'read_email',
     'Read the full content of a specific email by its ID. Returns headers, body text, and attachment info.',
     {
-      messageId: z.string().describe('The Gmail message ID (returned by list_emails or search_emails)'),
+      messageId: z
+        .string()
+        .describe('The Gmail message ID (returned by list_emails or search_emails)'),
     },
     async ({ messageId }) => {
       const msg = await gmailFetch(`/users/me/messages/${messageId}?format=full`, agentId, boardId);
@@ -452,15 +492,18 @@ export function createGmailMcpServer(
       }
       findAttachments(msg.payload?.parts);
 
-      const attachInfo = attachments.length > 0
-        ? `\n\nAttachments (${attachments.length}):\n${attachments.map(a => `  - ${a.filename} (${a.mimeType}, ${(a.size / 1024).toFixed(1)} KB)`).join('\n')}`
-        : '';
+      const attachInfo =
+        attachments.length > 0
+          ? `\n\nAttachments (${attachments.length}):\n${attachments.map(a => `  - ${a.filename} (${a.mimeType}, ${(a.size / 1024).toFixed(1)} KB)`).join('\n')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `From: ${from}\nTo: ${to}${cc ? `\nCc: ${cc}` : ''}\nSubject: ${subject}\nDate: ${date}\nMessage-ID: ${messageIdHeader}\nLabels: ${(msg.labelIds || []).join(', ')}\n\n--- Body ---\n${body}${attachInfo}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `From: ${from}\nTo: ${to}${cc ? `\nCc: ${cc}` : ''}\nSubject: ${subject}\nDate: ${date}\nMessage-ID: ${messageIdHeader}\nLabels: ${(msg.labelIds || []).join(', ')}\n\n--- Body ---\n${body}${attachInfo}`,
+          },
+        ],
       };
     }
   );
@@ -489,15 +532,18 @@ export function createGmailMcpServer(
         body: JSON.stringify({ raw }),
       });
 
-      const attachInfo = resolved && resolved.length > 0
-        ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
-        : '';
+      const attachInfo =
+        resolved && resolved.length > 0
+          ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Email sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${to}\nSubject: ${subject}${attachInfo}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Email sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${to}\nSubject: ${subject}${attachInfo}`,
+          },
+        ],
       };
     }
   );
@@ -509,7 +555,11 @@ export function createGmailMcpServer(
     {
       messageId: z.string().describe('The Gmail message ID to reply to'),
       body: z.string().describe('Reply body (plain text)'),
-      replyAll: z.boolean().optional().default(false).describe('If true, reply to all recipients (default: false)'),
+      replyAll: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('If true, reply to all recipients (default: false)'),
       attachments: attachmentsSchema,
     },
     async ({ messageId, body, replyAll, attachments }) => {
@@ -517,7 +567,11 @@ export function createGmailMcpServer(
         ? await Promise.all(attachments.map(a => resolveAttachment(a, agentId, runnerBridge)))
         : undefined;
       // Get the original message to extract headers
-      const original = await gmailFetch(`/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References`, agentId, boardId);
+      const original = await gmailFetch(
+        `/users/me/messages/${messageId}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=References`,
+        agentId,
+        boardId
+      );
       const headers = original.payload?.headers || [];
 
       const from = getHeader(headers, 'From') || '';
@@ -554,15 +608,18 @@ export function createGmailMcpServer(
         }),
       });
 
-      const attachInfo = resolved && resolved.length > 0
-        ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
-        : '';
+      const attachInfo =
+        resolved && resolved.length > 0
+          ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Reply sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${replyTo}\nSubject: ${replySubject}${attachInfo}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Reply sent successfully!\nMessage ID: ${result.id}\nThread ID: ${result.threadId}\nTo: ${replyTo}\nSubject: ${replySubject}${attachInfo}`,
+          },
+        ],
       };
     }
   );
@@ -593,15 +650,18 @@ export function createGmailMcpServer(
         }),
       });
 
-      const attachInfo = resolved && resolved.length > 0
-        ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
-        : '';
+      const attachInfo =
+        resolved && resolved.length > 0
+          ? `\nAttachments: ${resolved.map(a => a.filename).join(', ')}`
+          : '';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Draft created successfully!\nDraft ID: ${result.id}\nMessage ID: ${result.message?.id}\nTo: ${to}\nSubject: ${subject}${attachInfo}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Draft created successfully!\nDraft ID: ${result.id}\nMessage ID: ${result.message?.id}\nTo: ${to}\nSubject: ${subject}${attachInfo}`,
+          },
+        ],
       };
     }
   );
@@ -618,15 +678,18 @@ export function createGmailMcpServer(
       const system = labels.filter(l => l.type === 'system');
       const user = labels.filter(l => l.type === 'user');
 
-      const format = (l) => `  - ${l.name} (ID: ${l.id})`;
+      const format = l => `  - ${l.name} (ID: ${l.id})`;
 
       return {
-        content: [{
-          type: 'text',
-          text: `Gmail Labels (${labels.length} total):\n\n` +
-            `System Labels (${system.length}):\n${system.map(format).join('\n')}\n\n` +
-            `User Labels (${user.length}):\n${user.length > 0 ? user.map(format).join('\n') : '  (none)'}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Gmail Labels (${labels.length} total):\n\n` +
+              `System Labels (${system.length}):\n${system.map(format).join('\n')}\n\n` +
+              `User Labels (${user.length}):\n${user.length > 0 ? user.map(format).join('\n') : '  (none)'}`,
+          },
+        ],
       };
     }
   );
@@ -637,8 +700,14 @@ export function createGmailMcpServer(
     'Add or remove labels from an email. Use this to mark as read/unread, star/unstar, archive, move to trash, etc.',
     {
       messageId: z.string().describe('The Gmail message ID'),
-      addLabelIds: z.string().optional().describe('Comma-separated label IDs to add (e.g. "STARRED,IMPORTANT")'),
-      removeLabelIds: z.string().optional().describe('Comma-separated label IDs to remove (e.g. "UNREAD,INBOX")'),
+      addLabelIds: z
+        .string()
+        .optional()
+        .describe('Comma-separated label IDs to add (e.g. "STARRED,IMPORTANT")'),
+      removeLabelIds: z
+        .string()
+        .optional()
+        .describe('Comma-separated label IDs to remove (e.g. "UNREAD,INBOX")'),
     },
     async ({ messageId, addLabelIds, removeLabelIds }) => {
       const addIds = addLabelIds ? addLabelIds.split(',').map(l => l.trim()) : [];
@@ -661,10 +730,12 @@ export function createGmailMcpServer(
       if (removeIds.length > 0) changes.push(`Removed: ${removeIds.join(', ')}`);
 
       return {
-        content: [{
-          type: 'text',
-          text: `Labels modified for message ${messageId}:\n${changes.join('\n')}\nCurrent labels: ${(result.labelIds || []).join(', ')}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Labels modified for message ${messageId}:\n${changes.join('\n')}\nCurrent labels: ${(result.labelIds || []).join(', ')}`,
+          },
+        ],
       };
     }
   );
@@ -707,10 +778,12 @@ export function createGmailMcpServer(
       const size = data.size || 0;
 
       return {
-        content: [{
-          type: 'text',
-          text: `Attachment downloaded${filename ? ` (${filename})` : ''}.\nSize: ${(size / 1024).toFixed(1)} KB\n\nBase64 content:\n${standardB64}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Attachment downloaded${filename ? ` (${filename})` : ''}.\nSize: ${(size / 1024).toFixed(1)} KB\n\nBase64 content:\n${standardB64}`,
+          },
+        ],
       };
     }
   );
@@ -723,7 +796,11 @@ export function createGmailMcpServer(
       threadId: z.string().describe('The Gmail thread ID (returned in message details)'),
     },
     async ({ threadId }) => {
-      const thread = await gmailFetch(`/users/me/threads/${threadId}?format=full`, agentId, boardId);
+      const thread = await gmailFetch(
+        `/users/me/threads/${threadId}?format=full`,
+        agentId,
+        boardId
+      );
       const messages = thread.messages || [];
 
       const formatted = messages.map((msg, i) => {
@@ -739,10 +816,12 @@ export function createGmailMcpServer(
       const subject = getHeader(messages[0]?.payload?.headers || [], 'Subject') || '(no subject)';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Thread: ${subject}\nThread ID: ${threadId}\nMessages: ${messages.length}\n\n${formatted.join('\n\n')}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Thread: ${subject}\nThread ID: ${threadId}\nMessages: ${messages.length}\n\n${formatted.join('\n\n')}`,
+          },
+        ],
       };
     }
   );
@@ -762,5 +841,6 @@ export function createGmailMcpServer(
  */
 export function createGmailMcpHandler(runnerBridge: RunnerExecBridge | null = null) {
   return createMcpHttpHandler('Gmail', ({ agentId, boardId }) =>
-    createGmailMcpServer(agentId, boardId, runnerBridge));
+    createGmailMcpServer(agentId, boardId, runnerBridge)
+  );
 }

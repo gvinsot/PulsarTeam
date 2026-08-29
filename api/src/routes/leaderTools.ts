@@ -46,7 +46,9 @@ export function leaderToolsRoutes(agentManager) {
     let targetId = agentId;
     if (!targetId && agentName) {
       const agents = agentManager.getAllForUser(req.user.userId, req.user.role);
-      const found = agents.find((a: any) => a.name.toLowerCase() === (agentName as string).toLowerCase());
+      const found = agents.find(
+        (a: any) => a.name.toLowerCase() === (agentName as string).toLowerCase()
+      );
       if (!found) return res.status(404).json({ error: 'Agent not found' });
       targetId = found.id;
     }

@@ -60,9 +60,22 @@ function getToolHandler(server: any, name: string): (args: any) => Promise<any> 
 const parseResult = (result: any): any => JSON.parse(result.content[0].text);
 
 function makeFakeAgentManager() {
-  const agent = { id: 'agent-1', name: 'Builder', boardId: 'board-1', skills: [], mcpServers: [], mcpAuth: {} };
+  const agent = {
+    id: 'agent-1',
+    name: 'Builder',
+    boardId: 'board-1',
+    skills: [],
+    mcpServers: [],
+    mcpAuth: {},
+  };
   const tasks: any[] = [
-    { id: 'task-1', agentId: 'agent-1', text: 'Active task', status: 'in_progress', boardId: 'board-1' },
+    {
+      id: 'task-1',
+      agentId: 'agent-1',
+      text: 'Active task',
+      status: 'in_progress',
+      boardId: 'board-1',
+    },
   ];
   // Seed into the shared DB fake so resolveCurrentTaskId + locateTask find it.
   taskRows.clear();
@@ -97,14 +110,26 @@ function makeFakeMcpManager() {
     ]),
     async getToolsForAgent(_ids: string[], _agentId: string, _auth: any) {
       return {
-        tools: [{
-          serverName: 'Swarm API', serverId: 'mcp-swarm-api',
-          name: 'list_boards', description: 'List boards', inputSchema: { type: 'object', properties: {} },
-        }],
+        tools: [
+          {
+            serverName: 'Swarm API',
+            serverId: 'mcp-swarm-api',
+            name: 'list_boards',
+            description: 'List boards',
+            inputSchema: { type: 'object', properties: {} },
+          },
+        ],
         unavailable: [],
       };
     },
-    async callToolByNameForAgent(serverName: string, toolName: string, args: any, agentId: string, auth: any, boardId: string) {
+    async callToolByNameForAgent(
+      serverName: string,
+      toolName: string,
+      args: any,
+      agentId: string,
+      auth: any,
+      boardId: string
+    ) {
       calls.callToolByNameForAgent.push({ serverName, toolName, args, agentId, boardId });
       return { success: true, result: `ok:${serverName}:${toolName}`, images: undefined, raw: [] };
     },
@@ -116,7 +141,13 @@ const fakeSkillManager = { getById: () => null };
 
 test('update_task auto-resolves the active task and moves its column', async () => {
   const am = makeFakeAgentManager();
-  const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    makeFakeMcpManager() as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
   const handler = getToolHandler(server, 'update_task');
 
   const result = await handler({ status: 'in_progress' });
@@ -133,7 +164,13 @@ test('update_task auto-resolves the active task and moves its column', async () 
 
 test('update_task errors with no agent context', async () => {
   const am = makeFakeAgentManager();
-  const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, null, null);
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    makeFakeMcpManager() as any,
+    fakeSkillManager as any,
+    null,
+    null
+  );
   const handler = getToolHandler(server, 'update_task');
 
   const result = await handler({ status: 'done' });
@@ -143,7 +180,13 @@ test('update_task errors with no agent context', async () => {
 
 test('update_task with a comment marks the task finished', async () => {
   const am = makeFakeAgentManager();
-  const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    makeFakeMcpManager() as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
   const handler = getToolHandler(server, 'update_task');
 
   // No status: pure completion in place (the workflow chain advances the column).
@@ -164,7 +207,13 @@ test('update_task with a comment marks the task finished', async () => {
 
 test('update_task moves the column AND finishes when given status + comment', async () => {
   const am = makeFakeAgentManager();
-  const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    makeFakeMcpManager() as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
   const handler = getToolHandler(server, 'update_task');
 
   const result = await handler({ status: 'done', comment: 'all done' });
@@ -180,20 +229,35 @@ test('update_task moves the column AND finishes when given status + comment', as
 
 test('list_mcps groups tools by server and includes input schemas', async () => {
   const am = makeFakeAgentManager();
-  const server = createPulsarGatewayMcpServer(am as any, makeFakeMcpManager() as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    makeFakeMcpManager() as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
   const handler = getToolHandler(server, 'list_mcps');
 
   const body = parseResult(await handler({}));
   assert.equal(body.count, 1);
   assert.equal(body.mcps[0].server, 'Swarm API');
   assert.equal(body.mcps[0].tools[0].name, 'list_boards');
-  assert.ok(body.mcps[0].tools[0].input_schema, 'schema must be surfaced for correct argument construction');
+  assert.ok(
+    body.mcps[0].tools[0].input_schema,
+    'schema must be surfaced for correct argument construction'
+  );
 });
 
 test('call_mcp_tool proxies an available server', async () => {
   const am = makeFakeAgentManager();
   const mm = makeFakeMcpManager();
-  const server = createPulsarGatewayMcpServer(am as any, mm as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    mm as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
   const handler = getToolHandler(server, 'call_mcp_tool');
 
   const result = await handler({ server: 'Swarm API', tool: 'list_boards', args: {} });
@@ -206,7 +270,13 @@ test('call_mcp_tool proxies an available server', async () => {
 test('call_mcp_tool blocks a server not in the agent available set', async () => {
   const am = makeFakeAgentManager();
   const mm = makeFakeMcpManager();
-  const server = createPulsarGatewayMcpServer(am as any, mm as any, fakeSkillManager as any, 'agent-1', 'board-1');
+  const server = createPulsarGatewayMcpServer(
+    am as any,
+    mm as any,
+    fakeSkillManager as any,
+    'agent-1',
+    'board-1'
+  );
   const handler = getToolHandler(server, 'call_mcp_tool');
 
   // GitHub is a known server but not attached to this agent or its board.

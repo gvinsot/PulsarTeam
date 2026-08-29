@@ -19,7 +19,10 @@ export function internalTokenUsageRoutes(agentManager) {
   router.post('/agents/:agentId', async (req, res) => {
     try {
       const agent = agentManager.getById(req.params.agentId);
-      if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
 
       const body = req.body || {};
       const inputTokens = Math.max(0, Number(body.input_tokens) || 0);
@@ -46,7 +49,7 @@ export function internalTokenUsageRoutes(agentManager) {
         Number.isFinite(costUsd) ? costUsd : 0,
         userId,
         contextTokens,
-        idempotencyKey,
+        idempotencyKey
       );
 
       // recordTokenUsage never throws; when a pool is configured but the
@@ -74,7 +77,12 @@ export function internalTokenUsageRoutes(agentManager) {
         // Metrics are best-effort; never fail the recording call.
       }
 
-      res.json({ recorded: true, input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd });
+      res.json({
+        recorded: true,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_usd: costUsd,
+      });
     } catch (err: any) {
       console.error('Failed to record CLI runner token usage:', err?.message);
       res.status(500).json({ error: err?.message || 'internal error' });

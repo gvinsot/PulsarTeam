@@ -43,7 +43,10 @@ const wpProviderFetch = createProviderFetch({
   errorLabel: 'WordPress API error',
   getAuth: (agentId, boardId) => {
     const creds = getWordPressCredentialsForAgent(agentId, boardId);
-    if (!creds) throw new Error('Not connected to WordPress. Please configure WordPress credentials for this agent or board first.');
+    if (!creds)
+      throw new Error(
+        'Not connected to WordPress. Please configure WordPress credentials for this agent or board first.'
+      );
     return {
       authorization: `Basic ${Buffer.from(`${creds.username}:${creds.applicationPassword}`).toString('base64')}`,
       base: `${creds.siteUrl}/wp-json`,
@@ -63,7 +66,7 @@ async function wpFetch(
   agentId: string | null,
   boardId: string | null,
   endpoint: string,
-  options: Record<string, any> = {},
+  options: Record<string, any> = {}
 ): Promise<any> {
   // Normalize the leading slash so "wp/v2/posts" and "/wp/v2/posts" both work.
   const path = endpoint.startsWith('http')
@@ -81,22 +84,30 @@ async function resolveTermIds(
   agentId: string | null,
   boardId: string | null,
   taxonomy: 'categories' | 'tags',
-  terms: string[] | undefined,
+  terms: string[] | undefined
 ): Promise<number[]> {
   if (!terms || terms.length === 0) return [];
   const ids: number[] = [];
   for (const raw of terms) {
     const term = String(raw).trim();
     if (!term) continue;
-    if (/^\d+$/.test(term)) { ids.push(parseInt(term, 10)); continue; }
+    if (/^\d+$/.test(term)) {
+      ids.push(parseInt(term, 10));
+      continue;
+    }
     const matches = await wpFetch(
-      agentId, boardId,
-      `/wp/v2/${taxonomy}?search=${encodeURIComponent(term)}&per_page=10`,
+      agentId,
+      boardId,
+      `/wp/v2/${taxonomy}?search=${encodeURIComponent(term)}&per_page=10`
     );
-    const exact = (Array.isArray(matches) ? matches : []).find((t: any) =>
-      t.name?.toLowerCase() === term.toLowerCase() || t.slug?.toLowerCase() === term.toLowerCase()
+    const exact = (Array.isArray(matches) ? matches : []).find(
+      (t: any) =>
+        t.name?.toLowerCase() === term.toLowerCase() || t.slug?.toLowerCase() === term.toLowerCase()
     );
-    if (exact) { ids.push(exact.id); continue; }
+    if (exact) {
+      ids.push(exact.id);
+      continue;
+    }
     // Create it
     const created = await wpFetch(agentId, boardId, `/wp/v2/${taxonomy}`, {
       method: 'POST',
@@ -112,7 +123,10 @@ const postStatusEnum = z.enum(['publish', 'draft', 'pending', 'private', 'future
 /**
  * Create the WordPress MCP server with all tools registered.
  */
-export function createWordPressMcpServer(agentId: string | null = null, pulsarBoardId: string | null = null) {
+export function createWordPressMcpServer(
+  agentId: string | null = null,
+  pulsarBoardId: string | null = null
+) {
   const server = new McpServer({
     name: 'WordPress',
     version: '1.0.0',
@@ -126,17 +140,19 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     async () => {
       const info = await wpFetch(agentId, pulsarBoardId, '/');
       return {
-        content: [{
-          type: 'text',
-          text: [
-            `Site: ${info.name || '?'}`,
-            `Description: ${info.description || '(none)'}`,
-            `URL: ${info.url || '?'}`,
-            `Home: ${info.home || '?'}`,
-            `Timezone: ${info.timezone_string || '?'}`,
-            `Namespaces: ${(info.namespaces || []).join(', ')}`,
-          ].join('\n'),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Site: ${info.name || '?'}`,
+              `Description: ${info.description || '(none)'}`,
+              `URL: ${info.url || '?'}`,
+              `Home: ${info.home || '?'}`,
+              `Timezone: ${info.timezone_string || '?'}`,
+              `Namespaces: ${(info.namespaces || []).join(', ')}`,
+            ].join('\n'),
+          },
+        ],
       };
     }
   );
@@ -149,10 +165,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     async () => {
       const user = await wpFetch(agentId, pulsarBoardId, '/wp/v2/users/me?context=edit');
       return {
-        content: [{
-          type: 'text',
-          text: `WordPress User:\nID: ${user.id}\nName: ${user.name}\nUsername: ${user.username || user.slug}\nEmail: ${user.email || '?'}\nRoles: ${(user.roles || []).join(', ')}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `WordPress User:\nID: ${user.id}\nName: ${user.name}\nUsername: ${user.username || user.slug}\nEmail: ${user.email || '?'}\nRoles: ${(user.roles || []).join(', ')}`,
+          },
+        ],
       };
     }
   );
@@ -162,7 +180,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     'list_posts',
     'List WordPress posts with optional filters (status, search, author, category, tag).',
     {
-      status: z.string().optional().describe('Filter by status (publish, draft, pending, private, future, any). Default: publish'),
+      status: z
+        .string()
+        .optional()
+        .describe(
+          'Filter by status (publish, draft, pending, private, future, any). Default: publish'
+        ),
       search: z.string().optional().describe('Search term'),
       author: z.number().optional().describe('Filter by author user ID'),
       category: z.string().optional().describe('Category name, slug, or numeric ID'),
@@ -185,11 +208,20 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
         const ids = await resolveTermIds(agentId, pulsarBoardId, 'tags', [tag]);
         if (ids.length) params.set('tags', ids.join(','));
       }
-      const posts = await wpFetch(agentId, pulsarBoardId, `/wp/v2/posts?${params.toString()}&context=edit`);
-      const list = (Array.isArray(posts) ? posts : []).map((p: any) =>
-        `- [${p.id}] "${p.title?.rendered || p.title?.raw || '(untitled)'}" [${p.status}] — ${p.link}`
-      ).join('\n');
-      return text(`WordPress Posts (${Array.isArray(posts) ? posts.length : 0}):\n${list || '(none)'}`);
+      const posts = await wpFetch(
+        agentId,
+        pulsarBoardId,
+        `/wp/v2/posts?${params.toString()}&context=edit`
+      );
+      const list = (Array.isArray(posts) ? posts : [])
+        .map(
+          (p: any) =>
+            `- [${p.id}] "${p.title?.rendered || p.title?.raw || '(untitled)'}" [${p.status}] — ${p.link}`
+        )
+        .join('\n');
+      return text(
+        `WordPress Posts (${Array.isArray(posts) ? posts.length : 0}):\n${list || '(none)'}`
+      );
     }
   );
 
@@ -203,20 +235,22 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     async ({ postId }) => {
       const p = await wpFetch(agentId, pulsarBoardId, `/wp/v2/posts/${postId}?context=edit`);
       return {
-        content: [{
-          type: 'text',
-          text: [
-            `Post: [${p.id}] ${p.title?.rendered || p.title?.raw || '(untitled)'}`,
-            `Status: ${p.status} | Slug: ${p.slug} | Author: ${p.author}`,
-            `Date: ${p.date} | Modified: ${p.modified}`,
-            `URL: ${p.link}`,
-            `Categories: ${(p.categories || []).join(', ') || 'none'}`,
-            `Tags: ${(p.tags || []).join(', ') || 'none'}`,
-            `Featured media: ${p.featured_media || 'none'}`,
-            `\n--- Excerpt ---\n${p.excerpt?.raw || p.excerpt?.rendered || '(none)'}`,
-            `\n--- Content ---\n${p.content?.raw || p.content?.rendered || '(empty)'}`,
-          ].join('\n'),
-        }],
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Post: [${p.id}] ${p.title?.rendered || p.title?.raw || '(untitled)'}`,
+              `Status: ${p.status} | Slug: ${p.slug} | Author: ${p.author}`,
+              `Date: ${p.date} | Modified: ${p.modified}`,
+              `URL: ${p.link}`,
+              `Categories: ${(p.categories || []).join(', ') || 'none'}`,
+              `Tags: ${(p.tags || []).join(', ') || 'none'}`,
+              `Featured media: ${p.featured_media || 'none'}`,
+              `\n--- Excerpt ---\n${p.excerpt?.raw || p.excerpt?.rendered || '(none)'}`,
+              `\n--- Content ---\n${p.content?.raw || p.content?.rendered || '(empty)'}`,
+            ].join('\n'),
+          },
+        ],
       };
     }
   );
@@ -227,14 +261,28 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     'Create a new WordPress post. Use status="publish" to publish immediately, "draft" (default) to save as a draft, or "future" with a date to schedule.',
     {
       title: z.string().describe('Post title'),
-      content: z.string().describe('Post content (HTML or block markup). Plain text and basic HTML are both fine.'),
+      content: z
+        .string()
+        .describe('Post content (HTML or block markup). Plain text and basic HTML are both fine.'),
       status: postStatusEnum.optional().default('draft').describe('Post status (default: draft)'),
       excerpt: z.string().optional().describe('Short excerpt'),
       slug: z.string().optional().describe('URL slug'),
-      categories: z.array(z.string()).optional().describe('Category names, slugs, or IDs (created automatically if missing)'),
-      tags: z.array(z.string()).optional().describe('Tag names, slugs, or IDs (created automatically if missing)'),
-      featuredMediaId: z.number().optional().describe('Featured image: WordPress media ID (use upload_media first)'),
-      date: z.string().optional().describe('Publish date as ISO 8601 string (only relevant for status=future)'),
+      categories: z
+        .array(z.string())
+        .optional()
+        .describe('Category names, slugs, or IDs (created automatically if missing)'),
+      tags: z
+        .array(z.string())
+        .optional()
+        .describe('Tag names, slugs, or IDs (created automatically if missing)'),
+      featuredMediaId: z
+        .number()
+        .optional()
+        .describe('Featured image: WordPress media ID (use upload_media first)'),
+      date: z
+        .string()
+        .optional()
+        .describe('Publish date as ISO 8601 string (only relevant for status=future)'),
     },
     async ({ title, content, status, excerpt, slug, categories, tags, featuredMediaId, date }) => {
       const body: any = {
@@ -246,7 +294,8 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       if (slug) body.slug = slug;
       if (featuredMediaId) body.featured_media = featuredMediaId;
       if (date) body.date = date;
-      if (categories?.length) body.categories = await resolveTermIds(agentId, pulsarBoardId, 'categories', categories);
+      if (categories?.length)
+        body.categories = await resolveTermIds(agentId, pulsarBoardId, 'categories', categories);
       if (tags?.length) body.tags = await resolveTermIds(agentId, pulsarBoardId, 'tags', tags);
 
       const created = await wpFetch(agentId, pulsarBoardId, '/wp/v2/posts', {
@@ -254,10 +303,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
         body: JSON.stringify(body),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `Post created: [${created.id}] "${created.title?.rendered || title}" [${created.status}]\nURL: ${created.link}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Post created: [${created.id}] "${created.title?.rendered || title}" [${created.status}]\nURL: ${created.link}`,
+          },
+        ],
       };
     }
   );
@@ -278,7 +329,18 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       featuredMediaId: z.number().optional().describe('Featured image media ID (use 0 to clear)'),
       date: z.string().optional().describe('New publish date as ISO 8601'),
     },
-    async ({ postId, title, content, status, excerpt, slug, categories, tags, featuredMediaId, date }) => {
+    async ({
+      postId,
+      title,
+      content,
+      status,
+      excerpt,
+      slug,
+      categories,
+      tags,
+      featuredMediaId,
+      date,
+    }) => {
       const body: any = {};
       if (title !== undefined) body.title = title;
       if (content !== undefined) body.content = content;
@@ -287,8 +349,10 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       if (slug !== undefined) body.slug = slug;
       if (featuredMediaId !== undefined) body.featured_media = featuredMediaId;
       if (date !== undefined) body.date = date;
-      if (categories !== undefined) body.categories = await resolveTermIds(agentId, pulsarBoardId, 'categories', categories);
-      if (tags !== undefined) body.tags = await resolveTermIds(agentId, pulsarBoardId, 'tags', tags);
+      if (categories !== undefined)
+        body.categories = await resolveTermIds(agentId, pulsarBoardId, 'categories', categories);
+      if (tags !== undefined)
+        body.tags = await resolveTermIds(agentId, pulsarBoardId, 'tags', tags);
 
       if (Object.keys(body).length === 0) {
         return text('No fields supplied to update.');
@@ -299,10 +363,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
         body: JSON.stringify(body),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `Post updated: [${updated.id}] "${updated.title?.rendered || ''}" [${updated.status}]\nURL: ${updated.link}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Post updated: [${updated.id}] "${updated.title?.rendered || ''}" [${updated.status}]\nURL: ${updated.link}`,
+          },
+        ],
       };
     }
   );
@@ -320,10 +386,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
         body: JSON.stringify({ status: 'publish' }),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `Post published: [${updated.id}] "${updated.title?.rendered || ''}"\nURL: ${updated.link}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Post published: [${updated.id}] "${updated.title?.rendered || ''}"\nURL: ${updated.link}`,
+          },
+        ],
       };
     }
   );
@@ -334,22 +402,29 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     'Delete a WordPress post. By default moves to Trash; pass force=true to delete permanently.',
     {
       postId: z.number().describe('The post ID to delete'),
-      force: z.boolean().optional().default(false).describe('Permanently delete (true) or trash (false, default)'),
+      force: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('Permanently delete (true) or trash (false, default)'),
     },
     async ({ postId, force }) => {
       const result = await wpFetch(
-        agentId, pulsarBoardId,
+        agentId,
+        pulsarBoardId,
         `/wp/v2/posts/${postId}${force ? '?force=true' : ''}`,
-        { method: 'DELETE' },
+        { method: 'DELETE' }
       );
       const wasTrashed = !force;
       return {
-        content: [{
-          type: 'text',
-          text: wasTrashed
-            ? `Post ${postId} moved to trash.`
-            : `Post ${postId} permanently deleted.${result?.deleted ? '' : ''}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: wasTrashed
+              ? `Post ${postId} moved to trash.`
+              : `Post ${postId} permanently deleted.${result?.deleted ? '' : ''}`,
+          },
+        ],
       };
     }
   );
@@ -366,11 +441,19 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       const params = new URLSearchParams();
       params.set('per_page', String(Math.min(Math.max(perPage || 20, 1), 100)));
       if (status) params.set('status', status);
-      const pages = await wpFetch(agentId, pulsarBoardId, `/wp/v2/pages?${params.toString()}&context=edit`);
-      const list = (Array.isArray(pages) ? pages : []).map((p: any) =>
-        `- [${p.id}] "${p.title?.rendered || '(untitled)'}" [${p.status}] — ${p.link}`
-      ).join('\n');
-      return text(`WordPress Pages (${Array.isArray(pages) ? pages.length : 0}):\n${list || '(none)'}`);
+      const pages = await wpFetch(
+        agentId,
+        pulsarBoardId,
+        `/wp/v2/pages?${params.toString()}&context=edit`
+      );
+      const list = (Array.isArray(pages) ? pages : [])
+        .map(
+          (p: any) => `- [${p.id}] "${p.title?.rendered || '(untitled)'}" [${p.status}] — ${p.link}`
+        )
+        .join('\n');
+      return text(
+        `WordPress Pages (${Array.isArray(pages) ? pages.length : 0}):\n${list || '(none)'}`
+      );
     }
   );
 
@@ -394,10 +477,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
         body: JSON.stringify(body),
       });
       return {
-        content: [{
-          type: 'text',
-          text: `Page created: [${created.id}] "${created.title?.rendered || title}" [${created.status}]\nURL: ${created.link}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Page created: [${created.id}] "${created.title?.rendered || title}" [${created.status}]\nURL: ${created.link}`,
+          },
+        ],
       };
     }
   );
@@ -408,8 +493,14 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
     'Upload a file (image, PDF, video, etc.) from disk to the WordPress media library. Returns the new media ID, which can be passed as featuredMediaId to create_post.',
     {
       filePath: z.string().describe('Absolute or workspace-relative path to a file on this server'),
-      filename: z.string().optional().describe('Optional filename to send (default: basename of filePath)'),
-      mimeType: z.string().optional().describe('Optional MIME type (default: inferred from extension)'),
+      filename: z
+        .string()
+        .optional()
+        .describe('Optional filename to send (default: basename of filePath)'),
+      mimeType: z
+        .string()
+        .optional()
+        .describe('Optional MIME type (default: inferred from extension)'),
       title: z.string().optional().describe('Optional media title (default: filename)'),
       altText: z.string().optional().describe('Optional alternative text (for images)'),
       caption: z.string().optional().describe('Optional caption'),
@@ -422,7 +513,9 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       // WordPress default upload limit is typically 64 MB; cap at 50 MB to leave headroom.
       const MAX_BYTES = 50 * 1024 * 1024;
       if (stat.size > MAX_BYTES) {
-        throw new Error(`Media file "${filePath}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, exceeds 50 MB cap`);
+        throw new Error(
+          `Media file "${filePath}" is ${(stat.size / 1024 / 1024).toFixed(1)} MB, exceeds 50 MB cap`
+        );
       }
 
       const buf = await fs.readFile(filePath);
@@ -431,7 +524,9 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
 
       const creds = getWordPressCredentialsForAgent(agentId, pulsarBoardId);
       if (!creds) throw new Error('Not connected to WordPress.');
-      const encoded = Buffer.from(`${creds.username}:${creds.applicationPassword}`).toString('base64');
+      const encoded = Buffer.from(`${creds.username}:${creds.applicationPassword}`).toString(
+        'base64'
+      );
 
       const uploadRes = await fetch(`${creds.siteUrl}/wp-json/wp/v2/media`, {
         signal: AbortSignal.timeout(120_000),
@@ -447,7 +542,9 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
 
       if (!uploadRes.ok) {
         const txt = await uploadRes.text().catch(() => '');
-        throw new Error(`WordPress media upload failed (${uploadRes.status}): ${txt.slice(0, 300)}`);
+        throw new Error(
+          `WordPress media upload failed (${uploadRes.status}): ${txt.slice(0, 300)}`
+        );
       }
       const media = await uploadRes.json();
 
@@ -460,17 +557,19 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
         await wpFetch(agentId, pulsarBoardId, `/wp/v2/media/${media.id}`, {
           method: 'POST',
           body: JSON.stringify(metaBody),
-        }).catch((err) => {
+        }).catch(err => {
           // Non-fatal: the upload succeeded.
           console.warn(`[WordPress MCP] Media ${media.id} metadata update failed:`, err.message);
         });
       }
 
       return {
-        content: [{
-          type: 'text',
-          text: `Media uploaded: [${media.id}] "${finalName}" (${(stat.size / 1024).toFixed(1)} KB, ${finalMime})\nURL: ${media.source_url || media.guid?.rendered || '?'}\nUse featuredMediaId=${media.id} on create_post/update_post to set as featured image.`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Media uploaded: [${media.id}] "${finalName}" (${(stat.size / 1024).toFixed(1)} KB, ${finalMime})\nURL: ${media.source_url || media.guid?.rendered || '?'}\nUse featuredMediaId=${media.id} on create_post/update_post to set as featured image.`,
+          },
+        ],
       };
     }
   );
@@ -488,10 +587,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       params.set('per_page', String(Math.min(Math.max(perPage || 50, 1), 100)));
       if (search) params.set('search', search);
       const cats = await wpFetch(agentId, pulsarBoardId, `/wp/v2/categories?${params.toString()}`);
-      const list = (Array.isArray(cats) ? cats : []).map((c: any) =>
-        `- [${c.id}] "${c.name}" (slug: ${c.slug}) — ${c.count} posts`
-      ).join('\n');
-      return text(`WordPress Categories (${Array.isArray(cats) ? cats.length : 0}):\n${list || '(none)'}`);
+      const list = (Array.isArray(cats) ? cats : [])
+        .map((c: any) => `- [${c.id}] "${c.name}" (slug: ${c.slug}) — ${c.count} posts`)
+        .join('\n');
+      return text(
+        `WordPress Categories (${Array.isArray(cats) ? cats.length : 0}):\n${list || '(none)'}`
+      );
     }
   );
 
@@ -508,10 +609,12 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
       params.set('per_page', String(Math.min(Math.max(perPage || 50, 1), 100)));
       if (search) params.set('search', search);
       const tags = await wpFetch(agentId, pulsarBoardId, `/wp/v2/tags?${params.toString()}`);
-      const list = (Array.isArray(tags) ? tags : []).map((t: any) =>
-        `- [${t.id}] "${t.name}" (slug: ${t.slug}) — ${t.count} posts`
-      ).join('\n');
-      return text(`WordPress Tags (${Array.isArray(tags) ? tags.length : 0}):\n${list || '(none)'}`);
+      const list = (Array.isArray(tags) ? tags : [])
+        .map((t: any) => `- [${t.id}] "${t.name}" (slug: ${t.slug}) — ${t.count} posts`)
+        .join('\n');
+      return text(
+        `WordPress Tags (${Array.isArray(tags) ? tags.length : 0}):\n${list || '(none)'}`
+      );
     }
   );
 
@@ -524,5 +627,6 @@ export function createWordPressMcpServer(agentId: string | null = null, pulsarBo
  */
 export function createWordPressMcpHandler() {
   return createMcpHttpHandler('WordPress', ({ agentId, boardId }) =>
-    createWordPressMcpServer(agentId, boardId));
+    createWordPressMcpServer(agentId, boardId)
+  );
 }

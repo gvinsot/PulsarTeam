@@ -31,7 +31,11 @@ export default function BatchAgentCard({
   });
 
   useEffect(() => {
-    if (selectedAgentId && sorted.some(a => a.id === selectedAgentId) && selectedAgentId !== activeId) {
+    if (
+      selectedAgentId &&
+      sorted.some(a => a.id === selectedAgentId) &&
+      selectedAgentId !== activeId
+    ) {
       setActiveId(selectedAgentId);
     }
   }, [selectedAgentId, sorted]);
@@ -48,7 +52,7 @@ export default function BatchAgentCard({
   const memberFooter = (
     <div
       className="flex items-center justify-between gap-2 w-full pt-2 border-t border-dark-700/50"
-      onClick={(e) => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
     >
       <span
         className="flex items-center gap-1 text-[10px] font-medium text-indigo-300"
@@ -62,7 +66,7 @@ export default function BatchAgentCard({
       <div className="relative flex-shrink-0">
         <select
           value={activeId}
-          onChange={(e) => {
+          onChange={e => {
             const id = e.target.value;
             setActiveId(id);
             onSelect(id);
@@ -72,7 +76,12 @@ export default function BatchAgentCard({
         >
           {sorted.map(m => (
             <option key={m.id} value={m.id}>
-              #{m.batchIndex ?? '?'} {m.status === 'busy' || thinkingMap?.[m.id] ? '· busy' : m.status === 'error' ? '· err' : ''}
+              #{m.batchIndex ?? '?'}{' '}
+              {m.status === 'busy' || thinkingMap?.[m.id]
+                ? '· busy'
+                : m.status === 'error'
+                  ? '· err'
+                  : ''}
             </option>
           ))}
         </select>

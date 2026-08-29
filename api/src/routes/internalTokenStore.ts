@@ -29,7 +29,11 @@ const SCOPE_TYPE = 'user';
  * on the next API restart. No pool means a deliberately DB-less deployment:
  * memory IS the store, so treat it as persisted.
  */
-async function verifyPersisted(provider: OAuthProvider, ownerId: string, accessToken: string): Promise<boolean> {
+async function verifyPersisted(
+  provider: OAuthProvider,
+  ownerId: string,
+  accessToken: string
+): Promise<boolean> {
   const pool = getPool();
   if (!pool) return true;
   try {
@@ -58,27 +62,42 @@ export interface TokenStoreShape {
   } | null;
 }
 
-export function internalTokenRoutes(provider: OAuthProvider, shape: TokenStoreShape): express.Router {
+export function internalTokenRoutes(
+  provider: OAuthProvider,
+  shape: TokenStoreShape
+): express.Router {
   const router = express.Router();
 
   router.get('/:ownerId', async (req, res) => {
     const { ownerId } = req.params;
-    if (!ownerId) { res.status(400).json({ error: 'ownerId required' }); return; }
+    if (!ownerId) {
+      res.status(400).json({ error: 'ownerId required' });
+      return;
+    }
 
     // DB fallback so a sibling deployment that wrote the token a moment ago
     // (or that this replica started before) is still resolvable.
     const record = await fetchOAuthTokenWithDbFallback(provider, SCOPE_TYPE, ownerId);
-    if (!record) { res.status(404).json({ error: 'Token not found' }); return; }
+    if (!record) {
+      res.status(404).json({ error: 'Token not found' });
+      return;
+    }
 
     res.json(shape.serialize(record));
   });
 
   router.post('/:ownerId', async (req, res) => {
     const { ownerId } = req.params;
-    if (!ownerId) { res.status(400).json({ error: 'ownerId required' }); return; }
+    if (!ownerId) {
+      res.status(400).json({ error: 'ownerId required' });
+      return;
+    }
 
     const parsed = shape.parse(req.body || {});
-    if (!parsed) { res.status(400).json({ error: 'accessToken required' }); return; }
+    if (!parsed) {
+      res.status(400).json({ error: 'accessToken required' });
+      return;
+    }
 
     await storeOAuthToken({
       provider,
@@ -101,7 +120,10 @@ export function internalTokenRoutes(provider: OAuthProvider, shape: TokenStoreSh
 
   router.delete('/:ownerId', async (req, res) => {
     const { ownerId } = req.params;
-    if (!ownerId) { res.status(400).json({ error: 'ownerId required' }); return; }
+    if (!ownerId) {
+      res.status(400).json({ error: 'ownerId required' });
+      return;
+    }
 
     await deleteOAuthToken(provider, SCOPE_TYPE, ownerId);
     res.json({ ok: true });

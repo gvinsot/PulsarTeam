@@ -1,5 +1,8 @@
 import express from 'express';
-import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
+import {
+  getGoogleOAuthConfig,
+  GOOGLE_PLUGIN_REDIRECT_PATH,
+} from '../services/googleOAuthConfig.js';
 import { sendOAuthResult } from './oauthHelper.js';
 import { runOAuthCodeExchange } from './oauthCallback.js';
 import { createOAuthStateStore } from './oauthState.js';
@@ -34,7 +37,7 @@ export function generateGoogleOAuthState(
   service: GoogleService,
   username: string,
   agentId: string | null = null,
-  boardId: string | null = null,
+  boardId: string | null = null
 ): string {
   return oauthStates.generate({ service, username, agentId, boardId });
 }
@@ -83,7 +86,7 @@ function googleOAuthResult(
   service: GoogleService | null,
   success: boolean,
   error?: string | null,
-  email?: string | null,
+  email?: string | null
 ) {
   const providerLabel = service ? PROVIDER_LABEL_BY_SERVICE[service] : 'Google';
   // No service → no listener can claim the message, but we still send the gmail
@@ -96,13 +99,16 @@ function googleOAuthResult(
 }
 
 export async function handleGoogleOAuthCallback(req: express.Request, res: express.Response) {
-  return runOAuthCodeExchange<Omit<StateEntry, 'expiresAt'>, NonNullable<ReturnType<typeof getGoogleOAuthConfig>>>(req, res, {
+  return runOAuthCodeExchange<
+    Omit<StateEntry, 'expiresAt'>,
+    NonNullable<ReturnType<typeof getGoogleOAuthConfig>>
+  >(req, res, {
     consumeState: consumeGoogleOAuthState,
     getConfig: getGoogleOAuthConfig,
     notConfiguredError: 'Google OAuth not configured on server',
     tokenUrl: () => 'https://oauth2.googleapis.com/token',
     redirectPath: GOOGLE_PLUGIN_REDIRECT_PATH,
-    logLabel: (state) => state.service,
+    logLabel: state => state.service,
     fetchProfileEmail: (accessToken, state) => fetchUserEmail(state.service, accessToken),
     buildMeta: (_state, email) => ({ email }),
     sendSuccess: (res2, state, email) => googleOAuthResult(res2, state.service, true, null, email),

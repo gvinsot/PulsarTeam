@@ -65,23 +65,32 @@ export function makeTaskDbFake() {
       return clone(t);
     },
     deleteTasksByAgent: async (agentId: string) => {
-      for (const t of rows.values()) if (t.agentId === agentId && !t.deletedAt) t.deletedAt = new Date().toISOString();
+      for (const t of rows.values())
+        if (t.agentId === agentId && !t.deletedAt) t.deletedAt = new Date().toISOString();
     },
     clearTaskExecutionFlags: async () => {},
     clearActionRunningForAgent: async () => {},
     clearAllStaleActionRunning: async () => 0,
 
     // ── single-row reads ──────────────────────────────────────────────────
-    getTaskById: async (id: string) => { const t = rows.get(id); return live(t) ? clone(t) : null; },
+    getTaskById: async (id: string) => {
+      const t = rows.get(id);
+      return live(t) ? clone(t) : null;
+    },
     getTaskByIdPrefix: async (idOrPrefix: string) => {
       const exact = rows.get(idOrPrefix);
       if (live(exact)) return clone(exact);
       const matches = all().filter(t => live(t) && String(t.id).startsWith(idOrPrefix));
       return matches.length === 1 ? clone(matches[0]) : null;
     },
-    getDeletedTaskById: async (id: string) => { const t = rows.get(id); return t?.deletedAt ? clone(t) : null; },
+    getDeletedTaskById: async (id: string) => {
+      const t = rows.get(id);
+      return t?.deletedAt ? clone(t) : null;
+    },
     getActiveTaskForExecutor: async (agentId: string) => {
-      const m = all().filter(t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.startedAt);
+      const m = all().filter(
+        t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.startedAt
+      );
       return m[0] ? clone(m[0]) : null;
     },
     getTaskByActionRunningAgent: async (agentId: string) => {
@@ -90,33 +99,84 @@ export function makeTaskDbFake() {
     },
 
     // ── multi-row reads ───────────────────────────────────────────────────
-    getTasksByAgent: async (agentId: string) => all().filter(t => live(t) && t.agentId === agentId).map(clone),
+    getTasksByAgent: async (agentId: string) =>
+      all()
+        .filter(t => live(t) && t.agentId === agentId)
+        .map(clone),
     getAllTasks: async () => all().filter(live).map(clone),
-    getAllTaskIds: async () => all().filter(live).map(t => t.id),
+    getAllTaskIds: async () =>
+      all()
+        .filter(live)
+        .map(t => t.id),
     getActiveTasksByAgent: async (agentId: string) =>
-      all().filter(t => live(t) && t.agentId === agentId && !INACTIVE.has(t.status)).map(clone),
+      all()
+        .filter(t => live(t) && t.agentId === agentId && !INACTIVE.has(t.status))
+        .map(clone),
     getTasksByAssignee: async (agentId: string) =>
-      all().filter(t => live(t) && isExecutor(t, agentId)).map(clone),
-    getTasksByBoard: async (boardId: string) => all().filter(t => live(t) && t.boardId === boardId).map(clone),
+      all()
+        .filter(t => live(t) && isExecutor(t, agentId))
+        .map(clone),
+    getTasksByBoard: async (boardId: string) =>
+      all()
+        .filter(t => live(t) && t.boardId === boardId)
+        .map(clone),
     getTasksByStatusAndBoard: async (status: any = null, boardId: any = null) =>
-      all().filter(t => live(t) && (!status || t.status === status) && (!boardId || t.boardId === boardId)).map(clone),
-    getDeletedTasks: async () => all().filter(t => t?.deletedAt).map(clone),
-    getRecurringTasks: async () => all().filter(t => live(t) && t.recurrence).map(clone),
+      all()
+        .filter(
+          t => live(t) && (!status || t.status === status) && (!boardId || t.boardId === boardId)
+        )
+        .map(clone),
+    getDeletedTasks: async () =>
+      all()
+        .filter(t => t?.deletedAt)
+        .map(clone),
+    getRecurringTasks: async () =>
+      all()
+        .filter(t => live(t) && t.recurrence)
+        .map(clone),
     hasActiveTask: async (agentId: string, excludeTaskId: any = null) =>
-      all().some(t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId),
+      all().some(
+        t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId
+      ),
     countActiveTasksForAgent: async (agentId: string, excludeTaskId: any = null) =>
-      all().filter(t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId).length,
+      all().filter(
+        t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId
+      ).length,
     getActiveWorkflowTasks: async (env: any = null) =>
-      all().filter(t => live(t) && t.boardId && !t.isManual && !['done', 'error'].includes(t.status)
-        && !t.actionRunning && !['watching', 'stopped'].includes(t.executionStatus)
-        && (!env || (t.environment || 'prod') === env)).map(clone),
+      all()
+        .filter(
+          t =>
+            live(t) &&
+            t.boardId &&
+            !t.isManual &&
+            !['done', 'error'].includes(t.status) &&
+            !t.actionRunning &&
+            !['watching', 'stopped'].includes(t.executionStatus) &&
+            (!env || (t.environment || 'prod') === env)
+        )
+        .map(clone),
     getInterruptedChainTasks: async (env: any = null) =>
-      all().filter(t => live(t) && t.boardId && !t.isManual && (t.actionRunning || t.completedActionIdx != null)
-        && (!env || (t.environment || 'prod') === env)).map(clone),
+      all()
+        .filter(
+          t =>
+            live(t) &&
+            t.boardId &&
+            !t.isManual &&
+            (t.actionRunning || t.completedActionIdx != null) &&
+            (!env || (t.environment || 'prod') === env)
+        )
+        .map(clone),
     getTasksForResume: async (env: any = null) =>
-      all().filter(t => live(t) && t.startedAt && !INACTIVE.has(t.status)
-        && !['watching', 'stopped'].includes(t.executionStatus) && !t.isManual
-        && (!env || (t.environment || 'prod') === env))
+      all()
+        .filter(
+          t =>
+            live(t) &&
+            t.startedAt &&
+            !INACTIVE.has(t.status) &&
+            !['watching', 'stopped'].includes(t.executionStatus) &&
+            !t.isManual &&
+            (!env || (t.environment || 'prod') === env)
+        )
         .map(t => ({ ...clone(t), _agentStatus: 'idle', _agentEnabled: true })),
   };
 

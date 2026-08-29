@@ -1,9 +1,16 @@
 import express from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import {
-  recordTokenUsage, getTokenUsageByAgent, getTokenUsageTimeline,
-  getTokenUsageSummary, getTokenUsageSummaryAsync, getDailyTokenUsage, getSetting, setSetting,
-  getAllLlmConfigs, getPool
+  recordTokenUsage,
+  getTokenUsageByAgent,
+  getTokenUsageTimeline,
+  getTokenUsageSummary,
+  getTokenUsageSummaryAsync,
+  getDailyTokenUsage,
+  getSetting,
+  setSetting,
+  getAllLlmConfigs,
+  getPool,
 } from '../services/database.js';
 import { requireRole } from '../middleware/auth.js';
 import { validateBody, z } from '../lib/validate.js';
@@ -12,10 +19,12 @@ const router = express.Router();
 
 // /alerts does arithmetic + .toFixed() on these fields, so a malformed PUT
 // would otherwise break every subsequent /alerts poll until re-PUT correctly.
-const budgetConfigSchema = z.object({
-  dailyBudget: z.coerce.number().min(0).default(0),
-  alertThreshold: z.coerce.number().min(0).max(100).default(80),
-}).passthrough();
+const budgetConfigSchema = z
+  .object({
+    dailyBudget: z.coerce.number().min(0).default(0),
+    alertThreshold: z.coerce.number().min(0).max(100).default(80),
+  })
+  .passthrough();
 
 /**
  * Build a map from raw (provider, model) pairs to human-friendly config names.
@@ -57,62 +66,93 @@ function budgetUserId(req) {
   return req.user.role === 'admin' ? null : req.user.userId;
 }
 
-router.get('/summary', asyncHandler(async (req, res) => {
-  const days = parseInt(req.query.days as string) || 1;
-  const uid = budgetUserId(req);
-  const summary = uid ? await getTokenUsageSummaryAsync(days, uid) : getTokenUsageSummary(days);
-  const budgetConfig = getSetting('budget_config') || { dailyBudget: 0, alertThreshold: 80 };
-  res.json({ ...summary, budgetConfig });
-}));
+router.get(
+  '/summary',
+  asyncHandler(async (req, res) => {
+    const days = parseInt(req.query.days as string) || 1;
+    const uid = budgetUserId(req);
+    const summary = uid ? await getTokenUsageSummaryAsync(days, uid) : getTokenUsageSummary(days);
+    const budgetConfig = getSetting('budget_config') || { dailyBudget: 0, alertThreshold: 80 };
+    res.json({ ...summary, budgetConfig });
+  })
+);
 
-router.get('/by-agent', asyncHandler(async (req, res) => {
-  const days = parseInt(req.query.days as string) || 30;
-  const [rows, nameMap] = await Promise.all([
-    getTokenUsageByAgent(days, budgetUserId(req)),
-    buildProviderNameMap()
-  ]);
-  res.json(enrichProviderNames(rows, nameMap));
-}));
+router.get(
+  '/by-agent',
+  asyncHandler(async (req, res) => {
+    const days = parseInt(req.query.days as string) || 30;
+    const [rows, nameMap] = await Promise.all([
+      getTokenUsageByAgent(days, budgetUserId(req)),
+      buildProviderNameMap(),
+    ]);
+    res.json(enrichProviderNames(rows, nameMap));
+  })
+);
 
-router.get('/timeline', asyncHandler(async (req, res) => {
-  const days = parseInt(req.query.days as string) || 7;
-  const groupBy = (req.query.groupBy as string) || 'day';
-  res.json(await getTokenUsageTimeline(days, groupBy, budgetUserId(req)));
-}));
+router.get(
+  '/timeline',
+  asyncHandler(async (req, res) => {
+    const days = parseInt(req.query.days as string) || 7;
+    const groupBy = (req.query.groupBy as string) || 'day';
+    res.json(await getTokenUsageTimeline(days, groupBy, budgetUserId(req)));
+  })
+);
 
-router.get('/daily', asyncHandler(async (req, res) => {
-  const days = parseInt(req.query.days as string) || 30;
-  res.json(await getDailyTokenUsage(days, budgetUserId(req)));
-}));
+router.get(
+  '/daily',
+  asyncHandler(async (req, res) => {
+    const days = parseInt(req.query.days as string) || 30;
+    res.json(await getDailyTokenUsage(days, budgetUserId(req)));
+  })
+);
 
-router.get('/config', asyncHandler((req, res) => {
-  const config = getSetting('budget_config') || { dailyBudget: 10.00, alertThreshold: 80 };
-  res.json(config);
-}));
+router.get(
+  '/config',
+  asyncHandler((req, res) => {
+    const config = getSetting('budget_config') || { dailyBudget: 10.0, alertThreshold: 80 };
+    res.json(config);
+  })
+);
 
-router.put('/config', requireRole('admin'), validateBody(budgetConfigSchema), asyncHandler(async (req, res) => {
-  await setSetting('budget_config', req.body);
-  // setSetting swallows DB errors and only updates its cache after a
-  // successful write, so a stale read-back means nothing was persisted.
-  if (getPool() && getSetting('budget_config') !== req.body) {
-    return res.status(500).json({ error: 'Failed to persist budget config' });
-  }
-  res.json({ success: true });
-}));
+router.put(
+  '/config',
+  requireRole('admin'),
+  validateBody(budgetConfigSchema),
+  asyncHandler(async (req, res) => {
+    await setSetting('budget_config', req.body);
+    // setSetting swallows DB errors and only updates its cache after a
+    // successful write, so a stale read-back means nothing was persisted.
+    if (getPool() && getSetting('budget_config') !== req.body) {
+      return res.status(500).json({ error: 'Failed to persist budget config' });
+    }
+    res.json({ success: true });
+  })
+);
 
-router.get('/alerts', asyncHandler(async (req, res) => {
-  const config = getSetting('budget_config') || { dailyBudget: 10.00, alertThreshold: 80 };
-  const uid = budgetUserId(req);
-  const todaySummary = uid ? await getTokenUsageSummaryAsync(1, uid) : getTokenUsageSummary(1);
-  const todayCost = todaySummary?.total_cost || 0;
-  const alerts = [];
-  if (config.dailyBudget > 0) {
-    const pct = (todayCost / config.dailyBudget) * 100;
-    if (pct >= 100) alerts.push({ level: 'critical', message: `Daily budget exceeded: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)` });
-    else if (pct >= config.alertThreshold) alerts.push({ level: 'warning', message: `Approaching daily budget: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)` });
-  }
-  const byAgent = await getTokenUsageByAgent(1, uid);
-  res.json({ alerts, todayCost, dailyBudget: config.dailyBudget, byAgent });
-}));
+router.get(
+  '/alerts',
+  asyncHandler(async (req, res) => {
+    const config = getSetting('budget_config') || { dailyBudget: 10.0, alertThreshold: 80 };
+    const uid = budgetUserId(req);
+    const todaySummary = uid ? await getTokenUsageSummaryAsync(1, uid) : getTokenUsageSummary(1);
+    const todayCost = todaySummary?.total_cost || 0;
+    const alerts = [];
+    if (config.dailyBudget > 0) {
+      const pct = (todayCost / config.dailyBudget) * 100;
+      if (pct >= 100)
+        alerts.push({
+          level: 'critical',
+          message: `Daily budget exceeded: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)`,
+        });
+      else if (pct >= config.alertThreshold)
+        alerts.push({
+          level: 'warning',
+          message: `Approaching daily budget: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)`,
+        });
+    }
+    const byAgent = await getTokenUsageByAgent(1, uid);
+    res.json({ alerts, todayCost, dailyBudget: config.dailyBudget, byAgent });
+  })
+);
 
 export default router;

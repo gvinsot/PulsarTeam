@@ -21,10 +21,15 @@ const PROVIDER_TYPES = Object.keys(RUNNER_SERVICES) as ProviderType[];
 
 function _normalizeProviderType(t: ProviderTypeInput | string | undefined | null): ProviderType {
   if (t === 'coder') return 'claudecode';
-  return (PROVIDER_TYPES as readonly string[]).includes(t as string) ? (t as ProviderType) : 'sandbox';
+  return (PROVIDER_TYPES as readonly string[]).includes(t as string)
+    ? (t as ProviderType)
+    : 'sandbox';
 }
 
-interface RunnerOpts { baseUrl?: string; apiKey?: string }
+interface RunnerOpts {
+  baseUrl?: string;
+  apiKey?: string;
+}
 
 interface ExecutionManagerOptions {
   resolveProvider?: (agentId: string) => ProviderTypeInput;
@@ -53,12 +58,13 @@ export class ExecutionManager {
 
   constructor(options: ExecutionManagerOptions = {}) {
     const sharedKey = readSecret('CODER_API_KEY');
-    const make = (type: ProviderType, opts?: RunnerOpts) => new RunnerExecutionProvider({
-      // runnerServiceUrl already carries the legacy CODER_SERVICE_URL fallback
-      // for the claudecode runner.
-      baseUrl: opts?.baseUrl || runnerServiceUrl(type),
-      apiKey: opts?.apiKey || sharedKey,
-    });
+    const make = (type: ProviderType, opts?: RunnerOpts) =>
+      new RunnerExecutionProvider({
+        // runnerServiceUrl already carries the legacy CODER_SERVICE_URL fallback
+        // for the claudecode runner.
+        baseUrl: opts?.baseUrl || runnerServiceUrl(type),
+        apiKey: opts?.apiKey || sharedKey,
+      });
 
     const perTypeOpts: Partial<Record<ProviderType, RunnerOpts | undefined>> = {
       claudecode: options.claudecodeOptions || options.coderOptions,
@@ -108,8 +114,12 @@ export class ExecutionManager {
     const normalized = _normalizeProviderType(providerType);
     const previous = this._agentProviders.get(agentId);
     if (previous && previous !== normalized) {
-      console.log(`🔄 [Execution] Agent ${agentId.slice(0, 8)} switching provider: ${previous} → ${normalized}`);
-      this._getProvider(previous).destroySandbox(agentId).catch(() => {});
+      console.log(
+        `🔄 [Execution] Agent ${agentId.slice(0, 8)} switching provider: ${previous} → ${normalized}`
+      );
+      this._getProvider(previous)
+        .destroySandbox(agentId)
+        .catch(() => {});
     }
     this._agentProviders.set(agentId, normalized);
     if (meta.ownerId) {
@@ -132,7 +142,10 @@ export class ExecutionManager {
   }
 
   /** Set (or clear) the agent's task-scoped secondary repos, cloned alongside the primary. */
-  setSecondaryRepos(agentId: string, repos: Array<{ provider?: string; fullName: string }> | null): void {
+  setSecondaryRepos(
+    agentId: string,
+    repos: Array<{ provider?: string; fullName: string }> | null
+  ): void {
     this._providerFor(agentId).setSecondaryRepos(agentId, repos);
   }
 
@@ -165,7 +178,7 @@ export class ExecutionManager {
     agentId: string,
     project: string | null = null,
     gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null,
+    gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     return this._providerFor(agentId).ensureProject(agentId, project, gitUrl, gitCredentials);
   }
@@ -174,7 +187,7 @@ export class ExecutionManager {
     agentId: string,
     newProject: string,
     gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null,
+    gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     return this._providerFor(agentId).switchProject(agentId, newProject, gitUrl, gitCredentials);
   }
@@ -186,9 +199,7 @@ export class ExecutionManager {
   }
 
   async destroyAll(): Promise<void> {
-    await Promise.all(
-      [...this.providers.values()].map(provider => provider.destroyAll())
-    );
+    await Promise.all([...this.providers.values()].map(provider => provider.destroyAll()));
     this._agentProviders.clear();
   }
 
@@ -211,18 +222,22 @@ export class ExecutionManager {
    */
   async closeCliTerminalSessions(agentId: string): Promise<boolean> {
     // Every runner except 'sandbox' is a terminal-capable CLI runner.
-    const providers = PROVIDER_TYPES
-      .filter(type => type !== 'sandbox')
-      .map(type => this._getProvider(type));
+    const providers = PROVIDER_TYPES.filter(type => type !== 'sandbox').map(type =>
+      this._getProvider(type)
+    );
     const results = await Promise.allSettled(
       providers.map(provider => provider.closeTerminalSession(agentId))
     );
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) return true;
     }
-    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    const firstError = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected'
+    );
     if (firstError) {
-      console.warn(`⚠️ [Execution] closeCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`);
+      console.warn(
+        `⚠️ [Execution] closeCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`
+      );
     }
     return false;
   }
@@ -233,23 +248,31 @@ export class ExecutionManager {
    * agent to its runner, so fan out like closeCliTerminalSessions does.
    */
   async interruptCliTerminalSessions(agentId: string): Promise<boolean> {
-    const providers = PROVIDER_TYPES
-      .filter(type => type !== 'sandbox')
-      .map(type => this._getProvider(type));
+    const providers = PROVIDER_TYPES.filter(type => type !== 'sandbox').map(type =>
+      this._getProvider(type)
+    );
     const results = await Promise.allSettled(
       providers.map(provider => provider.interruptTerminalSession(agentId))
     );
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) return true;
     }
-    const firstError = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    const firstError = results.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected'
+    );
     if (firstError) {
-      console.warn(`⚠️ [Execution] interruptCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`);
+      console.warn(
+        `⚠️ [Execution] interruptCliTerminalSessions failed for ${agentId.slice(0, 8)}: ${firstError.reason?.message || firstError.reason}`
+      );
     }
     return false;
   }
 
-  async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
+  async sendTerminalInput(
+    agentId: string,
+    input: string,
+    options: { submit?: boolean } = {}
+  ): Promise<boolean> {
     return this._providerFor(agentId).sendTerminalInput(agentId, input, options);
   }
 
@@ -294,14 +317,22 @@ export class ExecutionManager {
     return this._providerFor(agentId).searchFiles(agentId, pattern, query);
   }
 
-  async exec(agentId: string, command: string, options: { cwd?: string; timeout?: number } = {}): Promise<{ stdout: string; stderr: string }> {
+  async exec(
+    agentId: string,
+    command: string,
+    options: { cwd?: string; timeout?: number } = {}
+  ): Promise<{ stdout: string; stderr: string }> {
     return this._providerFor(agentId).exec(agentId, command, options);
   }
 
   // ── Backward compatibility aliases ────────────────────────────────────
 
   /** @deprecated Use ensureProject() */
-  async ensureSandbox(agentId: string, project: string | null = null, gitUrl: string | null = null): Promise<void> {
+  async ensureSandbox(
+    agentId: string,
+    project: string | null = null,
+    gitUrl: string | null = null
+  ): Promise<void> {
     return this.ensureProject(agentId, project, gitUrl);
   }
 

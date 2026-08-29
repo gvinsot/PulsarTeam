@@ -4,7 +4,7 @@ export interface ToolHookRule {
   enabled: boolean;
   pattern: string;
   action: 'block' | 'warn';
-  tools: string[];  // e.g. ['run_command', 'mcp_call'] or ['*'] for all
+  tools: string[]; // e.g. ['run_command', 'mcp_call'] or ['*'] for all
   description?: string;
 }
 
@@ -22,7 +22,7 @@ export interface HookCheckResult {
 export function checkToolHooks(
   config: ToolHooksConfig | undefined,
   toolName: string,
-  args: string[],
+  args: string[]
 ): HookCheckResult {
   if (!config?.enabled || !config.rules?.length) {
     return { allowed: true };

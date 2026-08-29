@@ -29,7 +29,13 @@ import { externalVoiceRoutes } from './routes/externalVoice.js';
 import { leaderToolsRoutes } from './routes/leaderTools.js';
 import { BUILTIN_SKILLS } from './data/skills.js';
 import { readSecret, validateProductionSecrets } from './secrets.js';
-import { buildCorsOptions, getCorsOrigins, isOriginAllowed, logRejectedOrigin, validateCorsConfig } from './middleware/corsConfig.js';
+import {
+  buildCorsOptions,
+  getCorsOrigins,
+  isOriginAllowed,
+  logRejectedOrigin,
+  validateCorsConfig,
+} from './middleware/corsConfig.js';
 import { cookieSecurity } from './middleware/cookieSecurity.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
 import { initDatabase, isDatabaseConnected, getPool } from './services/database.js';
@@ -102,23 +108,29 @@ const contentSecurityPolicy = [
   "connect-src 'self' wss: ws: https://api.openai.com https://accounts.google.com https://oauth2.googleapis.com https://github.com https://api.github.com https://fonts.googleapis.com https://fonts.gstatic.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "object-src 'none'",
-  "frame-ancestors 'none'"
+  "frame-ancestors 'none'",
 ].join('; ');
 
 const io = new Server(httpServer, {
-  cors: buildCorsOptions(corsOrigins)
+  cors: buildCorsOptions(corsOrigins),
 });
 
 const skillManager = new SkillManager();
 const executionManager = new ExecutionManager({
   claudecodeOptions: {
     baseUrl: process.env.CLAUDECODE_SERVICE_URL || 'http://claudecode-service:8000',
-    apiKey: readSecret('CODER_API_KEY')
-  }
+    apiKey: readSecret('CODER_API_KEY'),
+  },
 });
 const mcpManager = new MCPManager();
 const codeIndexService = new CodeIndexService();
-const agentManager = new AgentManager(io, skillManager, executionManager, mcpManager, codeIndexService);
+const agentManager = new AgentManager(
+  io,
+  skillManager,
+  executionManager,
+  mcpManager,
+  codeIndexService
+);
 setAgentManager(agentManager);
 app.set('io', io);
 app.set('agentManager', agentManager);
@@ -171,7 +183,7 @@ const apiLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' }
+  message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', apiLimiter);
 
@@ -226,9 +238,21 @@ app.use('/api/internal/claude-tokens', authenticateCoderApiKey, internalClaudeTo
 app.use('/api/internal/codex-tokens', authenticateCoderApiKey, internalCodexTokenRoutes());
 app.use('/api/internal/runner-llm', authenticateCoderApiKey, internalRunnerLlmRoutes(agentManager));
 app.use('/api/internal/runner-config', authenticateCoderApiKey, internalRunnerConfigsRoutes());
-app.use('/api/internal/runner-mcp', authenticateCoderApiKey, internalRunnerMcpRoutes(agentManager, skillManager, mcpManager));
-app.use('/api/internal/runner-instructions', authenticateCoderApiKey, internalRunnerInstructionsRoutes(agentManager));
-app.use('/api/internal/token-usage', authenticateCoderApiKey, internalTokenUsageRoutes(agentManager));
+app.use(
+  '/api/internal/runner-mcp',
+  authenticateCoderApiKey,
+  internalRunnerMcpRoutes(agentManager, skillManager, mcpManager)
+);
+app.use(
+  '/api/internal/runner-instructions',
+  authenticateCoderApiKey,
+  internalRunnerInstructionsRoutes(agentManager)
+);
+app.use(
+  '/api/internal/token-usage',
+  authenticateCoderApiKey,
+  internalTokenUsageRoutes(agentManager)
+);
 app.use('/api/codex-auth', authenticateToken, codexAuthRoutes());
 
 // Internal MCP endpoints (used by the MCP client for tool discovery and calls)
@@ -259,7 +283,10 @@ const mcpMounts: Array<[string, (req: any, res: any) => any]> = [
   ['/api/swarm-api/mcp', createSwarmApiMcpHandler(agentManager)],
   // Pulsar Gateway MCP — the single always-on MCP injected into CLI runners
   // (task control + dynamic discovery/proxy of every other available MCP).
-  ['/api/pulsar-gateway/mcp', createPulsarGatewayMcpHandler(agentManager, mcpManager, skillManager)],
+  [
+    '/api/pulsar-gateway/mcp',
+    createPulsarGatewayMcpHandler(agentManager, mcpManager, skillManager),
+  ],
 ];
 for (const [path, handler] of mcpMounts) {
   app.all(path, authenticateToken, handler);
@@ -308,7 +335,7 @@ app.get('/api/health/details', authenticateToken, (req, res) => {
       active: Object.keys(projectCounts).length,
       distribution: projectCounts,
       unassigned,
-    }
+    },
   });
 });
 
@@ -363,13 +390,13 @@ async function start() {
   await ensureApiKeysTable();
   await mcpManager.loadFromDatabase();
   await mcpManager.seedDefaults(BUILTIN_MCP_SERVERS);
-  skillManager.setMcpResolver((id) => mcpManager.getById(id));
+  skillManager.setMcpResolver(id => mcpManager.getById(id));
   await skillManager.loadFromDatabase();
   await skillManager.seedDefaults(BUILTIN_SKILLS);
   await agentManager.loadFromDatabase();
   agentManager.startTaskLoop();
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>(resolve => {
     httpServer.listen(PORT, () => {
       console.log(`\\n🐝 Agent Swarm Server running on http://localhost:${PORT}`);
       console.log('   WebSocket ready for connections');
@@ -417,10 +444,10 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 // Prevent uncaught errors from MCP transports or other async sources from crashing the service
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', reason => {
   console.error('⚠️ [Process] Unhandled promise rejection (service continues):', reason);
 });
-process.on('uncaughtException', (err) => {
+process.on('uncaughtException', err => {
   console.error('💥 [Process] Uncaught exception (service continues):', err);
 });
 

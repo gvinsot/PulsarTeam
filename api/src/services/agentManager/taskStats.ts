@@ -3,20 +3,27 @@ import { getAllTasks } from '../database.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const taskStatsMethods = {
-
-  async _collectTasks(this: any, projectFilter: string | null = null, allowedBoardIds: Set<string> | null = null): Promise<any[]> {
+  async _collectTasks(
+    this: any,
+    projectFilter: string | null = null,
+    allowedBoardIds: Set<string> | null = null
+  ): Promise<any[]> {
     // Group every live task by owning agent (board-level, ownerless tasks are
     // excluded from stats — matching the prior agent-keyed store).
     const byAgent = new Map<string, any[]>();
     for (const t of await getAllTasks()) {
       if (!t.agentId) continue;
       let list = byAgent.get(t.agentId);
-      if (!list) { list = []; byAgent.set(t.agentId, list); }
+      if (!list) {
+        list = [];
+        byAgent.set(t.agentId, list);
+      }
       list.push(t);
     }
     const tasks: any[] = [];
     for (const agent of this.agents.values()) {
-      if (allowedBoardIds && (agent as any).boardId && !allowedBoardIds.has((agent as any).boardId)) continue;
+      if (allowedBoardIds && (agent as any).boardId && !allowedBoardIds.has((agent as any).boardId))
+        continue;
       const tasks_ = byAgent.get((agent as any).id) || [];
       if (!tasks_.length) continue;
       for (const t of tasks_) {
@@ -29,7 +36,11 @@ export const taskStatsMethods = {
     return tasks;
   },
 
-  async getTaskStats(this: any, projectFilter: string | null = null, allowedBoardIds: Set<string> | null = null): Promise<any> {
+  async getTaskStats(
+    this: any,
+    projectFilter: string | null = null,
+    allowedBoardIds: Set<string> | null = null
+  ): Promise<any> {
     const tasks = await this._collectTasks(projectFilter, allowedBoardIds);
     const total = tasks.length;
     const byType: Record<string, number> = {};
@@ -44,7 +55,9 @@ export const taskStatsMethods = {
       byStatus[t.status] = (byStatus[t.status] || 0) + 1;
 
       if (t.status === 'done' && t.history?.length) {
-        const doneEntry = [...t.history].reverse().find((h: any) => h.status === 'done' || h.to === 'done');
+        const doneEntry = [...t.history]
+          .reverse()
+          .find((h: any) => h.status === 'done' || h.to === 'done');
         if (doneEntry) {
           const created = new Date(t.createdAt).getTime();
           const resolved = new Date(doneEntry.at).getTime();
@@ -71,7 +84,7 @@ export const taskStatsMethods = {
       }
     }
 
-    const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+    const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
     const median = (arr: number[]) => {
       if (!arr.length) return 0;
       const sorted = [...arr].sort((a, b) => a - b);
@@ -90,7 +103,11 @@ export const taskStatsMethods = {
 
     const resolutionByTypeStats: Record<string, any> = {};
     for (const [typ, arr] of Object.entries(resolutionByType)) {
-      resolutionByTypeStats[typ] = { count: arr.length, avg: Math.round(avg(arr)), median: Math.round(median(arr)) };
+      resolutionByTypeStats[typ] = {
+        count: arr.length,
+        avg: Math.round(avg(arr)),
+        median: Math.round(median(arr)),
+      };
     }
 
     return {
@@ -107,11 +124,16 @@ export const taskStatsMethods = {
     };
   },
 
-  async getTaskTimeSeries(this: any, projectFilter: string | null = null, days: number = 30, allowedBoardIds: Set<string> | null = null): Promise<any> {
+  async getTaskTimeSeries(
+    this: any,
+    projectFilter: string | null = null,
+    days: number = 30,
+    allowedBoardIds: Set<string> | null = null
+  ): Promise<any> {
     const tasks = await this._collectTasks(projectFilter, allowedBoardIds);
     const now = new Date();
     const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-    const toDay = (iso: string | null) => iso ? new Date(iso).toISOString().slice(0, 10) : null;
+    const toDay = (iso: string | null) => (iso ? new Date(iso).toISOString().slice(0, 10) : null);
 
     const createdByDay: Record<string, number> = {};
     const resolvedByDay: Record<string, number> = {};
@@ -147,7 +169,7 @@ export const taskStatsMethods = {
       allDays.push(d.toISOString().slice(0, 10));
     }
 
-    const avg = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+    const avg = (arr: number[]) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
 
     const createdVsResolved = allDays.map(day => ({
       date: day,
@@ -179,13 +201,26 @@ export const taskStatsMethods = {
     return { createdVsResolved, resolutionTimeEvolution, openOverTime };
   },
 
-  async getAgentTimeSeries(this: any, projectFilter: string | null = null, days: number = 30, allowedBoardIds: Set<string> | null = null): Promise<any> {
+  async getAgentTimeSeries(
+    this: any,
+    projectFilter: string | null = null,
+    days: number = 30,
+    allowedBoardIds: Set<string> | null = null
+  ): Promise<any> {
     const tasks = await this._collectTasks(projectFilter, allowedBoardIds);
     const now = new Date();
     const cutoff = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
     const toDay = (d: Date) => d.toISOString().slice(0, 10);
 
-    const ACTIVE_STATES = new Set(['pending', 'in_progress', 'code', 'build', 'test', 'deploy', 'review']);
+    const ACTIVE_STATES = new Set([
+      'pending',
+      'in_progress',
+      'code',
+      'build',
+      'test',
+      'deploy',
+      'review',
+    ]);
 
     // Build a map: agentId -> agentName
     const agentNames: Record<string, string> = {};

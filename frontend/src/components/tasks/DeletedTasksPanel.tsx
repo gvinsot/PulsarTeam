@@ -1,6 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Trash2, X, Loader2, RotateCcw, Archive, ChevronLeft, ChevronRight } from 'lucide-react';
-import { getDeletedTasks, restoreTask as restoreTaskApi, hardDeleteTask as hardDeleteTaskApi } from '../../api';
+import {
+  getDeletedTasks,
+  restoreTask as restoreTaskApi,
+  hardDeleteTask as hardDeleteTaskApi,
+} from '../../api';
 
 const PAGE_SIZE = 20;
 
@@ -35,10 +39,12 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
       }
     }
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const handleRestore = async (taskId) => {
+  const handleRestore = async taskId => {
     setActionLoading(taskId);
     try {
       await restoreTaskApi(taskId);
@@ -51,7 +57,7 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
     }
   };
 
-  const handleHardDelete = async (taskId) => {
+  const handleHardDelete = async taskId => {
     setActionLoading(taskId);
     try {
       await hardDeleteTaskApi(taskId);
@@ -65,9 +71,14 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-dark-900 border border-dark-700 rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
-           onClick={e => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="bg-dark-900 border border-dark-700 rounded-xl w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-dark-700">
           <div className="flex items-center gap-2">
@@ -75,7 +86,10 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
             <h2 className="text-sm font-semibold text-dark-200">Deleted Tasks</h2>
             <span className="text-xs text-dark-500">({deletedTasks.length})</span>
           </div>
-          <button onClick={onClose} className="p-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors">
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-700 transition-colors"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -94,10 +108,14 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
           ) : (
             <div className="space-y-2">
               {pagedTasks.map(task => (
-                <div key={task.id}
-                  className="flex items-center justify-between px-4 py-3 bg-dark-800 border border-dark-700 rounded-lg hover:border-dark-600 transition-colors">
+                <div
+                  key={task.id}
+                  className="flex items-center justify-between px-4 py-3 bg-dark-800 border border-dark-700 rounded-lg hover:border-dark-600 transition-colors"
+                >
                   <div className="flex-1 min-w-0 mr-4">
-                    <p className="text-sm text-dark-200 truncate">{task.text || task.title || 'Untitled'}</p>
+                    <p className="text-sm text-dark-200 truncate">
+                      {task.text || task.title || 'Untitled'}
+                    </p>
                     <div className="flex items-center gap-3 mt-1">
                       {task.project && (
                         <span className="text-xs text-indigo-400/70">{task.project}</span>
@@ -138,7 +156,9 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
                         >
                           {actionLoading === task.id ? (
                             <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : 'Confirm'}
+                          ) : (
+                            'Confirm'
+                          )}
                         </button>
                         <button
                           onClick={() => setConfirmDelete(null)}

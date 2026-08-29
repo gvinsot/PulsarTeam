@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveRunnerService, runnerServiceUrlFor, runnerServiceUrl } from '../execution/runnerRegistry.js';
+import {
+  resolveRunnerService,
+  runnerServiceUrlFor,
+  runnerServiceUrl,
+} from '../execution/runnerRegistry.js';
 import { isCliRunner, CLI_RUNNER_IDS } from '../runners.js';
 
 // ─── CLI-runner single-source-of-truth: alias + casing resolution ───────────
@@ -41,8 +45,10 @@ test('runnerServiceUrlFor resolves the coder alias and honours CODER_SERVICE_URL
     assert.equal(runnerServiceUrlFor('coder'), 'http://legacy-coder:9000');
     assert.equal(runnerServiceUrlFor('coder'), runnerServiceUrl('claudecode'));
   } finally {
-    if (prev === undefined) delete process.env.CODER_SERVICE_URL; else process.env.CODER_SERVICE_URL = prev;
-    if (prevCc === undefined) delete process.env.CLAUDECODE_SERVICE_URL; else process.env.CLAUDECODE_SERVICE_URL = prevCc;
+    if (prev === undefined) delete process.env.CODER_SERVICE_URL;
+    else process.env.CODER_SERVICE_URL = prev;
+    if (prevCc === undefined) delete process.env.CLAUDECODE_SERVICE_URL;
+    else process.env.CLAUDECODE_SERVICE_URL = prevCc;
   }
 });
 

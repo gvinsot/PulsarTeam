@@ -13,21 +13,21 @@ export interface RunnerConfigFiles {
 export async function getRunnerConfig(
   runner: string,
   scopeType: string,
-  scopeId: string,
+  scopeId: string
 ): Promise<{ files: RunnerConfigFiles } | null> {
   const pool = getPool();
   if (!pool) return null;
   try {
     const result = await pool.query(
       'SELECT data FROM runner_configs WHERE runner = $1 AND scope_type = $2 AND scope_id = $3',
-      [runner, scopeType, scopeId],
+      [runner, scopeType, scopeId]
     );
     const data = result.rows[0]?.data;
     if (!data) return null;
     const dec = decryptFields(data, SECRET_FIELDS);
     let files: RunnerConfigFiles = {};
     try {
-      files = typeof dec.files === 'string' ? JSON.parse(dec.files) : (dec.files || {});
+      files = typeof dec.files === 'string' ? JSON.parse(dec.files) : dec.files || {};
     } catch {
       files = {};
     }
@@ -43,7 +43,7 @@ export async function saveRunnerConfig(
   runner: string,
   scopeType: string,
   scopeId: string,
-  files: RunnerConfigFiles,
+  files: RunnerConfigFiles
 ): Promise<void> {
   const pool = getPool();
   if (!pool) return;
@@ -53,7 +53,7 @@ export async function saveRunnerConfig(
       `INSERT INTO runner_configs (runner, scope_type, scope_id, data, updated_at)
        VALUES ($1, $2, $3, $4, NOW())
        ON CONFLICT (runner, scope_type, scope_id) DO UPDATE SET data = $4, updated_at = NOW()`,
-      [runner, scopeType, scopeId, JSON.stringify(blob)],
+      [runner, scopeType, scopeId, JSON.stringify(blob)]
     );
   } catch (err: any) {
     console.error('Failed to save runner config:', err.message);
@@ -63,14 +63,14 @@ export async function saveRunnerConfig(
 export async function deleteRunnerConfig(
   runner: string,
   scopeType: string,
-  scopeId: string,
+  scopeId: string
 ): Promise<void> {
   const pool = getPool();
   if (!pool) return;
   try {
     await pool.query(
       'DELETE FROM runner_configs WHERE runner = $1 AND scope_type = $2 AND scope_id = $3',
-      [runner, scopeType, scopeId],
+      [runner, scopeType, scopeId]
     );
   } catch (err: any) {
     console.error('Failed to delete runner config:', err.message);

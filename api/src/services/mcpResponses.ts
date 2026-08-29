@@ -38,25 +38,25 @@ export const taskMutationSharedShape = {
     .string()
     .optional()
     .describe(
-      'Target column — workflow column label preferred (e.g. "In Review", "Done"); the column id is also accepted.',
+      'Target column — workflow column label preferred (e.g. "In Review", "Done"); the column id is also accepted.'
     ),
   comment: z
     .string()
     .optional()
     .describe(
-      'Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished (commit and push your code first).',
+      'Completion summary appended onto the task card so the requester sees what was done. Providing it marks the task finished (commit and push your code first).'
     ),
   commits: z
     .string()
     .optional()
     .describe(
-      'Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.',
+      'Optional already-pushed commits to link, comma-separated "hash:message, hash:message". Pushed commits are auto-linked even if omitted.'
     ),
   done: z
     .boolean()
     .optional()
     .describe(
-      'Set true to signal the task is finished when you have no status change or comment to add (rarely needed — a status move or comment already finishes it).',
+      'Set true to signal the task is finished when you have no status change or comment to add (rarely needed — a status move or comment already finishes it).'
     ),
   repo_full_name: z
     .string()

@@ -8,7 +8,8 @@
 import { spawn } from 'child_process';
 
 function openInBrowser(url: string): void {
-  const cmd = process.platform === 'win32' ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const cmd =
+    process.platform === 'win32' ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
   const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
   spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref();
   console.log(`🌐 Opened ${url} in the default browser (native webview unavailable).`);

@@ -71,8 +71,7 @@ mock.module('../../middleware/auth.js', {
 // factories authorizeProjectAccess/authorizeBoardAccess — all must be stubbed
 // on the authz module. The middleware stubs deny access (403) so the isolation
 // tests observe the same "no leakage" behavior the real checks enforce.
-const denyMiddleware = (_req: any, res: any) =>
-  res.status(403).json({ error: 'Access denied' });
+const denyMiddleware = (_req: any, res: any) => res.status(403).json({ error: 'Access denied' });
 mock.module('../../middleware/authz.js', {
   namedExports: {
     checkBoardAccess: async () => ({ ok: false, status: 403, error: 'Access denied' }),
@@ -113,14 +112,16 @@ async function request(router: any, path: string) {
 test('GET /projects lists and enriches only projects accessible to the caller', async () => {
   const response = await request(projectRoutes(), '/');
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), [{
-    id: 'proj-A',
-    name: 'Project A',
-    owner_id: 'user-A',
-    boardCount: 0,
-    repoCount: 0,
-    storageCount: 0,
-  }]);
+  assert.deepEqual(await response.json(), [
+    {
+      id: 'proj-A',
+      name: 'Project A',
+      owner_id: 'user-A',
+      boardCount: 0,
+      repoCount: 0,
+      storageCount: 0,
+    },
+  ]);
   assert.deepEqual(projectListCalls, [['user-A', 'basic']]);
   assert.deepEqual(projectResourceCalls.boards, [['proj-A', 'user-A', 'basic']]);
   assert.deepEqual(projectResourceCalls.repos, [['proj-A', 'user-A', 'basic']]);

@@ -28,11 +28,14 @@ function computeReminderConfig(settings: Settings, envInterval: string | undefin
 }
 
 test('default values: 10 min interval, 12 max reminders, 2 min cooldown', () => {
-  const config = computeReminderConfig({
-    taskReminderIntervalMinutes: '10',
-    taskReminderMaxCount: '12',
-    taskReminderCooldownMinutes: '2',
-  }, undefined);
+  const config = computeReminderConfig(
+    {
+      taskReminderIntervalMinutes: '10',
+      taskReminderMaxCount: '12',
+      taskReminderCooldownMinutes: '2',
+    },
+    undefined
+  );
 
   assert.equal(config.intervalMinutes, 10);
   assert.equal(config.intervalMs, 600000);
@@ -42,22 +45,28 @@ test('default values: 10 min interval, 12 max reminders, 2 min cooldown', () => 
 });
 
 test('env var overrides DB setting for interval', () => {
-  const config = computeReminderConfig({
-    taskReminderIntervalMinutes: '10',
-    taskReminderMaxCount: '12',
-    taskReminderCooldownMinutes: '2',
-  }, '15');
+  const config = computeReminderConfig(
+    {
+      taskReminderIntervalMinutes: '10',
+      taskReminderMaxCount: '12',
+      taskReminderCooldownMinutes: '2',
+    },
+    '15'
+  );
 
   assert.equal(config.intervalMinutes, 15);
   assert.equal(config.intervalMs, 900000);
 });
 
 test('DB setting is used when env var is not set', () => {
-  const config = computeReminderConfig({
-    taskReminderIntervalMinutes: '20',
-    taskReminderMaxCount: '5',
-    taskReminderCooldownMinutes: '3',
-  }, undefined);
+  const config = computeReminderConfig(
+    {
+      taskReminderIntervalMinutes: '20',
+      taskReminderMaxCount: '5',
+      taskReminderCooldownMinutes: '3',
+    },
+    undefined
+  );
 
   assert.equal(config.intervalMinutes, 20);
   assert.equal(config.maxReminders, 5);
@@ -65,11 +74,14 @@ test('DB setting is used when env var is not set', () => {
 });
 
 test('minimum values are enforced', () => {
-  const config = computeReminderConfig({
-    taskReminderIntervalMinutes: '0',
-    taskReminderMaxCount: '0',
-    taskReminderCooldownMinutes: '-1',
-  }, undefined);
+  const config = computeReminderConfig(
+    {
+      taskReminderIntervalMinutes: '0',
+      taskReminderMaxCount: '0',
+      taskReminderCooldownMinutes: '-1',
+    },
+    undefined
+  );
 
   assert.equal(config.intervalMinutes, 1);
   assert.equal(config.maxReminders, 1);
@@ -92,17 +104,23 @@ test('env var with value 1 sets minimum interval', () => {
 });
 
 test('interval was changed from old 5-minute default to 10', () => {
-  const config = computeReminderConfig({
-    taskReminderIntervalMinutes: '10',
-  }, undefined);
+  const config = computeReminderConfig(
+    {
+      taskReminderIntervalMinutes: '10',
+    },
+    undefined
+  );
   assert.equal(config.intervalMinutes, 10);
   assert.equal(config.intervalMs, 600000);
   assert.notEqual(config.intervalMs, 300000);
 });
 
 test('cooldown prevents reminders when set to 0', () => {
-  const config = computeReminderConfig({
-    taskReminderCooldownMinutes: '0',
-  }, undefined);
+  const config = computeReminderConfig(
+    {
+      taskReminderCooldownMinutes: '0',
+    },
+    undefined
+  );
   assert.equal(config.cooldownMs, 0);
 });

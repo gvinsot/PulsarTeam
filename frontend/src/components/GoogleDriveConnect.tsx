@@ -14,13 +14,16 @@ const GDRIVE_CONFIG: OAuthProviderConfig = {
   messageType: 'gdrive-oauth-callback',
   buttonClass: 'bg-blue-500 hover:bg-blue-600',
   connectLabel: 'Connect with Google',
-  badgeDetail: (status) => status.email || null,
+  badgeDetail: status => status.email || null,
   configuredHint: (
     <>
-      Set <code className="text-dark-400">GOOGLE_CLIENT_ID</code> and <code className="text-dark-400">GOOGLE_CLIENT_SECRET</code> — one OAuth client serves Gmail, Drive, and Google login. Enable the Drive API in the Google Cloud Console and register the redirect URIs there.
+      Set <code className="text-dark-400">GOOGLE_CLIENT_ID</code> and{' '}
+      <code className="text-dark-400">GOOGLE_CLIENT_SECRET</code> — one OAuth client serves Gmail,
+      Drive, and Google login. Enable the Drive API in the Google Cloud Console and register the
+      redirect URIs there.
     </>
   ),
-  connectHint: (agentId) =>
+  connectHint: agentId =>
     agentId
       ? 'Click "Connect with Google" to authorize this agent to access Google Drive.'
       : 'Click "Connect with Google" to authorize Google Drive access. A popup will open for Google login.',
@@ -32,5 +35,12 @@ const GDRIVE_CONFIG: OAuthProviderConfig = {
 };
 
 export default function GoogleDriveConnect({ agentId, boardId, onStatusChange }) {
-  return <OAuthConnectWidget config={GDRIVE_CONFIG} agentId={agentId} boardId={boardId} onStatusChange={onStatusChange} />;
+  return (
+    <OAuthConnectWidget
+      config={GDRIVE_CONFIG}
+      agentId={agentId}
+      boardId={boardId}
+      onStatusChange={onStatusChange}
+    />
+  );
 }

@@ -1,5 +1,8 @@
 import { resolveAccessToken } from '../services/database.js';
-import { getMicrosoftOAuthConfig, MICROSOFT_PLUGIN_REDIRECT_PATH } from '../services/microsoftOAuthConfig.js';
+import {
+  getMicrosoftOAuthConfig,
+  MICROSOFT_PLUGIN_REDIRECT_PATH,
+} from '../services/microsoftOAuthConfig.js';
 import type { MicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
 import { generateMicrosoftOAuthState } from './microsoftOAuth.js';
 import { makeRefresh, oauthProviderRoutes } from './oauthProviderRoutes.js';
@@ -23,10 +26,13 @@ const outlookSpec: OAuthProviderSpec<MicrosoftOAuthConfig> = {
   provider: 'outlook',
   label: 'Outlook',
   getConfig: getMicrosoftOAuthConfig,
-  notConfiguredError: 'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.',
+  notConfiguredError:
+    'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.',
   refreshNotConfiguredError: 'Outlook not configured',
-  refreshTokenUrl: (_record, config) => `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`,
-  generateState: (username, agentId, boardId) => generateMicrosoftOAuthState('outlook', username, agentId, boardId),
+  refreshTokenUrl: (_record, config) =>
+    `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`,
+  generateState: (username, agentId, boardId) =>
+    generateMicrosoftOAuthState('outlook', username, agentId, boardId),
   buildAuthUrl: (req, config, state) => {
     // Microsoft Graph Mail scopes. offline_access is required for refresh tokens.
     const scopes = [

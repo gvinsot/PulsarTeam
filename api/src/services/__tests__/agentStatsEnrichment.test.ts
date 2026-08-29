@@ -45,11 +45,11 @@ const makeCtx = (agents: Map<string, any> = new Map()) => {
 test('_countTasks buckets by status with active = not done/backlog/error', () => {
   const ctx = makeCtx();
   const counts = ctx._countTasks([
-    { status: 'execute' },  // active
-    { status: 'verify' },   // active
-    { status: 'backlog' },  // waiting
-    { status: 'done' },     // done
-    { status: 'error' },    // error
+    { status: 'execute' }, // active
+    { status: 'verify' }, // active
+    { status: 'backlog' }, // waiting
+    { status: 'done' }, // done
+    { status: 'error' }, // error
   ]);
   assert.deepEqual(counts, { waiting: 1, active: 2, done: 1, error: 1, total: 5 });
 });
@@ -57,7 +57,13 @@ test('_countTasks buckets by status with active = not done/backlog/error', () =>
 test('_countTasks handles an empty/undefined list', () => {
   const ctx = makeCtx();
   assert.deepEqual(ctx._countTasks([]), { waiting: 0, active: 0, done: 0, error: 0, total: 0 });
-  assert.deepEqual(ctx._countTasks(undefined), { waiting: 0, active: 0, done: 0, error: 0, total: 0 });
+  assert.deepEqual(ctx._countTasks(undefined), {
+    waiting: 0,
+    active: 0,
+    done: 0,
+    error: 0,
+    total: 0,
+  });
 });
 
 test('_applyTokenFloor raises metrics to DB totals (CLI-runner case)', () => {

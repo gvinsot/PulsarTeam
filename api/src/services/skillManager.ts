@@ -50,11 +50,12 @@ function normalizeMcp(mcp: any): McpEntry {
 function normalizeSkill(skill: any, mcpResolver: ((id: string) => any) | null): Skill {
   // Always prefer resolving from mcpServerIds when a resolver is available,
   // so linked MCPs pick up live name/url/description from the MCP manager
-  const serverIds = Array.isArray(skill.mcpServerIds) && skill.mcpServerIds.length > 0
-    ? skill.mcpServerIds
-    : Array.isArray(skill.mcps)
-      ? skill.mcps.map((m: any) => m.id).filter(Boolean)
-      : [];
+  const serverIds =
+    Array.isArray(skill.mcpServerIds) && skill.mcpServerIds.length > 0
+      ? skill.mcpServerIds
+      : Array.isArray(skill.mcps)
+        ? skill.mcps.map((m: any) => m.id).filter(Boolean)
+        : [];
 
   let mcps: McpEntry[];
   if (serverIds.length > 0 && mcpResolver) {
@@ -64,14 +65,31 @@ function normalizeSkill(skill: any, mcpResolver: ((id: string) => any) | null): 
       const skillMcp = Array.isArray(skill.mcps) ? skill.mcps.find((m: any) => m.id === id) : null;
       if (server) {
         return normalizeMcp({
-          id: server.id, name: server.name, url: server.url, description: server.description || '',
-          icon: server.icon || '🔌', enabled: server.enabled !== false, userConfig: {},
+          id: server.id,
+          name: server.name,
+          url: server.url,
+          description: server.description || '',
+          icon: server.icon || '🔌',
+          enabled: server.enabled !== false,
+          userConfig: {},
           authMode: skillMcp?.authMode || undefined,
           apiKey: skillMcp?.apiKey || server.apiKey || '',
         });
       }
       // Fallback: try to find in existing mcps array for embedded (non-linked) MCPs
-      return skillMcp ? normalizeMcp(skillMcp) : { id, name: 'Linked MCP', url: '', description: '', icon: '🔌', authMode: 'none', apiKey: '', enabled: true, userConfig: {} };
+      return skillMcp
+        ? normalizeMcp(skillMcp)
+        : {
+            id,
+            name: 'Linked MCP',
+            url: '',
+            description: '',
+            icon: '🔌',
+            authMode: 'none',
+            apiKey: '',
+            enabled: true,
+            userConfig: {},
+          };
     });
   } else if (Array.isArray(skill.mcps)) {
     mcps = skill.mcps.map(normalizeMcp);
@@ -82,27 +100,26 @@ function normalizeSkill(skill: any, mcpResolver: ((id: string) => any) | null): 
   // Built-in plugins are globally shared by default; ownerId defaults to null.
   // User-created plugins keep whatever ownerId/shared was set on them.
   const ownerId = skill.ownerId ?? null;
-  const shared = skill.shared === undefined
-    ? skill.builtin === true
-    : !!skill.shared;
+  const shared = skill.shared === undefined ? skill.builtin === true : !!skill.shared;
 
   return {
     ...skill,
     userConfig: skill.userConfig || {},
     mcps,
-    mcpServerIds: mcps.map((m) => m.id),
+    mcpServerIds: mcps.map(m => m.id),
     ownerId,
     shared,
   };
 }
 
-
 function findBuiltinSkill(identifier: any): any {
   if (!identifier) return null;
   const value = String(identifier).toLowerCase();
-  return BUILTIN_SKILLS.find(
-    (skill: any) => skill.id.toLowerCase() === value || skill.name.toLowerCase() === value
-  ) || null;
+  return (
+    BUILTIN_SKILLS.find(
+      (skill: any) => skill.id.toLowerCase() === value || skill.name.toLowerCase() === value
+    ) || null
+  );
 }
 
 const ACTIVE_BUILTIN_SKILL_IDS = new Set(BUILTIN_SKILLS.map((skill: any) => skill.id));
@@ -145,22 +162,28 @@ export class SkillManager {
     let updated = 0;
     for (const skill of defaults) {
       if (!this.skills.has(skill.id)) {
-        const entry = normalizeSkill({
-          ...skill,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }, this._mcpResolver);
+        const entry = normalizeSkill(
+          {
+            ...skill,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          this._mcpResolver
+        );
         this.skills.set(skill.id, entry);
         await saveSkill(entry);
         seeded++;
       } else if (skill.builtin) {
         // Update existing builtin skills to pick up new fields (e.g. mcpServerIds)
         const existing = this.skills.get(skill.id);
-        const entry = normalizeSkill({
-          ...existing,
-          ...skill,
-          updatedAt: new Date().toISOString()
-        }, this._mcpResolver);
+        const entry = normalizeSkill(
+          {
+            ...existing,
+            ...skill,
+            updatedAt: new Date().toISOString(),
+          },
+          this._mcpResolver
+        );
         this.skills.set(skill.id, entry);
         await saveSkill(entry);
         updated++;
@@ -186,7 +209,7 @@ export class SkillManager {
   getAll(userId?: string | null, isAdmin: boolean = false): Skill[] {
     const resolver = this._mcpResolver;
     const all = Array.from(this.skills.values()).map(s => normalizeSkill(s, resolver));
-    const seen = new Set(all.map((skill) => skill.id));
+    const seen = new Set(all.map(skill => skill.id));
 
     for (const builtin of BUILTIN_SKILLS) {
       if (!seen.has((builtin as any).id)) {
@@ -198,7 +221,7 @@ export class SkillManager {
       return all;
     }
 
-    return all.filter((p) => {
+    return all.filter(p => {
       if (p.shared) return true;
       if (!p.ownerId) return true; // legacy / system-owned → visible
       return p.ownerId === userId;
@@ -235,21 +258,24 @@ export class SkillManager {
 
   async create(config: any, ownerId: string | null = null): Promise<Skill> {
     const id = uuidv4();
-    const skill = normalizeSkill({
-      id,
-      name: config.name || 'Unnamed Skill',
-      description: config.description || '',
-      category: config.category || 'general',
-      icon: config.icon || '🔧',
-      instructions: config.instructions || '',
-      userConfig: config.userConfig || {},
-      mcps: Array.isArray(config.mcps) ? config.mcps : [],
-      builtin: false,
-      ownerId,
-      shared: !!config.shared,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }, this._mcpResolver);
+    const skill = normalizeSkill(
+      {
+        id,
+        name: config.name || 'Unnamed Skill',
+        description: config.description || '',
+        category: config.category || 'general',
+        icon: config.icon || '🔧',
+        instructions: config.instructions || '',
+        userConfig: config.userConfig || {},
+        mcps: Array.isArray(config.mcps) ? config.mcps : [],
+        builtin: false,
+        ownerId,
+        shared: !!config.shared,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      this._mcpResolver
+    );
 
     this.skills.set(id, skill);
     await saveSkill(skill);
@@ -259,11 +285,14 @@ export class SkillManager {
   async setShared(id: string, shared: boolean): Promise<Skill | null> {
     const current = this.skills.get(id);
     if (!current) return null;
-    const updated = normalizeSkill({
-      ...current,
-      shared: !!shared,
-      updatedAt: new Date().toISOString(),
-    }, this._mcpResolver);
+    const updated = normalizeSkill(
+      {
+        ...current,
+        shared: !!shared,
+        updatedAt: new Date().toISOString(),
+      },
+      this._mcpResolver
+    );
     this.skills.set(id, updated);
     await saveSkill(updated);
     return updated;
@@ -274,17 +303,29 @@ export class SkillManager {
     if (!current) return null;
 
     const skill: any = { ...current };
-    const allowed = ['name', 'description', 'category', 'icon', 'instructions', 'userConfig', 'mcps', 'shared'];
+    const allowed = [
+      'name',
+      'description',
+      'category',
+      'icon',
+      'instructions',
+      'userConfig',
+      'mcps',
+      'shared',
+    ];
     for (const key of allowed) {
       if (updates[key] !== undefined) {
         skill[key] = updates[key];
       }
     }
 
-    const normalized = normalizeSkill({
-      ...skill,
-      updatedAt: new Date().toISOString()
-    }, this._mcpResolver);
+    const normalized = normalizeSkill(
+      {
+        ...skill,
+        updatedAt: new Date().toISOString(),
+      },
+      this._mcpResolver
+    );
 
     this.skills.set(id, normalized);
     await saveSkill(normalized);

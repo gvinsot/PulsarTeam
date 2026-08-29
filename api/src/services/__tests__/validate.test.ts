@@ -8,7 +8,7 @@ import { validateBody, validateQuery, validateParams } from '../../lib/validate.
 // Spin up a tiny express server, hit it with `fetch`, and tear it down.
 async function withServer(
   configure: (app: express.Express) => void,
-  run: (baseUrl: string) => Promise<void>,
+  run: (baseUrl: string) => Promise<void>
 ): Promise<void> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -41,7 +41,7 @@ test('validateBody rejects invalid payload with 400 and structured details', asy
         body: JSON.stringify({ username: 'a', password: '1' }),
       });
       assert.equal(resp.status, 400);
-      const body = await resp.json() as any;
+      const body = (await resp.json()) as any;
       assert.equal(body.error, 'Validation failed');
       assert.ok(Array.isArray(body.details));
       assert.ok(body.details.length >= 1);
@@ -51,7 +51,7 @@ test('validateBody rejects invalid payload with 400 and structured details', asy
         assert.equal(typeof d.message, 'string');
         assert.equal(typeof d.code, 'string');
       }
-    },
+    }
   );
 });
 
@@ -71,10 +71,10 @@ test('validateBody accepts valid payload and applies coercions', async () => {
         body: JSON.stringify({ name: 'jane' }),
       });
       assert.equal(resp.status, 200);
-      const body = await resp.json() as any;
+      const body = (await resp.json()) as any;
       assert.equal(body.name, 'jane');
       assert.equal(body.role, 'user'); // default applied
-    },
+    }
   );
 });
 
@@ -91,18 +91,20 @@ test('validateBody rejects missing required field with explicit path', async () 
         body: JSON.stringify({}),
       });
       assert.equal(resp.status, 400);
-      const body = await resp.json() as any;
+      const body = (await resp.json()) as any;
       assert.equal(body.error, 'Validation failed');
       const paths = body.details.map((d: any) => d.path);
       assert.ok(paths.includes('email'));
-    },
+    }
   );
 });
 
 test('express.json body limit rejects oversize payload with 413', async () => {
   const app = express();
   app.use(express.json({ limit: '1kb' }));
-  app.post('/big', validateBody(z.object({ s: z.string() })), (_req, res) => res.json({ ok: true }));
+  app.post('/big', validateBody(z.object({ s: z.string() })), (_req, res) =>
+    res.json({ ok: true })
+  );
   // Swallow body-parser's PayloadTooLargeError so it doesn't print a stack to stderr.
   // The default Express error handler still responds with the correct 413 status.
   app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -141,7 +143,7 @@ test('validateParams rejects malformed UUID in path with 400', async () => {
       assert.equal(bad.status, 400);
       const ok = await fetch(`${baseUrl}/items/00000000-0000-4000-8000-000000000000`);
       assert.equal(ok.status, 200);
-    },
+    }
   );
 });
 
@@ -156,9 +158,9 @@ test('validateQuery rejects missing/invalid query and accepts valid', async () =
       assert.equal(bad.status, 400);
       const ok = await fetch(`${baseUrl}/search?q=hello`);
       assert.equal(ok.status, 200);
-      const body = await ok.json() as any;
+      const body = (await ok.json()) as any;
       assert.equal(body.q, 'hello');
-    },
+    }
   );
 });
 
@@ -175,9 +177,9 @@ test('validateBody strips fields not declared on the schema (default zod behavio
         body: JSON.stringify({ name: 'ok', extra: 'should-be-stripped' }),
       });
       assert.equal(resp.status, 200);
-      const body = await resp.json() as any;
+      const body = (await resp.json()) as any;
       assert.equal(body.name, 'ok');
       assert.equal(body.extra, undefined);
-    },
+    }
   );
 });

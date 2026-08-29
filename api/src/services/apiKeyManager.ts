@@ -29,9 +29,7 @@ function getHmacSecret(): Buffer {
 
   const jwt = readSecret('JWT_SECRET', '');
   if (!jwt) {
-    throw new Error(
-      'API key HMAC secret is not configured (set API_KEY_SECRET or JWT_SECRET)'
-    );
+    throw new Error('API key HMAC secret is not configured (set API_KEY_SECRET or JWT_SECRET)');
   }
   // Domain-separate from JWT signing so the same bytes are never reused
   // across primitives.
@@ -115,7 +113,9 @@ export async function generateNewApiKey() {
   // Singleton: replace any existing key. DELETE+INSERT must be atomic — if the
   // INSERT fails after a committed DELETE, every external caller is locked out
   // until an admin mints and redistributes a new key.
-  const replaceKey = async (q: { query: (sql: string, params?: unknown[]) => Promise<unknown> }) => {
+  const replaceKey = async (q: {
+    query: (sql: string, params?: unknown[]) => Promise<unknown>;
+  }) => {
     await q.query(`DELETE FROM ${TABLE}`);
     await q.query(
       `INSERT INTO ${TABLE} (id, key_hash, prefix, created_at, hash_version)
@@ -156,10 +156,9 @@ export async function validateApiKey(key: string): Promise<boolean> {
 
   const candidate = hmacKey(key);
 
-  const result = await pool.query(
-    `SELECT key_hash FROM ${TABLE} WHERE hash_version = $1`,
-    [CURRENT_HASH_VERSION]
-  );
+  const result = await pool.query(`SELECT key_hash FROM ${TABLE} WHERE hash_version = $1`, [
+    CURRENT_HASH_VERSION,
+  ]);
 
   let matched = false;
   for (const row of result.rows) {

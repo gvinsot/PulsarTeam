@@ -4,9 +4,27 @@ import { api } from '../api';
 import { useClickOutside, useEscapeKey } from '../hooks/useDismiss';
 
 const PERMISSION_LEVELS = [
-  { value: 'read',  label: 'Read',  icon: Eye,     desc: 'Can view tasks',       cls: 'text-blue-400 bg-blue-500/10' },
-  { value: 'edit',  label: 'Edit',  icon: Edit3,   desc: 'Can modify tasks',     cls: 'text-amber-400 bg-amber-500/10' },
-  { value: 'admin', label: 'Admin', icon: Shield,  desc: 'Can share & manage',   cls: 'text-purple-400 bg-purple-500/10' },
+  {
+    value: 'read',
+    label: 'Read',
+    icon: Eye,
+    desc: 'Can view tasks',
+    cls: 'text-blue-400 bg-blue-500/10',
+  },
+  {
+    value: 'edit',
+    label: 'Edit',
+    icon: Edit3,
+    desc: 'Can modify tasks',
+    cls: 'text-amber-400 bg-amber-500/10',
+  },
+  {
+    value: 'admin',
+    label: 'Admin',
+    icon: Shield,
+    desc: 'Can share & manage',
+    cls: 'text-purple-400 bg-purple-500/10',
+  },
 ];
 
 export default function ShareBoardModal({ board, onClose, currentUserId }) {
@@ -46,27 +64,30 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
       }
     }
     load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [board.id]);
 
   useClickOutside(modalRef, onClose);
   useEscapeKey(onClose);
 
   // Filter out already shared users and the owner
-  const availableUsers = allUsers.filter(u =>
-    u.id !== currentUserId &&
-    u.id !== board.user_id &&
-    !shares.find(s => s.user_id === u.id)
+  const availableUsers = allUsers.filter(
+    u => u.id !== currentUserId && u.id !== board.user_id && !shares.find(s => s.user_id === u.id)
   );
 
   const filteredSuggestions = username.trim()
-    ? availableUsers.filter(u =>
-        u.username.toLowerCase().includes(username.toLowerCase()) ||
-        (u.display_name || '').toLowerCase().includes(username.toLowerCase())
-      ).slice(0, 5)
+    ? availableUsers
+        .filter(
+          u =>
+            u.username.toLowerCase().includes(username.toLowerCase()) ||
+            (u.display_name || '').toLowerCase().includes(username.toLowerCase())
+        )
+        .slice(0, 5)
     : [];
 
-  const handleShare = async (e) => {
+  const handleShare = async e => {
     e?.preventDefault();
     const trimmed = username.trim();
     if (!trimmed) return;
@@ -89,7 +110,9 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
   const handleUpdatePermission = async (userId, newPermission) => {
     try {
       await api.updateBoardShare(board.id, userId, newPermission);
-      setShares(prev => prev.map(s => s.user_id === userId ? { ...s, permission: newPermission } : s));
+      setShares(prev =>
+        prev.map(s => (s.user_id === userId ? { ...s, permission: newPermission } : s))
+      );
     } catch (err) {
       setError(err.message);
     }
@@ -134,7 +157,7 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm text-dark-200 font-medium truncate">
-                {isOwner ? 'You' : (board.owner_username || 'Owner')}
+                {isOwner ? 'You' : board.owner_username || 'Owner'}
               </div>
               <div className="text-xs text-dark-500">Owner</div>
             </div>
@@ -166,11 +189,16 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                         <button
                           key={u.id}
                           type="button"
-                          onClick={() => { setUsername(u.username); inputRef.current?.focus(); }}
+                          onClick={() => {
+                            setUsername(u.username);
+                            inputRef.current?.focus();
+                          }}
                           className="w-full text-left px-3 py-1.5 text-xs text-dark-200 hover:bg-dark-700 flex items-center gap-2"
                         >
                           <span className="font-medium">{u.username}</span>
-                          {u.display_name && <span className="text-dark-500">({u.display_name})</span>}
+                          {u.display_name && (
+                            <span className="text-dark-500">({u.display_name})</span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -183,7 +211,9 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                     focus:outline-none focus:border-indigo-500"
                 >
                   {PERMISSION_LEVELS.map(p => (
-                    <option key={p.value} value={p.value}>{p.label}</option>
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
                   ))}
                 </select>
                 <button
@@ -192,7 +222,11 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                   className="px-3 py-2 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed
                     text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1"
                 >
-                  {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <UserPlus className="w-3 h-3" />}
+                  {saving ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <UserPlus className="w-3 h-3" />
+                  )}
                   Share
                 </button>
               </div>
@@ -222,11 +256,18 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
             ) : (
               <div className="space-y-2">
                 {shares.map(share => {
-                  const permLevel = PERMISSION_LEVELS.find(p => p.value === share.permission) || PERMISSION_LEVELS[0];
+                  const permLevel =
+                    PERMISSION_LEVELS.find(p => p.value === share.permission) ||
+                    PERMISSION_LEVELS[0];
                   const Icon = permLevel.icon;
                   return (
-                    <div key={share.user_id} className="flex items-center gap-3 px-3 py-2.5 bg-dark-800/40 rounded-lg border border-dark-700/30">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${permLevel.cls}`}>
+                    <div
+                      key={share.user_id}
+                      className="flex items-center gap-3 px-3 py-2.5 bg-dark-800/40 rounded-lg border border-dark-700/30"
+                    >
+                      <div
+                        className={`w-8 h-8 rounded-full flex items-center justify-center ${permLevel.cls}`}
+                      >
                         <Icon className="w-3.5 h-3.5" />
                       </div>
                       <div className="flex-1 min-w-0">
@@ -244,11 +285,15 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                               focus:outline-none focus:border-indigo-500"
                           >
                             {PERMISSION_LEVELS.map(p => (
-                              <option key={p.value} value={p.value}>{p.label}</option>
+                              <option key={p.value} value={p.value}>
+                                {p.label}
+                              </option>
                             ))}
                           </select>
                           <button
-                            onClick={() => handleRevoke(share.user_id, share.display_name || share.username)}
+                            onClick={() =>
+                              handleRevoke(share.user_id, share.display_name || share.username)
+                            }
                             className="p-1.5 rounded text-dark-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                             title="Revoke access"
                           >
@@ -256,7 +301,9 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                           </button>
                         </div>
                       ) : (
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${permLevel.cls}`}>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-medium ${permLevel.cls}`}
+                        >
                           {permLevel.label}
                         </span>
                       )}
@@ -269,7 +316,9 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
 
           {/* Permission legend */}
           <div className="pt-2 border-t border-dark-700/50">
-            <div className="text-[10px] text-dark-500 uppercase tracking-wider mb-1.5">Permission levels</div>
+            <div className="text-[10px] text-dark-500 uppercase tracking-wider mb-1.5">
+              Permission levels
+            </div>
             <div className="grid grid-cols-3 gap-2">
               {PERMISSION_LEVELS.map(p => {
                 const Icon = p.icon;

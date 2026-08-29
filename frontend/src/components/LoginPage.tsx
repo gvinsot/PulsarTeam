@@ -1,5 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
-import { Lock, User, AlertCircle, Bot, LayoutDashboard, FolderKanban, DollarSign, Zap, Shield, Globe, ArrowRight, Play, X, ChevronDown, Mail, Phone, Building2, MessageSquare, Headphones, Send } from 'lucide-react';
+import {
+  Lock,
+  User,
+  AlertCircle,
+  Bot,
+  LayoutDashboard,
+  FolderKanban,
+  DollarSign,
+  Zap,
+  Shield,
+  Globe,
+  ArrowRight,
+  Play,
+  X,
+  ChevronDown,
+  Mail,
+  Phone,
+  Building2,
+  MessageSquare,
+  Headphones,
+  Send,
+} from 'lucide-react';
 import { api } from '../api';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -9,14 +30,16 @@ function Logo({ size = 'lg' }: { size?: 'sm' | 'lg' }) {
   const dim = size === 'lg' ? 'w-12 h-12' : 'w-9 h-9';
   const icon = size === 'lg' ? 'w-6 h-6' : 'w-5 h-5';
   return (
-    <div className={`inline-flex items-center justify-center ${dim} rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-500/20`}>
+    <div
+      className={`inline-flex items-center justify-center ${dim} rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-500/20`}
+    >
       <svg className={`${icon} text-white`} viewBox="0 0 100 100" fill="none">
-        <circle cx="50" cy="25" r="10" fill="currentColor"/>
-        <circle cx="25" cy="65" r="10" fill="currentColor" opacity="0.7"/>
-        <circle cx="75" cy="65" r="10" fill="currentColor" opacity="0.7"/>
-        <line x1="50" y1="35" x2="25" y2="55" stroke="currentColor" strokeWidth="3" opacity="0.5"/>
-        <line x1="50" y1="35" x2="75" y2="55" stroke="currentColor" strokeWidth="3" opacity="0.5"/>
-        <line x1="25" y1="75" x2="75" y2="75" stroke="currentColor" strokeWidth="3" opacity="0.3"/>
+        <circle cx="50" cy="25" r="10" fill="currentColor" />
+        <circle cx="25" cy="65" r="10" fill="currentColor" opacity="0.7" />
+        <circle cx="75" cy="65" r="10" fill="currentColor" opacity="0.7" />
+        <line x1="50" y1="35" x2="25" y2="55" stroke="currentColor" strokeWidth="3" opacity="0.5" />
+        <line x1="50" y1="35" x2="75" y2="55" stroke="currentColor" strokeWidth="3" opacity="0.5" />
+        <line x1="25" y1="75" x2="75" y2="75" stroke="currentColor" strokeWidth="3" opacity="0.3" />
       </svg>
     </div>
   );
@@ -39,10 +62,26 @@ function FeatureCard({ icon: Icon, title, desc }: { icon: any; title: string; de
 function ScreenshotCarousel() {
   const { t } = useLanguage();
   const screenshots = [
-    { src: '/screenshots/screenshot-agents.png', labelKey: 'screenshots.agents.label' as const, captionKey: 'screenshots.agents.caption' as const },
-    { src: '/screenshots/screenshot-tasks.png', labelKey: 'screenshots.tasks.label' as const, captionKey: 'screenshots.tasks.caption' as const },
-    { src: '/screenshots/screenshot-projects.png', labelKey: 'screenshots.projects.label' as const, captionKey: 'screenshots.projects.caption' as const },
-    { src: '/screenshots/screenshot-budget.png', labelKey: 'screenshots.budget.label' as const, captionKey: 'screenshots.budget.caption' as const },
+    {
+      src: '/screenshots/screenshot-agents.png',
+      labelKey: 'screenshots.agents.label' as const,
+      captionKey: 'screenshots.agents.caption' as const,
+    },
+    {
+      src: '/screenshots/screenshot-tasks.png',
+      labelKey: 'screenshots.tasks.label' as const,
+      captionKey: 'screenshots.tasks.caption' as const,
+    },
+    {
+      src: '/screenshots/screenshot-projects.png',
+      labelKey: 'screenshots.projects.label' as const,
+      captionKey: 'screenshots.projects.caption' as const,
+    },
+    {
+      src: '/screenshots/screenshot-budget.png',
+      labelKey: 'screenshots.budget.label' as const,
+      captionKey: 'screenshots.budget.caption' as const,
+    },
   ];
 
   const [active, setActive] = useState(0);
@@ -77,7 +116,10 @@ function ScreenshotCarousel() {
               </div>
             </div>
           </div>
-          <div className="relative aspect-[16/9] bg-dark-900 overflow-hidden cursor-pointer" onClick={() => setLightbox(active)}>
+          <div
+            className="relative aspect-[16/9] bg-dark-900 overflow-hidden cursor-pointer"
+            onClick={() => setLightbox(active)}
+          >
             {screenshots.map((s, i) => (
               <img
                 key={s.src}
@@ -111,11 +153,22 @@ function ScreenshotCarousel() {
 
       {/* Lightbox */}
       {lightbox !== null && (
-        <div className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center p-4 animate-fadeIn" onClick={() => setLightbox(null)}>
-          <button className="absolute top-4 right-4 text-dark-400 hover:text-white" onClick={() => setLightbox(null)}>
+        <div
+          className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setLightbox(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-dark-400 hover:text-white"
+            onClick={() => setLightbox(null)}
+          >
             <X className="w-6 h-6" />
           </button>
-          <img src={screenshots[lightbox].src} alt={t(screenshots[lightbox].labelKey)} className="max-w-full max-h-[90vh] rounded-lg shadow-2xl" onClick={e => e.stopPropagation()} />
+          <img
+            src={screenshots[lightbox].src}
+            alt={t(screenshots[lightbox].labelKey)}
+            className="max-w-full max-h-[90vh] rounded-lg shadow-2xl"
+            onClick={e => e.stopPropagation()}
+          />
         </div>
       )}
     </>
@@ -124,7 +177,15 @@ function ScreenshotCarousel() {
 
 /* ── Login form (slide-out panel) ── */
 
-function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, onGitHubLogin, oauthLoading }: {
+function LoginPanel({
+  open,
+  onClose,
+  onLogin,
+  onGoogleLogin,
+  onMicrosoftLogin,
+  onGitHubLogin,
+  oauthLoading,
+}: {
   open: boolean;
   onClose: () => void;
   onLogin: (u: string, p: string) => Promise<void>;
@@ -161,14 +222,19 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
       />
 
       {/* Panel */}
-      <div className={`fixed top-0 right-0 z-[101] h-full w-full max-w-md bg-dark-900 border-l border-dark-700/60 shadow-2xl transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div
+        className={`fixed top-0 right-0 z-[101] h-full w-full max-w-md bg-dark-900 border-l border-dark-700/60 shadow-2xl transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+      >
         <div className="flex flex-col h-full p-8">
           <div className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-3">
               <Logo size="sm" />
               <span className="text-xl font-bold text-dark-100">{t('login.title')}</span>
             </div>
-            <button onClick={onClose} className="p-2 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-800 transition-colors">
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-800 transition-colors"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>
@@ -182,7 +248,9 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
             )}
 
             <div>
-              <label className="block text-sm font-medium text-dark-300 mb-2">{t('login.username')}</label>
+              <label className="block text-sm font-medium text-dark-300 mb-2">
+                {t('login.username')}
+              </label>
               <div className="relative">
                 <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-400" />
                 <input
@@ -197,7 +265,9 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-dark-300 mb-2">{t('login.password')}</label>
+              <label className="block text-sm font-medium text-dark-300 mb-2">
+                {t('login.password')}
+              </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-400" />
                 <input
@@ -220,14 +290,20 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   {t('login.connecting')}
                 </span>
-              ) : t('login.submit')}
+              ) : (
+                t('login.submit')
+              )}
             </button>
 
             {(onGoogleLogin || onMicrosoftLogin || onGitHubLogin) && (
               <>
                 <div className="relative">
-                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-dark-600" /></div>
-                  <div className="relative flex justify-center text-sm"><span className="px-3 bg-dark-900 text-dark-400">{t('login.or')}</span></div>
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-dark-600" />
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-3 bg-dark-900 text-dark-400">{t('login.or')}</span>
+                  </div>
                 </div>
 
                 {onGoogleLogin && (
@@ -245,10 +321,22 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
                     ) : (
                       <>
                         <svg className="w-5 h-5" viewBox="0 0 24 24">
-                          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
-                          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                          <path
+                            fill="#4285F4"
+                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                          />
+                          <path
+                            fill="#EA4335"
+                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                          />
                         </svg>
                         {t('login.google')}
                       </>
@@ -271,10 +359,10 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
                     ) : (
                       <>
                         <svg className="w-5 h-5" viewBox="0 0 24 24">
-                          <rect x="1" y="1" width="10" height="10" fill="#F25022"/>
-                          <rect x="13" y="1" width="10" height="10" fill="#7FBA00"/>
-                          <rect x="1" y="13" width="10" height="10" fill="#00A4EF"/>
-                          <rect x="13" y="13" width="10" height="10" fill="#FFB900"/>
+                          <rect x="1" y="1" width="10" height="10" fill="#F25022" />
+                          <rect x="13" y="1" width="10" height="10" fill="#7FBA00" />
+                          <rect x="1" y="13" width="10" height="10" fill="#00A4EF" />
+                          <rect x="13" y="13" width="10" height="10" fill="#FFB900" />
                         </svg>
                         {t('login.microsoft')}
                       </>
@@ -297,7 +385,7 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
                     ) : (
                       <>
                         <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                          <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2.18c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.72-1.53-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.8 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.13v3.16c0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/>
+                          <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2.18c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.72-1.53-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.58.23 2.75.11 3.04.74.8 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.13v3.16c0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z" />
                         </svg>
                         {t('login.github')}
                       </>
@@ -307,9 +395,7 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
               </>
             )}
 
-            <p className="text-center text-dark-500 text-xs mt-auto">
-              {t('login.secure')}
-            </p>
+            <p className="text-center text-dark-500 text-xs mt-auto">{t('login.secure')}</p>
           </form>
         </div>
       </div>
@@ -319,7 +405,11 @@ function LoginPanel({ open, onClose, onLogin, onGoogleLogin, onMicrosoftLogin, o
 
 /* ── Contact / Support form modal ── */
 
-function ContactFormModal({ open, onClose, type }: {
+function ContactFormModal({
+  open,
+  onClose,
+  type,
+}: {
   open: boolean;
   onClose: () => void;
   type: 'contact' | 'support';
@@ -360,9 +450,18 @@ function ContactFormModal({ open, onClose, type }: {
 
   return (
     <>
-      <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm animate-fadeIn" onClick={handleClose} />
-      <div className="fixed inset-0 z-[101] flex items-center justify-center p-4" onClick={handleClose}>
-        <div className="bg-dark-900 border border-dark-700/60 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div
+        className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm animate-fadeIn"
+        onClick={handleClose}
+      />
+      <div
+        className="fixed inset-0 z-[101] flex items-center justify-center p-4"
+        onClick={handleClose}
+      >
+        <div
+          className="bg-dark-900 border border-dark-700/60 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+          onClick={e => e.stopPropagation()}
+        >
           <div className="p-6 sm:p-8">
             {/* Header */}
             <div className="flex items-center justify-between mb-6">
@@ -370,7 +469,10 @@ function ContactFormModal({ open, onClose, type }: {
                 <h2 className="text-xl font-bold text-dark-100">{title}</h2>
                 <p className="text-dark-400 text-sm mt-1">{subtitle}</p>
               </div>
-              <button onClick={handleClose} className="p-2 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-800 transition-colors">
+              <button
+                onClick={handleClose}
+                className="p-2 rounded-lg text-dark-400 hover:text-dark-200 hover:bg-dark-800 transition-colors"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -380,9 +482,14 @@ function ContactFormModal({ open, onClose, type }: {
                 <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-4">
                   <Send className="w-7 h-7 text-emerald-400" />
                 </div>
-                <h3 className="text-lg font-semibold text-dark-100 mb-2">{t('contact.successTitle')}</h3>
+                <h3 className="text-lg font-semibold text-dark-100 mb-2">
+                  {t('contact.successTitle')}
+                </h3>
                 <p className="text-dark-400 text-sm">{t('contact.successMessage')}</p>
-                <button onClick={handleClose} className="mt-6 px-6 py-2.5 text-sm font-medium rounded-xl bg-dark-800 border border-dark-600 text-dark-300 hover:bg-dark-700 transition-colors">
+                <button
+                  onClick={handleClose}
+                  className="mt-6 px-6 py-2.5 text-sm font-medium rounded-xl bg-dark-800 border border-dark-600 text-dark-300 hover:bg-dark-700 transition-colors"
+                >
                   {t('contact.close')}
                 </button>
               </div>
@@ -397,7 +504,9 @@ function ContactFormModal({ open, onClose, type }: {
 
                 {/* Name */}
                 <div>
-                  <label className="block text-sm font-medium text-dark-300 mb-1.5">{t('contact.name')}</label>
+                  <label className="block text-sm font-medium text-dark-300 mb-1.5">
+                    {t('contact.name')}
+                  </label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-400" />
                     <input
@@ -448,7 +557,9 @@ function ContactFormModal({ open, onClose, type }: {
 
                 {/* Company */}
                 <div>
-                  <label className="block text-sm font-medium text-dark-300 mb-1.5">{t('contact.company')}</label>
+                  <label className="block text-sm font-medium text-dark-300 mb-1.5">
+                    {t('contact.company')}
+                  </label>
                   <div className="relative">
                     <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-dark-400" />
                     <input
@@ -463,7 +574,9 @@ function ContactFormModal({ open, onClose, type }: {
 
                 {/* Message */}
                 <div>
-                  <label className="block text-sm font-medium text-dark-300 mb-1.5">{t('contact.message')}</label>
+                  <label className="block text-sm font-medium text-dark-300 mb-1.5">
+                    {t('contact.message')}
+                  </label>
                   <div className="relative">
                     <MessageSquare className="absolute left-3 top-3 w-4 h-4 text-dark-400" />
                     <textarea
@@ -471,7 +584,11 @@ function ContactFormModal({ open, onClose, type }: {
                       onChange={e => handleChange('message', e.target.value)}
                       rows={4}
                       className="w-full pl-10 pr-4 py-2.5 bg-dark-800 border border-dark-600 rounded-xl text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors text-sm resize-none"
-                      placeholder={type === 'contact' ? t('contact.messagePlaceholder') : t('contact.messagePlaceholderSupport')}
+                      placeholder={
+                        type === 'contact'
+                          ? t('contact.messagePlaceholder')
+                          : t('contact.messagePlaceholderSupport')
+                      }
                     />
                   </div>
                 </div>
@@ -486,7 +603,9 @@ function ContactFormModal({ open, onClose, type }: {
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       {t('contact.sending')}
                     </span>
-                  ) : t('contact.submit')}
+                  ) : (
+                    t('contact.submit')
+                  )}
                 </button>
               </form>
             )}
@@ -499,7 +618,15 @@ function ContactFormModal({ open, onClose, type }: {
 
 /* ── CTA options card ── */
 
-function CtaOptionCard({ icon: Icon, title, desc, onClick, href, accent = false, ctaLabel }: {
+function CtaOptionCard({
+  icon: Icon,
+  title,
+  desc,
+  onClick,
+  href,
+  accent = false,
+  ctaLabel,
+}: {
   icon: any;
   title: string;
   desc: string;
@@ -513,13 +640,19 @@ function CtaOptionCard({ icon: Icon, title, desc, onClick, href, accent = false,
     : 'bg-dark-800/50 border-dark-700/50 hover:border-dark-600 hover:bg-dark-800/80';
 
   const content = (
-    <div className={`group p-6 rounded-2xl border ${cls} transition-all duration-300 cursor-pointer h-full flex flex-col`}>
-      <div className={`w-11 h-11 rounded-xl ${accent ? 'bg-indigo-500/20' : 'bg-dark-700/60'} flex items-center justify-center mb-4 group-hover:scale-105 transition-transform`}>
+    <div
+      className={`group p-6 rounded-2xl border ${cls} transition-all duration-300 cursor-pointer h-full flex flex-col`}
+    >
+      <div
+        className={`w-11 h-11 rounded-xl ${accent ? 'bg-indigo-500/20' : 'bg-dark-700/60'} flex items-center justify-center mb-4 group-hover:scale-105 transition-transform`}
+      >
         <Icon className={`w-5 h-5 ${accent ? 'text-indigo-400' : 'text-dark-300'}`} />
       </div>
       <h3 className="text-base font-semibold text-dark-100 mb-2">{title}</h3>
       <p className="text-dark-400 text-sm leading-relaxed flex-1">{desc}</p>
-      <div className={`mt-4 flex items-center gap-1.5 text-sm font-medium ${accent ? 'text-indigo-400' : 'text-dark-300'} group-hover:gap-2.5 transition-all`}>
+      <div
+        className={`mt-4 flex items-center gap-1.5 text-sm font-medium ${accent ? 'text-indigo-400' : 'text-dark-300'} group-hover:gap-2.5 transition-all`}
+      >
         {ctaLabel}
         <ArrowRight className="w-4 h-4" />
       </div>
@@ -527,7 +660,11 @@ function CtaOptionCard({ icon: Icon, title, desc, onClick, href, accent = false,
   );
 
   if (href) {
-    return <a href={href} target="_blank" rel="noopener noreferrer" className="block">{content}</a>;
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className="block">
+        {content}
+      </a>
+    );
   }
   return <div onClick={onClick}>{content}</div>;
 }
@@ -550,7 +687,11 @@ function LanguageToggle() {
 
 /* ── Main landing page ── */
 
-export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
+export default function LoginPage({
+  onLogin,
+  onGoogleLogin,
+  oauthLoading,
+}: {
   onLogin: (u: string, p: string) => Promise<void>;
   onGoogleLogin?: any;
   oauthLoading?: boolean;
@@ -561,10 +702,19 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
   const [microsoftEnabled, setMicrosoftEnabled] = useState(false);
   const [githubEnabled, setGithubEnabled] = useState(false);
   const [oauthBusy, setOauthBusy] = useState(false);
-  const [contactModal, setContactModal] = useState<{ open: boolean; type: 'contact' | 'support' }>({ open: false, type: 'contact' });
+  const [contactModal, setContactModal] = useState<{ open: boolean; type: 'contact' | 'support' }>({
+    open: false,
+    type: 'contact',
+  });
   useEffect(() => {
-    api.googleStatus().then(data => setGoogleEnabled(!!data.enabled)).catch(() => {});
-    api.microsoftStatus().then(data => setMicrosoftEnabled(!!data.enabled)).catch(() => {});
+    api
+      .googleStatus()
+      .then(data => setGoogleEnabled(!!data.enabled))
+      .catch(() => {});
+    api
+      .microsoftStatus()
+      .then(data => setMicrosoftEnabled(!!data.enabled))
+      .catch(() => {});
     // GitHub authentication is temporarily hidden.
     setGithubEnabled(false);
   }, []);
@@ -623,10 +773,16 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <a href="#features" className="hidden sm:inline-flex text-sm text-dark-400 hover:text-dark-200 transition-colors px-3 py-2">
+            <a
+              href="#features"
+              className="hidden sm:inline-flex text-sm text-dark-400 hover:text-dark-200 transition-colors px-3 py-2"
+            >
               {t('nav.features')}
             </a>
-            <a href="#screenshots" className="hidden sm:inline-flex text-sm text-dark-400 hover:text-dark-200 transition-colors px-3 py-2">
+            <a
+              href="#screenshots"
+              className="hidden sm:inline-flex text-sm text-dark-400 hover:text-dark-200 transition-colors px-3 py-2"
+            >
               {t('nav.product')}
             </a>
             <LanguageToggle />
@@ -648,10 +804,14 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
           <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-purple-500/[0.06] rounded-full blur-[100px]" />
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-indigo-500/[0.03] rounded-full blur-[80px]" />
           {/* Grid pattern */}
-          <div className="absolute inset-0" style={{
-            backgroundImage: 'radial-gradient(circle at 1px 1px, rgb(99 102 241 / 0.05) 1px, transparent 0)',
-            backgroundSize: '48px 48px'
-          }} />
+          <div
+            className="absolute inset-0"
+            style={{
+              backgroundImage:
+                'radial-gradient(circle at 1px 1px, rgb(99 102 241 / 0.05) 1px, transparent 0)',
+              backgroundSize: '48px 48px',
+            }}
+          />
         </div>
 
         <div className="relative max-w-7xl mx-auto px-6">
@@ -701,7 +861,10 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
             {/* Tech stack badges */}
             <div className="mt-14 flex flex-wrap items-center justify-center gap-3">
               {['Claude', 'GPT', 'Mistral', 'Ollama', 'vLLM'].map(name => (
-                <span key={name} className="px-3 py-1 rounded-md bg-dark-800/60 border border-dark-700/50 text-dark-400 text-xs font-medium">
+                <span
+                  key={name}
+                  className="px-3 py-1 rounded-md bg-dark-800/60 border border-dark-700/50 text-dark-400 text-xs font-medium"
+                >
                   {name}
                 </span>
               ))}
@@ -714,24 +877,51 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
       <section id="features" className="py-20 lg:py-28">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-dark-50">
-              {t('features.title')}
-            </h2>
-            <p className="mt-4 text-dark-400 text-lg max-w-2xl mx-auto">
-              {t('features.subtitle')}
-            </p>
+            <h2 className="text-3xl sm:text-4xl font-bold text-dark-50">{t('features.title')}</h2>
+            <p className="mt-4 text-dark-400 text-lg max-w-2xl mx-auto">{t('features.subtitle')}</p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            <FeatureCard icon={Bot} title={t('features.agentMgmt.title')} desc={t('features.agentMgmt.desc')} />
-            <FeatureCard icon={FolderKanban} title={t('features.kanban.title')} desc={t('features.kanban.desc')} />
-            <FeatureCard icon={LayoutDashboard} title={t('features.projects.title')} desc={t('features.projects.desc')} />
-            <FeatureCard icon={DollarSign} title={t('features.budget.title')} desc={t('features.budget.desc')} />
-            <FeatureCard icon={Zap} title={t('features.swarm.title')} desc={t('features.swarm.desc')} />
-            <FeatureCard icon={Globe} title={t('features.multiProvider.title')} desc={t('features.multiProvider.desc')} />
-            <FeatureCard icon={Shield} title={t('features.sandbox.title')} desc={t('features.sandbox.desc')} />
-            <FeatureCard icon={Play} title={t('features.plugins.title')} desc={t('features.plugins.desc')} />
-
+            <FeatureCard
+              icon={Bot}
+              title={t('features.agentMgmt.title')}
+              desc={t('features.agentMgmt.desc')}
+            />
+            <FeatureCard
+              icon={FolderKanban}
+              title={t('features.kanban.title')}
+              desc={t('features.kanban.desc')}
+            />
+            <FeatureCard
+              icon={LayoutDashboard}
+              title={t('features.projects.title')}
+              desc={t('features.projects.desc')}
+            />
+            <FeatureCard
+              icon={DollarSign}
+              title={t('features.budget.title')}
+              desc={t('features.budget.desc')}
+            />
+            <FeatureCard
+              icon={Zap}
+              title={t('features.swarm.title')}
+              desc={t('features.swarm.desc')}
+            />
+            <FeatureCard
+              icon={Globe}
+              title={t('features.multiProvider.title')}
+              desc={t('features.multiProvider.desc')}
+            />
+            <FeatureCard
+              icon={Shield}
+              title={t('features.sandbox.title')}
+              desc={t('features.sandbox.desc')}
+            />
+            <FeatureCard
+              icon={Play}
+              title={t('features.plugins.title')}
+              desc={t('features.plugins.desc')}
+            />
           </div>
         </div>
       </section>
@@ -758,20 +948,32 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
       <section className="py-20 lg:py-28">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold text-dark-50">
-              {t('howItWorks.title')}
-            </h2>
+            <h2 className="text-3xl sm:text-4xl font-bold text-dark-50">{t('howItWorks.title')}</h2>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
-            {([
-              { step: '01', titleKey: 'howItWorks.step1.title' as const, descKey: 'howItWorks.step1.desc' as const },
-              { step: '02', titleKey: 'howItWorks.step2.title' as const, descKey: 'howItWorks.step2.desc' as const },
-              { step: '03', titleKey: 'howItWorks.step3.title' as const, descKey: 'howItWorks.step3.desc' as const },
-            ]).map(item => (
+            {[
+              {
+                step: '01',
+                titleKey: 'howItWorks.step1.title' as const,
+                descKey: 'howItWorks.step1.desc' as const,
+              },
+              {
+                step: '02',
+                titleKey: 'howItWorks.step2.title' as const,
+                descKey: 'howItWorks.step2.desc' as const,
+              },
+              {
+                step: '03',
+                titleKey: 'howItWorks.step3.title' as const,
+                descKey: 'howItWorks.step3.desc' as const,
+              },
+            ].map(item => (
               <div key={item.step} className="text-center">
                 <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/20 mb-5">
-                  <span className="text-xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">{item.step}</span>
+                  <span className="text-xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
+                    {item.step}
+                  </span>
                 </div>
                 <h3 className="text-lg font-semibold text-dark-100 mb-3">{t(item.titleKey)}</h3>
                 <p className="text-dark-400 text-sm leading-relaxed">{t(item.descKey)}</p>
@@ -833,14 +1035,18 @@ export default function LoginPage({ onLogin, onGoogleLogin, oauthLoading }: {
             <Logo size="sm" />
             <span className="text-sm font-semibold text-dark-300">PulsarTeam</span>
           </div>
-          <p className="text-dark-500 text-xs">
-            {t('footer.tagline')}
-          </p>
+          <p className="text-dark-500 text-xs">{t('footer.tagline')}</p>
           <div className="flex items-center gap-4">
-            <a href="/terms" className="text-dark-500 hover:text-dark-300 text-xs transition-colors">
+            <a
+              href="/terms"
+              className="text-dark-500 hover:text-dark-300 text-xs transition-colors"
+            >
               {t('footer.terms')}
             </a>
-            <a href="/privacy" className="text-dark-500 hover:text-dark-300 text-xs transition-colors">
+            <a
+              href="/privacy"
+              className="text-dark-500 hover:text-dark-300 text-xs transition-colors"
+            >
               {t('footer.privacy')}
             </a>
           </div>

@@ -108,14 +108,30 @@ export async function getSharedBoardsForUser(userId) {
   }
 }
 
-export async function logBoardAudit(boardId, action, actorId, actorUsername, targetUserId, targetUsername, details = null) {
+export async function logBoardAudit(
+  boardId,
+  action,
+  actorId,
+  actorUsername,
+  targetUserId,
+  targetUsername,
+  details = null
+) {
   const pool = getPool();
   if (!pool) return;
   try {
     await pool.query(
       `INSERT INTO board_audit_logs (board_id, action, actor_id, actor_username, target_user_id, target_username, details)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [boardId, action, actorId, actorUsername, targetUserId, targetUsername, details ? JSON.stringify(details) : null]
+      [
+        boardId,
+        action,
+        actorId,
+        actorUsername,
+        targetUserId,
+        targetUsername,
+        details ? JSON.stringify(details) : null,
+      ]
     );
   } catch (err) {
     console.error('Failed to log board audit:', err.message);

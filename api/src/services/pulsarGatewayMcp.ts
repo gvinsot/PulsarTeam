@@ -3,7 +3,12 @@ import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { applyTaskUpdate } from './swarmApiMcp.js';
 import { BUILTIN_MCP_SERVERS } from '../data/mcpServers.js';
-import { getBoardById, getTaskByActionRunningAgent, getTasksByAssignee, getActiveTasksByAgent } from './database.js';
+import {
+  getBoardById,
+  getTaskByActionRunningAgent,
+  getTasksByAssignee,
+  getActiveTasksByAgent,
+} from './database.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 
 /**
@@ -47,7 +52,7 @@ const SWARM_API_SERVER_ID = 'mcp-swarm-api';
 async function resolveAvailableServerIds(
   skillManager: any,
   agent: any,
-  boardId: string | null,
+  boardId: string | null
 ): Promise<Set<string>> {
   const ids = new Set<string>([SWARM_API_SERVER_ID]);
 
@@ -58,7 +63,9 @@ async function resolveAvailableServerIds(
     try {
       const board = await getBoardById(effectiveBoardId);
       if (board && Array.isArray(board.plugins)) boardPluginIds = board.plugins;
-    } catch { /* board may not exist */ }
+    } catch {
+      /* board may not exist */
+    }
   }
 
   for (const sid of new Set([...agentSkillIds, ...boardPluginIds])) {
@@ -67,7 +74,7 @@ async function resolveAvailableServerIds(
       for (const mid of (plugin as any).mcpServerIds) ids.add(mid);
     }
   }
-  for (const mid of (agent.mcpServers || [])) ids.add(mid);
+  for (const mid of agent.mcpServers || []) ids.add(mid);
 
   ids.delete(GATEWAY_SERVER_ID);
   return ids;
@@ -81,12 +88,17 @@ async function resolveAvailableServerIds(
 async function resolveCurrentTaskId(agentManager: any, agentId: string): Promise<string | null> {
   // Priority 1: a task with an in-flight action attributed to this agent.
   const running = await getTaskByActionRunningAgent(agentId);
-  if (running && agentManager._isActiveTaskStatus((running as any).status)) return (running as any).id;
+  if (running && agentManager._isActiveTaskStatus((running as any).status))
+    return (running as any).id;
   // Priority 2/3: an active task assigned to this agent (or its own unassigned).
-  const assigned = (await getTasksByAssignee(agentId)).find((t: any) => agentManager._isActiveTaskStatus(t.status));
+  const assigned = (await getTasksByAssignee(agentId)).find((t: any) =>
+    agentManager._isActiveTaskStatus(t.status)
+  );
   if (assigned) return assigned.id;
   // Priority 3b: the agent's own active task assigned to someone else (rare).
-  const own = (await getActiveTasksByAgent(agentId)).find((t: any) => agentManager._isActiveTaskStatus(t.status));
+  const own = (await getActiveTasksByAgent(agentId)).find((t: any) =>
+    agentManager._isActiveTaskStatus(t.status)
+  );
   return own ? own.id : null;
 }
 
@@ -100,7 +112,7 @@ function resolveServerId(mcpManager: any, nameOrId: string): string | null {
   // Fallback to the static builtin catalog for servers not yet registered in
   // the live server map (matches mcpManager.findBuiltinMcpServer semantics).
   const builtin = BUILTIN_MCP_SERVERS.find(
-    (b) => b.id.toLowerCase() === wanted || b.name.toLowerCase() === wanted,
+    b => b.id.toLowerCase() === wanted || b.name.toLowerCase() === wanted
   );
   return builtin ? builtin.id : null;
 }
@@ -110,7 +122,7 @@ export function createPulsarGatewayMcpServer(
   mcpManager: any,
   skillManager: any,
   callerAgentId: string | null = null,
-  callerBoardId: string | null = null,
+  callerBoardId: string | null = null
 ) {
   const server = new McpServer({ name: 'Pulsar Gateway', version: '1.0.0' });
 
@@ -124,9 +136,22 @@ export function createPulsarGatewayMcpServer(
     'Update YOUR current task AND/OR mark it finished. The task is auto-detected from your active assignment — task_id is optional. Move it to a board column with `status` (e.g. "In Review", "Done"), and/or record completion with a `comment` summary (plus optional `commits`). To finish a task, move it to its next column with a comment: update_task({ status: "Done", comment: "what you did" }). Commit and push your code first.',
     {
       ...taskMutationSharedShape,
-      task_id: z.string().optional().describe('Optional — target a specific task instead of your auto-detected current one.'),
+      task_id: z
+        .string()
+        .optional()
+        .describe('Optional — target a specific task instead of your auto-detected current one.'),
     },
-    async ({ status, comment, commits, done, repo_full_name, repo_provider, storage_path, storage_provider, task_id }) => {
+    async ({
+      status,
+      comment,
+      commits,
+      done,
+      repo_full_name,
+      repo_provider,
+      storage_path,
+      storage_provider,
+      task_id,
+    }) => {
       if (!callerAgentId) {
         return jsonError('No agent context. update_task is only available to CLI runner agents.');
       }
@@ -134,7 +159,9 @@ export function createPulsarGatewayMcpServer(
       if (!resolvedTaskId) {
         const current = await resolveCurrentTaskId(agentManager, callerAgentId);
         if (!current) {
-          return jsonError('No active task found to update. Pass task_id explicitly, or ensure you have an in-progress task assigned to you.');
+          return jsonError(
+            'No active task found to update. Pass task_id explicitly, or ensure you have an in-progress task assigned to you.'
+          );
         }
         resolvedTaskId = current;
       }
@@ -175,7 +202,7 @@ export function createPulsarGatewayMcpServer(
       const { tools, unavailable } = await mcpManager.getToolsForAgent(
         [...allowedIds],
         callerAgentId,
-        agent.mcpAuth || {},
+        agent.mcpAuth || {}
       );
 
       // Group the flat tool list by server.
@@ -215,7 +242,10 @@ export function createPulsarGatewayMcpServer(
     {
       server: z.string().describe('MCP server name (or id) exactly as returned by list_mcps.'),
       tool: z.string().describe('Tool name on that server, as returned by list_mcps.'),
-      args: z.record(z.string(), z.any()).optional().describe('Arguments object matching the tool\'s input schema.'),
+      args: z
+        .record(z.string(), z.any())
+        .optional()
+        .describe("Arguments object matching the tool's input schema."),
     },
     async ({ server: serverName, tool: toolName, args }) => {
       if (!callerAgentId) {
@@ -227,7 +257,9 @@ export function createPulsarGatewayMcpServer(
       const resolvedId = resolveServerId(mcpManager, serverName);
       const allowedIds = await resolveAvailableServerIds(skillManager, agent, callerBoardId);
       if (!resolvedId || !allowedIds.has(resolvedId)) {
-        return jsonError(`MCP server "${serverName}" is not available to you. Call list_mcps to see what you can use.`);
+        return jsonError(
+          `MCP server "${serverName}" is not available to you. Call list_mcps to see what you can use.`
+        );
       }
 
       try {
@@ -237,7 +269,7 @@ export function createPulsarGatewayMcpServer(
           args || {},
           callerAgentId,
           agent.mcpAuth || {},
-          agent.boardId || callerBoardId || null,
+          agent.boardId || callerBoardId || null
         );
         const content: any[] = [{ type: 'text', text: result.result ?? '' }];
         if (Array.isArray(result.images)) {
@@ -247,7 +279,9 @@ export function createPulsarGatewayMcpServer(
         }
         return { content, ...(result.success ? {} : { isError: true as const }) };
       } catch (err: any) {
-        return jsonError(`call_mcp_tool failed for ${serverName} → ${toolName}: ${err?.message || 'unknown error'}`);
+        return jsonError(
+          `call_mcp_tool failed for ${serverName} → ${toolName}: ${err?.message || 'unknown error'}`
+        );
       }
     }
   );
@@ -260,7 +294,12 @@ export function createPulsarGatewayMcpServer(
  * X-Agent-Id / X-Board-Id are extracted by createMcpHttpHandler and passed to
  * the server builder so task tools and the proxy resolve the right agent/board.
  */
-export function createPulsarGatewayMcpHandler(agentManager: any, mcpManager: any, skillManager: any) {
+export function createPulsarGatewayMcpHandler(
+  agentManager: any,
+  mcpManager: any,
+  skillManager: any
+) {
   return createMcpHttpHandler('Pulsar Gateway', ({ agentId, boardId }) =>
-    createPulsarGatewayMcpServer(agentManager, mcpManager, skillManager, agentId, boardId));
+    createPulsarGatewayMcpServer(agentManager, mcpManager, skillManager, agentId, boardId)
+  );
 }

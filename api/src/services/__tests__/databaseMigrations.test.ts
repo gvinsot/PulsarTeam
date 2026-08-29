@@ -37,7 +37,7 @@ function migration(id: string, fingerprint: string, sql: string): Migration {
     id,
     name: id,
     fingerprint,
-    up: async (db) => {
+    up: async db => {
       await db.query(sql);
     },
   };

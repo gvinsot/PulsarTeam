@@ -1,5 +1,8 @@
 import { resolveAccessToken } from '../services/database.js';
-import { getGoogleOAuthConfig, GOOGLE_PLUGIN_REDIRECT_PATH } from '../services/googleOAuthConfig.js';
+import {
+  getGoogleOAuthConfig,
+  GOOGLE_PLUGIN_REDIRECT_PATH,
+} from '../services/googleOAuthConfig.js';
 import type { GoogleOAuthConfig } from '../services/googleOAuthConfig.js';
 import { generateGoogleOAuthState } from './googleOAuth.js';
 import { makeRefresh, oauthProviderRoutes } from './oauthProviderRoutes.js';
@@ -26,10 +29,12 @@ const gdriveSpec: OAuthProviderSpec<GoogleOAuthConfig> = {
   provider: 'gdrive',
   label: 'Gdrive',
   getConfig: getGoogleOAuthConfig,
-  notConfiguredError: 'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET — the same OAuth client is reused for Gmail, Drive, and Google login.',
+  notConfiguredError:
+    'Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET — the same OAuth client is reused for Gmail, Drive, and Google login.',
   refreshNotConfiguredError: 'Google Drive not configured',
   refreshTokenUrl: () => 'https://oauth2.googleapis.com/token',
-  generateState: (username, agentId, boardId) => generateGoogleOAuthState('gdrive', username, agentId, boardId),
+  generateState: (username, agentId, boardId) =>
+    generateGoogleOAuthState('gdrive', username, agentId, boardId),
   buildAuthUrl: (req, config, state) => {
     const scopes = [
       'https://www.googleapis.com/auth/drive',

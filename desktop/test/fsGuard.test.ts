@@ -49,7 +49,10 @@ test('blocks ../ traversal', () => {
   const root = makeTree();
   const g = new FolderGuard();
   g.setRoots([root]);
-  assert.throws(() => g.readTextFile('../../../etc/passwd'), (e: any) => e instanceof GuardError && e.code === 'EACCES');
+  assert.throws(
+    () => g.readTextFile('../../../etc/passwd'),
+    (e: any) => e instanceof GuardError && e.code === 'EACCES'
+  );
 });
 
 test('strips an absolute path back into the root instead of escaping', () => {
@@ -57,7 +60,9 @@ test('strips an absolute path back into the root instead of escaping', () => {
   const g = new FolderGuard();
   g.setRoots([root]);
   // An absolute path is treated as relative-to-root; it must resolve INSIDE root.
-  const resolved = g.resolve(process.platform === 'win32' ? 'C:\\Windows\\system32' : '/etc/passwd');
+  const resolved = g.resolve(
+    process.platform === 'win32' ? 'C:\\Windows\\system32' : '/etc/passwd'
+  );
   assert.ok(resolved.startsWith(root), `expected ${resolved} under ${root}`);
 });
 
@@ -65,18 +70,28 @@ test('rejects UNC / device paths', () => {
   const root = makeTree();
   const g = new FolderGuard();
   g.setRoots([root]);
-  assert.throws(() => g.resolve('\\\\server\\share\\x'), (e: any) => e instanceof GuardError && e.code === 'EACCES');
+  assert.throws(
+    () => g.resolve('\\\\server\\share\\x'),
+    (e: any) => e instanceof GuardError && e.code === 'EACCES'
+  );
 });
 
-test('blocks a symlink that escapes the root', { skip: process.platform === 'win32' ? 'symlink perms' : false }, () => {
-  const root = makeTree();
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
-  fs.writeFileSync(path.join(outside, 'secret.txt'), 'top secret');
-  fs.symlinkSync(outside, path.join(root, 'link'));
-  const g = new FolderGuard();
-  g.setRoots([root]);
-  assert.throws(() => g.readTextFile('link/secret.txt'), (e: any) => e instanceof GuardError && e.code === 'EACCES');
-});
+test(
+  'blocks a symlink that escapes the root',
+  { skip: process.platform === 'win32' ? 'symlink perms' : false },
+  () => {
+    const root = makeTree();
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'top secret');
+    fs.symlinkSync(outside, path.join(root, 'link'));
+    const g = new FolderGuard();
+    g.setRoots([root]);
+    assert.throws(
+      () => g.readTextFile('link/secret.txt'),
+      (e: any) => e instanceof GuardError && e.code === 'EACCES'
+    );
+  }
+);
 
 test('search finds by filename and dispatch routes fs tools', () => {
   const root = makeTree();

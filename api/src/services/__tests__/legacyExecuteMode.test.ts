@@ -15,7 +15,11 @@ import { mapLegacyExecuteMode } from '../configManager.js';
 
 test('maps a legacy run_agent execute action to decide', () => {
   const transitions = [
-    { from: 'pending', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: 'do it' }] },
+    {
+      from: 'pending',
+      trigger: 'on_enter',
+      actions: [{ type: 'run_agent', role: 'developer', mode: 'execute', instructions: 'do it' }],
+    },
   ];
   const out = mapLegacyExecuteMode(transitions);
   assert.equal(out[0].actions[0].mode, 'decide');
@@ -27,7 +31,11 @@ test('maps a legacy run_agent execute action to decide', () => {
 
 test('leaves non-execute run_agent actions untouched (same reference)', () => {
   const transitions = [
-    { from: 'idea', trigger: 'on_enter', actions: [{ type: 'run_agent', mode: 'refine', instructions: 'x' }] },
+    {
+      from: 'idea',
+      trigger: 'on_enter',
+      actions: [{ type: 'run_agent', mode: 'refine', instructions: 'x' }],
+    },
     { from: 'todo', trigger: 'on_enter', actions: [{ type: 'change_status', target: 'done' }] },
   ];
   const out = mapLegacyExecuteMode(transitions);
@@ -37,11 +45,15 @@ test('leaves non-execute run_agent actions untouched (same reference)', () => {
 
 test('maps only the execute actions within a mixed transition', () => {
   const transitions = [
-    { from: 'pending', trigger: 'on_enter', actions: [
-      { type: 'assign_agent', role: 'dev' },
-      { type: 'run_agent', mode: 'execute', instructions: 'run' },
-      { type: 'run_agent', mode: 'decide', instructions: 'decide' },
-    ] },
+    {
+      from: 'pending',
+      trigger: 'on_enter',
+      actions: [
+        { type: 'assign_agent', role: 'dev' },
+        { type: 'run_agent', mode: 'execute', instructions: 'run' },
+        { type: 'run_agent', mode: 'decide', instructions: 'decide' },
+      ],
+    },
   ];
   const out = mapLegacyExecuteMode(transitions);
   assert.equal(out[0].actions[0].type, 'assign_agent');

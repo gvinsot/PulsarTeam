@@ -36,7 +36,12 @@ export type OAuthCallbackErrorStage =
   | 'internal';
 
 export interface OAuthCallbackHooks<
-  S extends { service: OAuthProvider; username: string; agentId: string | null; boardId: string | null },
+  S extends {
+    service: OAuthProvider;
+    username: string;
+    agentId: string | null;
+    boardId: string | null;
+  },
   C extends { clientId: string; clientSecret: string },
 > {
   consumeState(state: string): S | null;
@@ -57,12 +62,17 @@ export interface OAuthCallbackHooks<
     stage: OAuthCallbackErrorStage,
     consumed: S | null,
     rawState: string | undefined,
-    error: string,
+    error: string
   ): void;
 }
 
 export async function runOAuthCodeExchange<
-  S extends { service: OAuthProvider; username: string; agentId: string | null; boardId: string | null },
+  S extends {
+    service: OAuthProvider;
+    username: string;
+    agentId: string | null;
+    boardId: string | null;
+  },
   C extends { clientId: string; clientSecret: string },
 >(req: express.Request, res: express.Response, hooks: OAuthCallbackHooks<S, C>): Promise<void> {
   const err = req.query.error as string | undefined;
@@ -79,7 +89,13 @@ export async function runOAuthCodeExchange<
 
   const stateData = hooks.consumeState(state);
   if (!stateData) {
-    return hooks.sendError(res, 'bad_state', null, state, 'Invalid or expired state. Please try again.');
+    return hooks.sendError(
+      res,
+      'bad_state',
+      null,
+      state,
+      'Invalid or expired state. Please try again.'
+    );
   }
 
   const config = hooks.getConfig();
@@ -113,27 +129,42 @@ export async function runOAuthCodeExchange<
         'exchange_failed',
         stateData,
         state,
-        'Token exchange failed: ' + (data.error_description || data.error || 'unknown'),
+        'Token exchange failed: ' + (data.error_description || data.error || 'unknown')
       );
     }
 
     const email = await hooks.fetchProfileEmail(data.access_token, stateData);
-    const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
+    const { scopeType, scopeId } = resolveScope(
+      stateData.agentId,
+      stateData.boardId,
+      stateData.username
+    );
 
-    await storeOAuthToken({
-      provider: stateData.service,
-      scopeType,
-      scopeId,
-      accessToken: data.access_token,
-      refreshToken: data.refresh_token,
-      expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-      meta: hooks.buildMeta(stateData, email),
-    }, { throwOnPersistError: true });
+    await storeOAuthToken(
+      {
+        provider: stateData.service,
+        scopeType,
+        scopeId,
+        accessToken: data.access_token,
+        refreshToken: data.refresh_token,
+        expiresAt: Date.now() + (data.expires_in - 60) * 1000,
+        meta: hooks.buildMeta(stateData, email),
+      },
+      { throwOnPersistError: true }
+    );
 
-    console.log(`✅ [${hooks.logLabel(stateData)}] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`);
+    console.log(
+      `✅ [${hooks.logLabel(stateData)}] OAuth tokens stored for ${scopeType}:${scopeId} (${email || 'unknown'}) via redirect`
+    );
     return hooks.sendSuccess(res, stateData, email);
   } catch (e) {
     console.error(`[${hooks.logLabel(stateData)}] OAuth redirect error:`, e);
-    return hooks.sendError(res, 'internal', stateData, state, 'Internal error during token exchange');
+    return hooks.sendError(
+      res,
+      'internal',
+      stateData,
+      state,
+      'Internal error during token exchange'
+    );
   }
 }

@@ -14,7 +14,7 @@ export async function removeLegacyDefaultBoards(p) {
       `SELECT id FROM boards
        WHERE is_default = TRUE OR lower(btrim(name)) = 'default'`
     );
-    const ids = existing.rows.map((row) => row.id);
+    const ids = existing.rows.map(row => row.id);
     if (ids.length === 0) return;
 
     if (await relationExists(p, 'tasks')) {

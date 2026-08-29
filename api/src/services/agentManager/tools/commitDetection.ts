@@ -13,24 +13,28 @@ export function _isGitMutatingCmd(rawCmd: string): boolean {
 
 /** Check if git output indicates nothing actually happened */
 export function _isGitNoop(output: string): boolean {
-  return /nothing to commit/i.test(output) ||
+  return (
+    /nothing to commit/i.test(output) ||
     /everything up-to-date/i.test(output) ||
     /no changes added to commit/i.test(output) ||
     /nothing added to commit/i.test(output) ||
     /already up.to.date/i.test(output) ||
-    /^current branch .+ is up to date/im.test(output);
+    /^current branch .+ is up to date/im.test(output)
+  );
 }
 
 /** Check if git output indicates a fatal error (should not try to link commits) */
 export function _isGitError(output: string): boolean {
-  return /^fatal:/im.test(output) ||
+  return (
+    /^fatal:/im.test(output) ||
     /^error: failed to push/im.test(output) ||
     /rejected\b.*\bnon-fast-forward/i.test(output) ||
     /permission denied/i.test(output) ||
     /authentication failed/i.test(output) ||
     /could not read from remote/i.test(output) ||
     /unable to access/i.test(output) ||
-    /not a git repository/i.test(output);
+    /not a git repository/i.test(output)
+  );
 }
 
 /** Check if git output suggests a successful operation */
@@ -57,7 +61,12 @@ export function _isGitSuccess(output: string): boolean {
  * Handles: git commit, git push (including push ranges), git merge,
  * git cherry-pick, git rebase, chained commands.
  */
-export async function _detectCommitHashes(call: any, result: any, executionManager: any, agentId: string): Promise<Array<{ hash: string; msg: string }>> {
+export async function _detectCommitHashes(
+  call: any,
+  result: any,
+  executionManager: any,
+  agentId: string
+): Promise<Array<{ hash: string; msg: string }>> {
   if (typeof result.result !== 'string') return [];
   const rawCmd = (call.args[0] || '').toLowerCase();
   if (!_isGitMutatingCmd(rawCmd)) return [];
@@ -71,7 +80,9 @@ export async function _detectCommitHashes(call: any, result: any, executionManag
   // when push fails but commit succeeded — we still want to capture the commit hash.
   if (result.meta?.exitCode && result.meta.exitCode !== 0) {
     if (!_isGitSuccess(output)) return [];
-    console.log(`🔗 [Commit] Non-zero exit (${result.meta.exitCode}) but output has commit indicators — continuing detection`);
+    console.log(
+      `🔗 [Commit] Non-zero exit (${result.meta.exitCode}) but output has commit indicators — continuing detection`
+    );
   }
 
   const commits: Array<{ hash: string; msg: string }> = [];
@@ -86,7 +97,10 @@ export async function _detectCommitHashes(call: any, result: any, executionManag
         if (hash.length > seen.length) {
           seenHashes.delete(seen);
           const idx = commits.findIndex(c => c.hash === seen);
-          if (idx !== -1) { commits[idx].hash = hash; if (msg && !commits[idx].msg) commits[idx].msg = msg; }
+          if (idx !== -1) {
+            commits[idx].hash = hash;
+            if (msg && !commits[idx].msg) commits[idx].msg = msg;
+          }
           seenHashes.add(hash);
         }
         return;
@@ -114,7 +128,9 @@ export async function _detectCommitHashes(call: any, result: any, executionManag
     pushOldHash = pushMatch[1];
     pushNewHash = pushMatch[2];
     _addCommit(pushNewHash, '');
-    console.log(`🔗 [Commit] Detected push range: ${pushOldHash.slice(0, 7)}..${pushNewHash.slice(0, 7)}`);
+    console.log(
+      `🔗 [Commit] Detected push range: ${pushOldHash.slice(0, 7)}..${pushNewHash.slice(0, 7)}`
+    );
   }
 
   // ── Pattern 3: HEAD is now at <hash> (from rebase, cherry-pick, etc.) ──
@@ -127,12 +143,16 @@ export async function _detectCommitHashes(call: any, result: any, executionManag
   // Covers: new branch pushes, unusual output formats, merge commits, etc.
   if (commits.length === 0 && executionManager?.hasEnvironment(agentId) && _isGitSuccess(output)) {
     try {
-      const headResult = await executionManager.exec(agentId, 'git log --format="%H %s" -1', { timeout: 10000 });
+      const headResult = await executionManager.exec(agentId, 'git log --format="%H %s" -1', {
+        timeout: 10000,
+      });
       const headOutput = ((headResult.stdout || '') + (headResult.stderr || '')).trim();
       const headMatch = headOutput.match(/^([a-f0-9]{40})\s+(.*)/);
       if (headMatch) {
         _addCommit(headMatch[1], headMatch[2]);
-        console.log(`🔗 [Commit] Fallback: captured HEAD ${headMatch[1].slice(0, 7)} via git log (cmd="${rawCmd.slice(0, 60)}")`);
+        console.log(
+          `🔗 [Commit] Fallback: captured HEAD ${headMatch[1].slice(0, 7)} via git log (cmd="${rawCmd.slice(0, 60)}")`
+        );
       }
     } catch (e: any) {
       console.warn(`⚠️  [Commit] Fallback git log failed: ${e.message}`);
@@ -144,14 +164,20 @@ export async function _detectCommitHashes(call: any, result: any, executionManag
     // If we detected a push range, fetch ALL commits in that range
     if (pushOldHash && pushNewHash && commits.length <= 2) {
       try {
-        const rangeResult = await executionManager.exec(agentId, `git log --format="%H %s" ${pushOldHash}..${pushNewHash}`, { timeout: 10000 });
+        const rangeResult = await executionManager.exec(
+          agentId,
+          `git log --format="%H %s" ${pushOldHash}..${pushNewHash}`,
+          { timeout: 10000 }
+        );
         const rangeOutput = ((rangeResult.stdout || '') + (rangeResult.stderr || '')).trim();
         if (rangeOutput) {
           for (const line of rangeOutput.split('\n')) {
             const m = line.match(/^([a-f0-9]{40})\s+(.*)/);
             if (m) _addCommit(m[1], m[2]);
           }
-          console.log(`🔗 [Commit] Push range: found ${commits.length} commit(s) in ${pushOldHash.slice(0, 7)}..${pushNewHash.slice(0, 7)}`);
+          console.log(
+            `🔗 [Commit] Push range: found ${commits.length} commit(s) in ${pushOldHash.slice(0, 7)}..${pushNewHash.slice(0, 7)}`
+          );
         }
       } catch (e: any) {
         console.warn(`⚠️  [Commit] Push range log failed: ${e.message}`);
@@ -162,19 +188,25 @@ export async function _detectCommitHashes(call: any, result: any, executionManag
     for (const c of commits) {
       if (c.hash.length < 40) {
         try {
-          const revResult = await executionManager.exec(agentId, `git rev-parse ${c.hash}`, { timeout: 5000 });
+          const revResult = await executionManager.exec(agentId, `git rev-parse ${c.hash}`, {
+            timeout: 5000,
+          });
           const fullHash = ((revResult.stdout || '') + (revResult.stderr || '')).trim();
           if (/^[a-f0-9]{40}$/.test(fullHash)) {
             c.hash = fullHash;
           }
-        } catch { /* keep short hash */ }
+        } catch {
+          /* keep short hash */
+        }
       }
     }
   }
 
   // Diagnostic: log when a git mutating command ran but no hash was detected
   if (commits.length === 0 && !_isGitNoop(output)) {
-    console.warn(`⚠️  [Commit] No hash detected for git command. cmd="${rawCmd.slice(0, 120)}" output="${output.slice(0, 300)}"`);
+    console.warn(
+      `⚠️  [Commit] No hash detected for git command. cmd="${rawCmd.slice(0, 120)}" output="${output.slice(0, 300)}"`
+    );
   }
 
   return commits;

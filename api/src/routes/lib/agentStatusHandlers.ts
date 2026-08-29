@@ -21,40 +21,57 @@ function applyProjectFilter(statuses: any[], project: unknown): any[] {
   return statuses.filter(s => (s.project || '').toLowerCase() === lower);
 }
 
-export const statusesHandler = (agentManager: any, scoped: boolean) => scoped
-  ? async (req: any, res: any) => {
-      const boardIds = await getUserBoardIdSet(req.user.userId);
-      const statuses = await agentManager.getAllStatuses(req.user.userId, req.user.role, boardIds);
-      res.json(applyProjectFilter(statuses, req.query.project));
-    }
-  : async (req: any, res: any) => {
-      const statuses = await agentManager.getAllStatuses(req.user.userId, req.user.role);
-      res.json(applyProjectFilter(statuses, req.query.project));
-    };
+export const statusesHandler = (agentManager: any, scoped: boolean) =>
+  scoped
+    ? async (req: any, res: any) => {
+        const boardIds = await getUserBoardIdSet(req.user.userId);
+        const statuses = await agentManager.getAllStatuses(
+          req.user.userId,
+          req.user.role,
+          boardIds
+        );
+        res.json(applyProjectFilter(statuses, req.query.project));
+      }
+    : async (req: any, res: any) => {
+        const statuses = await agentManager.getAllStatuses(req.user.userId, req.user.role);
+        res.json(applyProjectFilter(statuses, req.query.project));
+      };
 
-export const swarmStatusHandler = (agentManager: any, scoped: boolean) => scoped
-  ? async (req: any, res: any) => {
-      const boardIds = await getUserBoardIdSet(req.user.userId);
-      res.json(await agentManager.getSwarmStatus(req.user.userId, req.user.role, boardIds));
-    }
-  : async (req: any, res: any) => {
-      res.json(await agentManager.getSwarmStatus(req.user.userId, req.user.role));
-    };
+export const swarmStatusHandler = (agentManager: any, scoped: boolean) =>
+  scoped
+    ? async (req: any, res: any) => {
+        const boardIds = await getUserBoardIdSet(req.user.userId);
+        res.json(await agentManager.getSwarmStatus(req.user.userId, req.user.role, boardIds));
+      }
+    : async (req: any, res: any) => {
+        res.json(await agentManager.getSwarmStatus(req.user.userId, req.user.role));
+      };
 
-export const byProjectHandler = (agentManager: any, scoped: boolean) => scoped
-  ? async (req: any, res: any) => {
-      const boardIds = await getUserBoardIdSet(req.user.userId);
-      res.json(await agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role, boardIds));
-    }
-  : async (req: any, res: any) => {
-      res.json(await agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role));
-    };
+export const byProjectHandler = (agentManager: any, scoped: boolean) =>
+  scoped
+    ? async (req: any, res: any) => {
+        const boardIds = await getUserBoardIdSet(req.user.userId);
+        res.json(
+          await agentManager.getAgentsByProject(
+            req.params.project,
+            req.user.userId,
+            req.user.role,
+            boardIds
+          )
+        );
+      }
+    : async (req: any, res: any) => {
+        res.json(
+          await agentManager.getAgentsByProject(req.params.project, req.user.userId, req.user.role)
+        );
+      };
 
-export const projectSummaryHandler = (agentManager: any, scoped: boolean) => scoped
-  ? async (req: any, res: any) => {
-      const boardIds = await getUserBoardIdSet(req.user.userId);
-      res.json(agentManager.getProjectSummary(req.user.userId, req.user.role, boardIds));
-    }
-  : (req: any, res: any) => {
-      res.json(agentManager.getProjectSummary(req.user.userId, req.user.role));
-    };
+export const projectSummaryHandler = (agentManager: any, scoped: boolean) =>
+  scoped
+    ? async (req: any, res: any) => {
+        const boardIds = await getUserBoardIdSet(req.user.userId);
+        res.json(agentManager.getProjectSummary(req.user.userId, req.user.role, boardIds));
+      }
+    : (req: any, res: any) => {
+        res.json(agentManager.getProjectSummary(req.user.userId, req.user.role));
+      };

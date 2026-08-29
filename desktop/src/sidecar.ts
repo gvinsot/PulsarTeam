@@ -43,21 +43,38 @@ export class OfficeSidecar {
     await this.stop();
     this.root = folder;
     this.starting = this._start();
-    try { await this.starting; } finally { this.starting = null; }
+    try {
+      await this.starting;
+    } finally {
+      this.starting = null;
+    }
   }
 
   private async _start(): Promise<void> {
     this.port = await freePort();
-    const env = { ...process.env, OFFICE_HOST: config.sidecar.host, OFFICE_PORT: String(this.port), OFFICE_ROOT: this.root };
+    const env = {
+      ...process.env,
+      OFFICE_HOST: config.sidecar.host,
+      OFFICE_PORT: String(this.port),
+      OFFICE_ROOT: this.root,
+    };
 
     if (config.sidecar.binary) {
       this.proc = spawn(config.sidecar.binary, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     } else {
       const [cmd, ...args] = config.sidecar.devCommand.split(' ');
-      this.proc = spawn(cmd, args, { env, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+      this.proc = spawn(cmd, args, {
+        env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: process.platform === 'win32',
+      });
     }
     this.proc.stderr?.on('data', d => console.error('[office-sidecar]', String(d).trim()));
-    this.proc.on('exit', code => { console.warn(`[office-sidecar] exited (${code})`); this.proc = null; this.client = null; });
+    this.proc.on('exit', code => {
+      console.warn(`[office-sidecar] exited (${code})`);
+      this.proc = null;
+      this.client = null;
+    });
 
     // Wait for /health, then open the MCP client.
     const base = `http://${config.sidecar.host}:${this.port}`;
@@ -65,7 +82,9 @@ export class OfficeSidecar {
       try {
         const res = await fetch(`${base}/health`);
         if (res.ok) break;
-      } catch { /* not up yet */ }
+      } catch {
+        /* not up yet */
+      }
       await sleep(250);
     }
     this.client = new Client({ name: 'pulsarteam-desktop', version: '1.0.0' });
@@ -77,15 +96,25 @@ export class OfficeSidecar {
   async call(tool: string, args: Record<string, unknown>): Promise<string> {
     if (!this.client) throw new Error('office sidecar not started');
     const result: any = await this.client.callTool({ name: tool, arguments: args });
-    const text = (result?.content || []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n');
+    const text = (result?.content || [])
+      .filter((c: any) => c.type === 'text')
+      .map((c: any) => c.text)
+      .join('\n');
     if (result?.isError) throw new Error(text || 'office tool error');
     return text;
   }
 
   async stop(): Promise<void> {
-    try { await this.client?.close(); } catch { /* ignore */ }
+    try {
+      await this.client?.close();
+    } catch {
+      /* ignore */
+    }
     this.client = null;
-    if (this.proc) { this.proc.kill(); this.proc = null; }
+    if (this.proc) {
+      this.proc.kill();
+      this.proc = null;
+    }
   }
 }
 

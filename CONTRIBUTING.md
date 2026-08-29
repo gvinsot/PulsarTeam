@@ -6,16 +6,16 @@ version has to offer its source to its users.
 
 ## Repository layout
 
-| Path              | What it is                                                        |
-| ----------------- | ----------------------------------------------------------------- |
-| `api/`            | Express + Socket.IO control plane (TypeScript, Node 24)           |
-| `frontend/`       | React 18 + Vite SPA                                                |
+| Path              | What it is                                                             |
+| ----------------- | ---------------------------------------------------------------------- |
+| `api/`            | Express + Socket.IO control plane (TypeScript, Node 24)                |
+| `frontend/`       | React 18 + Vite SPA                                                    |
 | `runner-service/` | Generic agent runtime (Python); one image, `RUNNER_TYPE` picks the CLI |
-| `mcp-browser/`    | crawl4ai/Playwright web tools behind FastAPI                       |
-| `office-engine/`  | DOCX/XLSX/PPTX/PDF MCP tools (library)                             |
-| `office-service/` | Server-side deployment of `office-engine`                          |
-| `desktop/`        | Local companion app (local-folder bridge, Office sidecar)          |
-| `devops/`         | Docker Swarm stack + deploy hooks                                  |
+| `mcp-browser/`    | crawl4ai/Playwright web tools behind FastAPI                           |
+| `office-engine/`  | DOCX/XLSX/PPTX/PDF MCP tools (library)                                 |
+| `office-service/` | Server-side deployment of `office-engine`                              |
+| `desktop/`        | Local companion app (local-folder bridge, Office sidecar)              |
+| `devops/`         | Docker Swarm stack + deploy hooks                                      |
 
 ## Getting set up
 
@@ -66,7 +66,7 @@ flag with its measured cost in a comment block. That block is the contract:
   not a ratchet step.
 
 The same contract covers `any`. `@typescript-eslint/no-explicit-any` is a
-*warning*, and `npm run lint` runs `--max-warnings <N>` with `N` pinned in
+_warning_, and `npm run lint` runs `--max-warnings <N>` with `N` pinned in
 `package.json` to the count at the time it was set (api: 1485, frontend: 139).
 So:
 
@@ -102,7 +102,7 @@ fix: gitReconcile error recovery and range fallback for commit detection
 Keep a pull request to one concern. If you had to fix something unrelated to get
 there, say so in the description rather than leaving the reviewer to find it.
 
-State in the description which gates you ran and what you did *not* verify.
+State in the description which gates you ran and what you did _not_ verify.
 "Docker was not available, so the image builds are unbuilt" is useful. Silence
 is not.
 

@@ -65,7 +65,7 @@ function normalizeVector(vector) {
 
   if (norm === 0) return vector;
   const scale = 1 / Math.sqrt(norm);
-  return vector.map((value) => Number((value * scale).toFixed(8)));
+  return vector.map(value => Number((value * scale).toFixed(8)));
 }
 
 export function createHashedEmbedding(value = '', dimension = EMBEDDING_DIMENSION) {

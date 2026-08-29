@@ -4,9 +4,10 @@ import { constantTimeEquals } from '../lib/crypto.js';
 export function authenticateCoderApiKey(req, res, next) {
   const headerKey = req.headers['x-api-key'];
   const authHeader = req.headers.authorization;
-  const bearer = typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')
-    ? authHeader.slice(7).trim()
-    : null;
+  const bearer =
+    typeof authHeader === 'string' && authHeader.toLowerCase().startsWith('bearer ')
+      ? authHeader.slice(7).trim()
+      : null;
   const provided = (typeof headerKey === 'string' && headerKey) || bearer;
 
   if (!provided) {

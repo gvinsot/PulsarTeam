@@ -1,8 +1,23 @@
 import { useState, useCallback, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import {
-  LogOut, Plus, Globe, LayoutGrid, List,
-  Zap, Settings, MessageSquare, Key, Users, KanbanSquare, Menu, DollarSign, Eye, ChevronDown,
-  Sun, Moon, FolderGit2
+  LogOut,
+  Plus,
+  Globe,
+  LayoutGrid,
+  List,
+  Zap,
+  Settings,
+  MessageSquare,
+  Key,
+  Users,
+  KanbanSquare,
+  Menu,
+  DollarSign,
+  Eye,
+  ChevronDown,
+  Sun,
+  Moon,
+  FolderGit2,
 } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { api } from '../api';
@@ -38,10 +53,25 @@ const NAV_VIEWS = [
 ];
 
 export default function Dashboard({
-  user, agents, templates, projects, skills, mcpServers, thinkingMap, streamBuffers,
-  onLogout, onRefresh, socket, showToast, onImpersonate, onStopImpersonation,
-  loadTemplates, loadProjects, loadSkills, loadMcpServers,
-  onAgentCreated
+  user,
+  agents,
+  templates,
+  projects,
+  skills,
+  mcpServers,
+  thinkingMap,
+  streamBuffers,
+  onLogout,
+  onRefresh,
+  socket,
+  showToast,
+  onImpersonate,
+  onStopImpersonation,
+  loadTemplates,
+  loadProjects,
+  loadSkills,
+  loadMcpServers,
+  onAgentCreated,
 }) {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -51,7 +81,7 @@ export default function Dashboard({
     const hash = window.location.hash.replace('#', '').toLowerCase();
     return VALID_VIEWS.includes(hash) ? hash : 'tasks';
   });
-  const setActiveView = useCallback((view) => {
+  const setActiveView = useCallback(view => {
     setActiveViewRaw(view);
     window.history.replaceState(null, '', `#${view}`);
   }, []);
@@ -64,7 +94,7 @@ export default function Dashboard({
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [boards, setBoards] = useState([]);
   const [boardFilter, setBoardFilterRaw] = useState(() => safeGet('activeBoardId') || '');
-  const setBoardFilter = useCallback((val) => {
+  const setBoardFilter = useCallback(val => {
     setBoardFilterRaw(val);
     if (val) safeSet('activeBoardId', val);
     else safeRemove('activeBoardId');
@@ -72,7 +102,7 @@ export default function Dashboard({
   const [dbProjects, setDbProjects] = useState([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [projectFilter, setProjectFilterRaw] = useState(() => safeGet('activeProjectId') || '');
-  const setProjectFilter = useCallback((val) => {
+  const setProjectFilter = useCallback(val => {
     setProjectFilterRaw(val);
     if (val) safeSet('activeProjectId', val);
     else safeRemove('activeProjectId');
@@ -87,7 +117,8 @@ export default function Dashboard({
   // Reload the project list that feeds the header scope chip + ProjectDrawer.
   // Also refresh the app-level projects prop so downstream modals stay in sync.
   const reloadDbProjects = useCallback(() => {
-    api.getProjects()
+    api
+      .getProjects()
       .then(setDbProjects)
       .catch(() => setDbProjects([]))
       .finally(() => setProjectsLoaded(true));
@@ -95,8 +126,12 @@ export default function Dashboard({
   }, [loadProjects]);
 
   useEffect(() => {
-    api.getBoards().then(setBoards).catch(() => {});
-    api.getProjects()
+    api
+      .getBoards()
+      .then(setBoards)
+      .catch(() => {});
+    api
+      .getProjects()
       .then(setDbProjects)
       .catch(() => setDbProjects([]))
       .finally(() => setProjectsLoaded(true));
@@ -104,13 +139,15 @@ export default function Dashboard({
 
   const activeProject = useMemo(
     () => dbProjects.find(p => p.id === projectFilter) || null,
-    [dbProjects, projectFilter],
+    [dbProjects, projectFilter]
   );
 
   // Build lookup: boardId → project_id (from boards loaded above)
   const boardProjectMap = useMemo(() => {
     const m = new Map();
-    (boards || []).forEach(b => { if (b?.id) m.set(b.id, b.project_id || null); });
+    (boards || []).forEach(b => {
+      if (b?.id) m.set(b.id, b.project_id || null);
+    });
     return m;
   }, [boards]);
 
@@ -161,19 +198,22 @@ export default function Dashboard({
   useClickOutside(mobileMenuRef, () => setMobileMenuOpen(false), mobileMenuOpen);
   useClickOutside(userMenuRef, () => setUserMenuOpen(false), userMenuOpen);
 
-  const handleNavigateToVoiceAgent = useCallback((agentId) => {
+  const handleNavigateToVoiceAgent = useCallback(agentId => {
     setSelectedAgent(agentId);
     setRequestedTab('chat');
     // Clear requestedTab after it's consumed
     setTimeout(() => setRequestedTab(null), 100);
   }, []);
 
-  const handleNavigateToAgent = useCallback((agentId) => {
-    setActiveView('agents');
-    setSelectedAgent(agentId);
-    setRequestedTab('chat');
-    setTimeout(() => setRequestedTab(null), 100);
-  }, [setActiveView]);
+  const handleNavigateToAgent = useCallback(
+    agentId => {
+      setActiveView('agents');
+      setSelectedAgent(agentId);
+      setRequestedTab('chat');
+      setTimeout(() => setRequestedTab(null), 100);
+    },
+    [setActiveView]
+  );
 
   // Sort agents with 'Swarm Leaders' role first
   const sortedAgents = [...agents].sort((a, b) => {
@@ -194,7 +234,7 @@ export default function Dashboard({
 
   const selectedAgentData = sortedAgents.find(a => a.id === selectedAgent);
 
-  const handleStopAgent = (agentId) => {
+  const handleStopAgent = agentId => {
     if (socket) {
       socket.emit(WsEvents.REQ_STOP, { agentId });
     }
@@ -206,7 +246,10 @@ export default function Dashboard({
     idle: projectScopedAgents.filter(a => a.status === 'idle' && !thinkingMap[a.id]).length,
     errors: projectScopedAgents.filter(a => a.status === 'error').length,
     totalTokensIn: projectScopedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensIn || 0), 0),
-    totalTokensOut: projectScopedAgents.reduce((sum, a) => sum + (a.metrics?.totalTokensOut || 0), 0),
+    totalTokensOut: projectScopedAgents.reduce(
+      (sum, a) => sum + (a.metrics?.totalTokensOut || 0),
+      0
+    ),
   };
 
   return (
@@ -215,7 +258,10 @@ export default function Dashboard({
       {user?.impersonatedBy && (
         <div className="sticky top-0 z-[60] flex items-center justify-center gap-3 px-4 py-2 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-sm">
           <Eye className="w-4 h-4 flex-shrink-0" />
-          <span>Impersonating <strong>{user.displayName || user.username}</strong> (by {user.impersonatedBy})</span>
+          <span>
+            Impersonating <strong>{user.displayName || user.username}</strong> (by{' '}
+            {user.impersonatedBy})
+          </span>
           <button
             onClick={onStopImpersonation}
             className="ml-2 px-3 py-1 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 rounded-lg transition-colors"
@@ -251,7 +297,10 @@ export default function Dashboard({
                   {NAV_VIEWS.map(({ key, label, icon: Icon }) => (
                     <button
                       key={key}
-                      onClick={() => { setActiveView(key); setMobileMenuOpen(false); }}
+                      onClick={() => {
+                        setActiveView(key);
+                        setMobileMenuOpen(false);
+                      }}
                       className={`flex items-center gap-3 w-full px-4 py-2.5 text-sm font-medium transition-colors ${
                         activeView === key
                           ? 'bg-dark-700 text-indigo-400'
@@ -264,11 +313,16 @@ export default function Dashboard({
                   ))}
                   <div className="border-t border-dark-700 mt-1 pt-1">
                     <button
-                      onClick={() => { setMobileMenuOpen(false); setProjectDrawerOpen(true); }}
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        setProjectDrawerOpen(true);
+                      }}
                       className="flex items-center gap-3 w-full px-4 py-2.5 text-sm font-medium text-dark-300 hover:bg-dark-700/50 hover:text-dark-100 transition-colors"
                     >
                       <FolderGit2 className="w-4 h-4 text-purple-400" />
-                      <span className="truncate">{activeProject ? activeProject.name : 'All Projects'}</span>
+                      <span className="truncate">
+                        {activeProject ? activeProject.name : 'All Projects'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -282,10 +336,15 @@ export default function Dashboard({
             >
               <h1 className="text-lg sm:text-xl font-bold text-dark-100 flex items-center gap-1.5 min-w-0">
                 <FolderGit2 className="w-4 h-4 text-purple-400 shrink-0 hidden sm:block" />
-                <span className="truncate">{activeProject ? activeProject.name : 'All Projects'}</span>
+                <span className="truncate">
+                  {activeProject ? activeProject.name : 'All Projects'}
+                </span>
                 <ChevronDown className="w-4 h-4 text-dark-400 shrink-0 group-hover:text-dark-200 transition-colors" />
               </h1>
-              <p className="text-xs text-dark-400 -mt-0.5 truncate" title={`v${import.meta.env.VITE_APP_VERSION || 'dev'}`}>
+              <p
+                className="text-xs text-dark-400 -mt-0.5 truncate"
+                title={`v${import.meta.env.VITE_APP_VERSION || 'dev'}`}
+              >
                 Pulsar Team · {projectScopedAgents.length} agents active
               </p>
             </button>
@@ -295,7 +354,9 @@ export default function Dashboard({
                   key={key}
                   onClick={() => setActiveView(key)}
                   className={`flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors ${
-                    activeView === key ? 'bg-dark-700 text-indigo-400' : 'text-dark-400 hover:text-dark-200'
+                    activeView === key
+                      ? 'bg-dark-700 text-indigo-400'
+                      : 'text-dark-400 hover:text-dark-200'
                   }`}
                   title={title}
                 >
@@ -308,7 +369,14 @@ export default function Dashboard({
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { if (!showBroadcast) { loadProjects(); loadSkills(); loadMcpServers(); } setShowBroadcast(!showBroadcast); }}
+              onClick={() => {
+                if (!showBroadcast) {
+                  loadProjects();
+                  loadSkills();
+                  loadMcpServers();
+                }
+                setShowBroadcast(!showBroadcast);
+              }}
               className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                 showBroadcast
                   ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
@@ -337,16 +405,23 @@ export default function Dashboard({
                 onClick={() => setUserMenuOpen(prev => !prev)}
                 className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-dark-700 transition-colors"
               >
-                <span className="text-sm text-dark-300 hidden sm:inline">{user.displayName || user.username}</span>
+                <span className="text-sm text-dark-300 hidden sm:inline">
+                  {user.displayName || user.username}
+                </span>
                 {isAdmin && <Crown className="w-3.5 h-3.5 text-red-400" />}
                 {user?.role === 'advanced' && <UserCheck className="w-3.5 h-3.5 text-amber-400" />}
-                <ChevronDown className={`w-3.5 h-3.5 text-dark-400 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} />
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-dark-400 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`}
+                />
               </button>
               {userMenuOpen && (
                 <div className="absolute right-0 top-full mt-1 w-48 bg-dark-800 border border-dark-700 rounded-lg shadow-xl z-50 py-1">
                   {isAdmin && (
                     <button
-                      onClick={() => { setShowAdminPanel(true); setUserMenuOpen(false); }}
+                      onClick={() => {
+                        setShowAdminPanel(true);
+                        setUserMenuOpen(false);
+                      }}
                       className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-dark-300 hover:bg-dark-700 hover:text-dark-100 transition-colors"
                     >
                       <Settings className="w-4 h-4" />
@@ -354,7 +429,10 @@ export default function Dashboard({
                     </button>
                   )}
                   <button
-                    onClick={() => { onLogout(); setUserMenuOpen(false); }}
+                    onClick={() => {
+                      onLogout();
+                      setUserMenuOpen(false);
+                    }}
                     className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-dark-300 hover:bg-dark-700 hover:text-red-400 transition-colors"
                   >
                     <LogOut className="w-4 h-4" />
@@ -411,23 +489,30 @@ export default function Dashboard({
           )}
           {/* Agent list */}
           {activeView === 'agents' && (
-            <div className={`flex-1 p-4 sm:p-6 overflow-auto ${selectedAgentData ? 'hidden lg:block lg:w-1/2 xl:w-3/5' : ''}`}>
+            <div
+              className={`flex-1 p-4 sm:p-6 overflow-auto ${selectedAgentData ? 'hidden lg:block lg:w-1/2 xl:w-3/5' : ''}`}
+            >
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-semibold text-dark-200">
                     Agents
-                    <span className="ml-2 text-sm font-normal text-dark-400">({filteredAgents.length}{boardFilter ? `/${sortedAgents.length}` : ''})</span>
+                    <span className="ml-2 text-sm font-normal text-dark-400">
+                      ({filteredAgents.length}
+                      {boardFilter ? `/${sortedAgents.length}` : ''})
+                    </span>
                   </h2>
                   {scopedBoards.length > 1 && (
                     <select
                       value={boardFilter}
-                      onChange={(e) => setBoardFilter(e.target.value)}
+                      onChange={e => setBoardFilter(e.target.value)}
                       className="h-9 px-2 pr-7 text-sm bg-dark-800 border border-dark-700 rounded-lg text-dark-200 focus:outline-none focus:border-indigo-500 appearance-none"
                       style={{ backgroundImage: 'none' }}
                     >
                       <option value="">All boards</option>
                       {scopedBoards.map(b => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
                       ))}
                     </select>
                   )}
@@ -449,7 +534,11 @@ export default function Dashboard({
                   </div>
                   {!isBasic && (
                     <button
-                      onClick={() => { loadTemplates(); loadProjects(); setShowAddModal(true); }}
+                      onClick={() => {
+                        loadTemplates();
+                        loadProjects();
+                        setShowAddModal(true);
+                      }}
                       className="flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-indigo-500/20"
                     >
                       <Plus className="w-4 h-4" />
@@ -464,11 +553,23 @@ export default function Dashboard({
                   <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-dark-800 flex items-center justify-center">
                     <MessageSquare className="w-8 h-8 text-dark-500" />
                   </div>
-                  <h3 className="text-dark-300 font-medium mb-1">{boardFilter ? 'No agents in this board' : 'No agents yet'}</h3>
-                  <p className="text-dark-500 text-sm mb-4">{boardFilter ? 'Try selecting a different board' : isBasic ? 'No agents are available for you' : 'Create your first agent to get started'}</p>
+                  <h3 className="text-dark-300 font-medium mb-1">
+                    {boardFilter ? 'No agents in this board' : 'No agents yet'}
+                  </h3>
+                  <p className="text-dark-500 text-sm mb-4">
+                    {boardFilter
+                      ? 'Try selecting a different board'
+                      : isBasic
+                        ? 'No agents are available for you'
+                        : 'Create your first agent to get started'}
+                  </p>
                   {!isBasic && !boardFilter && (
                     <button
-                      onClick={() => { loadTemplates(); loadProjects(); setShowAddModal(true); }}
+                      onClick={() => {
+                        loadTemplates();
+                        loadProjects();
+                        setShowAddModal(true);
+                      }}
                       className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors"
                     >
                       <Plus className="w-4 h-4" />
@@ -477,11 +578,13 @@ export default function Dashboard({
                   )}
                 </div>
               ) : (
-                <div className={
-                  viewMode === 'grid'
-                    ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
-                    : 'space-y-3'
-                }>
+                <div
+                  className={
+                    viewMode === 'grid'
+                      ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4'
+                      : 'space-y-3'
+                  }
+                >
                   {(() => {
                     // Group agents that share a batchId into a single rendered card.
                     // Standalone agents (batchId == null) render normally. Order is
@@ -510,7 +613,7 @@ export default function Dashboard({
                             thinkingMap={thinkingMap}
                             selectedAgentId={selectedAgent}
                             viewMode={viewMode}
-                            onSelect={(id) => setSelectedAgent(id === selectedAgent ? null : id)}
+                            onSelect={id => setSelectedAgent(id === selectedAgent ? null : id)}
                             onStop={handleStopAgent}
                           />
                         );
@@ -523,7 +626,9 @@ export default function Dashboard({
                           thinking={thinkingMap[agent.id]}
                           isSelected={selectedAgent === agent.id}
                           viewMode={viewMode}
-                          onClick={() => setSelectedAgent(agent.id === selectedAgent ? null : agent.id)}
+                          onClick={() =>
+                            setSelectedAgent(agent.id === selectedAgent ? null : agent.id)
+                          }
                           onStop={handleStopAgent}
                         />
                       );
@@ -540,7 +645,9 @@ export default function Dashboard({
               below ~80 cols. The list column is flex-1, so it auto-fills the
               remainder. */}
           {activeView === 'agents' && selectedAgentData && (
-            <div className={`w-full min-w-0 ${CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}>
+            <div
+              className={`w-full min-w-0 ${CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}
+            >
               <AgentDetail
                 key={selectedAgentData.id}
                 agent={selectedAgentData}
@@ -572,7 +679,7 @@ export default function Dashboard({
             projects={projects}
             initialBoardId={boardFilter}
             onClose={() => setShowAddModal(false)}
-            onCreated={(agent) => {
+            onCreated={agent => {
               setShowAddModal(false);
               if (onAgentCreated) onAgentCreated(agent);
               setSelectedAgent(agent.id);
@@ -583,10 +690,7 @@ export default function Dashboard({
 
       {/* API Key Modal */}
       {showApiKeyModal && (
-        <ApiKeyModal
-          onClose={() => setShowApiKeyModal(false)}
-          showToast={showToast}
-        />
+        <ApiKeyModal onClose={() => setShowApiKeyModal(false)} showToast={showToast} />
       )}
 
       {/* Voice session floating indicator */}

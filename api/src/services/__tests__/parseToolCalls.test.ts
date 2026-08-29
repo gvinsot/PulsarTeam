@@ -44,8 +44,11 @@ test('a missing-paren call closes at end of line, not end of response', () => {
 });
 
 test('recovers @write_file with an unterminated """ block (consumes multi-line content)', () => {
-  const content = '# Spécification Technique\n\nSection avec une parenthèse (déséquilibrée\nligne finale';
-  const calls = parseToolCalls(`@write_file(docs/technical/01-system-architecture.md, """\n${content}`);
+  const content =
+    '# Spécification Technique\n\nSection avec une parenthèse (déséquilibrée\nligne finale';
+  const calls = parseToolCalls(
+    `@write_file(docs/technical/01-system-architecture.md, """\n${content}`
+  );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].tool, 'write_file');
   assert.equal(calls[0].args[0], 'docs/technical/01-system-architecture.md');

@@ -1,5 +1,10 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, getAllLlmConfigs, recordTokenUsage, getTaskByIdPrefix } from '../database.js';
+import {
+  getAllAgents,
+  getAllLlmConfigs,
+  recordTokenUsage,
+  getTaskByIdPrefix,
+} from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
@@ -32,40 +37,94 @@ export interface AgentManager {
   // ── status.ts ──
   _tasksByAgentMap(): Promise<Map<string, any[]>>;
   _buildAgentStatus(agent: any, todoList: any[]): any;
-  _countTasks(todoList: any[]): { waiting: number; active: number; done: number; error: number; total: number };
+  _countTasks(todoList: any[]): {
+    waiting: number;
+    active: number;
+    done: number;
+    error: number;
+    total: number;
+  };
   _applyTokenFloor(agent: any, db: { input: number; output: number } | undefined): void;
   _enrichAllAgentsStats(): Promise<void>;
   _enrichAgentStats(agentId: string): Promise<void>;
   getAgentStatus(id: string): Promise<any | null>;
-  getAllStatuses(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any[]>;
-  getAgentsByProject(projectName: string, userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any[]>;
+  getAllStatuses(
+    userId?: string | null,
+    role?: string | null,
+    userBoardIds?: Set<string>
+  ): Promise<any[]>;
+  getAgentsByProject(
+    projectName: string,
+    userId?: string | null,
+    role?: string | null,
+    userBoardIds?: Set<string>
+  ): Promise<any[]>;
   getProjectSummary(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): any;
-  getSwarmStatus(userId?: string | null, role?: string | null, userBoardIds?: Set<string>): Promise<any>;
+  getSwarmStatus(
+    userId?: string | null,
+    role?: string | null,
+    userBoardIds?: Set<string>
+  ): Promise<any>;
   setStatus(id: string, status: string, detail?: string | null): void;
   _markTaskStopped(t: any, ownerAgentId: string | null, stopTimestamp: string): void;
   _haltAgentTasks(id: string, stopTimestamp: string): Promise<void>;
   stopAgent(id: string): boolean;
-  beginStream(agentId: string, opts?: { userMessage?: string | null; userMessageId?: string | null }): void;
+  beginStream(
+    agentId: string,
+    opts?: { userMessage?: string | null; userMessageId?: string | null }
+  ): void;
   appendStreamChunk(agentId: string, chunk: string): void;
   endStream(agentId: string, extra?: Record<string, any>): void;
   errorStream(agentId: string, error: string): void;
   getActiveStream(agentId: string): ActiveStream | null;
-  getActiveStreamsForUser(userId: string, role: string | null, userBoardIds: Set<string>): ActiveStream[];
+  getActiveStreamsForUser(
+    userId: string,
+    role: string | null,
+    userBoardIds: Set<string>
+  ): ActiveStream[];
 
   // ── taskStats.ts ──
-  _collectTasks(projectFilter?: string | null, allowedBoardIds?: Set<string> | null): Promise<any[]>;
+  _collectTasks(
+    projectFilter?: string | null,
+    allowedBoardIds?: Set<string> | null
+  ): Promise<any[]>;
   getTaskStats(projectFilter?: string | null, allowedBoardIds?: Set<string> | null): Promise<any>;
-  getTaskTimeSeries(projectFilter?: string | null, days?: number, allowedBoardIds?: Set<string> | null): Promise<any>;
-  getAgentTimeSeries(projectFilter?: string | null, days?: number, allowedBoardIds?: Set<string> | null): Promise<any>;
+  getTaskTimeSeries(
+    projectFilter?: string | null,
+    days?: number,
+    allowedBoardIds?: Set<string> | null
+  ): Promise<any>;
+  getAgentTimeSeries(
+    projectFilter?: string | null,
+    days?: number,
+    allowedBoardIds?: Set<string> | null
+  ): Promise<any>;
 
   // ── broadcast.ts ──
-  broadcastMessage(message: string, streamCallback: any, agentIdFilter?: Set<string> | null): Promise<any[]>;
+  broadcastMessage(
+    message: string,
+    streamCallback: any,
+    agentIdFilter?: Set<string> | null
+  ): Promise<any[]>;
   handoff(fromId: string, toId: string, context: string, streamCallback: any): Promise<any>;
 
   // ── actionLogs.ts ──
-  addActionLog(agentId: string, type: string, message: string, errorDetail?: string | null): Promise<any | null>;
+  addActionLog(
+    agentId: string,
+    type: string,
+    message: string,
+    errorDetail?: string | null
+  ): Promise<any | null>;
   clearActionLogs(agentId: string): boolean;
-  _saveExecutionLog(creatorAgentId: string, taskId: string, executorId: string, startMsgIdx: number, startedAt: string, success?: boolean, actionMode?: string): Promise<void>;
+  _saveExecutionLog(
+    creatorAgentId: string,
+    taskId: string,
+    executorId: string,
+    startMsgIdx: number,
+    startedAt: string,
+    success?: boolean,
+    actionMode?: string
+  ): Promise<void>;
 
   // ── agentFeatures.ts ──
   addRagDocument(agentId: string, name: string, content: string): any | null;
@@ -84,40 +143,156 @@ export interface AgentManager {
 
   // ── chat.ts ──
   _releaseChat(id: string, isTopLevel: boolean, status?: 'idle' | null): void;
-  _failChat(agent: any, id: string, isTopLevel: boolean, errMessage: string, finalStatus?: 'error' | 'idle'): void;
-  sendMessage(id: string, userMessage: string, streamCallback: any, delegationDepth?: number, messageMeta?: any): Promise<any>;
+  _failChat(
+    agent: any,
+    id: string,
+    isTopLevel: boolean,
+    errMessage: string,
+    finalStatus?: 'error' | 'idle'
+  ): void;
+  sendMessage(
+    id: string,
+    userMessage: string,
+    streamCallback: any,
+    delegationDepth?: number,
+    messageMeta?: any
+  ): Promise<any>;
   _cleanMarkdown(response: string): string;
   _buildSystemPrompt(agent: any, id: string, delegationDepth: number): Promise<string>;
   buildRunnerInstructions(id: string): Promise<string>;
-  _assembleMessages(agent: any, messages: any[], systemContent: string, userMessage: string, delegationDepth: number, messageMeta: any, streamCallback: any): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }>;
-  _consumeStream(provider: any, messages: any[], ctx: { agent: any; id: string; useCliRunner: boolean; streamCallback: any; abortController: AbortController; contextTokens: number; activeTaskId: string | null; sessionKey: string; runnerSessionId: string | undefined; maxTokens: number; llmConfig: any; isContinuation: boolean }): Promise<{ text: string; thinking: string; finishReason: string | null; outputTokens: number }>;
-  _streamAndContinue(agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId?: string | null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }>;
-  _processPostResponseActions(agent: any, id: string, responseForParsing: string, fullResponse: string, streamCallback: any, delegationDepth: number, messageMeta: any): Promise<{ earlyReturn?: any }>;
+  _assembleMessages(
+    agent: any,
+    messages: any[],
+    systemContent: string,
+    userMessage: string,
+    delegationDepth: number,
+    messageMeta: any,
+    streamCallback: any
+  ): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }>;
+  _consumeStream(
+    provider: any,
+    messages: any[],
+    ctx: {
+      agent: any;
+      id: string;
+      useCliRunner: boolean;
+      streamCallback: any;
+      abortController: AbortController;
+      contextTokens: number;
+      activeTaskId: string | null;
+      sessionKey: string;
+      runnerSessionId: string | undefined;
+      maxTokens: number;
+      llmConfig: any;
+      isContinuation: boolean;
+    }
+  ): Promise<{ text: string; thinking: string; finishReason: string | null; outputTokens: number }>;
+  _streamAndContinue(
+    agent: any,
+    id: string,
+    messages: any[],
+    llmConfig: any,
+    streamCallback: any,
+    abortController: AbortController,
+    delegationDepth: number,
+    activeTaskId?: string | null
+  ): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }>;
+  _processPostResponseActions(
+    agent: any,
+    id: string,
+    responseForParsing: string,
+    fullResponse: string,
+    streamCallback: any,
+    delegationDepth: number,
+    messageMeta: any
+  ): Promise<{ earlyReturn?: any }>;
 
   // ── tools.ts ──
-  recordTaskCompletion(agentId: string, args?: { comment?: string; explicitTaskId?: string; commitsArg?: string; streamCallback?: any }): Promise<{ success: boolean; result: string; isTerminal?: boolean; taskId?: string }>;
-  _processToolCalls(agentId: string, response: string, streamCallback: any, depth?: number): Promise<any[]>;
+  recordTaskCompletion(
+    agentId: string,
+    args?: { comment?: string; explicitTaskId?: string; commitsArg?: string; streamCallback?: any }
+  ): Promise<{ success: boolean; result: string; isTerminal?: boolean; taskId?: string }>;
+  _processToolCalls(
+    agentId: string,
+    response: string,
+    streamCallback: any,
+    depth?: number
+  ): Promise<any[]>;
 
   // ── parsing.ts ──
   _parseAskCommands(text: string): Array<{ agentName: string; question: string }>;
   _listAvailableProjects(): Promise<string[]>;
 
   // ── tasks.ts ──
-  addTask(agentId: string | null, text: string, source: any, initialStatus?: string, options?: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null }): Promise<any | null>;
+  addTask(
+    agentId: string | null,
+    text: string,
+    source: any,
+    initialStatus?: string,
+    options?: {
+      boardId?: string;
+      repoFullName?: string | null;
+      repoProvider?: string | null;
+      secondaryRepos?: any;
+      storagePath?: string | null;
+      storageProvider?: string | null;
+      skipAutoRefine?: boolean;
+      recurrence?: any;
+      taskType?: string;
+      isManual?: boolean;
+      environment?: string | null;
+    }
+  ): Promise<any | null>;
   toggleTask(agentId: string, taskId: string): Promise<any | null>;
-  setTaskStatus(agentId: string, taskId: string, status: string, options?: { skipAutoRefine?: boolean; by?: string | null }): Promise<any | null>;
-  _editTaskField(agentId: string, taskId: string, field: string, value: any, options?: { by?: string; applyExtra?: (task: any) => void }): Promise<any | null>;
+  setTaskStatus(
+    agentId: string,
+    taskId: string,
+    status: string,
+    options?: { skipAutoRefine?: boolean; by?: string | null }
+  ): Promise<any | null>;
+  _editTaskField(
+    agentId: string,
+    taskId: string,
+    field: string,
+    value: any,
+    options?: { by?: string; applyExtra?: (task: any) => void }
+  ): Promise<any | null>;
   updateTaskTitle(agentId: string, taskId: string, title: string): Promise<any | null>;
   updateTaskText(agentId: string, taskId: string, text: string): Promise<any | null>;
-  updateTaskRepo(agentId: string, taskId: string, repoFullName: string | null, repoProvider?: string | null): Promise<any | null>;
-  updateTaskSecondaryRepos(agentId: string, taskId: string, secondaryRepos: any): Promise<any | null>;
-  updateTaskStorage(agentId: string, taskId: string, storagePath: string | null, storageProvider?: string | null): Promise<any | null>;
-  updateTaskType(agentId: string, taskId: string, taskType: string, by?: string): Promise<any | null>;
+  updateTaskRepo(
+    agentId: string,
+    taskId: string,
+    repoFullName: string | null,
+    repoProvider?: string | null
+  ): Promise<any | null>;
+  updateTaskSecondaryRepos(
+    agentId: string,
+    taskId: string,
+    secondaryRepos: any
+  ): Promise<any | null>;
+  updateTaskStorage(
+    agentId: string,
+    taskId: string,
+    storagePath: string | null,
+    storageProvider?: string | null
+  ): Promise<any | null>;
+  updateTaskType(
+    agentId: string,
+    taskId: string,
+    taskType: string,
+    by?: string
+  ): Promise<any | null>;
   updateTaskRecurrence(agentId: string, taskId: string, recurrence: any): Promise<any | null>;
   _isActiveTaskStatus(status: string): boolean;
   _getFirstColumnStatus(boardId: string): Promise<string>;
   _findTaskForCommitLink(agentId: string): Promise<{ task: any; ownerAgentId: string } | null>;
-  addTaskCommit(agentId: string, taskId: string, hash: string, message: string, meta?: { pushed?: boolean }): Promise<any | null>;
+  addTaskCommit(
+    agentId: string,
+    taskId: string,
+    hash: string,
+    message: string,
+    meta?: { pushed?: boolean }
+  ): Promise<any | null>;
   removeTaskCommit(agentId: string, taskId: string, hash: string): Promise<any | null>;
   setTaskAssignee(agentId: string, taskId: string, assigneeId: string): Promise<any | null>;
   deleteTask(agentId: string | null, taskId: string): Promise<boolean>;
@@ -126,14 +301,25 @@ export interface AgentManager {
   getDeletedTasks(): Promise<any[]>;
   clearTasks(agentId: string): boolean;
   transferTask(fromAgentId: string, taskId: string, toAgentId: string): Promise<any | null>;
-  executeTask(agentId: string, taskId: string, streamCallback: any): Promise<{ taskId: string; response: null }>;
+  executeTask(
+    agentId: string,
+    taskId: string,
+    streamCallback: any
+  ): Promise<{ taskId: string; response: null }>;
   executeAllTasks(agentId: string, streamCallback: any): Promise<any[]>;
   startTaskLoop(intervalMs?: number): void;
   _refreshWorkflowManagedStatuses(): void;
   stopTaskLoop(): void;
   _processRecurringTasks(): Promise<void>;
   _processNextPendingTasks(): void;
-  _waitForExecutionComplete(creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options?: any): Promise<string>;
+  _waitForExecutionComplete(
+    creatorAgentId: string,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    options?: any
+  ): Promise<string>;
   _resumeActiveTask(agentId: string, agent: any, task: any): Promise<void>;
   getTask(taskId: string): Promise<any | null>;
   saveTaskDirectly(task: any): any;
@@ -149,12 +335,21 @@ export interface AgentManager {
   _recheckConditionalTransitions(): void;
 
   // ── compaction.ts ──
-  _compactionThresholds(contextLimit: number): { maxRecent: number; compactTrigger: number; compactReset: number; safetyRatio: number };
+  _compactionThresholds(contextLimit: number): {
+    maxRecent: number;
+    compactTrigger: number;
+    compactReset: number;
+    safetyRatio: number;
+  };
   _estimateTokens(messages: any[]): number;
   _safeMaxTokens(messages: any[], agent: any, llmConfig?: any): number;
   _isContextExceededError(errMsg: string): boolean;
   _parseRateLimitReset(text: string): { retryAt: number; resetLabel: string } | null;
-  _truncateMessagesToFit(messages: any[], contextLimit: number, reserveOutputTokens?: number): boolean;
+  _truncateMessagesToFit(
+    messages: any[],
+    contextLimit: number,
+    reserveOutputTokens?: number
+  ): boolean;
   _compactHistory(agent: any, keepRecent?: number): Promise<void>;
 }
 
@@ -213,7 +408,13 @@ export class AgentManager {
   _reassigningStatuses: Set<string> | undefined;
   _staleActionCleanupDone: boolean | undefined;
 
-  constructor(io: any, skillManager: any, executionManager: any, mcpManager: any = null, codeIndexService: any = null) {
+  constructor(
+    io: any,
+    skillManager: any,
+    executionManager: any,
+    mcpManager: any = null,
+    codeIndexService: any = null
+  ) {
     this.agents = new Map();
     this.abortControllers = new Map();
     this._taskQueues = new Map();
@@ -226,14 +427,19 @@ export class AgentManager {
     this.codeIndexService = codeIndexService;
     this._updateTimers = new Map();
     this._updatePending = new Map();
-    this.wsEmitter = new WsEmitter(io, this.agents, this._sanitize.bind(this), this._enrichAgentStats.bind(this));
+    this.wsEmitter = new WsEmitter(
+      io,
+      this.agents,
+      this._sanitize.bind(this),
+      this._enrichAgentStats.bind(this)
+    );
     this._conditionProcessing = new Map();
     this._decideNoDecisionCounts = new Map();
     this.llmConfigs = new Map();
 
     // Debounced code index re-indexation
     this._codeIndexPending = new Map(); // repoId -> Set<filePath>
-    this._codeIndexTimers = new Map();  // repoId -> timer
+    this._codeIndexTimers = new Map(); // repoId -> timer
   }
 
   async loadFromDatabase() {
@@ -254,7 +460,9 @@ export class AgentManager {
         agent.projectContexts = agent.projectContexts || {};
         agent.runnerSessions = agent.runnerSessions || {};
         if (agent.projectChangedAt === undefined) {
-          agent.projectChangedAt = agent.project ? (agent.updatedAt || agent.createdAt || null) : null;
+          agent.projectChangedAt = agent.project
+            ? agent.updatedAt || agent.createdAt || null
+            : null;
         }
         // Tasks are no longer cached in memory — the DB is the single source of
         // truth and every reader/mutator goes through the task accessors directly.
@@ -297,7 +505,9 @@ export class AgentManager {
           configName: config.name,
         };
       }
-      console.warn(`[LLM] Agent ${agent.name} references unknown llmConfigId: ${agent.llmConfigId} — using an empty config`);
+      console.warn(
+        `[LLM] Agent ${agent.name} references unknown llmConfigId: ${agent.llmConfigId} — using an empty config`
+      );
     }
     return {
       provider: '',
@@ -341,36 +551,88 @@ export class AgentManager {
     const model = resolved.model || 'unknown';
     try {
       if (resolved.costPerInputToken != null && resolved.costPerOutputToken != null) {
-        const cost = (inputTokens / 1e6) * resolved.costPerInputToken
-                   + (outputTokens / 1e6) * resolved.costPerOutputToken;
-        recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
+        const cost =
+          (inputTokens / 1e6) * resolved.costPerInputToken +
+          (outputTokens / 1e6) * resolved.costPerOutputToken;
+        recordTokenUsage(
+          agent.id,
+          agent.name,
+          provider,
+          model,
+          inputTokens,
+          outputTokens,
+          cost,
+          userId,
+          contextTokens
+        );
         return;
       }
       const configs = this._getLlmConfigsCached();
       if (agent.llmConfigId) {
         const cfg = configs.find((c: any) => c.id === agent.llmConfigId);
         if (cfg && (cfg.costPerInputToken != null || cfg.costPerOutputToken != null)) {
-          const cost = (inputTokens / 1e6) * (cfg.costPerInputToken || 0)
-                     + (outputTokens / 1e6) * (cfg.costPerOutputToken || 0);
-          recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
+          const cost =
+            (inputTokens / 1e6) * (cfg.costPerInputToken || 0) +
+            (outputTokens / 1e6) * (cfg.costPerOutputToken || 0);
+          recordTokenUsage(
+            agent.id,
+            agent.name,
+            provider,
+            model,
+            inputTokens,
+            outputTokens,
+            cost,
+            userId,
+            contextTokens
+          );
           return;
         }
       }
       const cfgByModel = configs.find((c: any) => c.model === model);
-      if (cfgByModel && (cfgByModel.costPerInputToken != null || cfgByModel.costPerOutputToken != null)) {
-        const cost = (inputTokens / 1e6) * (cfgByModel.costPerInputToken || 0)
-                   + (outputTokens / 1e6) * (cfgByModel.costPerOutputToken || 0);
-        recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
+      if (
+        cfgByModel &&
+        (cfgByModel.costPerInputToken != null || cfgByModel.costPerOutputToken != null)
+      ) {
+        const cost =
+          (inputTokens / 1e6) * (cfgByModel.costPerInputToken || 0) +
+          (outputTokens / 1e6) * (cfgByModel.costPerOutputToken || 0);
+        recordTokenUsage(
+          agent.id,
+          agent.name,
+          provider,
+          model,
+          inputTokens,
+          outputTokens,
+          cost,
+          userId,
+          contextTokens
+        );
         return;
       }
       const cost = (inputTokens / 1e6) * 3 + (outputTokens / 1e6) * 15;
-      recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, cost, userId, contextTokens);
+      recordTokenUsage(
+        agent.id,
+        agent.name,
+        provider,
+        model,
+        inputTokens,
+        outputTokens,
+        cost,
+        userId,
+        contextTokens
+      );
     } catch (err: any) {
-      console.warn("Failed to record token usage:", err.message);
+      console.warn('Failed to record token usage:', err.message);
     }
   }
 
-  _recordUsageDirect(agent: any, inputTokens: number, outputTokens: number, costUsd: number, contextTokens: number = 0) {
+  _recordUsageDirect(
+    agent: any,
+    inputTokens: number,
+    outputTokens: number,
+    costUsd: number,
+    contextTokens: number = 0
+  ) {
     // Record usage with the actual cost reported by the provider (e.g. Claude Paid Plan via coder-service).
     // This bypasses the token-based cost calculation used by _recordUsage.
     const userId = agent.ownerId || null;
@@ -378,9 +640,19 @@ export class AgentManager {
     const provider = resolved.configName || resolved.provider || 'unknown';
     const model = resolved.model || 'unknown';
     try {
-      recordTokenUsage(agent.id, agent.name, provider, model, inputTokens, outputTokens, costUsd, userId, contextTokens);
+      recordTokenUsage(
+        agent.id,
+        agent.name,
+        provider,
+        model,
+        inputTokens,
+        outputTokens,
+        costUsd,
+        userId,
+        contextTokens
+      );
     } catch (err: any) {
-      console.warn("Failed to record direct token usage:", err.message);
+      console.warn('Failed to record direct token usage:', err.message);
     }
   }
 
@@ -409,7 +681,11 @@ export class AgentManager {
         sanitizedCredentials[name] = { hasValue: !!value };
       }
     }
-    const sanitized: any = { ...rest, mcpAuth: sanitizedMcpAuth, credentials: sanitizedCredentials };
+    const sanitized: any = {
+      ...rest,
+      mcpAuth: sanitizedMcpAuth,
+      credentials: sanitizedCredentials,
+    };
     // The agents view renders per-agent task counts. `agent.tasks` is a cached
     // snapshot refreshed by _enrichAgentStats/_enrichAllAgentsStats on the emit
     // paths; default it so the shape is stable before the first refresh.
@@ -442,7 +718,10 @@ export class AgentManager {
    * chunks so that any socket that joins (or reconnects) while the stream is
    * in flight can resume from where it is via REQ_STREAM_STATE / STREAM_RESUME.
    * Always emits STREAM_START to the agent's board room. */
-  beginStream(agentId: string, opts: { userMessage?: string | null; userMessageId?: string | null } = {}) {
+  beginStream(
+    agentId: string,
+    opts: { userMessage?: string | null; userMessageId?: string | null } = {}
+  ) {
     const agent = this.agents.get(agentId);
     const stream: ActiveStream = {
       agentId,
@@ -454,7 +733,10 @@ export class AgentManager {
       userMessageId: opts.userMessageId ?? null,
     };
     this._activeStreams.set(agentId, stream);
-    this.wsEmitter.streamStart(agentId, { startedAt: stream.startedAt, userMessageId: stream.userMessageId });
+    this.wsEmitter.streamStart(agentId, {
+      startedAt: stream.startedAt,
+      userMessageId: stream.userMessageId,
+    });
   }
 
   /** Append a chunk to the active stream buffer and broadcast it. Safe to
@@ -491,7 +773,11 @@ export class AgentManager {
   }
 
   /** Return active stream snapshots for the agents accessible to a user. */
-  getActiveStreamsForUser(userId: string, role: string | null, userBoardIds: Set<string>): ActiveStream[] {
+  getActiveStreamsForUser(
+    userId: string,
+    role: string | null,
+    userBoardIds: Set<string>
+  ): ActiveStream[] {
     const accessible = this._agentsForUser(userId, role || undefined, userBoardIds);
     const accessibleIds = new Set(accessible.map((a: any) => a.id));
     const out: ActiveStream[] = [];
@@ -516,8 +802,16 @@ export class AgentManager {
 
   _randomColor() {
     const colors = [
-      '#6366f1', '#8b5cf6', '#ec4899', '#ef4444', '#f97316',
-      '#eab308', '#22c55e', '#14b8a6', '#06b6d4', '#3b82f6'
+      '#6366f1',
+      '#8b5cf6',
+      '#ec4899',
+      '#ef4444',
+      '#f97316',
+      '#eab308',
+      '#22c55e',
+      '#14b8a6',
+      '#06b6d4',
+      '#3b82f6',
     ];
     return colors[Math.floor(Math.random() * colors.length)];
   }
@@ -559,7 +853,9 @@ export class AgentManager {
     try {
       const repos = await this.codeIndexService.findReposByProject(projectKey);
       if (repos.length === 0) {
-        console.log(`📇 [CodeIndex] No indexed repo found for project "${projectKey}" — skipping update`);
+        console.log(
+          `📇 [CodeIndex] No indexed repo found for project "${projectKey}" — skipping update`
+        );
         return;
       }
 
@@ -570,7 +866,9 @@ export class AgentManager {
 
       for (const repo of repos) {
         const result = await this.codeIndexService.updateFiles(repo.id, fileEntries);
-        console.log(`📇 [CodeIndex] Updated index "${repo.name}" (${repo.id}): +${result.added} ~${result.updated} -${result.removed} files`);
+        console.log(
+          `📇 [CodeIndex] Updated index "${repo.name}" (${repo.id}): +${result.added} ~${result.updated} -${result.removed} files`
+        );
       }
     } catch (err: any) {
       console.error(`📇 [CodeIndex] Failed to update index for "${projectKey}":`, err.message);

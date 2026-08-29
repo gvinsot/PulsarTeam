@@ -17,7 +17,6 @@ import { hasIdleAgentWithRole } from '../workflow/agentSelector.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const workflowMethods = {
-
   /**
    * Evaluate a single workflow condition.
    * Delegates to the pure-logic evaluator in TaskStateMachine.
@@ -37,7 +36,11 @@ export const workflowMethods = {
   /** True if the agent has an active task it executes — as assignee, or as owner
    * of an unassigned task. DB-backed (the single source of truth); replaces the
    * old cross-agent in-memory scan. */
-  async agentHasActiveTask(this: any, agentId: string, excludeTaskId: string | null = null): Promise<boolean> {
+  async agentHasActiveTask(
+    this: any,
+    agentId: string,
+    excludeTaskId: string | null = null
+  ): Promise<boolean> {
     return hasActiveTask(agentId, excludeTaskId);
   },
 
@@ -54,7 +57,9 @@ export const workflowMethods = {
    * Delegates to WorkflowEngine.processColumnEntry.
    */
   _checkAutoRefine(this: any, task: any, { by = null }: { by?: string | null } = {}): void {
-    console.log(`[Workflow] _checkAutoRefine: status="${task.status}" task="${task.id}" "${(task.title || task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`);
+    console.log(
+      `[Workflow] _checkAutoRefine: status="${task.status}" task="${task.id}" "${(task.title || task.text || '').slice(0, 60)}" by="${by || 'unknown'}"`
+    );
 
     if (task.status === 'error') {
       console.log(`[Workflow] _checkAutoRefine: skipping — error status`);
@@ -62,8 +67,9 @@ export const workflowMethods = {
     }
 
     // Fire-and-forget: processColumnEntry is async
-    processColumnEntry(task, this, { by })
-      .catch((err: any) => console.error(`[Workflow] processColumnEntry failed:`, err.message));
+    processColumnEntry(task, this, { by }).catch((err: any) =>
+      console.error(`[Workflow] processColumnEntry failed:`, err.message)
+    );
   },
 
   /**
@@ -71,7 +77,8 @@ export const workflowMethods = {
    * Delegates to WorkflowEngine.recheckPendingTransitions.
    */
   _recheckConditionalTransitions(this: any): void {
-    recheckPendingTransitions(this)
-      .catch((err: any) => console.error(`[Workflow] recheckPendingTransitions failed:`, err.message));
+    recheckPendingTransitions(this).catch((err: any) =>
+      console.error(`[Workflow] recheckPendingTransitions failed:`, err.message)
+    );
   },
 };

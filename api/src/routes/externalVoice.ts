@@ -37,7 +37,10 @@ export function externalVoiceRoutes(agentManager) {
   // backend — only credentials and per-agent voice config.
   router.get('/config/:agentId', async (req, res) => {
     const agent = agentManager.agents.get(req.params.agentId);
-    if (!agent) { res.status(404).json({ error: 'Agent not found' }); return; }
+    if (!agent) {
+      res.status(404).json({ error: 'Agent not found' });
+      return;
+    }
     if (!agent.isVoice || agent.voiceMode !== 'external') {
       res.status(400).json({ error: 'Agent is not an external voice agent' });
       return;
@@ -49,7 +52,8 @@ export function externalVoiceRoutes(agentManager) {
 
     if (!sttUrl || !ttsUrl) {
       res.status(503).json({
-        error: 'STT/TTS services are not configured. Set sttServiceUrl and ttsServiceUrl in Admin Settings.',
+        error:
+          'STT/TTS services are not configured. Set sttServiceUrl and ttsServiceUrl in Admin Settings.',
       });
       return;
     }
@@ -89,7 +93,14 @@ export function externalVoiceRoutes(agentManager) {
         ? { available: true, wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 }
         : { available: false },
       tts: ttsUrl
-        ? { available: true, wsUrl: ttsUrl, sampleRate: 22050, encoding: 'pcm16', channels: 1, voiceId }
+        ? {
+            available: true,
+            wsUrl: ttsUrl,
+            sampleRate: 22050,
+            encoding: 'pcm16',
+            channels: 1,
+            voiceId,
+          }
         : { available: false },
     });
   });
@@ -98,9 +109,15 @@ export function externalVoiceRoutes(agentManager) {
   // ack, then closes. Used by Admin Settings "Test connection" buttons.
   // Body: { url, apiKey } — when omitted, falls back to the saved settings
   // for the given service ("stt" or "tts").
-  async function probeWebSocket(wsUrl: string, timeoutMs = 5000): Promise<{ ok: boolean; error?: string; latencyMs?: number }> {
+  async function probeWebSocket(
+    wsUrl: string,
+    timeoutMs = 5000
+  ): Promise<{ ok: boolean; error?: string; latencyMs?: number }> {
     if (typeof (globalThis as any).WebSocket === 'undefined') {
-      return { ok: false, error: 'Node WebSocket API not available on this server (Node >= 22 required).' };
+      return {
+        ok: false,
+        error: 'Node WebSocket API not available on this server (Node >= 22 required).',
+      };
     }
     return new Promise(resolve => {
       let settled = false;
@@ -109,7 +126,9 @@ export function externalVoiceRoutes(agentManager) {
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        try { ws?.close(); } catch {}
+        try {
+          ws?.close();
+        } catch {}
         resolve({ ok: false, error: `Timeout after ${timeoutMs}ms` });
       }, timeoutMs);
       try {
@@ -123,14 +142,18 @@ export function externalVoiceRoutes(agentManager) {
         settled = true;
         clearTimeout(timer);
         const latencyMs = Date.now() - start;
-        try { ws.close(1000, 'probe'); } catch {}
+        try {
+          ws.close(1000, 'probe');
+        } catch {}
         resolve({ ok: true, latencyMs });
       });
       ws.addEventListener('error', (ev: any) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        try { ws.close(); } catch {}
+        try {
+          ws.close();
+        } catch {}
         resolve({ ok: false, error: ev?.message || 'WebSocket error' });
       });
       ws.addEventListener('close', (ev: any) => {
@@ -138,7 +161,10 @@ export function externalVoiceRoutes(agentManager) {
         settled = true;
         clearTimeout(timer);
         if (ev?.code && ev.code !== 1000) {
-          resolve({ ok: false, error: `Closed with code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}` });
+          resolve({
+            ok: false,
+            error: `Closed with code ${ev.code}${ev.reason ? `: ${ev.reason}` : ''}`,
+          });
         } else {
           resolve({ ok: true, latencyMs: Date.now() - start });
         }

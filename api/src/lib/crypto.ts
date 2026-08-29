@@ -15,13 +15,7 @@
  * `secrets.ts` aborts startup if it is missing or known-default.
  */
 
-import {
-  createCipheriv,
-  createDecipheriv,
-  hkdfSync,
-  randomBytes,
-  timingSafeEqual,
-} from 'crypto';
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, timingSafeEqual } from 'crypto';
 import { readSecret } from '../secrets.js';
 
 export const ENCRYPTION_PREFIX = 'enc:v1:';
@@ -48,7 +42,7 @@ function getKey(): Buffer {
   if (!raw) {
     throw new Error(
       'ENCRYPTION_KEY is not set — required to encrypt/decrypt credentials at rest. ' +
-      'Generate one with `openssl rand -hex 32` and configure it as a Docker secret.'
+        'Generate one with `openssl rand -hex 32` and configure it as a Docker secret.'
     );
   }
 

@@ -16,13 +16,13 @@ export default {
           800: 'rgb(var(--dark-800) / <alpha-value>)',
           900: 'rgb(var(--dark-900) / <alpha-value>)',
           950: 'rgb(var(--dark-950) / <alpha-value>)',
-        }
+        },
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'spin-slow': 'spin 3s linear infinite',
-      }
-    }
+      },
+    },
   },
-  plugins: []
+  plugins: [],
 };

@@ -17,13 +17,17 @@ function _evictStaleLocks() {
   const now = Date.now();
   for (const [key, entry] of _executionLocks) {
     if (now - entry.ts > LOCK_TTL_MS) {
-      console.warn(`[AgentSelector] Evicting stale execution lock: ${key} (age: ${Math.round((now - entry.ts) / 1000)}s)`);
+      console.warn(
+        `[AgentSelector] Evicting stale execution lock: ${key} (age: ${Math.round((now - entry.ts) / 1000)}s)`
+      );
       _executionLocks.delete(key);
     }
   }
   for (const [key, ts] of _busyAgents) {
     if (now - ts > LOCK_TTL_MS) {
-      console.warn(`[AgentSelector] Evicting stale busy-agent flag: ${key} (age: ${Math.round((now - ts) / 1000)}s)`);
+      console.warn(
+        `[AgentSelector] Evicting stale busy-agent flag: ${key} (age: ${Math.round((now - ts) / 1000)}s)`
+      );
       _busyAgents.delete(key);
     }
   }
@@ -124,7 +128,11 @@ export function hasIdleAgentWithRole(agents: Map<any, any>, role?: string): bool
  * user has an agent for), and hard-filtering there would strand the task with
  * no agent at all rather than run it slightly off-home.
  */
-function _preferOrFallback(pool: any[], predicate: (a: any) => boolean, fallbackWarning: string): any[] {
+function _preferOrFallback(
+  pool: any[],
+  predicate: (a: any) => boolean,
+  fallbackWarning: string
+): any[] {
   const preferred = pool.filter(predicate);
   if (preferred.length > 0) return preferred;
   if (fallbackWarning) console.warn(fallbackWarning);
@@ -144,7 +152,14 @@ function _preferOrFallback(pool: any[], predicate: (a: any) => boolean, fallback
  * @param {string|null} boardId    - board to prefer (not a filter — see _preferOrFallback)
  * @returns {Object|null}          - the selected agent, or null
  */
-export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: string | null = null, getAgentTasks: (agentId: any) => any[] = () => [], boardId: string | null = null, taskProject: string | null = null) {
+export function findAgentByRole(
+  agents: Map<any, any>,
+  role: string,
+  ownerId: string | null = null,
+  getAgentTasks: (agentId: any) => any[] = () => [],
+  boardId: string | null = null,
+  taskProject: string | null = null
+) {
   const allAgents = Array.from(agents.values()) as any[];
 
   // Step 1: match role + owner filter. The board is applied later as a
@@ -195,14 +210,14 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
     eligible = _preferOrFallback(
       eligible,
       (a: any) => a.boardId === boardId,
-      `[AgentSelector] No idle role="${role}" agent on board="${boardId}" — reusing an idle agent from another board`,
+      `[AgentSelector] No idle role="${role}" agent on board="${boardId}" — reusing an idle agent from another board`
     );
   }
   if (taskProject) {
     eligible = _preferOrFallback(
       eligible,
       (a: any) => a.project === taskProject,
-      `[AgentSelector] No idle role="${role}" agent on project="${taskProject}" — will reuse an idle agent from another repo (it will be switched)`,
+      `[AgentSelector] No idle role="${role}" agent on project="${taskProject}" — will reuse an idle agent from another repo (it will be switched)`
     );
   }
 
@@ -227,7 +242,9 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
     }
   }
 
-  console.log(`[AgentSelector] Selected "${best.name}" (${bestCount} tasks) from ${eligible.length} eligible agents`);
+  console.log(
+    `[AgentSelector] Selected "${best.name}" (${bestCount} tasks) from ${eligible.length} eligible agents`
+  );
   return best;
 }
 
@@ -235,7 +252,15 @@ export function findAgentByRole(agents: Map<any, any>, role: string, ownerId: st
  * Find the best agent for a role-based assignment (for assign_agent actions).
  * Same logic as findAgentByRole but does NOT filter on idle status (for pure assignment).
  */
-export function findAgentForAssignment(agents: Map<any, any>, role: string, ownerId: string | null = null, getAgentTasks: (agentId: any) => any[] = () => [], excludeTaskId: string | null = null, boardId: string | null = null, taskProject: string | null = null) {
+export function findAgentForAssignment(
+  agents: Map<any, any>,
+  role: string,
+  ownerId: string | null = null,
+  getAgentTasks: (agentId: any) => any[] = () => [],
+  excludeTaskId: string | null = null,
+  boardId: string | null = null,
+  taskProject: string | null = null
+) {
   const allAgents = Array.from(agents.values()) as any[];
   const candidates = allAgents.filter(
     (a: any) =>
@@ -254,14 +279,14 @@ export function findAgentForAssignment(agents: Map<any, any>, role: string, owne
     pool = _preferOrFallback(
       pool,
       (a: any) => a.boardId === boardId,
-      `[AgentSelector] assign: no role="${role}" agent on board="${boardId}" — falling back to any board`,
+      `[AgentSelector] assign: no role="${role}" agent on board="${boardId}" — falling back to any board`
     );
   }
   if (taskProject) {
     pool = _preferOrFallback(
       pool,
       (a: any) => a.project === taskProject,
-      `[AgentSelector] assign: no role="${role}" agent on project="${taskProject}" — falling back to any project`,
+      `[AgentSelector] assign: no role="${role}" agent on project="${taskProject}" — falling back to any project`
     );
   }
 

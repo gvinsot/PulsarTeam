@@ -44,17 +44,17 @@ const mcpServers = firstArrayExport(mcpServersModule);
 
 test('seeded builtin plugins reference the canonical MCP server ids', () => {
   for (const skillName of ['OneDrive', 'Code Index']) {
-    const skill = skills.find((entry) => entry?.name === skillName);
+    const skill = skills.find(entry => entry?.name === skillName);
     assert.ok(skill, `Expected seeded plugin for ${skillName}`);
 
-    const mcpServer = mcpServers.find((entry) => entry?.name === skillName);
+    const mcpServer = mcpServers.find(entry => entry?.name === skillName);
     assert.ok(mcpServer?.id, `Expected MCP server seed for ${skillName}`);
 
     const refs = collectServerRefs(skill);
     assert.ok(refs.length > 0, `${skillName} should declare an MCP server reference in seed data`);
     assert.ok(
       refs.includes(mcpServer.id),
-      `${skillName} should reference canonical MCP server id "${mcpServer.id}", got: ${refs.join(', ') || '(none)'}`,
+      `${skillName} should reference canonical MCP server id "${mcpServer.id}", got: ${refs.join(', ') || '(none)'}`
     );
   }
 });

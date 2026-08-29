@@ -46,7 +46,10 @@ test('normalizeStoragePath trims, length-caps, and rejects empty/non-string', ()
 
 // ── normalizeSecondaryRepos ──────────────────────────────────────────────────
 test('normalizeSecondaryRepos coerces shapes, defaults provider, drops invalid', () => {
-  const out = normalizeSecondaryRepos(['a/b', 'a/b', { fullName: 'c/d' }, 'nope', { foo: 1 }], 'x/y');
+  const out = normalizeSecondaryRepos(
+    ['a/b', 'a/b', { fullName: 'c/d' }, 'nope', { foo: 1 }],
+    'x/y'
+  );
   assert.deepEqual(out, [
     { provider: 'github', fullName: 'a/b' },
     { provider: 'github', fullName: 'c/d' },
@@ -56,15 +59,14 @@ test('normalizeSecondaryRepos coerces shapes, defaults provider, drops invalid',
 test('normalizeSecondaryRepos excludes the primary repo', () => {
   assert.deepEqual(
     normalizeSecondaryRepos(['x/y', 'a/b'], 'x/y').map(r => r.fullName),
-    ['a/b'],
+    ['a/b']
   );
 });
 
 test('normalizeSecondaryRepos preserves an explicit provider', () => {
-  assert.deepEqual(
-    normalizeSecondaryRepos([{ provider: 'gitlab', fullName: 'a/b' }]),
-    [{ provider: 'gitlab', fullName: 'a/b' }],
-  );
+  assert.deepEqual(normalizeSecondaryRepos([{ provider: 'gitlab', fullName: 'a/b' }]), [
+    { provider: 'gitlab', fullName: 'a/b' },
+  ]);
 });
 
 test('normalizeSecondaryRepos returns [] for non-array input', () => {
