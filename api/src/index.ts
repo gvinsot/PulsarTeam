@@ -6,7 +6,9 @@ import { ZodError } from 'zod';
 import { formatZodError } from './lib/validate.js';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { authenticateToken, requireRole, getJwtSecret } from './middleware/auth.js';
+import { authenticateToken, requireRole } from './middleware/auth.js';
+import { readSessionCookie, verifySessionToken } from './middleware/session.js';
+import { csrfProtection } from './middleware/csrf.js';
 import { authRouter, ensureAdminSeeded } from './routes/authLogin.js';
 import { agentRoutes } from './routes/agents.js';
 import { templateRoutes } from './routes/templates.js';
@@ -144,10 +146,10 @@ installTerminalProxy(httpServer, executionManager, agentManager);
 app.use(cors(buildCorsOptions(corsOrigins)));
 
 // Rewrites every outgoing Set-Cookie to carry HttpOnly + SameSite + (in prod)
-// Secure. The API authenticates with bearer JWTs and issues no cookies of its
-// own, so this is a guard rail: neither a future endpoint nor a third-party
-// dependency can ship an unprotected cookie. Mounted before the routes so it
-// wraps res.setHeader for every request.
+// Secure. The session cookie already sets those itself (middleware/session.ts);
+// this is the guard rail for every other cookie, so neither a future endpoint
+// nor a third-party dependency can ship an unprotected one. Mounted before the
+// routes so it wraps res.setHeader for every request.
 app.use(cookieSecurity());
 
 // Security headers — defense-in-depth when accessed without a reverse proxy
@@ -186,6 +188,13 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' },
 });
 app.use('/api/', apiLimiter);
+
+// The session lives in an HttpOnly cookie, which the browser attaches to every
+// same-site request — including one a third-party page triggered. So every
+// state-changing request authenticated that way must echo the session's CSRF
+// token in X-CSRF-Token. Bearer-authenticated and unauthenticated requests are
+// waved through; see middleware/csrf.ts for why that is safe.
+app.use('/api', csrfProtection());
 
 app.use('/api/auth', authRouter);
 
@@ -357,25 +366,29 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 });
 
 io.use((socket, next) => {
-  // Validate Origin header to prevent cross-site WebSocket hijacking
+  // Validate Origin header to prevent cross-site WebSocket hijacking. This is
+  // the socket's CSRF defence: a WebSocket handshake cannot carry a custom
+  // header, so the X-CSRF-Token check that guards the HTTP API is unavailable
+  // here. SameSite=Lax on the session cookie is the second layer.
   const origin = socket.handshake.headers.origin;
   if (origin && !isOriginAllowed(origin, corsOrigins)) {
     logRejectedOrigin(origin, 'ws');
     return next(new Error('Origin not allowed'));
   }
 
-  const token = socket.handshake.auth.token;
+  // Browsers authenticate with the HttpOnly session cookie, which rides along
+  // on the same-origin handshake — the SPA has no token to hand over any more.
+  // `auth.token` stays supported for non-browser clients, notably the desktop
+  // bridge, which connects straight to the platform with the JWT it reads off
+  // the Cookie header of the requests it proxies.
+  const token = socket.handshake.auth?.token || readSessionCookie(socket.handshake.headers.cookie);
   if (!token) return next(new Error('Authentication required'));
 
-  import('jsonwebtoken').then(jwt => {
-    try {
-      const decoded = jwt.default.verify(token, getJwtSecret());
-      (socket as any).user = decoded;
-      next();
-    } catch (err) {
-      next(new Error('Invalid token'));
-    }
-  });
+  const claims = verifySessionToken(token);
+  if (!claims) return next(new Error('Invalid token'));
+
+  (socket as any).user = claims;
+  next();
 });
 
 setupSocketHandlers(io, agentManager);

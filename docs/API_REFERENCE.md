@@ -40,6 +40,10 @@ Complete reference for the PulsarTeam REST API, WebSocket events, and MCP endpoi
 
 PulsarTeam uses **JWT** (JSON Web Token) authentication for internal API endpoints and **API Key** authentication for the external Swarm API.
 
+The JWT is never handed to browser JavaScript. It travels in an `HttpOnly` session cookie (`__Host-pt_session` in production, `pt_session` in development) set by the login and OAuth callback endpoints: `SameSite=Lax`, `Secure` in production, `Path=/`, 24-hour lifetime. Non-browser clients (scripts, tests, the desktop bridge, the internal MCP client) may present `Authorization: Bearer <jwt-token>` instead; when both are sent, the bearer header wins.
+
+Because a cookie is ambient, every state-changing request authenticated by it must also carry an `X-CSRF-Token` header — see [Using Session Authentication](#using-session-authentication) below.
+
 ### Login
 
 ```
@@ -53,10 +57,10 @@ POST /api/auth/login
 | `username` | string | yes      | User login  |
 | `password` | string | yes      | Password    |
 
-**Response:**
+**Response:** sets the session cookie and returns
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIs...",
+  "csrfToken": "u7QF1n...",
   "username": "admin",
   "role": "admin",
   "userId": "uuid",
@@ -64,19 +68,23 @@ POST /api/auth/login
 }
 ```
 
+The OAuth callbacks (`POST /api/auth/{google,microsoft,github}/callback`) return the same shape.
+
 **Rate limit:** 5 attempts per IP per 15 minutes.
 
 ### Verify Token
 
 ```
 GET /api/auth/verify
-Authorization: Bearer <jwt-token>
 ```
+
+Accepts the session cookie or `Authorization: Bearer <jwt-token>`. Clients call it on boot: it is the only way to learn whether the `HttpOnly` cookie is still valid, and it re-issues the CSRF token, which the caller holds in memory and therefore loses on every reload.
 
 **Response:**
 ```json
 {
   "valid": true,
+  "csrfToken": "u7QF1n...",
   "user": {
     "userId": "uuid",
     "username": "admin",
@@ -86,21 +94,43 @@ Authorization: Bearer <jwt-token>
 }
 ```
 
+### Logout
+
+```
+POST /api/auth/logout
+```
+
+Clears the session cookie. **Response:** `{ "ok": true }`.
+
 ### Impersonate User (Admin Only)
 
 ```
 POST /api/auth/impersonate/:userId
-Authorization: Bearer <jwt-token>
 ```
 
-Returns a new JWT for the target user, with `impersonatedBy` field set to the admin's username.
+Replaces the caller's session cookie with one minted for the target user and returns `{ csrfToken, username, role, userId, displayName, impersonatedBy }`, where `impersonatedBy` is the admin's username. The token also carries an `impersonatorId` claim, which is how the admin gets their own session back.
 
-### Using JWT Authentication
+### Stop Impersonation
 
-All authenticated endpoints require the header:
 ```
-Authorization: Bearer <jwt-token>
+POST /api/auth/stop-impersonation
 ```
+
+Ends an impersonation: reads `impersonatorId` from the current session, re-checks that the original account is still an admin, and mints that admin a fresh session cookie. Same response shape as login.
+
+**Errors:** 400 if the session is not an impersonation; 403 (and the cookie is cleared) if the original account is no longer an administrator.
+
+### Using Session Authentication
+
+Browsers send the session cookie automatically, provided the request is issued with credentials included. Every method other than `GET`, `HEAD` and `OPTIONS` must additionally echo back the CSRF token from the last login or `/api/auth/verify` response:
+
+```
+X-CSRF-Token: <csrf-token>
+```
+
+A missing or mismatched header returns `403` with `{ "error": "Missing or invalid CSRF token", "code": "CSRF_INVALID" }`.
+
+Requests presenting `Authorization: Bearer <jwt-token>` are exempt from the CSRF check: a bearer header is an explicit credential that a browser never attaches on its own.
 
 ### Roles
 
@@ -145,7 +175,6 @@ GET /api/health
 
 ```
 GET /api/health/details
-Authorization: Bearer <jwt-token>
 ```
 
 **Response:**
@@ -172,7 +201,7 @@ Authorization: Bearer <jwt-token>
 
 ## Agents
 
-All agent endpoints require JWT authentication: `Authorization: Bearer <jwt-token>`
+All agent endpoints require authentication — the session cookie plus `X-CSRF-Token` on state-changing requests, or `Authorization: Bearer <jwt-token>`. See [Authentication](#authentication).
 
 ### List Agents
 
@@ -1469,14 +1498,14 @@ Internal MCP for OneDrive file operations.
 
 ## WebSocket Events
 
-PulsarTeam uses Socket.IO for real-time communication. Connect with:
+PulsarTeam uses Socket.IO for real-time communication. Browsers authenticate with the session cookie, which rides along on the same-origin handshake:
 
 ```javascript
 import { io } from 'socket.io-client';
-const socket = io('http://localhost:3001', {
-  auth: { token: '<jwt-token>' }
-});
+const socket = io('http://localhost:3001', { withCredentials: true });
 ```
+
+Non-browser clients that hold a JWT can pass it as `auth: { token: '<jwt-token>' }` instead. Either way, the handshake rejects an `Origin` that is not on the CORS allow-list.
 
 ### Client → Server Events
 

@@ -1,8 +1,9 @@
 /**
  * Local web host. Three jobs:
  *  1. Proxy /api + /socket.io to the REMOTE platform so the UNCHANGED same-origin
- *     React frontend works as-is, and sniff the Bearer token off proxied requests
- *     to (re)authenticate the reverse bridge — no frontend change, no token UI.
+ *     React frontend works as-is, and sniff the session cookie off proxied
+ *     requests to (re)authenticate the reverse bridge — no frontend change, no
+ *     token UI.
  *  2. Serve the built frontend bundle (SPA).
  *  3. Serve a thin native-ish control shell (/__local/) that embeds the app in an
  *     iframe and adds Share-folder / status / activity — the bits a bare webview
@@ -25,11 +26,31 @@ const FRONTEND_DIST = process.env.FRONTEND_DIST || path.join(__dirname, '..', 'f
 export async function startServer(): Promise<{ url: string; server: http.Server }> {
   const app = express();
 
-  // ── Bridge token capture: every authenticated /api call carries the user's
-  // JWT; feed the freshest one to the bridge so it connects as that user.
+  // ── Bridge session capture: every authenticated /api call carries the user's
+  // session cookie; feed the freshest one to the bridge so it connects as that
+  // user.
+  //
+  // The frontend stopped sending a bearer token when the session moved into an
+  // HttpOnly cookie. HttpOnly only hides the value from *page scripts* — this
+  // proxy is Node and reads the request header directly, so the bridge still
+  // learns the JWT it needs for its own socket to the platform. The cookie name
+  // is `__Host-`-prefixed against a production API and bare in development;
+  // both are accepted (see api/src/middleware/session.ts).
+  const SESSION_COOKIE_NAMES = ['__Host-pt_session', 'pt_session'];
+
   const captureToken = (req: any) => {
-    const auth = req.headers['authorization'];
-    if (typeof auth === 'string' && auth.startsWith('Bearer ')) bridge.setToken(auth.slice(7));
+    const header = req.headers['cookie'];
+    if (typeof header !== 'string') return;
+    for (const part of header.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq < 0) continue;
+      if (!SESSION_COOKIE_NAMES.includes(part.slice(0, eq).trim())) continue;
+      const value = part.slice(eq + 1).trim();
+      if (value) {
+        bridge.setToken(decodeURIComponent(value));
+        return;
+      }
+    }
   };
 
   const apiProxy = createProxyMiddleware({

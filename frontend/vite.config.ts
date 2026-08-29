@@ -21,6 +21,13 @@ export default defineConfig({
         target: 'http://localhost:3001',
         ws: true,
       },
+      // Terminal WebSocket for CLI runners. It authenticates with the session
+      // cookie, so it has to come from the same origin as the SPA — proxying
+      // it here is what makes the terminal usable under `vite dev`.
+      '/ws': {
+        target: 'http://localhost:3001',
+        ws: true,
+      },
     },
   },
 });

@@ -67,9 +67,39 @@ writable paths. As of the image-hardening pass, `api`, `frontend`,
 image_, so they stay unprivileged when deployed without this compose file.
 
 **Transport and headers.** HSTS, `X-Content-Type-Options`, `X-Frame-Options`,
-`Referrer-Policy` and a CSP are set in `api/src/index.ts`. Outgoing cookies are
-forced to `HttpOnly` + `SameSite` + `Secure`-in-production by
-`api/src/middleware/cookieSecurity.ts`.
+`Referrer-Policy` and a CSP are set in `api/src/index.ts`. Every outgoing cookie
+is forced to `HttpOnly` + `SameSite` + `Secure`-in-production by
+`api/src/middleware/cookieSecurity.ts` — the session cookie sets those flags
+itself, so this is the backstop for anything else that ever sets one.
+
+**Sessions.** The login JWT is delivered as an `HttpOnly`, `SameSite=Lax`,
+`Secure`-in-production cookie — `__Host-pt_session` in production, `pt_session`
+in development — minted in `api/src/middleware/session.ts`. Nothing in the page
+can read it, so a script injection can no longer lift the credential and replay
+it somewhere else; the SPA holds no credential in `localStorage` or
+`sessionStorage` at all. `Authorization: Bearer` remains accepted for
+non-browser callers (the internal MCP client, scripts, the desktop bridge),
+because an explicit header is not ambient authority.
+
+**CSRF.** A cookie is attached by the browser to requests a third-party page
+caused — the one exposure a bearer header never had. Every session therefore
+carries a random `csrf` claim *inside* the signed token, handed to the SPA once
+in the login and `/api/auth/verify` responses and held in memory only.
+`api/src/middleware/csrf.ts` requires it back in `X-CSRF-Token` on every request
+that is not `GET`/`HEAD`/`OPTIONS` and authenticates with the cookie. A
+cross-origin page can neither read that claim (the cookie is `HttpOnly`, the
+response is behind the CORS allow-list) nor set the header without a preflight
+the allow-list refuses. Bearer-authenticated and unauthenticated requests are
+exempt, and so is a request whose session cookie no longer verifies — a stale
+cookie must not lock a user out of logging back in.
+
+**WebSocket handshakes.** A browser cannot put a custom header on a WebSocket
+handshake, so `X-CSRF-Token` is unavailable there. Socket.IO
+(`api/src/index.ts`) and the terminal WebSocket (`api/src/routes/terminal.ts`)
+both authenticate from the same session cookie and validate the handshake
+`Origin` against the CORS allow-list instead, with `SameSite=Lax` as the second
+layer. The terminal endpoint's `?token=<jwt>` query parameter is gone: it parked
+a live credential in URLs, proxy access logs and referrers.
 
 **Untrusted rendering.** The one `dangerouslySetInnerHTML` in the app (the
 call-graph diagram) renders Mermaid in `securityLevel: 'strict'` and then passes
@@ -80,13 +110,18 @@ the result through the allowlist sanitiser in `frontend/src/lib/sanitizeSvg.ts`.
 These are accepted, understood weaknesses rather than undiscovered bugs. Reports
 that restate them without new impact will be closed as known.
 
-- **The login JWT lives in `localStorage`**, so any successful XSS in the SPA can
-  exfiltrate a session. `cookieSecurity.ts` is mounted and hardens any cookie the
-  API might emit, but the token itself has not been migrated to an `HttpOnly`
-  cookie — that requires CSRF protection plus reworking the Socket.IO and
-  terminal-WebSocket handshakes, and is tracked as its own piece of work. Until
-  then, the XSS surface is deliberately kept minimal: exactly one raw-HTML sink,
+- **An XSS could still act as the user.** The `HttpOnly` session cookie removes
+  *exfiltration* — a script cannot read the credential and replay it from
+  elsewhere — but the browser still attaches the cookie to requests an injected
+  script makes from the page, and same-origin script can read the CSRF token out
+  of an `/api/auth/verify` response. No cookie design fixes that. The XSS surface
+  is therefore still kept deliberately minimal: exactly one raw-HTML sink,
   sanitised twice.
+- **Sessions cannot be revoked before they expire.** The session token is a
+  stateless 24h JWT. `/api/auth/logout` drops the cookie, and impersonation is
+  swapped server-side, but a token captured before either stays valid until its
+  `exp`. There is no server-side session store or deny-list, and rotating
+  `JWT_SECRET` is the only way to invalidate every live session at once.
 - **The `desktop` companion app** has unfixed advisories in the
   `webview-nodejs` → `libwebview-nodejs` → `cmake-js` → `tar` chain. The only
   available fix is a breaking downgrade of `webview-nodejs`. `api` and

@@ -114,7 +114,7 @@ A professional, real-time web interface for managing a swarm of AI agents. Built
 
 ### Security
 
-- **JWT-based authentication** with login page
+- **Session-cookie authentication** (`HttpOnly` JWT + `X-CSRF-Token`) with login page
 - API key authentication for external Swarm API
 - OAuth PKCE for Claude Code CLI
 - Bearer token support for MCP servers

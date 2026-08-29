@@ -17,7 +17,7 @@ A modal that exposes all **system-wide administrative actions**. It is admin-gat
 - Table of all users: username, display name, role (Admin / Advanced / Basic), last login, online indicator.
 - Actions per row:
   - **Edit** — change display name, role, password.
-  - **Impersonate** — POST `/api/auth/impersonate/:userId` returns a JWT for the target user. The dashboard then shows an amber banner with a "Stop Impersonation" button.
+  - **Impersonate** — POST `/api/auth/impersonate/:userId` swaps the caller's session cookie for one minted for the target user. The dashboard then shows an amber banner with a "Stop Impersonation" button, which POSTs `/api/auth/stop-impersonation` to have the API re-mint the admin's own session.
   - **Delete** — soft-confirms; self-deletion is blocked.
 - **Create user** form: username, password, role, display name. On submit, the user is created and their workspace is provisioned (Linux UID allocation, default board, default agent).
 

@@ -15,6 +15,11 @@
  *     re-lays out to fill the viewport without scrollbars.
  *   • Scrollback is server-authoritative on reconnect, avoiding duplicated
  *     local replay after transient WebSocket drops.
+ *
+ * Auth: none is passed here. The session is an HttpOnly cookie the browser
+ * attaches to the same-origin upgrade itself — the JWT used to be appended as
+ * `?token=…` because `new WebSocket()` cannot set headers, which parked a live
+ * credential in URLs and proxy logs.
  */
 import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
@@ -38,7 +43,6 @@ import {
 
 interface TerminalTabProps {
   agent: { id: string; name?: string; runner?: string };
-  token: string;
 }
 
 // Backoff schedule for reconnects: 0.5s → 1s → 2s → … capped at 15s.
@@ -100,7 +104,7 @@ const getTerminalTheme = (theme: string) =>
         brightWhite: '#f8fafc',
       };
 
-export default function TerminalTab({ agent, token }: TerminalTabProps) {
+export default function TerminalTab({ agent }: TerminalTabProps) {
   const { theme } = useTheme();
   const [connected, setConnected] = useState(false);
   const [exited, setExited] = useState(false);
@@ -435,9 +439,9 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
   // ── WebSocket lifecycle ───────────────────────────────────────────────
   // Connect once on mount, reconnect on close. Kept in its own effect so
-  // changing `agent.id` or `token` reopens cleanly.
+  // changing `agent.id` reopens cleanly.
   useEffect(() => {
-    if (!agent.id || !token) return undefined;
+    if (!agent.id) return undefined;
 
     const connect = () => {
       if (!aliveRef.current) return;
@@ -449,7 +453,6 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       const url = new URL(
         `${proto}//${window.location.host}/ws/agents/${encodeURIComponent(agent.id)}/terminal`
       );
-      url.searchParams.set('token', token);
       url.searchParams.set('cols', String(term.cols));
       url.searchParams.set('rows', String(term.rows));
 
@@ -575,7 +578,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       setConnected(false);
       setExitedState(false);
     };
-  }, [agent.id, token]);
+  }, [agent.id]);
 
   const shellClass = theme === 'light' ? 'bg-white text-gray-700' : 'bg-dark-900 text-dark-200';
   const headerClass =

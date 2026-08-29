@@ -5,9 +5,10 @@ import type { Request, Response, NextFunction } from 'express';
  *
  * Mounted in index.ts immediately after CORS, ahead of every route.
  *
- * The API authenticates with JWTs in localStorage and intentionally does not
- * issue cookies. This middleware enforces secure flags on any Set-Cookie header
- * that may be added in the future (or by a third-party dependency), so a
+ * The API authenticates browsers with an HttpOnly session cookie
+ * (middleware/session.ts), which sets every flag explicitly. This middleware is
+ * the backstop: it applies the same flags to any *other* Set-Cookie header —
+ * one added by a future endpoint or by a third-party dependency — so a
  * regression cannot ship a cookie without HttpOnly, Secure, and SameSite.
  *
  * Rules applied to each cookie:

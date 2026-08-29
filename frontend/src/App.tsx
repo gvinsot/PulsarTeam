@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { disconnectSocket, getSocket } from './socket';
-import { api } from './api';
-import { safeGet, safeSet, safeRemove } from './lib/safeStorage';
+import { api, setCsrfToken } from './api';
 import { useAgentsSocket } from './hooks/useAgentsSocket';
 import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
@@ -178,36 +177,36 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const token = safeGet('token');
-    if (token) {
-      api
-        .verify()
-        .then(async data => {
-          if (cancelled) return;
-          // Not completeLogin: this path needs the `cancelled` guard between
-          // loadData and initSocket (StrictMode/unmount), and must not
-          // rewrite the token it just verified.
-          setUser(toUser(data.user));
-          await loadData();
-          if (cancelled) return;
-          initSocket(token);
-          checkDbHealth();
-        })
-        .catch(err => {
-          if (cancelled) return;
-          // A transient backend stall (request timeout/abort) must not
-          // silently log the user out — only drop the token when the
-          // server actually rejected it.
-          if (err?.name !== 'TimeoutError' && err?.name !== 'AbortError') {
-            safeRemove('token');
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    } else {
-      setLoading(false);
-    }
+    // The session cookie is HttpOnly, so the page cannot tell whether it holds
+    // one — asking the server is the only way, and a logged-out visitor simply
+    // gets a 401 here. /verify is also the handover point for the CSRF token,
+    // which is kept in memory and therefore does not survive a reload.
+    api
+      .verify()
+      .then(async data => {
+        if (cancelled) return;
+        setCsrfToken(data.csrfToken);
+        // Not completeLogin: this path needs the `cancelled` guard between
+        // loadData and initSocket (StrictMode/unmount).
+        setUser(toUser(data.user));
+        await loadData();
+        if (cancelled) return;
+        initSocket();
+        checkDbHealth();
+      })
+      .catch(err => {
+        if (cancelled) return;
+        // A transient backend stall (request timeout/abort) must not be read
+        // as a rejected session — only drop the CSRF token when the server
+        // actually answered. Either way `user` stays null, so the login
+        // screen is what renders.
+        if (err?.name !== 'TimeoutError' && err?.name !== 'AbortError') {
+          setCsrfToken(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
       // Cleanup: remove all socket listeners when effect re-runs
@@ -227,11 +226,13 @@ export default function App() {
   // Shared post-login sequence (OAuth callback + password login).
   // `awaitHealth` reproduces the OAuth path's behavior of resolving only
   // after the DB health probe returns; password login fires it and resolves.
-  const completeLogin = async (token, userData, { awaitHealth = false } = {}) => {
-    safeSet('token', token);
-    setUser(toUser(userData));
+  const completeLogin = async (data, { awaitHealth = false } = {}) => {
+    // The session arrived as an HttpOnly cookie on this very response. All the
+    // page keeps is the CSRF token that pairs with it.
+    setCsrfToken(data.csrfToken);
+    setUser(toUser(data));
     await loadData();
-    initSocket(token);
+    initSocket();
     const health = checkDbHealth();
     if (awaitHealth) await health;
   };
@@ -251,7 +252,7 @@ export default function App() {
     window.history.replaceState({}, '', '/');
 
     exchange(code, redirectUri)
-      .then(data => completeLogin(data.token, data, { awaitHealth: true }))
+      .then(data => completeLogin(data, { awaitHealth: true }))
       .catch(err => {
         console.error('OAuth login failed:', err);
         showToast(err.message || 'Login failed', 'error');
@@ -264,12 +265,15 @@ export default function App() {
 
   const handleLogin = async (username, password) => {
     const data = await api.login(username, password);
-    await completeLogin(data.token, data);
+    await completeLogin(data);
   };
 
   const handleLogout = () => {
-    safeRemove('token');
-    safeRemove('originalToken');
+    // Only the server can drop an HttpOnly cookie, so logging out is a request.
+    // The local session is torn down regardless of how it goes — a failed
+    // logout must not strand the user in a UI they can no longer drive.
+    api.logout().catch(() => {});
+    setCsrfToken(null);
     disconnectSocket();
     setUser(null);
     setAgents([]);
@@ -301,29 +305,27 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleImpersonate = data => {
-    // Save original token so we can return. Not completeLogin: impersonation
+    // The impersonated session replaced the cookie on this response; the admin's
+    // own session is recoverable server-side (the token carries their id), so
+    // nothing is stashed locally any more. Not completeLogin: impersonation
     // recycles the socket, skips the DB health probe and doesn't await loadData.
-    const currentToken = safeGet('token');
-    safeSet('originalToken', currentToken);
-    safeSet('token', data.token);
+    setCsrfToken(data.csrfToken);
     setUser(toUser(data));
     disconnectSocket();
-    initSocket(data.token);
+    initSocket();
     loadData();
   };
 
   const handleStopImpersonation = () => {
-    const originalToken = safeGet('originalToken');
-    if (!originalToken) return;
-    safeSet('token', originalToken);
-    safeRemove('originalToken');
-    // Re-verify to get original user info
+    // Server-side swap back: /auth/stop-impersonation reads the impersonator's
+    // id out of the current session and mints them a fresh one.
     api
-      .verify()
-      .then(verifyData => {
-        setUser(verifyData.user);
+      .stopImpersonation()
+      .then(data => {
+        setCsrfToken(data.csrfToken);
+        setUser(toUser(data));
         disconnectSocket();
-        initSocket(originalToken);
+        initSocket();
         loadData();
       })
       .catch(() => {

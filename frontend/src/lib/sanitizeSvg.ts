@@ -4,8 +4,10 @@
  * The call-graph tab renders a Mermaid diagram whose source is produced
  * server-side from repository contents and (optionally) rewritten by an LLM.
  * Neither input is trusted: a crafted file name or a prompt-injected LLM reply
- * could otherwise smuggle markup into the DOM, and the login JWT lives in
- * localStorage, so a single script execution is enough to exfiltrate a session.
+ * could otherwise smuggle markup into the DOM. The session now lives in an
+ * HttpOnly cookie rather than localStorage, so a script execution can no longer
+ * exfiltrate it — but it could still act as the user from inside the page, so
+ * this sink stays firmly closed.
  *
  * Mermaid is configured with securityLevel 'strict' (which runs its own
  * DOMPurify pass) — this module is the second, independent layer so the app is

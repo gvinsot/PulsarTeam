@@ -1,30 +1,28 @@
-import jwt from 'jsonwebtoken';
-import { readSecret } from '../secrets.js';
+import { resolveSessionToken, verifySessionToken } from './session.js';
 
-// Helper to get JWT secret at runtime — read from /run/secrets/JWT_SECRET (or env fallback in dev)
-const getJwtSecret = () => {
-  const secret = readSecret('JWT_SECRET');
-  if (!secret) {
-    throw new Error(
-      'JWT_SECRET is not set (expected at /run/secrets/JWT_SECRET or as env var in dev)'
-    );
-  }
-  return secret;
-};
-
-// Auth middleware
+/**
+ * Authenticate a request from its session token.
+ *
+ * Two presentations are accepted, in this order:
+ *
+ *  • `Authorization: Bearer <jwt>` — explicit, used by non-browser clients
+ *    (the internal MCP client in `services/mcpManager.ts`, the desktop bridge,
+ *    scripts and tests).
+ *  • The `HttpOnly` session cookie — what browsers send. Since it is ambient,
+ *    every state-changing request over this path additionally goes through
+ *    `csrfProtection` (middleware/csrf.ts).
+ *
+ * Both live in middleware/session.ts, which owns the cookie names and the JWT.
+ */
 export function authenticateToken(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: 'Access denied' });
+  const resolved = resolveSessionToken(req);
+  if (!resolved) return res.status(401).json({ error: 'Access denied' });
 
-  const token = authHeader.split(' ')[1];
-  try {
-    const decoded = jwt.verify(token, getJwtSecret()) as any;
-    req.user = decoded;
-    next();
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
+  const claims = verifySessionToken(resolved.token);
+  if (!claims) return res.status(401).json({ error: 'Invalid token' });
+
+  req.user = claims;
+  next();
 }
 
 // Role-based access control middleware
@@ -38,4 +36,5 @@ export function requireRole(...roles) {
   };
 }
 
-export { getJwtSecret };
+// Re-exported from its new home so the many existing importers keep working.
+export { getJwtSecret } from './session.js';

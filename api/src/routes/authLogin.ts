@@ -1,5 +1,4 @@
 import express from 'express';
-import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
@@ -31,7 +30,14 @@ import {
   oauthUrlQuerySchema,
   impersonateParamsSchema,
 } from '../schemas/auth.js';
-import { authenticateToken, getJwtSecret } from '../middleware/auth.js';
+import { authenticateToken } from '../middleware/auth.js';
+import {
+  clearSessionCookie,
+  resolveSessionToken,
+  setSessionCookie,
+  signSessionToken,
+  verifySessionToken,
+} from '../middleware/session.js';
 
 const router = express.Router();
 
@@ -101,7 +107,14 @@ function resolveLoginRedirectUri(frontendUri?: string): string {
 }
 
 /**
- * Sign a 24h login JWT for `user` and write the standard login response.
+ * Mint a 24h session for `user`, install it as an HttpOnly cookie and write the
+ * standard login response.
+ *
+ * The JWT itself is deliberately absent from the body: it lives only in the
+ * cookie, where page scripts cannot reach it. What the SPA gets instead is
+ * `csrfToken`, the per-session secret it must echo in `X-CSRF-Token` on every
+ * state-changing request (middleware/csrf.ts). That one is meant to be held in
+ * memory and re-fetched from /verify after a reload — never persisted.
  *
  * The OAuth callbacks pass `extra.avatarUrl` (which may be null for Microsoft /
  * GitHub accounts without a photo). The /login route passes nothing, leaving
@@ -109,13 +122,14 @@ function resolveLoginRedirectUri(frontendUri?: string): string {
  * login payload keeps its original shape (no avatarUrl key).
  */
 function sendLoginResponse(res, user, extra: { avatarUrl?: string | null } = {}) {
-  const token = jwt.sign(
-    { userId: user.id, username: user.username, role: user.role },
-    getJwtSecret(),
-    { expiresIn: '24h' }
-  );
+  const { token, csrfToken } = signSessionToken({
+    userId: user.id,
+    username: user.username,
+    role: user.role,
+  });
+  setSessionCookie(res, token);
   res.json({
-    token,
+    csrfToken,
     username: user.username,
     role: user.role,
     userId: user.id,
@@ -276,17 +290,26 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
   }
 });
 
-// Verify token
+// Verify the current session.
+//
+// The SPA calls this on boot for two reasons now: it is the only way to learn
+// whether the HttpOnly cookie is still valid (nothing in the page can read it),
+// and it re-hands the CSRF token, which is held in memory and therefore lost on
+// every reload.
 router.get('/verify', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
+  const resolved = resolveSessionToken(req);
+  if (!resolved) {
     res.status(401).json({ error: 'No token provided' });
     return;
   }
 
-  const token = authHeader.split(' ')[1];
+  const decoded = verifySessionToken(resolved.token);
+  if (!decoded) {
+    res.status(401).json({ error: 'Invalid token' });
+    return;
+  }
+
   try {
-    const decoded = jwt.verify(token, getJwtSecret()) as any;
     // Fetch fresh user data from DB to catch role changes
     const user = await getUserById(decoded.userId);
     if (!user) {
@@ -308,10 +331,19 @@ router.get('/verify', async (req, res) => {
       responseUser.impersonatedBy = decoded.impersonatedBy;
     }
 
-    res.json({ valid: true, user: responseUser });
+    res.json({ valid: true, user: responseUser, csrfToken: decoded.csrf });
   } catch (err) {
     res.status(401).json({ error: 'Invalid token' });
   }
+});
+
+// Log out. A stateless JWT cannot be revoked server-side, so dropping the
+// cookie the page cannot read *is* the logout. csrfProtection waves through a
+// request whose session cookie no longer verifies, so an expired session can
+// always be cleaned up.
+router.post('/logout', (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
 });
 
 // Impersonate user (admin only) — authenticateToken applied inline
@@ -333,19 +365,19 @@ router.post(
         return;
       }
 
-      const token = jwt.sign(
-        {
-          userId: targetUser.id,
-          username: targetUser.username,
-          role: targetUser.role,
-          impersonatedBy: adminUser.username,
-        },
-        getJwtSecret(),
-        { expiresIn: '24h' }
-      );
+      const { token, csrfToken } = signSessionToken({
+        userId: targetUser.id,
+        username: targetUser.username,
+        role: targetUser.role,
+        impersonatedBy: adminUser.username,
+        // Carries the way back: /stop-impersonation mints the admin's own
+        // session from this instead of the frontend stashing their old token.
+        impersonatorId: adminUser.userId,
+      });
+      setSessionCookie(res, token);
 
       res.json({
-        token,
+        csrfToken,
         username: targetUser.username,
         role: targetUser.role,
         userId: targetUser.id,
@@ -358,6 +390,39 @@ router.post(
     }
   }
 );
+
+/**
+ * End an impersonation and hand the admin their own session back.
+ *
+ * While the token lived in localStorage the frontend simply kept the admin's
+ * original JWT next to the impersonated one and swapped them back. It cannot do
+ * that any more — nothing in the page can read a cookie — so the way back rides
+ * inside the impersonation token (`impersonatorId`) and the real session is
+ * minted here, server-side.
+ */
+router.post('/stop-impersonation', authenticateToken, async (req, res) => {
+  try {
+    const current = req.user;
+    if (!current?.impersonatorId) {
+      res.status(400).json({ error: 'Not impersonating' });
+      return;
+    }
+
+    const admin = await getUserById(current.impersonatorId);
+    // Refuse to restore a session that is no longer entitled to one: the
+    // impersonator may have been demoted or deleted mid-impersonation.
+    if (!admin || admin.role !== 'admin') {
+      clearSessionCookie(res);
+      res.status(403).json({ error: 'Original account is no longer an administrator' });
+      return;
+    }
+
+    sendLoginResponse(res, admin);
+  } catch (err) {
+    console.error('Stop impersonation error:', err.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // ── Table-driven OAuth login providers ────────────────────────────────────────
 // Google, Microsoft and GitHub previously carried three structurally identical

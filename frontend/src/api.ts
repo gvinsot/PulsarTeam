@@ -1,5 +1,3 @@
-import { safeGet } from './lib/safeStorage';
-
 const API_BASE = '/api';
 
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -7,17 +5,42 @@ const DEFAULT_TIMEOUT_MS = 30000;
 // against requests that hang forever.
 const LONG_TIMEOUT_MS = 600000;
 
+/**
+ * Per-session CSRF token.
+ *
+ * The session itself is an HttpOnly cookie that nothing here can read — that is
+ * the point: a script injection can no longer lift the credential off the page.
+ * What it costs is CSRF exposure, since the browser now attaches the session by
+ * itself, so the API requires this token in `X-CSRF-Token` on every
+ * state-changing request. The server hands it over in the login and
+ * /auth/verify responses.
+ *
+ * It is held in memory only — deliberately not in localStorage, which is what
+ * we just moved the session out of. A reload drops it, and App re-obtains it
+ * from /auth/verify on boot.
+ */
+let csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null | undefined): void {
+  csrfToken = token || null;
+}
+
 // Browsers have no default fetch timeout, so a wedged backend would hang
 // callers forever. Callers can override by passing their own `signal`.
 function apiFetch(url, opts = {}) {
-  return fetch(url, { signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS), ...opts });
+  return fetch(url, {
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
+    // The session cookie is the credential. Same-origin defaults to sending it
+    // anyway; explicit because the desktop shell proxies these same calls.
+    credentials: 'include',
+    ...opts,
+  });
 }
 
 function getHeaders() {
-  const token = safeGet('token');
   return {
     'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
   };
 }
 
@@ -40,7 +63,13 @@ async function handleResponse(res) {
 
 // Verb helpers — every endpoint below reads as method + path (+ payload).
 // `long: true` swaps in the LONG_TIMEOUT_MS signal for LLM/Docker-bound calls;
-// `auth: false` marks a public endpoint (bare Content-Type, no Authorization).
+// `auth: false` marks a public endpoint.
+//
+// `auth: false` no longer suppresses a credential — the session is a cookie the
+// browser attaches either way. It only means "this route works logged out", and
+// for GETs it also keeps the request header-free (and therefore preflight-free).
+// Bodied verbs always send the CSRF token when we hold one: a public POST made
+// while a session happens to be active is still CSRF-checked server-side.
 type RequestOpts = { long?: boolean; auth?: boolean };
 
 const request =
@@ -48,7 +77,7 @@ const request =
   (path: string, body?: unknown, opts: RequestOpts = {}) =>
     apiFetch(`${API_BASE}${path}`, {
       method,
-      headers: opts.auth === false ? { 'Content-Type': 'application/json' } : getHeaders(),
+      headers: getHeaders(),
       ...(body !== undefined && { body: JSON.stringify(body) }),
       ...(opts.long && { signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
     }).then(handleResponse);
@@ -135,6 +164,10 @@ export const api = {
   login: (username, password) => post('/auth/login', { username, password }, { auth: false }),
 
   verify: () => get('/auth/verify'),
+
+  // Drops the session cookie server-side. The page cannot clear an HttpOnly
+  // cookie itself, so logging out is a request, not a local delete.
+  logout: () => post('/auth/logout'),
 
   acceptTerms: () => post('/auth/accept-terms'),
 
@@ -571,6 +604,10 @@ export const api = {
 
   // Impersonation (admin only)
   impersonate: userId => post(`/auth/impersonate/${userId}`),
+
+  // Hands the admin their own session back. Server-side now: the page has no
+  // copy of the original token to swap in.
+  stopImpersonation: () => post('/auth/stop-impersonation'),
 
   // LLM Configs (admin only)
   getLlmConfigs: () => get('/llm-configs'),

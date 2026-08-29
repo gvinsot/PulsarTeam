@@ -60,7 +60,7 @@ const content = {
       },
       {
         heading: '9. Cookies',
-        text: 'The Service uses a JWT token stored in localStorage for authentication. We do not use tracking cookies or third-party analytics cookies. No cookie consent banner is required as we do not perform cross-site tracking.',
+        text: 'The Service uses a single strictly necessary cookie to keep you signed in. It carries your session token, is HttpOnly (page scripts cannot read it) and SameSite, and expires after 24 hours or when you sign out. We do not use tracking cookies or third-party analytics cookies. No cookie consent banner is required: a cookie strictly necessary to deliver a service you asked for is exempt, and we do not perform cross-site tracking.',
       },
       {
         heading: "10. Children's Privacy",
@@ -134,7 +134,7 @@ const content = {
       },
       {
         heading: '9. Cookies',
-        text: "Le Service utilise un jeton JWT stocké dans le localStorage pour l'authentification. Nous n'utilisons pas de cookies de suivi ni de cookies d'analyse tiers. Aucune bannière de consentement aux cookies n'est requise car nous n'effectuons pas de suivi intersite.",
+        text: "Le Service utilise un unique cookie strictement nécessaire pour vous maintenir connecté. Il contient votre jeton de session, est HttpOnly (les scripts de la page ne peuvent pas le lire) et SameSite, et expire au bout de 24 heures ou lors de votre déconnexion. Nous n'utilisons pas de cookies de suivi ni de cookies d'analyse tiers. Aucune bannière de consentement aux cookies n'est requise : un cookie strictement nécessaire à la fourniture d'un service que vous avez demandé en est dispensé, et nous n'effectuons pas de suivi intersite.",
       },
       {
         heading: '10. Données des mineurs',

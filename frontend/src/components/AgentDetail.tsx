@@ -485,7 +485,7 @@ export default function AgentDetail({
           (isCliRunner ? (
             // CLI runners (claudecode, codex, opencode, openclaw) drive a real
             // TUI in a shared PTY — bypassing the chat surface entirely.
-            <TerminalTab agent={agent} token={localStorage.getItem('token') || ''} />
+            <TerminalTab agent={agent} />
           ) : agent.isVoice ? (
             agent.voiceMode === 'external' ? (
               <ExternalVoiceChatTab agent={agent} />

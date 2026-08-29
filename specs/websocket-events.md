@@ -2,7 +2,7 @@
 
 Source of truth: `frontend/src/socketEvents.ts` (mirrored from `api/src/ws/events.ts`).
 
-The Socket.IO connection uses JWT auth on the handshake (`socket.handshake.auth.token`). Origin is validated against the same CORS allow-list as HTTP.
+The Socket.IO connection authenticates with the `HttpOnly` session cookie, which the browser attaches to the same-origin handshake; `socket.handshake.auth.token` stays available for non-browser clients such as the desktop bridge. Origin is validated against the same CORS allow-list as HTTP — a handshake cannot carry the `X-CSRF-Token` header that guards the HTTP API, so that check plus `SameSite=Lax` is the CSRF defence here.
 
 Events are split into:
 - **Server → client** (push updates and stream chunks)

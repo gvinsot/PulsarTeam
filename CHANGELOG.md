@@ -12,6 +12,33 @@ added under `[Unreleased]` as work lands.
 
 ### Security
 
+- The login JWT no longer reaches browser JavaScript. It travels in an
+  `HttpOnly` session cookie (`__Host-pt_session` in production, `pt_session` in
+  development; `SameSite=Lax`, `Secure` in production, 24 h) instead of being
+  returned in the login response and kept in `localStorage`, where any
+  successful XSS was a session exfiltration. The credential can no longer be
+  lifted off the page and replayed elsewhere — an XSS can still act as the user
+  from inside the page, so this narrows the blast radius rather than closing it.
+- CSRF protection to go with it. Every session token carries a random `csrf`
+  claim, handed to the client once in the login / `/api/auth/verify` response
+  and held in memory only; `csrfProtection`, mounted globally on `/api`,
+  requires a matching `X-CSRF-Token` header on every method other than
+  GET/HEAD/OPTIONS. `Authorization: Bearer` requests are exempt — a browser
+  never attaches one by itself — so the internal MCP client, the API scripts
+  and the test suite are unaffected.
+- New `POST /api/auth/logout` (clears the cookie) and
+  `POST /api/auth/stop-impersonation`, which re-mints the admin's own session
+  from an `impersonatorId` claim after re-checking the account is still an
+  admin. The frontend used to end an impersonation by keeping the admin's JWT
+  in `localStorage` under `originalToken`; nothing in the page can read a
+  cookie, so the way back now lives server-side.
+- The terminal WebSocket (`/ws/agents/:id/terminal`) no longer accepts
+  `?token=<jwt>`. A JWT in a query string ends up in proxy logs, browser
+  history and referrers; the upgrade now authenticates with the session cookie
+  or a bearer header, and validates `Origin` against the CORS allow-list the
+  way the Socket.IO handshake already did. Socket.IO in turn falls back to the
+  cookie when `handshake.auth.token` is absent, which is the browser's path
+  now — `auth.token` stays for the desktop bridge.
 - The API's cookie-hardening middleware (`HttpOnly` + `SameSite=Lax` +
   `Secure`-in-production on every `Set-Cookie`) is now actually mounted. It had
   been written and unit-tested but never wired into `index.ts`, so it protected

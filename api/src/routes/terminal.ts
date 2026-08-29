@@ -8,10 +8,15 @@
  * openclaw, hermes}` so the user drives the real TUI here.
  *
  * Auth + authorization:
- *   • The browser passes the user's JWT via `?token=…` on the WS handshake
- *     (header-based auth is awkward over `new WebSocket()`).
- *   • We verify the JWT, look up the agent by id, and check the user owns
- *     it (or is an admin). Failing → close with 4401.
+ *   • The browser presents the HttpOnly session cookie, which it attaches to
+ *     the same-origin upgrade by itself. `Authorization: Bearer` is accepted
+ *     too, for the non-browser clients that can set headers.
+ *   • The Origin header is checked against the CORS allow-list before anything
+ *     else: the credential is ambient now, so a cross-site page could otherwise
+ *     open this socket on the user's behalf.
+ *   • We verify the session, look up the agent by id, and check the user owns
+ *     it (or is an admin). Failing → the upgrade is refused with a plain HTTP
+ *     status, which the browser surfaces as a failed connection.
  *   • Server → runner-service uses the shared CODER_API_KEY as before.
  *
  * Lifecycle:
@@ -23,10 +28,11 @@
 import type { Server as HttpServer, IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import { WebSocket, WebSocketServer } from 'ws';
-import jwt from 'jsonwebtoken';
 import { URL } from 'url';
 
 import { readSecret } from '../secrets.js';
+import { isOriginAllowed, logRejectedOrigin } from '../middleware/corsConfig.js';
+import { resolveSessionToken, verifySessionToken } from '../middleware/session.js';
 import { getAgentById } from '../services/database.js';
 import { getLlmConfig } from '../services/database/llmConfigs.js';
 import { getGitHubCredentialsForAgent } from './github.js';
@@ -105,18 +111,6 @@ function noteConsoleOutput(agentId: string, agentManager: any): void {
   consoleActivity.set(agentId, { idleTimer });
 }
 
-function getJwtSecret(): string {
-  const s = readSecret('JWT_SECRET');
-  if (!s) throw new Error('JWT_SECRET is not configured');
-  return s;
-}
-
-interface DecodedToken {
-  userId?: string;
-  username?: string;
-  role?: string;
-}
-
 interface TerminalRunnerContext {
   permissions?: any | null;
   llmConfig?: any | null;
@@ -175,16 +169,25 @@ export function installTerminalProxy(
 
     const agentId = match[1];
     const parsedUrl = new URL(req.url!, 'http://localhost');
-    const token = parsedUrl.searchParams.get('token') || '';
     const cols = parsedUrl.searchParams.get('cols') || '120';
     const rows = parsedUrl.searchParams.get('rows') || '40';
 
-    // Verify the user's JWT before consuming the upgrade.
-    let decoded: DecodedToken;
-    try {
-      decoded = jwt.verify(token, getJwtSecret()) as DecodedToken;
-    } catch {
-      // 4401 = "auth failed". Browsers expose the close code to JS.
+    // Cross-site WebSocket hijacking guard, mirroring the socket.io handshake
+    // in index.ts. A handshake cannot carry the X-CSRF-Token header the HTTP
+    // API relies on, so Origin (plus SameSite=Lax on the cookie) is the defence.
+    const origin = req.headers.origin;
+    if (origin && !isOriginAllowed(origin)) {
+      logRejectedOrigin(origin, 'ws');
+      rejectUpgrade(socket, '403 Forbidden');
+      return;
+    }
+
+    // The JWT used to arrive as `?token=…`, because `new WebSocket()` cannot
+    // set headers — which parked a live credential in URLs, proxy access logs
+    // and referrers. The cookie removes the need for it: the browser attaches
+    // the session itself. Bearer stays for clients that can set headers.
+    const decoded = verifySessionToken(resolveSessionToken(req)?.token);
+    if (!decoded) {
       rejectUpgrade(socket, '401 Unauthorized');
       return;
     }

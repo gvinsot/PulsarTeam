@@ -63,8 +63,10 @@ export function useAgentsSocket(showToastRef) {
     });
   }, [agents]);
 
-  const initSocket = useCallback(token => {
-    const sock = connectSocket(token);
+  // No token argument: the session is an HttpOnly cookie the browser sends on
+  // the handshake itself (see socket.ts).
+  const initSocket = useCallback(() => {
+    const sock = connectSocket();
 
     const clearThinking = agentId => setThinkingMap(prev => withoutKey(prev, agentId));
     const clearStreamBuffer = agentId => setStreamBuffers(prev => withoutKey(prev, agentId));

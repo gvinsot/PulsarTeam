@@ -1,15 +1,23 @@
 import { io } from 'socket.io-client';
 import { WsEvents } from './socketEvents';
-import { safeGet } from './lib/safeStorage';
 
 let socket = null;
-let socketToken = null;
 
-export function connectSocket(token) {
-  // Return existing socket if it's connected or still connecting with the
-  // same identity. A changed token must fall through to the recreate path —
-  // mutating socket.auth on a live socket would not re-authenticate it.
-  if (socket && (socket.connected || socket.active) && socketToken === token) return socket;
+/**
+ * Open (or reuse) the realtime socket.
+ *
+ * No token is passed any more: the session is an HttpOnly cookie the browser
+ * attaches to the same-origin handshake by itself, so there is nothing for the
+ * page to hold or hand over. The server still accepts an explicit
+ * `auth.token` — that path is for non-browser clients such as the desktop
+ * bridge — and validates the handshake's `Origin` either way, which is the
+ * socket's CSRF defence (a WebSocket handshake cannot carry a custom header).
+ */
+export function connectSocket() {
+  // Return the existing socket if it's connected or still connecting. Identity
+  // no longer changes under us: a re-login replaces the cookie, and the caller
+  // recycles the socket explicitly via disconnectSocket().
+  if (socket && (socket.connected || socket.active)) return socket;
 
   // Disconnect any stale socket before creating a new one
   if (socket) {
@@ -18,24 +26,17 @@ export function connectSocket(token) {
     socket = null;
   }
 
-  socketToken = token;
-
   // In production (behind reverse proxy), connect to same origin
   // In dev, Vite proxies /socket.io to the backend
   const sock = io({
-    // Function form so every reconnect handshake reads the freshest token
-    // (e.g., refreshed by a re-login) instead of the one captured here.
-    auth: cb => {
-      cb({ token: safeGet('token') || socketToken });
-    },
+    // Sends the session cookie on the handshake, including on the polling
+    // transport and when the API is served from a sibling origin.
+    withCredentials: true,
     transports: ['websocket', 'polling'],
   });
   socket = sock;
 
-  let retriedAuth = false;
-
   sock.on('connect', () => {
-    retriedAuth = false;
     console.log('🔌 WebSocket connected');
     // Ask the server which agents are currently streaming so the UI can
     // pick up an in-flight response instead of looking frozen until the
@@ -50,15 +51,11 @@ export function connectSocket(token) {
     // has stopped permanently.
     if (sock.active) return;
 
+    // Nothing to retry with: the cookie the handshake used is the only
+    // credential the page has, so an auth rejection means the session is
+    // genuinely gone and App must send the user back to the login screen.
     const isAuthError =
       err.message === 'Invalid token' || err.message === 'Authentication required';
-    if (isAuthError && !retriedAuth) {
-      // Retry exactly once in case localStorage holds a fresher token than
-      // the one used for the failed handshake.
-      retriedAuth = true;
-      sock.connect();
-      return;
-    }
 
     window.dispatchEvent(
       new CustomEvent(isAuthError ? 'socket:auth-error' : 'socket:connect-error', {
@@ -79,5 +76,4 @@ export function disconnectSocket() {
     socket.disconnect();
     socket = null;
   }
-  socketToken = null;
 }
