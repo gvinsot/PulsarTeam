@@ -32,8 +32,6 @@ mock.module('../database.js', {
     getAgentById: async () => null,
     saveAgent: noop,
     deleteAgentFromDb: noop,
-    setAgentOwner: noop,
-    setAgentBoard: noop,
     getAgentsByBoard: async () => [],
     // skills
     getAllSkills: async () => [],

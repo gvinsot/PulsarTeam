@@ -1,6 +1,6 @@
 // ─── Agent CRUD: create, update, delete, resetInstructionsByRole ─────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveAgent, deleteAgentFromDb, setAgentOwner, setAgentBoard } from '../database.js';
+import { saveAgent, deleteAgentFromDb } from '../database.js';
 import { AGENT_TEMPLATES } from '../../data/templates.js';
 
 const AGENT_UPDATE_FIELDS = [
@@ -100,13 +100,9 @@ export const crudMethods = {
     };
 
     this.agents.set(id, agent);
+    // saveAgent writes the owner_id / board_id columns from the agent object —
+    // no dedicated UPDATE needed on top of it.
     await saveAgent(agent);
-    if (config.ownerId) {
-      await setAgentOwner(id, config.ownerId);
-    }
-    if (config.boardId) {
-      await setAgentBoard(id, config.boardId);
-    }
     this._emit('agent:created', this._sanitize(agent));
     return this._sanitize(agent);
   },
@@ -220,14 +216,10 @@ export const crudMethods = {
           target.name = `${batchBaseName} #${target.batchIndex ?? 1}`;
           continue;
         }
-        if (key === 'ownerId' && effectiveUpdates[key] !== target[key]) {
+        if (key === 'ownerId' || key === 'boardId') {
+          // Persisted by the saveAgent(target) below, which fills the owner_id
+          // and board_id columns from the agent object.
           target[key] = effectiveUpdates[key];
-          await setAgentOwner(target.id, effectiveUpdates[key]);
-          continue;
-        }
-        if (key === 'boardId' && effectiveUpdates[key] !== target[key]) {
-          target[key] = effectiveUpdates[key];
-          await setAgentBoard(target.id, effectiveUpdates[key]);
           continue;
         }
         if (key === 'mcpAuth') {

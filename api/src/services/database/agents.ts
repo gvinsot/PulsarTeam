@@ -8,10 +8,10 @@ export async function getAllAgents() {
     const result = await pool.query('SELECT data, board_id FROM agents ORDER BY created_at');
     return result.rows.map(row => {
       const agent = row.data;
-      // Ensure boardId from the DB column is always present in the agent object
-      if (row.board_id && !agent.boardId) {
-        agent.boardId = row.board_id;
-      }
+      // The board_id column is the source of truth (saveAgent writes it from the
+      // same object, and it is what board queries index on); the JSON copy is
+      // only a fallback for rows written before the column existed.
+      agent.boardId = row.board_id ?? agent.boardId ?? null;
       return agent;
     });
   } catch (err) {
@@ -31,7 +31,7 @@ export async function getAgentById(id) {
     if (result.rows.length === 0) return null;
     const row = result.rows[0];
     const agent = row.data;
-    if (row.board_id && !agent.boardId) agent.boardId = row.board_id;
+    agent.boardId = row.board_id ?? agent.boardId ?? null;
     return agent;
   } catch (err) {
     console.error('Failed to load agent:', err.message);
@@ -66,29 +66,7 @@ export async function deleteAgentFromDb(id) {
   }
 }
 
-// ── Agent owner_id helpers ──────────────────────────────────────────────────
-
-export async function setAgentOwner(agentId, ownerId) {
-  const pool = getPool();
-  if (!pool) return;
-  try {
-    await pool.query('UPDATE agents SET owner_id = $2 WHERE id = $1', [agentId, ownerId]);
-  } catch (err) {
-    console.error('Failed to set agent owner:', err.message);
-  }
-}
-
 // ── Agent board_id helpers ─────────────────────────────────────────────────
-
-export async function setAgentBoard(agentId, boardId) {
-  const pool = getPool();
-  if (!pool) return;
-  try {
-    await pool.query('UPDATE agents SET board_id = $2 WHERE id = $1', [agentId, boardId]);
-  } catch (err) {
-    console.error('Failed to set agent board:', err.message);
-  }
-}
 
 export async function getAgentsByBoard(boardId) {
   const pool = getPool();

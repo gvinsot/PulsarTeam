@@ -1,5 +1,5 @@
 // ─── AgentManager: class shell + constructor + mixin assembly ─────────────────
-import { getAllAgents, setAgentOwner, setAgentBoard, getAllLlmConfigs, recordTokenUsage, getTaskByIdPrefix } from '../database.js';
+import { getAllAgents, getAllLlmConfigs, recordTokenUsage, getTaskByIdPrefix } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 
 import { lifecycleMethods } from './lifecycle.js';
