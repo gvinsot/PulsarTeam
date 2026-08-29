@@ -19,7 +19,12 @@ mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
 
 const { AgentManager } = await import('../agentManager.js');
 
-const mockIo = { emit() {}, to() { return { emit() {} }; } };
+const mockIo = {
+  emit() {},
+  to() {
+    return { emit() {} };
+  },
+};
 
 async function setup(agentDefs: any[] = []) {
   rows.clear();
@@ -107,7 +112,10 @@ test('recordTaskCompletion auto-detects commits via git log (terminal-independen
   });
 
   assert.equal(outcome.success, true);
-  assert.ok(execCalls.some(c => /git log/.test(c)), 'auto-detect should query git log');
+  assert.ok(
+    execCalls.some(c => /git log/.test(c)),
+    'auto-detect should query git log'
+  );
   const linked = (rows.get('task-cli-2') as any).commits;
   assert.equal(linked.length, 1, 'the silently-made commit should be auto-linked');
   assert.equal(linked[0].hash, fullHash);

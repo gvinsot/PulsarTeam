@@ -1,8 +1,36 @@
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
-import { saveTaskToDb, deleteTaskFromDb, deleteTasksByAgent, hardDeleteTaskFromDb, restoreTaskFromDb, getDeletedTasks, getDeletedTaskById, getTasksForResume, updateTaskExecutionStatus, getTaskById, getTasksByAgent, getAllTaskIds, getActiveTasksByAgent, getActiveTaskForExecutor, getTasksByAssignee, getTaskByActionRunningAgent, getRecurringTasks, hasActiveTask, updateTaskFields, clearAllStaleActionRunning } from '../database.js';
+import {
+  saveTaskToDb,
+  deleteTaskFromDb,
+  deleteTasksByAgent,
+  hardDeleteTaskFromDb,
+  restoreTaskFromDb,
+  getDeletedTasks,
+  getDeletedTaskById,
+  getTasksForResume,
+  updateTaskExecutionStatus,
+  getTaskById,
+  getTasksByAgent,
+  getAllTaskIds,
+  getActiveTasksByAgent,
+  getActiveTaskForExecutor,
+  getTasksByAssignee,
+  getTaskByActionRunningAgent,
+  getRecurringTasks,
+  hasActiveTask,
+  updateTaskFields,
+  clearAllStaleActionRunning,
+} from '../database.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
-import { isActiveStatus, getWorkflowManagedStatuses, getReassigningStatuses, markTaskError, isUserStopError, reArmInterruptedChains } from '../workflow/index.js';
+import {
+  isActiveStatus,
+  getWorkflowManagedStatuses,
+  getReassigningStatuses,
+  markTaskError,
+  isUserStopError,
+  reArmInterruptedChains,
+} from '../workflow/index.js';
 import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
 import { snapshotGitBaseline, reconcileTaskCommits } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
@@ -69,7 +97,8 @@ export function purgeStaleTaskSignals(activeTaskIds: Set<string>): void {
  * is mis-set via a direct API call.
  */
 function normalizeRetention(value: any): number | null {
-  if (value === null || value === undefined || value === '' || value === 0 || value === false) return null;
+  if (value === null || value === undefined || value === '' || value === 0 || value === false)
+    return null;
   const n = typeof value === 'number' ? value : parseInt(value, 10);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.min(3650, Math.floor(n));
@@ -81,7 +110,7 @@ function normalizeRetention(value: any): number | null {
  */
 function pruneByDate<T extends { at?: string; date?: string }>(
   arr: T[] | undefined,
-  cutoffMs: number,
+  cutoffMs: number
 ): number {
   if (!Array.isArray(arr) || arr.length === 0) return 0;
   let dropped = 0;
@@ -98,8 +127,38 @@ function pruneByDate<T extends { at?: string; date?: string }>(
 
 /** @this {import('./index.js').AgentManager} */
 export const tasksMethods = {
-
-  async addTask(this: any, agentId: string | null, text: string, source: any, initialStatus?: string, { boardId, repoFullName, repoProvider, secondaryRepos, storagePath, storageProvider, skipAutoRefine = false, recurrence, taskType, isManual, environment }: { boardId?: string; repoFullName?: string | null; repoProvider?: string | null; secondaryRepos?: any; storagePath?: string | null; storageProvider?: string | null; skipAutoRefine?: boolean; recurrence?: any; taskType?: string; isManual?: boolean; environment?: string | null } = {}): Promise<any> {
+  async addTask(
+    this: any,
+    agentId: string | null,
+    text: string,
+    source: any,
+    initialStatus?: string,
+    {
+      boardId,
+      repoFullName,
+      repoProvider,
+      secondaryRepos,
+      storagePath,
+      storageProvider,
+      skipAutoRefine = false,
+      recurrence,
+      taskType,
+      isManual,
+      environment,
+    }: {
+      boardId?: string;
+      repoFullName?: string | null;
+      repoProvider?: string | null;
+      secondaryRepos?: any;
+      storagePath?: string | null;
+      storageProvider?: string | null;
+      skipAutoRefine?: boolean;
+      recurrence?: any;
+      taskType?: string;
+      isManual?: boolean;
+      environment?: string | null;
+    } = {}
+  ): Promise<any> {
     // agentId === null → unassigned task: lives on a board, waits to be picked up.
     // Requires a boardId to make sense (the board IS its home in that case).
     const agent = agentId ? this.agents.get(agentId) : null;
@@ -114,12 +173,12 @@ export const tasksMethods = {
       status,
       // project is derived server-side from board.project_id; no longer stored on the task
       repoFullName: repoFullName || null,
-      repoProvider: repoFullName ? (repoProvider || 'github') : null,
+      repoProvider: repoFullName ? repoProvider || 'github' : null,
       // Secondary repos cloned alongside the primary; normalized (deduped,
       // primary-excluded, capped) so the stored shape is always clean.
       secondaryRepos: normalizeSecondaryRepos(secondaryRepos, repoFullName || null),
       storagePath: storagePath || null,
-      storageProvider: storagePath ? (storageProvider || 'onedrive') : null,
+      storageProvider: storagePath ? storageProvider || 'onedrive' : null,
       source: source || null,
       boardId: boardId || null,
       isManual: isManual || false,
@@ -160,7 +219,8 @@ export const tasksMethods = {
     const taskPayload = { ...newTask, agentId };
     this._emit('task:updated', { agentId, task: taskPayload });
     // Skip auto-refine for unassigned tasks — there's no agent to refine for yet.
-    if (agentId && !skipAutoRefine && !newTask.isManual) this._checkAutoRefine({ ...newTask, agentId });
+    if (agentId && !skipAutoRefine && !newTask.isManual)
+      this._checkAutoRefine({ ...newTask, agentId });
     return newTask;
   },
 
@@ -188,7 +248,13 @@ export const tasksMethods = {
     return task;
   },
 
-  async setTaskStatus(this: any, agentId: string, taskId: string, status: string, { skipAutoRefine = false, by = null }: { skipAutoRefine?: boolean; by?: string | null } = {}): Promise<any> {
+  async setTaskStatus(
+    this: any,
+    agentId: string,
+    taskId: string,
+    status: string,
+    { skipAutoRefine = false, by = null }: { skipAutoRefine?: boolean; by?: string | null } = {}
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = await getTaskById(taskId);
@@ -267,7 +333,8 @@ export const tasksMethods = {
     // (agent:updated alone is not enough — the board listens on task:updated).
     const taskPayload = enrichAssignee(this, { ...task, agentId: ownerId });
     this._emit('task:updated', { agentId: ownerId, task: taskPayload });
-    if (!skipAutoRefine && status !== 'error' && !task.isManual) this._checkAutoRefine({ ...task, agentId: ownerId }, { by: by || 'user' });
+    if (!skipAutoRefine && status !== 'error' && !task.isManual)
+      this._checkAutoRefine({ ...task, agentId: ownerId }, { by: by || 'user' });
     return task;
   },
 
@@ -282,7 +349,7 @@ export const tasksMethods = {
     taskId: string,
     field: string,
     value: any,
-    { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: any) => void } = {},
+    { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: any) => void } = {}
   ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
@@ -292,7 +359,15 @@ export const tasksMethods = {
     task[field] = value;
     applyExtra?.(task);
     if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by, type: 'edit', field, oldValue, newValue: value ?? null });
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by,
+      type: 'edit',
+      field,
+      oldValue,
+      newValue: value ?? null,
+    });
     await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
@@ -306,19 +381,32 @@ export const tasksMethods = {
     return this._editTaskField(agentId, taskId, 'text', text);
   },
 
-  updateTaskRepo(this: any, agentId: string, taskId: string, repoFullName: string | null, repoProvider: string | null = null): any {
+  updateTaskRepo(
+    this: any,
+    agentId: string,
+    taskId: string,
+    repoFullName: string | null,
+    repoProvider: string | null = null
+  ): any {
     return this._editTaskField(agentId, taskId, 'repoFullName', repoFullName || null, {
       applyExtra: (task: any) => {
-        task.repoProvider = repoFullName ? (repoProvider || task.repoProvider || 'github') : null;
+        task.repoProvider = repoFullName ? repoProvider || task.repoProvider || 'github' : null;
         // Keep the invariant: a repo can't be both primary and secondary.
         if (repoFullName && Array.isArray(task.secondaryRepos)) {
-          task.secondaryRepos = task.secondaryRepos.filter((r: any) => r?.fullName !== repoFullName);
+          task.secondaryRepos = task.secondaryRepos.filter(
+            (r: any) => r?.fullName !== repoFullName
+          );
         }
       },
     });
   },
 
-  async updateTaskSecondaryRepos(this: any, agentId: string, taskId: string, secondaryRepos: any): Promise<any> {
+  async updateTaskSecondaryRepos(
+    this: any,
+    agentId: string,
+    taskId: string,
+    secondaryRepos: any
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = await getTaskById(taskId);
@@ -327,23 +415,52 @@ export const tasksMethods = {
     const newValue = normalizeSecondaryRepos(secondaryRepos, task.repoFullName);
     task.secondaryRepos = newValue;
     if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'edit', field: 'secondaryRepos', oldValue, newValue });
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by: 'user',
+      type: 'edit',
+      field: 'secondaryRepos',
+      oldValue,
+      newValue,
+    });
     await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     return task;
   },
 
-  updateTaskStorage(this: any, agentId: string, taskId: string, storagePath: string | null, storageProvider: string | null = null): any {
+  updateTaskStorage(
+    this: any,
+    agentId: string,
+    taskId: string,
+    storagePath: string | null,
+    storageProvider: string | null = null
+  ): any {
     return this._editTaskField(agentId, taskId, 'storagePath', storagePath || null, {
-      applyExtra: (task: any) => { task.storageProvider = storagePath ? (storageProvider || task.storageProvider || 'onedrive') : null; },
+      applyExtra: (task: any) => {
+        task.storageProvider = storagePath
+          ? storageProvider || task.storageProvider || 'onedrive'
+          : null;
+      },
     });
   },
 
-  updateTaskType(this: any, agentId: string, taskId: string, taskType: string, by: string = 'user'): any {
+  updateTaskType(
+    this: any,
+    agentId: string,
+    taskId: string,
+    taskType: string,
+    by: string = 'user'
+  ): any {
     return this._editTaskField(agentId, taskId, 'taskType', taskType || null, { by });
   },
 
-  async updateTaskRecurrence(this: any, agentId: string, taskId: string, recurrence: any): Promise<any> {
+  async updateTaskRecurrence(
+    this: any,
+    agentId: string,
+    taskId: string,
+    recurrence: any
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = await getTaskById(taskId);
@@ -384,11 +501,16 @@ export const tasksMethods = {
       if (workflow?.columns?.length > 0) {
         return workflow.columns[0].id;
       }
-    } catch { /* fall through */ }
+    } catch {
+      /* fall through */
+    }
     return 'backlog';
   },
 
-  async _findTaskForCommitLink(this: any, agentId: string): Promise<{ task: any; ownerAgentId: string } | null> {
+  async _findTaskForCommitLink(
+    this: any,
+    agentId: string
+  ): Promise<{ task: any; ownerAgentId: string } | null> {
     // Window for the "recently active" fallback (used when status has transitioned
     // away from active — e.g. error from a rate-limit, or done seconds ago).
     // Commits made by an agent within this window after the task left the
@@ -403,7 +525,9 @@ export const tasksMethods = {
     // handler or to "done" via @update_task).
     const running = await getTaskByActionRunningAgent(agentId);
     if (running) {
-      console.log(`🔗 [Commit] Found task via actionRunningAgentId: "${(running as any).text?.slice(0, 50)}" (status=${(running as any).status})`);
+      console.log(
+        `🔗 [Commit] Found task via actionRunningAgentId: "${(running as any).text?.slice(0, 50)}" (status=${(running as any).status})`
+      );
       return { task: running, ownerAgentId: (running as any).agentId };
     }
 
@@ -416,12 +540,18 @@ export const tasksMethods = {
     let bestActive: any = null;
     for (const task of assignedTasks) {
       if (!this._isActiveTaskStatus(task.status)) continue;
-      if (!bestActive || (task.startedAt && (!bestActive.startedAt || new Date(task.startedAt) > new Date(bestActive.startedAt)))) {
+      if (
+        !bestActive ||
+        (task.startedAt &&
+          (!bestActive.startedAt || new Date(task.startedAt) > new Date(bestActive.startedAt)))
+      ) {
         bestActive = task;
       }
     }
     if (bestActive) {
-      console.log(`🔗 [Commit] Found task via assignee/own active: "${bestActive.text?.slice(0, 50)}" (owner=${(bestActive.agentId || '').slice(0, 8)})`);
+      console.log(
+        `🔗 [Commit] Found task via assignee/own active: "${bestActive.text?.slice(0, 50)}" (owner=${(bestActive.agentId || '').slice(0, 8)})`
+      );
       return { task: bestActive, ownerAgentId: bestActive.agentId };
     }
 
@@ -439,14 +569,18 @@ export const tasksMethods = {
       }
     }
     if (bestRecent) {
-      console.log(`🔗 [Commit] Found recently-active task: "${bestRecent.task.text?.slice(0, 50)}" (status=${bestRecent.task.status}, age=${Math.round((now - bestRecent.ts) / 1000)}s)`);
+      console.log(
+        `🔗 [Commit] Found recently-active task: "${bestRecent.task.text?.slice(0, 50)}" (status=${bestRecent.task.status}, age=${Math.round((now - bestRecent.ts) / 1000)}s)`
+      );
       return { task: bestRecent.task, ownerAgentId: bestRecent.task.agentId };
     }
 
     // Priority 5 (DB fallback): find active task from DB
     const activeTask = await getActiveTaskForExecutor(agentId);
     if (activeTask) {
-      console.log(`🔗 [Commit] Found task via DB executor lookup: "${(activeTask as any).text?.slice(0, 50)}"`);
+      console.log(
+        `🔗 [Commit] Found task via DB executor lookup: "${(activeTask as any).text?.slice(0, 50)}"`
+      );
       return { task: activeTask, ownerAgentId: (activeTask as any).agentId };
     }
 
@@ -456,30 +590,43 @@ export const tasksMethods = {
     // without task".
     const allTasks = await getTasksByAgent(agentId);
     const recentlyFinished = allTasks
-      .filter((t: any) => (t.status === 'done' || t.status === 'error') && (t.completedAt || t.startedAt))
+      .filter(
+        (t: any) => (t.status === 'done' || t.status === 'error') && (t.completedAt || t.startedAt)
+      )
       .map((t: any) => ({ task: t, ts: new Date(t.completedAt || t.startedAt).getTime() }))
       .filter((x: any) => now - x.ts <= RECENT_ACTIVE_MS);
     if (recentlyFinished.length > 0) {
       recentlyFinished.sort((a: any, b: any) => b.ts - a.ts);
       const top = recentlyFinished[0].task;
-      console.log(`🔗 [Commit] No active task — falling back to recently finished task "${top.text?.slice(0, 50)}" (status=${top.status})`);
+      console.log(
+        `🔗 [Commit] No active task — falling back to recently finished task "${top.text?.slice(0, 50)}" (status=${top.status})`
+      );
       return { task: top, ownerAgentId: top.agentId };
     }
     // Log diagnostic info when no task found at all
     const agentObj = this.agents.get(agentId);
-    console.warn(`⚠️ [Commit] _findTaskForCommitLink: no task found for agent "${agentObj?.name || agentId.slice(0, 8)}". Checked: actionRunningAgentId, assignee, own tasks, recent in-mem, DB executor, DB recent finished.`);
+    console.warn(
+      `⚠️ [Commit] _findTaskForCommitLink: no task found for agent "${agentObj?.name || agentId.slice(0, 8)}". Checked: actionRunningAgentId, assignee, own tasks, recent in-mem, DB executor, DB recent finished.`
+    );
     return null;
   },
 
-  async addTaskCommit(this: any, agentId: string, taskId: string, hash: string, message: string, meta: { pushed?: boolean } = {}): Promise<any> {
+  async addTaskCommit(
+    this: any,
+    agentId: string,
+    taskId: string,
+    hash: string,
+    message: string,
+    meta: { pushed?: boolean } = {}
+  ): Promise<any> {
     const task: any = await getTaskById(taskId);
     if (!task) return null;
     const ownerAgentId: string = task.agentId;
     if (!task.commits) task.commits = [];
     // Prefix-aware dedup: treat short and full hashes of the same commit as equal.
     // If a full hash is provided and a short hash already exists, upgrade it.
-    const existingIdx = task.commits.findIndex((c: any) =>
-      c.hash === hash || c.hash.startsWith(hash) || hash.startsWith(c.hash)
+    const existingIdx = task.commits.findIndex(
+      (c: any) => c.hash === hash || c.hash.startsWith(hash) || hash.startsWith(c.hash)
     );
     if (existingIdx !== -1) {
       const existing = task.commits[existingIdx];
@@ -498,7 +645,11 @@ export const tasksMethods = {
       }
       if (mutated) {
         await saveTaskToDb({ ...task, agentId: ownerAgentId });
-        emitTaskUpdated(this, { ...task, agentId: ownerAgentId }, { emitAgent: false, stampUpdatedAt: true });
+        emitTaskUpdated(
+          this,
+          { ...task, agentId: ownerAgentId },
+          { emitAgent: false, stampUpdatedAt: true }
+        );
       }
       return task;
     }
@@ -514,7 +665,11 @@ export const tasksMethods = {
     // Also emit the task itself so the kanban card shows the commit live —
     // commits linked by the terminal-independent reconcile have no other
     // event to piggyback on (no @run_command result, no status move).
-    emitTaskUpdated(this, { ...task, agentId: ownerAgentId }, { emitAgent: false, stampUpdatedAt: true });
+    emitTaskUpdated(
+      this,
+      { ...task, agentId: ownerAgentId },
+      { emitAgent: false, stampUpdatedAt: true }
+    );
     return task;
   },
 
@@ -532,14 +687,25 @@ export const tasksMethods = {
     return task;
   },
 
-  async setTaskAssignee(this: any, agentId: string, taskId: string, assigneeId: string): Promise<any> {
+  async setTaskAssignee(
+    this: any,
+    agentId: string,
+    taskId: string,
+    assigneeId: string
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = await getTaskById(taskId);
     if (!task) return null;
     task.assignee = assigneeId;
     if (!task.history) task.history = [];
-    task.history.push({ status: task.status, at: new Date().toISOString(), by: 'user', type: 'reassign', assignee: assigneeId });
+    task.history.push({
+      status: task.status,
+      at: new Date().toISOString(),
+      by: 'user',
+      type: 'reassign',
+      assignee: assigneeId,
+    });
     await saveTaskToDb({ ...task, agentId });
     this._emit('agent:updated', this._sanitize(agent));
     this._recheckConditionalTransitions();
@@ -563,7 +729,12 @@ export const tasksMethods = {
     const restored = await restoreTaskFromDb(taskId);
     if (!restored) return null;
     if (!restored.history) restored.history = [];
-    restored.history.push({ status: restored.status, at: new Date().toISOString(), by: 'user', type: 'restored' });
+    restored.history.push({
+      status: restored.status,
+      at: new Date().toISOString(),
+      by: 'user',
+      type: 'restored',
+    });
     await saveTaskToDb({ ...restored, agentId: restored.agentId });
     const agent = restored.agentId ? this.agents.get(restored.agentId) : null;
     if (agent) this._emit('agent:updated', this._sanitize(agent));
@@ -588,7 +759,12 @@ export const tasksMethods = {
     return true;
   },
 
-  async transferTask(this: any, fromAgentId: string, taskId: string, toAgentId: string): Promise<any> {
+  async transferTask(
+    this: any,
+    fromAgentId: string,
+    taskId: string,
+    toAgentId: string
+  ): Promise<any> {
     const fromAgent = this.agents.get(fromAgentId);
     const toAgent = this.agents.get(toAgentId);
     if (!fromAgent || !toAgent) return null;
@@ -597,7 +773,19 @@ export const tasksMethods = {
     const prevStatus = taskToTransfer.status;
     await deleteTaskFromDb(taskId);
     this._emit('agent:updated', this._sanitize(fromAgent));
-    const newTask = await this.addTask(toAgentId, taskToTransfer.text, { type: 'transfer', name: fromAgent.name, id: fromAgent.id }, prevStatus, { boardId: taskToTransfer.boardId, repoFullName: taskToTransfer.repoFullName, repoProvider: taskToTransfer.repoProvider, storagePath: taskToTransfer.storagePath, storageProvider: taskToTransfer.storageProvider });
+    const newTask = await this.addTask(
+      toAgentId,
+      taskToTransfer.text,
+      { type: 'transfer', name: fromAgent.name, id: fromAgent.id },
+      prevStatus,
+      {
+        boardId: taskToTransfer.boardId,
+        repoFullName: taskToTransfer.repoFullName,
+        repoProvider: taskToTransfer.repoProvider,
+        storagePath: taskToTransfer.storagePath,
+        storageProvider: taskToTransfer.storageProvider,
+      }
+    );
     if (newTask) {
       newTask.assignee = toAgentId;
       await saveTaskToDb({ ...newTask, agentId: toAgentId });
@@ -613,7 +801,9 @@ export const tasksMethods = {
     if (!task) throw new Error('Task not found');
     if (task.status === 'done') throw new Error('Task already completed');
 
-    console.log(`[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`);
+    console.log(
+      `[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`
+    );
 
     clearTaskSignal(taskId, 'stopped');
     clearTaskSignal(taskId, 'watching');
@@ -653,7 +843,12 @@ export const tasksMethods = {
       this._loopProcessing.add(executorId);
       // Fire-and-forget — caller (socket handler) doesn't await the agent run
       this._resumeActiveTask(agentId, executor, task)
-        .catch((err: any) => console.error(`[Resume] _resumeActiveTask failed for "${task.text?.slice(0, 60)}":`, err.message))
+        .catch((err: any) =>
+          console.error(
+            `[Resume] _resumeActiveTask failed for "${task.text?.slice(0, 60)}":`,
+            err.message
+          )
+        )
         .finally(() => {
           this._loopProcessing.delete(executorId);
         });
@@ -668,7 +863,9 @@ export const tasksMethods = {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
     const tasks = await getTasksByAgent(agentId);
-    const executable = tasks.filter((t: any) => t.status !== 'done' && !this._isActiveTaskStatus(t.status));
+    const executable = tasks.filter(
+      (t: any) => t.status !== 'done' && !this._isActiveTaskStatus(t.status)
+    );
     if (executable.length === 0) throw new Error('No executable tasks');
 
     console.log(`▶️  Executing ${executable.length} task(s) for ${agent.name}`);
@@ -678,13 +875,21 @@ export const tasksMethods = {
     for (const task of executable) {
       try {
         const result = await this.executeTask(agentId, task.id, streamCallback);
-        results.push({ taskId: task.id, text: task.text, success: true, response: result.response });
+        results.push({
+          taskId: task.id,
+          text: task.text,
+          success: true,
+          response: result.response,
+        });
       } catch (err: any) {
         results.push({ taskId: task.id, text: task.text, success: false, error: err.message });
       }
     }
 
-    this._emit('agent:task:executeAll:complete', { agentId, results: results.map(r => ({ taskId: r.taskId, success: r.success })) });
+    this._emit('agent:task:executeAll:complete', {
+      agentId,
+      results: results.map(r => ({ taskId: r.taskId, success: r.success })),
+    });
     return results;
   },
 
@@ -698,27 +903,34 @@ export const tasksMethods = {
     this._refreshWorkflowManagedStatuses();
     this._taskLoopInterval = setInterval(() => this._processNextPendingTasks(), intervalMs);
     this._recurrenceInterval = setInterval(() => this._processRecurringTasks(), 60000);
-    this._workflowRefreshInterval = setInterval(() => this._refreshWorkflowManagedStatuses(), 30000);
+    this._workflowRefreshInterval = setInterval(
+      () => this._refreshWorkflowManagedStatuses(),
+      30000
+    );
     console.log(`🔄 Task loop started (every ${intervalMs / 1000}s)`);
   },
 
   _refreshWorkflowManagedStatuses(this: any): void {
-    getAllBoardWorkflows().then((boardWorkflows: any) => {
-      const next = getWorkflowManagedStatuses(boardWorkflows);
-      this._workflowManagedStatuses = next;
-      // Statuses whose entry will reassign the task — drives whether
-      // setTaskStatus clears the assignee on a column move (see setTaskStatus).
-      this._reassigningStatuses = getReassigningStatuses(boardWorkflows);
-      // Log only when the managed-status set actually changes — this runs every
-      // 30s, and re-printing the (long, static) list each time drowned the logs.
-      const nextKey = [...next].sort().join(',');
-      if (nextKey !== this._workflowManagedStatusesKey) {
-        this._workflowManagedStatusesKey = nextKey;
-        if (next.size > 0) {
-          console.log(`🔄 [TaskLoop] Workflow-managed statuses (${next.size}): ${[...next].join(', ')}`);
+    getAllBoardWorkflows()
+      .then((boardWorkflows: any) => {
+        const next = getWorkflowManagedStatuses(boardWorkflows);
+        this._workflowManagedStatuses = next;
+        // Statuses whose entry will reassign the task — drives whether
+        // setTaskStatus clears the assignee on a column move (see setTaskStatus).
+        this._reassigningStatuses = getReassigningStatuses(boardWorkflows);
+        // Log only when the managed-status set actually changes — this runs every
+        // 30s, and re-printing the (long, static) list each time drowned the logs.
+        const nextKey = [...next].sort().join(',');
+        if (nextKey !== this._workflowManagedStatusesKey) {
+          this._workflowManagedStatusesKey = nextKey;
+          if (next.size > 0) {
+            console.log(
+              `🔄 [TaskLoop] Workflow-managed statuses (${next.size}): ${[...next].join(', ')}`
+            );
+          }
         }
-      }
-    }).catch(() => {});
+      })
+      .catch(() => {});
   },
 
   stopTaskLoop(this: any): void {
@@ -774,10 +986,12 @@ export const tasksMethods = {
       }
 
       console.log(
-        `🔁 [Recurrence] Resetting task "${(task.text || '').slice(0, 60)}" `
-        + `${prevStatus} → ${resetStatus} (interval: ${rec.intervalMinutes}min`
-        + (retentionDays ? `, retention: ${retentionDays}d, pruned: ${prunedHistory}h/${prunedCommits}c` : '')
-        + `)`
+        `🔁 [Recurrence] Resetting task "${(task.text || '').slice(0, 60)}" ` +
+          `${prevStatus} → ${resetStatus} (interval: ${rec.intervalMinutes}min` +
+          (retentionDays
+            ? `, retention: ${retentionDays}d, pruned: ${prunedHistory}h/${prunedCommits}c`
+            : '') +
+          `)`
       );
 
       task.status = resetStatus;
@@ -830,9 +1044,12 @@ export const tasksMethods = {
         .finally(() => {
           clearAllStaleActionRunning(env)
             .then((cleared: number) => {
-              if (cleared > 0) console.log(`🔄 Cleared ${cleared} stale action_running flags for env="${env}"`);
+              if (cleared > 0)
+                console.log(`🔄 Cleared ${cleared} stale action_running flags for env="${env}"`);
             })
-            .catch((err: any) => console.error('[TaskLoop] stale action cleanup failed:', err.message));
+            .catch((err: any) =>
+              console.error('[TaskLoop] stale action cleanup failed:', err.message)
+            );
         });
     }
 
@@ -850,54 +1067,67 @@ export const tasksMethods = {
 
     // Use DB query to find tasks that need resume — filtered to our environment
     // so a sibling replica sharing the DB doesn't steal each other's tasks.
-    getTasksForResume(getCurrentEnvironment()).then(async (dbTasks: any[]) => {
-      for (const dbTask of dbTasks) {
-        const executorId = dbTask.assignee || dbTask.agentId;
-        const executor = this.agents.get(executorId);
-        if (!executor) continue;
-        if (executor.status !== 'idle') continue;
-        if (this._loopProcessing.has(executorId)) continue;
-        if (!this._isActiveTaskStatus(dbTask.status)) continue;
+    getTasksForResume(getCurrentEnvironment())
+      .then(async (dbTasks: any[]) => {
+        for (const dbTask of dbTasks) {
+          const executorId = dbTask.assignee || dbTask.agentId;
+          const executor = this.agents.get(executorId);
+          if (!executor) continue;
+          if (executor.status !== 'idle') continue;
+          if (this._loopProcessing.has(executorId)) continue;
+          if (!this._isActiveTaskStatus(dbTask.status)) continue;
 
-        if (this._workflowManagedStatuses?.has(dbTask.status)) continue;
+          if (this._workflowManagedStatuses?.has(dbTask.status)) continue;
 
-        if (dbTask.executionStatus === 'stopped' || getTaskSignal(dbTask.id, 'stopped')) {
-          continue;
-        }
-        if (dbTask.executionStatus === 'watching' || getTaskSignal(dbTask.id, 'watching')) continue;
-
-        // Circuit breaker: stop retrying tasks that fail repeatedly
-        const MAX_RESUME_FAILURES = 3;
-        const FAILURE_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
-        const failureInfo = this._taskResumeFailures?.get(dbTask.id);
-        if (failureInfo && failureInfo.count >= MAX_RESUME_FAILURES) {
-          if (Date.now() - failureInfo.lastFailedAt < FAILURE_COOLDOWN_MS) {
-            continue; // Still in cooldown, skip silently
+          if (dbTask.executionStatus === 'stopped' || getTaskSignal(dbTask.id, 'stopped')) {
+            continue;
           }
-          // Cooldown expired — reset and allow one more attempt
-          this._taskResumeFailures.delete(dbTask.id);
-        }
+          if (dbTask.executionStatus === 'watching' || getTaskSignal(dbTask.id, 'watching'))
+            continue;
 
-        this._loopProcessing.add(executorId);
-        console.log(`🔄 [TaskLoop] Agent "${executor.name}" is idle but has started task "${dbTask.text.slice(0, 60)}" (${dbTask.status}) — resuming`);
-        this._resumeActiveTask(dbTask.agentId, this.agents.get(dbTask.agentId), dbTask).then(() => {
-          // Successful resume — reset failure counter
-          this._taskResumeFailures?.delete(dbTask.id);
-        }).catch(() => {
-          // Track consecutive failures for this task
-          const prev = this._taskResumeFailures?.get(dbTask.id) || { count: 0 };
-          const newCount = prev.count + 1;
-          this._taskResumeFailures?.set(dbTask.id, { count: newCount, lastFailedAt: Date.now() });
-          if (newCount >= MAX_RESUME_FAILURES) {
-            console.log(`🔴 [TaskLoop] Circuit breaker: task "${dbTask.text.slice(0, 60)}" failed ${newCount} consecutive resumes — pausing for ${FAILURE_COOLDOWN_MS / 60000}min`);
+          // Circuit breaker: stop retrying tasks that fail repeatedly
+          const MAX_RESUME_FAILURES = 3;
+          const FAILURE_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
+          const failureInfo = this._taskResumeFailures?.get(dbTask.id);
+          if (failureInfo && failureInfo.count >= MAX_RESUME_FAILURES) {
+            if (Date.now() - failureInfo.lastFailedAt < FAILURE_COOLDOWN_MS) {
+              continue; // Still in cooldown, skip silently
+            }
+            // Cooldown expired — reset and allow one more attempt
+            this._taskResumeFailures.delete(dbTask.id);
           }
-        }).finally(() => {
-          this._loopProcessing.delete(executorId);
-        });
-      }
-    }).catch((err: any) => {
-      console.error('[TaskLoop] Failed to query tasks for resume:', err.message);
-    });
+
+          this._loopProcessing.add(executorId);
+          console.log(
+            `🔄 [TaskLoop] Agent "${executor.name}" is idle but has started task "${dbTask.text.slice(0, 60)}" (${dbTask.status}) — resuming`
+          );
+          this._resumeActiveTask(dbTask.agentId, this.agents.get(dbTask.agentId), dbTask)
+            .then(() => {
+              // Successful resume — reset failure counter
+              this._taskResumeFailures?.delete(dbTask.id);
+            })
+            .catch(() => {
+              // Track consecutive failures for this task
+              const prev = this._taskResumeFailures?.get(dbTask.id) || { count: 0 };
+              const newCount = prev.count + 1;
+              this._taskResumeFailures?.set(dbTask.id, {
+                count: newCount,
+                lastFailedAt: Date.now(),
+              });
+              if (newCount >= MAX_RESUME_FAILURES) {
+                console.log(
+                  `🔴 [TaskLoop] Circuit breaker: task "${dbTask.text.slice(0, 60)}" failed ${newCount} consecutive resumes — pausing for ${FAILURE_COOLDOWN_MS / 60000}min`
+                );
+              }
+            })
+            .finally(() => {
+              this._loopProcessing.delete(executorId);
+            });
+        }
+      })
+      .catch((err: any) => {
+        console.error('[TaskLoop] Failed to query tasks for resume:', err.message);
+      });
   },
 
   /**
@@ -911,7 +1141,7 @@ export const tasksMethods = {
     try {
       const status = await this.executionManager.getTerminalSession(executorId);
       const err = status?.auth_error;
-      return (typeof err === 'string' && err.trim()) ? err.trim() : null;
+      return typeof err === 'string' && err.trim() ? err.trim() : null;
     } catch {
       return null;
     }
@@ -923,7 +1153,7 @@ export const tasksMethods = {
   _consumeTaskAuthError(this: any, taskId: string): string | null {
     const err = getTaskSignal(taskId, 'authError');
     if (err) clearTaskSignal(taskId, 'authError');
-    return (typeof err === 'string' && err.trim()) ? err.trim() : null;
+    return typeof err === 'string' && err.trim() ? err.trim() : null;
   },
 
   /** Drop the in-memory 'stopped' interrupt signal for a task. Called when a
@@ -950,12 +1180,19 @@ export const tasksMethods = {
    * "resumed twice"). `startStatus` is the column the wait began on, so an
    * active→active move (off that column) still counts as 'moved'.
    */
-  async _pollTaskVerdict(this: any, taskId: string, taskText: string, startStatus: string | undefined): Promise<'completed' | 'stopped' | 'moved' | 'deleted' | null> {
+  async _pollTaskVerdict(
+    this: any,
+    taskId: string,
+    taskText: string,
+    startStatus: string | undefined
+  ): Promise<'completed' | 'stopped' | 'moved' | 'deleted' | null> {
     if (getTaskSignal(taskId, 'completed')) {
       const comment = getTaskSignal(taskId, 'comment') || '';
       clearTaskSignal(taskId, 'completed');
       clearTaskSignal(taskId, 'comment');
-      console.log(`✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`);
+      console.log(
+        `✅ [Execution] update_task completed "${taskText.slice(0, 60)}"${comment ? ` (${comment.slice(0, 80)})` : ''}`
+      );
       return 'completed';
     }
     if (getTaskSignal(taskId, 'stopped')) {
@@ -965,7 +1202,8 @@ export const tasksMethods = {
     const task = await getTaskById(taskId);
     if (!task) return 'deleted';
     const status = (task as any).status;
-    const movedAway = typeof status === 'string' && startStatus !== undefined && status !== startStatus;
+    const movedAway =
+      typeof status === 'string' && startStatus !== undefined && status !== startStatus;
     if (!this._isActiveTaskStatus(status) || movedAway) return 'moved';
     return null;
   },
@@ -976,21 +1214,26 @@ export const tasksMethods = {
    * send failure swallowed (logged) so the wait continues. Uses the CLI
    * terminal-input path for terminal-driven CLI runners, else sendMessage.
    */
-  async _sendPromptStreamed(this: any, executorId: string, executor: any, prompt: string, { terminalDriven = false, label = 'Send' }: { terminalDriven?: boolean; label?: string } = {}): Promise<void> {
+  async _sendPromptStreamed(
+    this: any,
+    executorId: string,
+    executor: any,
+    prompt: string,
+    { terminalDriven = false, label = 'Send' }: { terminalDriven?: boolean; label?: string } = {}
+  ): Promise<void> {
     this._emit('agent:stream:start', { agentId: executorId });
     try {
       if (terminalDriven && isCliRunner(executor) && this.executionManager?.sendTerminalInput) {
         await bindAgentRunner(this, executor);
         await this.executionManager.sendTerminalInput(executorId, prompt, { submit: true });
       } else {
-        await this.sendMessage(
-          executorId,
-          prompt,
-          (chunk: any) => {
-            this._emit('agent:stream:chunk', { agentId: executorId, chunk });
-            this._emit('agent:thinking', { agentId: executorId, thinking: executor.currentThinking || '' });
-          }
-        );
+        await this.sendMessage(executorId, prompt, (chunk: any) => {
+          this._emit('agent:stream:chunk', { agentId: executorId, chunk });
+          this._emit('agent:thinking', {
+            agentId: executorId,
+            thinking: executor.currentThinking || '',
+          });
+        });
       }
       // _saveExecutionLog moved to caller — captures full conversation including retries/reminders
     } catch (err: any) {
@@ -1010,7 +1253,14 @@ export const tasksMethods = {
    * terminal verdict ('completed'|'stopped'|'moved'|'deleted'|'error') or null
    * to continue to the reminder loop.
    */
-  async _probeCliAuth(this: any, taskId: string, executorId: string, executorName: string, taskText: string, startStatus: string | undefined): Promise<string | null> {
+  async _probeCliAuth(
+    this: any,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    startStatus: string | undefined
+  ): Promise<string | null> {
     const AUTH_PROBE_ATTEMPTS = 8;
     const AUTH_PROBE_INTERVAL_MS = 3000;
     for (let i = 0; i < AUTH_PROBE_ATTEMPTS; i++) {
@@ -1020,7 +1270,9 @@ export const tasksMethods = {
       const authErr = await this._checkTerminalAuthError(executorId);
       if (authErr) {
         setTaskSignal(taskId, 'authError', authErr);
-        console.warn(`🔐 [Execution] CLI auth failure for "${executorName}" on task ${taskId} "${taskText.slice(0, 60)}": ${authErr}`);
+        console.warn(
+          `🔐 [Execution] CLI auth failure for "${executorName}" on task ${taskId} "${taskText.slice(0, 60)}": ${authErr}`
+        );
         return 'error';
       }
     }
@@ -1033,7 +1285,14 @@ export const tasksMethods = {
    * session corruption), re-send the task immediately instead of waiting for the
    * slow reminder loop. Returns a terminal verdict or null to continue.
    */
-  async _immediateIdleRetry(this: any, taskId: string, executorId: string, executorName: string, taskText: string, startStatus: string | undefined): Promise<string | null> {
+  async _immediateIdleRetry(
+    this: any,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    startStatus: string | undefined
+  ): Promise<string | null> {
     const executor = this.agents.get(executorId);
     if (!(executor && executor.status === 'idle' && !getTaskSignal(taskId, 'stopped'))) return null;
 
@@ -1044,12 +1303,14 @@ export const tasksMethods = {
     if (verdict) return verdict;
 
     if (executor.status === 'idle') {
-      console.log(`🔄 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — retrying immediately`);
+      console.log(
+        `🔄 [Execution] Agent "${executorName}" went idle without completing task ${taskId} "${taskText.slice(0, 60)}" — retrying immediately`
+      );
       await this._sendPromptStreamed(
         executorId,
         executor,
         `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, call @update_task(taskId, <final column>, summary) to move it to its final column and finish it.`,
-        { label: 'Immediate retry' },
+        { label: 'Immediate retry' }
       );
       const retryResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
       if (retryResult) return retryResult;
@@ -1063,88 +1324,131 @@ export const tasksMethods = {
    * finally (set by the caller) — always clears the flag and, unless the task
    * was explicitly stopped, resets executionStatus so the task loop can resume.
    */
-  async _reminderLoop(this: any, taskId: string, executorId: string, executorName: string, taskText: string, startStatus: string | undefined, { terminalDriven = false, gitBaselineHead = null }: { terminalDriven?: boolean; gitBaselineHead?: string | null } = {}): Promise<string> {
+  async _reminderLoop(
+    this: any,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    startStatus: string | undefined,
+    {
+      terminalDriven = false,
+      gitBaselineHead = null,
+    }: { terminalDriven?: boolean; gitBaselineHead?: string | null } = {}
+  ): Promise<string> {
     const reminderConfig = await getReminderConfig();
-    console.log(`🔔 [Execution] Agent "${executorName}" still idle after immediate retry for task ${taskId} "${taskText.slice(0, 60)}" — falling back to reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`);
-    const { intervalMs: REMINDER_INTERVAL_MS, maxReminders: MAX_REMINDERS, cooldownMs: COOLDOWN_MS } = reminderConfig;
+    console.log(
+      `🔔 [Execution] Agent "${executorName}" still idle after immediate retry for task ${taskId} "${taskText.slice(0, 60)}" — falling back to reminder loop (interval=${reminderConfig.intervalMinutes}min, cooldown=${reminderConfig.cooldownMinutes}min)`
+    );
+    const {
+      intervalMs: REMINDER_INTERVAL_MS,
+      maxReminders: MAX_REMINDERS,
+      cooldownMs: COOLDOWN_MS,
+    } = reminderConfig;
     let reminded = 0;
     let lastReminderSentAt = 0;
 
     try {
-    while (reminded < MAX_REMINDERS) {
-      await new Promise(resolve => setTimeout(resolve, REMINDER_INTERVAL_MS));
+      while (reminded < MAX_REMINDERS) {
+        await new Promise(resolve => setTimeout(resolve, REMINDER_INTERVAL_MS));
 
-      const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
-      if (verdict) {
-        console.log(`🔔 [Execution] Task ${taskId} verdict "${verdict}" during reminder wait — exiting loop`);
-        return verdict;
-      }
+        const verdict = await this._pollTaskVerdict(taskId, taskText, startStatus);
+        if (verdict) {
+          console.log(
+            `🔔 [Execution] Task ${taskId} verdict "${verdict}" during reminder wait — exiting loop`
+          );
+          return verdict;
+        }
 
-      // Terminal-independent commit sweep for CLI runners: a runner commits
-      // silently inside its PTY (nothing parseable ever reaches the terminal),
-      // so poll the repo itself and link what appeared since the baseline.
-      // Requires the baseline anchor — the time-window fallback is reserved
-      // for the end-of-run reconcile, where recordTaskCompletion's heuristics
-      // already bound the risk of over-linking.
-      if (terminalDriven && gitBaselineHead) {
-        try {
-          await reconcileTaskCommits(this, executorId, taskId, {
-            baselineHead: gitBaselineHead,
-            label: 'MidRunSweep',
-          });
-        } catch { /* best-effort — the end-of-run reconcile catches up */ }
-      }
+        // Terminal-independent commit sweep for CLI runners: a runner commits
+        // silently inside its PTY (nothing parseable ever reaches the terminal),
+        // so poll the repo itself and link what appeared since the baseline.
+        // Requires the baseline anchor — the time-window fallback is reserved
+        // for the end-of-run reconcile, where recordTaskCompletion's heuristics
+        // already bound the risk of over-linking.
+        if (terminalDriven && gitBaselineHead) {
+          try {
+            await reconcileTaskCommits(this, executorId, taskId, {
+              baselineHead: gitBaselineHead,
+              label: 'MidRunSweep',
+            });
+          } catch {
+            /* best-effort — the end-of-run reconcile catches up */
+          }
+        }
 
-      const currentExecutor = this.agents.get(executorId);
-      if (!currentExecutor || currentExecutor.status === 'busy') {
-        console.log(`🔔 [Execution] Executor "${executorName}" is busy — skipping reminder`);
-        continue;
-      }
-      if (currentExecutor.status === 'error') {
-        console.log(`🔔 [Execution] Executor "${executorName}" is in error — exiting reminder loop`);
-        return 'error';
-      }
-
-      // Late CLI auth failure (token expired mid-run, re-auth needed). Surface
-      // it the same way as the early probe so the task is failed, not left to
-      // exhaust the reminder loop and time out as if "done".
-      if (terminalDriven) {
-        const loopAuthErr = await this._checkTerminalAuthError(executorId);
-        if (loopAuthErr) {
-          setTaskSignal(taskId, 'authError', loopAuthErr);
-          console.warn(`🔐 [Execution] CLI auth failure (mid-run) for "${executorName}" on task ${taskId}: ${loopAuthErr}`);
+        const currentExecutor = this.agents.get(executorId);
+        if (!currentExecutor || currentExecutor.status === 'busy') {
+          console.log(`🔔 [Execution] Executor "${executorName}" is busy — skipping reminder`);
+          continue;
+        }
+        if (currentExecutor.status === 'error') {
+          console.log(
+            `🔔 [Execution] Executor "${executorName}" is in error — exiting reminder loop`
+          );
           return 'error';
         }
+
+        // Late CLI auth failure (token expired mid-run, re-auth needed). Surface
+        // it the same way as the early probe so the task is failed, not left to
+        // exhaust the reminder loop and time out as if "done".
+        if (terminalDriven) {
+          const loopAuthErr = await this._checkTerminalAuthError(executorId);
+          if (loopAuthErr) {
+            setTaskSignal(taskId, 'authError', loopAuthErr);
+            console.warn(
+              `🔐 [Execution] CLI auth failure (mid-run) for "${executorName}" on task ${taskId}: ${loopAuthErr}`
+            );
+            return 'error';
+          }
+        }
+
+        // Cooldown: skip if a reminder was sent too recently
+        const now = Date.now();
+        if (COOLDOWN_MS > 0 && lastReminderSentAt > 0 && now - lastReminderSentAt < COOLDOWN_MS) {
+          console.log(
+            `🔔 [Execution] Cooldown active for "${executorName}" — skipping redundant reminder`
+          );
+          continue;
+        }
+
+        reminded++;
+        lastReminderSentAt = now;
+        console.log(
+          `🔔 [Execution] Reminding "${executorName}" to complete task (attempt ${reminded}/${MAX_REMINDERS})`
+        );
+
+        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @update_task(taskId, <final column>, summary of what was done) — moving it to its final column with a summary signals completion.\n\nIf you have already finished all the work, call @update_task now to move the task to its final column with a summary of what was accomplished.`;
+        await this._sendPromptStreamed(executorId, currentExecutor, reminderPrompt, {
+          terminalDriven,
+          label: 'Reminder',
+        });
+
+        const afterResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
+        if (afterResult) return afterResult;
       }
 
-      // Cooldown: skip if a reminder was sent too recently
-      const now = Date.now();
-      if (COOLDOWN_MS > 0 && lastReminderSentAt > 0 && (now - lastReminderSentAt) < COOLDOWN_MS) {
-        console.log(`🔔 [Execution] Cooldown active for "${executorName}" — skipping redundant reminder`);
-        continue;
+      if (reminded >= MAX_REMINDERS) {
+        const finalTask = await getTaskById(taskId);
+        if (
+          finalTask &&
+          this._isActiveTaskStatus((finalTask as any).status) &&
+          !getTaskSignal(taskId, 'completed')
+        ) {
+          console.warn(
+            `⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains active (${(finalTask as any).status})`
+          );
+          this.addActionLog(
+            executorId,
+            'warning',
+            `Task reminder limit reached — task remains active`,
+            taskText.slice(0, 200)
+          );
+        }
+        return 'timeout';
       }
 
-      reminded++;
-      lastReminderSentAt = now;
-      console.log(`🔔 [Execution] Reminding "${executorName}" to complete task (attempt ${reminded}/${MAX_REMINDERS})`);
-
-      const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @update_task(taskId, <final column>, summary of what was done) — moving it to its final column with a summary signals completion.\n\nIf you have already finished all the work, call @update_task now to move the task to its final column with a summary of what was accomplished.`;
-      await this._sendPromptStreamed(executorId, currentExecutor, reminderPrompt, { terminalDriven, label: 'Reminder' });
-
-      const afterResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
-      if (afterResult) return afterResult;
-    }
-
-    if (reminded >= MAX_REMINDERS) {
-      const finalTask = await getTaskById(taskId);
-      if (finalTask && this._isActiveTaskStatus((finalTask as any).status) && !getTaskSignal(taskId, 'completed')) {
-        console.warn(`⚠️ [Execution] Max reminders (${MAX_REMINDERS}) reached for "${taskText.slice(0, 60)}" — task remains active (${(finalTask as any).status})`);
-        this.addActionLog(executorId, 'warning', `Task reminder limit reached — task remains active`, taskText.slice(0, 200));
-      }
-      return 'timeout';
-    }
-
-    return 'unknown';
+      return 'unknown';
     } finally {
       // Always clear the watching flag so the task loop can resume if needed.
       clearTaskSignal(taskId, 'watching');
@@ -1159,7 +1463,15 @@ export const tasksMethods = {
     }
   },
 
-  async _waitForExecutionComplete(this: any, creatorAgentId: string, taskId: string, executorId: string, executorName: string, taskText: string, options: any = {}): Promise<string> {
+  async _waitForExecutionComplete(
+    this: any,
+    creatorAgentId: string,
+    taskId: string,
+    executorId: string,
+    executorName: string,
+    taskText: string,
+    options: any = {}
+  ): Promise<string> {
     const terminalDriven = Boolean(options.terminalDriven);
     // HEAD snapshot taken by executeRunAgent before the run started — anchors
     // the terminal-independent commit sweep in the reminder loop (gitReconcile.ts).
@@ -1174,26 +1486,35 @@ export const tasksMethods = {
     // next column / every other assignment ("no idle agent"). `startStatus`
     // threads into _pollTaskVerdict so an off-column move always reads as 'moved'.
     const startStatus: string | undefined = freshTask?.status;
-    console.log(`🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} completionSignal=${Boolean(getTaskSignal(taskId, 'completed'))} status=${freshTask?.status}`);
+    console.log(
+      `🔍 [Execution] _waitForExecutionComplete: task=${taskId} creator=${creatorAgentId} executor=${executorName} completionSignal=${Boolean(getTaskSignal(taskId, 'completed'))} status=${freshTask?.status}`
+    );
 
     // Early exit if the executor was stopped (e.g. user pressed Stop) before we
     // got here — otherwise we'd hold the workflow lock through the reminder loop
     // while the agent is already idle.
     if (getTaskSignal(taskId, 'stopped')) {
       clearTaskSignal(taskId, 'stopped');
-      console.log(`🛑 [Execution] Task ${taskId} "${taskText.slice(0, 60)}" was stopped before wait started — exiting`);
+      console.log(
+        `🛑 [Execution] Task ${taskId} "${taskText.slice(0, 60)}" was stopped before wait started — exiting`
+      );
       return 'stopped';
     }
     // Task already failed — block the transition (checked before the verdict poll
     // because 'error' is an inactive status the poll would otherwise read as 'moved').
     if (freshTask?.status === 'error') {
-      console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`);
+      console.log(
+        `[Execution] Task ${taskId} "${taskText.slice(0, 60)}" ended with error — blocking transition`
+      );
       return 'error';
     }
     // Immediate completion / already-moved.
     const immediate = await this._pollTaskVerdict(taskId, taskText, startStatus);
     if (immediate) {
-      if (immediate === 'moved') console.log(`[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved — accepting`);
+      if (immediate === 'moved')
+        console.log(
+          `[Execution] Task ${taskId} "${taskText.slice(0, 60)}" already moved — accepting`
+        );
       return immediate;
     }
 
@@ -1205,18 +1526,33 @@ export const tasksMethods = {
 
     // ── Phase 1: terminal-driven auth/error probe ──────────────────────────
     if (terminalDriven) {
-      const probeVerdict = await this._probeCliAuth(taskId, executorId, executorName, taskText, startStatus);
+      const probeVerdict = await this._probeCliAuth(
+        taskId,
+        executorId,
+        executorName,
+        taskText,
+        startStatus
+      );
       if (probeVerdict) return probeVerdict;
     }
 
     // ── Phase 2: immediate idle retry (non-terminal runners) ───────────────
     if (!terminalDriven) {
-      const retryVerdict = await this._immediateIdleRetry(taskId, executorId, executorName, taskText, startStatus);
+      const retryVerdict = await this._immediateIdleRetry(
+        taskId,
+        executorId,
+        executorName,
+        taskText,
+        startStatus
+      );
       if (retryVerdict) return retryVerdict;
     }
 
     // ── Phase 3: reminder loop (owns the watching finally lifecycle) ───────
-    return this._reminderLoop(taskId, executorId, executorName, taskText, startStatus, { terminalDriven, gitBaselineHead });
+    return this._reminderLoop(taskId, executorId, executorName, taskText, startStatus, {
+      terminalDriven,
+      gitBaselineHead,
+    });
   },
 
   async _resumeActiveTask(this: any, agentId: string, agent: any, task: any): Promise<void> {
@@ -1225,7 +1561,10 @@ export const tasksMethods = {
 
     const streamCallback = (chunk: any) => {
       this._emit('agent:stream:chunk', { agentId: executorId, chunk });
-      this._emit('agent:thinking', { agentId: executorId, thinking: executor.currentThinking || '' });
+      this._emit('agent:thinking', {
+        agentId: executorId,
+        thinking: executor.currentThinking || '',
+      });
     };
 
     this._emit('agent:stream:start', { agentId: executorId });
@@ -1253,25 +1592,35 @@ export const tasksMethods = {
       const needsSecondaryEnsure = secondaryRepos.length > 0;
       if (taskRepo && (needsPrimarySwitch || needsSecondaryEnsure)) {
         if (needsPrimarySwitch) {
-          console.log(`🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`);
+          console.log(
+            `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
+          );
           if (this._switchProjectContext) {
             this._switchProjectContext(executor, executor.project, taskRepo);
           }
         }
         if (this.executionManager) {
           try {
-            const gitUrl = task.repoHtmlUrl || (taskRepo ? `https://github.com/${taskRepo}.git` : null);
+            const gitUrl =
+              task.repoHtmlUrl || (taskRepo ? `https://github.com/${taskRepo}.git` : null);
             if (gitUrl) {
               const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
-              const gitCreds = await getGitHubCredentialsForAgent(executorId, executor.boardId || null);
+              const gitCreds = await getGitHubCredentialsForAgent(
+                executorId,
+                executor.boardId || null
+              );
               await this.executionManager.switchProject(executorId, taskRepo, gitUrl, gitCreds);
             }
             const envProject = this.executionManager.getProject(executorId);
             if (envProject && envProject !== taskRepo) {
-              throw new Error(`Execution environment is on "${envProject}" but task requires "${taskRepo}"`);
+              throw new Error(
+                `Execution environment is on "${envProject}" but task requires "${taskRepo}"`
+              );
             }
           } catch (switchErr: any) {
-            console.error(`🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`);
+            console.error(
+              `🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`
+            );
             throw switchErr;
           }
         }
@@ -1289,7 +1638,8 @@ export const tasksMethods = {
       // instead of the original message, which would cause a full reasoning reset.
       const taskPrefix = task.text.slice(0, 80);
       const alreadySent = executor.conversationHistory.some(
-        (msg: any) => msg.role === 'user' && typeof msg.content === 'string' && msg.content.includes(taskPrefix)
+        (msg: any) =>
+          msg.role === 'user' && typeof msg.content === 'string' && msg.content.includes(taskPrefix)
       );
       const messageToSend = alreadySent
         ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @update_task(taskId, <final column>, summary of what was done) to move it to its final column and finish it.`
@@ -1319,17 +1669,26 @@ export const tasksMethods = {
       // loop would treat the idle runner as unfinished and keep reminding it.
       if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
         if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
-          console.log(`✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`);
+          console.log(
+            `✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`
+          );
           setTaskSignal(task.id, 'completed', true);
         }
       }
 
       // _saveExecutionLog moved after _waitForExecutionComplete — captures full conversation
 
-      const waitResult = await this._waitForExecutionComplete(agentId, task.id, executorId, executor.name, task.text, {
-        terminalDriven,
-        gitBaselineHead,
-      });
+      const waitResult = await this._waitForExecutionComplete(
+        agentId,
+        task.id,
+        executorId,
+        executor.name,
+        task.text,
+        {
+          terminalDriven,
+          gitBaselineHead,
+        }
+      );
 
       // A detected CLI auth failure (or other hard error) must fail the task
       // rather than silently complete. Throw so the catch below runs the
@@ -1341,7 +1700,14 @@ export const tasksMethods = {
 
       // Save execution log AFTER wait completes — captures the full conversation
       // including retries, reminders, and tool calls.
-      this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, waitResult !== "error" && waitResult !== "timeout");
+      this._saveExecutionLog(
+        agentId,
+        task.id,
+        executorId,
+        startMsgIdx,
+        executionStartedAt,
+        waitResult !== 'error' && waitResult !== 'timeout'
+      );
     } catch (err: any) {
       const isUserStop = isUserStopError(err);
       console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
@@ -1384,7 +1750,11 @@ export const tasksMethods = {
           // Best-effort: if it fails the helper still works (just no validation).
           let wf: any = null;
           if (errorTask.boardId) {
-            try { wf = await getWorkflowForBoard(errorTask.boardId); } catch { /* ignore */ }
+            try {
+              wf = await getWorkflowForBoard(errorTask.boardId);
+            } catch {
+              /* ignore */
+            }
           }
           const mutated = markTaskError(errorTask, err.message, {
             by: executor.name,
@@ -1396,7 +1766,10 @@ export const tasksMethods = {
             this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
           }
         } else {
-          await this.setTaskStatus(agentId, task.id, 'error', { skipAutoRefine: true, by: executor.name });
+          await this.setTaskStatus(agentId, task.id, 'error', {
+            skipAutoRefine: true,
+            by: executor.name,
+          });
           await updateTaskFields(task.id, { error: err.message });
         }
         this._emit('agent:error:report', {
@@ -1426,7 +1799,9 @@ export const tasksMethods = {
           label: 'ResumeEndReconcile',
         });
       } catch (reconcileErr: any) {
-        console.warn(`🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`);
+        console.warn(
+          `🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`
+        );
       }
       this._emit('agent:stream:end', { agentId: executorId });
       this._emit('agent:updated', this._sanitize(executor));
@@ -1453,7 +1828,10 @@ export const tasksMethods = {
       () => taskFn(),
       () => taskFn()
     );
-    this._taskQueues.set(agentId, resultPromise.catch(() => {}));
+    this._taskQueues.set(
+      agentId,
+      resultPromise.catch(() => {})
+    );
     return resultPromise;
   },
 };

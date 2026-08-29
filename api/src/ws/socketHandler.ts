@@ -25,7 +25,9 @@ export function getDesktopSocketsForUser(userId: string): Set<any> | undefined {
   return desktopSockets.get(userId);
 }
 
-export function getDesktopBridgeInfo(userId: string): { folders: string[]; registeredAt: number } | null {
+export function getDesktopBridgeInfo(
+  userId: string
+): { folders: string[]; registeredAt: number } | null {
   return desktopBridgeInfo.get(userId) || null;
 }
 
@@ -53,7 +55,7 @@ function _trackMessageId(messageId) {
 }
 
 export function setupSocketHandlers(io, agentManager) {
-  io.on('connection', async (socket) => {
+  io.on('connection', async socket => {
     console.log(`⚡ Client connected: ${socket.user?.username}`);
 
     const checkSocketRate = createSocketRateLimiter(30, 60_000);
@@ -63,7 +65,7 @@ export function setupSocketHandlers(io, agentManager) {
     const userId = socket.user?.userId;
     const userRole = socket.user?.role;
 
-    let userBoardIds = new Set<string>();
+    const userBoardIds = new Set<string>();
     if (userId) {
       let boards = await getBoardsByUser(userId);
       // getBoardsByUser swallows query errors and returns []. An empty list
@@ -75,7 +77,9 @@ export function setupSocketHandlers(io, agentManager) {
           await getPool().query('SELECT 1');
           boards = await getBoardsByUser(userId);
         } catch {
-          console.error(`⚠️ Board lookup failed at connect for user ${userId} — disconnecting socket`);
+          console.error(
+            `⚠️ Board lookup failed at connect for user ${userId} — disconnecting socket`
+          );
           socket.emit(WsEvents.ERROR, { message: 'Failed to load boards, please reconnect' });
           socket.disconnect(true);
           return;
@@ -101,7 +105,10 @@ export function setupSocketHandlers(io, agentManager) {
     if (isDesktopBridge && userId) {
       socket.join(`desktop:${userId}`);
       let set = desktopSockets.get(userId);
-      if (!set) { set = new Set(); desktopSockets.set(userId, set); }
+      if (!set) {
+        set = new Set();
+        desktopSockets.set(userId, set);
+      }
       set.add(socket);
       console.log(`🖥️ Desktop bridge connected for user ${userId}`);
 
@@ -134,12 +141,12 @@ export function setupSocketHandlers(io, agentManager) {
     // all-task execute handlers, which differ only in the manager call.
     const streamTaskToSocket = async (
       agentId: string,
-      run: (onChunk: (chunk: string) => void) => Promise<any>,
+      run: (onChunk: (chunk: string) => void) => Promise<any>
     ): Promise<void> => {
       const project = agentManager.agents.get(agentId)?.project || null;
       try {
         socket.emit(WsEvents.STREAM_START, { agentId, project });
-        await run((chunk) => {
+        await run(chunk => {
           socket.emit(WsEvents.STREAM_CHUNK, { agentId, project, chunk });
           ws.thinking(agentId);
         });
@@ -165,23 +172,39 @@ export function setupSocketHandlers(io, agentManager) {
       }
 
       if (!canAccessAgent(agentId)) {
-        safeAck({ status: 'error', code: 'forbidden', message: 'Access denied: you do not have access to this agent\'s board.' });
+        safeAck({
+          status: 'error',
+          code: 'forbidden',
+          message: "Access denied: you do not have access to this agent's board.",
+        });
         return;
       }
       if (!checkSocketRate()) {
-        safeAck({ status: 'error', code: 'rate_limit', message: 'Rate limit exceeded. Please wait before sending more messages.' });
+        safeAck({
+          status: 'error',
+          code: 'rate_limit',
+          message: 'Rate limit exceeded. Please wait before sending more messages.',
+        });
         return;
       }
 
       if (_trackMessageId(messageId)) {
         // Duplicate (auto-retry from client after disconnect) — tell the
         // client it's already being processed so it stops worrying.
-        safeAck({ status: 'duplicate', code: 'duplicate', message: 'Duplicate request ignored (already received).' });
+        safeAck({
+          status: 'duplicate',
+          code: 'duplicate',
+          message: 'Duplicate request ignored (already received).',
+        });
         return;
       }
 
       if (chatInFlight.has(agentId)) {
-        safeAck({ status: 'error', code: 'busy', message: 'This agent is already processing a message. Wait for it to finish or stop it.' });
+        safeAck({
+          status: 'error',
+          code: 'busy',
+          message: 'This agent is already processing a message. Wait for it to finish or stop it.',
+        });
         return;
       }
       chatInFlight.add(agentId);
@@ -197,11 +220,17 @@ export function setupSocketHandlers(io, agentManager) {
       try {
         let sanitizedImages: any = null;
         if (Array.isArray(images) && images.length > 0) {
-          sanitizedImages = images.slice(0, 5).filter((img: any) =>
-            img && typeof img.data === 'string' && typeof img.mediaType === 'string' &&
-            img.data.length < 10 * 1024 * 1024 &&
-            /^image\/(png|jpeg|gif|webp)$/.test(img.mediaType)
-          ).map((img: any) => ({ data: img.data, mediaType: img.mediaType }));
+          sanitizedImages = images
+            .slice(0, 5)
+            .filter(
+              (img: any) =>
+                img &&
+                typeof img.data === 'string' &&
+                typeof img.mediaType === 'string' &&
+                img.data.length < 10 * 1024 * 1024 &&
+                /^image\/(png|jpeg|gif|webp)$/.test(img.mediaType)
+            )
+            .map((img: any) => ({ data: img.data, mediaType: img.mediaType }));
           if (sanitizedImages.length === 0) sanitizedImages = null;
         }
 
@@ -210,10 +239,17 @@ export function setupSocketHandlers(io, agentManager) {
         // (a socket that reconnects mid-stream can resume via STREAM_RESUME).
         agentManager.beginStream(agentId, { userMessage: message, userMessageId: messageId });
 
-        await agentManager.sendMessage(agentId, message, (chunk: string) => {
-          agentManager.appendStreamChunk(agentId, chunk);
-          ws.thinking(agentId);
-        }, 0, null, sanitizedImages);
+        await agentManager.sendMessage(
+          agentId,
+          message,
+          (chunk: string) => {
+            agentManager.appendStreamChunk(agentId, chunk);
+            ws.thinking(agentId);
+          },
+          0,
+          null,
+          sanitizedImages
+        );
 
         agentManager.endStream(agentId);
       } catch (err: any) {
@@ -248,11 +284,13 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Broadcast to all agents (tmux) ────────────────────────────────
-    socket.on(WsEvents.REQ_BROADCAST, async (data) => {
+    socket.on(WsEvents.REQ_BROADCAST, async data => {
       const { message } = data || {};
       if (!message) return;
       if (!checkSocketRate()) {
-        socket.emit(WsEvents.ERROR, { message: 'Rate limit exceeded. Please wait before sending more messages.' });
+        socket.emit(WsEvents.ERROR, {
+          message: 'Rate limit exceeded. Please wait before sending more messages.',
+        });
         return;
       }
 
@@ -279,7 +317,7 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Handoff ───────────────────────────────────────────────────────
-    socket.on(WsEvents.REQ_HANDOFF, async (data) => {
+    socket.on(WsEvents.REQ_HANDOFF, async data => {
       const { fromId, toId, context } = data || {};
       if (!fromId || !toId || !context) return;
       if (!canAccessAgent(fromId) || !canAccessAgent(toId)) {
@@ -297,7 +335,7 @@ export function setupSocketHandlers(io, agentManager) {
       try {
         ws.emit(WsEvents.STREAM_START, { agentId: toId, project: targetProject });
 
-        const response = await agentManager.handoff(fromId, toId, context, (chunk) => {
+        const response = await agentManager.handoff(fromId, toId, context, chunk => {
           ws.emit(WsEvents.STREAM_CHUNK, { agentId: toId, project: targetProject, chunk });
           ws.thinking(toId);
         });
@@ -319,16 +357,22 @@ export function setupSocketHandlers(io, agentManager) {
 
     // ── Get swarm status with project assignments ─────────────────────
     socket.on(WsEvents.REQ_SWARM_STATUS, async () => {
-      socket.emit(WsEvents.REQ_SWARM_STATUS, await agentManager.getSwarmStatus(userId, userRole, userBoardIds));
+      socket.emit(
+        WsEvents.REQ_SWARM_STATUS,
+        await agentManager.getSwarmStatus(userId, userRole, userBoardIds)
+      );
     });
 
     // ── Get lightweight status for ALL enabled agents ─────────────────
     socket.on(WsEvents.REQ_STATUSES, async () => {
-      socket.emit(WsEvents.REQ_STATUSES, await agentManager.getAllStatuses(userId, userRole, userBoardIds));
+      socket.emit(
+        WsEvents.REQ_STATUSES,
+        await agentManager.getAllStatuses(userId, userRole, userBoardIds)
+      );
     });
 
     // ── Get single agent detailed status ──────────────────────────────
-    socket.on(WsEvents.REQ_AGENT_STATUS, async (data) => {
+    socket.on(WsEvents.REQ_AGENT_STATUS, async data => {
       const { agentId } = data || {};
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
@@ -339,19 +383,25 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Get agents by project ────────────────────────────────────────
-    socket.on(WsEvents.REQ_BY_PROJECT, async (data) => {
+    socket.on(WsEvents.REQ_BY_PROJECT, async data => {
       const { project } = data || {};
       if (!project) return;
-      socket.emit(WsEvents.REQ_BY_PROJECT, await agentManager.getAgentsByProject(project, userId, userRole, userBoardIds));
+      socket.emit(
+        WsEvents.REQ_BY_PROJECT,
+        await agentManager.getAgentsByProject(project, userId, userRole, userBoardIds)
+      );
     });
 
     // ── Get project summary ──────────────────────────────────────────
     socket.on(WsEvents.REQ_PROJECT_SUMMARY, () => {
-      socket.emit(WsEvents.REQ_PROJECT_SUMMARY, agentManager.getProjectSummary(userId, userRole, userBoardIds));
+      socket.emit(
+        WsEvents.REQ_PROJECT_SUMMARY,
+        agentManager.getProjectSummary(userId, userRole, userBoardIds)
+      );
     });
 
     // ── Stop agent ────────────────────────────────────────────────────
-    socket.on(WsEvents.REQ_STOP, (data) => {
+    socket.on(WsEvents.REQ_STOP, data => {
       const { agentId } = data || {};
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
@@ -364,42 +414,49 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Execute single task ─────────────────────────────────────────
-    socket.on(WsEvents.REQ_TASK_EXECUTE, async (data) => {
+    socket.on(WsEvents.REQ_TASK_EXECUTE, async data => {
       const { agentId, taskId } = data || {};
       if (!agentId || !taskId) return;
       if (!canAccessAgent(agentId)) return;
 
-      await streamTaskToSocket(agentId, (onChunk) => agentManager.executeTask(agentId, taskId, onChunk));
+      await streamTaskToSocket(agentId, onChunk =>
+        agentManager.executeTask(agentId, taskId, onChunk)
+      );
     });
 
     // ── Execute all pending tasks ─────────────────────────────────────
-    socket.on(WsEvents.REQ_TASK_EXECUTE_ALL, async (data) => {
+    socket.on(WsEvents.REQ_TASK_EXECUTE_ALL, async data => {
       const { agentId } = data || {};
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
-      await streamTaskToSocket(agentId, (onChunk) => agentManager.executeAllTasks(agentId, onChunk));
+      await streamTaskToSocket(agentId, onChunk => agentManager.executeAllTasks(agentId, onChunk));
     });
 
     // ── Voice delegation (Realtime API function call relay) ──────────
-    socket.on(WsEvents.REQ_VOICE_DELEGATE, async (data) => {
+    socket.on(WsEvents.REQ_VOICE_DELEGATE, async data => {
       const { agentId, targetAgentName, task } = data || {};
       if (!agentId || !targetAgentName || !task) return;
       if (!checkSocketRate()) {
-        socket.emit(WsEvents.VOICE_DELEGATE_RESULT, { agentId, targetAgentName, error: 'Rate limit exceeded', result: null });
+        socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
+          agentId,
+          targetAgentName,
+          error: 'Rate limit exceeded',
+          result: null,
+        });
         return;
       }
 
       try {
-        const targetAgent = agentManager.getAllForUser(userId, userRole, userBoardIds).find(
-          a => a.name.toLowerCase() === targetAgentName.toLowerCase()
-        );
+        const targetAgent = agentManager
+          .getAllForUser(userId, userRole, userBoardIds)
+          .find(a => a.name.toLowerCase() === targetAgentName.toLowerCase());
         if (!targetAgent) {
           socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
             agentId,
             targetAgentName,
             error: `Agent "${targetAgentName}" not found in swarm`,
-            result: null
+            result: null,
           });
           return;
         }
@@ -416,7 +473,7 @@ export function setupSocketHandlers(io, agentManager) {
         const response = await agentManager.sendMessage(
           targetAgent.id,
           `[TASK from ${leaderName}]: ${task}`,
-          (chunk) => {
+          chunk => {
             ws.streamChunk(targetAgent.id, chunk);
             ws.thinking(targetAgent.id);
           }
@@ -428,7 +485,7 @@ export function setupSocketHandlers(io, agentManager) {
           agentId,
           targetAgentName,
           error: null,
-          result: response
+          result: response,
         });
       } catch (err) {
         console.error(`🎙️ [Voice Delegate] Error: ${err.message}`);
@@ -436,31 +493,46 @@ export function setupSocketHandlers(io, agentManager) {
           agentId,
           targetAgentName,
           error: err.message,
-          result: null
+          result: null,
         });
       }
     });
 
     // ── Voice ask (lightweight question to another agent) ────────────
-    socket.on(WsEvents.REQ_VOICE_ASK, async (data) => {
+    socket.on(WsEvents.REQ_VOICE_ASK, async data => {
       const { agentId, targetAgentName, question } = data || {};
       if (!agentId || !targetAgentName || !question) return;
       if (!checkSocketRate()) {
-        socket.emit(WsEvents.VOICE_ASK_RESULT, { agentId, targetAgentName, error: 'Rate limit exceeded', result: null });
+        socket.emit(WsEvents.VOICE_ASK_RESULT, {
+          agentId,
+          targetAgentName,
+          error: 'Rate limit exceeded',
+          result: null,
+        });
         return;
       }
 
       try {
-        const targetAgent = agentManager.getAllForUser(userId, userRole, userBoardIds).find(
-          a => a.name.toLowerCase() === targetAgentName.toLowerCase()
-        );
+        const targetAgent = agentManager
+          .getAllForUser(userId, userRole, userBoardIds)
+          .find(a => a.name.toLowerCase() === targetAgentName.toLowerCase());
         if (!targetAgent) {
-          socket.emit(WsEvents.VOICE_ASK_RESULT, { agentId, targetAgentName, error: `Agent "${targetAgentName}" not found in swarm`, result: null });
+          socket.emit(WsEvents.VOICE_ASK_RESULT, {
+            agentId,
+            targetAgentName,
+            error: `Agent "${targetAgentName}" not found in swarm`,
+            result: null,
+          });
           return;
         }
 
         if (targetAgent.status === 'busy') {
-          socket.emit(WsEvents.VOICE_ASK_RESULT, { agentId, targetAgentName, error: `Agent "${targetAgentName}" is currently busy`, result: null });
+          socket.emit(WsEvents.VOICE_ASK_RESULT, {
+            agentId,
+            targetAgentName,
+            error: `Agent "${targetAgentName}" is currently busy`,
+            result: null,
+          });
           return;
         }
 
@@ -474,7 +546,7 @@ export function setupSocketHandlers(io, agentManager) {
         const answer = await agentManager.sendMessage(
           targetAgent.id,
           `[QUESTION from ${voiceName}]: ${question}\n\nPlease provide a concise, direct answer.`,
-          (chunk) => {
+          chunk => {
             ws.streamChunk(targetAgent.id, chunk);
           },
           1,
@@ -483,39 +555,69 @@ export function setupSocketHandlers(io, agentManager) {
 
         ws.streamEnd(targetAgent.id);
 
-        socket.emit(WsEvents.VOICE_ASK_RESULT, { agentId, targetAgentName, error: null, result: answer });
+        socket.emit(WsEvents.VOICE_ASK_RESULT, {
+          agentId,
+          targetAgentName,
+          error: null,
+          result: answer,
+        });
       } catch (err) {
         console.error(`🎙️ [Voice Ask] Error: ${err.message}`);
-        socket.emit(WsEvents.VOICE_ASK_RESULT, { agentId, targetAgentName, error: err.message, result: null });
+        socket.emit(WsEvents.VOICE_ASK_RESULT, {
+          agentId,
+          targetAgentName,
+          error: err.message,
+          result: null,
+        });
       }
     });
 
     // ── Voice management tools (quick sync operations) ────────────────
-    socket.on(WsEvents.REQ_VOICE_MANAGEMENT, async (data) => {
+    socket.on(WsEvents.REQ_VOICE_MANAGEMENT, async data => {
       const { agentId, functionName, args: rawArgs } = data || {};
       const args = rawArgs || {};
       if (!agentId || !functionName) return;
       if (!canAccessAgent(agentId)) {
-        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, { agentId, functionName, error: 'Access denied', result: null });
+        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          agentId,
+          functionName,
+          error: 'Access denied',
+          result: null,
+        });
         return;
       }
 
       const voiceAgent = agentManager.agents.get(agentId);
       if (!voiceAgent) {
-        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, { agentId, functionName, error: 'Voice agent not found', result: null });
+        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          agentId,
+          functionName,
+          error: 'Voice agent not found',
+          result: null,
+        });
         return;
       }
 
       const userAgents = agentManager.getAllForUser(userId, userRole, userBoardIds);
-      const findAgent = (name) => userAgents.find(
-        a => a.name.toLowerCase() === (name || '').toLowerCase() && a.id !== agentId && a.enabled !== false
-      );
+      const findAgent = name =>
+        userAgents.find(
+          a =>
+            a.name.toLowerCase() === (name || '').toLowerCase() &&
+            a.id !== agentId &&
+            a.enabled !== false
+        );
 
       // Handler table — defined inside the event so each entry closes over
       // agentManager / ws / userAgents / agentId. `needsTarget` entries get a
       // resolved `target` (the dispatcher emits the shared not-found message
       // when findAgent misses, so they can assume target is present).
-      const VOICE_FNS: Record<string, { needsTarget?: boolean; run: (ctx: { target?: any; args: any }) => Promise<string> | string }> = {
+      const VOICE_FNS: Record<
+        string,
+        {
+          needsTarget?: boolean;
+          run: (ctx: { target?: any; args: any }) => Promise<string> | string;
+        }
+      > = {
         assign_project: {
           needsTarget: true,
           run: ({ target, args }) => {
@@ -527,12 +629,20 @@ export function setupSocketHandlers(io, agentManager) {
         },
         get_project: {
           needsTarget: true,
-          run: ({ target }) => target.project ? `${target.name} is assigned to project "${target.project}"` : `${target.name} has no project assigned`,
+          run: ({ target }) =>
+            target.project
+              ? `${target.name} is assigned to project "${target.project}"`
+              : `${target.name} has no project assigned`,
         },
         list_agents: {
           run: () => {
             const enabled = userAgents.filter(a => a.enabled !== false);
-            return enabled.map(a => `${a.name} [${a.status}] (${a.role || 'worker'})${a.project ? ` project=${a.project}` : ''}`).join('\n');
+            return enabled
+              .map(
+                a =>
+                  `${a.name} [${a.status}] (${a.role || 'worker'})${a.project ? ` project=${a.project}` : ''}`
+              )
+              .join('\n');
           },
         },
         agent_status: {
@@ -548,7 +658,11 @@ export function setupSocketHandlers(io, agentManager) {
         get_available_agent: {
           run: ({ args }) => {
             const available = userAgents.find(
-              a => a.id !== agentId && a.enabled !== false && a.status === 'idle' && (a.role || '').toLowerCase() === (args.role || '').toLowerCase()
+              a =>
+                a.id !== agentId &&
+                a.enabled !== false &&
+                a.status === 'idle' &&
+                (a.role || '').toLowerCase() === (args.role || '').toLowerCase()
             );
             return available
               ? `Available ${args.role}: ${available.name} [idle]${available.project ? ` project=${available.project}` : ''}`
@@ -558,7 +672,9 @@ export function setupSocketHandlers(io, agentManager) {
         list_projects: {
           run: async () => {
             const projects = await agentManager._listAvailableProjects();
-            return projects.length > 0 ? `Available projects: ${projects.join(', ')}` : 'No projects found';
+            return projects.length > 0
+              ? `Available projects: ${projects.join(', ')}`
+              : 'No projects found';
           },
         },
         clear_context: {
@@ -589,8 +705,12 @@ export function setupSocketHandlers(io, agentManager) {
           run: ({ target }) => {
             const stopped = agentManager.stopAgent(target.id);
             if (stopped) ws.agentUpdated(target.id);
-            console.log(`🎙️ [Voice] stop_agent: ${target.name} → ${stopped ? 'stopped' : 'not busy'}`);
-            return stopped ? `Stopped agent ${target.name}` : `${target.name} is not currently busy`;
+            console.log(
+              `🎙️ [Voice] stop_agent: ${target.name} → ${stopped ? 'stopped' : 'not busy'}`
+            );
+            return stopped
+              ? `Stopped agent ${target.name}`
+              : `${target.name} is not currently busy`;
           },
         },
         clear_all_chats: {
@@ -639,18 +759,29 @@ export function setupSocketHandlers(io, agentManager) {
           }
         }
 
-        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, { agentId, functionName, error: null, result });
+        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          agentId,
+          functionName,
+          error: null,
+          result,
+        });
       } catch (err) {
         console.error(`🎙️ [Voice Management] ${functionName} error: ${err.message}`);
-        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, { agentId, functionName, error: err.message, result: null });
+        socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          agentId,
+          functionName,
+          error: err.message,
+          result: null,
+        });
       }
     });
 
     socket.on('disconnect', () => {
       console.log(`🔌 Client disconnected: ${socket.user?.username}`);
       if (userId) {
-        const still = Array.from(io.sockets.sockets.values())
-          .some(s => (s as any).user?.userId === userId && (s as any).id !== socket.id);
+        const still = Array.from(io.sockets.sockets.values()).some(
+          s => (s as any).user?.userId === userId && (s as any).id !== socket.id
+        );
         if (!still) {
           connectedUserIds.delete(userId);
           updateLastSeen(userId).catch(() => {});
@@ -663,7 +794,10 @@ export function setupSocketHandlers(io, agentManager) {
           if (set.size === 0) {
             desktopSockets.delete(userId);
             desktopBridgeInfo.delete(userId);
-            io.to(`user:${userId}`).emit(WsEvents.BRIDGE_FOLDER_CHANGED, { connected: false, folders: [] });
+            io.to(`user:${userId}`).emit(WsEvents.BRIDGE_FOLDER_CHANGED, {
+              connected: false,
+              folders: [],
+            });
           }
         }
       }

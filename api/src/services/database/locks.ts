@@ -55,7 +55,11 @@ export async function tryAcquireTaskLock(taskId: string): Promise<boolean> {
     client.release();
     return false; // a sibling replica holds it
   } catch {
-    try { client.release(); } catch { /* already released */ }
+    try {
+      client.release();
+    } catch {
+      /* already released */
+    }
     return false;
   }
 }
@@ -72,7 +76,11 @@ export async function releaseTaskLock(taskId: string): Promise<void> {
     /* connection may be dead; release() below still returns/destroys it and
        Postgres drops the session lock when the connection closes */
   }
-  try { client.release(); } catch { /* already released */ }
+  try {
+    client.release();
+  } catch {
+    /* already released */
+  }
 }
 
 /** Number of task locks this process currently holds (for diagnostics/tests). */

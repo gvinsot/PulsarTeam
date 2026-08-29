@@ -14,13 +14,15 @@ import { useEffect, useRef, RefObject } from 'react';
 export function useClickOutside(
   ref: RefObject<HTMLElement>,
   onOutside: () => void,
-  enabled = true,
+  enabled = true
 ) {
   const cb = useRef(onOutside);
-  useEffect(() => { cb.current = onOutside; });
+  useEffect(() => {
+    cb.current = onOutside;
+  });
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) return undefined;
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) cb.current();
     };
@@ -32,11 +34,15 @@ export function useClickOutside(
 /** Fire `onEscape` on the Escape key. */
 export function useEscapeKey(onEscape: () => void, enabled = true) {
   const cb = useRef(onEscape);
-  useEffect(() => { cb.current = onEscape; });
+  useEffect(() => {
+    cb.current = onEscape;
+  });
 
   useEffect(() => {
-    if (!enabled) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') cb.current(); };
+    if (!enabled) return undefined;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') cb.current();
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [enabled]);
@@ -46,6 +52,8 @@ export function useEscapeKey(onEscape: () => void, enabled = true) {
 export function useBodyScrollLock() {
   useEffect(() => {
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
+    return () => {
+      document.body.style.overflow = '';
+    };
   }, []);
 }

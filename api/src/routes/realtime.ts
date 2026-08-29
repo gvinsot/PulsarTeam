@@ -6,7 +6,7 @@ const tool = (
   name: string,
   description: string,
   props: Record<string, { type: string; description: string; [k: string]: unknown }> = {},
-  required = Object.keys(props),
+  required = Object.keys(props)
 ) => ({
   type: 'function',
   name,
@@ -19,32 +19,52 @@ const tool = (
 });
 
 export const VOICE_TOOLS = [
-  tool('delegate', 'Delegate a task to another agent in the swarm. Use this when the user asks you to assign work to a specific agent or when a task requires a specialist.', {
-    agent_name: { type: 'string', description: 'Name of the target agent to delegate to' },
-    task: { type: 'string', description: 'Detailed task description for the agent' },
-  }),
-  tool('ask', 'Ask a quick question to another agent without creating a task. Use this for short questions that need a concise answer.', {
-    agent_name: { type: 'string', description: 'Name of the agent to ask' },
-    question: { type: 'string', description: 'The question to ask' },
-  }),
-  tool('assign_project', 'Assign an agent to a project so they can use file and command tools on it.', {
-    agent_name: { type: 'string', description: 'Name of the agent' },
-    project_name: { type: 'string', description: 'Name of the project to assign' },
-  }),
+  tool(
+    'delegate',
+    'Delegate a task to another agent in the swarm. Use this when the user asks you to assign work to a specific agent or when a task requires a specialist.',
+    {
+      agent_name: { type: 'string', description: 'Name of the target agent to delegate to' },
+      task: { type: 'string', description: 'Detailed task description for the agent' },
+    }
+  ),
+  tool(
+    'ask',
+    'Ask a quick question to another agent without creating a task. Use this for short questions that need a concise answer.',
+    {
+      agent_name: { type: 'string', description: 'Name of the agent to ask' },
+      question: { type: 'string', description: 'The question to ask' },
+    }
+  ),
+  tool(
+    'assign_project',
+    'Assign an agent to a project so they can use file and command tools on it.',
+    {
+      agent_name: { type: 'string', description: 'Name of the agent' },
+      project_name: { type: 'string', description: 'Name of the project to assign' },
+    }
+  ),
   tool('get_project', 'Check which project an agent is currently assigned to.', {
     agent_name: { type: 'string', description: 'Name of the agent' },
   }),
   tool('list_agents', 'List all enabled agents with their current status, project, and role.'),
-  tool('agent_status', "Check a specific agent's status (busy/idle/error), project, pending tasks, and message count.", {
-    agent_name: { type: 'string', description: 'Name of the agent to check' },
-  }),
+  tool(
+    'agent_status',
+    "Check a specific agent's status (busy/idle/error), project, pending tasks, and message count.",
+    {
+      agent_name: { type: 'string', description: 'Name of the agent to check' },
+    }
+  ),
   tool('get_available_agent', 'Get the first idle agent with the specified role.', {
     role: { type: 'string', description: 'Role to search for (e.g. "developer")' },
   }),
   tool('list_projects', 'List all available projects.'),
-  tool('clear_context', "Clear an agent's entire conversation history, giving them a fresh start.", {
-    agent_name: { type: 'string', description: 'Name of the agent' },
-  }),
+  tool(
+    'clear_context',
+    "Clear an agent's entire conversation history, giving them a fresh start.",
+    {
+      agent_name: { type: 'string', description: 'Name of the agent' },
+    }
+  ),
   tool('rollback', "Remove the last X messages from an agent's conversation history.", {
     agent_name: { type: 'string', description: 'Name of the agent' },
     count: { type: 'integer', description: 'Number of messages to remove' },
@@ -105,7 +125,8 @@ export function realtimeRoutes(agentManager) {
     const apiKey = llmConfig.apiKey;
     if (!apiKey) {
       return res.status(500).json({
-        error: 'No OpenAI API key configured. Set an API key in the LLM Configuration assigned to this voice agent.',
+        error:
+          'No OpenAI API key configured. Set an API key in the LLM Configuration assigned to this voice agent.',
       });
     }
 

@@ -1,7 +1,5 @@
 import express from 'express';
-import {
-  storeOAuthToken, getOAuthToken, deleteOAuthToken,
-} from '../../services/database.js';
+import { storeOAuthToken, getOAuthToken, deleteOAuthToken } from '../../services/database.js';
 import type { OAuthProvider, ScopeType } from '../../services/database.js';
 
 /**
@@ -20,7 +18,7 @@ import type { OAuthProvider, ScopeType } from '../../services/database.js';
 /** Storage scope for the credential connectors: agent → board, else null. */
 export function resolveScope(
   agentId: string | null,
-  boardId: string | null,
+  boardId: string | null
 ): { scopeType: ScopeType; scopeId: string } | null {
   if (agentId) return { scopeType: 'agent', scopeId: agentId };
   if (boardId) return { scopeType: 'board', scopeId: boardId };
@@ -31,7 +29,7 @@ export function resolveScope(
 export function getProviderCredentials<T>(
   provider: OAuthProvider,
   agentId: string | null,
-  boardId: string | null = null,
+  boardId: string | null = null
 ): T | null {
   if (agentId) {
     const token = getOAuthToken(provider, 'agent', agentId);
@@ -93,10 +91,14 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     const agentId = (req.query.agentId as string) || null;
     const boardId = (req.query.boardId as string) || null;
     if (!agentId && !boardId) {
-      return res.json({ connected: false, agentId: null, boardId: null });
+      res.json({ connected: false, agentId: null, boardId: null });
+      return;
     }
     const scope = resolveScope(agentId, boardId);
-    if (!scope) return res.json({ connected: false });
+    if (!scope) {
+      res.json({ connected: false });
+      return;
+    }
     const token = getOAuthToken(provider, scope.scopeType, scope.scopeId);
     res.json({
       connected: !!token,
@@ -113,17 +115,21 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     try {
       const result = await opts.connect(body);
       if (isFailure(result)) {
-        return res.status(result.status ?? 400).json({ error: result.error });
+        res.status(result.status ?? 400).json({ error: result.error });
+        return;
       }
 
       const scope = resolveScope(agentId, boardId)!;
-      await storeOAuthToken({
-        provider,
-        scopeType: scope.scopeType,
-        scopeId: scope.scopeId,
-        accessToken: result.accessToken,
-        meta: result.meta,
-      }, { throwOnPersistError: true });
+      await storeOAuthToken(
+        {
+          provider,
+          scopeType: scope.scopeType,
+          scopeId: scope.scopeId,
+          accessToken: result.accessToken,
+          meta: result.meta,
+        },
+        { throwOnPersistError: true }
+      );
 
       const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
       console.log(`✅ [${label}] Credentials stored for ${target} ${result.logSuffix}`);
@@ -139,7 +145,8 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     const agentId = req.body?.agentId || null;
     const boardId = req.body?.boardId || null;
     if (!agentId && !boardId) {
-      return res.status(400).json({ error: 'agentId or boardId is required' });
+      res.status(400).json({ error: 'agentId or boardId is required' });
+      return;
     }
     const scope = resolveScope(agentId, boardId)!;
     await deleteOAuthToken(provider, scope.scopeType, scope.scopeId);

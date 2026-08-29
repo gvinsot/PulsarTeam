@@ -5,7 +5,9 @@ import { readSecret } from '../secrets.js';
 const getJwtSecret = () => {
   const secret = readSecret('JWT_SECRET');
   if (!secret) {
-    throw new Error('JWT_SECRET is not set (expected at /run/secrets/JWT_SECRET or as env var in dev)');
+    throw new Error(
+      'JWT_SECRET is not set (expected at /run/secrets/JWT_SECRET or as env var in dev)'
+    );
   }
   return secret;
 };

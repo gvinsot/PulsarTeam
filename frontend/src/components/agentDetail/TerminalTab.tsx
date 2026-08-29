@@ -21,10 +21,19 @@ import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { Terminal as TerminalIcon, ArrowUp, ArrowDown, CornerDownLeft, RotateCcw } from 'lucide-react';
+import {
+  Terminal as TerminalIcon,
+  ArrowUp,
+  ArrowDown,
+  CornerDownLeft,
+  RotateCcw,
+} from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import {
-  CLAUDE_OAUTH_PREFIXES, openExternalLink, createClaudeOAuthLinkProvider, reconstructClaudeOAuthUrlFromBuffer,
+  CLAUDE_OAUTH_PREFIXES,
+  openExternalLink,
+  createClaudeOAuthLinkProvider,
+  reconstructClaudeOAuthUrlFromBuffer,
 } from './claudeOAuthLinks';
 
 interface TerminalTabProps {
@@ -42,7 +51,7 @@ const BACKOFF_MAX_MS = 15_000;
 const MIN_COLS = 80;
 const MIN_ROWS = 10;
 
-const getTerminalTheme = (theme: string) => (
+const getTerminalTheme = (theme: string) =>
   theme === 'light'
     ? {
         background: '#ffffff',
@@ -89,8 +98,7 @@ const getTerminalTheme = (theme: string) => (
         brightMagenta: '#c4b5fd',
         brightCyan: '#22d3ee',
         brightWhite: '#f8fafc',
-      }
-);
+      };
 
 export default function TerminalTab({ agent, token }: TerminalTabProps) {
   const { theme } = useTheme();
@@ -144,7 +152,11 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       term.clear();
     }
     setTerminalActive(false);
-    try { wsRef.current?.close(); } catch { /* noop */ }
+    try {
+      wsRef.current?.close();
+    } catch {
+      /* noop */
+    }
     wsRef.current = null;
     connectRef.current?.();
   };
@@ -204,8 +216,8 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     // unreadable sliver, so there (coarse pointer) we fit to the actual width.
     // Keying on width instead made a narrow desktop detail panel drop the floor
     // and hand the CLI a cramped ~50-col grid.
-    const coarsePointer = typeof window !== 'undefined'
-      && !!window.matchMedia?.('(pointer: coarse)').matches;
+    const coarsePointer =
+      typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
     const cols = coarsePointer ? dims.cols : Math.max(MIN_COLS, dims.cols);
     const rows = Math.max(MIN_ROWS, dims.rows);
     if (cols !== term.cols || rows !== term.rows) {
@@ -250,13 +262,13 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // ── xterm.js setup ────────────────────────────────────────────────────
   useEffect(() => {
     aliveRef.current = true;
-    if (!containerRef.current) return;
+    if (!containerRef.current) return undefined;
 
     // Smaller font on phones so more columns fit the narrow width (a 14px grid
     // only fits ~40 cols at 360px; 12px fits ~50), reducing how much a wide TUI
     // overflows. Paired with the responsive cols floor in fitTerminalNow.
-    const isMobileViewport = typeof window !== 'undefined'
-      && window.matchMedia('(max-width: 640px)').matches;
+    const isMobileViewport =
+      typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches;
     const term = new XTerminal({
       cursorBlink: true,
       fontFamily: '"Cascadia Code", "SFMono-Regular", "Segoe UI Mono", Menlo, Consolas, monospace',
@@ -279,14 +291,16 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     const claudeOAuthLinkProvider = term.registerLinkProvider(createClaudeOAuthLinkProvider(term));
-    term.loadAddon(new WebLinksAddon((event, uri) => {
-      if (CLAUDE_OAUTH_PREFIXES.some((p) => uri.startsWith(p))) {
-        event.preventDefault();
-        openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
-        return;
-      }
-      openExternalLink(uri);
-    }));
+    term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (CLAUDE_OAUTH_PREFIXES.some(p => uri.startsWith(p))) {
+          event.preventDefault();
+          openExternalLink(reconstructClaudeOAuthUrlFromBuffer(term, uri));
+          return;
+        }
+        openExternalLink(uri);
+      })
+    );
     term.open(containerRef.current);
     // Let the container scroll horizontally instead of clipping when the grid
     // is wider than the panel (we hold a MIN_COLS floor so the Claude Code TUI
@@ -363,7 +377,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
 
     // Keystrokes from the user → bytes to the server. When the session has
     // ended, any keypress relaunches it (e.g. Enter) instead of being dropped.
-    term.onData((data) => {
+    term.onData(data => {
       if (exitedRef.current) {
         relaunch();
         return;
@@ -396,10 +410,18 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         resizeSendTimerRef.current = null;
       }
       pendingResizeRef.current = null;
-      try { wsRef.current?.close(); } catch { /* noop */ }
+      try {
+        wsRef.current?.close();
+      } catch {
+        /* noop */
+      }
       wsRef.current = null;
       claudeOAuthLinkProvider.dispose();
-      try { term.dispose(); } catch { /* noop */ }
+      try {
+        term.dispose();
+      } catch {
+        /* noop */
+      }
       termRef.current = null;
       fitRef.current = null;
     };
@@ -415,7 +437,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
   // Connect once on mount, reconnect on close. Kept in its own effect so
   // changing `agent.id` or `token` reopens cleanly.
   useEffect(() => {
-    if (!agent.id || !token) return;
+    if (!agent.id || !token) return undefined;
 
     const connect = () => {
       if (!aliveRef.current) return;
@@ -424,7 +446,9 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
       fitTerminalNow();
 
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = new URL(`${proto}//${window.location.host}/ws/agents/${encodeURIComponent(agent.id)}/terminal`);
+      const url = new URL(
+        `${proto}//${window.location.host}/ws/agents/${encodeURIComponent(agent.id)}/terminal`
+      );
       url.searchParams.set('token', token);
       url.searchParams.set('cols', String(term.cols));
       url.searchParams.set('rows', String(term.rows));
@@ -455,7 +479,7 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         ws.send(JSON.stringify({ type: 'refresh' }));
       };
 
-      ws.onmessage = (ev) => {
+      ws.onmessage = ev => {
         if (wsRef.current !== ws) return;
         const t = termRef.current;
         if (!t) return;
@@ -476,11 +500,16 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
               suppressReconnectRef.current = true;
               setExitedState(true);
               setConnected(false);
-              const code = ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
+              const code =
+                ctrl.code === null || ctrl.code === undefined ? 'unknown' : String(ctrl.code);
               const tail = typeof ctrl.tail === 'string' ? ctrl.tail.trim() : '';
               t.writeln(`\r\n\x1b[2m[runner session ended, code=${code}]\x1b[0m`);
               if (tail) {
-                const lines = tail.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-6);
+                const lines = tail
+                  .split(/\r?\n/)
+                  .map(line => line.trim())
+                  .filter(Boolean)
+                  .slice(-6);
                 for (const line of lines) {
                   t.writeln(`\x1b[2m${line}\x1b[0m`);
                 }
@@ -496,9 +525,8 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
           return;
         }
         // Binary frame = raw PTY bytes.
-        const buf = ev.data instanceof ArrayBuffer
-          ? new Uint8Array(ev.data)
-          : new Uint8Array(ev.data as any);
+        const buf =
+          ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : new Uint8Array(ev.data as any);
         if (buf.byteLength > 0) markTerminalActivity();
         t.write(buf);
       };
@@ -538,19 +566,22 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
         reconnectTimerRef.current = null;
       }
       connectRef.current = null;
-      try { wsRef.current?.close(); } catch { /* noop */ }
+      try {
+        wsRef.current?.close();
+      } catch {
+        /* noop */
+      }
       wsRef.current = null;
       setConnected(false);
       setExitedState(false);
     };
   }, [agent.id, token]);
 
-  const shellClass = theme === 'light'
-    ? 'bg-white text-gray-700'
-    : 'bg-dark-900 text-dark-200';
-  const headerClass = theme === 'light'
-    ? 'border-gray-200 text-gray-500 bg-gray-50'
-    : 'border-dark-700/50 text-dark-400 bg-dark-900';
+  const shellClass = theme === 'light' ? 'bg-white text-gray-700' : 'bg-dark-900 text-dark-200';
+  const headerClass =
+    theme === 'light'
+      ? 'border-gray-200 text-gray-500 bg-gray-50'
+      : 'border-dark-700/50 text-dark-400 bg-dark-900';
   const bodyClass = theme === 'light' ? 'bg-white' : 'bg-dark-900';
 
   return (
@@ -602,7 +633,14 @@ export default function TerminalTab({ agent, token }: TerminalTabProps) {
             </button>
           )}
           <span className="opacity-60 ml-1">
-            {connected ? (terminalActive ? 'active' : 'connected') : exited ? 'ended' : 'reconnecting'} · multi-client
+            {connected
+              ? terminalActive
+                ? 'active'
+                : 'connected'
+              : exited
+                ? 'ended'
+                : 'reconnecting'}{' '}
+            · multi-client
           </span>
         </div>
       </div>

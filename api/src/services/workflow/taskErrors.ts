@@ -92,7 +92,7 @@ export function markTaskError(task: any, message: string, opts: MarkTaskErrorOpt
     errorFrom = columnIds[0];
     console.warn(
       `[taskErrors] Task ${task.id} previous status "${prevStatus}" is not in the ` +
-      `current workflow — using fallback column "${errorFrom}" so the task stays visible.`
+        `current workflow — using fallback column "${errorFrom}" so the task stays visible.`
     );
   }
 

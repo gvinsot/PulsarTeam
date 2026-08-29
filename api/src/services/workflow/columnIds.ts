@@ -44,7 +44,7 @@ export function slugifyColumnId(label: any): string {
 
 export function resolveWorkflowStatus(
   workflowOrColumns: Workflow | WorkflowColumn[] | null | undefined,
-  status: any,
+  status: any
 ): StatusResolution | null {
   const wanted = comparable(status);
   if (!wanted) return null;
@@ -64,13 +64,15 @@ export function resolveWorkflowStatus(
 }
 
 function uniqueColumnId(base: string, used: Set<string>): string {
-  const cleanBase = (base || 'column').slice(0, MAX_COLUMN_ID_LENGTH).replace(/_+$/g, '') || 'column';
+  const cleanBase =
+    (base || 'column').slice(0, MAX_COLUMN_ID_LENGTH).replace(/_+$/g, '') || 'column';
   let candidate = cleanBase;
   let suffix = 2;
 
   while (used.has(candidate)) {
     const marker = `_${suffix++}`;
-    const head = cleanBase.slice(0, MAX_COLUMN_ID_LENGTH - marker.length).replace(/_+$/g, '') || 'column';
+    const head =
+      cleanBase.slice(0, MAX_COLUMN_ID_LENGTH - marker.length).replace(/_+$/g, '') || 'column';
     candidate = `${head}${marker}`;
   }
 
@@ -105,18 +107,20 @@ function rewriteTransitionReferences(transition: any, renameMap: Map<string, str
 
 export function normalizeWorkflowColumnIds(
   nextWorkflow: Workflow,
-  previousWorkflow: Workflow | null | undefined,
+  previousWorkflow: Workflow | null | undefined
 ): { workflow: Workflow; renames: ColumnRename[] } {
   const nextColumns = columnsFrom(nextWorkflow);
   const previousColumns = columnsFrom(previousWorkflow);
-  const previousById = new Map(previousColumns
-    .filter(c => typeof c?.id === 'string' && c.id.trim())
-    .map(c => [c.id!.trim(), c]));
+  const previousById = new Map(
+    previousColumns
+      .filter(c => typeof c?.id === 'string' && c.id.trim())
+      .map(c => [c.id!.trim(), c])
+  );
 
   const used = new Set<string>();
   const renameMap = new Map<string, string>();
 
-  const planned = nextColumns.map((column) => {
+  const planned = nextColumns.map(column => {
     const oldId = typeof column?.id === 'string' ? column.id.trim() : '';
     const label = typeof column?.label === 'string' ? column.label.trim() : '';
     const previous = oldId ? previousById.get(oldId) : null;
@@ -131,7 +135,7 @@ export function normalizeWorkflowColumnIds(
       column,
       oldId,
       deriveFromLabel,
-      desiredId: deriveFromLabel ? slugifyColumnId(label) : (oldId || slugifyColumnId(label)),
+      desiredId: deriveFromLabel ? slugifyColumnId(label) : oldId || slugifyColumnId(label),
     };
   });
 

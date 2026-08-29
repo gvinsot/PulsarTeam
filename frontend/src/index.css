@@ -3,7 +3,8 @@
 @tailwind utilities;
 
 /* ─── Theme color variables ─── */
-:root, .dark {
+:root,
+.dark {
   color-scheme: dark;
   --dark-50: 248 250 252;
   --dark-100: 241 245 249;
@@ -20,17 +21,17 @@
 
 .light {
   color-scheme: light;
-  --dark-50: 17 24 39;       /* #111827 gray-900 — headings */
-  --dark-100: 17 24 39;      /* #111827 gray-900 — headings */
-  --dark-200: 55 65 81;      /* #374151 gray-700 — body text */
-  --dark-300: 75 85 99;      /* #4B5563 gray-600 — secondary text */
-  --dark-400: 107 114 128;   /* #6B7280 gray-500 */
-  --dark-500: 156 163 175;   /* #9CA3AF gray-400 */
-  --dark-600: 209 213 219;   /* #D1D5DB gray-300 — borders */
-  --dark-700: 229 231 235;   /* #E5E7EB gray-200 — borders */
-  --dark-800: 249 250 251;   /* #F9FAFB — subtle bg */
-  --dark-900: 255 255 255;   /* #FFFFFF — cards */
-  --dark-950: 229 231 235;   /* #E5E7EB — page background (medium gray for contrast) */
+  --dark-50: 17 24 39; /* #111827 gray-900 — headings */
+  --dark-100: 17 24 39; /* #111827 gray-900 — headings */
+  --dark-200: 55 65 81; /* #374151 gray-700 — body text */
+  --dark-300: 75 85 99; /* #4B5563 gray-600 — secondary text */
+  --dark-400: 107 114 128; /* #6B7280 gray-500 */
+  --dark-500: 156 163 175; /* #9CA3AF gray-400 */
+  --dark-600: 209 213 219; /* #D1D5DB gray-300 — borders */
+  --dark-700: 229 231 235; /* #E5E7EB gray-200 — borders */
+  --dark-800: 249 250 251; /* #F9FAFB — subtle bg */
+  --dark-900: 255 255 255; /* #FFFFFF — cards */
+  --dark-950: 229 231 235; /* #E5E7EB — page background (medium gray for contrast) */
 }
 
 * {
@@ -40,14 +41,20 @@
 }
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family:
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
   background: rgb(var(--dark-950));
   color: rgb(var(--dark-200));
   min-height: 100vh;
   overflow-x: hidden;
 }
 
-code, pre, .font-mono {
+code,
+pre,
+.font-mono {
   font-family: 'JetBrains Mono', monospace;
 }
 
@@ -118,23 +125,46 @@ code, pre, .font-mono {
 
 /* Animations */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes slideIn {
-  from { opacity: 0; transform: translateX(-20px); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 5px rgba(99, 102, 241, 0.3); }
-  50% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.6); }
+  0%,
+  100% {
+    box-shadow: 0 0 5px rgba(99, 102, 241, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.6);
+  }
 }
 
 @keyframes slideInRight {
-  from { opacity: 0; transform: translateX(100%); }
-  to { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .animate-fadeIn {
@@ -154,7 +184,9 @@ code, pre, .font-mono {
 }
 
 /* Markdown content styling */
-.markdown-content h1, .markdown-content h2, .markdown-content h3 {
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
   color: rgb(var(--dark-100));
   margin-top: 0.75rem;
   margin-bottom: 0.5rem;
@@ -166,7 +198,8 @@ code, pre, .font-mono {
   line-height: 1.6;
 }
 
-.markdown-content ul, .markdown-content ol {
+.markdown-content ul,
+.markdown-content ol {
   margin-left: 1.25rem;
   margin-bottom: 0.5rem;
 }
@@ -252,10 +285,19 @@ code, pre, .font-mono {
 }
 
 /* Status indicator glow */
-.status-idle { @apply bg-emerald-500; }
-.status-busy { @apply bg-amber-500; animation: pulseGlow 1.5s infinite; }
-.status-error { @apply bg-red-500; }
-.status-offline { @apply bg-gray-500; }
+.status-idle {
+  @apply bg-emerald-500;
+}
+.status-busy {
+  @apply bg-amber-500;
+  animation: pulseGlow 1.5s infinite;
+}
+.status-error {
+  @apply bg-red-500;
+}
+.status-offline {
+  @apply bg-gray-500;
+}
 
 /* Touch drag-and-drop highlight */
 .touch-drag-over {
@@ -279,8 +321,8 @@ code, pre, .font-mono {
 }
 
 /* Light mode: subtle border visibility for panels */
-.light [class*="border-dark-700"],
-.light [class*="border-dark-600"] {
+.light [class*='border-dark-700'],
+.light [class*='border-dark-600'] {
   border-color: rgb(209 213 219 / 0.8);
 }
 
@@ -296,7 +338,9 @@ code, pre, .font-mono {
   border-radius: inherit;
   padding: 1px;
   background: linear-gradient(135deg, #6366f1, #8b5cf6, #ec4899);
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
   mask-composite: exclude;
   -webkit-mask-composite: xor;
   pointer-events: none;

@@ -97,7 +97,11 @@ export async function deleteUser(id) {
   }
 }
 
-const PROVIDER_ID_COLUMNS = { google: 'google_id', microsoft: 'microsoft_id', github: 'github_id' } as const;
+const PROVIDER_ID_COLUMNS = {
+  google: 'google_id',
+  microsoft: 'microsoft_id',
+  github: 'github_id',
+} as const;
 type IdProvider = keyof typeof PROVIDER_ID_COLUMNS;
 
 export async function getUserByProviderId(provider: IdProvider, externalId) {
@@ -113,7 +117,14 @@ export async function getUserByProviderId(provider: IdProvider, externalId) {
   }
 }
 
-export async function createProviderUser(provider: IdProvider, externalId, username, displayName, avatarUrl, role = 'advanced') {
+export async function createProviderUser(
+  provider: IdProvider,
+  externalId,
+  username,
+  displayName,
+  avatarUrl,
+  role = 'advanced'
+) {
   const col = PROVIDER_ID_COLUMNS[provider];
   const pool = getPool();
   if (!pool) throw new Error('Database not connected');
@@ -149,20 +160,28 @@ export async function linkProviderId(provider: IdProvider, userId, externalId, a
   }
 }
 
-export const getUserByGoogleId = (googleId) => getUserByProviderId('google', googleId);
+export const getUserByGoogleId = googleId => getUserByProviderId('google', googleId);
 export const createGoogleUser = (googleId, email, displayName, avatarUrl, role = 'advanced') =>
   createProviderUser('google', googleId, email, displayName, avatarUrl, role);
-export const linkGoogleId = (userId, googleId, avatarUrl) => linkProviderId('google', userId, googleId, avatarUrl);
+export const linkGoogleId = (userId, googleId, avatarUrl) =>
+  linkProviderId('google', userId, googleId, avatarUrl);
 
-export const getUserByMicrosoftId = (microsoftId) => getUserByProviderId('microsoft', microsoftId);
-export const createMicrosoftUser = (microsoftId, email, displayName, avatarUrl, role = 'advanced') =>
-  createProviderUser('microsoft', microsoftId, email, displayName, avatarUrl, role);
-export const linkMicrosoftId = (userId, microsoftId, avatarUrl) => linkProviderId('microsoft', userId, microsoftId, avatarUrl);
+export const getUserByMicrosoftId = microsoftId => getUserByProviderId('microsoft', microsoftId);
+export const createMicrosoftUser = (
+  microsoftId,
+  email,
+  displayName,
+  avatarUrl,
+  role = 'advanced'
+) => createProviderUser('microsoft', microsoftId, email, displayName, avatarUrl, role);
+export const linkMicrosoftId = (userId, microsoftId, avatarUrl) =>
+  linkProviderId('microsoft', userId, microsoftId, avatarUrl);
 
-export const getUserByGitHubId = (githubId) => getUserByProviderId('github', githubId);
+export const getUserByGitHubId = githubId => getUserByProviderId('github', githubId);
 export const createGitHubUser = (githubId, email, displayName, avatarUrl, role = 'advanced') =>
   createProviderUser('github', githubId, email, displayName, avatarUrl, role);
-export const linkGitHubId = (userId, githubId, avatarUrl) => linkProviderId('github', userId, githubId, avatarUrl);
+export const linkGitHubId = (userId, githubId, avatarUrl) =>
+  linkProviderId('github', userId, githubId, avatarUrl);
 
 export async function acceptTerms(userId: string) {
   const pool = getPool();

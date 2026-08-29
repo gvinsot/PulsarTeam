@@ -14,31 +14,50 @@ function useBoardList(boardId, fetcher, fallbackMsg) {
   // from a spinner.
   const [loading, setLoading] = useState(false);
   useEffect(() => {
-    if (!boardId) { setItems([]); setError(null); setLoading(false); return; }
+    if (!boardId) {
+      setItems([]);
+      setError(null);
+      setLoading(false);
+      return undefined;
+    }
     let cancelled = false;
     setError(null);
     setLoading(true);
     fetcher(boardId)
-      .then(list => { if (!cancelled) setItems(Array.isArray(list) ? list : []); })
+      .then(list => {
+        if (!cancelled) setItems(Array.isArray(list) ? list : []);
+      })
       .catch(err => {
         if (cancelled) return;
         setItems([]);
         setError(err?.message || fallbackMsg);
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [boardId]);
   return { items, error, loading };
 }
 
 // Repos accessible via the board's GitHub plugin OAuth (picker source)
 export function useBoardRepos(boardId) {
-  const { items, error, loading } = useBoardList(boardId, api.getBoardAvailableRepos, 'Failed to load repos');
+  const { items, error, loading } = useBoardList(
+    boardId,
+    api.getBoardAvailableRepos,
+    'Failed to load repos'
+  );
   return { repos: items, error, loading };
 }
 
 // Storage roots accessible via the board's OneDrive plugin OAuth
 export function useBoardStorages(boardId) {
-  const { items, error, loading } = useBoardList(boardId, api.getBoardAvailableStorages, 'Failed to load storages');
+  const { items, error, loading } = useBoardList(
+    boardId,
+    api.getBoardAvailableStorages,
+    'Failed to load storages'
+  );
   return { storages: items, error, loading };
 }

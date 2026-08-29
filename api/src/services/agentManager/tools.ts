@@ -1,7 +1,15 @@
 // ─── Tools: _processToolCalls ────────────────────────────────────────────────
 import { parseToolCalls, executeTool } from '../agentTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
-import { saveAgent, saveTaskToDb, getTaskByIdPrefix, getTaskByActionRunningAgent, getTasksByAssignee, getActiveTasksByAgent, getAllTasks } from '../database.js';
+import {
+  saveAgent,
+  saveTaskToDb,
+  getTaskByIdPrefix,
+  getTaskByActionRunningAgent,
+  getTasksByAssignee,
+  getActiveTasksByAgent,
+  getAllTasks,
+} from '../database.js';
 import { setTaskSignal } from './tasks.js';
 import { checkToolHooks } from '../toolHooks.js';
 import { _detectCommitHashes } from './tools/commitDetection.js';
@@ -10,7 +18,6 @@ import { enrichAssignee } from '../taskMutations.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const toolsMethods = {
-
   /**
    * Record the completion part of `update_task`: append the agent's summary,
    * link commits, and set the execute-mode completion signal watched by the
@@ -19,8 +26,12 @@ export const toolsMethods = {
   async recordTaskCompletion(
     this: any,
     agentId: string,
-    { comment = '', explicitTaskId = '', commitsArg = '', streamCallback = null }:
-      { comment?: string; explicitTaskId?: string; commitsArg?: string; streamCallback?: any } = {},
+    {
+      comment = '',
+      explicitTaskId = '',
+      commitsArg = '',
+      streamCallback = null,
+    }: { comment?: string; explicitTaskId?: string; commitsArg?: string; streamCallback?: any } = {}
   ): Promise<{ success: boolean; result: string; isTerminal?: boolean; taskId?: string }> {
     const agent = this.agents.get(agentId);
     if (!agent) {
@@ -36,35 +47,61 @@ export const toolsMethods = {
     // If explicit taskId provided, look it up directly (DB, by id or unique prefix)
     if (explicitTaskId) {
       const found = await getTaskByIdPrefix(explicitTaskId);
-      if (found) { inProgressTask = found; ownerAgentId = (found as any).agentId; }
+      if (found) {
+        inProgressTask = found;
+        ownerAgentId = (found as any).agentId;
+      }
       if (!inProgressTask) {
-        console.warn(`⚠️  [UpdateTask] Explicit taskId "${explicitTaskId}" not found, falling back to auto-detect`);
+        console.warn(
+          `⚠️  [UpdateTask] Explicit taskId "${explicitTaskId}" not found, falling back to auto-detect`
+        );
       }
     }
 
     // Auto-detect: Priority 1: Task actively running via this agent (set by processTransition)
     if (!inProgressTask) {
       const found = await getTaskByActionRunningAgent(agentId);
-      if (found && this._isActiveTaskStatus((found as any).status)) { inProgressTask = found; ownerAgentId = (found as any).agentId; }
+      if (found && this._isActiveTaskStatus((found as any).status)) {
+        inProgressTask = found;
+        ownerAgentId = (found as any).agentId;
+      }
     }
     // Auto-detect: Priority 2/3: Active task this agent executes (assignee, or its
     // own unassigned task — getTasksByAssignee is exactly that set).
     if (!inProgressTask) {
-      const found = (await getTasksByAssignee(agentId)).find((t: any) => this._isActiveTaskStatus(t.status));
-      if (found) { inProgressTask = found; ownerAgentId = found.agentId; }
+      const found = (await getTasksByAssignee(agentId)).find((t: any) =>
+        this._isActiveTaskStatus(t.status)
+      );
+      if (found) {
+        inProgressTask = found;
+        ownerAgentId = found.agentId;
+      }
     }
     // Auto-detect: Priority 3b: Agent's own active task assigned to someone else (rare).
     if (!inProgressTask) {
-      const found = (await getActiveTasksByAgent(agentId)).find((t: any) => this._isActiveTaskStatus(t.status));
-      if (found) { inProgressTask = found; ownerAgentId = agentId; }
+      const found = (await getActiveTasksByAgent(agentId)).find((t: any) =>
+        this._isActiveTaskStatus(t.status)
+      );
+      if (found) {
+        inProgressTask = found;
+        ownerAgentId = agentId;
+      }
     }
 
     if (!inProgressTask) {
       // Log diagnostic info to help debug why no task was found
       const allActiveTasks = (await getAllTasks())
         .filter((t: any) => this._isActiveTaskStatus(t.status))
-        .map((t: any) => ({ id: t.id, status: t.status, assignee: t.assignee, actionRunningAgentId: t.actionRunningAgentId, ownerId: t.agentId }));
-      console.log(`⚠️ [UpdateTask] Agent "${agent.name}" (${agentId}) requested completion but no active task was found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`);
+        .map((t: any) => ({
+          id: t.id,
+          status: t.status,
+          assignee: t.assignee,
+          actionRunningAgentId: t.actionRunningAgentId,
+          ownerId: t.agentId,
+        }));
+      console.log(
+        `⚠️ [UpdateTask] Agent "${agent.name}" (${agentId}) requested completion but no active task was found. Active tasks: ${JSON.stringify(allActiveTasks.slice(0, 5))}`
+      );
       return { success: true, result: 'No action needed (no active task).', isTerminal: true };
     }
 
@@ -102,7 +139,10 @@ export const toolsMethods = {
     // addTaskCommit is idempotent (prefix-aware dedup), so re-linking is a no-op.
     let linkedCommitCount = 0;
     if (commitsArg) {
-      const commitEntries = commitsArg.split(/,\s*(?=[a-f0-9])/).map((s: string) => s.trim()).filter(Boolean);
+      const commitEntries = commitsArg
+        .split(/,\s*(?=[a-f0-9])/)
+        .map((s: string) => s.trim())
+        .filter(Boolean);
       for (const entry of commitEntries) {
         const colonIdx = entry.indexOf(':');
         const hash = colonIdx > 0 ? entry.slice(0, colonIdx).trim() : entry.trim();
@@ -110,7 +150,9 @@ export const toolsMethods = {
         if (hash && /^[a-f0-9]{7,40}$/.test(hash)) {
           await this.addTaskCommit(ownerAgentId, inProgressTask.id, hash, msg);
           linkedCommitCount++;
-          console.log(`🔗 [UpdateTask] Linked commit ${hash.slice(0, 7)} to task ${inProgressTask.id}`);
+          console.log(
+            `🔗 [UpdateTask] Linked commit ${hash.slice(0, 7)} to task ${inProgressTask.id}`
+          );
         }
       }
     }
@@ -124,12 +166,18 @@ export const toolsMethods = {
     // `git log` (not the terminal output), so it catches commits a CLI runner
     // made silently inside its PTY that never rendered as parseable text.
     const existingCommits = inProgressTask.commits || [];
-    if (linkedCommitCount === 0 && existingCommits.length === 0 && this.executionManager?.hasEnvironment(agentId)) {
+    if (
+      linkedCommitCount === 0 &&
+      existingCommits.length === 0 &&
+      this.executionManager?.hasEnvironment(agentId)
+    ) {
       try {
         // Use %aI (ISO author date) so we can filter by task time window in code
         // and avoid relying solely on git's --since (which is fuzzy on edge cases).
         const taskStartedAt = inProgressTask.startedAt;
-        const sinceArg = taskStartedAt ? ` --since="${new Date(new Date(taskStartedAt).getTime() - 5 * 60000).toISOString()}"` : '';
+        const sinceArg = taskStartedAt
+          ? ` --since="${new Date(new Date(taskStartedAt).getTime() - 5 * 60000).toISOString()}"`
+          : '';
         const logCmd = `git log --format="%H %aI %s"${sinceArg} -20`;
         const logResult = await this.executionManager.exec(agentId, logCmd, { timeout: 10000 });
         const logOutput = ((logResult.stdout || '') + (logResult.stderr || '')).trim();
@@ -148,10 +196,17 @@ export const toolsMethods = {
           // Pass 1: name-based match (existing convention, highest confidence)
           for (const e of entries) {
             if (agentNameLower && e.msg.toLowerCase().includes(agentNameLower)) {
-              const linked = await this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
+              const linked = await this.addTaskCommit(
+                ownerAgentId,
+                inProgressTask.id,
+                e.hash,
+                e.msg
+              );
               if (linked) {
                 linkedCommitCount++;
-                console.log(`🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`);
+                console.log(
+                  `🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-name): "${e.msg.slice(0, 60)}"`
+                );
               }
             }
           }
@@ -168,16 +223,25 @@ export const toolsMethods = {
               if (e.ts < startedAtMs) continue;
               const msgLower = e.msg.toLowerCase();
               if (otherAgentNames.some(n => msgLower.includes(n))) continue;
-              const linked = await this.addTaskCommit(ownerAgentId, inProgressTask.id, e.hash, e.msg);
+              const linked = await this.addTaskCommit(
+                ownerAgentId,
+                inProgressTask.id,
+                e.hash,
+                e.msg
+              );
               if (linked) {
                 linkedCommitCount++;
-                console.log(`🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`);
+                console.log(
+                  `🔗 [UpdateTask] Auto-detected commit ${e.hash.slice(0, 7)} for task ${inProgressTask.id} (by-date): "${e.msg.slice(0, 60)}"`
+                );
               }
             }
           }
         }
         if (linkedCommitCount === 0) {
-          console.log(`ℹ️ [UpdateTask] No auto-detectable commits for task ${inProgressTask.id} (agent="${agent.name}")`);
+          console.log(
+            `ℹ️ [UpdateTask] No auto-detectable commits for task ${inProgressTask.id} (agent="${agent.name}")`
+          );
         }
       } catch (e: any) {
         console.warn(`⚠️ [UpdateTask] Auto-detect commits failed: ${e.message}`);
@@ -196,13 +260,17 @@ export const toolsMethods = {
       try {
         await saveTaskToDb({ ...inProgressTask, agentId: ownerAgentId });
       } catch (err: any) {
-        console.warn(`⚠️ [UpdateTask] Failed to persist appended comment for task ${inProgressTask.id}: ${err?.message || err}`);
+        console.warn(
+          `⚠️ [UpdateTask] Failed to persist appended comment for task ${inProgressTask.id}: ${err?.message || err}`
+        );
       }
       const taskPayload: any = enrichAssignee(this, { ...inProgressTask, agentId: ownerAgentId });
       this._emit('task:updated', { agentId: ownerAgentId, task: taskPayload });
     }
 
-    console.log(`✅ [UpdateTask] Agent "${agent.name}" recorded completion for task ${inProgressTask.id} (status="${inProgressTask.status}", assignee="${inProgressTask.assignee || 'none'}"): "${comment.slice(0, 120)}"`);
+    console.log(
+      `✅ [UpdateTask] Agent "${agent.name}" recorded completion for task ${inProgressTask.id} (status="${inProgressTask.status}", assignee="${inProgressTask.assignee || 'none'}"): "${comment.slice(0, 120)}"`
+    );
     if (streamCallback) {
       streamCallback(`\n✅ Task updated: ${comment.slice(0, 200)}\n`);
     }
@@ -214,7 +282,13 @@ export const toolsMethods = {
     };
   },
 
-  async _processToolCalls(this: any, agentId: string, response: string, streamCallback: any, depth: number = 0): Promise<any[]> {
+  async _processToolCalls(
+    this: any,
+    agentId: string,
+    response: string,
+    streamCallback: any,
+    depth: number = 0
+  ): Promise<any[]> {
     const agent = this.agents.get(agentId);
     if (!agent) return [];
 
@@ -224,17 +298,28 @@ export const toolsMethods = {
     // before their first await — see handlers.ts). Lives once across the loop.
     const dedup: Record<string, boolean> = {};
 
-    console.log(`\n🔧 [Tools] Parsing response from "${agent.name}" (depth=${depth}, length=${response.length})`);
+    console.log(
+      `\n🔧 [Tools] Parsing response from "${agent.name}" (depth=${depth}, length=${response.length})`
+    );
 
     if (toolCalls.length === 0) {
-      const rawCount = (response.match(/@(read_file|write_file|list_dir|search_files|run_command|append_file)/gi) || []).length;
+      const rawCount = (
+        response.match(/@(read_file|write_file|list_dir|search_files|run_command|append_file)/gi) ||
+        []
+      ).length;
       const tagCount = (response.match(/<tool_call>/gi) || []).length;
       if (rawCount > 0 || tagCount > 0) {
-        console.warn(`⚠️  [Tools] Agent "${agent.name}": found ${rawCount} @tool mention(s) and ${tagCount} <tool_call> tag(s) but parseToolCalls returned 0 matches`);
+        console.warn(
+          `⚠️  [Tools] Agent "${agent.name}": found ${rawCount} @tool mention(s) and ${tagCount} <tool_call> tag(s) but parseToolCalls returned 0 matches`
+        );
         const lines = response.split('\n');
         const toolLines = lines
           .map((line, i) => ({ line, i }))
-          .filter(({ line }) => /@(read_file|write_file|list_dir|search_files|run_command|append_file)/i.test(line) || /<tool_call>/i.test(line));
+          .filter(
+            ({ line }) =>
+              /@(read_file|write_file|list_dir|search_files|run_command|append_file)/i.test(line) ||
+              /<tool_call>/i.test(line)
+          );
         for (const { line, i } of toolLines.slice(0, 5)) {
           console.warn(`   L${i + 1}: ${line.slice(0, 200)}`);
         }
@@ -242,7 +327,9 @@ export const toolsMethods = {
       return [];
     }
 
-    console.log(`🔧 Agent ${agent.name} executing ${toolCalls.length} tool(s) (project=${agent.project || 'none'}, execution=${this.executionManager ? (this.executionManager.hasEnvironment(agentId) ? 'ready' : 'not-initialized') : 'no-manager'})`);
+    console.log(
+      `🔧 Agent ${agent.name} executing ${toolCalls.length} tool(s) (project=${agent.project || 'none'}, execution=${this.executionManager ? (this.executionManager.hasEnvironment(agentId) ? 'ready' : 'not-initialized') : 'no-manager'})`
+    );
 
     if (this.executionManager) {
       try {
@@ -252,14 +339,21 @@ export const toolsMethods = {
         const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
         const gitCreds = await getGitHubCredentialsForAgent(agentId, agent.boardId || null);
         const llmConfigForRunner = agent.llmConfigId ? llmCfg : null;
-        this.executionManager.bindAgent(agentId, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
+        this.executionManager.bindAgent(agentId, providerType, {
+          ownerId: agent.ownerId || null,
+          gitCredentials: gitCreds,
+          permissions: agent.permissions || null,
+          llmConfig: llmConfigForRunner,
+        });
 
         if (agent.project) {
           const gitUrl = buildRepoCloneUrl(agent.project);
           if (gitUrl) {
             await this.executionManager.ensureProject(agentId, agent.project, gitUrl, gitCreds);
           } else {
-            console.warn(`⚠️  [Execution] No git URL derived from agent.project "${agent.project}" — expected "owner/repo" format`);
+            console.warn(
+              `⚠️  [Execution] No git URL derived from agent.project "${agent.project}" — expected "owner/repo" format`
+            );
           }
         } else {
           await this.executionManager.ensureProject(agentId);
@@ -270,9 +364,14 @@ export const toolsMethods = {
             await this.executionManager.installGitCredentials(agentId, gitCreds);
           }
         }
-        console.log(`📦 [Execution] After ensureProject: hasEnvironment=${this.executionManager.hasEnvironment(agentId)}, provider=${providerType}`);
+        console.log(
+          `📦 [Execution] After ensureProject: hasEnvironment=${this.executionManager.hasEnvironment(agentId)}, provider=${providerType}`
+        );
       } catch (err: any) {
-        console.error(`⚠️  [Execution] Failed to ensure environment for ${agent.name}:`, err.message);
+        console.error(
+          `⚠️  [Execution] Failed to ensure environment for ${agent.name}:`,
+          err.message
+        );
       }
     }
 
@@ -297,8 +396,10 @@ export const toolsMethods = {
         const ldNow = Date.now();
         if (!agent._lastListDirCache) agent._lastListDirCache = {};
         const cached = agent._lastListDirCache[dirPath];
-        if (cached && (ldNow - cached.at) < 30000) {
-          console.log(`[Dedup] Skipping @list_dir(${dirPath}) from "${agent.name}" — listed ${Math.round((ldNow - cached.at) / 1000)}s ago`);
+        if (cached && ldNow - cached.at < 30000) {
+          console.log(
+            `[Dedup] Skipping @list_dir(${dirPath}) from "${agent.name}" — listed ${Math.round((ldNow - cached.at) / 1000)}s ago`
+          );
           results.push({ tool: 'list_dir', args: call.args, success: true, result: cached.result });
           continue;
         }
@@ -306,12 +407,12 @@ export const toolsMethods = {
 
       try {
         const toolLabels: Record<string, (a: any[]) => string> = {
-          write_file: (a) => `Writing ${a[0] || ''}`,
-          append_file: (a) => `Appending to ${a[0] || ''}`,
-          read_file: (a) => `Reading ${a[0] || ''}`,
-          list_dir: (a) => `Listing ${a[0] || '.'}`,
-          search_files: (a) => `Searching ${a[0] || '*'} for "${a[1] || ''}"`,
-          run_command: (a) => `Running: ${(a[0] || '').slice(0, 80)}`,
+          write_file: a => `Writing ${a[0] || ''}`,
+          append_file: a => `Appending to ${a[0] || ''}`,
+          read_file: a => `Reading ${a[0] || ''}`,
+          list_dir: a => `Listing ${a[0] || '.'}`,
+          search_files: a => `Searching ${a[0] || '*'} for "${a[1] || ''}"`,
+          run_command: a => `Running: ${(a[0] || '').slice(0, 80)}`,
         };
         const labelFn = toolLabels[call.tool];
         const toolLabel = labelFn ? labelFn(call.args) : `@${call.tool}`;
@@ -323,14 +424,21 @@ export const toolsMethods = {
           agentName: agent.name,
           project: agent.project || null,
           tool: call.tool,
-          args: call.args
+          args: call.args,
         });
 
         // ── Tool Hooks: pre-execution check ──
         const hookResult = checkToolHooks(agent.toolHooks, call.tool, call.args);
         if (!hookResult.allowed) {
-          console.log(`🛡️ [ToolHook] Blocked ${call.tool} for agent "${agent.name}": ${hookResult.message}`);
-          results.push({ tool: call.tool, args: call.args, success: false, error: hookResult.message });
+          console.log(
+            `🛡️ [ToolHook] Blocked ${call.tool} for agent "${agent.name}": ${hookResult.message}`
+          );
+          results.push({
+            tool: call.tool,
+            args: call.args,
+            success: false,
+            error: hookResult.message,
+          });
           if (streamCallback) {
             streamCallback(`\n✗ ${call.tool} — blocked by security rule\n`);
           }
@@ -340,10 +448,20 @@ export const toolsMethods = {
           console.log(`🛡️ ${hookResult.message}`);
         }
 
-        const result: any = await executeTool(call.tool, call.args, agent.project, this.executionManager, agentId);
+        const result: any = await executeTool(
+          call.tool,
+          call.args,
+          agent.project,
+          this.executionManager,
+          agentId
+        );
 
         // Schedule code index re-indexation for file modifications
-        if (result.success && (call.tool === 'write_file' || call.tool === 'append_file') && agent.project) {
+        if (
+          result.success &&
+          (call.tool === 'write_file' || call.tool === 'append_file') &&
+          agent.project
+        ) {
           const filePath = result.meta?.path || call.args[0];
           const content = call.tool === 'write_file' ? call.args[1] : undefined;
           if (filePath) {
@@ -353,7 +471,12 @@ export const toolsMethods = {
 
         // Auto-capture commit hashes from git commands and link to task
         if (call.tool === 'run_command' && result.success) {
-          const detectedCommits = await _detectCommitHashes(call, result, this.executionManager, agentId);
+          const detectedCommits = await _detectCommitHashes(
+            call,
+            result,
+            this.executionManager,
+            agentId
+          );
 
           if (detectedCommits.length > 0) {
             let targetTask: any = null;
@@ -366,11 +489,16 @@ export const toolsMethods = {
 
             if (!targetTask) {
               const taskText = agent.currentTask || detectedCommits[0].msg || 'Commit without task';
-              const created = await this.addTask(agentId, taskText, { type: 'auto', reason: 'commit-link' });
+              const created = await this.addTask(agentId, taskText, {
+                type: 'auto',
+                reason: 'commit-link',
+              });
               if (created) {
                 targetTask = created;
                 ownerAgentId = agentId;
-                console.log(`🔗 [Commit] Auto-created task "${taskText.slice(0, 50)}" for commit linking`);
+                console.log(
+                  `🔗 [Commit] Auto-created task "${taskText.slice(0, 50)}" for commit linking`
+                );
               }
             }
 
@@ -382,11 +510,15 @@ export const toolsMethods = {
               }
               if (linkedCount > 0) {
                 const hashPreview = detectedCommits.map(c => c.hash.slice(0, 7)).join(', ');
-                console.log(`🔗 [Commit] Auto-linked ${linkedCount} commit(s) [${hashPreview}] to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`);
+                console.log(
+                  `🔗 [Commit] Auto-linked ${linkedCount} commit(s) [${hashPreview}] to task "${targetTask.text?.slice(0, 50)}" (status=${targetTask.status}, owner=${ownerAgentId.slice(0, 8)})`
+                );
                 result.result = `${result.result}\n\n🔗 ${linkedCount} commit(s) automatically linked to task "${targetTask.text?.slice(0, 60)}"`;
               }
             } else {
-              console.warn(`⚠️  [Commit] Agent "${agent.name}" committed but no task found to link`);
+              console.warn(
+                `⚠️  [Commit] Agent "${agent.name}" committed but no task found to link`
+              );
             }
           }
         }
@@ -412,10 +544,12 @@ export const toolsMethods = {
             tool: call.tool,
             args: call.args,
             success: true,
-            preview: result.result.slice(0, 300)
+            preview: result.result.slice(0, 300),
           });
         } else {
-          console.warn(`⚠️  [Tool Error] Agent "${agent.name}" — @${call.tool}(${(call.args[0] || '').slice(0, 80)}): ${result.error}`);
+          console.warn(
+            `⚠️  [Tool Error] Agent "${agent.name}" — @${call.tool}(${(call.args[0] || '').slice(0, 80)}): ${result.error}`
+          );
 
           this._emit('agent:tool:error', {
             agentId,
@@ -425,12 +559,16 @@ export const toolsMethods = {
             args: call.args,
             error: result.error || 'Unknown error',
             output: result.result || null,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
           });
 
           if (streamCallback) {
-            const outputSnippet = result.result ? `\n\`\`\`\n${result.result.slice(0, 500)}\n\`\`\`` : '';
-            streamCallback(`\n\n⚠️ **Tool error** \`@${call.tool}(${(call.args[0] || '').slice(0, 100)})\`: ${result.error}${outputSnippet}\n`);
+            const outputSnippet = result.result
+              ? `\n\`\`\`\n${result.result.slice(0, 500)}\n\`\`\``
+              : '';
+            streamCallback(
+              `\n\n⚠️ **Tool error** \`@${call.tool}(${(call.args[0] || '').slice(0, 100)})\`: ${result.error}${outputSnippet}\n`
+            );
           }
         }
       } catch (err: any) {
@@ -440,7 +578,7 @@ export const toolsMethods = {
           tool: call.tool,
           args: call.args,
           success: false,
-          error: err.message
+          error: err.message,
         });
 
         this._emit('agent:tool:error', {
@@ -450,11 +588,13 @@ export const toolsMethods = {
           tool: call.tool,
           args: call.args,
           error: err.message,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         });
 
         if (streamCallback) {
-          streamCallback(`\n\n❌ **Tool crashed** \`@${call.tool}(${(call.args[0] || '').slice(0, 100)})\`: ${err.message}\n`);
+          streamCallback(
+            `\n\n❌ **Tool crashed** \`@${call.tool}(${(call.args[0] || '').slice(0, 100)})\`: ${err.message}\n`
+          );
         }
       }
     }

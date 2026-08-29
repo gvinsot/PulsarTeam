@@ -63,7 +63,7 @@ function countBraces(line) {
       continue;
     }
     if (inSingle) {
-      if (char === '\'') inSingle = false;
+      if (char === "'") inSingle = false;
       continue;
     }
     if (inDouble) {
@@ -75,7 +75,7 @@ function countBraces(line) {
       continue;
     }
 
-    if (char === '\'') {
+    if (char === "'") {
       inSingle = true;
       continue;
     }
@@ -117,17 +117,32 @@ function extractLeadingComment(lines, startIndex, language) {
     }
 
     if (trimmed.startsWith('*')) {
-      collected.unshift(trimmed.replace(/^\*\s?/, '').replace(/\*\/$/, '').trim());
+      collected.unshift(
+        trimmed
+          .replace(/^\*\s?/, '')
+          .replace(/\*\/$/, '')
+          .trim()
+      );
       continue;
     }
 
     if (trimmed.startsWith('/*')) {
-      collected.unshift(trimmed.replace(/^\/\*+\s?/, '').replace(/\*\/$/, '').trim());
+      collected.unshift(
+        trimmed
+          .replace(/^\/\*+\s?/, '')
+          .replace(/\*\/$/, '')
+          .trim()
+      );
       continue;
     }
 
     if (trimmed.endsWith('*/')) {
-      collected.unshift(trimmed.replace(/^\/\*+\s?/, '').replace(/\*\/$/, '').trim());
+      collected.unshift(
+        trimmed
+          .replace(/^\/\*+\s?/, '')
+          .replace(/\*\/$/, '')
+          .trim()
+      );
       continue;
     }
 
@@ -201,19 +216,25 @@ function findBlockEndJs(lines, startIndex) {
 }
 
 function findInnermostClass(classSymbols, lineNumber) {
-  return classSymbols
-    .filter((symbol) => lineNumber > symbol.startLine && lineNumber <= symbol.endLine)
-    .sort((left, right) => (left.endLine - left.startLine) - (right.endLine - right.startLine))[0] || null;
+  return (
+    classSymbols
+      .filter(symbol => lineNumber > symbol.startLine && lineNumber <= symbol.endLine)
+      .sort(
+        (left, right) => left.endLine - left.startLine - (right.endLine - right.startLine)
+      )[0] || null
+  );
 }
 
 function createSource(lines, startLine, endLine) {
-  return lines.slice(startLine - 1, endLine).join('\n').trimEnd();
+  return lines
+    .slice(startLine - 1, endLine)
+    .join('\n')
+    .trimEnd();
 }
 
 function createSummary(lines, symbol, language) {
-  const docstring = language === 'python'
-    ? extractPythonDocstring(lines, symbol.startLine, symbol.endLine)
-    : '';
+  const docstring =
+    language === 'python' ? extractPythonDocstring(lines, symbol.startLine, symbol.endLine) : '';
   const leading = extractLeadingComment(lines, symbol.startLine - 1, language);
   return docstring || leading || symbol.signature;
 }
@@ -222,7 +243,12 @@ function extractJavaScriptSymbols(lines, language) {
   const classSymbols = [];
   const symbols = [];
 
-  const pushSymbol = (index: number, name: string, kind: string, extra: { qualifiedName?: string; parentName?: string } = {}) => {
+  const pushSymbol = (
+    index: number,
+    name: string,
+    kind: string,
+    extra: { qualifiedName?: string; parentName?: string } = {}
+  ) => {
     const startLine = index + 1;
     const endLine = findBlockEndJs(lines, index);
     symbols.push({
@@ -238,9 +264,12 @@ function extractJavaScriptSymbols(lines, language) {
   };
 
   const classRegex = /^\s*(?:export\s+default\s+|export\s+)?class\s+([A-Za-z_$][\w$]*)/;
-  const functionRegex = /^\s*(?:export\s+default\s+|export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/;
-  const arrowRegex = /^\s*(?:export\s+default\s+|export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/;
-  const functionExprRegex = /^\s*(?:export\s+default\s+|export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\(([^)]*)\)/;
+  const functionRegex =
+    /^\s*(?:export\s+default\s+|export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(([^)]*)\)/;
+  const arrowRegex =
+    /^\s*(?:export\s+default\s+|export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*=>/;
+  const functionExprRegex =
+    /^\s*(?:export\s+default\s+|export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?function\s*\(([^)]*)\)/;
   const methodRegex = /^\s*(?:static\s+)?(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*\{/;
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -293,7 +322,7 @@ function extractJavaScriptSymbols(lines, language) {
   }
 
   const allSymbols = [...classSymbols, ...symbols]
-    .map((symbol) => ({
+    .map(symbol => ({
       ...symbol,
       summary: createSummary(lines, symbol, language),
     }))
@@ -350,22 +379,24 @@ function extractPythonSymbols(lines) {
     definition.endLine = Math.max(definition.startLine, endLine);
   }
 
-  const classes = definitions.filter((definition) => definition.kind === 'class');
+  const classes = definitions.filter(definition => definition.kind === 'class');
 
   return definitions
-    .map((definition) => {
+    .map(definition => {
       let qualifiedName = definition.name;
       let kind = definition.kind;
       let parentName = null;
 
       if (definition.kind === 'function') {
-        const parentClass = classes
-          .filter((candidate) =>
-            definition.startLine > candidate.startLine &&
-            definition.startLine <= candidate.endLine &&
-            definition.indent > candidate.indent
-          )
-          .sort((left, right) => right.indent - left.indent)[0] || null;
+        const parentClass =
+          classes
+            .filter(
+              candidate =>
+                definition.startLine > candidate.startLine &&
+                definition.startLine <= candidate.endLine &&
+                definition.indent > candidate.indent
+            )
+            .sort((left, right) => right.indent - left.indent)[0] || null;
 
         if (parentClass) {
           kind = 'method';
@@ -399,7 +430,8 @@ function extractGenericSymbols(lines, language) {
     },
     {
       kind: 'function',
-      regex: /^\s*(?:export\s+)?(?:async\s+)?(?:function\s+)?([A-Za-z_][\w]*)\s*\([^)]*\)\s*(?:\{|=>|:)/,
+      regex:
+        /^\s*(?:export\s+)?(?:async\s+)?(?:function\s+)?([A-Za-z_][\w]*)\s*\([^)]*\)\s*(?:\{|=>|:)/,
     },
   ];
 

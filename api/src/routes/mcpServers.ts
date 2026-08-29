@@ -36,44 +36,72 @@ export function mcpServerRoutes(mcpManager) {
   // Get single MCP server
   router.get('/:id', (req, res) => {
     const server = mcpManager.getById(req.params.id);
-    if (!server) return res.status(404).json({ error: 'MCP server not found' });
+    if (!server) {
+      res.status(404).json({ error: 'MCP server not found' });
+      return;
+    }
     res.json(sanitize(server));
   });
 
   // Create MCP server (admin only — global setting affecting all agents)
-  router.post('/', requireRole('admin'), asyncHandler(async (req, res) => {
-    const parsed = createMcpServerSchema.parse(req.body);
-    const server = await mcpManager.create(parsed);
-    res.status(201).json(sanitize(server));
-  }));
+  router.post(
+    '/',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+      const parsed = createMcpServerSchema.parse(req.body);
+      const server = await mcpManager.create(parsed);
+      res.status(201).json(sanitize(server));
+    })
+  );
 
   // Update MCP server (admin only)
-  router.put('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
-    const parsed = updateMcpServerSchema.parse(req.body);
-    const server = await mcpManager.update(req.params.id, parsed);
-    if (!server) return res.status(404).json({ error: 'MCP server not found' });
-    res.json(sanitize(server));
-  }));
+  router.put(
+    '/:id',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+      const parsed = updateMcpServerSchema.parse(req.body);
+      const server = await mcpManager.update(req.params.id, parsed);
+      if (!server) {
+        res.status(404).json({ error: 'MCP server not found' });
+        return;
+      }
+      res.json(sanitize(server));
+    })
+  );
 
   // Delete MCP server (admin only)
-  router.delete('/:id', requireRole('admin'), asyncHandler(async (req, res) => {
-    const success = await mcpManager.delete(req.params.id);
-    if (!success) return res.status(404).json({ error: 'MCP server not found' });
-    res.json({ success: true });
-  }));
+  router.delete(
+    '/:id',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+      const success = await mcpManager.delete(req.params.id);
+      if (!success) {
+        res.status(404).json({ error: 'MCP server not found' });
+        return;
+      }
+      res.json({ success: true });
+    })
+  );
 
   // Force reconnect & refresh tools (admin only)
-  router.post('/:id/connect', requireRole('admin'), asyncHandler(async (req, res) => {
-    const server = await mcpManager.connect(req.params.id);
-    res.json(sanitize(server));
-  }));
+  router.post(
+    '/:id/connect',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+      const server = await mcpManager.connect(req.params.id);
+      res.json(sanitize(server));
+    })
+  );
 
   // Test MCP connection by server ID (without persisting state changes)
   // Accepts optional { apiKey } in body to test with a specific key
   router.post('/:id/test', async (req, res) => {
     try {
       const server = mcpManager.getById(req.params.id);
-      if (!server) return res.status(404).json({ error: 'MCP server not found' });
+      if (!server) {
+        res.status(404).json({ error: 'MCP server not found' });
+        return;
+      }
 
       const { MCPClient } = await import('../services/mcpClient.js');
       const { resolveInternalMcpConfig } = await import('../services/mcpManager.js');
@@ -94,13 +122,18 @@ export function mcpServerRoutes(mcpManager) {
 
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('MCP connection test timed out after 15s')), 15_000);
+        timer = setTimeout(
+          () => reject(new Error('MCP connection test timed out after 15s')),
+          15_000
+        );
       });
       const connectPromise = client.connect(connectUrl, connectOpts);
       // connect()'s SSE fallback can install a fresh transport after a
       // mid-flight close(), so always chain a final close onto the connect
       // promise itself — the finally below only covers the current transport.
-      const closeQuietly = () => { client.close().catch(() => {}); };
+      const closeQuietly = () => {
+        client.close().catch(() => {});
+      };
       connectPromise.then(closeQuietly, closeQuietly);
       try {
         const { tools } = await Promise.race([connectPromise, timeout]);

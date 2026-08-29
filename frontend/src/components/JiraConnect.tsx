@@ -1,6 +1,8 @@
 import { Ticket, TicketX } from 'lucide-react';
 import { api } from '../api';
-import CredentialConnectWidget, { CredentialProviderConfig } from './connect/CredentialConnectWidget';
+import CredentialConnectWidget, {
+  CredentialProviderConfig,
+} from './connect/CredentialConnectWidget';
 
 /**
  * Jira connection widget — thin config over the shared CredentialConnectWidget.
@@ -12,10 +14,15 @@ const JIRA_CONFIG: CredentialProviderConfig = {
   IconDisconnect: TicketX,
   color: 'blue',
   connectButtonLabel: 'Connect Jira',
-  badgeDetail: (status) => status.domain || 'Connected',
+  badgeDetail: status => status.domain || 'Connected',
   requiredError: 'All fields are required',
   fields: [
-    { key: 'domain', label: 'Jira Domain', placeholder: 'yourcompany.atlassian.net', required: true },
+    {
+      key: 'domain',
+      label: 'Jira Domain',
+      placeholder: 'yourcompany.atlassian.net',
+      required: true,
+    },
     { key: 'email', label: 'Email', placeholder: 'you@company.com', type: 'email', required: true },
     {
       key: 'apiToken',
@@ -25,7 +32,15 @@ const JIRA_CONFIG: CredentialProviderConfig = {
       required: true,
       help: (
         <>
-          Create at <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">id.atlassian.com</a>
+          Create at{' '}
+          <a
+            href="https://id.atlassian.com/manage-profile/security/api-tokens"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:underline"
+          >
+            id.atlassian.com
+          </a>
         </>
       ),
     },
@@ -36,9 +51,25 @@ const JIRA_CONFIG: CredentialProviderConfig = {
     getStatus: api.getJiraStatus,
     disconnect: api.disconnectJira,
   },
-  connectHint: 'Click "Connect Jira" to configure this agent\'s Jira access with your Atlassian API token.',
+  connectHint:
+    'Click "Connect Jira" to configure this agent\'s Jira access with your Atlassian API token.',
 };
 
-export default function JiraConnect({ agentId, boardId, onStatusChange }: { agentId?: string; boardId?: string; onStatusChange?: (status: any) => void }) {
-  return <CredentialConnectWidget config={JIRA_CONFIG} agentId={agentId} boardId={boardId} onStatusChange={onStatusChange} />;
+export default function JiraConnect({
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: (status: any) => void;
+}) {
+  return (
+    <CredentialConnectWidget
+      config={JIRA_CONFIG}
+      agentId={agentId}
+      boardId={boardId}
+      onStatusChange={onStatusChange}
+    />
+  );
 }

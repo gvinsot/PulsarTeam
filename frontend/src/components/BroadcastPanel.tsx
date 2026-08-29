@@ -1,5 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { X, Globe, Send, Loader2, ChevronDown, ChevronRight, StopCircle, Wrench, Plus, Pencil, Trash2, Zap, MessageSquareOff, Plug, RefreshCw, Search, Lock, KeyRound } from 'lucide-react';
+import {
+  X,
+  Globe,
+  Send,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+  StopCircle,
+  Wrench,
+  Plus,
+  Pencil,
+  Trash2,
+  Zap,
+  MessageSquareOff,
+  Plug,
+  RefreshCw,
+  Search,
+  Lock,
+  KeyRound,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { cleanToolSyntax } from './AgentDetail';
 import { api } from '../api';
@@ -14,7 +33,15 @@ const TABS = [
 ];
 
 // Inline confirm button — first click shows "Are you sure?", second click executes
-function ConfirmButton({ onConfirm, disabled, icon: Icon, label, confirmLabel = 'Are you sure?', className, confirmClassName }) {
+function ConfirmButton({
+  onConfirm,
+  disabled,
+  icon: Icon,
+  label,
+  confirmLabel = 'Are you sure?',
+  className,
+  confirmClassName,
+}) {
   const [confirming, setConfirming] = useState(false);
   const timerRef = useRef(null);
 
@@ -57,11 +84,19 @@ const statusLabels = {
   disconnected: 'Deconnecte',
 };
 
-export default function BroadcastPanel({ agents, skills = [], mcpServers = [], socket, onClose, onRefresh, user }) {
+export default function BroadcastPanel({
+  agents,
+  skills = [],
+  mcpServers = [],
+  socket,
+  onClose,
+  onRefresh,
+  user,
+}) {
   const isAdmin = user?.role === 'admin';
   const currentUserId = user?.userId || user?.id || null;
   // Plugin is editable by its owner, or by an admin for built-ins.
-  const canManagePlugin = (p) => {
+  const canManagePlugin = p => {
     if (!p) return false;
     if (isAdmin) return true;
     if (p.builtin && !p.ownerId) return false;
@@ -77,9 +112,29 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
 
   // Plugin state
   const [editingPlugin, setEditingPlugin] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [], shared: false, ownerId: null, builtin: false });
+  const [editForm, setEditForm] = useState({
+    name: '',
+    description: '',
+    category: '',
+    icon: '',
+    instructions: '',
+    userConfig: {},
+    mcps: [],
+    shared: false,
+    ownerId: null,
+    builtin: false,
+  });
   const [showCreate, setShowCreate] = useState(false);
-  const [newPlugin, setNewPlugin] = useState({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [], shared: false });
+  const [newPlugin, setNewPlugin] = useState({
+    name: '',
+    description: '',
+    category: 'coding',
+    icon: '🔧',
+    instructions: '',
+    userConfig: {},
+    mcps: [],
+    shared: false,
+  });
 
   // MCP Explorer state
   const [expandedMcpExplorer, setExpandedMcpExplorer] = useState(new Set());
@@ -94,21 +149,21 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
   }, [responses]);
 
   useEffect(() => {
-    if (!socket) return;
+    if (!socket) return undefined;
 
-    const handleComplete = (data) => {
+    const handleComplete = data => {
       setResponses(data.results || []);
       setSending(false);
     };
 
-    const handleError = (data) => {
+    const handleError = data => {
       console.error('Global error:', data.error);
       setSending(false);
     };
 
     // Rate-limit rejections arrive as a generic error event, and a dropped
     // connection loses the completion event entirely — both must unstick the UI.
-    const handleGenericError = (data) => {
+    const handleGenericError = data => {
       console.error('Global error:', data?.error || data?.message);
       setSending(false);
     };
@@ -139,10 +194,9 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
     socket.emit(WsEvents.REQ_BROADCAST, { message: msg });
   };
 
-
   // ── Plugin handlers ─────────────────────────────────────────────────
 
-  const startEdit = (plugin) => {
+  const startEdit = plugin => {
     setEditingPlugin(plugin.id);
     setEditForm({
       name: plugin.name,
@@ -161,7 +215,18 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
 
   const cancelEdit = () => {
     setEditingPlugin(null);
-    setEditForm({ name: '', description: '', category: '', icon: '', instructions: '', userConfig: {}, mcps: [], shared: false, ownerId: null, builtin: false });
+    setEditForm({
+      name: '',
+      description: '',
+      category: '',
+      icon: '',
+      instructions: '',
+      userConfig: {},
+      mcps: [],
+      shared: false,
+      ownerId: null,
+      builtin: false,
+    });
   };
 
   const saveEdit = async () => {
@@ -187,42 +252,61 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
       await api.updatePlugin(editingPlugin, payload);
       setEditingPlugin(null);
       if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to update plugin:', err); }
+    } catch (err) {
+      console.error('Failed to update plugin:', err);
+    }
   };
 
-  const handleDelete = async (pluginId) => {
+  const handleDelete = async pluginId => {
     try {
       await api.deletePlugin(pluginId);
       if (editingPlugin === pluginId) setEditingPlugin(null);
       if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to delete plugin:', err); }
+    } catch (err) {
+      console.error('Failed to delete plugin:', err);
+    }
   };
 
   const handleCreate = async () => {
     if (!newPlugin.name.trim() || !newPlugin.instructions.trim()) return;
     try {
       await api.createPlugin(newPlugin);
-      setNewPlugin({ name: '', description: '', category: 'coding', icon: '🔧', instructions: '', userConfig: {}, mcps: [], shared: false });
+      setNewPlugin({
+        name: '',
+        description: '',
+        category: 'coding',
+        icon: '🔧',
+        instructions: '',
+        userConfig: {},
+        mcps: [],
+        shared: false,
+      });
       setShowCreate(false);
       if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to create plugin:', err); }
+    } catch (err) {
+      console.error('Failed to create plugin:', err);
+    }
   };
 
   // ── MCP Explorer handlers ──────────────────────────────────────────
 
-  const handleConnectMcp = async (id) => {
+  const handleConnectMcp = async id => {
     setConnectingMcp(id);
     try {
       await api.connectMcpServer(id);
       if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to connect MCP server:', err); }
-    finally { setConnectingMcp(null); }
+    } catch (err) {
+      console.error('Failed to connect MCP server:', err);
+    } finally {
+      setConnectingMcp(null);
+    }
   };
 
-  const toggleMcpExpanded = (id) => {
+  const toggleMcpExpanded = id => {
     setExpandedMcpExplorer(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -244,12 +328,12 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
 
     // Embedded MCPs from plugins
     for (const plugin of skills) {
-      for (const mcp of (plugin.mcps || [])) {
+      for (const mcp of plugin.mcps || []) {
         if (mcp.id && seenIds.has(mcp.id)) continue;
         if (mcp.id) seenIds.add(mcp.id);
         // Find matching standalone server for status info
-        const matchingServer = mcpServers.find(s =>
-          s.url === mcp.url || (mcp.id && s.id === mcp.id)
+        const matchingServer = mcpServers.find(
+          s => s.url === mcp.url || (mcp.id && s.id === mcp.id)
         );
         result.push({
           ...mcp,
@@ -272,12 +356,16 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
     try {
       await Promise.all(agents.map(a => api.clearHistory(a.id)));
       if (onRefresh) onRefresh();
-    } catch (err) { console.error('Failed to clear chats:', err); }
+    } catch (err) {
+      console.error('Failed to clear chats:', err);
+    }
   }, [agents, onRefresh]);
 
   const handleStopAll = useCallback(() => {
     if (!socket) return;
-    agents.filter(a => a.status === 'busy').forEach(a => socket.emit(WsEvents.REQ_STOP, { agentId: a.id }));
+    agents
+      .filter(a => a.status === 'busy')
+      .forEach(a => socket.emit(WsEvents.REQ_STOP, { agentId: a.id }));
   }, [agents, socket]);
 
   const busyCount = agents.filter(a => a.status === 'busy').length;
@@ -292,500 +380,596 @@ export default function BroadcastPanel({ agents, skills = [], mcpServers = [], s
         }`}
       >
         {/* ── Left panel (main) ── */}
-        <div className={`flex flex-col overflow-hidden ${editingPlugin ? 'sm:w-[700px] flex-shrink-0' : 'flex-1'}`}>
-        {/* ── Header ─────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-dark-700 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Globe className="w-4 h-4 text-amber-400" />
-            <h3 className="font-semibold text-dark-100 text-sm">Global Settings</h3>
-            <span className="text-xs text-dark-400">({agents.length} agents)</span>
-          </div>
-          <button onClick={onClose} className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* ── Tabs ───────────────────────────────────────────────── */}
-        <div className="flex gap-1 px-5 py-2.5 border-b border-dark-700/50 flex-shrink-0">
-          {TABS.map(t => {
-            const Icon = t.icon;
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                  active
-                    ? 'bg-amber-500/15 text-amber-400'
-                    : 'text-dark-400 hover:text-dark-200 hover:bg-dark-800'
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {t.label}
-                {t.id === 'plugins' && <span className="text-xs opacity-60">({skills.length})</span>}
-                {t.id === 'actions' && busyCount > 0 && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* ── Tab Content (fills remaining space) ────────────────── */}
-        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-
-          {/* ── BROADCAST TAB ──────────────────────────────────── */}
-          {tab === 'broadcast' && (
-            <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
-              {/* Responses (scrollable, takes available space) */}
-              <div ref={responsesRef} className="flex-1 overflow-auto min-h-0 space-y-2">
-                {responses.length > 0 && (
-                  <>
-                    <p className="text-xs text-dark-400 font-medium sticky top-0 bg-dark-900 py-1">Responses:</p>
-                    {responses.map((r, i) => (
-                      <div key={i} className={`p-3 rounded-lg border text-sm ${
-                        r.error ? 'bg-red-500/5 border-red-500/20' : 'bg-dark-800/50 border-dark-700/50'
-                      }`}>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="font-medium text-dark-200">{r.agentName}</span>
-                          {r.error && <span className="text-xs text-red-400">Error</span>}
-                        </div>
-                        {r.error ? (
-                          <p className="text-xs text-red-400">{r.error}</p>
-                        ) : (
-                          <div className="markdown-content text-xs text-dark-300">
-                            <ReactMarkdown>{cleanToolSyntax(r.response)}</ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </>
-                )}
-                {responses.length === 0 && !sending && (
-                  <div className="flex-1 flex items-center justify-center h-full">
-                    <p className="text-dark-500 text-sm">Send a message to all agents at once</p>
-                  </div>
-                )}
-                {sending && (
-                  <div className="flex items-center justify-center gap-2 text-xs text-amber-400 py-8">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Broadcasting to {agents.length} agents...
-                  </div>
-                )}
-              </div>
-
-              {/* Input (pinned to bottom) */}
-              <div className="flex gap-2 flex-shrink-0">
-                <textarea
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleBroadcast();
-                    }
-                  }}
-                  className="flex-1 px-4 py-2.5 bg-dark-800 border border-amber-500/30 rounded-xl text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-amber-500 resize-none"
-                  placeholder="Type a message to broadcast to all agents..."
-                  rows={2}
-                  disabled={sending}
-                />
-                <button
-                  onClick={handleBroadcast}
-                  disabled={sending || !message.trim() || agents.length === 0}
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-dark-900 font-medium rounded-xl disabled:opacity-40 transition-colors flex items-center gap-2 self-end"
-                >
-                  {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                  <span className="hidden sm:inline">{sending ? 'Sending...' : 'Global'}</span>
-                </button>
-              </div>
+        <div
+          className={`flex flex-col overflow-hidden ${editingPlugin ? 'sm:w-[700px] flex-shrink-0' : 'flex-1'}`}
+        >
+          {/* ── Header ─────────────────────────────────────────────── */}
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-dark-700 flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <Globe className="w-4 h-4 text-amber-400" />
+              <h3 className="font-semibold text-dark-100 text-sm">Global Settings</h3>
+              <span className="text-xs text-dark-400">({agents.length} agents)</span>
             </div>
-          )}
+            <button
+              onClick={onClose}
+              className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
 
-          {/* ── PLUGINS TAB ────────────────────────────────────── */}
-          {tab === 'plugins' && (
-            <div className="flex-1 flex flex-col min-h-0">
-              {/* Sub-tab navigation */}
-              <div className="flex items-center gap-1 px-5 py-2 border-b border-dark-700/30 flex-shrink-0">
+          {/* ── Tabs ───────────────────────────────────────────────── */}
+          <div className="flex gap-1 px-5 py-2.5 border-b border-dark-700/50 flex-shrink-0">
+            {TABS.map(t => {
+              const Icon = t.icon;
+              const active = tab === t.id;
+              return (
                 <button
-                  onClick={() => setPluginSubTab('list')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    pluginSubTab === 'list'
-                      ? 'bg-indigo-500/15 text-indigo-400'
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    active
+                      ? 'bg-amber-500/15 text-amber-400'
                       : 'text-dark-400 hover:text-dark-200 hover:bg-dark-800'
                   }`}
                 >
-                  <Wrench className="w-3 h-3" />
-                  Plugins
-                  <span className="opacity-60">({skills.length})</span>
+                  <Icon className="w-3.5 h-3.5" />
+                  {t.label}
+                  {t.id === 'plugins' && (
+                    <span className="text-xs opacity-60">({skills.length})</span>
+                  )}
+                  {t.id === 'actions' && busyCount > 0 && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  )}
                 </button>
-                <button
-                  onClick={() => setPluginSubTab('mcp-explorer')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                    pluginSubTab === 'mcp-explorer'
-                      ? 'bg-emerald-500/15 text-emerald-400'
-                      : 'text-dark-400 hover:text-dark-200 hover:bg-dark-800'
-                  }`}
-                >
-                  <Search className="w-3 h-3" />
-                  MCP Explorer
-                  <span className="opacity-60">({allMcps.length})</span>
-                </button>
-              </div>
+              );
+            })}
+          </div>
 
-              {/* ── Plugins List Sub-tab ──────────────────────────── */}
-              {pluginSubTab === 'list' && (() => {
-                // Split plugins into two clear groups for the SaaS UX:
-                //  - "Mes plugins"     → plugins I created (or admin-managed built-ins for admins)
-                //  - "Plugins partagés" → plugins owned by others (or built-ins for non-admins)
-                const myPlugins = skills.filter((p) => canManagePlugin(p));
-                const sharedPlugins = skills.filter((p) => !canManagePlugin(p));
-
-                const renderPluginRow = (plugin, opts) => {
-                  const mine = opts?.mine ?? false;
-                  return (
-                    <div
-                      key={plugin.id}
-                      className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors group cursor-pointer ${
-                        editingPlugin === plugin.id
-                          ? 'bg-indigo-500/10 border-indigo-500/30'
-                          : 'bg-dark-800/30 border-dark-700/30 hover:border-dark-600'
-                      }`}
-                      onClick={() => startEdit(plugin)}
-                    >
-                      <span className="text-base flex-shrink-0">{plugin.icon}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
-                            {plugin.category}
-                          </span>
-                          {plugin.builtin && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">builtin</span>
-                          )}
-                          {mine && plugin.shared && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
-                              <Globe className="w-2.5 h-2.5" /> partagé
-                            </span>
-                          )}
-                          {mine && !plugin.shared && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600 flex items-center gap-0.5">
-                              <Lock className="w-2.5 h-2.5" /> privé
-                            </span>
-                          )}
-                          {(plugin.mcps || []).length > 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30 flex items-center gap-0.5">
-                              <Plug className="w-2.5 h-2.5" />
-                              {(plugin.mcps || []).length} MCP
-                            </span>
+          {/* ── Tab Content (fills remaining space) ────────────────── */}
+          <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+            {/* ── BROADCAST TAB ──────────────────────────────────── */}
+            {tab === 'broadcast' && (
+              <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
+                {/* Responses (scrollable, takes available space) */}
+                <div ref={responsesRef} className="flex-1 overflow-auto min-h-0 space-y-2">
+                  {responses.length > 0 && (
+                    <>
+                      <p className="text-xs text-dark-400 font-medium sticky top-0 bg-dark-900 py-1">
+                        Responses:
+                      </p>
+                      {responses.map((r, i) => (
+                        <div
+                          key={i}
+                          className={`p-3 rounded-lg border text-sm ${
+                            r.error
+                              ? 'bg-red-500/5 border-red-500/20'
+                              : 'bg-dark-800/50 border-dark-700/50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-dark-200">{r.agentName}</span>
+                            {r.error && <span className="text-xs text-red-400">Error</span>}
+                          </div>
+                          {r.error ? (
+                            <p className="text-xs text-red-400">{r.error}</p>
+                          ) : (
+                            <div className="markdown-content text-xs text-dark-300">
+                              <ReactMarkdown>{cleanToolSyntax(r.response)}</ReactMarkdown>
+                            </div>
                           )}
                         </div>
-                        <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
-                      </div>
-                      {mine && (
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-                          <button onClick={(e) => { e.stopPropagation(); handleDelete(plugin.id); }} className="p-1.5 text-dark-400 hover:text-red-400 rounded-md hover:bg-dark-700 transition-colors" title="Supprimer le plugin">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                };
-
-                return (
-                <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
-                  {/* Header */}
-                  <div className="flex items-center justify-between flex-shrink-0">
-                    <h4 className="text-sm font-medium text-dark-200 flex items-center gap-2">
-                      <Wrench className="w-4 h-4 text-indigo-400" />
-                      Plugins
-                      <span className="text-dark-400 font-normal">({skills.length})</span>
-                    </h4>
-                    <button
-                      onClick={() => { setShowCreate(!showCreate); setEditingPlugin(null); }}
-                      className="flex items-center gap-1 px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Nouveau plugin
-                    </button>
-                  </div>
-
-                  {/* Create plugin form — always configure mode */}
-                  {showCreate && (
-                    <div className="max-h-[60vh] overflow-auto rounded-lg">
-                      <PluginEditor
-                        value={newPlugin}
-                        onChange={setNewPlugin}
-                        onSubmit={handleCreate}
-                        onCancel={() => setShowCreate(false)}
-                        saving={false}
-                        submitLabel="Creer le plugin"
-                        mode="configure"
-                      />
+                      ))}
+                    </>
+                  )}
+                  {responses.length === 0 && !sending && (
+                    <div className="flex-1 flex items-center justify-center h-full">
+                      <p className="text-dark-500 text-sm">Send a message to all agents at once</p>
                     </div>
                   )}
-
-                  {/* Plugins lists (scrollable) */}
-                  <div className="flex-1 overflow-auto min-h-0 space-y-4">
-                    {/* My plugins */}
-                    <div>
-                      <div className="flex items-center gap-2 mb-1.5 px-1">
-                        <Lock className="w-3 h-3 text-indigo-400" />
-                        <h5 className="text-[11px] font-semibold uppercase tracking-wider text-dark-400">
-                          Mes plugins <span className="text-dark-500 normal-case font-normal">({myPlugins.length})</span>
-                        </h5>
-                      </div>
-                      <div className="space-y-1.5">
-                        {myPlugins.length === 0 ? (
-                          <p className="text-center text-dark-500 text-xs py-4 border border-dashed border-dark-700/50 rounded-lg">
-                            Vous n'avez pas encore créé de plugin. Cliquez sur « Nouveau plugin ».
-                          </p>
-                        ) : (
-                          myPlugins.map((p) => renderPluginRow(p, { mine: true }))
-                        )}
-                      </div>
+                  {sending && (
+                    <div className="flex items-center justify-center gap-2 text-xs text-amber-400 py-8">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Broadcasting to {agents.length} agents...
                     </div>
-
-                    {/* Shared plugins */}
-                    <div>
-                      <div className="flex items-center gap-2 mb-1.5 px-1">
-                        <Globe className="w-3 h-3 text-emerald-400" />
-                        <h5 className="text-[11px] font-semibold uppercase tracking-wider text-dark-400">
-                          Plugins partagés <span className="text-dark-500 normal-case font-normal">({sharedPlugins.length})</span>
-                        </h5>
-                      </div>
-                      <div className="space-y-1.5">
-                        {sharedPlugins.length === 0 ? (
-                          <p className="text-center text-dark-500 text-xs py-4 border border-dashed border-dark-700/50 rounded-lg">
-                            Aucun plugin partagé disponible.
-                          </p>
-                        ) : (
-                          sharedPlugins.map((p) => renderPluginRow(p, { mine: false }))
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  )}
                 </div>
-                );
-              })()}
 
-              {/* ── MCP Explorer Sub-tab ─────────────────────────── */}
-              {pluginSubTab === 'mcp-explorer' && (
-                <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
-                  <div className="flex items-center justify-between flex-shrink-0">
-                    <h4 className="text-sm font-medium text-dark-200 flex items-center gap-2">
-                      <Search className="w-4 h-4 text-emerald-400" />
-                      MCP Explorer
-                      <span className="text-dark-400 font-normal">({allMcps.length})</span>
-                    </h4>
-                    <p className="text-[11px] text-dark-500">Vue en lecture seule - editez les MCP depuis leur plugin</p>
-                  </div>
-
-                  <div className="flex-1 overflow-auto min-h-0 space-y-2">
-                    {allMcps.length === 0 && (
-                      <div className="text-center py-12">
-                        <Plug className="w-8 h-8 text-dark-600 mx-auto mb-3" />
-                        <p className="text-dark-500 text-sm">Aucun serveur MCP configure</p>
-                        <p className="text-dark-600 text-xs mt-1">Ajoutez un MCP dans la configuration d'un plugin</p>
-                      </div>
+                {/* Input (pinned to bottom) */}
+                <div className="flex gap-2 flex-shrink-0">
+                  <textarea
+                    value={message}
+                    onChange={e => setMessage(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleBroadcast();
+                      }
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-dark-800 border border-amber-500/30 rounded-xl text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-amber-500 resize-none"
+                    placeholder="Type a message to broadcast to all agents..."
+                    rows={2}
+                    disabled={sending}
+                  />
+                  <button
+                    onClick={handleBroadcast}
+                    disabled={sending || !message.trim() || agents.length === 0}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-dark-900 font-medium rounded-xl disabled:opacity-40 transition-colors flex items-center gap-2 self-end"
+                  >
+                    {sending ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
                     )}
+                    <span className="hidden sm:inline">{sending ? 'Sending...' : 'Global'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
-                    {allMcps.map((mcp) => {
-                      const expanded = expandedMcpExplorer.has(mcp.id || mcp.name);
-                      const status = mcp.status || 'disconnected';
-                      const tools = mcp.tools || [];
+            {/* ── PLUGINS TAB ────────────────────────────────────── */}
+            {tab === 'plugins' && (
+              <div className="flex-1 flex flex-col min-h-0">
+                {/* Sub-tab navigation */}
+                <div className="flex items-center gap-1 px-5 py-2 border-b border-dark-700/30 flex-shrink-0">
+                  <button
+                    onClick={() => setPluginSubTab('list')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      pluginSubTab === 'list'
+                        ? 'bg-indigo-500/15 text-indigo-400'
+                        : 'text-dark-400 hover:text-dark-200 hover:bg-dark-800'
+                    }`}
+                  >
+                    <Wrench className="w-3 h-3" />
+                    Plugins
+                    <span className="opacity-60">({skills.length})</span>
+                  </button>
+                  <button
+                    onClick={() => setPluginSubTab('mcp-explorer')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      pluginSubTab === 'mcp-explorer'
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'text-dark-400 hover:text-dark-200 hover:bg-dark-800'
+                    }`}
+                  >
+                    <Search className="w-3 h-3" />
+                    MCP Explorer
+                    <span className="opacity-60">({allMcps.length})</span>
+                  </button>
+                </div>
 
+                {/* ── Plugins List Sub-tab ──────────────────────────── */}
+                {pluginSubTab === 'list' &&
+                  (() => {
+                    // Split plugins into two clear groups for the SaaS UX:
+                    //  - "Mes plugins"     → plugins I created (or admin-managed built-ins for admins)
+                    //  - "Plugins partagés" → plugins owned by others (or built-ins for non-admins)
+                    const myPlugins = skills.filter(p => canManagePlugin(p));
+                    const sharedPlugins = skills.filter(p => !canManagePlugin(p));
+
+                    const renderPluginRow = (plugin, opts) => {
+                      const mine = opts?.mine ?? false;
                       return (
-                        <div key={mcp.id || mcp.name} className="rounded-lg border border-dark-700/30 bg-dark-800/20 hover:border-dark-600 transition-colors">
-                          <div
-                            className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
-                            onClick={() => toggleMcpExpanded(mcp.id || mcp.name)}
-                          >
-                            <span className="text-base flex-shrink-0">{mcp.icon || '🔌'}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium text-dark-200">{mcp.name}</span>
-                                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColors[status] || statusColors.disconnected}`} />
-                                <span className={`text-[10px] ${
-                                  status === 'connected' ? 'text-emerald-400' :
-                                  status === 'error' ? 'text-red-400' :
-                                  status === 'connecting' ? 'text-amber-400' :
-                                  'text-dark-500'
-                                }`}>
-                                  {statusLabels[status] || status}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-[11px] text-dark-500 font-mono truncate">{mcp.url || 'URL non configuree'}</span>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                              {mcp.source === 'plugin' && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 flex items-center gap-0.5">
-                                  {mcp.pluginIcon} {mcp.pluginName}
-                                </span>
-                              )}
-                              {mcp.source === 'standalone' && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">
-                                  standalone
-                                </span>
-                              )}
-                              <span className="text-[10px] text-dark-500">{tools.length} tool{tools.length !== 1 ? 's' : ''}</span>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleConnectMcp(mcp.id); }}
-                                disabled={!mcp.id || connectingMcp === mcp.id}
-                                className="p-1 text-dark-400 hover:text-emerald-400 rounded transition-colors disabled:opacity-30"
-                                title="Reconnecter"
+                        <div
+                          key={plugin.id}
+                          className={`flex items-center gap-3 p-2.5 rounded-lg border transition-colors group cursor-pointer ${
+                            editingPlugin === plugin.id
+                              ? 'bg-indigo-500/10 border-indigo-500/30'
+                              : 'bg-dark-800/30 border-dark-700/30 hover:border-dark-600'
+                          }`}
+                          onClick={() => startEdit(plugin)}
+                        >
+                          <span className="text-base flex-shrink-0">{plugin.icon}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-medium text-dark-200">
+                                {plugin.name}
+                              </span>
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}
                               >
-                                <RefreshCw className={`w-3 h-3 ${connectingMcp === mcp.id ? 'animate-spin' : ''}`} />
-                              </button>
-                              {expanded ? <ChevronDown className="w-3.5 h-3.5 text-dark-400" /> : <ChevronRight className="w-3.5 h-3.5 text-dark-400" />}
+                                {plugin.category}
+                              </span>
+                              {plugin.builtin && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">
+                                  builtin
+                                </span>
+                              )}
+                              {mine && plugin.shared && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
+                                  <Globe className="w-2.5 h-2.5" /> partagé
+                                </span>
+                              )}
+                              {mine && !plugin.shared && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600 flex items-center gap-0.5">
+                                  <Lock className="w-2.5 h-2.5" /> privé
+                                </span>
+                              )}
+                              {(plugin.mcps || []).length > 0 && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-emerald-500/20 text-emerald-400 border-emerald-500/30 flex items-center gap-0.5">
+                                  <Plug className="w-2.5 h-2.5" />
+                                  {(plugin.mcps || []).length} MCP
+                                </span>
+                              )}
                             </div>
+                            <p className="text-xs text-dark-500 truncate">{plugin.description}</p>
                           </div>
-
-                          {expanded && (
-                            <div className="px-3 pb-3 border-t border-dark-700/30 pt-2">
-                              {mcp.description && (
-                                <p className="text-xs text-dark-400 mb-2">{mcp.description}</p>
-                              )}
-
-                              {mcp.error && (
-                                <div className="mb-2 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/20">
-                                  <p className="text-[11px] text-red-400">Erreur: {mcp.error}</p>
-                                </div>
-                              )}
-
-                              {mcp.authMode && (
-                                <div className="mb-2 flex items-center gap-2">
-                                  <span className="text-[11px] text-dark-500">Auth:</span>
-                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
-                                    mcp.authMode === 'bearer'
-                                      ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
-                                      : 'bg-dark-600/50 text-dark-400 border-dark-600/30'
-                                  }`}>
-                                    {mcp.authMode === 'bearer' ? 'Bearer Token' : 'Aucune'}
-                                  </span>
-                                  {mcp.hasApiKey && (
-                                    <span className="text-[10px] text-emerald-400">Cle configuree</span>
-                                  )}
-                                </div>
-                              )}
-
-                              {tools.length > 0 ? (
-                                <div>
-                                  <p className="text-[11px] text-dark-500 font-medium mb-1.5">Outils disponibles ({tools.length})</p>
-                                  <div className="space-y-1">
-                                    {tools.map((tool, idx) => (
-                                      <div key={idx} className="flex items-start gap-2 px-2 py-1.5 bg-dark-900/50 rounded border border-dark-700/20">
-                                        <span className="text-[10px] text-emerald-400 font-mono mt-0.5 flex-shrink-0">{tool.name}</span>
-                                        <span className="text-[10px] text-dark-500 flex-1">{tool.description || 'Pas de description'}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              ) : (
-                                <p className="text-[11px] text-dark-500 italic">
-                                  {status === 'connected' ? 'Aucun outil expose' : 'Connectez le serveur pour decouvrir les outils'}
-                                </p>
-                              )}
+                          {mine && (
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                              <button
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  handleDelete(plugin.id);
+                                }}
+                                className="p-1.5 text-dark-400 hover:text-red-400 rounded-md hover:bg-dark-700 transition-colors"
+                                title="Supprimer le plugin"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           )}
                         </div>
                       );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+                    };
 
-          {/* ── ACTIONS TAB ────────────────────────────────────── */}
-          {tab === 'actions' && (
-            <div className="flex-1 p-5 space-y-3 overflow-auto">
-              <p className="text-xs text-dark-400 mb-1">Bulk actions applied to all {agents.length} agents</p>
+                    return (
+                      <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
+                        {/* Header */}
+                        <div className="flex items-center justify-between flex-shrink-0">
+                          <h4 className="text-sm font-medium text-dark-200 flex items-center gap-2">
+                            <Wrench className="w-4 h-4 text-indigo-400" />
+                            Plugins
+                            <span className="text-dark-400 font-normal">({skills.length})</span>
+                          </h4>
+                          <button
+                            onClick={() => {
+                              setShowCreate(!showCreate);
+                              setEditingPlugin(null);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-xs transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Nouveau plugin
+                          </button>
+                        </div>
 
-              <div className="space-y-2">
-                {/* Clear All Chats */}
-                <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <MessageSquareOff className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Clear All Chats</span>
+                        {/* Create plugin form — always configure mode */}
+                        {showCreate && (
+                          <div className="max-h-[60vh] overflow-auto rounded-lg">
+                            <PluginEditor
+                              value={newPlugin}
+                              onChange={setNewPlugin}
+                              onSubmit={handleCreate}
+                              onCancel={() => setShowCreate(false)}
+                              saving={false}
+                              submitLabel="Creer le plugin"
+                              mode="configure"
+                            />
+                          </div>
+                        )}
+
+                        {/* Plugins lists (scrollable) */}
+                        <div className="flex-1 overflow-auto min-h-0 space-y-4">
+                          {/* My plugins */}
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5 px-1">
+                              <Lock className="w-3 h-3 text-indigo-400" />
+                              <h5 className="text-[11px] font-semibold uppercase tracking-wider text-dark-400">
+                                Mes plugins{' '}
+                                <span className="text-dark-500 normal-case font-normal">
+                                  ({myPlugins.length})
+                                </span>
+                              </h5>
+                            </div>
+                            <div className="space-y-1.5">
+                              {myPlugins.length === 0 ? (
+                                <p className="text-center text-dark-500 text-xs py-4 border border-dashed border-dark-700/50 rounded-lg">
+                                  Vous n'avez pas encore créé de plugin. Cliquez sur « Nouveau
+                                  plugin ».
+                                </p>
+                              ) : (
+                                myPlugins.map(p => renderPluginRow(p, { mine: true }))
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Shared plugins */}
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5 px-1">
+                              <Globe className="w-3 h-3 text-emerald-400" />
+                              <h5 className="text-[11px] font-semibold uppercase tracking-wider text-dark-400">
+                                Plugins partagés{' '}
+                                <span className="text-dark-500 normal-case font-normal">
+                                  ({sharedPlugins.length})
+                                </span>
+                              </h5>
+                            </div>
+                            <div className="space-y-1.5">
+                              {sharedPlugins.length === 0 ? (
+                                <p className="text-center text-dark-500 text-xs py-4 border border-dashed border-dark-700/50 rounded-lg">
+                                  Aucun plugin partagé disponible.
+                                </p>
+                              ) : (
+                                sharedPlugins.map(p => renderPluginRow(p, { mine: false }))
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                {/* ── MCP Explorer Sub-tab ─────────────────────────── */}
+                {pluginSubTab === 'mcp-explorer' && (
+                  <div className="flex-1 flex flex-col min-h-0 p-5 gap-3">
+                    <div className="flex items-center justify-between flex-shrink-0">
+                      <h4 className="text-sm font-medium text-dark-200 flex items-center gap-2">
+                        <Search className="w-4 h-4 text-emerald-400" />
+                        MCP Explorer
+                        <span className="text-dark-400 font-normal">({allMcps.length})</span>
+                      </h4>
+                      <p className="text-[11px] text-dark-500">
+                        Vue en lecture seule - editez les MCP depuis leur plugin
+                      </p>
                     </div>
-                    <p className="text-xs text-dark-500">Delete conversation history for every agent</p>
-                  </div>
-                  <ConfirmButton
-                    onConfirm={handleClearAllChats}
-                    disabled={agents.length === 0}
-                    icon={MessageSquareOff}
-                    label="Clear"
-                    confirmLabel="Confirm?"
-                    className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
-                    confirmClassName="flex items-center gap-1.5 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors text-sm font-medium flex-shrink-0 animate-pulse"
-                  />
-                </div>
 
-                {/* Stop All Agents */}
-                <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <StopCircle className="w-4 h-4 text-dark-300" />
-                      <span className="text-sm font-medium text-dark-200">Stop All Agents</span>
+                    <div className="flex-1 overflow-auto min-h-0 space-y-2">
+                      {allMcps.length === 0 && (
+                        <div className="text-center py-12">
+                          <Plug className="w-8 h-8 text-dark-600 mx-auto mb-3" />
+                          <p className="text-dark-500 text-sm">Aucun serveur MCP configure</p>
+                          <p className="text-dark-600 text-xs mt-1">
+                            Ajoutez un MCP dans la configuration d'un plugin
+                          </p>
+                        </div>
+                      )}
+
+                      {allMcps.map(mcp => {
+                        const expanded = expandedMcpExplorer.has(mcp.id || mcp.name);
+                        const status = mcp.status || 'disconnected';
+                        const tools = mcp.tools || [];
+
+                        return (
+                          <div
+                            key={mcp.id || mcp.name}
+                            className="rounded-lg border border-dark-700/30 bg-dark-800/20 hover:border-dark-600 transition-colors"
+                          >
+                            <div
+                              className="flex items-center gap-2.5 px-3 py-2.5 cursor-pointer"
+                              onClick={() => toggleMcpExpanded(mcp.id || mcp.name)}
+                            >
+                              <span className="text-base flex-shrink-0">{mcp.icon || '🔌'}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium text-dark-200">
+                                    {mcp.name}
+                                  </span>
+                                  <span
+                                    className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColors[status] || statusColors.disconnected}`}
+                                  />
+                                  <span
+                                    className={`text-[10px] ${
+                                      status === 'connected'
+                                        ? 'text-emerald-400'
+                                        : status === 'error'
+                                          ? 'text-red-400'
+                                          : status === 'connecting'
+                                            ? 'text-amber-400'
+                                            : 'text-dark-500'
+                                    }`}
+                                  >
+                                    {statusLabels[status] || status}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[11px] text-dark-500 font-mono truncate">
+                                    {mcp.url || 'URL non configuree'}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                {mcp.source === 'plugin' && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 flex items-center gap-0.5">
+                                    {mcp.pluginIcon} {mcp.pluginName}
+                                  </span>
+                                )}
+                                {mcp.source === 'standalone' && (
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700 text-dark-400 border border-dark-600">
+                                    standalone
+                                  </span>
+                                )}
+                                <span className="text-[10px] text-dark-500">
+                                  {tools.length} tool{tools.length !== 1 ? 's' : ''}
+                                </span>
+                                <button
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    handleConnectMcp(mcp.id);
+                                  }}
+                                  disabled={!mcp.id || connectingMcp === mcp.id}
+                                  className="p-1 text-dark-400 hover:text-emerald-400 rounded transition-colors disabled:opacity-30"
+                                  title="Reconnecter"
+                                >
+                                  <RefreshCw
+                                    className={`w-3 h-3 ${connectingMcp === mcp.id ? 'animate-spin' : ''}`}
+                                  />
+                                </button>
+                                {expanded ? (
+                                  <ChevronDown className="w-3.5 h-3.5 text-dark-400" />
+                                ) : (
+                                  <ChevronRight className="w-3.5 h-3.5 text-dark-400" />
+                                )}
+                              </div>
+                            </div>
+
+                            {expanded && (
+                              <div className="px-3 pb-3 border-t border-dark-700/30 pt-2">
+                                {mcp.description && (
+                                  <p className="text-xs text-dark-400 mb-2">{mcp.description}</p>
+                                )}
+
+                                {mcp.error && (
+                                  <div className="mb-2 px-2 py-1.5 rounded bg-red-500/10 border border-red-500/20">
+                                    <p className="text-[11px] text-red-400">Erreur: {mcp.error}</p>
+                                  </div>
+                                )}
+
+                                {mcp.authMode && (
+                                  <div className="mb-2 flex items-center gap-2">
+                                    <span className="text-[11px] text-dark-500">Auth:</span>
+                                    <span
+                                      className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                                        mcp.authMode === 'bearer'
+                                          ? 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+                                          : 'bg-dark-600/50 text-dark-400 border-dark-600/30'
+                                      }`}
+                                    >
+                                      {mcp.authMode === 'bearer' ? 'Bearer Token' : 'Aucune'}
+                                    </span>
+                                    {mcp.hasApiKey && (
+                                      <span className="text-[10px] text-emerald-400">
+                                        Cle configuree
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+
+                                {tools.length > 0 ? (
+                                  <div>
+                                    <p className="text-[11px] text-dark-500 font-medium mb-1.5">
+                                      Outils disponibles ({tools.length})
+                                    </p>
+                                    <div className="space-y-1">
+                                      {tools.map((tool, idx) => (
+                                        <div
+                                          key={idx}
+                                          className="flex items-start gap-2 px-2 py-1.5 bg-dark-900/50 rounded border border-dark-700/20"
+                                        >
+                                          <span className="text-[10px] text-emerald-400 font-mono mt-0.5 flex-shrink-0">
+                                            {tool.name}
+                                          </span>
+                                          <span className="text-[10px] text-dark-500 flex-1">
+                                            {tool.description || 'Pas de description'}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="text-[11px] text-dark-500 italic">
+                                    {status === 'connected'
+                                      ? 'Aucun outil expose'
+                                      : 'Connectez le serveur pour decouvrir les outils'}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                    <p className="text-xs text-dark-500">
-                      {busyCount > 0
-                        ? `Interrupt ${busyCount} running agent${busyCount > 1 ? 's' : ''}`
-                        : 'No agents currently running'}
-                    </p>
                   </div>
-                  <ConfirmButton
-                    onConfirm={handleStopAll}
-                    disabled={busyCount === 0 || !socket}
-                    icon={StopCircle}
-                    label="Stop All"
-                    confirmLabel="Confirm?"
-                    className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
-                    confirmClassName="flex items-center gap-1.5 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors text-sm font-medium flex-shrink-0 animate-pulse"
-                  />
+                )}
+              </div>
+            )}
+
+            {/* ── ACTIONS TAB ────────────────────────────────────── */}
+            {tab === 'actions' && (
+              <div className="flex-1 p-5 space-y-3 overflow-auto">
+                <p className="text-xs text-dark-400 mb-1">
+                  Bulk actions applied to all {agents.length} agents
+                </p>
+
+                <div className="space-y-2">
+                  {/* Clear All Chats */}
+                  <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <MessageSquareOff className="w-4 h-4 text-dark-300" />
+                        <span className="text-sm font-medium text-dark-200">Clear All Chats</span>
+                      </div>
+                      <p className="text-xs text-dark-500">
+                        Delete conversation history for every agent
+                      </p>
+                    </div>
+                    <ConfirmButton
+                      onConfirm={handleClearAllChats}
+                      disabled={agents.length === 0}
+                      icon={MessageSquareOff}
+                      label="Clear"
+                      confirmLabel="Confirm?"
+                      className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
+                      confirmClassName="flex items-center gap-1.5 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors text-sm font-medium flex-shrink-0 animate-pulse"
+                    />
+                  </div>
+
+                  {/* Stop All Agents */}
+                  <div className="p-4 bg-dark-800/30 rounded-xl border border-dark-700/30 flex items-center justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <StopCircle className="w-4 h-4 text-dark-300" />
+                        <span className="text-sm font-medium text-dark-200">Stop All Agents</span>
+                      </div>
+                      <p className="text-xs text-dark-500">
+                        {busyCount > 0
+                          ? `Interrupt ${busyCount} running agent${busyCount > 1 ? 's' : ''}`
+                          : 'No agents currently running'}
+                      </p>
+                    </div>
+                    <ConfirmButton
+                      onConfirm={handleStopAll}
+                      disabled={busyCount === 0 || !socket}
+                      icon={StopCircle}
+                      label="Stop All"
+                      confirmLabel="Confirm?"
+                      className="flex items-center gap-1.5 px-4 py-2 bg-dark-700 text-dark-300 hover:text-dark-100 hover:bg-dark-600 rounded-lg transition-colors text-sm font-medium disabled:opacity-40 flex-shrink-0"
+                      confirmClassName="flex items-center gap-1.5 px-4 py-2 bg-red-500/20 text-red-400 hover:bg-red-500/30 rounded-lg transition-colors text-sm font-medium flex-shrink-0 animate-pulse"
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-
-        </div>
+            )}
+          </div>
         </div>
         {/* ── Right panel: Plugin editor ── */}
-        {editingPlugin && (() => {
-          const target = skills.find(s => s.id === editingPlugin);
-          const mine = canManagePlugin(target);
-          return (
-          <div className="hidden sm:flex flex-col w-[400px] border-l border-dark-700 bg-dark-850 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-dark-700 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                {mine ? <Pencil className="w-3.5 h-3.5 text-indigo-400" /> : <KeyRound className="w-3.5 h-3.5 text-amber-400" />}
-                <span className="text-sm font-semibold text-dark-100">
-                  {mine ? 'Configurer le plugin' : 'Activer mes accès'}
-                </span>
+        {editingPlugin &&
+          (() => {
+            const target = skills.find(s => s.id === editingPlugin);
+            const mine = canManagePlugin(target);
+            return (
+              <div className="hidden sm:flex flex-col w-[400px] border-l border-dark-700 bg-dark-850 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-dark-700 flex-shrink-0">
+                  <div className="flex items-center gap-2">
+                    {mine ? (
+                      <Pencil className="w-3.5 h-3.5 text-indigo-400" />
+                    ) : (
+                      <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                    )}
+                    <span className="text-sm font-semibold text-dark-100">
+                      {mine ? 'Configurer le plugin' : 'Activer mes accès'}
+                    </span>
+                  </div>
+                  <button
+                    onClick={cancelEdit}
+                    className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto">
+                  <PluginEditor
+                    value={editForm}
+                    onChange={setEditForm}
+                    onSubmit={saveEdit}
+                    onCancel={cancelEdit}
+                    saving={false}
+                    submitLabel={mine ? 'Sauvegarder' : 'Enregistrer mes accès'}
+                    mode={mine ? 'configure' : 'activate'}
+                  />
+                </div>
               </div>
-              <button onClick={cancelEdit} className="p-1.5 text-dark-400 hover:text-dark-100 hover:bg-dark-700 rounded-lg transition-colors">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-auto">
-              <PluginEditor
-                value={editForm}
-                onChange={setEditForm}
-                onSubmit={saveEdit}
-                onCancel={cancelEdit}
-                saving={false}
-                submitLabel={mine ? 'Sauvegarder' : 'Enregistrer mes accès'}
-                mode={mine ? 'configure' : 'activate'}
-              />
-            </div>
-          </div>
-          );
-        })()}
+            );
+          })()}
       </div>
     </div>
   );

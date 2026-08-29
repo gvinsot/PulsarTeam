@@ -203,6 +203,22 @@ RUN RTK_ARCH=$(uname -m | sed 's/x86_64/x86_64/' | sed 's/aarch64/aarch64/') && 
 # gosu for runtime user switching
 RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 
+# ─── No USER directive: this is deliberate ────────────────────────────────
+# Every other image in this repo drops to an unprivileged UID. This one cannot,
+# and the omission must not be "fixed" by adding `USER` here.
+#
+# The runner's isolation model is per-agent, not per-container: agent_user.py
+# assigns each agent a deterministic UID in 20000..60000, chowns its HOME to
+# that UID at 0700, and launches the CLI subprocess under it via setresuid.
+# Both operations require CAP_CHOWN / CAP_SETUID / CAP_SETGID in the parent, so
+# the server process has to start privileged. Adding `USER` collapses every
+# agent onto one shared UID and silently removes the isolation between them
+# (os.chown and Popen(user=...) start failing with EPERM).
+#
+# What contains this image instead: cap_drop ALL plus that minimal cap_add, and
+# no-new-privileges:true — see the runner services in docker-compose.yml. Deploy
+# it with an equivalent capability allowlist or not at all.
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
     CMD curl -sf http://localhost:8000/health || exit 1

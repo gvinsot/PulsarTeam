@@ -17,13 +17,17 @@
 
 // Silence-detection tuning (browser-side VAD). Exported so the external-voice
 // tab uses the same thresholds as SttSession.
-export const SILENCE_MS = 900;      // Trailing silence required to end an utterance.
-export const MIN_SPEECH_MS = 300;   // Discard utterances shorter than this.
-export const RMS_SPEECH = 0.02;     // Above → speech.
-export const RMS_SILENCE = 0.012;   // Below → silence.
+export const SILENCE_MS = 900; // Trailing silence required to end an utterance.
+export const MIN_SPEECH_MS = 300; // Discard utterances shorter than this.
+export const RMS_SPEECH = 0.02; // Above → speech.
+export const RMS_SILENCE = 0.012; // Below → silence.
 
 // Decode a PCM16 little-endian chunk into a mono AudioBuffer for playback.
-export function decodePcm16ToBuffer(ctx: AudioContext, arrayBuf: ArrayBuffer, sampleRate: number): AudioBuffer {
+export function decodePcm16ToBuffer(
+  ctx: AudioContext,
+  arrayBuf: ArrayBuffer,
+  sampleRate: number
+): AudioBuffer {
   const int16 = new Int16Array(arrayBuf);
   const float = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) float[i] = int16[i] / 0x8000;
@@ -99,7 +103,10 @@ export class SttSession {
   private stopped = false;
   private finalizeTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private config: SttConfig, private cb: SttCallbacks) {}
+  constructor(
+    private config: SttConfig,
+    private cb: SttCallbacks
+  ) {}
 
   async start(): Promise<void> {
     this.cb.onStateChange?.('listening');
@@ -119,23 +126,26 @@ export class SttSession {
         processorOptions: { targetRate: this.config.sampleRate || 16000 },
       });
       this.workletNode = node;
-      node.port.onmessage = (ev) => this.onFrame(ev);
+      node.port.onmessage = ev => this.onFrame(ev);
       source.connect(node);
 
       const stt = new WebSocket(this.config.wsUrl);
       stt.binaryType = 'arraybuffer';
       this.socket = stt;
       stt.onopen = () => {
-        stt.send(JSON.stringify({
-          type: 'session.start',
-          config: { language: this.config.language || 'fr' },
-        }));
+        stt.send(
+          JSON.stringify({
+            type: 'session.start',
+            config: { language: this.config.language || 'fr' },
+          })
+        );
       };
-      stt.onmessage = (evt) => {
+      stt.onmessage = evt => {
         try {
-          const raw = typeof evt.data === 'string'
-            ? evt.data
-            : new TextDecoder().decode(evt.data as ArrayBuffer);
+          const raw =
+            typeof evt.data === 'string'
+              ? evt.data
+              : new TextDecoder().decode(evt.data as ArrayBuffer);
           const msg = JSON.parse(raw);
           if (msg.type === 'transcript.partial') {
             this.cb.onPartial?.(msg.text || '');
@@ -183,7 +193,11 @@ export class SttSession {
     if (ws && ws.readyState === WebSocket.OPEN && !this.vad.ended) {
       this.vad.ended = true;
       this.cb.onStateChange?.('finalizing');
-      try { ws.send(JSON.stringify({ type: 'session.end' })); } catch { /* ignore */ }
+      try {
+        ws.send(JSON.stringify({ type: 'session.end' }));
+      } catch {
+        /* ignore */
+      }
       this.armFinalizeTimeout();
     } else {
       this.stop();
@@ -214,10 +228,22 @@ export class SttSession {
       clearTimeout(this.finalizeTimer);
       this.finalizeTimer = null;
     }
-    try { this.socket?.close(); } catch { /* ignore */ }
+    try {
+      this.socket?.close();
+    } catch {
+      /* ignore */
+    }
     this.socket = null;
-    try { this.workletNode?.disconnect(); } catch { /* ignore */ }
-    try { this.sourceNode?.disconnect(); } catch { /* ignore */ }
+    try {
+      this.workletNode?.disconnect();
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.sourceNode?.disconnect();
+    } catch {
+      /* ignore */
+    }
     this.workletNode = null;
     this.sourceNode = null;
     if (this.stream) {
@@ -247,7 +273,11 @@ export class SttSession {
       if (speechDur >= MIN_SPEECH_MS && silenceDur >= SILENCE_MS) {
         vad.ended = true;
         this.cb.onStateChange?.('finalizing');
-        try { ws.send(JSON.stringify({ type: 'session.end' })); } catch { /* ignore */ }
+        try {
+          ws.send(JSON.stringify({ type: 'session.end' }));
+        } catch {
+          /* ignore */
+        }
         this.armFinalizeTimeout();
       }
     }
@@ -275,7 +305,10 @@ export class TtsPlayer {
   private cancelled = false;
   private pendingSources: AudioBufferSourceNode[] = [];
 
-  constructor(private config: TtsConfig, private cb: TtsCallbacks = {}) {}
+  constructor(
+    private config: TtsConfig,
+    private cb: TtsCallbacks = {}
+  ) {}
 
   speak(text: string): void {
     if (!text || !text.trim()) {
@@ -291,17 +324,23 @@ export class TtsPlayer {
       if (this.config.voiceId) startMsg.config.voice_id = this.config.voiceId;
       ws.send(JSON.stringify(startMsg));
     };
-    ws.onmessage = (evt) => {
+    ws.onmessage = evt => {
       if (this.cancelled) return;
       if (typeof evt.data === 'string') {
         try {
           const msg = JSON.parse(evt.data);
           if (msg.type === 'session.summary' || msg.type === 'session.end') {
-            try { ws.close(); } catch { /* ignore */ }
+            try {
+              ws.close();
+            } catch {
+              /* ignore */
+            }
           } else if (msg.type === 'error') {
             this.cb.onError?.(msg.message || 'unknown TTS error');
           }
-        } catch { /* binary chunk path */ }
+        } catch {
+          /* binary chunk path */
+        }
       } else {
         this.enqueuePcm(evt.data as ArrayBuffer);
       }
@@ -324,10 +363,18 @@ export class TtsPlayer {
 
   stop(): void {
     this.cancelled = true;
-    try { this.socket?.close(); } catch { /* ignore */ }
+    try {
+      this.socket?.close();
+    } catch {
+      /* ignore */
+    }
     this.socket = null;
     for (const src of this.pendingSources) {
-      try { src.stop(); } catch { /* ignore */ }
+      try {
+        src.stop();
+      } catch {
+        /* ignore */
+      }
     }
     this.pendingSources = [];
     if (this.playCtx) {
@@ -340,26 +387,28 @@ export class TtsPlayer {
   private enqueuePcm(arrayBuf: ArrayBuffer): void {
     if (this.cancelled) return;
     const sampleRate = this.config.sampleRate || 22050;
-    this.playbackQueue = this.playbackQueue.then(async () => {
-      if (this.cancelled) return;
-      if (!this.playCtx) {
-        this.playCtx = new AudioContext({ sampleRate });
-      }
-      const ctx = this.playCtx;
-      const buf = decodePcm16ToBuffer(ctx, arrayBuf, sampleRate);
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(ctx.destination);
-      this.pendingSources.push(src);
-      await new Promise<void>(resolve => {
-        src.onended = () => {
-          this.pendingSources = this.pendingSources.filter(s => s !== src);
-          resolve();
-        };
-        src.start();
+    this.playbackQueue = this.playbackQueue
+      .then(async () => {
+        if (this.cancelled) return;
+        if (!this.playCtx) {
+          this.playCtx = new AudioContext({ sampleRate });
+        }
+        const ctx = this.playCtx;
+        const buf = decodePcm16ToBuffer(ctx, arrayBuf, sampleRate);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        this.pendingSources.push(src);
+        await new Promise<void>(resolve => {
+          src.onended = () => {
+            this.pendingSources = this.pendingSources.filter(s => s !== src);
+            resolve();
+          };
+          src.start();
+        });
+      })
+      .catch(err => {
+        console.error('[TtsPlayer] playback error', err);
       });
-    }).catch(err => {
-      console.error('[TtsPlayer] playback error', err);
-    });
   }
 }

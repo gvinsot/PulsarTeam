@@ -18,9 +18,9 @@ async function detectWorkspaceRoot() {
   const parent = path.resolve(cwd, '..');
 
   if (
-    await pathExists(path.join(parent, '.git')) ||
-    await pathExists(path.join(parent, 'client')) ||
-    await pathExists(path.join(parent, 'server'))
+    (await pathExists(path.join(parent, '.git'))) ||
+    (await pathExists(path.join(parent, 'client'))) ||
+    (await pathExists(path.join(parent, 'server')))
   ) {
     return parent;
   }
@@ -51,10 +51,7 @@ function renderTree(node, depth = 0) {
   const current = `${prefix}${icon} ${node.name || '.'}`;
 
   if (!node.children?.length) return current;
-  return [
-    current,
-    ...node.children.flatMap((child) => renderTree(child, depth + 1)),
-  ].join('\\n');
+  return [current, ...node.children.flatMap(child => renderTree(child, depth + 1))].join('\\n');
 }
 
 function summarizeOutline(outline) {
@@ -62,8 +59,8 @@ function summarizeOutline(outline) {
     return `File: ${outline.file.path}\\nNo symbols detected.`;
   }
 
-  const lines = outline.symbols.map((symbol) =>
-    `- ${symbol.kind} ${symbol.qualifiedName} (${symbol.startLine}-${symbol.endLine})`
+  const lines = outline.symbols.map(
+    symbol => `- ${symbol.kind} ${symbol.qualifiedName} (${symbol.startLine}-${symbol.endLine})`
   );
 
   return `File: ${outline.file.path}\\nLanguage: ${outline.file.language}\\n\\n${lines.join('\\n')}`;
@@ -89,10 +86,24 @@ export function createCodeIndexMcpServer(codeIndexService) {
     'index_folder',
     'Index a local folder on the server host for symbol lookup and semantic code search.',
     {
-      path: z.string().describe('Absolute path or path relative to the backend process working directory'),
+      path: z
+        .string()
+        .describe('Absolute path or path relative to the backend process working directory'),
       repoName: z.string().optional().describe('Optional display name for the indexed repo'),
-      maxFiles: z.number().int().min(1).max(20000).optional().describe('Maximum number of files to index'),
-      maxFileSize: z.number().int().min(1024).max(5 * 1024 * 1024).optional().describe('Maximum file size in bytes'),
+      maxFiles: z
+        .number()
+        .int()
+        .min(1)
+        .max(20000)
+        .optional()
+        .describe('Maximum number of files to index'),
+      maxFileSize: z
+        .number()
+        .int()
+        .min(1024)
+        .max(5 * 1024 * 1024)
+        .optional()
+        .describe('Maximum file size in bytes'),
     },
     async ({ path: folderPath, repoName, maxFiles, maxFileSize }) => {
       const repo = await codeIndexService.indexFolder({
@@ -103,10 +114,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
       });
 
       return {
-        content: [{
-          type: 'text',
-          text: `${formatRepoSummary(repo)}\\n\\nJSON:\\n${formatJson(repo)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${formatRepoSummary(repo)}\\n\\nJSON:\\n${formatJson(repo)}`,
+          },
+        ],
       };
     }
   );
@@ -115,10 +128,18 @@ export function createCodeIndexMcpServer(codeIndexService) {
     'index_workspace',
     'Index the current application workspace or one of its subpaths.',
     {
-      subpath: z.string().optional().describe('Optional subpath under the detected workspace root, e.g. "server/src"'),
+      subpath: z
+        .string()
+        .optional()
+        .describe('Optional subpath under the detected workspace root, e.g. "server/src"'),
       repoName: z.string().optional().describe('Optional display name for the indexed repo'),
       maxFiles: z.number().int().min(1).max(20000).optional(),
-      maxFileSize: z.number().int().min(1024).max(5 * 1024 * 1024).optional(),
+      maxFileSize: z
+        .number()
+        .int()
+        .min(1024)
+        .max(5 * 1024 * 1024)
+        .optional(),
     },
     async ({ subpath = '', repoName, maxFiles, maxFileSize }) => {
       const workspaceRoot = await detectWorkspaceRoot();
@@ -132,10 +153,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
       });
 
       return {
-        content: [{
-          type: 'text',
-          text: `Workspace root: ${workspaceRoot}\\nTarget path: ${targetPath}\\n\\n${formatRepoSummary(repo)}\\n\\nJSON:\\n${formatJson(repo)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Workspace root: ${workspaceRoot}\\nTarget path: ${targetPath}\\n\\n${formatRepoSummary(repo)}\\n\\nJSON:\\n${formatJson(repo)}`,
+          },
+        ],
       };
     }
   );
@@ -147,14 +170,21 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async () => {
       const repos = await codeIndexService.listRepos();
       const summary = repos.length
-        ? repos.map((repo) => `- ${repo.name} (${repo.id}) — ${repo.filesIndexed} files, ${repo.symbolsIndexed} symbols`).join('\\n')
+        ? repos
+            .map(
+              repo =>
+                `- ${repo.name} (${repo.id}) — ${repo.filesIndexed} files, ${repo.symbolsIndexed} symbols`
+            )
+            .join('\\n')
         : 'No indexed repositories.';
 
       return {
-        content: [{
-          type: 'text',
-          text: `${summary}\\n\\nJSON:\\n${formatJson(repos)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${summary}\\n\\nJSON:\\n${formatJson(repos)}`,
+          },
+        ],
       };
     }
   );
@@ -168,10 +198,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async ({ repoId }) => {
       const summary = await codeIndexService.getRepoSummary(repoId);
       return {
-        content: [{
-          type: 'text',
-          text: `${formatRepoSummary(summary)}\\n\\nJSON:\\n${formatJson(summary)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${formatRepoSummary(summary)}\\n\\nJSON:\\n${formatJson(summary)}`,
+          },
+        ],
       };
     }
   );
@@ -185,10 +217,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async ({ repoId }) => {
       const tree = await codeIndexService.getFileTree(repoId);
       return {
-        content: [{
-          type: 'text',
-          text: `${renderTree(tree)}\\n\\nJSON:\\n${formatJson(tree)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${renderTree(tree)}\\n\\nJSON:\\n${formatJson(tree)}`,
+          },
+        ],
       };
     }
   );
@@ -203,10 +237,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async ({ repoId, filePath }) => {
       const outline = await codeIndexService.getFileOutline(repoId, filePath);
       return {
-        content: [{
-          type: 'text',
-          text: `${summarizeOutline(outline)}\\n\\nJSON:\\n${formatJson(outline)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeOutline(outline)}\\n\\nJSON:\\n${formatJson(outline)}`,
+          },
+        ],
       };
     }
   );
@@ -217,16 +253,27 @@ export function createCodeIndexMcpServer(codeIndexService) {
     {
       repoId: z.string().describe('Indexed repository ID'),
       symbolId: z.string().describe('Symbol ID returned by outline/search calls'),
-      verify: z.boolean().optional().describe('Verify live source drift against current filesystem contents'),
-      contextLines: z.number().int().min(0).max(50).optional().describe('Extra context lines around the symbol'),
+      verify: z
+        .boolean()
+        .optional()
+        .describe('Verify live source drift against current filesystem contents'),
+      contextLines: z
+        .number()
+        .int()
+        .min(0)
+        .max(50)
+        .optional()
+        .describe('Extra context lines around the symbol'),
     },
     async ({ repoId, symbolId, verify = false, contextLines = 0 }) => {
       const symbol = await codeIndexService.getSymbol(repoId, symbolId, { verify, contextLines });
       return {
-        content: [{
-          type: 'text',
-          text: `Symbol: ${symbol.qualifiedName}\\nKind: ${symbol.kind}\\nFile: ${symbol.filePath}\\nLines: ${symbol.startLine}-${symbol.endLine}\\nDrift detected: ${symbol.driftDetected ? 'yes' : 'no'}\\n\\nSource:\\n${symbol.source}\\n\\nJSON:\\n${formatJson(symbol)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Symbol: ${symbol.qualifiedName}\\nKind: ${symbol.kind}\\nFile: ${symbol.filePath}\\nLines: ${symbol.startLine}-${symbol.endLine}\\nDrift detected: ${symbol.driftDetected ? 'yes' : 'no'}\\n\\nSource:\\n${symbol.source}\\n\\nJSON:\\n${formatJson(symbol)}`,
+          },
+        ],
       };
     }
   );
@@ -237,16 +284,21 @@ export function createCodeIndexMcpServer(codeIndexService) {
     {
       repoId: z.string().describe('Indexed repository ID'),
       query: z.string().describe('Search query'),
-      kind: z.enum(['function', 'class', 'method']).optional().describe('Optional symbol kind filter'),
+      kind: z
+        .enum(['function', 'class', 'method'])
+        .optional()
+        .describe('Optional symbol kind filter'),
       topK: z.number().int().min(1).max(50).optional().describe('Maximum number of results'),
     },
     async ({ repoId, query, kind, topK = 10 }) => {
       const results = await codeIndexService.searchSymbols(repoId, { query, kind, topK });
       return {
-        content: [{
-          type: 'text',
-          text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+          },
+        ],
       };
     }
   );
@@ -262,10 +314,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async ({ repoId, query, topK = 10 }) => {
       const results = await codeIndexService.searchSemantic(repoId, { query, topK });
       return {
-        content: [{
-          type: 'text',
-          text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+          },
+        ],
       };
     }
   );
@@ -281,10 +335,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async ({ repoId, query, topK = 10 }) => {
       const results = await codeIndexService.searchText(repoId, { query, topK });
       return {
-        content: [{
-          type: 'text',
-          text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `${summarizeSearchResults(results)}\\n\\nJSON:\\n${formatJson(results)}`,
+          },
+        ],
       };
     }
   );
@@ -294,18 +350,29 @@ export function createCodeIndexMcpServer(codeIndexService) {
     'Incrementally update specific files in an indexed repository without full re-indexing.',
     {
       repoId: z.string().describe('Indexed repository ID'),
-      files: z.array(z.object({
-        path: z.string().describe('Relative file path (posix-style, e.g. "src/index.js")'),
-        content: z.string().optional().describe('New file content — if omitted, the file is read from disk'),
-      })).min(1).max(100).describe('Files to update'),
+      files: z
+        .array(
+          z.object({
+            path: z.string().describe('Relative file path (posix-style, e.g. "src/index.js")'),
+            content: z
+              .string()
+              .optional()
+              .describe('New file content — if omitted, the file is read from disk'),
+          })
+        )
+        .min(1)
+        .max(100)
+        .describe('Files to update'),
     },
     async ({ repoId, files }) => {
       const result = await codeIndexService.updateFiles(repoId, files);
       return {
-        content: [{
-          type: 'text',
-          text: `Updated index ${repoId}: +${result.added} added, ~${result.updated} updated, -${result.removed} removed\\n\\nJSON:\\n${formatJson(result)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Updated index ${repoId}: +${result.added} added, ~${result.updated} updated, -${result.removed} removed\\n\\nJSON:\\n${formatJson(result)}`,
+          },
+        ],
       };
     }
   );
@@ -319,10 +386,12 @@ export function createCodeIndexMcpServer(codeIndexService) {
     async ({ repoId }) => {
       const result = await codeIndexService.invalidate(repoId);
       return {
-        content: [{
-          type: 'text',
-          text: `Deleted indexed repo ${repoId}.\\n\\nJSON:\\n${formatJson(result)}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Deleted indexed repo ${repoId}.\\n\\nJSON:\\n${formatJson(result)}`,
+          },
+        ],
       };
     }
   );

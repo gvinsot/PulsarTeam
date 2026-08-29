@@ -25,13 +25,18 @@ function rowToRepo(row: any): DerivedRepo {
 }
 
 /** Distinct repos in use by non-deleted tasks across accessible boards of one project. */
-export async function getReposForProject(projectId: string, userId: string | null, role: string): Promise<DerivedRepo[]> {
+export async function getReposForProject(
+  projectId: string,
+  userId: string | null,
+  role: string
+): Promise<DerivedRepo[]> {
   const pool = getPool();
   if (!pool) return [];
   if (role !== 'admin' && !userId) return [];
-  const accessFilter = role === 'admin'
-    ? ''
-    : ` AND (
+  const accessFilter =
+    role === 'admin'
+      ? ''
+      : ` AND (
           b.user_id = $2
           OR EXISTS (
             SELECT 1 FROM board_shares bs
@@ -72,7 +77,10 @@ export async function getReposForBoard(boardId: string): Promise<DerivedRepo[]> 
  * Distinct repos used across the boards a user has access to (admin = all).
  * Powers global pickers (Add Agent, Broadcast).
  */
-export async function getAccessibleBoardRepos(userId: string | null, role: string): Promise<DerivedRepo[]> {
+export async function getAccessibleBoardRepos(
+  userId: string | null,
+  role: string
+): Promise<DerivedRepo[]> {
   const pool = getPool();
   if (!pool) return [];
   if (role === 'admin' || !userId) {

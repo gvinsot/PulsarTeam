@@ -1,6 +1,9 @@
 import express from 'express';
 import { resolveAccessToken } from '../services/database.js';
-import { getMicrosoftOAuthConfig, MICROSOFT_PLUGIN_REDIRECT_PATH } from '../services/microsoftOAuthConfig.js';
+import {
+  getMicrosoftOAuthConfig,
+  MICROSOFT_PLUGIN_REDIRECT_PATH,
+} from '../services/microsoftOAuthConfig.js';
 import type { MicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
 import { generateMicrosoftOAuthState } from './microsoftOAuth.js';
 import { makeRefresh, oauthProviderRoutes } from './oauthProviderRoutes.js';
@@ -23,7 +26,8 @@ const onedriveSpec: OAuthProviderSpec<MicrosoftOAuthConfig> = {
   provider: 'onedrive',
   label: 'OneDrive',
   getConfig: getMicrosoftOAuthConfig,
-  notConfiguredError: 'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.',
+  notConfiguredError:
+    'Microsoft OAuth not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.',
   refreshNotConfiguredError: 'OneDrive not configured',
   refreshTokenUrl: (record, config) => {
     // Si le token vient du flow consumer (cf. /auth-url?consumer=1), le refresh

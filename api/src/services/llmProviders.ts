@@ -16,7 +16,7 @@ function tempParam(options: { temperature?: number | null }): { temperature?: nu
 // content format when images are present.
 
 interface ChatImage {
-  data: string;      // base64 encoded image data (no data-URL prefix)
+  data: string; // base64 encoded image data (no data-URL prefix)
   mediaType: string; // e.g. "image/png", "image/jpeg"
 }
 
@@ -27,7 +27,7 @@ function buildClaudeContent(text: string, images?: ChatImage[]): any {
   for (const img of images) {
     parts.push({
       type: 'image',
-      source: { type: 'base64', media_type: img.mediaType, data: img.data }
+      source: { type: 'base64', media_type: img.mediaType, data: img.data },
     });
   }
   if (text) parts.push({ type: 'text', text });
@@ -41,7 +41,7 @@ function buildOpenAIContent(text: string, images?: ChatImage[]): any {
   for (const img of images) {
     parts.push({
       type: 'image_url',
-      image_url: { url: `data:${img.mediaType};base64,${img.data}` }
+      image_url: { url: `data:${img.mediaType};base64,${img.data}` },
     });
   }
   if (text) parts.push({ type: 'text', text });
@@ -87,7 +87,7 @@ function defaultMapDone(usage: any): StreamDone {
 async function* consumeOpenAIStream(
   stream: AsyncIterable<any>,
   signal: AbortSignal | undefined,
-  mapDone: (usage: any) => StreamDone = defaultMapDone,
+  mapDone: (usage: any) => StreamDone = defaultMapDone
 ): AsyncGenerator<any> {
   let finishReason: string | null = null;
   for await (const chunk of stream) {
@@ -163,7 +163,9 @@ async function ollamaFetchWithRetry(
       // Transient network / timeout errors — retry
       if (attempt < maxRetries) {
         const delay = OLLAMA_BASE_DELAY_MS * Math.pow(2, attempt);
-        console.log(`⚠️  [Ollama] ${err.message} — retry ${attempt + 1}/${maxRetries} in ${delay}ms`);
+        console.log(
+          `⚠️  [Ollama] ${err.message} — retry ${attempt + 1}/${maxRetries} in ${delay}ms`
+        );
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
@@ -200,7 +202,7 @@ export class OllamaProvider {
         const res = await fetch(`${this.baseUrl}/api/pull`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: this.model, stream: false })
+          body: JSON.stringify({ model: this.model, stream: false }),
         });
         if (!res.ok) {
           const text = await res.text();
@@ -236,11 +238,17 @@ export class OllamaProvider {
 
   // POST to /v1/chat/completions with the 404 → auto-pull → retry recovery.
   private async _completionsRequest(body: any, signal: AbortSignal | null): Promise<Response> {
-    const doFetch = () => ollamaFetchWithRetry(`${this.baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }, OLLAMA_MAX_RETRIES, signal);
+    const doFetch = () =>
+      ollamaFetchWithRetry(
+        `${this.baseUrl}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        OLLAMA_MAX_RETRIES,
+        signal
+      );
 
     let res = await doFetch();
     // Auto-pull model on 404 and retry
@@ -267,8 +275,8 @@ export class OllamaProvider {
       provider: 'ollama',
       usage: {
         inputTokens: data.usage?.prompt_tokens || 0,
-        outputTokens: data.usage?.completion_tokens || 0
-      }
+        outputTokens: data.usage?.completion_tokens || 0,
+      },
     };
   }
 
@@ -290,17 +298,22 @@ export class OllamaProvider {
     const resetIdleTimer = (): void => {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
-        if (idleReject) idleReject(new Error('Ollama stream idle timeout — no data received for 5 minutes'));
+        if (idleReject)
+          idleReject(new Error('Ollama stream idle timeout — no data received for 5 minutes'));
       }, OLLAMA_STREAM_IDLE_TIMEOUT_MS);
     };
-    const clearIdleTimer = (): void => { if (idleTimer) clearTimeout(idleTimer); };
+    const clearIdleTimer = (): void => {
+      if (idleTimer) clearTimeout(idleTimer);
+    };
 
     try {
       while (true) {
         // Race reader.read() against the idle timeout
         resetIdleTimer();
         const readPromise = reader.read();
-        const idlePromise = new Promise<never>((_, reject) => { idleReject = reject; });
+        const idlePromise = new Promise<never>((_, reject) => {
+          idleReject = reject;
+        });
         const { done, value } = await Promise.race([readPromise, idlePromise]);
         if (done) break;
 
@@ -323,8 +336,8 @@ export class OllamaProvider {
               finishReason: finishReason || 'stop',
               usage: {
                 inputTokens: totalInputTokens,
-                outputTokens: totalOutputTokens
-              }
+                outputTokens: totalOutputTokens,
+              },
             };
             continue;
           }
@@ -381,10 +394,12 @@ export class ClaudeProvider {
 
   async chat(messages: any[], options: any = {}): Promise<any> {
     const systemMsg = messages.find(m => m.role === 'system');
-    const chatMessages = messages.filter(m => m.role !== 'system').map(m => ({
-      role: m.role === 'user' ? 'user' : 'assistant',
-      content: buildClaudeContent(m.content, m.images)
-    }));
+    const chatMessages = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: buildClaudeContent(m.content, m.images),
+      }));
 
     // Ensure messages alternate correctly
     const sanitized = this._sanitizeMessages(chatMessages);
@@ -405,17 +420,19 @@ export class ClaudeProvider {
       provider: 'claude',
       usage: {
         inputTokens: response.usage?.input_tokens || 0,
-        outputTokens: response.usage?.output_tokens || 0
-      }
+        outputTokens: response.usage?.output_tokens || 0,
+      },
     };
   }
 
   async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const systemMsg = messages.find(m => m.role === 'system');
-    const chatMessages = messages.filter(m => m.role !== 'system').map(m => ({
-      role: m.role === 'user' ? 'user' : 'assistant',
-      content: buildClaudeContent(m.content, m.images)
-    }));
+    const chatMessages = messages
+      .filter(m => m.role !== 'system')
+      .map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: buildClaudeContent(m.content, m.images),
+      }));
 
     const sanitized = this._sanitizeMessages(chatMessages);
 
@@ -453,19 +470,21 @@ export class ClaudeProvider {
       finishReason: finalMessage.stop_reason === 'max_tokens' ? 'length' : 'stop',
       usage: {
         inputTokens: finalMessage.usage?.input_tokens || 0,
-        outputTokens: finalMessage.usage?.output_tokens || 0
-      }
+        outputTokens: finalMessage.usage?.output_tokens || 0,
+      },
     };
   }
 
   async ping(): Promise<boolean> {
     try {
       // Simple validation - try a minimal request
-      const response = await this.rateLimiter.schedule(() => this.client.messages.create({
-        model: this.model,
-        max_tokens: 10,
-        messages: [{ role: 'user', content: 'ping' }]
-      }));
+      const response = await this.rateLimiter.schedule(() =>
+        this.client.messages.create({
+          model: this.model,
+          max_tokens: 10,
+          messages: [{ role: 'user', content: 'ping' }],
+        })
+      );
       return !!response;
     } catch {
       return false;
@@ -503,8 +522,14 @@ export class ClaudeProvider {
 // ─── OpenAI Provider ────────────────────────────────────────────────────────
 // Completion-only models (legacy, use /v1/completions endpoint)
 const OPENAI_COMPLETION_MODELS = [
-  'gpt-3.5-turbo-instruct', 'davinci-002', 'babbage-002',
-  'text-davinci-003', 'text-davinci-002', 'text-curie-001', 'text-babbage-001', 'text-ada-001'
+  'gpt-3.5-turbo-instruct',
+  'davinci-002',
+  'babbage-002',
+  'text-davinci-003',
+  'text-davinci-002',
+  'text-curie-001',
+  'text-babbage-001',
+  'text-ada-001',
 ];
 
 // Reasoning models: no temperature support, use 'developer' role instead of 'system'
@@ -538,7 +563,7 @@ export class OpenAIProvider {
     const reasoning = this._isReasoning(options);
     return messages.map(m => ({
       role: reasoning && m.role === 'system' ? 'developer' : m.role,
-      content: buildOpenAIContent(m.content, m.images)
+      content: buildOpenAIContent(m.content, m.images),
     }));
   }
 
@@ -579,8 +604,8 @@ export class OpenAIProvider {
       provider: 'openai',
       usage: {
         inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0
-      }
+        outputTokens: response.usage?.completion_tokens || 0,
+      },
     };
   }
 
@@ -608,18 +633,21 @@ export class OpenAIProvider {
       provider: 'openai',
       usage: {
         inputTokens: response.usage?.input_tokens || 0,
-        outputTokens: response.usage?.output_tokens || 0
-      }
+        outputTokens: response.usage?.output_tokens || 0,
+      },
     };
   }
 
   async _completionChat(messages: any[], options: any = {}): Promise<any> {
     // Convert messages to a single prompt for completion models
-    const prompt = messages.map(m => {
-      if (m.role === 'system') return `System: ${m.content}`;
-      if (m.role === 'user') return `Human: ${m.content}`;
-      return `Assistant: ${m.content}`;
-    }).join('\\n\\n') + '\\n\\nAssistant:';
+    const prompt =
+      messages
+        .map(m => {
+          if (m.role === 'system') return `System: ${m.content}`;
+          if (m.role === 'user') return `Human: ${m.content}`;
+          return `Assistant: ${m.content}`;
+        })
+        .join('\\n\\n') + '\\n\\nAssistant:';
 
     const response = await this.client.completions.create({
       model: this.model,
@@ -634,14 +662,16 @@ export class OpenAIProvider {
       provider: 'openai',
       usage: {
         inputTokens: response.usage?.prompt_tokens || 0,
-        outputTokens: response.usage?.completion_tokens || 0
-      }
+        outputTokens: response.usage?.completion_tokens || 0,
+      },
     };
   }
 
   async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const systemMsg = messages.find(m => m.role === 'system');
-    console.log(`🔌 [OpenAI] chatStream model=${this.model} | messages=${messages.length} | systemPrompt=${systemMsg ? systemMsg.content.length + ' chars' : 'NONE'} | useResponsesAPI=${this.useResponsesAPI} | isReasoning=${this._isReasoning(options)}`);
+    console.log(
+      `🔌 [OpenAI] chatStream model=${this.model} | messages=${messages.length} | systemPrompt=${systemMsg ? systemMsg.content.length + ' chars' : 'NONE'} | useResponsesAPI=${this.useResponsesAPI} | isReasoning=${this._isReasoning(options)}`
+    );
     if (this.isCompletionModel) {
       yield* this._completionStream(messages, options);
       return;
@@ -654,7 +684,9 @@ export class OpenAIProvider {
       yield* this._chatCompletionStream(messages, options);
     } catch (err: any) {
       if (err.status === 404) {
-        console.log(`🔌 [OpenAI] Chat Completions 404 for ${this.model} — switching to Responses API`);
+        console.log(
+          `🔌 [OpenAI] Chat Completions 404 for ${this.model} — switching to Responses API`
+        );
         this.useResponsesAPI = true;
         yield* this._responsesChatStream(messages, options);
       } else {
@@ -722,8 +754,8 @@ export class OpenAIProvider {
           finishReason: status === 'incomplete' ? 'length' : 'stop',
           usage: {
             inputTokens: (event as any).response?.usage?.input_tokens || 0,
-            outputTokens: (event as any).response?.usage?.output_tokens || 0
-          }
+            outputTokens: (event as any).response?.usage?.output_tokens || 0,
+          },
         };
       }
     }
@@ -731,11 +763,14 @@ export class OpenAIProvider {
 
   async *_completionStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     // Convert messages to a single prompt for completion models
-    const prompt = messages.map(m => {
-      if (m.role === 'system') return `System: ${m.content}`;
-      if (m.role === 'user') return `Human: ${m.content}`;
-      return `Assistant: ${m.content}`;
-    }).join('\\n\\n') + '\\n\\nAssistant:';
+    const prompt =
+      messages
+        .map(m => {
+          if (m.role === 'system') return `System: ${m.content}`;
+          if (m.role === 'user') return `Human: ${m.content}`;
+          return `Assistant: ${m.content}`;
+        })
+        .join('\\n\\n') + '\\n\\nAssistant:';
 
     const stream = await this.client.completions.create({
       model: this.model,
@@ -757,7 +792,7 @@ export class OpenAIProvider {
     yield {
       type: 'done',
       finishReason: 'stop',
-      usage: { inputTokens: 0, outputTokens: totalTokens }
+      usage: { inputTokens: 0, outputTokens: totalTokens },
     };
   }
 
@@ -819,7 +854,15 @@ export class VLLMProvider {
   // override it while reusing the identical OpenAI-compatible request wiring.
   providerName = 'vllm';
 
-  constructor(baseUrl: string, model: string, apiKey: string, agentId: string | null = null, ownerId: string | null = null, permissions: any = null, llmConfig: any = null) {
+  constructor(
+    baseUrl: string,
+    model: string,
+    apiKey: string,
+    agentId: string | null = null,
+    ownerId: string | null = null,
+    permissions: any = null,
+    llmConfig: any = null
+  ) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.model = model;
     this.agentId = agentId;
@@ -867,7 +910,7 @@ export class VLLMProvider {
     const totalTokens = response.usage?.total_tokens || 0;
     const usage: any = {
       inputTokens: promptTokens || totalTokens,
-      outputTokens: completionTokens
+      outputTokens: completionTokens,
     };
     // Forward cost_usd extension (e.g. from coder-service / Claude Paid Plan)
     if ((response.usage as any)?.cost_usd != null) {
@@ -878,7 +921,7 @@ export class VLLMProvider {
       content: response.choices[0]?.message?.content || '',
       model: this.model,
       provider: this.providerName,
-      usage
+      usage,
     };
   }
 
@@ -982,25 +1025,16 @@ export function createProvider(config: any): any {
       config.agentId || null,
       config.ownerId || null,
       config.permissions || null,
-      config.llmConfig || null,
+      config.llmConfig || null
     );
   }
   switch (config.provider) {
     case 'ollama':
-      return new OllamaProvider(
-        config.endpoint || 'http://localhost:11434',
-        config.model
-      );
+      return new OllamaProvider(config.endpoint || 'http://localhost:11434', config.model);
     case 'claude':
-      return new ClaudeProvider(
-        config.apiKey,
-        config.model
-      );
+      return new ClaudeProvider(config.apiKey, config.model);
     case 'openai':
-      return new OpenAIProvider(
-        config.apiKey,
-        config.model
-      );
+      return new OpenAIProvider(config.apiKey, config.model);
     case 'vllm':
       return new VLLMProvider(
         config.endpoint || 'http://localhost:8000',
@@ -1019,10 +1053,7 @@ export function createProvider(config: any): any {
         config.permissions || null
       );
     case 'mistral':
-      return new MistralProvider(
-        config.apiKey,
-        config.model
-      );
+      return new MistralProvider(config.apiKey, config.model);
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
   }

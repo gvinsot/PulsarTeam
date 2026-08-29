@@ -1,16 +1,45 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import {
-  Chart as ChartJS, CategoryScale, LinearScale, BarElement, LineElement,
-  PointElement, Title, Tooltip, Legend, Filler
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler,
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
 import { api } from '../api';
-import { Bug, Sparkles, Wrench, ArrowUpCircle, BookOpen, HelpCircle, Layers, Clock, TrendingUp, RefreshCw } from 'lucide-react';
+import {
+  Bug,
+  Sparkles,
+  Wrench,
+  ArrowUpCircle,
+  BookOpen,
+  HelpCircle,
+  Layers,
+  Clock,
+  TrendingUp,
+  RefreshCw,
+} from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import AgentTimeChart from './AgentTimeChart';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend, Filler);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 function getChartColors(theme) {
   if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
@@ -18,13 +47,13 @@ function getChartColors(theme) {
 }
 
 const TYPE_META = {
-  bug:           { label: 'Bugs',          icon: Bug,           color: 'text-red-400' },
-  feature:       { label: 'Features',      icon: Sparkles,      color: 'text-emerald-400' },
-  technical:     { label: 'Technical',     icon: Wrench,        color: 'text-blue-400' },
-  improvement:   { label: 'Improvements',  icon: ArrowUpCircle, color: 'text-violet-400' },
-  documentation: { label: 'Documentation', icon: BookOpen,      color: 'text-amber-400' },
-  other:         { label: 'Other',         icon: HelpCircle,    color: 'text-slate-400' },
-  untyped:       { label: 'Untyped',       icon: Layers,        color: 'text-dark-400' },
+  bug: { label: 'Bugs', icon: Bug, color: 'text-red-400' },
+  feature: { label: 'Features', icon: Sparkles, color: 'text-emerald-400' },
+  technical: { label: 'Technical', icon: Wrench, color: 'text-blue-400' },
+  improvement: { label: 'Improvements', icon: ArrowUpCircle, color: 'text-violet-400' },
+  documentation: { label: 'Documentation', icon: BookOpen, color: 'text-amber-400' },
+  other: { label: 'Other', icon: HelpCircle, color: 'text-slate-400' },
+  untyped: { label: 'Untyped', icon: Layers, color: 'text-dark-400' },
 };
 
 function formatDuration(ms) {
@@ -42,7 +71,11 @@ function formatDuration(ms) {
 }
 
 // Shape of GET /api/agents/tasks/stats (see api/src/services/agentManager/taskStats.ts)
-interface DurationStats { avg: number; median: number; count: number }
+interface DurationStats {
+  avg: number;
+  median: number;
+  count: number;
+}
 interface ProjectTaskStats {
   total: number;
   byType: Record<string, number>;
@@ -63,8 +96,15 @@ export default function ProjectStats({ projectName }) {
       legend: { labels: { color: cc.legend, font: { size: 11 } } },
     },
     scales: {
-      x: { ticks: { color: cc.tick, font: { size: 10 }, maxRotation: 45 }, grid: { color: cc.grid } },
-      y: { ticks: { color: cc.tick, font: { size: 10 } }, grid: { color: cc.grid }, beginAtZero: true },
+      x: {
+        ticks: { color: cc.tick, font: { size: 10 }, maxRotation: 45 },
+        grid: { color: cc.grid },
+      },
+      y: {
+        ticks: { color: cc.tick, font: { size: 10 } },
+        grid: { color: cc.grid },
+        beginAtZero: true,
+      },
     },
   };
   const [stats, setStats] = useState<ProjectTaskStats | null>(null);
@@ -88,7 +128,9 @@ export default function ProjectStats({ projectName }) {
     }
   }, [projectName, days]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   if (loading && !stats) {
     return (
@@ -102,7 +144,7 @@ export default function ProjectStats({ projectName }) {
 
   if (!stats || !timeseries) return null;
 
-  const formatLabel = (d) => d?.slice(5) || '';
+  const formatLabel = d => d?.slice(5) || '';
 
   // Created vs Resolved chart
   const createdResolvedData = {
@@ -135,7 +177,9 @@ export default function ProjectStats({ projectName }) {
     datasets: [
       {
         label: 'Avg Resolution Time (hours)',
-        data: (timeseries.resolutionTimeEvolution || []).map(d => Math.round(d.avgMs / 3600000 * 10) / 10),
+        data: (timeseries.resolutionTimeEvolution || []).map(
+          d => Math.round((d.avgMs / 3600000) * 10) / 10
+        ),
         borderColor: '#6366f1',
         backgroundColor: 'rgba(99,102,241,0.15)',
         fill: true,
@@ -151,7 +195,8 @@ export default function ProjectStats({ projectName }) {
       ...chartOpts.plugins,
       tooltip: {
         callbacks: {
-          label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}h (${ctx.raw > 0 ? formatDuration(ctx.raw * 3600000) : '—'})`,
+          label: ctx =>
+            `${ctx.dataset.label}: ${ctx.parsed.y}h (${ctx.raw > 0 ? formatDuration(ctx.raw * 3600000) : '—'})`,
         },
       },
     },
@@ -173,7 +218,9 @@ export default function ProjectStats({ projectName }) {
     ],
   };
 
-  const hasCreatedResolved = (timeseries.createdVsResolved || []).some(d => d.created > 0 || d.resolved > 0);
+  const hasCreatedResolved = (timeseries.createdVsResolved || []).some(
+    d => d.created > 0 || d.resolved > 0
+  );
   const hasResolutionTime = (timeseries.resolutionTimeEvolution || []).length > 0;
   const hasOpenData = (timeseries.openOverTime || []).some(d => d.open > 0);
 
@@ -192,7 +239,11 @@ export default function ProjectStats({ projectName }) {
             <option value={30}>30 days</option>
             <option value={90}>90 days</option>
           </select>
-          <button onClick={loadData} className="text-dark-400 hover:text-dark-100 p-1" title="Refresh">
+          <button
+            onClick={loadData}
+            className="text-dark-400 hover:text-dark-100 p-1"
+            title="Refresh"
+          >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -201,13 +252,20 @@ export default function ProjectStats({ projectName }) {
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <MiniCard label="Total" value={stats.total} />
-        {Object.entries(stats.byType || {}).filter(([, count]) => count > 0).map(([type, count]) => {
-          const meta = TYPE_META[type] || { label: type, icon: Layers, color: 'text-dark-400' };
-          const Icon = meta.icon;
-          return (
-            <MiniCard key={type} label={meta.label} value={count} icon={<Icon size={12} className={meta.color} />} />
-          );
-        })}
+        {Object.entries(stats.byType || {})
+          .filter(([, count]) => count > 0)
+          .map(([type, count]) => {
+            const meta = TYPE_META[type] || { label: type, icon: Layers, color: 'text-dark-400' };
+            const Icon = meta.icon;
+            return (
+              <MiniCard
+                key={type}
+                label={meta.label}
+                value={count}
+                icon={<Icon size={12} className={meta.color} />}
+              />
+            );
+          })}
         <MiniCard
           label="Avg Resolution"
           value={formatDuration(stats.resolution?.avg)}
@@ -230,10 +288,16 @@ export default function ProjectStats({ projectName }) {
           </h4>
           <div className="h-52">
             {hasCreatedResolved ? (
-              <Bar data={createdResolvedData} options={{
-                ...chartOpts,
-                plugins: { ...chartOpts.plugins, legend: { ...chartOpts.plugins.legend, position: 'top' } },
-              }} />
+              <Bar
+                data={createdResolvedData}
+                options={{
+                  ...chartOpts,
+                  plugins: {
+                    ...chartOpts.plugins,
+                    legend: { ...chartOpts.plugins.legend, position: 'top' },
+                  },
+                }}
+              />
             ) : (
               <EmptyChart />
             )}
@@ -262,11 +326,7 @@ export default function ProjectStats({ projectName }) {
             Open Tickets Over Time
           </h4>
           <div className="h-44">
-            {hasOpenData ? (
-              <Line data={openData} options={chartOpts} />
-            ) : (
-              <EmptyChart />
-            )}
+            {hasOpenData ? <Line data={openData} options={chartOpts} /> : <EmptyChart />}
           </div>
         </div>
       </div>
@@ -293,7 +353,15 @@ export default function ProjectStats({ projectName }) {
   );
 }
 
-function MiniCard({ label, value, icon }: { label: ReactNode; value: ReactNode; icon?: ReactNode }) {
+function MiniCard({
+  label,
+  value,
+  icon,
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  icon?: ReactNode;
+}) {
   return (
     <div className="bg-dark-700/50 rounded-lg px-3 py-2">
       <div className="text-xs text-dark-400 flex items-center gap-1 mb-0.5">

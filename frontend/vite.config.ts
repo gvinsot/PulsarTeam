@@ -9,9 +9,9 @@ export default defineConfig({
         manualChunks: {
           vendor: ['react', 'react-dom'],
           icons: ['lucide-react'],
-        }
-      }
-    }
+        },
+      },
+    },
   },
   server: {
     port: 5173,
@@ -19,8 +19,8 @@ export default defineConfig({
       '/api': 'http://localhost:3001',
       '/socket.io': {
         target: 'http://localhost:3001',
-        ws: true
-      }
-    }
-  }
+        ws: true,
+      },
+    },
+  },
 });

@@ -16,7 +16,11 @@ export async function getSettingAsync(key) {
   try {
     const result = await pool.query('SELECT value FROM settings WHERE key = $1', [key]);
     if (result.rows.length === 0) return null;
-    try { return JSON.parse(result.rows[0].value); } catch { return result.rows[0].value; }
+    try {
+      return JSON.parse(result.rows[0].value);
+    } catch {
+      return result.rows[0].value;
+    }
   } catch (err) {
     console.error('Failed to get setting:', err.message);
     return null;
@@ -46,7 +50,11 @@ export async function loadSettingsCache() {
   try {
     const result = await pool.query('SELECT key, value FROM settings');
     for (const row of result.rows) {
-      try { _settingsCache[row.key] = JSON.parse(row.value); } catch { _settingsCache[row.key] = row.value; }
+      try {
+        _settingsCache[row.key] = JSON.parse(row.value);
+      } catch {
+        _settingsCache[row.key] = row.value;
+      }
     }
   } catch (err) {
     console.error('Failed to load settings cache:', err.message);

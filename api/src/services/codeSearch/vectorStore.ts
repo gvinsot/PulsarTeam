@@ -29,7 +29,9 @@ async function tryCandidates(candidates: Array<() => any>, errorMessage: string)
 }
 
 function sanitizeCollectionName(value: any): string {
-  return String(value).replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 120);
+  return String(value)
+    .replace(/[^a-zA-Z0-9_-]+/g, '-')
+    .slice(0, 120);
 }
 
 function normalizeResults(results: any): Array<{ id: any; score: number; payload: any }> {
@@ -37,12 +39,12 @@ function normalizeResults(results: any): Array<{ id: any; score: number; payload
   if (!Array.isArray(list)) return [];
 
   return list
-    .map((item) => ({
+    .map(item => ({
       id: item?.id || item?.docId || item?.doc?.id || item?._id || null,
       score: Number(item?.score ?? item?.similarity ?? item?.distance ?? 0),
       payload: item,
     }))
-    .filter((item) => item.id);
+    .filter(item => item.id);
 }
 
 interface VectorDoc {
@@ -67,7 +69,10 @@ function findMinIndex(results: QueryResult[]): number {
 
 export class InMemoryVectorStore {
   dimension: number;
-  collections: Map<string, Map<string, { id: string; vector: number[]; fields: Record<string, any> }>>;
+  collections: Map<
+    string,
+    Map<string, { id: string; vector: number[]; fields: Record<string, any> }>
+  >;
   backend: string;
 
   constructor({ dimension = EMBEDDING_DIMENSION }: { dimension?: number } = {}) {
@@ -135,7 +140,10 @@ export class ZvecVectorStore {
   collections: Map<string, any>;
   zvecPromise: Promise<any> | null;
 
-  constructor({ rootDir, dimension = EMBEDDING_DIMENSION }: { rootDir?: string; dimension?: number } = {}) {
+  constructor({
+    rootDir,
+    dimension = EMBEDDING_DIMENSION,
+  }: { rootDir?: string; dimension?: number } = {}) {
     this.rootDir = rootDir;
     this.dimension = dimension;
     this.backend = 'zvec';
@@ -179,24 +187,34 @@ export class ZvecVectorStore {
 
   async createSchema(zvec: any, collectionName: string): Promise<any> {
     const DataType = zvec.DataType || {};
-    const dataType = DataType.VECTOR_FP32 || DataType.VectorFp32 || DataType.vector_fp32 || Object.values(DataType)[0];
+    const dataType =
+      DataType.VECTOR_FP32 ||
+      DataType.VectorFp32 ||
+      DataType.vector_fp32 ||
+      Object.values(DataType)[0];
 
     if (!zvec.CollectionSchema) {
       throw new Error('ZVEC module does not expose CollectionSchema');
     }
 
-    return tryCandidates([
-      () => new zvec.CollectionSchema(collectionName, [
-        { name: 'embedding', dataType, dimension: this.dimension },
-      ]),
-      () => new zvec.CollectionSchema({
-        name: collectionName,
-        vectors: [{ name: 'embedding', dataType, dimension: this.dimension }],
-      }),
-      () => new zvec.CollectionSchema(collectionName, {
-        vectors: [{ name: 'embedding', dataType, dimension: this.dimension }],
-      }),
-    ], 'Unable to create ZVEC collection schema');
+    return tryCandidates(
+      [
+        () =>
+          new zvec.CollectionSchema(collectionName, [
+            { name: 'embedding', dataType, dimension: this.dimension },
+          ]),
+        () =>
+          new zvec.CollectionSchema({
+            name: collectionName,
+            vectors: [{ name: 'embedding', dataType, dimension: this.dimension }],
+          }),
+        () =>
+          new zvec.CollectionSchema(collectionName, {
+            vectors: [{ name: 'embedding', dataType, dimension: this.dimension }],
+          }),
+      ],
+      'Unable to create ZVEC collection schema'
+    );
   }
 
   async getCollection(collectionName: string): Promise<any> {
@@ -216,12 +234,15 @@ export class ZvecVectorStore {
       throw new Error('ZVEC module does not expose create/open collection API');
     }
 
-    const collection = await tryCandidates([
-      () => createAndOpen(vectorPath, schema),
-      () => createAndOpen({ path: vectorPath, schema }),
-      () => createAndOpen(schema, vectorPath),
-      () => createAndOpen({ schema, path: vectorPath }),
-    ], 'Unable to open ZVEC collection');
+    const collection = await tryCandidates(
+      [
+        () => createAndOpen(vectorPath, schema),
+        () => createAndOpen({ path: vectorPath, schema }),
+        () => createAndOpen(schema, vectorPath),
+        () => createAndOpen({ schema, path: vectorPath }),
+      ],
+      'Unable to open ZVEC collection'
+    );
 
     this.collections.set(collectionName, collection);
     return collection;
@@ -229,7 +250,7 @@ export class ZvecVectorStore {
 
   async upsert(collectionName: string, docs: VectorDoc[]): Promise<void> {
     const collection = await this.getCollection(collectionName);
-    const payload = docs.map((doc) => ({
+    const payload = docs.map(doc => ({
       id: doc.id,
       vectors: {
         embedding: doc.vector,
@@ -237,21 +258,27 @@ export class ZvecVectorStore {
       fields: doc.fields || {},
     }));
 
-    await tryCandidates([
-      () => collection.insert(payload),
-      () => collection.upsert(payload),
-      () => collection.add(payload),
-    ], 'Unable to insert vectors into ZVEC');
+    await tryCandidates(
+      [
+        () => collection.insert(payload),
+        () => collection.upsert(payload),
+        () => collection.add(payload),
+      ],
+      'Unable to insert vectors into ZVEC'
+    );
   }
 
   async remove(collectionName: string, ids: string[]): Promise<void> {
     try {
       const collection = await this.getCollection(collectionName);
-      await tryCandidates([
-        () => collection.delete(ids),
-        () => collection.remove(ids),
-        () => Promise.all(ids.map((id: string) => collection.delete(id))),
-      ], 'Unable to remove vectors from ZVEC');
+      await tryCandidates(
+        [
+          () => collection.delete(ids),
+          () => collection.remove(ids),
+          () => Promise.all(ids.map((id: string) => collection.delete(id))),
+        ],
+        'Unable to remove vectors from ZVEC'
+      );
     } catch {
       // Best-effort: zvec may not support deletion — vectors will be overwritten on next upsert
     }
@@ -260,14 +287,17 @@ export class ZvecVectorStore {
   async query(collectionName: string, vector: number[], topK: number = 10): Promise<QueryResult[]> {
     const collection = await this.getCollection(collectionName);
 
-    const results = await tryCandidates([
-      () => collection.query({ vectorName: 'embedding', vector, topK }),
-      () => collection.query({ field: 'embedding', vector, topK }),
-      () => collection.query({ field: 'embedding', vector, topk: topK }),
-      () => collection.query({ embedding: vector, topK }),
-      () => collection.querySync({ field: 'embedding', vector, topK }),
-      () => collection.querySync({ vectorName: 'embedding', vector, topK }),
-    ], 'Unable to query ZVEC');
+    const results = await tryCandidates(
+      [
+        () => collection.query({ vectorName: 'embedding', vector, topK }),
+        () => collection.query({ field: 'embedding', vector, topK }),
+        () => collection.query({ field: 'embedding', vector, topk: topK }),
+        () => collection.query({ embedding: vector, topK }),
+        () => collection.querySync({ field: 'embedding', vector, topK }),
+        () => collection.querySync({ vectorName: 'embedding', vector, topK }),
+      ],
+      'Unable to query ZVEC'
+    );
 
     return normalizeResults(results);
   }
@@ -293,9 +323,12 @@ export async function createVectorStore({
     const store = new InMemoryVectorStore({ dimension });
     store.backend = backend === 'auto' ? 'memory' : `memory-fallback-from-${backend}`;
     // Suppress warning in test mode to avoid false failures
-    const isTestMode = process.argv.some(arg => arg.includes('--test')) || process.env.NODE_ENV === 'test';
+    const isTestMode =
+      process.argv.some(arg => arg.includes('--test')) || process.env.NODE_ENV === 'test';
     if (!isTestMode) {
-      console.info(`Code index: using in-memory vector store (zvec native binary unavailable on this platform: ${error.message})`);
+      console.info(
+        `Code index: using in-memory vector store (zvec native binary unavailable on this platform: ${error.message})`
+      );
     }
     return store;
   }

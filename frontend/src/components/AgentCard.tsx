@@ -18,10 +18,21 @@ const RUNNER_LABELS = {
   codex: 'OpenAI Codex',
 };
 
-export default function AgentCard({ agent, thinking, isSelected, viewMode, onClick, onStop, emphasizedBorder = false, footer = null }) {
+export default function AgentCard({
+  agent,
+  thinking,
+  isSelected,
+  viewMode,
+  onClick,
+  onStop,
+  emphasizedBorder = false,
+  footer = null,
+}) {
   const effectiveStatus = thinking ? 'busy' : agent.status;
   const status = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.idle;
-  const truncatedThinking = thinking ? thinking.slice(-120) + (thinking.length > 120 ? '' : '') : null;
+  const truncatedThinking = thinking
+    ? thinking.slice(-120) + (thinking.length > 120 ? '' : '')
+    : null;
   const disabled = agent.enabled === false;
   // No explicit LLM config → the agent uses the runner's built-in default model.
   const runnerLabel = RUNNER_LABELS[agent.runner];
@@ -39,51 +50,61 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             : 'bg-dark-800/50 border-dark-700/50 hover:bg-dark-800 hover:border-dark-600'
         }`}
       >
-       <div className="flex items-center gap-4">
-        <div className="text-2xl flex-shrink-0">{agent.icon}</div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-sm text-dark-100 truncate">{agent.name}</span>
-            {agent.isLeader && <span title="Leader" className="inline-flex flex-shrink-0"><Crown className="w-3.5 h-3.5 text-amber-400" /></span>}
-            <div className={`w-2 h-2 rounded-full flex-shrink-0 ${status.dot}`} />
-          </div>
-          <p className="text-xs text-dark-400 truncate">
-            {agent.role} · {usesRunnerDefaultLlm ? `${runnerLabel} · default model` : `${agent.provider}/${agent.model}`}
-          </p>
-          {agent.project && (
-            <p className="text-xs text-indigo-400 truncate flex items-center gap-1">
-              <FolderOpen className="w-3 h-3" />
-              {agent.project}
+        <div className="flex items-center gap-4">
+          <div className="text-2xl flex-shrink-0">{agent.icon}</div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-sm text-dark-100 truncate">{agent.name}</span>
+              {agent.isLeader && (
+                <span title="Leader" className="inline-flex flex-shrink-0">
+                  <Crown className="w-3.5 h-3.5 text-amber-400" />
+                </span>
+              )}
+              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${status.dot}`} />
+            </div>
+            <p className="text-xs text-dark-400 truncate">
+              {agent.role} ·{' '}
+              {usesRunnerDefaultLlm
+                ? `${runnerLabel} · default model`
+                : `${agent.provider}/${agent.model}`}
             </p>
-          )}
-        </div>
-        {thinking && (
-          <div className="hidden sm:block text-xs text-dark-400 truncate max-w-[200px] font-mono">
-            {truncatedThinking}
+            {agent.project && (
+              <p className="text-xs text-indigo-400 truncate flex items-center gap-1">
+                <FolderOpen className="w-3 h-3" />
+                {agent.project}
+              </p>
+            )}
           </div>
-        )}
-        <div className="flex items-center gap-3 flex-shrink-0 text-xs text-dark-400">
-          <span className="flex items-center gap-1">
-            <MessageSquare className="w-3 h-3" />
-            {agent.metrics?.totalMessages || 0}
-          </span>
-          {disabled ? (
-            <span className="text-dark-500">Disabled</span>
-          ) : effectiveStatus === 'busy' && onStop ? (
-            <button
-              onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
-              className="flex items-center gap-1 px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
-              title="Stop agent"
-            >
-              <StopCircle className="w-3.5 h-3.5" />
-              <span>Stop</span>
-            </button>
-          ) : (
-            <span className={status.textColor}>{status.label}</span>
+          {thinking && (
+            <div className="hidden sm:block text-xs text-dark-400 truncate max-w-[200px] font-mono">
+              {truncatedThinking}
+            </div>
           )}
+          <div className="flex items-center gap-3 flex-shrink-0 text-xs text-dark-400">
+            <span className="flex items-center gap-1">
+              <MessageSquare className="w-3 h-3" />
+              {agent.metrics?.totalMessages || 0}
+            </span>
+            {disabled ? (
+              <span className="text-dark-500">Disabled</span>
+            ) : effectiveStatus === 'busy' && onStop ? (
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  onStop(agent.id);
+                }}
+                className="flex items-center gap-1 px-2 py-1 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+                title="Stop agent"
+              >
+                <StopCircle className="w-3.5 h-3.5" />
+                <span>Stop</span>
+              </button>
+            ) : (
+              <span className={status.textColor}>{status.label}</span>
+            )}
+          </div>
         </div>
-       </div>
-       {footer && <div className="mt-2">{footer}</div>}
+        {footer && <div className="mt-2">{footer}</div>}
       </div>
     );
   }
@@ -112,12 +133,19 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            {agent.isLeader && <span title="Leader" className="inline-flex"><Crown className="w-3.5 h-3.5 text-amber-400" /></span>}
+            {agent.isLeader && (
+              <span title="Leader" className="inline-flex">
+                <Crown className="w-3.5 h-3.5 text-amber-400" />
+              </span>
+            )}
             {disabled ? (
               <span className="text-xs font-medium text-dark-500">Disabled</span>
             ) : effectiveStatus === 'busy' && onStop ? (
               <button
-                onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
+                onClick={e => {
+                  e.stopPropagation();
+                  onStop(agent.id);
+                }}
                 className="flex items-center gap-1 px-2 py-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors text-xs"
                 title="Stop agent"
               >
@@ -147,11 +175,13 @@ export default function AgentCard({ agent, thinking, isSelected, viewMode, onCli
             </>
           ) : (
             <>
-              <span className={`px-2 py-0.5 rounded-full ${
-                agent.provider === 'claude'
-                  ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
-                  : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
-              }`}>
+              <span
+                className={`px-2 py-0.5 rounded-full ${
+                  agent.provider === 'claude'
+                    ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
+                    : 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                }`}
+              >
                 {agent.provider}
               </span>
               <span className="text-dark-400 truncate font-mono text-[11px]">{agent.model}</span>

@@ -148,15 +148,23 @@ describe('CodeIndexService', () => {
 
   it('should return empty for no matches', async () => {
     const service = makeService();
-    const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-no-match' });
+    const result = await service.indexFolder({
+      folderPath: FIXTURE_DIR,
+      repoName: 'test-no-match',
+    });
     const results = await service.searchSymbols(result.id, { query: 'xyzNonExistent123' });
     assert.deepEqual(results, []);
   });
 
   it('should search semantically', async () => {
     const service = makeService();
-    const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-semantic' });
-    const results = await service.searchSemantic(result.id, { query: 'JWT authentication middleware' });
+    const result = await service.indexFolder({
+      folderPath: FIXTURE_DIR,
+      repoName: 'test-semantic',
+    });
+    const results = await service.searchSemantic(result.id, {
+      query: 'JWT authentication middleware',
+    });
     assert.ok(results.length > 0);
     const allText = results.map(r => (r.name + ' ' + (r.summary || '')).toLowerCase()).join(' ');
     assert.ok(/auth|token|jwt/.test(allText), 'Should find auth-related symbols');
@@ -202,14 +210,19 @@ describe('CodeIndexService', () => {
     assert.equal(results.length, 1);
     const sym = await service.getSymbol(result.id, results[0].id);
     const indexedTokens = sym.source.length / 4;
-    const reduction = 1 - (indexedTokens / fullTokens);
-    console.log(`  Token reduction: ${(reduction * 100).toFixed(1)}% (full: ~${Math.round(fullTokens)}, indexed: ~${Math.round(indexedTokens)})`);
-    assert.ok(reduction > 0.3, `Expected >30% reduction, got ${(reduction*100).toFixed(1)}%`);
+    const reduction = 1 - indexedTokens / fullTokens;
+    console.log(
+      `  Token reduction: ${(reduction * 100).toFixed(1)}% (full: ~${Math.round(fullTokens)}, indexed: ~${Math.round(indexedTokens)})`
+    );
+    assert.ok(reduction > 0.3, `Expected >30% reduction, got ${(reduction * 100).toFixed(1)}%`);
   });
 
   it('should reduce tokens vs full codebase for semantic queries', async () => {
     const service = makeService();
-    const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-tokens-sem' });
+    const result = await service.indexFolder({
+      folderPath: FIXTURE_DIR,
+      repoName: 'test-tokens-sem',
+    });
     let total = '';
     for (const [p, c] of Object.entries(FIXTURES)) {
       if (p.endsWith('.js') || p.endsWith('.py') || p.endsWith('.ts')) total += c;
@@ -222,9 +235,11 @@ describe('CodeIndexService', () => {
       if (s) indexed += s.source;
     }
     const indexedTokens = indexed.length / 4;
-    const reduction = 1 - (indexedTokens / fullTokens);
-    console.log(`  Codebase token reduction: ${(reduction * 100).toFixed(1)}% (full: ~${Math.round(fullTokens)}, indexed: ~${Math.round(indexedTokens)})`);
-    assert.ok(reduction > 0.5, `Expected >50% reduction, got ${(reduction*100).toFixed(1)}%`);
+    const reduction = 1 - indexedTokens / fullTokens;
+    console.log(
+      `  Codebase token reduction: ${(reduction * 100).toFixed(1)}% (full: ~${Math.round(fullTokens)}, indexed: ~${Math.round(indexedTokens)})`
+    );
+    assert.ok(reduction > 0.5, `Expected >50% reduction, got ${(reduction * 100).toFixed(1)}%`);
   });
 
   it('should index in under 1 second', async () => {
@@ -238,18 +253,12 @@ describe('CodeIndexService', () => {
 
   it('should handle repo not found', async () => {
     const service = makeService();
-    await assert.rejects(
-      () => service.getFileTree('nonexistent'),
-      /ENOENT|not found/i
-    );
+    await assert.rejects(() => service.getFileTree('nonexistent'), /ENOENT|not found/i);
   });
 
   it('should handle symbol not found', async () => {
     const service = makeService();
     const result = await service.indexFolder({ folderPath: FIXTURE_DIR, repoName: 'test-edge' });
-    await assert.rejects(
-      () => service.getSymbol(result.id, 'nonexistent-id'),
-      /not found/i
-    );
+    await assert.rejects(() => service.getSymbol(result.id, 'nonexistent-id'), /not found/i);
   });
 });

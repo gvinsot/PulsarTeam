@@ -2,20 +2,37 @@
 //     _streamAndContinue, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
 import { isCliRunner } from '../runners.js';
-import { saveAgent, saveTaskToDb, getBoardById, getTasksByAgent, getTasksByAssignee, getActiveTaskForExecutor, getTaskByActionRunningAgent, updateTaskFields } from '../database.js';
+import {
+  saveAgent,
+  saveTaskToDb,
+  getBoardById,
+  getTasksByAgent,
+  getTasksByAssignee,
+  getActiveTaskForExecutor,
+  getTaskByActionRunningAgent,
+  updateTaskFields,
+} from '../database.js';
 import { TOOL_DEFINITIONS } from '../agentTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
 import { AgentManager } from './index.js';
 import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
-import { agentRosterLines, ragDocsSection, pluginsSection, credentialsSection, relevantTasksSection, byRecency, RECENT_TASKS_LIMIT, TASK_TEXT_MAX_CHARS } from './promptSections.js';
+import {
+  agentRosterLines,
+  ragDocsSection,
+  pluginsSection,
+  credentialsSection,
+  relevantTasksSection,
+  byRecency,
+  RECENT_TASKS_LIMIT,
+  TASK_TEXT_MAX_CHARS,
+} from './promptSections.js';
 
 const MAX_DELEGATION_DEPTH = 5;
 
 /** @this {AgentManager} */
 export const chatMethods = {
-
   /** Success/idle teardown for a chat turn: set status, drop the abort
    * controller, and release the top-level chat lock. Order matters — setStatus
    * runs BEFORE the abortController delete (mirrors the original success path).
@@ -31,25 +48,47 @@ export const chatMethods = {
    * abortController is dropped BEFORE setStatus (mirrors the original error
    * path), and saveAgent is intentionally NOT awaited. The per-error delete of
    * agent._streamRetryCount / _compactionRetried stays at the call sites. */
-  _failChat(this: any, agent: any, id: string, isTopLevel: boolean, errMessage: string, finalStatus: 'error' | 'idle' = 'error'): void {
+  _failChat(
+    this: any,
+    agent: any,
+    id: string,
+    isTopLevel: boolean,
+    errMessage: string,
+    finalStatus: 'error' | 'idle' = 'error'
+  ): void {
     this.abortControllers.delete(id);
     agent.metrics.errors += 1;
     agent.currentThinking = '';
-    this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
+    this._emit('agent:thinking', {
+      agentId: id,
+      agentName: agent.name,
+      project: agent.project || null,
+      thinking: '',
+    });
     this.setStatus(id, finalStatus, errMessage);
     saveAgent(agent);
     if (isTopLevel) this._chatLocks.delete(id);
   },
 
   // ─── Chat ───────────────────────────────────────────────────────────
-  async sendMessage(this: any, id: string, userMessage: string, streamCallback: any, delegationDepth: number = 0, messageMeta: any = null, images: any[] | null = null): Promise<any> {
+  async sendMessage(
+    this: any,
+    id: string,
+    userMessage: string,
+    streamCallback: any,
+    delegationDepth: number = 0,
+    messageMeta: any = null,
+    images: any[] | null = null
+  ): Promise<any> {
     const isTopLevel = delegationDepth === 0 && !messageMeta;
     if (isTopLevel) {
       if (this._chatLocks.has(id)) {
         const agent = this.agents.get(id);
         const lockedMessage = this._chatLocks.get(id);
         if (!agent || agent.status !== 'busy') {
-          console.warn(`⚠️ Stale chat lock for agent ${id} (status: ${agent?.status}) — auto-clearing`);
+          console.warn(
+            `⚠️ Stale chat lock for agent ${id} (status: ${agent?.status}) — auto-clearing`
+          );
           this._chatLocks.delete(id);
         } else if (lockedMessage === userMessage) {
           return null;
@@ -79,17 +118,25 @@ export const chatMethods = {
     }
 
     if (messageMeta?.type === 'delegation-task') {
-      agent.currentTask = (userMessage || '').replace(/^\[TASK from [^\]]+\]:\s*/i, '').slice(0, 200) || null;
+      agent.currentTask =
+        (userMessage || '').replace(/^\[TASK from [^\]]+\]:\s*/i, '').slice(0, 200) || null;
     } else if (delegationDepth === 0 && !messageMeta) {
       agent.currentTask = (userMessage || '').slice(0, 200) || null;
     }
-    this._emit('agent:status', { id, status: 'busy', project: agent.project || null, currentTask: agent.currentTask || null });
+    this._emit('agent:status', {
+      id,
+      status: 'busy',
+      project: agent.project || null,
+      currentTask: agent.currentTask || null,
+    });
 
     if (this.executionManager && agent.project) {
       // Verify execution environment matches agent's assigned project
       const envProject = this.executionManager.getProject(id);
       if (envProject && envProject !== agent.project) {
-        console.warn(`⚠️  [Chat] Project mismatch detected for "${agent.name}": agent.project="${agent.project}" but execution env has "${envProject}". Re-syncing execution environment.`);
+        console.warn(
+          `⚠️  [Chat] Project mismatch detected for "${agent.name}": agent.project="${agent.project}" but execution env has "${envProject}". Re-syncing execution environment.`
+        );
         try {
           const gitUrl = buildRepoCloneUrl(agent.project);
           if (gitUrl) {
@@ -97,7 +144,9 @@ export const chatMethods = {
             await this.executionManager.switchProject(id, agent.project, gitUrl, gitCreds);
           }
         } catch (syncErr: any) {
-          console.error(`⚠️  [Chat] Failed to re-sync execution env for "${agent.name}": ${syncErr.message}`);
+          console.error(
+            `⚠️  [Chat] Failed to re-sync execution env for "${agent.name}": ${syncErr.message}`
+          );
         }
       }
 
@@ -110,7 +159,12 @@ export const chatMethods = {
         // assigned. With llmConfigId="" ("Default LLM") the runner is
         // expected to fall back to its built-in credentials.
         const llmConfigForRunner = agent.llmConfigId ? earlyLlm : null;
-        this.executionManager.bindAgent(id, providerType, { ownerId: agent.ownerId || null, gitCredentials: gitCreds, permissions: agent.permissions || null, llmConfig: llmConfigForRunner });
+        this.executionManager.bindAgent(id, providerType, {
+          ownerId: agent.ownerId || null,
+          gitCredentials: gitCreds,
+          permissions: agent.permissions || null,
+          llmConfig: llmConfigForRunner,
+        });
 
         const gitUrl = buildRepoCloneUrl(agent.project);
         if (gitUrl) {
@@ -140,17 +194,27 @@ export const chatMethods = {
     const systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
     messages.push({ role: 'system', content: systemContent });
 
-    const { managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(agent, messages, systemContent, userMessage, delegationDepth, messageMeta, streamCallback, images);
+    const { managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(
+      agent,
+      messages,
+      systemContent,
+      userMessage,
+      delegationDepth,
+      messageMeta,
+      streamCallback,
+      images
+    );
 
     const historyEntry: any = {
       role: 'user',
       content: userMessage,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
     };
     if (messageMeta) {
       historyEntry.type = messageMeta.type;
       if (messageMeta.toolResults) historyEntry.toolResults = messageMeta.toolResults;
-      if (messageMeta.delegationResults) historyEntry.delegationResults = messageMeta.delegationResults;
+      if (messageMeta.delegationResults)
+        historyEntry.delegationResults = messageMeta.delegationResults;
       if (messageMeta.fromAgent) historyEntry.fromAgent = messageMeta.fromAgent;
     }
     // Store lightweight image metadata in history (thumbnails for display).
@@ -173,7 +237,9 @@ export const chatMethods = {
       try {
         await saveAgent(agent);
       } catch (persistErr: any) {
-        console.warn(`⚠️  [Chat] Early persist of user message failed for "${agent.name}": ${persistErr.message}`);
+        console.warn(
+          `⚠️  [Chat] Early persist of user message failed for "${agent.name}": ${persistErr.message}`
+        );
       }
     }
 
@@ -186,7 +252,16 @@ export const chatMethods = {
 
     try {
       const llmConfig = this.resolveLlmConfig(agent);
-      const streamResult = await this._streamAndContinue(agent, id, messages, llmConfig, streamCallback, abortController, delegationDepth, activeTaskId);
+      const streamResult = await this._streamAndContinue(
+        agent,
+        id,
+        messages,
+        llmConfig,
+        streamCallback,
+        abortController,
+        delegationDepth,
+        activeTaskId
+      );
       fullResponse = streamResult.fullResponse;
 
       const assistantEntry: any = {
@@ -225,7 +300,9 @@ export const chatMethods = {
             (m: any) => m.timestamp && new Date(m.timestamp).getTime() >= taskStartTime!
           );
           const preTaskMessages = agent.conversationHistory.filter(
-            (m: any) => m.type !== 'compaction-summary' && (!m.timestamp || new Date(m.timestamp).getTime() < taskStartTime!)
+            (m: any) =>
+              m.type !== 'compaction-summary' &&
+              (!m.timestamp || new Date(m.timestamp).getTime() < taskStartTime!)
           );
           // Keep enough pre-task messages to fill up to MAX, prioritizing recent ones
           const preTaskSlots = Math.max(0, MAX_HISTORY_ENTRIES - taskMessages.length);
@@ -236,7 +313,9 @@ export const chatMethods = {
           const removed = agent.conversationHistory.length - pruned.length;
           if (removed > 0) {
             agent.conversationHistory = pruned;
-            console.log(`🗜️  [Prune] "${agent.name}": removed ${removed} old messages, kept ${taskMessages.length} task msgs + ${keptPreTask.length} recent (${pruned.length} total)`);
+            console.log(
+              `🗜️  [Prune] "${agent.name}": removed ${removed} old messages, kept ${taskMessages.length} task msgs + ${keptPreTask.length} recent (${pruned.length} total)`
+            );
           }
         } else {
           // No active task: just keep the most recent messages
@@ -245,19 +324,34 @@ export const chatMethods = {
             trimmed.unshift(summary);
           }
           agent.conversationHistory = trimmed;
-          console.log(`🗜️  [Prune] "${agent.name}": trimmed history to ${agent.conversationHistory.length} entries (no active task)`);
+          console.log(
+            `🗜️  [Prune] "${agent.name}": trimmed history to ${agent.conversationHistory.length} entries (no active task)`
+          );
         }
       }
 
       agent.metrics.totalMessages += 1;
       agent.metrics.lastActiveAt = new Date().toISOString();
       agent.currentThinking = '';
-      this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: '' });
+      this._emit('agent:thinking', {
+        agentId: id,
+        agentName: agent.name,
+        project: agent.project || null,
+        thinking: '',
+      });
       saveAgent(agent);
 
       const responseForParsing = this._cleanMarkdown(fullResponse);
       postProcessingStarted = true;
-      const actionResult = await this._processPostResponseActions(agent, id, responseForParsing, fullResponse, streamCallback, delegationDepth, messageMeta);
+      const actionResult = await this._processPostResponseActions(
+        agent,
+        id,
+        responseForParsing,
+        fullResponse,
+        streamCallback,
+        delegationDepth,
+        messageMeta
+      );
       if (actionResult.earlyReturn !== null) {
         this.setStatus(id, 'idle');
         return actionResult.earlyReturn;
@@ -269,21 +363,40 @@ export const chatMethods = {
       // ── Rate limit: mark task as error and schedule retry ──
       if (err.isRateLimit) {
         const delayMs = Math.max(0, err.retryAt - Date.now());
-        console.log(`🕐 [Rate Limit] "${agent.name}": ${err.message} — retry in ${Math.round(delayMs / 60000)}min`);
-        if (streamCallback) streamCallback(`\n⏸️ *${err.message}. Task will auto-retry at ${err.resetLabel} + 5min.*\n`);
-        this.addActionLog(id, 'error', `Rate limit reached — resets at ${err.resetLabel}`, err.message);
+        console.log(
+          `🕐 [Rate Limit] "${agent.name}": ${err.message} — retry in ${Math.round(delayMs / 60000)}min`
+        );
+        if (streamCallback)
+          streamCallback(
+            `\n⏸️ *${err.message}. Task will auto-retry at ${err.resetLabel} + 5min.*\n`
+          );
+        this.addActionLog(
+          id,
+          'error',
+          `Rate limit reached — resets at ${err.resetLabel}`,
+          err.message
+        );
 
         const activeTask = await getActiveTaskForExecutor(id);
         if (activeTask) {
           // Persist the error text first, then flip status — setTaskStatus
           // re-fetches the row and preserves the error in its upsert.
-          await updateTaskFields((activeTask as any).id, { error: `Rate limit reached — resets at ${err.resetLabel}` });
-          await this.setTaskStatus(id, (activeTask as any).id, 'error', { skipAutoRefine: true, by: 'rate-limit' });
-          console.log(`🕐 [Rate Limit] Task "${(activeTask as any).text.slice(0, 60)}" set to error`);
+          await updateTaskFields((activeTask as any).id, {
+            error: `Rate limit reached — resets at ${err.resetLabel}`,
+          });
+          await this.setTaskStatus(id, (activeTask as any).id, 'error', {
+            skipAutoRefine: true,
+            by: 'rate-limit',
+          });
+          console.log(
+            `🕐 [Rate Limit] Task "${(activeTask as any).text.slice(0, 60)}" set to error`
+          );
         }
 
         setTimeout(() => {
-          console.log(`🕐 [Rate Limit] Retry timer fired for "${agent.name}" — triggering re-check`);
+          console.log(
+            `🕐 [Rate Limit] Retry timer fired for "${agent.name}" — triggering re-check`
+          );
           this._recheckConditionalTransitions();
         }, delayMs);
 
@@ -293,24 +406,50 @@ export const chatMethods = {
 
       // ── Reactive compaction: context exceeded → compact and retry once (task mode only) ──
       // In chat mode, full history must be preserved — context errors propagate to the user.
-      if (this._isContextExceededError(err.message) && !agent._compactionRetried && !managesContext && isTaskExecution) {
-        console.log(`🗜️  [Reactive Compact] "${agent.name}": context exceeded — compacting and retrying`);
+      if (
+        this._isContextExceededError(err.message) &&
+        !agent._compactionRetried &&
+        !managesContext &&
+        isTaskExecution
+      ) {
+        console.log(
+          `🗜️  [Reactive Compact] "${agent.name}": context exceeded — compacting and retrying`
+        );
         agent._compactionRetried = true;
-        this.addActionLog(id, 'warning', 'Context limit exceeded — compacting conversation and retrying');
+        this.addActionLog(
+          id,
+          'warning',
+          'Context limit exceeded — compacting conversation and retrying'
+        );
         if (isTopLevel) this._chatLocks.delete(id);
         try {
-          if (streamCallback) streamCallback(`\n⚠️ *Context limit exceeded — compacting conversation and retrying...*\n`);
-          const reactiveCtxLimit = this.resolveLlmConfig(agent).contextLength || agent.contextLength || 8192;
-          const reactiveKeep = Math.max(6, Math.floor(this._compactionThresholds(reactiveCtxLimit).maxRecent * 0.5));
+          if (streamCallback)
+            streamCallback(
+              `\n⚠️ *Context limit exceeded — compacting conversation and retrying...*\n`
+            );
+          const reactiveCtxLimit =
+            this.resolveLlmConfig(agent).contextLength || agent.contextLength || 8192;
+          const reactiveKeep = Math.max(
+            6,
+            Math.floor(this._compactionThresholds(reactiveCtxLimit).maxRecent * 0.5)
+          );
           await this._compactHistory(agent, reactiveKeep);
           agent._compactionArmed = false;
           agent.conversationHistory.pop();
-          const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta);
+          const retryResult = await this.sendMessage(
+            id,
+            userMessage,
+            streamCallback,
+            delegationDepth,
+            messageMeta
+          );
           delete agent._compactionRetried;
           return retryResult;
         } catch (retryErr: any) {
           delete agent._compactionRetried;
-          console.error(`🗜️  [Reactive Compact] "${agent.name}": retry after compaction also failed: ${retryErr.message}`);
+          console.error(
+            `🗜️  [Reactive Compact] "${agent.name}": retry after compaction also failed: ${retryErr.message}`
+          );
           this._failChat(agent, id, isTopLevel, retryErr.message);
           throw retryErr;
         }
@@ -319,34 +458,81 @@ export const chatMethods = {
       // ── Transient stream error → retry with backoff ──
       const isUserStop = err.message === 'Agent stopped by user';
       const isAuthError = err.status === 401 || err.status === 403;
-      const hasPartialToolCalls = fullResponse && /@(read_file|write_file|list_dir|search_files|run_command|append_file|mcp_call|report_error|update_task|search_skill|create_skill|update_skill|delete_skill)\b/i.test(fullResponse);
-      const isTransient = !isUserStop && !isAuthError && !err.isRateLimit && !this._isContextExceededError(err.message);
+      const hasPartialToolCalls =
+        fullResponse &&
+        /@(read_file|write_file|list_dir|search_files|run_command|append_file|mcp_call|report_error|update_task|search_skill|create_skill|update_skill|delete_skill)\b/i.test(
+          fullResponse
+        );
+      const isTransient =
+        !isUserStop &&
+        !isAuthError &&
+        !err.isRateLimit &&
+        !this._isContextExceededError(err.message);
       const MAX_STREAM_RETRIES = 3;
       const retryCount = agent._streamRetryCount || 0;
 
-      if (isTransient && !postProcessingStarted && !hasPartialToolCalls && retryCount < MAX_STREAM_RETRIES && !abortController.signal.aborted) {
+      if (
+        isTransient &&
+        !postProcessingStarted &&
+        !hasPartialToolCalls &&
+        retryCount < MAX_STREAM_RETRIES &&
+        !abortController.signal.aborted
+      ) {
         agent._streamRetryCount = retryCount + 1;
         const delay = 2000 * Math.pow(2, retryCount);
-        console.log(`🔄 [Stream Retry] "${agent.name}": ${err.message} — retry ${retryCount + 1}/${MAX_STREAM_RETRIES} in ${delay}ms`);
-        this.addActionLog(id, 'warning', `Connection lost, retrying (${retryCount + 1}/${MAX_STREAM_RETRIES})`, err.message);
-        if (streamCallback) streamCallback(`\n⚠️ *Connection lost, retrying (${retryCount + 1}/${MAX_STREAM_RETRIES})...*\n`);
+        console.log(
+          `🔄 [Stream Retry] "${agent.name}": ${err.message} — retry ${retryCount + 1}/${MAX_STREAM_RETRIES} in ${delay}ms`
+        );
+        this.addActionLog(
+          id,
+          'warning',
+          `Connection lost, retrying (${retryCount + 1}/${MAX_STREAM_RETRIES})`,
+          err.message
+        );
+        if (streamCallback)
+          streamCallback(
+            `\n⚠️ *Connection lost, retrying (${retryCount + 1}/${MAX_STREAM_RETRIES})...*\n`
+          );
         await new Promise(r => setTimeout(r, delay));
         agent.conversationHistory.pop();
         if (isTopLevel) this._chatLocks.delete(id);
         try {
-          const retryResult = await this.sendMessage(id, userMessage, streamCallback, delegationDepth, messageMeta);
+          const retryResult = await this.sendMessage(
+            id,
+            userMessage,
+            streamCallback,
+            delegationDepth,
+            messageMeta
+          );
           delete agent._streamRetryCount;
           return retryResult;
         } catch (retryErr: any) {
           delete agent._streamRetryCount;
           const isRetryUserStop = retryErr.message === 'Agent stopped by user';
-          this._failChat(agent, id, isTopLevel, retryErr.message, isRetryUserStop ? 'idle' : 'error');
+          this._failChat(
+            agent,
+            id,
+            isTopLevel,
+            retryErr.message,
+            isRetryUserStop ? 'idle' : 'error'
+          );
           throw retryErr;
         }
       }
-      if (isTransient && (postProcessingStarted || hasPartialToolCalls) && retryCount < MAX_STREAM_RETRIES) {
-        console.log(`🛡️ [Stream Retry] "${agent.name}": skipping retry — ${postProcessingStarted ? 'post-processing already started' : 'partial response contains tool calls'}`);
-        this.addActionLog(id, 'warning', 'Error after tool execution — not retrying to avoid duplicate actions', err.message);
+      if (
+        isTransient &&
+        (postProcessingStarted || hasPartialToolCalls) &&
+        retryCount < MAX_STREAM_RETRIES
+      ) {
+        console.log(
+          `🛡️ [Stream Retry] "${agent.name}": skipping retry — ${postProcessingStarted ? 'post-processing already started' : 'partial response contains tool calls'}`
+        );
+        this.addActionLog(
+          id,
+          'warning',
+          'Error after tool execution — not retrying to avoid duplicate actions',
+          err.message
+        );
       }
       delete agent._streamRetryCount;
 
@@ -359,7 +545,12 @@ export const chatMethods = {
     return (response || '').replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
   },
 
-  async _buildSystemPrompt(this: any, agent: any, id: string, delegationDepth: number): Promise<string> {
+  async _buildSystemPrompt(
+    this: any,
+    agent: any,
+    id: string,
+    delegationDepth: number
+  ): Promise<string> {
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
     let systemContent = `Your name is "${agent.name}".${agent.role ? ` Your role: ${agent.role}.` : ''}\n\nToday's date is ${todayStr}.\n\n${agent.instructions || 'You are a helpful AI assistant.'}`;
 
@@ -410,13 +601,17 @@ export const chatMethods = {
           boardPluginIds = Array.isArray(board.plugins) ? board.plugins : [];
           boardMcpAuth = board.mcp_auth || {};
         }
-      } catch { /* board may not exist */ }
+      } catch {
+        /* board may not exist */
+      }
     }
     const allSkillIds = [...new Set([...agentSkills, ...boardPluginIds])];
 
     const pluginMcpIds = new Set<string>();
     if (allSkillIds.length > 0 && this.skillManager) {
-      const resolvedPlugins = allSkillIds.map((sid: string) => this.skillManager.getById(sid)).filter(Boolean);
+      const resolvedPlugins = allSkillIds
+        .map((sid: string) => this.skillManager.getById(sid))
+        .filter(Boolean);
       systemContent += pluginsSection(resolvedPlugins);
       // Collect plugin MCP server ids (consumed below) as a separate pass.
       for (const plugin of resolvedPlugins) {
@@ -444,13 +639,18 @@ export const chatMethods = {
     const directMcpIds = agent.mcpServers || [];
     const allMcpIds = [...new Set([...pluginMcpIds, ...directMcpIds])];
     if (allMcpIds.length > 0 && this.mcpManager) {
-      const { tools: mcpTools, unavailable: mcpUnavailable } = await this.mcpManager.getToolsForAgent(allMcpIds, id, mergedMcpAuth);
+      const { tools: mcpTools, unavailable: mcpUnavailable } =
+        await this.mcpManager.getToolsForAgent(allMcpIds, id, mergedMcpAuth);
       if (mcpTools.length > 0) {
         systemContent += '\n\n--- MCP Tools ---\n';
-        systemContent += 'These are NOT shell commands. Do NOT use @run_command or any bash tool to call them.\n';
-        systemContent += 'Call them using ONLY the @mcp_call(server, tool, {"arg": "value"}) syntax — this is the ONLY valid way.\n';
-        systemContent += 'IMPORTANT: Replace <type> placeholders with ACTUAL values. Do NOT copy the type descriptions.\n';
-        systemContent += 'Example: @mcp_call(MyServer, my_tool, {"name": "my-actual-value", "count": 5})\n\n';
+        systemContent +=
+          'These are NOT shell commands. Do NOT use @run_command or any bash tool to call them.\n';
+        systemContent +=
+          'Call them using ONLY the @mcp_call(server, tool, {"arg": "value"}) syntax — this is the ONLY valid way.\n';
+        systemContent +=
+          'IMPORTANT: Replace <type> placeholders with ACTUAL values. Do NOT copy the type descriptions.\n';
+        systemContent +=
+          'Example: @mcp_call(MyServer, my_tool, {"name": "my-actual-value", "count": 5})\n\n';
         for (const t of mcpTools) {
           const schema = simplifyMcpSchema(t.inputSchema);
           systemContent += `@mcp_call(${t.serverName}, ${t.name}, ${schema}) — ${t.description || ''}\n`;
@@ -460,7 +660,8 @@ export const chatMethods = {
         systemContent += '\n\n--- MCP Servers Unavailable ---\n';
         systemContent += 'The following MCP servers are configured but currently NOT connected.\n';
         systemContent += 'Do NOT attempt to call tools on these servers — they will fail.\n';
-        systemContent += 'If the user asks you to use these tools, inform them that the MCP server is disconnected.\n\n';
+        systemContent +=
+          'If the user asks you to use these tools, inform them that the MCP server is disconnected.\n\n';
         for (const u of mcpUnavailable) {
           systemContent += `- ${u.serverName}: ${u.reason}\n`;
         }
@@ -476,10 +677,12 @@ export const chatMethods = {
     // Without this bound, agents that had accumulated many tasks shipped
     // 100+ KB / 30k tokens to Anthropic on every turn, which added minutes
     // of latency before the first response token.
-    const SEMANTIC_WEIGHT = 0.7;       // 70% semantic, 30% recency
-    const RECENCY_HALF_LIFE_MS = 7 * 24 * 3600 * 1000;  // 7 days
+    const SEMANTIC_WEIGHT = 0.7; // 70% semantic, 30% recency
+    const RECENCY_HALF_LIFE_MS = 7 * 24 * 3600 * 1000; // 7 days
 
-    const activeTasks = (await getTasksByAgent(id)).filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
+    const activeTasks = (await getTasksByAgent(id)).filter(
+      (t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error'
+    );
 
     // Look for the latest user message to use as the relevance query.
     let relevanceQuery = '';
@@ -526,8 +729,8 @@ export const chatMethods = {
       activeTasks.length,
       (s: string) => this._isActiveTaskStatus(s),
       (overflow: number) =>
-        `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — `
-        + `use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see all)\n`,
+        `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — ` +
+        `use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see all)\n`
     );
 
     if (agent.project) {
@@ -552,17 +755,21 @@ export const chatMethods = {
     }
 
     const pluginCount = (agent.skills || []).length;
-    const resolvedCount = pluginCount > 0 && this.skillManager
-      ? (agent.skills || []).map((sid: string) => this.skillManager.getById(sid)).filter(Boolean).length
-      : 0;
+    const resolvedCount =
+      pluginCount > 0 && this.skillManager
+        ? (agent.skills || []).map((sid: string) => this.skillManager.getById(sid)).filter(Boolean)
+            .length
+        : 0;
     const sections: string[] = [];
-    if (systemContent.includes('Active Plugins'))   sections.push('plugins');
-    if (systemContent.includes('AVAILABLE TOOLS'))   sections.push('tools');
-    if (systemContent.includes('MCP Tools'))         sections.push('mcp');
+    if (systemContent.includes('Active Plugins')) sections.push('plugins');
+    if (systemContent.includes('AVAILABLE TOOLS')) sections.push('tools');
+    if (systemContent.includes('MCP Tools')) sections.push('mcp');
     if (systemContent.includes('Current Task List')) sections.push('tasks');
-    if (systemContent.includes('PROJECT CONTEXT'))   sections.push('project');
-    if (systemContent.includes('Swarm Agents'))      sections.push('swarm');
-    console.log(`📋 [System Prompt] Agent "${agent.name}" (${agent.provider}/${agent.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`);
+    if (systemContent.includes('PROJECT CONTEXT')) sections.push('project');
+    if (systemContent.includes('Swarm Agents')) sections.push('swarm');
+    console.log(
+      `📋 [System Prompt] Agent "${agent.name}" (${agent.provider}/${agent.model}): ${systemContent.length} chars (~${Math.round(systemContent.length / 4)} tokens) | sections: [${sections.join(', ')}] | plugins: ${resolvedCount}/${pluginCount} | project: ${agent.project || 'none'} | history: ${agent.conversationHistory.length} msgs`
+    );
 
     return systemContent;
   },
@@ -592,7 +799,8 @@ export const chatMethods = {
     // Pulsar Gateway. Its task tools are always present; everything else
     // (plugins on you or your board, which can be added at any time) is reached
     // dynamically. Tell the agent to discover before acting.
-    out += `\n\n--- PulsarTeam Tools ---\n` +
+    out +=
+      `\n\n--- PulsarTeam Tools ---\n` +
       `You have a single MCP server, the Pulsar Gateway, which is always available:\n` +
       `- ALWAYS start by calling \`list_mcps\` to discover the MCP servers and tools currently available to you. More can be attached to you or your board at any time, so do not assume — list them.\n` +
       `- To run any tool a server exposes, call \`call_mcp_tool({ server, tool, args })\` with the names and argument schema reported by list_mcps.\n` +
@@ -613,7 +821,9 @@ export const chatMethods = {
       try {
         const projectNames = await this._listAvailableProjects();
         if (projectNames.length > 0) out += `\n\nAvailable projects: ${projectNames.join(', ')}`;
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
 
     // Reference documents (RAG). Use the content already on the agent — the
@@ -628,21 +838,25 @@ export const chatMethods = {
     // tool list which the CLI gets natively).
     const agentSkills = agent.skills || [];
     if (agentSkills.length > 0 && this.skillManager) {
-      const resolvedPlugins = agentSkills.map((sid: string) => this.skillManager.getById(sid)).filter(Boolean);
+      const resolvedPlugins = agentSkills
+        .map((sid: string) => this.skillManager.getById(sid))
+        .filter(Boolean);
       out += pluginsSection(resolvedPlugins);
     }
 
     out += credentialsSection(agent.credentials || {});
 
     // Relevant tasks — recency-ranked (kept light: no embedding pass here).
-    const activeTasks = (await getTasksByAgent(id))
-      .filter((t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error');
+    const activeTasks = (await getTasksByAgent(id)).filter(
+      (t: any) => this._isActiveTaskStatus(t.status) || t.status === 'error'
+    );
     const rankedTasks = [...activeTasks].sort(byRecency).slice(0, RECENT_TASKS_LIMIT);
     out += relevantTasksSection(
       rankedTasks,
       activeTasks.length,
       (s: string) => this._isActiveTaskStatus(s),
-      (overflow: number) => `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — use the Swarm API MCP tools to list them all)\n`,
+      (overflow: number) =>
+        `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — use the Swarm API MCP tools to list them all)\n`
     );
 
     // Project context — real paths, no @-syntax (the CLI works in a real cwd).
@@ -656,15 +870,28 @@ export const chatMethods = {
     return out;
   },
 
-  async _assembleMessages(this: any, agent: any, messages: any[], systemContent: string, userMessage: string, delegationDepth: number, messageMeta: any, streamCallback: any, images: any[] | null = null): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }> {
+  async _assembleMessages(
+    this: any,
+    agent: any,
+    messages: any[],
+    systemContent: string,
+    userMessage: string,
+    delegationDepth: number,
+    messageMeta: any,
+    streamCallback: any,
+    images: any[] | null = null
+  ): Promise<{ managesContext: boolean; isTaskExecution: boolean; activeTaskId: string | null }> {
     const earlyLlmConfig = this.resolveLlmConfig(agent);
     const managesContext = earlyLlmConfig.managesContext || false;
     if (managesContext) {
-      console.log(`🧠 [Managed Context] "${agent.name}": model manages its own memory/compaction — skipping history \& compaction`);
+      console.log(
+        `🧠 [Managed Context] "${agent.name}": model manages its own memory/compaction — skipping history & compaction`
+      );
     }
 
     const contextLimit = earlyLlmConfig.contextLength || agent.contextLength || 8192;
-    const { maxRecent, compactTrigger, compactReset, safetyRatio } = this._compactionThresholds(contextLimit);
+    const { maxRecent, compactTrigger, compactReset, safetyRatio } =
+      this._compactionThresholds(contextLimit);
 
     const isTopLevelUserMessage = delegationDepth === 0 && !messageMeta;
     const isNewDelegationTask = messageMeta?.type === 'delegation-task';
@@ -692,7 +919,9 @@ export const chatMethods = {
     // to the last executed task's startedAt to avoid sending the entire history.
     let lastTaskStartTime: number | null = null;
     if (!isTaskExecution) {
-      const _checkTime = (ts: any) => { if (ts && (!lastTaskStartTime || ts > lastTaskStartTime)) lastTaskStartTime = ts; };
+      const _checkTime = (ts: any) => {
+        if (ts && (!lastTaskStartTime || ts > lastTaskStartTime)) lastTaskStartTime = ts;
+      };
       const _checkTask = (t: any) => {
         if (t.startedAt) _checkTime(new Date(t.startedAt).getTime());
         if (Array.isArray(t.history)) {
@@ -713,7 +942,9 @@ export const chatMethods = {
     // Chat mode scopes to last task start — no compaction needed.
     // Workflow one-shot actions skip compaction (no history included).
     if (shouldCompact && !managesContext && isTaskExecution && !isWorkflowAction) {
-      const nonSummaryMessages = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+      const nonSummaryMessages = agent.conversationHistory.filter(
+        (m: any) => m.type !== 'compaction-summary'
+      );
 
       if (agent._compactionArmed === undefined) {
         agent._compactionArmed = true;
@@ -723,8 +954,13 @@ export const chatMethods = {
       }
 
       if (agent._compactionArmed && nonSummaryMessages.length > compactTrigger) {
-        console.log(`🗜️  [Proactive Compact] "${agent.name}": ${nonSummaryMessages.length} messages — compacting to keep ${maxRecent} recent (context: ${contextLimit})`);
-        if (streamCallback) streamCallback(`\n⏳ *Compacting conversation history (${nonSummaryMessages.length} messages)...*\n`);
+        console.log(
+          `🗜️  [Proactive Compact] "${agent.name}": ${nonSummaryMessages.length} messages — compacting to keep ${maxRecent} recent (context: ${contextLimit})`
+        );
+        if (streamCallback)
+          streamCallback(
+            `\n⏳ *Compacting conversation history (${nonSummaryMessages.length} messages)...*\n`
+          );
         await this._compactHistory(agent, maxRecent);
         agent._compactionArmed = false;
       }
@@ -737,7 +973,9 @@ export const chatMethods = {
     // messages.
     if (isWorkflowAction) {
       // No history — just system prompt + the action prompt (added below)
-      console.log(`📋 [Workflow Action] "${agent.name}": mode=${messageMeta.mode} — no history (one-shot)`);
+      console.log(
+        `📋 [Workflow Action] "${agent.name}": mode=${messageMeta.mode} — no history (one-shot)`
+      );
     } else if (managesContext) {
       // Model manages its own context — only include history relevant to the current task.
       if (activeTask) {
@@ -751,12 +989,18 @@ export const chatMethods = {
           // Fallback: no history newer than taskStartTime (fresh task after a context
           // switch or restart). Without this the model sees only the system prompt + the
           // new user message and often fails to emit proper tool calls.
-          const summary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
-          const realMessages = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+          const summary = agent.conversationHistory.find(
+            (m: any) => m.type === 'compaction-summary'
+          );
+          const realMessages = agent.conversationHistory.filter(
+            (m: any) => m.type !== 'compaction-summary'
+          );
           if (summary) messages.push(summary);
           messages.push(...realMessages.slice(-maxRecent));
         }
-        console.log(`📋 [Task Context] "${agent.name}": task execution (managed) — sending ${messages.length - 1} messages (of ${agent.conversationHistory.length} total)`);
+        console.log(
+          `📋 [Task Context] "${agent.name}": task execution (managed) — sending ${messages.length - 1} messages (of ${agent.conversationHistory.length} total)`
+        );
       } else if (isTopLevelUserMessage) {
         // Direct user message with no active task: scope to last task's startedAt
         // to avoid sending the entire conversation history.
@@ -786,11 +1030,15 @@ export const chatMethods = {
       } else {
         // Fallback: send recent messages if no timestamp match
         const summary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
-        const realMessages = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+        const realMessages = agent.conversationHistory.filter(
+          (m: any) => m.type !== 'compaction-summary'
+        );
         if (summary) messages.push(summary);
         messages.push(...realMessages.slice(-maxRecent));
       }
-      console.log(`📋 [Task Context] "${agent.name}": task execution — sending ${messages.length - 1} messages from task start (of ${agent.conversationHistory.length} total)`);
+      console.log(
+        `📋 [Task Context] "${agent.name}": task execution — sending ${messages.length - 1} messages from task start (of ${agent.conversationHistory.length} total)`
+      );
     } else {
       // Chat mode: scope to last task's startedAt to reduce context size.
       // Only sends the full history as fallback when no task has ever been executed.
@@ -807,11 +1055,15 @@ export const chatMethods = {
       if (!scopedToTask) {
         // Fallback: send full history (no task history found or no matching messages)
         const summary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
-        const realMessages = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+        const realMessages = agent.conversationHistory.filter(
+          (m: any) => m.type !== 'compaction-summary'
+        );
         if (summary) messages.push(summary);
         messages.push(...realMessages);
       }
-      console.log(`📋 [Chat Context] "${agent.name}": chat mode — sending ${messages.length - 1} messages${scopedToTask ? ' (scoped to last task start)' : ' (full history)'} of ${agent.conversationHistory.length} total`);
+      console.log(
+        `📋 [Chat Context] "${agent.name}": chat mode — sending ${messages.length - 1} messages${scopedToTask ? ' (scoped to last task start)' : ' (full history)'} of ${agent.conversationHistory.length} total`
+      );
     }
 
     const userMsg: any = { role: 'user', content: userMessage };
@@ -821,20 +1073,29 @@ export const chatMethods = {
     // Safety token check: only during task execution, non-managed context.
     // Chat mode scopes to last task start — no token-based compaction.
     if (shouldCompact && !managesContext && isTaskExecution) {
-      const realMessages = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+      const realMessages = agent.conversationHistory.filter(
+        (m: any) => m.type !== 'compaction-summary'
+      );
       const estimatedTokens = this._estimateTokens(messages);
       if (estimatedTokens > contextLimit * safetyRatio && realMessages.length > maxRecent) {
         const emergencyKeep = Math.max(6, Math.floor(maxRecent * 0.6));
-        console.log(`🗜️  [Token Compact] "${agent.name}": estimated ${estimatedTokens} tokens vs ${contextLimit} limit — compacting to keep ${emergencyKeep}`);
-        if (streamCallback) streamCallback(`\n⏳ *Compacting conversation history (token limit)...*\n`);
+        console.log(
+          `🗜️  [Token Compact] "${agent.name}": estimated ${estimatedTokens} tokens vs ${contextLimit} limit — compacting to keep ${emergencyKeep}`
+        );
+        if (streamCallback)
+          streamCallback(`\n⏳ *Compacting conversation history (token limit)...*\n`);
         await this._compactHistory(agent, emergencyKeep);
         agent._compactionArmed = false;
         messages.length = 0;
         if (systemContent) {
           messages.push({ role: 'system', content: systemContent });
         }
-        const newSummary = agent.conversationHistory.find((m: any) => m.type === 'compaction-summary');
-        const newReal = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+        const newSummary = agent.conversationHistory.find(
+          (m: any) => m.type === 'compaction-summary'
+        );
+        const newReal = agent.conversationHistory.filter(
+          (m: any) => m.type !== 'compaction-summary'
+        );
         if (newSummary) messages.push(newSummary);
         messages.push(...newReal);
         const rebuildMsg: any = { role: 'user', content: userMessage };
@@ -856,13 +1117,39 @@ export const chatMethods = {
     provider: any,
     messages: any[],
     ctx: {
-      agent: any; id: string; useCliRunner: boolean; streamCallback: any;
-      abortController: AbortController; contextTokens: number; activeTaskId: string | null;
-      sessionKey: string; runnerSessionId: string | undefined; maxTokens: number;
-      llmConfig: any; isContinuation: boolean;
-    },
-  ): Promise<{ text: string; thinking: string; finishReason: string | null; outputTokens: number }> {
-    const { agent, id, useCliRunner, streamCallback, abortController, contextTokens, activeTaskId, sessionKey, runnerSessionId, maxTokens, llmConfig, isContinuation } = ctx;
+      agent: any;
+      id: string;
+      useCliRunner: boolean;
+      streamCallback: any;
+      abortController: AbortController;
+      contextTokens: number;
+      activeTaskId: string | null;
+      sessionKey: string;
+      runnerSessionId: string | undefined;
+      maxTokens: number;
+      llmConfig: any;
+      isContinuation: boolean;
+    }
+  ): Promise<{
+    text: string;
+    thinking: string;
+    finishReason: string | null;
+    outputTokens: number;
+  }> {
+    const {
+      agent,
+      id,
+      useCliRunner,
+      streamCallback,
+      abortController,
+      contextTokens,
+      activeTaskId,
+      sessionKey,
+      runnerSessionId,
+      maxTokens,
+      llmConfig,
+      isContinuation,
+    } = ctx;
     let text = '';
     let thinking = '';
     let finishReason: string | null = null;
@@ -887,7 +1174,12 @@ export const chatMethods = {
         } else {
           thinking += chunk.text;
           agent.currentThinking = thinking;
-          this._emit('agent:thinking', { agentId: id, agentName: agent.name, project: agent.project || null, thinking: agent.currentThinking });
+          this._emit('agent:thinking', {
+            agentId: id,
+            agentName: agent.name,
+            project: agent.project || null,
+            thinking: agent.currentThinking,
+          });
         }
       }
 
@@ -908,14 +1200,18 @@ export const chatMethods = {
           } else {
             this._recordUsage(agent, inTok, outTok, contextTokens);
           }
-          console.log(`📊 [Token] "${agent.name}"${isContinuation ? ' (cont)' : ''}: in=${inTok} out=${outTok} ctx=${contextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`);
+          console.log(
+            `📊 [Token] "${agent.name}"${isContinuation ? ' (cont)' : ''}: in=${inTok} out=${outTok} ctx=${contextTokens} cost=${cost != null ? '$' + cost.toFixed(4) : 'calc'}`
+          );
         } else if (!isContinuation) {
           console.warn(`⚠️ [Token] "${agent.name}": done event with no usage data`);
         }
         if (chunk.runnerSessionId && chunk.runnerSessionId !== runnerSessionId) {
           agent.runnerSessions[sessionKey] = chunk.runnerSessionId;
           if (!isContinuation) {
-            console.log(`🔑 [Session] "${agent.name}" task=${sessionKey} → runner session ${chunk.runnerSessionId.slice(0, 12)}`);
+            console.log(
+              `🔑 [Session] "${agent.name}" task=${sessionKey} → runner session ${chunk.runnerSessionId.slice(0, 12)}`
+            );
           }
         }
         if (chunk.finishReason) {
@@ -927,7 +1223,23 @@ export const chatMethods = {
     return { text, thinking, finishReason, outputTokens };
   },
 
-  async _streamAndContinue(this: any, agent: any, id: string, messages: any[], llmConfig: any, streamCallback: any, abortController: AbortController, delegationDepth: number, activeTaskId: string | null = null): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null; outputTokens: number; durationMs: number }> {
+  async _streamAndContinue(
+    this: any,
+    agent: any,
+    id: string,
+    messages: any[],
+    llmConfig: any,
+    streamCallback: any,
+    abortController: AbortController,
+    delegationDepth: number,
+    activeTaskId: string | null = null
+  ): Promise<{
+    fullResponse: string;
+    thinkingBuffer: string;
+    finishReason: string | null;
+    outputTokens: number;
+    durationMs: number;
+  }> {
     // When the agent is bound to a CLI runner (opencode, openclaw, hermes,
     // codex, claudecode), route the chat call through the runner-service so
     // the CLI is the one talking to the LLM with the user-selected
@@ -948,12 +1260,15 @@ export const chatMethods = {
       // Only forward the LLM config when an actual config is selected.
       // With llmConfigId="" ("Default LLM") the runner falls back to its
       // built-in credentials.
-      llmConfig: useCliRunner && agent.llmConfigId ? {
-        provider: llmConfig.provider,
-        model: llmConfig.model,
-        apiKey: llmConfig.apiKey,
-        endpoint: llmConfig.endpoint || null,
-      } : null,
+      llmConfig:
+        useCliRunner && agent.llmConfigId
+          ? {
+              provider: llmConfig.provider,
+              model: llmConfig.model,
+              apiKey: llmConfig.apiKey,
+              endpoint: llmConfig.endpoint || null,
+            }
+          : null,
     });
 
     let fullResponse = '';
@@ -978,14 +1293,23 @@ export const chatMethods = {
     // never created here) it mints a fresh UUID and replays history, then
     // returns the new UUID on the `done` event for us to persist.
     const sessionKey = activeTaskId || '_default';
-    if (!agent.runnerSessions || typeof agent.runnerSessions !== 'object') agent.runnerSessions = {};
+    if (!agent.runnerSessions || typeof agent.runnerSessions !== 'object')
+      agent.runnerSessions = {};
     const initialRunnerSessionId: string | undefined = agent.runnerSessions[sessionKey];
 
     const first = await this._consumeStream(provider, messages, {
-      agent, id, useCliRunner, streamCallback, abortController,
-      contextTokens: estimatedContextTokens, activeTaskId, sessionKey,
-      runnerSessionId: initialRunnerSessionId, maxTokens: safeMaxTokens,
-      llmConfig, isContinuation: false,
+      agent,
+      id,
+      useCliRunner,
+      streamCallback,
+      abortController,
+      contextTokens: estimatedContextTokens,
+      activeTaskId,
+      sessionKey,
+      runnerSessionId: initialRunnerSessionId,
+      maxTokens: safeMaxTokens,
+      llmConfig,
+      isContinuation: false,
     });
     fullResponse += first.text;
     thinkingBuffer += first.thinking;
@@ -997,21 +1321,35 @@ export const chatMethods = {
     let continuationCount = 0;
     while (finishReason === 'length' && continuationCount < MAX_CONTINUATIONS) {
       continuationCount++;
-      console.log(`🔄 [Continuation ${continuationCount}/${MAX_CONTINUATIONS}] "${agent.name}": response was truncated (finish_reason=length), requesting continuation...`);
+      console.log(
+        `🔄 [Continuation ${continuationCount}/${MAX_CONTINUATIONS}] "${agent.name}": response was truncated (finish_reason=length), requesting continuation...`
+      );
       if (streamCallback) streamCallback(`\n⏳ *Response truncated, continuing...*\n`);
 
       messages.push({ role: 'assistant', content: fullResponse });
-      messages.push({ role: 'user', content: 'Your previous response was cut off because it exceeded the maximum output length. Continue EXACTLY from where you stopped. Do not repeat anything you already wrote — just output the remaining content.' });
+      messages.push({
+        role: 'user',
+        content:
+          'Your previous response was cut off because it exceeded the maximum output length. Continue EXACTLY from where you stopped. Do not repeat anything you already wrote — just output the remaining content.',
+      });
 
       finishReason = null;
       const contMaxTokens = this._safeMaxTokens(messages, agent, llmConfig);
       this._truncateMessagesToFit(messages, llmConfig.contextLength || 131072, contMaxTokens);
       const contContextTokens = this._estimateTokens(messages);
       const cont = await this._consumeStream(provider, messages, {
-        agent, id, useCliRunner, streamCallback, abortController,
-        contextTokens: contContextTokens, activeTaskId, sessionKey,
-        runnerSessionId: agent.runnerSessions?.[sessionKey], maxTokens: contMaxTokens,
-        llmConfig, isContinuation: true,
+        agent,
+        id,
+        useCliRunner,
+        streamCallback,
+        abortController,
+        contextTokens: contContextTokens,
+        activeTaskId,
+        sessionKey,
+        runnerSessionId: agent.runnerSessions?.[sessionKey],
+        maxTokens: contMaxTokens,
+        llmConfig,
+        isContinuation: true,
       });
       fullResponse += cont.text;
       thinkingBuffer += cont.thinking;
@@ -1022,22 +1360,45 @@ export const chatMethods = {
     }
 
     if (continuationCount > 0 && finishReason === 'length') {
-      console.log(`⚠️  [Continuation] "${agent.name}": still truncated after ${MAX_CONTINUATIONS} continuations`);
+      console.log(
+        `⚠️  [Continuation] "${agent.name}": still truncated after ${MAX_CONTINUATIONS} continuations`
+      );
     }
 
-    return { fullResponse, thinkingBuffer, finishReason, outputTokens: totalOutputTokens, durationMs: Date.now() - responseStartedAt };
+    return {
+      fullResponse,
+      thinkingBuffer,
+      finishReason,
+      outputTokens: totalOutputTokens,
+      durationMs: Date.now() - responseStartedAt,
+    };
   },
 
-  async _processPostResponseActions(this: any, agent: any, id: string, responseForParsing: string, fullResponse: string, streamCallback: any, delegationDepth: number, messageMeta: any): Promise<{ earlyReturn?: any }> {
+  async _processPostResponseActions(
+    this: any,
+    agent: any,
+    id: string,
+    responseForParsing: string,
+    fullResponse: string,
+    streamCallback: any,
+    delegationDepth: number,
+    messageMeta: any
+  ): Promise<{ earlyReturn?: any }> {
     const isTopLevel = delegationDepth === 0 && !messageMeta;
 
     const isNudge = messageMeta?.type === 'nudge';
-    const intentPatterns = /^[\s\S]{0,200}\b(i('ll| will| am going to|'m going to) (start|begin|proceed|now|first)|let me (start|begin|proceed|first|now|go ahead)|let's (start|begin|proceed)|je vais (commencer|d'abord|maintenant)|commençons par|je m'en occupe)\b/i;
+    const intentPatterns =
+      /^[\s\S]{0,200}\b(i('ll| will| am going to|'m going to) (start|begin|proceed|now|first)|let me (start|begin|proceed|first|now|go ahead)|let's (start|begin|proceed)|je vais (commencer|d'abord|maintenant)|commençons par|je m'en occupe)\b/i;
     const looksLikePurePlan = responseForParsing.length < 500;
 
     // Process tool calls
     {
-      const toolResults = await this._processToolCalls(id, responseForParsing, streamCallback, delegationDepth);
+      const toolResults = await this._processToolCalls(
+        id,
+        responseForParsing,
+        streamCallback,
+        delegationDepth
+      );
       if (toolResults.length > 0) {
         const hasTerminal = toolResults.some((r: any) => r.isTerminal);
         const nonTerminal = toolResults.filter((r: any) => !r.isTerminal);
@@ -1049,22 +1410,30 @@ export const chatMethods = {
         if (hasTerminal || nonTerminal.length === 0) {
           return {};
         }
-        const resultsSummary = nonTerminal.map((r: any) => {
-          if (r.isErrorReport) {
-            return `--- ⚠️ ERROR REPORT ---\n${r.args[0] || r.result}`;
-          }
-          if (!r.success) {
-            const parts = [`ERROR: ${r.error}`];
-            if (r.result) parts.push(`OUTPUT:\n${r.result}`);
-            return `--- ${r.tool}(${r.args.join(', ')}) ---\n${parts.join('\n')}`;
-          }
-          return `--- ${r.tool}(${r.args.join(', ')}) ---\n${r.result}`;
-        }).join('\n\n');
+        const resultsSummary = nonTerminal
+          .map((r: any) => {
+            if (r.isErrorReport) {
+              return `--- ⚠️ ERROR REPORT ---\n${r.args[0] || r.result}`;
+            }
+            if (!r.success) {
+              const parts = [`ERROR: ${r.error}`];
+              if (r.result) parts.push(`OUTPUT:\n${r.result}`);
+              return `--- ${r.tool}(${r.args.join(', ')}) ---\n${parts.join('\n')}`;
+            }
+            return `--- ${r.tool}(${r.args.join(', ')}) ---\n${r.result}`;
+          })
+          .join('\n\n');
 
         const hasErrorReports = nonTerminal.some((r: any) => r.isErrorReport);
         const hasRealErrors = nonTerminal.some((r: any) => !r.success && !r.isErrorReport);
-        const hasSuccessfulCommit = nonTerminal.some((r: any) => r.tool === 'run_command' && r.success && (r.args[0] || '').toLowerCase().includes('git push'));
-        let continuationPrompt = '\nThese are the results of the tools YOU just called. Continue your work based on these results. Do NOT re-explain your plan or re-call the same tools — use the output above and proceed to the next step.';
+        const hasSuccessfulCommit = nonTerminal.some(
+          (r: any) =>
+            r.tool === 'run_command' &&
+            r.success &&
+            (r.args[0] || '').toLowerCase().includes('git push')
+        );
+        let continuationPrompt =
+          '\nThese are the results of the tools YOU just called. Continue your work based on these results. Do NOT re-explain your plan or re-call the same tools — use the output above and proceed to the next step.';
         // Remind the LLM of the original task/user message to prevent it from
         // losing context across multiple tool-result iterations.
         const originalTask = agent.currentTask || '';
@@ -1072,11 +1441,14 @@ export const chatMethods = {
           continuationPrompt += `\nReminder — your current task: "${originalTask}"`;
         }
         if (hasErrorReports) {
-          continuationPrompt = '\nYou reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
+          continuationPrompt =
+            '\nYou reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
         } else if (hasRealErrors) {
-          continuationPrompt = '\nSome tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
+          continuationPrompt =
+            '\nSome tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
         } else if (hasSuccessfulCommit) {
-          continuationPrompt = '\nYour code has been committed and pushed. Now call @update_task(taskId, <final column>, summary) to move the task to its final column and signal that your task is done.';
+          continuationPrompt =
+            '\nYour code has been committed and pushed. Now call @update_task(taskId, <final column>, summary) to move the task to its final column and signal that your task is done.';
         }
 
         const toolImages = nonTerminal.flatMap((r: any) => r.images || []);
@@ -1086,7 +1458,18 @@ export const chatMethods = {
           `[TOOL RESULTS — DO NOT RESTART YOUR REASONING]\n${resultsSummary}\n\n${continuationPrompt}`,
           streamCallback,
           delegationDepth,
-          { type: 'tool-result', toolResults: nonTerminal.map((r: any) => ({ tool: r.tool, args: r.args, success: r.success, result: r.result || undefined, error: r.success ? undefined : r.error, isErrorReport: r.isErrorReport || false, images: r.images || undefined })) },
+          {
+            type: 'tool-result',
+            toolResults: nonTerminal.map((r: any) => ({
+              tool: r.tool,
+              args: r.args,
+              success: r.success,
+              result: r.result || undefined,
+              error: r.success ? undefined : r.error,
+              isErrorReport: r.isErrorReport || false,
+              images: r.images || undefined,
+            })),
+          },
           toolImages.length > 0 ? toolImages : null
         );
         return { earlyReturn: continuedResponse };
@@ -1095,10 +1478,13 @@ export const chatMethods = {
       const hasTools = agent.project || agent.mcpServers?.length > 0 || agent.skills?.length > 0;
       if (hasTools && !isNudge && looksLikePurePlan && responseForParsing.length > 20) {
         if (intentPatterns.test(responseForParsing)) {
-          console.log(`🔄 [Nudge] Agent "${agent.name}" described intent but used no tools — nudging`);
-          const nudgeMessage = agent.project || agent.skills?.length > 0
-            ? '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use @read_file, @write_file, @list_dir, @search_files, or @run_command to accomplish your task. Do NOT explain what you will do — just do it.'
-            : '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use your available @mcp_call tools to accomplish your task. Do NOT explain what you will do — just do it.';
+          console.log(
+            `🔄 [Nudge] Agent "${agent.name}" described intent but used no tools — nudging`
+          );
+          const nudgeMessage =
+            agent.project || agent.skills?.length > 0
+              ? '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use @read_file, @write_file, @list_dir, @search_files, or @run_command to accomplish your task. Do NOT explain what you will do — just do it.'
+              : '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use your available @mcp_call tools to accomplish your task. Do NOT explain what you will do — just do it.';
           const nudgeResponse = await this.sendMessage(
             id,
             nudgeMessage,
@@ -1122,27 +1508,40 @@ export const chatMethods = {
 
           for (const askCmd of askCommands) {
             const targetAgent = Array.from(this.agents.values()).find(
-              (a: any) => a.name.toLowerCase() === askCmd.agentName.toLowerCase() && a.id !== id && a.enabled !== false
+              (a: any) =>
+                a.name.toLowerCase() === askCmd.agentName.toLowerCase() &&
+                a.id !== id &&
+                a.enabled !== false
             );
 
             if (!targetAgent) {
               console.log(`⚠️  [Ask] Agent "${askCmd.agentName}" not found or disabled`);
-              askResults.push({ agentName: askCmd.agentName, answer: null, error: `Agent "${askCmd.agentName}" not found or disabled in swarm` });
+              askResults.push({
+                agentName: askCmd.agentName,
+                answer: null,
+                error: `Agent "${askCmd.agentName}" not found or disabled in swarm`,
+              });
               continue;
             }
 
             if ((targetAgent as any).status === 'busy') {
               console.log(`⚠️  [Ask] Agent "${askCmd.agentName}" is busy`);
-              askResults.push({ agentName: askCmd.agentName, answer: null, error: `Agent "${askCmd.agentName}" is currently busy. Try again later.` });
+              askResults.push({
+                agentName: askCmd.agentName,
+                answer: null,
+                error: `Agent "${askCmd.agentName}" is currently busy. Try again later.`,
+              });
               continue;
             }
 
-            console.log(`💬 [Ask] ${agent.name} → ${(targetAgent as any).name}: "${askCmd.question.slice(0, 80)}"`);
+            console.log(
+              `💬 [Ask] ${agent.name} → ${(targetAgent as any).name}: "${askCmd.question.slice(0, 80)}"`
+            );
 
             this._emit('agent:ask', {
               from: { id, name: agent.name },
               to: { id: (targetAgent as any).id, name: (targetAgent as any).name },
-              question: askCmd.question
+              question: askCmd.question,
             });
 
             this._emit('agent:stream:start', { agentId: (targetAgent as any).id });
@@ -1165,14 +1564,20 @@ export const chatMethods = {
             } catch (err: any) {
               this._emit('agent:stream:end', { agentId: (targetAgent as any).id });
               console.error(`💬 [Ask] Error from ${(targetAgent as any).name}: ${err.message}`);
-              askResults.push({ agentName: (targetAgent as any).name, answer: null, error: err.message });
+              askResults.push({
+                agentName: (targetAgent as any).name,
+                answer: null,
+                error: err.message,
+              });
             }
           }
 
-          const answersSummary = askResults.map(r => {
-            if (r.error) return `--- ⚠️ ERROR asking ${r.agentName} ---\n${r.error}`;
-            return `--- Answer from ${r.agentName} ---\n${r.answer}`;
-          }).join('\n\n');
+          const answersSummary = askResults
+            .map(r => {
+              if (r.error) return `--- ⚠️ ERROR asking ${r.agentName} ---\n${r.error}`;
+              return `--- Answer from ${r.agentName} ---\n${r.answer}`;
+            })
+            .join('\n\n');
 
           if (streamCallback) streamCallback(`\n\n--- Received answers, continuing ---\n\n`);
 
@@ -1181,7 +1586,14 @@ export const chatMethods = {
             `[ASK RESULTS]\n${answersSummary}\n\nContinue with your task based on these answers.`,
             streamCallback,
             delegationDepth,
-            { type: 'ask-result', askResults: askResults.map(r => ({ agentName: r.agentName, answer: r.answer, error: r.error })) }
+            {
+              type: 'ask-result',
+              askResults: askResults.map(r => ({
+                agentName: r.agentName,
+                answer: r.answer,
+                error: r.error,
+              })),
+            }
           );
           return { earlyReturn: continuedResponse };
         }

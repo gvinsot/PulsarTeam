@@ -21,7 +21,7 @@ export type McpHandlerContext = {
  */
 export function createMcpHttpHandler(
   label: string,
-  buildServer: (ctx: McpHandlerContext) => McpServer,
+  buildServer: (ctx: McpHandlerContext) => McpServer
 ) {
   return async (req: any, res: any) => {
     if (req.method !== 'POST') {

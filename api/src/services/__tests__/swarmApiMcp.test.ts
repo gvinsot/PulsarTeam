@@ -37,7 +37,8 @@ mock.module('../database.js', {
     getAllBoards: async () => [
       { id: 'board-1', name: 'Default', is_default: true, workflow: BOARD_WORKFLOW },
     ],
-    getBoardById: async (id: string) => (id === 'board-1' ? { id: 'board-1', name: 'Default', workflow: BOARD_WORKFLOW } : null),
+    getBoardById: async (id: string) =>
+      id === 'board-1' ? { id: 'board-1', name: 'Default', workflow: BOARD_WORKFLOW } : null,
     getBoardWithMostTasksForProject: async () => null,
     searchTasks: async (opts: any) => {
       searchTasksCalls.push(opts);
@@ -66,7 +67,13 @@ function makeFakeAgentManager() {
   // (getTaskByIdPrefix) finds tasks this fake manager creates.
   taskRows.clear();
   const tasks: any[] = [];
-  const calls: any = { addTask: [], setTaskStatus: [], updateTaskRepo: [], updateTaskStorage: [], recordTaskCompletion: [] };
+  const calls: any = {
+    addTask: [],
+    setTaskStatus: [],
+    updateTaskRepo: [],
+    updateTaskStorage: [],
+    recordTaskCompletion: [],
+  };
 
   return {
     agents: new Map([[agent.id, agent]]),
@@ -97,16 +104,21 @@ function makeFakeAgentManager() {
       const t = tasks.find(x => x.id === taskId);
       if (t) {
         t.repoFullName = repo;
-        t.repoProvider = repo ? (provider || 'github') : null;
+        t.repoProvider = repo ? provider || 'github' : null;
       }
       calls.updateTaskRepo.push({ agentId, taskId, repo, provider });
       return t;
     },
-    updateTaskStorage(agentId: string, taskId: string, path: string | null, provider: string | null) {
+    updateTaskStorage(
+      agentId: string,
+      taskId: string,
+      path: string | null,
+      provider: string | null
+    ) {
       const t = tasks.find(x => x.id === taskId);
       if (t) {
         t.storagePath = path;
-        t.storageProvider = path ? (provider || 'onedrive') : null;
+        t.storageProvider = path ? provider || 'onedrive' : null;
       }
       calls.updateTaskStorage.push({ agentId, taskId, path, provider });
       return t;
@@ -238,7 +250,11 @@ test('add_task without a caller agent creates a board-level task (no owner)', as
   assert.equal(body.agent, null, 'no caller → no owner');
   assert.equal(body.board_id, 'board-1');
   assert.equal(am._calls.addTask.length, 1);
-  assert.equal(am._calls.addTask[0].agentId, null, 'addTask called with agentId=null when no caller');
+  assert.equal(
+    am._calls.addTask[0].agentId,
+    null,
+    'addTask called with agentId=null when no caller'
+  );
 });
 
 test('add_task owns the task to the calling agent', async () => {
@@ -533,20 +549,41 @@ test('search_tasks forwards filters and returns a slim payload', async () => {
     returned: 2,
     tasks: [
       {
-        id: 't1', title: 'Reset password flow', text: 'Implement reset endpoint',
-        status: 'done', agentId: 'agent-1', assignee: null, project: 'acme',
-        boardId: 'board-1', repoFullName: 'acme/widgets',
+        id: 't1',
+        title: 'Reset password flow',
+        text: 'Implement reset endpoint',
+        status: 'done',
+        agentId: 'agent-1',
+        assignee: null,
+        project: 'acme',
+        boardId: 'board-1',
+        repoFullName: 'acme/widgets',
         repoHtmlUrl: 'https://github.com/acme/widgets',
-        storagePath: null, commits: ['a', 'b'], history: [{}, {}, {}],
-        error: null, createdAt: '2026-05-10T00:00:00Z',
-        startedAt: '2026-05-10T01:00:00Z', completedAt: '2026-05-10T02:00:00Z',
+        storagePath: null,
+        commits: ['a', 'b'],
+        history: [{}, {}, {}],
+        error: null,
+        createdAt: '2026-05-10T00:00:00Z',
+        startedAt: '2026-05-10T01:00:00Z',
+        completedAt: '2026-05-10T02:00:00Z',
       },
       {
-        id: 't2', title: null, text: 'Fix old password reset bug',
-        status: 'done', agentId: 'agent-1', assignee: null, project: 'acme',
-        boardId: 'board-1', repoFullName: null, repoHtmlUrl: null,
-        storagePath: null, commits: [], history: [], error: null,
-        createdAt: '2026-04-01T00:00:00Z', startedAt: null,
+        id: 't2',
+        title: null,
+        text: 'Fix old password reset bug',
+        status: 'done',
+        agentId: 'agent-1',
+        assignee: null,
+        project: 'acme',
+        boardId: 'board-1',
+        repoFullName: null,
+        repoHtmlUrl: null,
+        storagePath: null,
+        commits: [],
+        history: [],
+        error: null,
+        createdAt: '2026-04-01T00:00:00Z',
+        startedAt: null,
         completedAt: '2026-04-02T00:00:00Z',
       },
     ],
@@ -599,7 +636,12 @@ test('update_task with a comment finishes the task', async () => {
   const handler = getToolHandler(server, 'update_task');
 
   // No status: pure completion in place (the workflow chain advances the column).
-  const result = await handler({ agent_id: 'agent-1', task_id: 'task-1', comment: 'Implemented auth', commits: 'abc1234:feat: auth' });
+  const result = await handler({
+    agent_id: 'agent-1',
+    task_id: 'task-1',
+    comment: 'Implemented auth',
+    commits: 'abc1234:feat: auth',
+  });
 
   assert.notEqual(result.isError, true);
   assert.equal(am._calls.recordTaskCompletion.length, 1);
@@ -622,7 +664,12 @@ test('update_task moves the column AND finishes when given status + comment', as
   const server = createSwarmApiMcpServer(am as any);
   const handler = getToolHandler(server, 'update_task');
 
-  const result = await handler({ agent_id: 'agent-1', task_id: 'task-1', status: 'done', comment: 'Done' });
+  const result = await handler({
+    agent_id: 'agent-1',
+    task_id: 'task-1',
+    status: 'done',
+    comment: 'Done',
+  });
 
   assert.notEqual(result.isError, true);
   // Completion runs before the move so the task is still active for commit linking.
@@ -659,7 +706,5 @@ test('list_boards exposes repos in use on each board', async () => {
 
   assert.equal(body.count, 1);
   assert.equal(body.boards[0].id, 'board-1');
-  assert.deepEqual(body.boards[0].repos, [
-    { provider: 'github', fullName: 'acme/widgets' },
-  ]);
+  assert.deepEqual(body.boards[0].repos, [{ provider: 'github', fullName: 'acme/widgets' }]);
 });

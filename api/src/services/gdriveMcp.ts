@@ -60,7 +60,7 @@ function formatItem(item: any) {
 async function resolveItemId(
   pathOrId: string,
   agentId: string | null,
-  boardId: string | null,
+  boardId: string | null
 ): Promise<{ id: string; name: string; mimeType: string }> {
   if (!pathOrId) throw new Error('A non-empty path or id is required.');
 
@@ -70,12 +70,15 @@ async function resolveItemId(
     const meta = await driveFetch(
       `/files/${encodeURIComponent(pathOrId)}?fields=id,name,mimeType`,
       agentId,
-      boardId,
+      boardId
     );
     return { id: meta.id, name: meta.name, mimeType: meta.mimeType };
   }
 
-  const segments = pathOrId.split('/').map(s => s.trim()).filter(Boolean);
+  const segments = pathOrId
+    .split('/')
+    .map(s => s.trim())
+    .filter(Boolean);
   let parentId = 'root';
   let lastMeta: any = { id: 'root', name: 'My Drive', mimeType: FOLDER_MIME };
 
@@ -89,10 +92,14 @@ async function resolveItemId(
     const result = await driveFetch(`/files?${params}`, agentId, boardId);
     const files = result.files || [];
     if (files.length === 0) {
-      throw new Error(`Drive item not found: "${pathOrId}" (segment "${segment}" missing under parent "${lastMeta.name}").`);
+      throw new Error(
+        `Drive item not found: "${pathOrId}" (segment "${segment}" missing under parent "${lastMeta.name}").`
+      );
     }
     if (files.length > 1) {
-      throw new Error(`Drive path "${pathOrId}" is ambiguous: multiple items named "${segment}" exist. Use the file id instead.`);
+      throw new Error(
+        `Drive path "${pathOrId}" is ambiguous: multiple items named "${segment}" exist. Use the file id instead.`
+      );
     }
     lastMeta = files[0];
     parentId = files[0].id;
@@ -110,7 +117,7 @@ async function downloadFile(
   mimeType: string,
   agentId: string | null,
   boardId: string | null,
-  maxBytes: number = MAX_TEXT_READ_BYTES,
+  maxBytes: number = MAX_TEXT_READ_BYTES
 ): Promise<{ buffer: Buffer; mimeType: string; exported: boolean }> {
   if (mimeType === FOLDER_MIME) {
     throw new Error('Cannot download a folder.');
@@ -126,17 +133,14 @@ async function downloadFile(
       `/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent(exportMime)}`,
       agentId,
       boardId,
-      { raw: true },
+      { raw: true }
     );
     outMime = exportMime;
     exported = true;
   } else {
-    res = await driveFetch(
-      `/files/${encodeURIComponent(fileId)}?alt=media`,
-      agentId,
-      boardId,
-      { raw: true },
-    );
+    res = await driveFetch(`/files/${encodeURIComponent(fileId)}?alt=media`, agentId, boardId, {
+      raw: true,
+    });
   }
 
   return { buffer: await readBodyCapped(res, maxBytes), mimeType: outMime, exported };
@@ -144,7 +148,7 @@ async function downloadFile(
 
 export function createGdriveMcpServer(
   agentId: string | null = null,
-  boardId: string | null = null,
+  boardId: string | null = null
 ) {
   const server = new McpServer({
     name: 'GoogleDrive',
@@ -160,21 +164,30 @@ export function createGdriveMcpServer(
       const about = await driveFetch(
         '/about?fields=user(emailAddress,displayName),storageQuota(limit,usage,usageInDrive)',
         agentId,
-        boardId,
+        boardId
       );
       const quota = about.storageQuota || {};
-      const limit = quota.limit ? `${(Number(quota.limit) / 1024 / 1024 / 1024).toFixed(2)} GB` : 'unlimited';
-      const usage = quota.usage ? `${(Number(quota.usage) / 1024 / 1024 / 1024).toFixed(2)} GB` : '0 GB';
-      const inDrive = quota.usageInDrive ? `${(Number(quota.usageInDrive) / 1024 / 1024 / 1024).toFixed(2)} GB` : '0 GB';
+      const limit = quota.limit
+        ? `${(Number(quota.limit) / 1024 / 1024 / 1024).toFixed(2)} GB`
+        : 'unlimited';
+      const usage = quota.usage
+        ? `${(Number(quota.usage) / 1024 / 1024 / 1024).toFixed(2)} GB`
+        : '0 GB';
+      const inDrive = quota.usageInDrive
+        ? `${(Number(quota.usageInDrive) / 1024 / 1024 / 1024).toFixed(2)} GB`
+        : '0 GB';
 
       return {
-        content: [{
-          type: 'text',
-          text: `Google Drive:\n` +
-            `User: ${about.user?.displayName || ''} <${about.user?.emailAddress || ''}>\n` +
-            `Total quota: ${limit}\n` +
-            `Used: ${usage} (${inDrive} in My Drive)`
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Google Drive:\n` +
+              `User: ${about.user?.displayName || ''} <${about.user?.emailAddress || ''}>\n` +
+              `Total quota: ${limit}\n` +
+              `Used: ${usage} (${inDrive} in My Drive)`,
+          },
+        ],
       };
     }
   );
@@ -184,9 +197,18 @@ export function createGdriveMcpServer(
     'list_files',
     'List files and folders. Pass "path" (e.g. "/" or "/Documents") or "folderId" to scope the listing.',
     {
-      path: z.string().optional().describe('Folder path. "/" for root. Defaults to root when neither path nor folderId is given.'),
+      path: z
+        .string()
+        .optional()
+        .describe(
+          'Folder path. "/" for root. Defaults to root when neither path nor folderId is given.'
+        ),
       folderId: z.string().optional().describe('Drive folder id (alternative to path).'),
-      pageSize: z.number().optional().default(50).describe('Number of items to return (1-100, default 50).'),
+      pageSize: z
+        .number()
+        .optional()
+        .default(50)
+        .describe('Number of items to return (1-100, default 50).'),
       includeTrashed: z.boolean().optional().default(false).describe('Include items in the trash.'),
     },
     async ({ path, folderId, pageSize, includeTrashed }) => {
@@ -197,7 +219,7 @@ export function createGdriveMcpServer(
         const meta = await driveFetch(
           `/files/${encodeURIComponent(folderId)}?fields=id,name,mimeType`,
           agentId,
-          boardId,
+          boardId
         );
         if (meta.mimeType !== FOLDER_MIME) {
           throw new Error(`"${folderId}" is not a folder.`);
@@ -235,10 +257,12 @@ export function createGdriveMcpServer(
       });
 
       return {
-        content: [{
-          type: 'text',
-          text: `Folder: ${parentName} (id: ${parentId})\nItems: ${items.length}\n\n${lines.join('\n\n')}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Folder: ${parentName} (id: ${parentId})\nItems: ${items.length}\n\n${lines.join('\n\n')}`,
+          },
+        ],
       };
     }
   );
@@ -303,29 +327,33 @@ export function createGdriveMcpServer(
       const meta = await driveFetch(
         `/files/${encodeURIComponent(resolved.id)}?fields=id,name,mimeType,size,modifiedTime,createdTime,parents,webViewLink,owners(displayName,emailAddress),shared,trashed,description`,
         agentId,
-        boardId,
+        boardId
       );
 
       const size = meta.size ? `${(Number(meta.size) / 1024).toFixed(1)} KB` : '—';
-      const owners = (meta.owners || []).map((o: any) => `${o.displayName} <${o.emailAddress}>`).join(', ');
+      const owners = (meta.owners || [])
+        .map((o: any) => `${o.displayName} <${o.emailAddress}>`)
+        .join(', ');
 
       return {
-        content: [{
-          type: 'text',
-          text:
-            `Name: ${meta.name}\n` +
-            `ID: ${meta.id}\n` +
-            `Type: ${meta.mimeType}\n` +
-            `Size: ${size}\n` +
-            `Created: ${meta.createdTime || '—'}\n` +
-            `Modified: ${meta.modifiedTime || '—'}\n` +
-            `Owners: ${owners || '—'}\n` +
-            `Shared: ${meta.shared ? 'yes' : 'no'}\n` +
-            `Trashed: ${meta.trashed ? 'yes' : 'no'}\n` +
-            `Web link: ${meta.webViewLink || '—'}\n` +
-            `Parents: ${(meta.parents || []).join(', ') || '—'}\n` +
-            (meta.description ? `Description: ${meta.description}\n` : ''),
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Name: ${meta.name}\n` +
+              `ID: ${meta.id}\n` +
+              `Type: ${meta.mimeType}\n` +
+              `Size: ${size}\n` +
+              `Created: ${meta.createdTime || '—'}\n` +
+              `Modified: ${meta.modifiedTime || '—'}\n` +
+              `Owners: ${owners || '—'}\n` +
+              `Shared: ${meta.shared ? 'yes' : 'no'}\n` +
+              `Trashed: ${meta.trashed ? 'yes' : 'no'}\n` +
+              `Web link: ${meta.webViewLink || '—'}\n` +
+              `Parents: ${(meta.parents || []).join(', ') || '—'}\n` +
+              (meta.description ? `Description: ${meta.description}\n` : ''),
+          },
+        ],
       };
     }
   );
@@ -337,7 +365,10 @@ export function createGdriveMcpServer(
     {
       path: z.string().optional().describe('Drive path (e.g. "/Documents/notes.txt").'),
       fileId: z.string().optional().describe('Drive file id (alternative to path).'),
-      maxBytes: z.number().optional().describe(`Max bytes to read (default ${MAX_TEXT_READ_BYTES}).`),
+      maxBytes: z
+        .number()
+        .optional()
+        .describe(`Max bytes to read (default ${MAX_TEXT_READ_BYTES}).`),
     },
     async ({ path, fileId, maxBytes }) => {
       if (!path && !fileId) throw new Error('Provide "path" or "fileId".');
@@ -345,7 +376,7 @@ export function createGdriveMcpServer(
         ? await driveFetch(
             `/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType`,
             agentId,
-            boardId,
+            boardId
           )
         : await resolveItemId(path!, agentId, boardId);
 
@@ -355,7 +386,7 @@ export function createGdriveMcpServer(
         meta.mimeType,
         agentId,
         boardId,
-        limit,
+        limit
       );
 
       const looksText =
@@ -368,22 +399,26 @@ export function createGdriveMcpServer(
       if (looksText) {
         const text = buffer.toString('utf-8');
         return {
-          content: [{
-            type: 'text',
-            text:
-              `File: ${meta.name} (${meta.mimeType}${exported ? ` → exported as ${mimeType}` : ''})\n` +
-              `Bytes: ${buffer.length}\n\n${text}`,
-          }],
+          content: [
+            {
+              type: 'text',
+              text:
+                `File: ${meta.name} (${meta.mimeType}${exported ? ` → exported as ${mimeType}` : ''})\n` +
+                `Bytes: ${buffer.length}\n\n${text}`,
+            },
+          ],
         };
       }
 
       return {
-        content: [{
-          type: 'text',
-          text:
-            `Binary file ${meta.name} (${mimeType}, ${buffer.length} bytes).\n` +
-            `Base64 content:\n${buffer.toString('base64')}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Binary file ${meta.name} (${mimeType}, ${buffer.length} bytes).\n` +
+              `Base64 content:\n${buffer.toString('base64')}`,
+          },
+        ],
       };
     }
   );
@@ -394,7 +429,10 @@ export function createGdriveMcpServer(
     'Create a new folder under a given parent. Provide either "parentPath" or "parentId" (defaults to root).',
     {
       name: z.string().describe('Folder name.'),
-      parentPath: z.string().optional().describe('Parent folder path (e.g. "/Documents"). Defaults to root.'),
+      parentPath: z
+        .string()
+        .optional()
+        .describe('Parent folder path (e.g. "/Documents"). Defaults to root.'),
       parentId: z.string().optional().describe('Parent folder id (alternative to parentPath).'),
     },
     async ({ name, parentPath, parentId }) => {
@@ -407,16 +445,23 @@ export function createGdriveMcpServer(
         parent = resolved.id;
       }
 
-      const result = await driveFetch('/files?fields=id,name,parents,webViewLink', agentId, boardId, {
-        method: 'POST',
-        body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parent] }),
-      });
+      const result = await driveFetch(
+        '/files?fields=id,name,parents,webViewLink',
+        agentId,
+        boardId,
+        {
+          method: 'POST',
+          body: JSON.stringify({ name, mimeType: FOLDER_MIME, parents: [parent] }),
+        }
+      );
 
       return {
-        content: [{
-          type: 'text',
-          text: `Folder created: ${result.name}\nID: ${result.id}\nParent: ${parent}\nLink: ${result.webViewLink || '—'}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text: `Folder created: ${result.name}\nID: ${result.id}\nParent: ${parent}\nLink: ${result.webViewLink || '—'}`,
+          },
+        ],
       };
     }
   );
@@ -427,9 +472,20 @@ export function createGdriveMcpServer(
     'Upload a new file to Drive (text or base64). Provide either "parentPath" or "parentId" (defaults to root).',
     {
       name: z.string().describe('File name with extension (e.g. "report.txt").'),
-      content: z.string().describe('File content. UTF-8 text by default, or base64 when "encoding" is "base64".'),
-      mimeType: z.string().optional().describe('MIME type (e.g. "text/plain", "application/pdf"). Auto-detected from extension when omitted.'),
-      encoding: z.enum(['utf8', 'base64']).optional().default('utf8').describe('Encoding of "content" (default utf8).'),
+      content: z
+        .string()
+        .describe('File content. UTF-8 text by default, or base64 when "encoding" is "base64".'),
+      mimeType: z
+        .string()
+        .optional()
+        .describe(
+          'MIME type (e.g. "text/plain", "application/pdf"). Auto-detected from extension when omitted.'
+        ),
+      encoding: z
+        .enum(['utf8', 'base64'])
+        .optional()
+        .default('utf8')
+        .describe('Encoding of "content" (default utf8).'),
       parentPath: z.string().optional().describe('Parent folder path. Defaults to root.'),
       parentId: z.string().optional().describe('Parent folder id (alternative to parentPath).'),
     },
@@ -443,9 +499,10 @@ export function createGdriveMcpServer(
         parent = resolved.id;
       }
 
-      const buffer = encoding === 'base64'
-        ? Buffer.from(content.replace(/\s+/g, ''), 'base64')
-        : Buffer.from(content, 'utf-8');
+      const buffer =
+        encoding === 'base64'
+          ? Buffer.from(content.replace(/\s+/g, ''), 'base64')
+          : Buffer.from(content, 'utf-8');
 
       const finalMime = mimeType || 'application/octet-stream';
       const metadata = { name, parents: [parent], mimeType: finalMime };
@@ -456,16 +513,19 @@ export function createGdriveMcpServer(
       const body = Buffer.concat([Buffer.from(head, 'utf-8'), buffer, Buffer.from(tail, 'utf-8')]);
 
       const token = await getGdriveAccessTokenForAgent(agentId, boardId);
-      const res = await fetch(`${UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,parents`, {
-        signal: AbortSignal.timeout(120_000),
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
-          'Content-Length': String(body.length),
-        },
-        body,
-      });
+      const res = await fetch(
+        `${UPLOAD_BASE}/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,parents`,
+        {
+          signal: AbortSignal.timeout(120_000),
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': `multipart/related; boundary=${boundary}`,
+            'Content-Length': String(body.length),
+          },
+          body,
+        }
+      );
 
       if (!res.ok) {
         const text = await res.text();
@@ -474,16 +534,18 @@ export function createGdriveMcpServer(
       const result = await res.json();
 
       return {
-        content: [{
-          type: 'text',
-          text:
-            `File uploaded: ${result.name}\n` +
-            `ID: ${result.id}\n` +
-            `MIME: ${result.mimeType}\n` +
-            `Parent: ${parent}\n` +
-            `Bytes: ${buffer.length}\n` +
-            `Link: ${result.webViewLink || '—'}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `File uploaded: ${result.name}\n` +
+              `ID: ${result.id}\n` +
+              `MIME: ${result.mimeType}\n` +
+              `Parent: ${parent}\n` +
+              `Bytes: ${buffer.length}\n` +
+              `Link: ${result.webViewLink || '—'}`,
+          },
+        ],
       };
     }
   );
@@ -495,7 +557,11 @@ export function createGdriveMcpServer(
     {
       path: z.string().optional().describe('Drive path (e.g. "/Documents/old.txt").'),
       fileId: z.string().optional().describe('Drive file id (alternative to path).'),
-      permanent: z.boolean().optional().default(false).describe('Permanently delete instead of trashing.'),
+      permanent: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('Permanently delete instead of trashing.'),
     },
     async ({ path, fileId, permanent }) => {
       if (!path && !fileId) throw new Error('Provide "path" or "fileId".');
@@ -504,14 +570,21 @@ export function createGdriveMcpServer(
         : await resolveItemId(path!, agentId, boardId);
 
       if (permanent) {
-        await driveFetch(`/files/${encodeURIComponent(resolved.id)}`, agentId, boardId, { method: 'DELETE' });
+        await driveFetch(`/files/${encodeURIComponent(resolved.id)}`, agentId, boardId, {
+          method: 'DELETE',
+        });
         return text(`Permanently deleted: ${resolved.name || resolved.id}`);
       }
 
-      await driveFetch(`/files/${encodeURIComponent(resolved.id)}?fields=id,trashed`, agentId, boardId, {
-        method: 'PATCH',
-        body: JSON.stringify({ trashed: true }),
-      });
+      await driveFetch(
+        `/files/${encodeURIComponent(resolved.id)}?fields=id,trashed`,
+        agentId,
+        boardId,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ trashed: true }),
+        }
+      );
       return text(`Moved to trash: ${resolved.name || resolved.id}`);
     }
   );
@@ -524,7 +597,13 @@ export function createGdriveMcpServer(
       path: z.string().optional().describe('Drive path.'),
       fileId: z.string().optional().describe('Drive file id (alternative to path).'),
       type: z.enum(['view', 'edit']).optional().default('view').describe('Permission type.'),
-      anyoneWithLink: z.boolean().optional().default(true).describe('When true, anyone with the link gets access. When false, the file is only shared with explicitly added users (no link permission created).'),
+      anyoneWithLink: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe(
+          'When true, anyone with the link gets access. When false, the file is only shared with explicitly added users (no link permission created).'
+        ),
     },
     async ({ path, fileId, type, anyoneWithLink }) => {
       if (!path && !fileId) throw new Error('Provide "path" or "fileId".');
@@ -533,30 +612,37 @@ export function createGdriveMcpServer(
         : await resolveItemId(path!, agentId, boardId);
 
       if (anyoneWithLink) {
-        await driveFetch(`/files/${encodeURIComponent(resolved.id)}/permissions`, agentId, boardId, {
-          method: 'POST',
-          body: JSON.stringify({
-            role: type === 'edit' ? 'writer' : 'reader',
-            type: 'anyone',
-            allowFileDiscovery: false,
-          }),
-        });
+        await driveFetch(
+          `/files/${encodeURIComponent(resolved.id)}/permissions`,
+          agentId,
+          boardId,
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              role: type === 'edit' ? 'writer' : 'reader',
+              type: 'anyone',
+              allowFileDiscovery: false,
+            }),
+          }
+        );
       }
 
       const meta = await driveFetch(
         `/files/${encodeURIComponent(resolved.id)}?fields=id,name,webViewLink`,
         agentId,
-        boardId,
+        boardId
       );
 
       return {
-        content: [{
-          type: 'text',
-          text:
-            `Share link for ${meta.name}:\n` +
-            `${meta.webViewLink}\n` +
-            `Access: ${anyoneWithLink ? `anyone with link can ${type === 'edit' ? 'edit' : 'view'}` : 'restricted (no link permission added)'}`,
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `Share link for ${meta.name}:\n` +
+              `${meta.webViewLink}\n` +
+              `Access: ${anyoneWithLink ? `anyone with link can ${type === 'edit' ? 'edit' : 'view'}` : 'restricted (no link permission added)'}`,
+          },
+        ],
       };
     }
   );
@@ -566,5 +652,6 @@ export function createGdriveMcpServer(
 
 export function createGdriveMcpHandler() {
   return createMcpHttpHandler('Gdrive', ({ agentId, boardId }) =>
-    createGdriveMcpServer(agentId, boardId));
+    createGdriveMcpServer(agentId, boardId)
+  );
 }

@@ -1,10 +1,14 @@
 // ─── Conversation: history management, context switching, voice ───────────────
-import { saveAgent, clearTaskExecutionFlags, getTasksByAgent, getTasksByAssignee } from '../database.js';
+import {
+  saveAgent,
+  clearTaskExecutionFlags,
+  getTasksByAgent,
+  getTasksByAssignee,
+} from '../database.js';
 import { getTaskSignal, setTaskSignal } from './tasks.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const conversationMethods = {
-
   /** Run the four independent runtime-teardown steps concurrently and return
    * whether a CLI terminal session was closed. Shared by reloadContext and
    * restartRuntime — they differ only in the log prefix (`logTag`).
@@ -22,18 +26,27 @@ export const conversationMethods = {
    *     because the operation can run before this API replica has bound the
    *     agent, or after the runner setting changed.
    */
-  async _teardownRuntimeConnections(this: any, agentId: string, agent: any, logTag: string): Promise<boolean> {
+  async _teardownRuntimeConnections(
+    this: any,
+    agentId: string,
+    agent: any,
+    logTag: string
+  ): Promise<boolean> {
     let terminalClosed = false;
 
     const refreshLlm = (async () => {
-      try { await this.refreshLlmConfigs(); } catch (err: any) {
+      try {
+        await this.refreshLlmConfigs();
+      } catch (err: any) {
         console.warn(`⚠️  [${logTag}] refreshLlmConfigs failed: ${err.message}`);
       }
     })();
 
     const disconnectMcp = (async () => {
       if (this.mcpManager?.disconnectAgent) {
-        try { await this.mcpManager.disconnectAgent(agentId); } catch (err: any) {
+        try {
+          await this.mcpManager.disconnectAgent(agentId);
+        } catch (err: any) {
           console.warn(`⚠️  [${logTag}] mcp.disconnectAgent failed: ${err.message}`);
         }
       }
@@ -41,7 +54,9 @@ export const conversationMethods = {
 
     const refreshTree = (async () => {
       if (agent.project && this.executionManager?.refreshFileTree) {
-        try { await this.executionManager.refreshFileTree(agentId); } catch (err: any) {
+        try {
+          await this.executionManager.refreshFileTree(agentId);
+        } catch (err: any) {
           console.warn(`⚠️  [${logTag}] refreshFileTree failed: ${err.message}`);
         }
       }
@@ -118,7 +133,11 @@ export const conversationMethods = {
     if (!agent) return false;
 
     // 1. Abort any in-flight stream so we don't fight it.
-    try { this.stopAgent(agentId); } catch { /* ignore */ }
+    try {
+      this.stopAgent(agentId);
+    } catch {
+      /* ignore */
+    }
 
     // 2. Drop the stream resume cache for this agent.
     if (this._activeStreams) this._activeStreams.delete(agentId);
@@ -175,7 +194,11 @@ export const conversationMethods = {
     if (!agent) return false;
 
     // 1. Abort any in-flight stream so we don't fight it.
-    try { this.stopAgent(agentId); } catch { /* ignore */ }
+    try {
+      this.stopAgent(agentId);
+    } catch {
+      /* ignore */
+    }
 
     // 2. Drop the stream resume cache + chat lock so a stuck in-flight flag
     //    doesn't block the next send.
@@ -194,11 +217,7 @@ export const conversationMethods = {
 
     // Both branches of the former ternary emitted the same string, so the
     // terminalClosed distinction was dead — collapse to the single message.
-    this.addActionLog(
-      agentId,
-      'info',
-      'Agent restarted — runtime reset, conversation preserved'
-    );
+    this.addActionLog(agentId, 'info', 'Agent restarted — runtime reset, conversation preserved');
     this._emit('agent:updated', this._sanitize(agent));
     return true;
   },
@@ -209,7 +228,9 @@ export const conversationMethods = {
     const idx = parseInt(afterIndex, 10);
     if (isNaN(idx) || idx < 0) return null;
     agent.conversationHistory = agent.conversationHistory.slice(0, idx + 1);
-    agent.conversationHistory = agent.conversationHistory.filter((m: any) => m.type !== 'compaction-summary');
+    agent.conversationHistory = agent.conversationHistory.filter(
+      (m: any) => m.type !== 'compaction-summary'
+    );
     delete agent._compactionArmed;
     // History diverged from whatever the runner's JSONL holds — force a
     // fresh CLI session on next call so the model sees the truncated
@@ -221,7 +242,12 @@ export const conversationMethods = {
   },
 
   // ─── Project Context Switching ──────────────────────────────────────
-  _switchProjectContext(this: any, agent: any, oldProject: string | null, newProject: string | null): void {
+  _switchProjectContext(
+    this: any,
+    agent: any,
+    oldProject: string | null,
+    newProject: string | null
+  ): void {
     if (!agent.projectContexts) agent.projectContexts = {};
 
     if (oldProject) {
@@ -229,9 +255,11 @@ export const conversationMethods = {
         conversationHistory: [...agent.conversationHistory],
         _compactionArmed: agent._compactionArmed,
         runnerSessions: { ...(agent.runnerSessions || {}) },
-        savedAt: new Date().toISOString()
+        savedAt: new Date().toISOString(),
       };
-      console.log(`💾 [Context Switch] Saved context for "${agent.name}" on project "${oldProject}" (${agent.conversationHistory.length} messages)`);
+      console.log(
+        `💾 [Context Switch] Saved context for "${agent.name}" on project "${oldProject}" (${agent.conversationHistory.length} messages)`
+      );
     }
 
     if (newProject && agent.projectContexts[newProject]) {
@@ -240,13 +268,17 @@ export const conversationMethods = {
       agent._compactionArmed = saved._compactionArmed;
       agent.runnerSessions = { ...(saved.runnerSessions || {}) };
       delete agent.projectContexts[newProject];
-      console.log(`📂 [Context Switch] Restored context for "${agent.name}" on project "${newProject}" (${agent.conversationHistory.length} messages)`);
+      console.log(
+        `📂 [Context Switch] Restored context for "${agent.name}" on project "${newProject}" (${agent.conversationHistory.length} messages)`
+      );
     } else {
       agent.conversationHistory = [];
       agent.currentThinking = '';
       agent.runnerSessions = {};
       delete agent._compactionArmed;
-      console.log(`🆕 [Context Switch] Clean slate for "${agent.name}" on project "${newProject || '(none)'}"`);
+      console.log(
+        `🆕 [Context Switch] Clean slate for "${agent.name}" on project "${newProject || '(none)'}"`
+      );
     }
   },
 
@@ -274,7 +306,9 @@ export const conversationMethods = {
 
     const agentSkills = agent.skills || [];
     if (agentSkills.length > 0 && this.skillManager) {
-      const resolvedSkills = agentSkills.map((sid: string) => this.skillManager.getById(sid)).filter(Boolean);
+      const resolvedSkills = agentSkills
+        .map((sid: string) => this.skillManager.getById(sid))
+        .filter(Boolean);
       if (resolvedSkills.length > 0) {
         instructions += '\n\n--- Active Skills ---\n';
         for (const skill of resolvedSkills) {
@@ -287,7 +321,14 @@ export const conversationMethods = {
     if (voiceTasks.length > 0) {
       instructions += '\n\n--- Current Task List ---\n';
       for (const task of voiceTasks) {
-        const mark = task.status === 'done' ? 'x' : this._isActiveTaskStatus(task.status) ? '~' : task.status === 'error' ? '!' : ' ';
+        const mark =
+          task.status === 'done'
+            ? 'x'
+            : this._isActiveTaskStatus(task.status)
+              ? '~'
+              : task.status === 'error'
+                ? '!'
+                : ' ';
         instructions += `- [${mark}] ${task.text}\n`;
       }
     }

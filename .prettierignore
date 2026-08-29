@@ -1,0 +1,19 @@
+# Build output and vendored trees
+**/node_modules/
+**/dist/
+**/build/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+api/tests/
+frontend/public/
+
+# Lockfiles and generated data
+**/package-lock.json
+*.log
+
+# Not source we own the formatting of
+.claude/
+docs/
+specs/
+LICENSE

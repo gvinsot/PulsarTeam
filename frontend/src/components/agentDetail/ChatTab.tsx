@@ -1,7 +1,18 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import {
-  MessageSquare, Send, RotateCcw, StopCircle, ArrowDownToLine, ImagePlus, X, RefreshCw,
-  Mic, MicOff, Volume2, VolumeX, Loader2,
+  MessageSquare,
+  Send,
+  RotateCcw,
+  StopCircle,
+  ArrowDownToLine,
+  ImagePlus,
+  X,
+  RefreshCw,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Loader2,
 } from 'lucide-react';
 import ChatMessage from './ChatMessage';
 import { RichAssistantContent } from './ChatMessage';
@@ -51,9 +62,26 @@ function TerminalView({ text, className = '' }: { text: string; className?: stri
 }
 
 export default function ChatTab({
-  history, thinking, streamBuffer, message, setMessage, sending, isBusy, onSend, onStop,
-  onClear, onReload, onTruncate, chatEndRef, agentName, autoScroll, onToggleAutoScroll,
-  supportsImages, pendingImages, onAddImages, onRemoveImage,
+  history,
+  thinking,
+  streamBuffer,
+  message,
+  setMessage,
+  sending,
+  isBusy,
+  onSend,
+  onStop,
+  onClear,
+  onReload,
+  onTruncate,
+  chatEndRef,
+  agentName,
+  autoScroll,
+  onToggleAutoScroll,
+  supportsImages,
+  pendingImages,
+  onAddImages,
+  onRemoveImage,
   agent,
 }) {
   const fileInputRef = useRef(null);
@@ -92,7 +120,8 @@ export default function ChatTab({
 
   useEffect(() => {
     if (!agent?.id) return;
-    api.getExternalVoiceServices(agent.id)
+    api
+      .getExternalVoiceServices(agent.id)
       .then(setVoiceServices)
       .catch(() => setVoiceServices(null));
   }, [agent?.id]);
@@ -133,25 +162,38 @@ export default function ChatTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history, streamBuffer, isBusy, ttsEnabled, speakerMuted]);
 
-  const speak = useCallback((text: string) => {
-    const cfg = voiceServices?.tts;
-    if (!cfg?.available || !cfg.wsUrl) return;
-    stopTts();
-    const player = new TtsPlayer(
-      { wsUrl: cfg.wsUrl, sampleRate: cfg.sampleRate || 22050, voiceId: cfg.voiceId || '' },
-      {
-        onStart: () => setTtsSpeaking(true),
-        onEnd: () => { setTtsSpeaking(false); ttsRef.current = null; },
-        onError: (msg) => { setVoiceError(msg); setTtsSpeaking(false); },
-      },
-    );
-    ttsRef.current = player;
-    player.speak(text);
-  }, [voiceServices]);
+  const speak = useCallback(
+    (text: string) => {
+      const cfg = voiceServices?.tts;
+      if (!cfg?.available || !cfg.wsUrl) return;
+      stopTts();
+      const player = new TtsPlayer(
+        { wsUrl: cfg.wsUrl, sampleRate: cfg.sampleRate || 22050, voiceId: cfg.voiceId || '' },
+        {
+          onStart: () => setTtsSpeaking(true),
+          onEnd: () => {
+            setTtsSpeaking(false);
+            ttsRef.current = null;
+          },
+          onError: msg => {
+            setVoiceError(msg);
+            setTtsSpeaking(false);
+          },
+        }
+      );
+      ttsRef.current = player;
+      player.speak(text);
+    },
+    [voiceServices]
+  );
 
   const stopTts = useCallback(() => {
     if (ttsRef.current) {
-      try { ttsRef.current.stop(); } catch { /* ignore */ }
+      try {
+        ttsRef.current.stop();
+      } catch {
+        /* ignore */
+      }
       ttsRef.current = null;
     }
     setTtsSpeaking(false);
@@ -159,7 +201,11 @@ export default function ChatTab({
 
   const stopStt = useCallback(() => {
     if (sttRef.current) {
-      try { sttRef.current.stop(); } catch { /* ignore */ }
+      try {
+        sttRef.current.stop();
+      } catch {
+        /* ignore */
+      }
       sttRef.current = null;
     }
     setSttState('idle');
@@ -179,10 +225,10 @@ export default function ChatTab({
     const session = new SttSession(
       { wsUrl: cfg.wsUrl, sampleRate: cfg.sampleRate || 16000 },
       {
-        onStateChange: (state) => setSttState(state),
-        onPartial: (text) => setPartial(text),
-        onError: (msg) => setVoiceError(msg),
-        onFinal: (text) => {
+        onStateChange: state => setSttState(state),
+        onPartial: text => setPartial(text),
+        onError: msg => setVoiceError(msg),
+        onFinal: text => {
           sttRef.current = null;
           setPartial('');
           setSttState('idle');
@@ -198,9 +244,11 @@ export default function ChatTab({
           // Auto-send after React commits the textarea update so the fresh
           // handler (with the new message state) is the one invoked; the full
           // text is also passed explicitly for handlers that accept it.
-          setTimeout(() => { onSendRef.current?.(full); }, 0);
+          setTimeout(() => {
+            onSendRef.current?.(full);
+          }, 0);
         },
-      },
+      }
     );
     sttRef.current = session;
     try {
@@ -240,9 +288,10 @@ export default function ChatTab({
   // When streamBuffer is active, the last assistant message in history may be
   // a duplicate (agent:updated can arrive before the buffer is cleared).
   // Hide it to prevent a brief "doubled text" flash.
-  const displayHistory = (streamBuffer && history.length > 0 && history[history.length - 1].role === 'assistant')
-    ? history.slice(0, -1)
-    : history;
+  const displayHistory =
+    streamBuffer && history.length > 0 && history[history.length - 1].role === 'assistant'
+      ? history.slice(0, -1)
+      : history;
 
   // Shared ingestion for picked and pasted image files. One onAddImages call
   // per file — readers complete asynchronously and out of order.
@@ -252,7 +301,7 @@ export default function ChatTab({
       if (file.size > MAX_IMAGE_BYTES) continue;
 
       const reader = new FileReader();
-      reader.onload = (ev) => {
+      reader.onload = ev => {
         const dataUrl = ev.target.result;
         // readAsDataURL always yields a string; guard narrows the type.
         if (typeof dataUrl !== 'string') return;
@@ -266,7 +315,7 @@ export default function ChatTab({
     }
   };
 
-  const handleFileSelect = (e) => {
+  const handleFileSelect = e => {
     const files = Array.from<File>(e.target.files || []);
     if (files.length === 0) return;
     ingestImageFiles(files);
@@ -285,7 +334,13 @@ export default function ChatTab({
         )}
 
         {displayHistory.map((msg, i) => (
-          <ChatMessage key={i} message={msg} index={i} isLast={i === displayHistory.length - 1} onTruncate={onTruncate} />
+          <ChatMessage
+            key={i}
+            message={msg}
+            index={i}
+            isLast={i === displayHistory.length - 1}
+            onTruncate={onTruncate}
+          />
         ))}
 
         {/* Thinking indicator (shown during reasoning before/alongside text) */}
@@ -317,7 +372,10 @@ export default function ChatTab({
                     <div className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                     Thinking...
                   </summary>
-                  <TerminalView text={thinking} className="mt-1 border-l-2 border-amber-500/30 pl-2" />
+                  <TerminalView
+                    text={thinking}
+                    className="mt-1 border-l-2 border-amber-500/30 pl-2"
+                  />
                 </details>
               )}
               <div className="markdown-content text-sm text-dark-200">
@@ -325,8 +383,14 @@ export default function ChatTab({
               </div>
               <div className="flex items-center gap-1 mt-2">
                 <div className="w-1 h-1 rounded-full bg-indigo-500 animate-pulse" />
-                <div className="w-1 h-1 rounded-full bg-indigo-500 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                <div className="w-1 h-1 rounded-full bg-indigo-500 animate-pulse" style={{ animationDelay: '0.4s' }} />
+                <div
+                  className="w-1 h-1 rounded-full bg-indigo-500 animate-pulse"
+                  style={{ animationDelay: '0.2s' }}
+                />
+                <div
+                  className="w-1 h-1 rounded-full bg-indigo-500 animate-pulse"
+                  style={{ animationDelay: '0.4s' }}
+                />
               </div>
             </div>
           </div>
@@ -358,9 +422,7 @@ export default function ChatTab({
                 Speaking…
               </span>
             )}
-            {voiceError && (
-              <span className="text-red-400">{voiceError}</span>
-            )}
+            {voiceError && <span className="text-red-400">{voiceError}</span>}
           </div>
         )}
         {/* Image previews */}
@@ -441,16 +503,20 @@ export default function ChatTab({
                     : 'text-dark-500 hover:text-emerald-400 hover:bg-dark-700'
               }`}
               title={
-                sttState === 'listening' ? 'Stop recording (auto-stops on silence)' :
-                sttState === 'finalizing' ? 'Transcribing…' :
-                'Speak to send (Speech-to-Text)'
+                sttState === 'listening'
+                  ? 'Stop recording (auto-stops on silence)'
+                  : sttState === 'finalizing'
+                    ? 'Transcribing…'
+                    : 'Speak to send (Speech-to-Text)'
               }
             >
-              {sttState === 'finalizing'
-                ? <Loader2 className="w-4 h-4 animate-spin" />
-                : sttState === 'listening'
-                  ? <MicOff className="w-4 h-4" />
-                  : <Mic className="w-4 h-4" />}
+              {sttState === 'finalizing' ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : sttState === 'listening' ? (
+                <MicOff className="w-4 h-4" />
+              ) : (
+                <Mic className="w-4 h-4" />
+              )}
             </button>
           )}
           {/* Speaker mute — only shown when TTS is enabled on this agent. Lets
@@ -472,7 +538,13 @@ export default function ChatTab({
                     ? 'text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20'
                     : 'text-dark-500 hover:text-indigo-400 hover:bg-dark-700'
               }`}
-              title={speakerMuted ? 'Speaker muted — click to enable' : ttsSpeaking ? 'Stop speaking' : 'TTS on — click to mute'}
+              title={
+                speakerMuted
+                  ? 'Speaker muted — click to enable'
+                  : ttsSpeaking
+                    ? 'Stop speaking'
+                    : 'TTS on — click to mute'
+              }
             >
               {speakerMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
             </button>
@@ -480,8 +552,8 @@ export default function ChatTab({
           <div className="flex-1 relative">
             <textarea
               value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
+              onChange={e => setMessage(e.target.value)}
+              onKeyDown={e => {
                 if (e.key === 'Enter' && !e.shiftKey && !sending) {
                   e.preventDefault();
                   // Track baseline so the upcoming reply is eligible for TTS.
@@ -489,7 +561,7 @@ export default function ChatTab({
                   onSend();
                 }
               }}
-              onPaste={(e) => {
+              onPaste={e => {
                 if (!supportsImages) return;
                 const items = Array.from(e.clipboardData?.items || []);
                 const imageItems = items.filter(item => item.type.match(IMAGE_MIME_RE));
@@ -500,12 +572,12 @@ export default function ChatTab({
               className="w-full px-4 py-2.5 bg-dark-800 border border-dark-600 rounded-xl text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 resize-none"
               placeholder={
                 sttAvailable
-                  ? (supportsImages
-                      ? "Type, paste an image, or click the mic to speak…"
-                      : "Type a message or click the mic to speak…")
-                  : (supportsImages
-                      ? "Type a message or paste an image... (Shift+Enter for new line)"
-                      : "Type a message... (Shift+Enter for new line)")
+                  ? supportsImages
+                    ? 'Type, paste an image, or click the mic to speak…'
+                    : 'Type a message or click the mic to speak…'
+                  : supportsImages
+                    ? 'Type a message or paste an image... (Shift+Enter for new line)'
+                    : 'Type a message... (Shift+Enter for new line)'
               }
               rows={1}
               disabled={sending}
@@ -525,7 +597,9 @@ export default function ChatTab({
                 if (ttsEnabled) turnBaselineRef.current = (history ? history.length : 0) + 1;
                 onSend();
               }}
-              disabled={sending || (!message.trim() && (!pendingImages || pendingImages.length === 0))}
+              disabled={
+                sending || (!message.trim() && (!pendingImages || pendingImages.length === 0))
+              }
               className="p-2.5 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >
               <Send className="w-4 h-4" />

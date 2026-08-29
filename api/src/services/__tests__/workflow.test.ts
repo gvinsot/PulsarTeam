@@ -16,7 +16,12 @@ const { setTaskSignal, getTaskSignal } = await import('../agentManager/tasks.js'
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Minimal mock IO */
-const mockIo = { emit() {}, to() { return { emit() {} }; } };
+const mockIo = {
+  emit() {},
+  to() {
+    return { emit() {} };
+  },
+};
 
 /** All live tasks owned by an agent (replaces the old in-memory _getAgentTasks). */
 function agentTasks(agentId: any): any[] {
@@ -66,7 +71,14 @@ function addTask(mgr: any, text: any, status: any, boardId = 'board-1', extra: a
 }
 
 /** Create a task owned by a specific agent (seeded into the DB fake). */
-function addTaskToAgent(mgr: any, agentId: any, text: any, status: any, boardId = 'board-1', extra: any = {}) {
+function addTaskToAgent(
+  mgr: any,
+  agentId: any,
+  text: any,
+  status: any,
+  boardId = 'board-1',
+  extra: any = {}
+) {
   const task: any = {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     text,
@@ -123,7 +135,13 @@ test('_validTransition requires from, trigger, and actions array', async () => {
   const mgr = await setup([{ name: 'A', role: 'dev' }]);
 
   assert.ok(mgr._validTransition({ from: 'code', trigger: 'on_enter', actions: [] }));
-  assert.ok(mgr._validTransition({ from: 'code', trigger: 'on_enter', actions: [{ type: 'change_status' }] }));
+  assert.ok(
+    mgr._validTransition({
+      from: 'code',
+      trigger: 'on_enter',
+      actions: [{ type: 'change_status' }],
+    })
+  );
   assert.ok(!mgr._validTransition({ from: 'code', trigger: 'on_enter' }));
   assert.ok(!mgr._validTransition({ from: 'code', actions: [] }));
   assert.ok(!mgr._validTransition({ trigger: 'on_enter', actions: [] }));
@@ -140,10 +158,7 @@ test('_validTransition requires from, trigger, and actions array', async () => {
 
 test('_columnExists checks column id in workflow', async () => {
   const mgr = await setup([{ name: 'A', role: 'dev' }]);
-  const wf = workflow(
-    [{ id: 'backlog' }, { id: 'refine' }, { id: 'code' }, { id: 'done' }],
-    []
-  );
+  const wf = workflow([{ id: 'backlog' }, { id: 'refine' }, { id: 'code' }, { id: 'done' }], []);
 
   assert.ok(mgr._columnExists(wf, 'backlog'));
   assert.ok(mgr._columnExists(wf, 'code'));
@@ -178,14 +193,24 @@ test('_evaluateCondition: assignee_status eq/neq', async () => {
 
   // Worker is idle
   worker.status = 'idle';
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'idle' }, task));
-  assert.ok(!mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'busy' }, task));
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_status', operator: 'neq', value: 'busy' }, task));
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'idle' }, task)
+  );
+  assert.ok(
+    !mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'busy' }, task)
+  );
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_status', operator: 'neq', value: 'busy' }, task)
+  );
 
   // Worker is busy
   worker.status = 'busy';
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'busy' }, task));
-  assert.ok(!mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'idle' }, task));
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'busy' }, task)
+  );
+  assert.ok(
+    !mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'idle' }, task)
+  );
 });
 
 test('_evaluateCondition: assignee_enabled', async () => {
@@ -198,27 +223,37 @@ test('_evaluateCondition: assignee_enabled', async () => {
 
   const task = { assignee: workerId, agentId: creatorId };
 
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_enabled', operator: 'eq', value: 'true' }, task));
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_enabled', operator: 'eq', value: 'true' }, task)
+  );
   worker.enabled = false;
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_enabled', operator: 'eq', value: 'false' }, task));
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_enabled', operator: 'eq', value: 'false' }, task)
+  );
 });
 
 test('_evaluateCondition: task_has_assignee', async () => {
   const mgr = await setup([{ name: 'A', role: 'dev' }]);
   const [agentId] = mgr.agents.keys();
 
-  assert.ok(mgr._evaluateCondition(
-    { field: 'task_has_assignee', operator: 'eq', value: 'true' },
-    { assignee: agentId, agentId }
-  ));
-  assert.ok(mgr._evaluateCondition(
-    { field: 'task_has_assignee', operator: 'eq', value: 'false' },
-    { assignee: null, agentId }
-  ));
-  assert.ok(mgr._evaluateCondition(
-    { field: 'task_has_assignee', operator: 'neq', value: 'true' },
-    { assignee: null, agentId }
-  ));
+  assert.ok(
+    mgr._evaluateCondition(
+      { field: 'task_has_assignee', operator: 'eq', value: 'true' },
+      { assignee: agentId, agentId }
+    )
+  );
+  assert.ok(
+    mgr._evaluateCondition(
+      { field: 'task_has_assignee', operator: 'eq', value: 'false' },
+      { assignee: null, agentId }
+    )
+  );
+  assert.ok(
+    mgr._evaluateCondition(
+      { field: 'task_has_assignee', operator: 'neq', value: 'true' },
+      { assignee: null, agentId }
+    )
+  );
 });
 
 test('_evaluateCondition: idle_agent_available', async () => {
@@ -232,17 +267,37 @@ test('_evaluateCondition: idle_agent_available', async () => {
   const task = { agentId: creatorId };
 
   // Dev is idle → idle_agent_available for role "developer" should be true
-  assert.ok(mgr._evaluateCondition({ field: 'idle_agent_available', operator: 'eq', value: 'developer' }, task));
+  assert.ok(
+    mgr._evaluateCondition(
+      { field: 'idle_agent_available', operator: 'eq', value: 'developer' },
+      task
+    )
+  );
 
   // No idle agent with role "security"
-  assert.ok(!mgr._evaluateCondition({ field: 'idle_agent_available', operator: 'eq', value: 'security' }, task));
+  assert.ok(
+    !mgr._evaluateCondition(
+      { field: 'idle_agent_available', operator: 'eq', value: 'security' },
+      task
+    )
+  );
 
   // Dev goes busy → no idle developer
   dev.status = 'busy';
-  assert.ok(!mgr._evaluateCondition({ field: 'idle_agent_available', operator: 'eq', value: 'developer' }, task));
+  assert.ok(
+    !mgr._evaluateCondition(
+      { field: 'idle_agent_available', operator: 'eq', value: 'developer' },
+      task
+    )
+  );
 
   // neq operator: "no idle developer available" → true when dev is busy
-  assert.ok(mgr._evaluateCondition({ field: 'idle_agent_available', operator: 'neq', value: 'developer' }, task));
+  assert.ok(
+    mgr._evaluateCondition(
+      { field: 'idle_agent_available', operator: 'neq', value: 'developer' },
+      task
+    )
+  );
 });
 
 test('_evaluateCondition: no assignee returns defaults', async () => {
@@ -251,8 +306,12 @@ test('_evaluateCondition: no assignee returns defaults', async () => {
   const task = { assignee: null, agentId };
 
   // No assignee → status = 'none', enabled = 'false'
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'none' }, task));
-  assert.ok(mgr._evaluateCondition({ field: 'assignee_enabled', operator: 'eq', value: 'false' }, task));
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_status', operator: 'eq', value: 'none' }, task)
+  );
+  assert.ok(
+    mgr._evaluateCondition({ field: 'assignee_enabled', operator: 'eq', value: 'false' }, task)
+  );
 });
 
 test('_evaluateCondition: assignee_role', async () => {
@@ -263,14 +322,18 @@ test('_evaluateCondition: assignee_role', async () => {
   const { id: devId } = getAgent(mgr, 'Dev');
   const { id: creatorId } = getAgent(mgr, 'Creator');
 
-  assert.ok(mgr._evaluateCondition(
-    { field: 'assignee_role', operator: 'eq', value: 'developer' },
-    { assignee: devId, agentId: creatorId }
-  ));
-  assert.ok(!mgr._evaluateCondition(
-    { field: 'assignee_role', operator: 'eq', value: 'manager' },
-    { assignee: devId, agentId: creatorId }
-  ));
+  assert.ok(
+    mgr._evaluateCondition(
+      { field: 'assignee_role', operator: 'eq', value: 'developer' },
+      { assignee: devId, agentId: creatorId }
+    )
+  );
+  assert.ok(
+    !mgr._evaluateCondition(
+      { field: 'assignee_role', operator: 'eq', value: 'manager' },
+      { assignee: devId, agentId: creatorId }
+    )
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -286,7 +349,12 @@ test('agentHasActiveTask excludes specific task when excludeTaskId is provided',
   const { id: titlesId } = getAgent(mgr, 'Titles');
 
   const taskId = 'task-chain-1';
-  seedTask(creatorId, { id: taskId, text: 'Multi-action task', status: 'refine', assignee: titlesId });
+  seedTask(creatorId, {
+    id: taskId,
+    text: 'Multi-action task',
+    status: 'refine',
+    assignee: titlesId,
+  });
 
   assert.equal(await mgr.agentHasActiveTask(titlesId), true);
   assert.equal(await mgr.agentHasActiveTask(titlesId, taskId), false);
@@ -504,7 +572,7 @@ test('action chain resume index tracks correctly', async () => {
   const { task } = addTask(mgr, 'Chain test', 'refine');
 
   const rawIdx0 = task.completedActionIdx;
-  const startIdx0 = (typeof rawIdx0 === 'number') ? rawIdx0 + 1 : 0;
+  const startIdx0 = typeof rawIdx0 === 'number' ? rawIdx0 + 1 : 0;
   assert.equal(startIdx0, 0, 'should start at action 0');
 
   task.completedActionIdx = 0;
@@ -517,7 +585,7 @@ test('action chain resume index tracks correctly', async () => {
 
   task.completedActionIdx = null;
   const rawIdxClean = task.completedActionIdx;
-  const startIdxClean = (typeof rawIdxClean === 'number') ? rawIdxClean + 1 : 0;
+  const startIdxClean = typeof rawIdxClean === 'number' ? rawIdxClean + 1 : 0;
   assert.equal(startIdxClean, 0, 'should restart from 0 after cleanup');
 });
 
@@ -538,7 +606,7 @@ test('full refine→code chain: completedActionIdx does not leak across transiti
   task.status = 'code';
 
   const rawIdx = task.completedActionIdx;
-  const startIdx = (typeof rawIdx === 'number') ? rawIdx + 1 : 0;
+  const startIdx = typeof rawIdx === 'number' ? rawIdx + 1 : 0;
   assert.equal(startIdx, 0, 'code on_enter should start at action 0, not resume from refine chain');
   assert.equal(task.status, 'code');
 });
@@ -555,7 +623,7 @@ test('_pendingOnEnter is set when action chain is interrupted', async () => {
 
   // When retry succeeds: resume from action 2 (completedActionIdx + 1)
   const rawIdx = task.completedActionIdx;
-  const resumeIdx = (typeof rawIdx === 'number') ? rawIdx + 1 : 0;
+  const resumeIdx = typeof rawIdx === 'number' ? rawIdx + 1 : 0;
   assert.equal(resumeIdx, 2, 'should resume at the skipped action');
 });
 
@@ -616,7 +684,14 @@ test('a latched stopped signal aborts the execution wait early', async () => {
   // Reproduces the move route re-setting the in-memory 'stopped' signal after a
   // user Stop: with it latched, the very first execution-wait bails immediately.
   setTaskSignal(task.id, 'stopped', true);
-  const result = await mgr._waitForExecutionComplete(agentId, task.id, agentId, agent.name, task.text, {});
+  const result = await mgr._waitForExecutionComplete(
+    agentId,
+    task.id,
+    agentId,
+    agent.name,
+    task.text,
+    {}
+  );
   assert.equal(result, 'stopped', 'stale stop signal short-circuits the wait');
 });
 
@@ -839,7 +914,7 @@ test('cross-agent task assignment: worker detects task from creator todoList', a
   // Worker should see the cross-agent task
   assert.ok(await mgr.agentHasActiveTask(workerId));
   // But excluding that task, worker is free
-  assert.ok(!await mgr.agentHasActiveTask(workerId, task.id));
+  assert.ok(!(await mgr.agentHasActiveTask(workerId, task.id)));
 });
 
 test('multiple agents with same role: load balancing by task count', async () => {
@@ -857,13 +932,13 @@ test('multiple agents with same role: load balancing by task count', async () =>
 
   // Both agents have active tasks counted by agentHasActiveTask
   // PM1 has 0 active (t1 is done), PM2 has 0 active — both are free
-  assert.ok(!await mgr.agentHasActiveTask(pm1Id));
-  assert.ok(!await mgr.agentHasActiveTask(pm2Id));
+  assert.ok(!(await mgr.agentHasActiveTask(pm1Id)));
+  assert.ok(!(await mgr.agentHasActiveTask(pm2Id)));
 
   // Give PM1 an active task
   seedTask(creatorId, { id: 't2', text: 'Task 2', status: 'refine', assignee: pm1Id });
   assert.ok(await mgr.agentHasActiveTask(pm1Id));
-  assert.ok(!await mgr.agentHasActiveTask(pm2Id));
+  assert.ok(!(await mgr.agentHasActiveTask(pm2Id)));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -887,10 +962,11 @@ test('_pendingOnEnter retry: _recheckConditionalTransitions finds pending on_ent
   const transitions = [
     { from: 'refine', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'dev' }] },
   ];
-  const matching = transitions.filter(t =>
-    mgr._validTransition(t) &&
-    t.from === task.status &&
-    (t.trigger !== 'on_enter' || task._pendingOnEnter === task.status)
+  const matching = transitions.filter(
+    t =>
+      mgr._validTransition(t) &&
+      t.from === task.status &&
+      (t.trigger !== 'on_enter' || task._pendingOnEnter === task.status)
   );
   assert.equal(matching.length, 1, 'should match the on_enter transition for a pending task');
 });
@@ -903,10 +979,11 @@ test('_pendingOnEnter retry: non-pending tasks do not match on_enter in recheck'
   const transitions = [
     { from: 'refine', trigger: 'on_enter', actions: [{ type: 'run_agent', role: 'dev' }] },
   ];
-  const matching = transitions.filter(t =>
-    mgr._validTransition(t) &&
-    t.from === task.status &&
-    (t.trigger !== 'on_enter' || task._pendingOnEnter === task.status)
+  const matching = transitions.filter(
+    t =>
+      mgr._validTransition(t) &&
+      t.from === task.status &&
+      (t.trigger !== 'on_enter' || task._pendingOnEnter === task.status)
   );
   assert.equal(matching.length, 0, 'should NOT match — no _pendingOnEnter');
 });
@@ -1016,9 +1093,18 @@ test('addTask normalizes secondary repos (dedupe, exclude primary, drop invalid)
   const task = await mgr.addTask(agentId, 'Multi repo', null, null, {
     skipAutoRefine: true,
     repoFullName: 'org/primary',
-    secondaryRepos: ['org/lib-a', 'org/lib-a', 'org/primary', 'bad repo name', { fullName: 'org/lib-b', provider: 'github' }],
+    secondaryRepos: [
+      'org/lib-a',
+      'org/lib-a',
+      'org/primary',
+      'bad repo name',
+      { fullName: 'org/lib-b', provider: 'github' },
+    ],
   });
-  assert.deepEqual(task.secondaryRepos.map(r => r.fullName), ['org/lib-a', 'org/lib-b']);
+  assert.deepEqual(
+    task.secondaryRepos.map(r => r.fullName),
+    ['org/lib-a', 'org/lib-b']
+  );
   assert.ok(task.secondaryRepos.every(r => r.provider === 'github'));
 });
 
@@ -1031,9 +1117,19 @@ test('addTask defaults secondaryRepos to []', async () => {
 
 test('updateTaskSecondaryRepos replaces the set, excludes primary, records history', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  const { task, agentId } = addTask(mgr, 'Repo task', 'backlog', 'board-1', { repoFullName: 'org/primary', secondaryRepos: [] });
-  const updated = await mgr.updateTaskSecondaryRepos(agentId, task.id, ['org/x', 'org/primary', { fullName: 'org/y' }]);
-  assert.deepEqual(updated.secondaryRepos.map(r => r.fullName), ['org/x', 'org/y']);
+  const { task, agentId } = addTask(mgr, 'Repo task', 'backlog', 'board-1', {
+    repoFullName: 'org/primary',
+    secondaryRepos: [],
+  });
+  const updated = await mgr.updateTaskSecondaryRepos(agentId, task.id, [
+    'org/x',
+    'org/primary',
+    { fullName: 'org/y' },
+  ]);
+  assert.deepEqual(
+    updated.secondaryRepos.map(r => r.fullName),
+    ['org/x', 'org/y']
+  );
   assert.ok(updated.history.some(h => h.type === 'edit' && h.field === 'secondaryRepos'));
 });
 
@@ -1045,7 +1141,10 @@ test('updateTaskRepo drops the new primary from existing secondaries', async () 
   });
   const updated = await mgr.updateTaskRepo(agentId, task.id, 'org/lib');
   assert.equal(updated.repoFullName, 'org/lib');
-  assert.deepEqual(updated.secondaryRepos.map(r => r.fullName), []);
+  assert.deepEqual(
+    updated.secondaryRepos.map(r => r.fullName),
+    []
+  );
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1061,7 +1160,10 @@ test('task history accumulates across multiple status transitions', async () => 
   await mgr.setTaskStatus(agentId, task.id, 'done', { skipAutoRefine: true, by: 'agent' });
 
   // Initial + 3 transitions = 4 entries (addTask creates with initial history)
-  assert.ok(task.history.length >= 3, `expected at least 3 history entries, got ${task.history.length}`);
+  assert.ok(
+    task.history.length >= 3,
+    `expected at least 3 history entries, got ${task.history.length}`
+  );
 
   const statuses = task.history.map(h => h.status);
   assert.ok(statuses.includes('refine'));
@@ -1111,7 +1213,11 @@ test('setTaskStatus clears startedAt to prevent stale task loop resume', async (
   // User moves done → nextsprint
   await mgr.setTaskStatus(agentId, task.id, 'nextsprint', { skipAutoRefine: true, by: 'user' });
   assert.equal(task.status, 'nextsprint');
-  assert.equal(task.startedAt, null, 'startedAt must stay cleared — task loop must NOT resume this');
+  assert.equal(
+    task.startedAt,
+    null,
+    'startedAt must stay cleared — task loop must NOT resume this'
+  );
   assert.equal(task.executionStatus, null, 'executionStatus must be cleared');
 });
 

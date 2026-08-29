@@ -6,7 +6,8 @@ export const AGENT_TEMPLATES = [
     color: '#f59e0b',
     role: 'leader',
     isLeader: true,
-    description: 'Orchestrator agent that coordinates and delegates tasks to other agents in the swarm.',
+    description:
+      'Orchestrator agent that coordinates and delegates tasks to other agents in the swarm.',
     instructions: `You are a swarm leader agent responsible for orchestrating a team of specialized AI agents.
 
 ## PHASE 1 — SPECIFICATIONS
@@ -228,7 +229,8 @@ Product principles:
     role: 'Voice Swarm Leader',
     isLeader: true,
     isVoice: true,
-    description: 'Voice-controlled leader that delegates tasks to agents via speech. Uses OpenAI Realtime API for speech-to-speech communication.',
+    description:
+      'Voice-controlled leader that delegates tasks to agents via speech. Uses OpenAI Realtime API for speech-to-speech communication.',
     instructions: `You are a voice-controlled swarm leader. Users speak to you via microphone and you respond with speech.
 
 Your primary role is to orchestrate a team of AI agents by delegating tasks using the "delegate" function.
@@ -271,7 +273,8 @@ When you need an agent to work on something; first wait to confirm with the need
     isLeader: true,
     isVoice: true,
     voiceMode: 'external',
-    description: 'Voice agent that uses an external Speech-to-Text service, a regular text LLM, and an external Text-to-Speech service (e.g. HighSpeedToText). Configure service URLs in Admin Settings.',
+    description:
+      'Voice agent that uses an external Speech-to-Text service, a regular text LLM, and an external Text-to-Speech service (e.g. HighSpeedToText). Configure service URLs in Admin Settings.',
     instructions: `You are a voice-controlled assistant. The user speaks to you; your text answer is read back through a text-to-speech service.
 
 ## COMMUNICATION STYLE
@@ -343,7 +346,8 @@ Working principles:
     icon: '📰',
     color: '#0ea5e9',
     role: 'reporter',
-    description: 'News reporter that researches topics, verifies sources, and writes balanced articles.',
+    description:
+      'News reporter that researches topics, verifies sources, and writes balanced articles.',
     instructions: `You are a professional news reporter. Your responsibilities:
 - Research topics using web search and direct sources
 - Verify facts across multiple independent sources before reporting them
@@ -369,7 +373,8 @@ Reporting principles:
     icon: '📋',
     color: '#0d9488',
     role: 'compliance',
-    description: 'Compliance auditor for regulatory, policy, and process audits (SOC2, ISO27001, GDPR, etc.).',
+    description:
+      'Compliance auditor for regulatory, policy, and process audits (SOC2, ISO27001, GDPR, etc.).',
     instructions: `You are a compliance auditor specialized in software and data-handling organizations. Your responsibilities:
 - Audit systems, processes, and codebases against compliance frameworks (SOC 2, ISO 27001, GDPR, HIPAA, PCI-DSS)
 - Map controls to requirements and identify gaps
@@ -388,5 +393,5 @@ Audit approach:
 7. Never claim compliance you cannot evidence; mark unverifiable items as "unable to verify"`,
     temperature: 0.2,
     maxTokens: 128000,
-  }
+  },
 ];

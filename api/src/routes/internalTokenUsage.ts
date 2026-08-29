@@ -19,7 +19,10 @@ export function internalTokenUsageRoutes(agentManager) {
   router.post('/agents/:agentId', async (req, res) => {
     try {
       const agent = agentManager.getById(req.params.agentId);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
 
       const body = req.body || {};
       const inputTokens = Math.max(0, Number(body.input_tokens) || 0);
@@ -27,7 +30,8 @@ export function internalTokenUsageRoutes(agentManager) {
       const contextTokens = Math.max(0, Number(body.context_tokens) || 0);
       const costUsd = body.cost_usd != null ? Number(body.cost_usd) : 0;
       if (!inputTokens && !outputTokens && !costUsd) {
-        return res.json({ recorded: false, reason: 'empty-usage' });
+        res.json({ recorded: false, reason: 'empty-usage' });
+        return;
       }
 
       const provider = (body.provider || agent.runner || 'cli').toString();
@@ -45,7 +49,7 @@ export function internalTokenUsageRoutes(agentManager) {
         Number.isFinite(costUsd) ? costUsd : 0,
         userId,
         contextTokens,
-        idempotencyKey,
+        idempotencyKey
       );
 
       // recordTokenUsage never throws; when a pool is configured but the
@@ -53,7 +57,8 @@ export function internalTokenUsageRoutes(agentManager) {
       // false {recorded:true} that silently drops the spend. Without a
       // pool (DB-less mode) recording is a no-op and still succeeds.
       if (!recorded && getPool()) {
-        return res.status(500).json({ error: 'failed to record token usage' });
+        res.status(500).json({ error: 'failed to record token usage' });
+        return;
       }
 
       // Mirror onto the agent's running metrics so the dashboard reflects it
@@ -72,7 +77,12 @@ export function internalTokenUsageRoutes(agentManager) {
         // Metrics are best-effort; never fail the recording call.
       }
 
-      res.json({ recorded: true, input_tokens: inputTokens, output_tokens: outputTokens, cost_usd: costUsd });
+      res.json({
+        recorded: true,
+        input_tokens: inputTokens,
+        output_tokens: outputTokens,
+        cost_usd: costUsd,
+      });
     } catch (err: any) {
       console.error('Failed to record CLI runner token usage:', err?.message);
       res.status(500).json({ error: err?.message || 'internal error' });

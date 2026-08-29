@@ -25,7 +25,10 @@ function isProduction(): boolean {
 
 function parseOrigins(raw: string | undefined): string[] {
   if (!raw) return [];
-  return raw.split(',').map(s => s.trim()).filter(Boolean);
+  return raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 }
 
 /** Parsed allow-list. Falls back to localhost defaults outside production. */
@@ -65,15 +68,15 @@ export function validateCorsConfig(): void {
   if (isProduction() && (!raw || origins.length === 0)) {
     errors.push(
       'CORS_ORIGINS is unset or empty in production. Configure an explicit ' +
-      'comma-separated allow-list (e.g. CORS_ORIGINS=https://app.example.com).'
+        'comma-separated allow-list (e.g. CORS_ORIGINS=https://app.example.com).'
     );
   }
 
   if (origins.includes('*')) {
     checks.push(
       "CORS_ORIGINS contains '*' (wildcard). The API runs with credentials:true, " +
-      'so a wildcard is forbidden by the CORS spec and would expose authenticated ' +
-      'endpoints to any site if accepted. Replace with an explicit allow-list.'
+        'so a wildcard is forbidden by the CORS spec and would expose authenticated ' +
+        'endpoints to any site if accepted. Replace with an explicit allow-list.'
     );
   }
 
@@ -132,7 +135,10 @@ export function logRejectedOrigin(origin: string, source: 'http' | 'ws' = 'http'
  * header (server-to-server, curl, same-origin navigations) are allowed —
  * CORS only applies to cross-origin browser requests anyway.
  */
-export function isOriginAllowed(origin: string | undefined, allowed: string[] = getCorsOrigins()): boolean {
+export function isOriginAllowed(
+  origin: string | undefined,
+  allowed: string[] = getCorsOrigins()
+): boolean {
   if (!origin) return true;
   if (allowed.includes('*')) {
     // Defensive: validateCorsConfig refuses '*' in production. If we somehow get
@@ -153,7 +159,7 @@ export function buildCorsOptions(allowedOverride?: string[]): CorsOptions {
       return cb(null, false);
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   };
 }
 

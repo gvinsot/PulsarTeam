@@ -109,7 +109,10 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   setSecondaryRepos(agentId: string, repos: SecondaryRepo[] | null): void {
     if (!agentId) return;
     if (Array.isArray(repos) && repos.length > 0) {
-      this.secondaryRepos.set(agentId, repos.filter((r) => r && r.fullName));
+      this.secondaryRepos.set(
+        agentId,
+        repos.filter(r => r && r.fullName)
+      );
     } else {
       this.secondaryRepos.delete(agentId);
     }
@@ -130,7 +133,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   async installGitCredentials(agentId: string, creds: GitCredentials | null = null): Promise<void> {
     if (!agentId) return;
     if (creds !== null) this.setGitCredentials(agentId, creds);
-    const effective = (this.gitCredentials.get(agentId) || null) as (GitCredentials & { login?: string | null }) | null;
+    const effective = (this.gitCredentials.get(agentId) || null) as
+      (GitCredentials & { login?: string | null }) | null;
     if (!effective || !effective.token) return;
     try {
       const res = await fetch(`${this.baseUrl}/credentials/git`, {
@@ -147,10 +151,14 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       });
       const data: any = await res.json().catch(() => ({}));
       if (data?.status === 'error') {
-        console.warn(`🤖 [Runner] installGitCredentials reported error: ${data.error || 'unknown'}`);
+        console.warn(
+          `🤖 [Runner] installGitCredentials reported error: ${data.error || 'unknown'}`
+        );
       }
     } catch (err: any) {
-      console.warn(`🤖 [Runner] installGitCredentials failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
+      console.warn(
+        `🤖 [Runner] installGitCredentials failed for agent ${agentId.slice(0, 8)}: ${err.message}`
+      );
     }
   }
 
@@ -194,7 +202,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     agentId: string,
     project: string | null = null,
     gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null,
+    gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     if (gitCredentials !== null) this.setGitCredentials(agentId, gitCredentials);
 
@@ -207,11 +215,15 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     // Each resolves to a github HTTPS URL (the same creds cover them all). The
     // signature feeds the debounce so adding/removing a secondary forces a
     // re-ensure even when the primary is unchanged.
-    const keepSet = (this.secondaryRepos.get(agentId) || []).filter((r) => r && r.fullName);
+    const keepSet = (this.secondaryRepos.get(agentId) || []).filter(r => r && r.fullName);
     const secondaryPayload = keepSet
-      .map((r) => ({ provider: r.provider || 'github', full_name: r.fullName, git_url: buildRepoCloneUrl(r.fullName) }))
+      .map(r => ({
+        provider: r.provider || 'github',
+        full_name: r.fullName,
+        git_url: buildRepoCloneUrl(r.fullName),
+      }))
       .filter((r): r is { provider: string; full_name: string; git_url: string } => !!r.git_url);
-    const secondarySig = JSON.stringify(secondaryPayload.map((r) => r.full_name).sort());
+    const secondarySig = JSON.stringify(secondaryPayload.map(r => r.full_name).sort());
 
     // Debounce: if the same (agent, project, secondary set) was successfully
     // ensured very recently, skip the HTTP round-trip. The runner-service caches
@@ -229,10 +241,13 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       return;
     }
 
-    console.log(`🤖 [Runner] ensureProject(agent=${agentId.slice(0, 8)}, project=${project || 'none'}, gitUrl=${gitUrl ? 'yes' : 'no'}, secondaries=${secondaryPayload.length})`);
+    console.log(
+      `🤖 [Runner] ensureProject(agent=${agentId.slice(0, 8)}, project=${project || 'none'}, gitUrl=${gitUrl ? 'yes' : 'no'}, secondaries=${secondaryPayload.length})`
+    );
 
     try {
-      const creds = (this.gitCredentials.get(agentId) || null) as (GitCredentials & { login?: string | null }) | null;
+      const creds = (this.gitCredentials.get(agentId) || null) as
+        (GitCredentials & { login?: string | null }) | null;
       const body: any = { project, git_url: gitUrl };
       if (creds && creds.token) {
         body.git_credentials = {
@@ -252,7 +267,9 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       });
       if (!res.ok) {
         const errBody = await res.text().catch(() => '');
-        throw new Error(`projects/ensure failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`);
+        throw new Error(
+          `projects/ensure failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`
+        );
       }
       const data: any = await res.json();
       if (data.status === 'error') {
@@ -272,7 +289,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     agentId: string,
     newProject: string,
     gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null,
+    gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     if (gitCredentials !== null) this.setGitCredentials(agentId, gitCredentials);
     this._fileTreeCache.delete(agentId);
@@ -317,22 +334,29 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     if (res.status === 404) return false;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`terminal session close failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+      throw new Error(
+        `terminal session close failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`
+      );
     }
     const data: any = await res.json().catch(() => ({}));
     return Boolean(data.closed);
   }
 
   async interruptTerminalSession(agentId: string): Promise<boolean> {
-    const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/interrupt`, {
-      method: 'POST',
-      headers: this._headers(agentId),
-      signal: AbortSignal.timeout(5000),
-    });
+    const res = await fetch(
+      `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/interrupt`,
+      {
+        method: 'POST',
+        headers: this._headers(agentId),
+        signal: AbortSignal.timeout(5000),
+      }
+    );
     if (res.status === 404) return false;
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`terminal session interrupt failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+      throw new Error(
+        `terminal session interrupt failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`
+      );
     }
     const data: any = await res.json().catch(() => ({}));
     return Boolean(data.interrupted);
@@ -359,24 +383,33 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     }
   }
 
-  async sendTerminalInput(agentId: string, input: string, options: { submit?: boolean } = {}): Promise<boolean> {
+  async sendTerminalInput(
+    agentId: string,
+    input: string,
+    options: { submit?: boolean } = {}
+  ): Promise<boolean> {
     if (!input) return false;
-    const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/input`, {
-      method: 'POST',
-      headers: this._headers(agentId),
-      body: JSON.stringify({
-        input,
-        submit: options.submit !== false,
-        bracketed_paste: true,
-      }),
-      // The runner blocks this call until the TUI is input-ready (the
-      // PTY-is-free gate, up to ~45s for a fresh session) before pasting, so
-      // the client timeout must comfortably exceed that window.
-      signal: AbortSignal.timeout(90_000),
-    });
+    const res = await fetch(
+      `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/input`,
+      {
+        method: 'POST',
+        headers: this._headers(agentId),
+        body: JSON.stringify({
+          input,
+          submit: options.submit !== false,
+          bracketed_paste: true,
+        }),
+        // The runner blocks this call until the TUI is input-ready (the
+        // PTY-is-free gate, up to ~45s for a fresh session) before pasting, so
+        // the client timeout must comfortably exceed that window.
+        signal: AbortSignal.timeout(90_000),
+      }
+    );
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      throw new Error(`terminal input failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+      throw new Error(
+        `terminal input failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`
+      );
     }
     const data: any = await res.json().catch(() => ({}));
     return data.status === 'success';
@@ -404,16 +437,27 @@ export class RunnerExecutionProvider extends ExecutionProvider {
 
     try {
       const { stdout } = await this._execShell(agentId, 'ls -1F . | head -100', 10);
-      const lines = stdout.trim().split('\n').filter(l => l);
+      const lines = stdout
+        .trim()
+        .split('\n')
+        .filter(l => l);
       if (lines.length === 0) {
-        this._fileTreeCache.set(agentId, { project: entry.project, tree: null, timestamp: Date.now() });
+        this._fileTreeCache.set(agentId, {
+          project: entry.project,
+          tree: null,
+          timestamp: Date.now(),
+        });
         return;
       }
       const tree = lines.join('\n');
       this._fileTreeCache.set(agentId, { project: entry.project, tree, timestamp: Date.now() });
-      console.log(`🌳 [Runner] File tree cached for agent ${agentId.slice(0, 8)} (${lines.length} entries)`);
+      console.log(
+        `🌳 [Runner] File tree cached for agent ${agentId.slice(0, 8)} (${lines.length} entries)`
+      );
     } catch (err: any) {
-      console.warn(`⚠️  [Runner] Failed to generate file tree for ${agentId.slice(0, 8)}: ${err.message}`);
+      console.warn(
+        `⚠️  [Runner] Failed to generate file tree for ${agentId.slice(0, 8)}: ${err.message}`
+      );
     }
   }
 
@@ -443,7 +487,11 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   async listDir(agentId: string, dirPath: string): Promise<string> {
-    const { stdout } = await this._execShell(agentId, `ls -1F ${this._sh(dirPath)} | head -200`, 10);
+    const { stdout } = await this._execShell(
+      agentId,
+      `ls -1F ${this._sh(dirPath)} | head -200`,
+      10
+    );
     return stdout;
   }
 
@@ -461,7 +509,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   async exec(
     agentId: string,
     command: string,
-    options: { cwd?: string; timeout?: number; maxOutput?: number } = {},
+    options: { cwd?: string; timeout?: number; maxOutput?: number } = {}
   ): Promise<{ stdout: string; stderr: string }> {
     const timeout = Math.min(Math.ceil((options.timeout || 300000) / 1000), 120);
     const { stdout, stderr } = await this._execShell(agentId, command, timeout, options.maxOutput);
@@ -475,7 +523,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     const h: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Api-Key': this.apiKey,
-      'Authorization': `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${this.apiKey}`,
     };
     if (agentId) h['X-Agent-Id'] = agentId;
     if (resolvedOwner) h['X-Owner-Id'] = resolvedOwner;
@@ -494,7 +542,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     agentId: string,
     command: string,
     timeoutSecs: number = 60,
-    maxOutput?: number,
+    maxOutput?: number
   ): Promise<{ stdout: string; stderr: string }> {
     const body: Record<string, unknown> = { command, timeout: timeoutSecs };
     if (typeof maxOutput === 'number' && Number.isFinite(maxOutput) && maxOutput > 0) {
@@ -510,7 +558,9 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`exec-shell failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`);
+      throw new Error(
+        `exec-shell failed (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ''}`
+      );
     }
     const data: any = await res.json();
     if (data.status !== 'success') {
@@ -523,6 +573,6 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   _sh(value: any): string {
-    return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
+    return `'${String(value).replace(/'/g, `'"'"'`)}'`;
   }
 }

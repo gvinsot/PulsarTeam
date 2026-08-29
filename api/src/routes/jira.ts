@@ -1,7 +1,4 @@
-import {
-  credentialConnectorRoutes,
-  getProviderCredentials,
-} from './lib/credentialConnector.js';
+import { credentialConnectorRoutes, getProviderCredentials } from './lib/credentialConnector.js';
 
 /**
  * Jira per-agent/board authentication routes — unified token store.
@@ -17,20 +14,23 @@ export interface JiraCredentials {
 
 export const getJiraCredentialsForAgent = (
   agentId: string | null,
-  boardId: string | null = null,
+  boardId: string | null = null
 ): JiraCredentials | null => getProviderCredentials<JiraCredentials>('jira', agentId, boardId);
 
 export function jiraRoutes() {
   return credentialConnectorRoutes({
     provider: 'jira',
     label: 'Jira',
-    statusFields: (meta) => ({
+    statusFields: meta => ({
       domain: meta?.domain || null,
       email: meta?.email || null,
     }),
     connect: async ({ agentId, boardId, domain, email, apiToken }) => {
       if ((!agentId && !boardId) || !domain || !email || !apiToken) {
-        return { error: 'agentId or boardId, domain, email, and apiToken are required', status: 400 };
+        return {
+          error: 'agentId or boardId, domain, email, and apiToken are required',
+          status: 400,
+        };
       }
 
       const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
@@ -44,7 +44,10 @@ export function jiraRoutes() {
 
       if (!testRes.ok) {
         const body = await testRes.text().catch(() => '');
-        return { error: `Jira authentication failed (${testRes.status}): ${body.slice(0, 200)}`, status: 400 };
+        return {
+          error: `Jira authentication failed (${testRes.status}): ${body.slice(0, 200)}`,
+          status: 400,
+        };
       }
 
       const myself = await testRes.json();
@@ -56,6 +59,6 @@ export function jiraRoutes() {
         logSuffix: `→ ${cleanDomain} (${myself.displayName || email})`,
       };
     },
-    onError: (err) => ({ status: 500, message: `Connection failed: ${err.message}` }),
+    onError: err => ({ status: 500, message: `Connection failed: ${err.message}` }),
   });
 }

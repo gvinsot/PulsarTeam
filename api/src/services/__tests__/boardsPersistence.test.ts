@@ -1,12 +1,7 @@
 import test, { afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { setPool } from '../database/connection.js';
-import {
-  createBoard,
-  deleteBoard,
-  getBoardsByUser,
-  updateBoard,
-} from '../database/boards.js';
+import { createBoard, deleteBoard, getBoardsByUser, updateBoard } from '../database/boards.js';
 
 afterEach(() => {
   setPool(null);
@@ -19,7 +14,9 @@ test('board CRUD persists through SQL-backed database helpers', async () => {
       calls.push({ sql, params });
       if (sql.includes('COALESCE(MAX(position)')) return { rows: [{ next_pos: 4 }] };
       if (sql.includes('INSERT INTO boards')) {
-        return { rows: [{ id: 'board-1', user_id: params?.[0], name: params?.[1], position: params?.[4] }] };
+        return {
+          rows: [{ id: 'board-1', user_id: params?.[0], name: params?.[1], position: params?.[4] }],
+        };
       }
       if (sql.includes('UPDATE boards SET')) {
         return { rows: [{ id: params?.[params.length - 1], name: 'Renamed' }] };
@@ -29,8 +26,16 @@ test('board CRUD persists through SQL-backed database helpers', async () => {
     },
   } as any);
 
-  const created = await createBoard('user-1', 'Roadmap', { columns: [{ id: 'todo', label: 'Todo' }] }, {});
-  const updated = await updateBoard(created.id, { name: 'Renamed', workflow: { columns: [{ id: 'done', label: 'Done' }] } });
+  const created = await createBoard(
+    'user-1',
+    'Roadmap',
+    { columns: [{ id: 'todo', label: 'Todo' }] },
+    {}
+  );
+  const updated = await updateBoard(created.id, {
+    name: 'Renamed',
+    workflow: { columns: [{ id: 'done', label: 'Done' }] },
+  });
   const deleted = await deleteBoard(created.id);
 
   assert.equal(created.position, 4);
@@ -59,7 +64,10 @@ test('getBoardsByUser reads only own and shared boards from the database', async
   const boards = await getBoardsByUser('user-1');
 
   assert.equal(boards.length, 2);
-  assert.deepEqual(boards.map((board: any) => board.id), ['owned-board', 'shared-board']);
+  assert.deepEqual(
+    boards.map((board: any) => board.id),
+    ['owned-board', 'shared-board']
+  );
   assert.match(capturedSql, /b\.user_id = \$1/);
   assert.match(capturedSql, /board_shares/);
   assert.doesNotMatch(capturedSql, /b\.is_default = TRUE/);

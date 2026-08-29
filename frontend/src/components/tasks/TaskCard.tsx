@@ -1,11 +1,36 @@
 import { useState, useRef, useEffect } from 'react';
 import {
-  Trash2, Clock, AlertTriangle, User, GitCommit, Repeat, Loader2, Square,
-  Flag, Sun, Play, Hand, Pause,
+  Trash2,
+  Clock,
+  AlertTriangle,
+  User,
+  GitCommit,
+  Repeat,
+  Loader2,
+  Square,
+  Flag,
+  Sun,
+  Play,
+  Hand,
+  Pause,
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
 
-export default function TaskCard({ task, onDelete, onStop, onResume, onClearStopped, onOpen, showAgent, showCreator, showProject, showTaskType, onTouchDrop, onNavigateToAgent, onOpenCommits }) {
+export default function TaskCard({
+  task,
+  onDelete,
+  onStop,
+  onResume,
+  onClearStopped,
+  onOpen,
+  showAgent,
+  showCreator,
+  showProject,
+  showTaskType,
+  onTouchDrop,
+  onNavigateToAgent,
+  onOpenCommits,
+}) {
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
   const today = isToday(task.createdAt);
@@ -18,10 +43,14 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   // Refs for native touch listeners (avoid stale closures)
   const onTouchDropRef = useRef(onTouchDrop);
   const taskRef = useRef(task);
-  useEffect(() => { onTouchDropRef.current = onTouchDrop; }, [onTouchDrop]);
-  useEffect(() => { taskRef.current = task; }, [task]);
+  useEffect(() => {
+    onTouchDropRef.current = onTouchDrop;
+  }, [onTouchDrop]);
+  useEffect(() => {
+    taskRef.current = task;
+  }, [task]);
 
-  const sourceMeta = task.source ? (SOURCE_META[task.source.type] || SOURCE_META.api) : null;
+  const sourceMeta = task.source ? SOURCE_META[task.source.type] || SOURCE_META.api : null;
 
   // Find which column contains a given viewport coordinate using bounding rects.
   // More reliable on mobile than elementFromPoint (no z-index / pointer-events issues).
@@ -37,7 +66,9 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   }
 
   function highlightColumn(colEl) {
-    document.querySelectorAll('[data-column-id]').forEach(c => c.classList.remove('touch-drag-over'));
+    document
+      .querySelectorAll('[data-column-id]')
+      .forEach(c => c.classList.remove('touch-drag-over'));
     if (colEl) colEl.classList.add('touch-drag-over');
   }
 
@@ -45,7 +76,11 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   function finalizeTouchDrop(touchX, touchY) {
     const t = taskRef.current;
     if (!touchDragRef.current) return;
-    if (!touchDragRef.current.started) { isDraggingRef.current = false; touchDragRef.current = null; return; }
+    if (!touchDragRef.current.started) {
+      isDraggingRef.current = false;
+      touchDragRef.current = null;
+      return;
+    }
 
     // Determine target column BEFORE removing the ghost (ghost has pointerEvents:none
     // so it doesn't interfere, but we want all DOM state stable during lookup).
@@ -70,7 +105,9 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
     if (dropColId) {
       onTouchDropRef.current(t.agentId, t.id, dropColId);
     }
-    setTimeout(() => { isDraggingRef.current = false; }, 50);
+    setTimeout(() => {
+      isDraggingRef.current = false;
+    }, 50);
     touchDragRef.current = null;
   }
 
@@ -78,7 +115,7 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   const docTouchBlocker = useRef(null);
   function installDocTouchBlocker() {
     if (docTouchBlocker.current) return;
-    const handler = (e) => {
+    const handler = e => {
       if (longPressArmedRef.current || touchDragRef.current) {
         e.preventDefault();
       }
@@ -97,7 +134,7 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   const docTouchEndRef = useRef(null);
   function installDocTouchEnd() {
     if (docTouchEndRef.current) return;
-    const handleEnd = (e) => {
+    const handleEnd = e => {
       if (!touchDragRef.current) return;
       const wasDragging = touchDragRef.current.started;
       const originEl = touchDragRef.current.originEl;
@@ -126,8 +163,14 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   }
 
   function cleanupTouchState() {
-    if (autoScrollRef.current) { cancelAnimationFrame(autoScrollRef.current); autoScrollRef.current = null; }
-    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+    if (autoScrollRef.current) {
+      cancelAnimationFrame(autoScrollRef.current);
+      autoScrollRef.current = null;
+    }
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
     removeDocTouchBlocker();
     removeDocTouchEnd();
     if (cardRef.current) {
@@ -144,9 +187,9 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
   // (mobile browsers sometimes don't deliver touchend to the original element).
   useEffect(() => {
     const el = cardRef.current;
-    if (!el) return;
+    if (!el) return undefined;
 
-    const handleTouchStart = (e) => {
+    const handleTouchStart = e => {
       if (taskRef.current?.actionRunning) return;
       const touch = e.touches[0];
       const startX = touch.clientX;
@@ -174,7 +217,7 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
       }, 500);
     };
 
-    const handleTouchMove = (e) => {
+    const handleTouchMove = e => {
       if (longPressTimerRef.current && !longPressArmedRef.current) {
         clearTimeout(longPressTimerRef.current);
         longPressTimerRef.current = null;
@@ -211,8 +254,8 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
       }
 
       if (touchDragRef.current.ghost) {
-        touchDragRef.current.ghost.style.left = (touch.clientX - el.offsetWidth / 2) + 'px';
-        touchDragRef.current.ghost.style.top = (touch.clientY - 30) + 'px';
+        touchDragRef.current.ghost.style.left = touch.clientX - el.offsetWidth / 2 + 'px';
+        touchDragRef.current.ghost.style.top = touch.clientY - 30 + 'px';
       }
 
       const scrollEl = touchDragRef.current.scrollContainer;
@@ -228,7 +271,7 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
 
         const touchX = touch.clientX;
         const touchY = touch.clientY;
-        const startAutoScroll = (direction) => {
+        const startAutoScroll = direction => {
           const tick = () => {
             scrollEl.scrollLeft += direction * scrollSpeed;
             const col2 = getColumnAtPoint(touchX, touchY);
@@ -275,43 +318,68 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
     <div
       ref={cardRef}
       draggable={!task.actionRunning}
-      onDragStart={(e) => {
-        if (task.actionRunning) { e.preventDefault(); return; }
+      onDragStart={e => {
+        if (task.actionRunning) {
+          e.preventDefault();
+          return;
+        }
         isDraggingRef.current = true;
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('application/json', JSON.stringify({ agentId: task.agentId, taskId: task.id }));
+        e.dataTransfer.setData(
+          'application/json',
+          JSON.stringify({ agentId: task.agentId, taskId: task.id })
+        );
         setTimeout(() => (e.target as HTMLElement).classList.add('opacity-40'), 0);
       }}
-      onDragEnd={(e) => {
+      onDragEnd={e => {
         (e.target as HTMLElement).classList.remove('opacity-40');
         // Reset after a tick so click doesn't fire after drop
-        setTimeout(() => { isDraggingRef.current = false; }, 50);
+        setTimeout(() => {
+          isDraggingRef.current = false;
+        }, 50);
       }}
-      onClick={() => { if (!isDraggingRef.current) onOpen(task); }}
+      onClick={() => {
+        if (!isDraggingRef.current) onOpen(task);
+      }}
       className={`group/card bg-dark-800 rounded-lg border p-3 cursor-pointer
         transition-all hover:shadow-lg hover:shadow-black/20
-        ${isError
-          ? 'border-red-500/40 bg-red-500/5 hover:border-red-500/60'
-          : isStopped
-            ? 'border-yellow-500/40 bg-yellow-500/5 hover:border-yellow-500/60 ring-1 ring-yellow-500/20'
-            : task.isManual
-              ? 'border-orange-500/40 bg-orange-500/5 hover:border-orange-500/60 ring-1 ring-orange-500/20'
-              : today
-                ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60 ring-1 ring-amber-500/20'
-                : 'border-dark-700 hover:border-dark-500'
+        ${
+          isError
+            ? 'border-red-500/40 bg-red-500/5 hover:border-red-500/60'
+            : isStopped
+              ? 'border-yellow-500/40 bg-yellow-500/5 hover:border-yellow-500/60 ring-1 ring-yellow-500/20'
+              : task.isManual
+                ? 'border-orange-500/40 bg-orange-500/5 hover:border-orange-500/60 ring-1 ring-orange-500/20'
+                : today
+                  ? 'border-amber-500/40 bg-amber-500/5 hover:border-amber-500/60 ring-1 ring-amber-500/20'
+                  : 'border-dark-700 hover:border-dark-500'
         }`}
     >
       {/* Task text */}
-      <p className={`text-sm leading-snug mb-2.5 ${isError ? 'text-red-300' : 'text-dark-200'}`}
-        style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+      <p
+        className={`text-sm leading-snug mb-2.5 ${isError ? 'text-red-300' : 'text-dark-200'}`}
+        style={{
+          display: '-webkit-box',
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}
+      >
         {task.title || task.text}
       </p>
 
       {isError && task.error && (
         <div className="flex items-start gap-1.5 mb-2 p-1.5 rounded bg-red-500/10 border border-red-500/20">
           <AlertTriangle className="w-3 h-3 text-red-400 flex-shrink-0 mt-0.5" />
-          <p className="text-xs text-red-400/80 leading-tight"
-            style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          <p
+            className="text-xs text-red-400/80 leading-tight"
+            style={{
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
             {task.error}
           </p>
         </div>
@@ -327,7 +395,9 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
       {/* Badges */}
       <div className="flex flex-wrap gap-1 mb-2.5">
         {task.priority && PRIORITY_MAP[task.priority] && (
-          <span className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${PRIORITY_MAP[task.priority].cls}`}>
+          <span
+            className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${PRIORITY_MAP[task.priority].cls}`}
+          >
             <Flag className="w-2.5 h-2.5" />
             {PRIORITY_MAP[task.priority].label}
           </span>
@@ -338,7 +408,10 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
           </span>
         )}
         {task.repoFullName && (
-          <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20" title={`Repo: ${task.repoFullName}`}>
+          <span
+            className="text-xs px-1.5 py-0.5 rounded font-medium bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20"
+            title={`Repo: ${task.repoFullName}`}
+          >
             {task.repoFullName.split('/').pop()}
           </span>
         )}
@@ -359,20 +432,28 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
           </span>
         )}
         {task.storagePath && (
-          <span className="text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20" title={`Storage: ${task.storagePath}`}>
+          <span
+            className="text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20"
+            title={`Storage: ${task.storagePath}`}
+          >
             {task.storagePath.split('/').filter(Boolean).pop() || task.storagePath}
           </span>
         )}
-        {showTaskType && task.taskType && TASK_TYPE_MAP[task.taskType] && (() => {
-          const tt = TASK_TYPE_MAP[task.taskType];
-          const Icon = tt.icon;
-          return (
-            <span className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${tt.cls}`}>
-              <Icon className="w-2.5 h-2.5" />
-              {tt.label}
-            </span>
-          );
-        })()}
+        {showTaskType &&
+          task.taskType &&
+          TASK_TYPE_MAP[task.taskType] &&
+          (() => {
+            const tt = TASK_TYPE_MAP[task.taskType];
+            const Icon = tt.icon;
+            return (
+              <span
+                className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${tt.cls}`}
+              >
+                <Icon className="w-2.5 h-2.5" />
+                {tt.label}
+              </span>
+            );
+          })()}
         {showCreator && sourceMeta && (
           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${sourceMeta.cls}`}>
             {sourceMeta.label(task.source)}
@@ -381,15 +462,30 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
         {showAgent && task.assigneeName && (
           <span
             className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20${task.assignee && onNavigateToAgent ? ' cursor-pointer hover:bg-cyan-500/20 transition-colors' : ''}`}
-            onClick={task.assignee && onNavigateToAgent ? (e) => { e.stopPropagation(); onNavigateToAgent(task.assignee); } : undefined}
-            title={task.assignee && onNavigateToAgent ? `Open ${task.assigneeName}'s chat` : undefined}
+            onClick={
+              task.assignee && onNavigateToAgent
+                ? e => {
+                    e.stopPropagation();
+                    onNavigateToAgent(task.assignee);
+                  }
+                : undefined
+            }
+            title={
+              task.assignee && onNavigateToAgent ? `Open ${task.assigneeName}'s chat` : undefined
+            }
           >
             <User className="w-2.5 h-2.5" />
             {`${task.assigneeIcon || ''} ${task.assigneeName}`.trim()}
           </span>
         )}
         {task.commits && task.commits.length > 0 && (
-          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 cursor-pointer hover:bg-amber-500/20 transition-colors" onClick={(e) => { e.stopPropagation(); onOpenCommits?.(task); }}>
+          <span
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 cursor-pointer hover:bg-amber-500/20 transition-colors"
+            onClick={e => {
+              e.stopPropagation();
+              onOpenCommits?.(task);
+            }}
+          >
             <GitCommit className="w-2.5 h-2.5" />
             {task.commits.length}
           </span>
@@ -397,7 +493,9 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
         {task.recurrence?.enabled && (
           <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-teal-500/10 text-teal-400 ring-1 ring-teal-500/20">
             <Repeat className="w-2.5 h-2.5" />
-            {task.recurrence.period === 'custom' ? `${task.recurrence.intervalMinutes}m` : task.recurrence.period}
+            {task.recurrence.period === 'custom'
+              ? `${task.recurrence.intervalMinutes}m`
+              : task.recurrence.period}
           </span>
         )}
         {task.isManual && (
@@ -421,13 +519,14 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
           )}
         </span>
         <div className="flex items-center gap-1">
-          {task.actionRunning && (
-            <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
-          )}
+          {task.actionRunning && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
           <div className="flex items-center gap-0.5 opacity-0 group-hover/card:opacity-100 transition-opacity">
             {task.actionRunning ? (
               <button
-                onClick={(e) => { e.stopPropagation(); onStop(task); }}
+                onClick={e => {
+                  e.stopPropagation();
+                  onStop(task);
+                }}
                 className="p-1.5 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
                 title="Stop action"
               >
@@ -437,7 +536,10 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
               <>
                 {isStopped && !task.assignee && onClearStopped && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); onClearStopped(task); }}
+                    onClick={e => {
+                      e.stopPropagation();
+                      onClearStopped(task);
+                    }}
                     className="p-1.5 rounded text-yellow-500 hover:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
                     title="Clear stopped status"
                   >
@@ -446,7 +548,10 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
                 )}
                 {task.assignee && onResume && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); onResume(task); }}
+                    onClick={e => {
+                      e.stopPropagation();
+                      onResume(task);
+                    }}
                     className="p-1.5 rounded text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors"
                     title="Resume task"
                   >
@@ -454,7 +559,10 @@ export default function TaskCard({ task, onDelete, onStop, onResume, onClearStop
                   </button>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); onDelete(task); }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    onDelete(task);
+                  }}
                   className="p-1.5 rounded text-dark-500 hover:text-red-400 hover:bg-dark-700 transition-colors"
                   title="Delete task"
                 >

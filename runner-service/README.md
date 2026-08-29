@@ -23,14 +23,14 @@ All backends expose the same HTTP surface; capabilities the active
 backend doesn't support return `501`.
 
 - `GET  /health`
-- `POST /execute`                — sync agent run
-- `POST /stream`                 — SSE stream
-- `POST /v1/chat/completions`    — OpenAI-compatible
+- `POST /execute` — sync agent run
+- `POST /stream` — SSE stream
+- `POST /v1/chat/completions` — OpenAI-compatible
 - `POST /v1/completions`
 - `GET  /v1/models`
-- `POST /code/execute`           — direct python/shell exec (no LLM)
-- `POST /exec-shell`             — shell exec in agent's project workspace
-- `POST /projects/ensure`        — clone/refresh per-agent project
+- `POST /code/execute` — direct python/shell exec (no LLM)
+- `POST /exec-shell` — shell exec in agent's project workspace
+- `POST /projects/ensure` — clone/refresh per-agent project
 
 Auth (claude-code only):
 

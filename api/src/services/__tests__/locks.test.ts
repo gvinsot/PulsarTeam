@@ -20,10 +20,17 @@ function fakeClient() {
       if (sql.includes('pg_try_advisory_lock')) return { rows: [{ ok: state.ok }] };
       return { rows: [] }; // unlock
     },
-    release: () => { state.released++; },
+    release: () => {
+      state.released++;
+    },
   };
 }
-const fakePool = { connect: async () => { state.connects++; return fakeClient(); } };
+const fakePool = {
+  connect: async () => {
+    state.connects++;
+    return fakeClient();
+  },
+};
 
 mock.module('../database/connection.js', {
   namedExports: {
@@ -34,11 +41,15 @@ mock.module('../database/connection.js', {
   },
 });
 
-const { tryAcquireTaskLock, releaseTaskLock, heldTaskLockCount } = await import('../database/locks.js');
+const { tryAcquireTaskLock, releaseTaskLock, heldTaskLockCount } =
+  await import('../database/locks.js');
 
 beforeEach(async () => {
   // Reset shared module state between tests (release anything still held).
-  state.ok = true; state.hasPool = true; state.released = 0; state.connects = 0;
+  state.ok = true;
+  state.hasPool = true;
+  state.released = 0;
+  state.connects = 0;
   for (let i = 0; i < 50; i++) await releaseTaskLock(`t${i}`);
   for (let i = 0; i < 50; i++) await releaseTaskLock(`c${i}`);
   await releaseTaskLock('task-a');

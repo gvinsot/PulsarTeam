@@ -34,11 +34,24 @@ function getTool(server: any, name: string) {
 const text = (r: any) => r.content[0].text;
 
 test('registers the full file + office tool surface', () => {
-  const server: any = createLocalFolderMcpServer({ agentId: null, boardId: null }, agentManagerWith(null));
+  const server: any = createLocalFolderMcpServer(
+    { agentId: null, boardId: null },
+    agentManagerWith(null)
+  );
   const names = Object.keys(server._registeredTools);
-  for (const expected of ['list_files', 'read_file', 'write_file', 'search_files',
-    'read_document', 'convert_document', 'edit_docx', 'generate_xlsx', 'edit_pptx',
-    'read_pdf', 'merge_pdfs']) {
+  for (const expected of [
+    'list_files',
+    'read_file',
+    'write_file',
+    'search_files',
+    'read_document',
+    'convert_document',
+    'edit_docx',
+    'generate_xlsx',
+    'edit_pptx',
+    'read_pdf',
+    'merge_pdfs',
+  ]) {
     assert.ok(names.includes(expected), `missing tool ${expected}`);
   }
   assert.equal(names.length, 21);
@@ -46,7 +59,10 @@ test('registers the full file + office tool surface', () => {
 
 test('errors when the agent has no resolvable owner', async () => {
   const agent = { id: 'agent-x' }; // no ownerId
-  const server = createLocalFolderMcpServer({ agentId: 'agent-x', boardId: null }, agentManagerWith(agent));
+  const server = createLocalFolderMcpServer(
+    { agentId: 'agent-x', boardId: null },
+    agentManagerWith(agent)
+  );
   const res = await getTool(server, 'read_document')({ path: 'a.docx' });
   assert.equal(res.isError, true);
   assert.match(text(res), /ownerId/);
@@ -55,7 +71,10 @@ test('errors when the agent has no resolvable owner', async () => {
 test('returns a friendly error when no desktop is connected', async () => {
   registry.clear();
   const agent = { id: 'agent-1', ownerId: 'user-1' };
-  const server = createLocalFolderMcpServer({ agentId: 'agent-1', boardId: null }, agentManagerWith(agent));
+  const server = createLocalFolderMcpServer(
+    { agentId: 'agent-1', boardId: null },
+    agentManagerWith(agent)
+  );
   const res = await getTool(server, 'list_files')({ path: '.' });
   assert.equal(res.isError, true);
   assert.match(text(res), /No desktop app connected/);
@@ -75,7 +94,10 @@ test('round-trips a tool call to the connected desktop and returns its result', 
   registry.set('user-1', new Set([fakeSocket]));
 
   const agent = { id: 'agent-1', ownerId: 'user-1' };
-  const server = createLocalFolderMcpServer({ agentId: 'agent-1', boardId: null }, agentManagerWith(agent));
+  const server = createLocalFolderMcpServer(
+    { agentId: 'agent-1', boardId: null },
+    agentManagerWith(agent)
+  );
   const res = await getTool(server, 'read_document')({ path: 'report.docx' });
 
   assert.equal(res.isError, undefined);
@@ -89,11 +111,20 @@ test('round-trips a tool call to the connected desktop and returns its result', 
 test('surfaces a desktop-side error verbatim', async () => {
   registry.clear();
   const fakeSocket = {
-    timeout: () => ({ emitWithAck: async () => ({ ok: false, code: 'EACCES', error: 'path escapes the shared folder' }) }),
+    timeout: () => ({
+      emitWithAck: async () => ({
+        ok: false,
+        code: 'EACCES',
+        error: 'path escapes the shared folder',
+      }),
+    }),
   };
   registry.set('user-2', new Set([fakeSocket]));
   const agent = { id: 'agent-2', ownerId: 'user-2' };
-  const server = createLocalFolderMcpServer({ agentId: 'agent-2', boardId: null }, agentManagerWith(agent));
+  const server = createLocalFolderMcpServer(
+    { agentId: 'agent-2', boardId: null },
+    agentManagerWith(agent)
+  );
   const res = await getTool(server, 'read_file')({ path: '../secret' });
   assert.equal(res.isError, true);
   assert.match(text(res), /EACCES: path escapes/);

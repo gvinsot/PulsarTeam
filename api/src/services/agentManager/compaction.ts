@@ -4,15 +4,17 @@ import { saveAgent } from '../database.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const compactionMethods = {
-
   /**
    * Compute dynamic compaction thresholds based on context window size.
    */
-  _compactionThresholds(this: any, contextLimit: number): { maxRecent: number; compactTrigger: number; compactReset: number; safetyRatio: number } {
+  _compactionThresholds(
+    this: any,
+    contextLimit: number
+  ): { maxRecent: number; compactTrigger: number; compactReset: number; safetyRatio: number } {
     if (contextLimit >= 200000) {
-      return { maxRecent: 80, compactTrigger: 110, compactReset: 90, safetyRatio: 0.80 };
+      return { maxRecent: 80, compactTrigger: 110, compactReset: 90, safetyRatio: 0.8 };
     } else if (contextLimit >= 128000) {
-      return { maxRecent: 40, compactTrigger: 55, compactReset: 45, safetyRatio: 0.80 };
+      return { maxRecent: 40, compactTrigger: 55, compactReset: 45, safetyRatio: 0.8 };
     } else if (contextLimit >= 32000) {
       return { maxRecent: 16, compactTrigger: 24, compactReset: 20, safetyRatio: 0.75 };
     } else {
@@ -35,15 +37,17 @@ export const compactionMethods = {
    * Compute a safe maxTokens value that won't exceed the model's context window.
    */
   _safeMaxTokens(this: any, messages: any[], agent: any, llmConfig: any = null): number {
-    const contextLength = (llmConfig?.contextLength) || agent.contextLength || 131072;
-    const desiredMaxTokens = (llmConfig?.maxTokens) || agent.maxTokens || 4096;
+    const contextLength = llmConfig?.contextLength || agent.contextLength || 131072;
+    const desiredMaxTokens = llmConfig?.maxTokens || agent.maxTokens || 4096;
     const estimatedInput = this._estimateTokens(messages);
     const safetyMargin = Math.ceil(contextLength * 0.15);
     const available = contextLength - estimatedInput - safetyMargin;
     if (available < desiredMaxTokens) {
       const capped = Math.max(1024, available);
       if (capped !== desiredMaxTokens) {
-        console.log(`⚠️  [TokenCap] "${agent.name}": capping maxTokens from ${desiredMaxTokens} to ${capped} (input ~${estimatedInput}, context ${contextLength})`);
+        console.log(
+          `⚠️  [TokenCap] "${agent.name}": capping maxTokens from ${desiredMaxTokens} to ${capped} (input ~${estimatedInput}, context ${contextLength})`
+        );
       }
       return capped;
     }
@@ -53,16 +57,26 @@ export const compactionMethods = {
   _isContextExceededError(this: any, errMsg: string): boolean {
     const lower = (errMsg || '').toLowerCase();
     return [
-      'context length', 'context_length', 'num_ctx', 'context window',
-      'too long', 'maximum context', 'exceeds', 'token limit',
-      'kv cache full', 'prompt is too long', 'input too long',
-      'context_length_exceeded'
+      'context length',
+      'context_length',
+      'num_ctx',
+      'context window',
+      'too long',
+      'maximum context',
+      'exceeds',
+      'token limit',
+      'kv cache full',
+      'prompt is too long',
+      'input too long',
+      'context_length_exceeded',
     ].some(kw => lower.includes(kw));
   },
 
   _parseRateLimitReset(this: any, text: string): { retryAt: number; resetLabel: string } | null {
     if (!text) return null;
-    const match = text.match(/(?:hit your limit|rate.limit|limit.reached)[\s\S]*?resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:\(([^)]+)\))?/i);
+    const match = text.match(
+      /(?:hit your limit|rate.limit|limit.reached)[\s\S]*?resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:\(([^)]+)\))?/i
+    );
     if (!match) return null;
 
     let hours = parseInt(match[1], 10);
@@ -74,7 +88,12 @@ export const compactionMethods = {
     if (ampm === 'am' && hours === 12) hours = 0;
 
     const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
     const todayStr = formatter.format(now);
     const resetStr = `${todayStr}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
 
@@ -91,15 +110,22 @@ export const compactionMethods = {
     const retryAt = resetUtc.getTime() + 5 * 60 * 1000;
     const resetLabel = `${match[1]}${match[2] ? ':' + match[2] : ''}${ampm} (${tz})`;
 
-    console.log(`🕐 [Rate Limit] Parsed reset: ${resetLabel} → retry at ${new Date(retryAt).toISOString()}`);
+    console.log(
+      `🕐 [Rate Limit] Parsed reset: ${resetLabel} → retry at ${new Date(retryAt).toISOString()}`
+    );
     return { retryAt, resetLabel };
   },
 
   /**
    * Truncate individual messages so total estimated tokens fits within context limit.
    */
-  _truncateMessagesToFit(this: any, messages: any[], contextLimit: number, reserveOutputTokens: number = 1024): boolean {
-    const target = contextLimit - reserveOutputTokens - Math.ceil(contextLimit * 0.10);
+  _truncateMessagesToFit(
+    this: any,
+    messages: any[],
+    contextLimit: number,
+    reserveOutputTokens: number = 1024
+  ): boolean {
+    const target = contextLimit - reserveOutputTokens - Math.ceil(contextLimit * 0.1);
     let estimated = this._estimateTokens(messages);
     if (estimated <= target) return false;
 
@@ -119,14 +145,18 @@ export const compactionMethods = {
       const excessChars = excessTokens * 3;
       const newLen = Math.max(MIN_CONTENT, content.length - excessChars);
       if (newLen < content.length) {
-        msg.content = content.slice(0, newLen) + `\n\n... [truncated from ${content.length} to ${newLen} chars to fit context window]`;
+        msg.content =
+          content.slice(0, newLen) +
+          `\n\n... [truncated from ${content.length} to ${newLen} chars to fit context window]`;
         estimated = this._estimateTokens(messages);
         truncated = true;
       }
     }
 
     if (truncated) {
-      console.log(`✂️  [Truncate] Messages truncated to fit context: ~${estimated} tokens (target: ${target}, limit: ${contextLimit})`);
+      console.log(
+        `✂️  [Truncate] Messages truncated to fit context: ~${estimated} tokens (target: ${target}, limit: ${contextLimit})`
+      );
     }
     return truncated;
   },
@@ -139,24 +169,38 @@ export const compactionMethods = {
     if (history.length <= keepRecent + 2) {
       agent.conversationHistory = history.slice(-keepRecent);
       saveAgent(agent);
-      console.log(`🗜️  [Compact] "${agent.name}": hard truncation to ${agent.conversationHistory.length} msgs (history too short for summary)`);
+      console.log(
+        `🗜️  [Compact] "${agent.name}": hard truncation to ${agent.conversationHistory.length} msgs (history too short for summary)`
+      );
       return;
     }
 
     const contextLimit = this.resolveLlmConfig(agent).contextLength || agent.contextLength || 8192;
 
-    const perMsgTruncate = contextLimit >= 200000 ? 8000
-                         : contextLimit >= 128000 ? 6000
-                         : contextLimit >= 32000  ? 4000
-                         : 2000;
-    const summaryInputCap = contextLimit >= 200000 ? 100000
-                          : contextLimit >= 128000 ? 60000
-                          : contextLimit >= 32000  ? 30000
-                          : 12000;
-    const summaryMaxTokens = contextLimit >= 200000 ? 4096
-                           : contextLimit >= 128000 ? 3072
-                           : contextLimit >= 32000  ? 2048
-                           : 1024;
+    const perMsgTruncate =
+      contextLimit >= 200000
+        ? 8000
+        : contextLimit >= 128000
+          ? 6000
+          : contextLimit >= 32000
+            ? 4000
+            : 2000;
+    const summaryInputCap =
+      contextLimit >= 200000
+        ? 100000
+        : contextLimit >= 128000
+          ? 60000
+          : contextLimit >= 32000
+            ? 30000
+            : 12000;
+    const summaryMaxTokens =
+      contextLimit >= 200000
+        ? 4096
+        : contextLimit >= 128000
+          ? 3072
+          : contextLimit >= 32000
+            ? 2048
+            : 1024;
     const summaryMaxWords = contextLimit >= 128000 ? 2000 : 500;
 
     const existingSummary = history.find((m: any) => m.type === 'compaction-summary');
@@ -174,9 +218,11 @@ export const compactionMethods = {
     for (const m of toSummarize) {
       const role = m.role === 'user' ? 'User' : 'Assistant';
       const rawContent = m.content || '';
-      const content = rawContent.length > perMsgTruncate
-        ? rawContent.slice(0, perMsgTruncate) + `... [truncated, ${rawContent.length} chars total]`
-        : rawContent;
+      const content =
+        rawContent.length > perMsgTruncate
+          ? rawContent.slice(0, perMsgTruncate) +
+            `... [truncated, ${rawContent.length} chars total]`
+          : rawContent;
       summaryParts.push(`[${role}]: ${content}`);
     }
 
@@ -190,64 +236,80 @@ export const compactionMethods = {
         endpoint: llmConfig.endpoint,
         apiKey: llmConfig.apiKey,
         agentId: agent.id,
-        ownerId: agent.ownerId || null
+        ownerId: agent.ownerId || null,
       });
 
       const msgCount = toSummarize.length + (existingSummary ? 1 : 0);
-      console.log(`🗜️  [Compact] "${agent.name}": summarizing ${msgCount} messages (${summaryInput.length} chars input, cap ${summaryInputCap}), keeping ${toKeep.length} recent, context ${contextLimit}, model=${llmConfig.model}`);
+      console.log(
+        `🗜️  [Compact] "${agent.name}": summarizing ${msgCount} messages (${summaryInput.length} chars input, cap ${summaryInputCap}), keeping ${toKeep.length} recent, context ${contextLimit}, model=${llmConfig.model}`
+      );
 
-      const maxSummaryInputChars = Math.min(summaryInputCap, (contextLimit - summaryMaxTokens - 1000) * 3);
+      const maxSummaryInputChars = Math.min(
+        summaryInputCap,
+        (contextLimit - summaryMaxTokens - 1000) * 3
+      );
       const summaryMessages = [
         {
           role: 'system',
-          content: `You are a conversation summarizer. Produce a concise but thorough summary of the conversation below.${existingSummary ? ' A previous summary is included — integrate it with the new messages into one unified summary.' : ''} Preserve: key decisions made, files modified and their changes, errors encountered and how they were resolved, current task status, tools/commands used, and any important context the assistant needs to continue working effectively. Be factual and structured. Use bullet points grouped by topic. Maximum ${summaryMaxWords} words.`
+          content: `You are a conversation summarizer. Produce a concise but thorough summary of the conversation below.${existingSummary ? ' A previous summary is included — integrate it with the new messages into one unified summary.' : ''} Preserve: key decisions made, files modified and their changes, errors encountered and how they were resolved, current task status, tools/commands used, and any important context the assistant needs to continue working effectively. Be factual and structured. Use bullet points grouped by topic. Maximum ${summaryMaxWords} words.`,
         },
         {
           role: 'user',
-          content: `Summarize this conversation:\n\n${summaryInput.slice(0, maxSummaryInputChars)}`
-        }
+          content: `Summarize this conversation:\n\n${summaryInput.slice(0, maxSummaryInputChars)}`,
+        },
       ];
       this._truncateMessagesToFit(summaryMessages, contextLimit, summaryMaxTokens);
 
       let summaryResponse = await provider.chat(summaryMessages, {
         temperature: 0.2,
         maxTokens: summaryMaxTokens,
-        contextLength: contextLimit
+        contextLength: contextLimit,
       });
 
       let summaryText = summaryResponse.content || '';
 
       if (!summaryText.trim()) {
-        console.warn(`🗜️  [Compact] "${agent.name}": first summary attempt returned empty (model=${llmConfig.model}) — retrying with simpler prompt`);
+        console.warn(
+          `🗜️  [Compact] "${agent.name}": first summary attempt returned empty (model=${llmConfig.model}) — retrying with simpler prompt`
+        );
         const retryMessages = [
-          { role: 'user', content: `Summarize the following conversation in bullet points. Keep it concise.\n\n${summaryInput.slice(0, Math.floor(maxSummaryInputChars / 2))}` }
+          {
+            role: 'user',
+            content: `Summarize the following conversation in bullet points. Keep it concise.\n\n${summaryInput.slice(0, Math.floor(maxSummaryInputChars / 2))}`,
+          },
         ];
         this._truncateMessagesToFit(retryMessages, contextLimit, summaryMaxTokens);
         summaryResponse = await provider.chat(retryMessages, {
           temperature: 0.3,
           maxTokens: summaryMaxTokens,
-          contextLength: contextLimit
+          contextLength: contextLimit,
         });
         summaryText = summaryResponse.content || '';
       }
 
-      if (!summaryText.trim()) throw new Error(`Empty summary after retry (model=${llmConfig.model}, provider=${llmConfig.provider})`);
+      if (!summaryText.trim())
+        throw new Error(
+          `Empty summary after retry (model=${llmConfig.model}, provider=${llmConfig.provider})`
+        );
 
       agent.conversationHistory = [
         {
           role: 'assistant',
           content: `[CONVERSATION SUMMARY — earlier messages were compacted to save context]\n\n${summaryText}`,
           timestamp: new Date().toISOString(),
-          type: 'compaction-summary'
+          type: 'compaction-summary',
         },
-        ...toKeep
+        ...toKeep,
       ];
 
       saveAgent(agent);
-      console.log(`🗜️  [Compact] "${agent.name}": compacted ${history.length} → ${agent.conversationHistory.length} messages (summary: ${summaryText.length} chars)`);
-
+      console.log(
+        `🗜️  [Compact] "${agent.name}": compacted ${history.length} → ${agent.conversationHistory.length} messages (summary: ${summaryText.length} chars)`
+      );
     } catch (summaryErr: any) {
-      console.warn(`🗜️  [Compact] "${agent.name}": summarization failed (${summaryErr.message}), building mechanical summary`);
+      console.warn(
+        `🗜️  [Compact] "${agent.name}": summarization failed (${summaryErr.message}), building mechanical summary`
+      );
 
       const filesRead = new Set<string>();
       const filesWritten = new Set<string>();
@@ -260,21 +322,30 @@ export const compactionMethods = {
         const content = m.content || '';
         if (m.role === 'assistant') {
           const reads = content.match(/@read_file\(([^)]{1,120})\)/g);
-          if (reads) reads.forEach((r: string) => {
-            const match = r.match(/@read_file\(([^,)]+)/);
-            if (match) filesRead.add(match[1].trim().replace(/^["']|["']$/g, ''));
-          });
+          if (reads)
+            reads.forEach((r: string) => {
+              const match = r.match(/@read_file\(([^,)]+)/);
+              if (match) filesRead.add(match[1].trim().replace(/^["']|["']$/g, ''));
+            });
           const writes = content.match(/@write_file\(([^,]{1,120})/g);
-          if (writes) writes.forEach((w: string) => {
-            const match = w.match(/@write_file\(([^,]+)/);
-            if (match) filesWritten.add(match[1].trim().replace(/^["']|["']$/g, ''));
-          });
+          if (writes)
+            writes.forEach((w: string) => {
+              const match = w.match(/@write_file\(([^,]+)/);
+              if (match) filesWritten.add(match[1].trim().replace(/^["']|["']$/g, ''));
+            });
           const cmds = content.match(/@run_command\(([^)]{1,200})\)/g);
-          if (cmds) commandsRun.push(...cmds.slice(0, 3).map((c: string) => c.slice(13, -1).slice(0, 80)));
-          const otherTools = content.match(/@(?:search_files|list_dir|append_file|mcp_call)\([^)]{0,80}\)/g);
+          if (cmds)
+            commandsRun.push(...cmds.slice(0, 3).map((c: string) => c.slice(13, -1).slice(0, 80)));
+          const otherTools = content.match(
+            /@(?:search_files|list_dir|append_file|mcp_call)\([^)]{0,80}\)/g
+          );
           if (otherTools) toolCalls.push(...otherTools.slice(0, 5));
         } else if (m.role === 'user') {
-          if (content.includes('Error') || content.includes('error') || content.includes('failed')) {
+          if (
+            content.includes('Error') ||
+            content.includes('error') ||
+            content.includes('failed')
+          ) {
             const errPreview = content.slice(0, 150).replace(/\n/g, ' ');
             errors.push(errPreview);
           }
@@ -287,8 +358,14 @@ export const compactionMethods = {
       const parts: string[] = [];
       parts.push(`[MECHANICAL SUMMARY — ${toSummarize.length} messages compacted]`);
       if (userRequests.length > 0) parts.push(`Tasks: ${userRequests.slice(0, 3).join(' | ')}`);
-      if (filesRead.size > 0) parts.push(`Read ${filesRead.size} file(s): ${[...filesRead].slice(0, 5).join(', ')}${filesRead.size > 5 ? ` +${filesRead.size - 5} more` : ''}`);
-      if (filesWritten.size > 0) parts.push(`Wrote ${filesWritten.size} file(s): ${[...filesWritten].slice(0, 5).join(', ')}${filesWritten.size > 5 ? ` +${filesWritten.size - 5} more` : ''}`);
+      if (filesRead.size > 0)
+        parts.push(
+          `Read ${filesRead.size} file(s): ${[...filesRead].slice(0, 5).join(', ')}${filesRead.size > 5 ? ` +${filesRead.size - 5} more` : ''}`
+        );
+      if (filesWritten.size > 0)
+        parts.push(
+          `Wrote ${filesWritten.size} file(s): ${[...filesWritten].slice(0, 5).join(', ')}${filesWritten.size > 5 ? ` +${filesWritten.size - 5} more` : ''}`
+        );
       if (commandsRun.length > 0) parts.push(`Ran ${commandsRun.length} command(s)`);
       if (toolCalls.length > 0) parts.push(`${toolCalls.length} other tool call(s)`);
       if (errors.length > 0) parts.push(`${errors.length} error(s): ${errors[0].slice(0, 80)}`);
@@ -303,16 +380,20 @@ export const compactionMethods = {
             role: 'assistant',
             content: mechanicalSummary,
             timestamp: new Date().toISOString(),
-            type: 'compaction-summary'
+            type: 'compaction-summary',
           },
-          ...toKeep
+          ...toKeep,
         ];
       }
-      const maxPerMsg = Math.floor((contextLimit * 3) / Math.max(agent.conversationHistory.length, 1) * 0.6);
+      const maxPerMsg = Math.floor(
+        ((contextLimit * 3) / Math.max(agent.conversationHistory.length, 1)) * 0.6
+      );
       for (const m of agent.conversationHistory) {
         if (m.type === 'compaction-summary') continue;
         if ((m.content || '').length > maxPerMsg) {
-          m.content = m.content.slice(0, maxPerMsg) + `\n\n... [hard-truncated from ${m.content.length} to ${maxPerMsg} chars]`;
+          m.content =
+            m.content.slice(0, maxPerMsg) +
+            `\n\n... [hard-truncated from ${m.content.length} to ${maxPerMsg} chars]`;
         }
       }
       saveAgent(agent);

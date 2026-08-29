@@ -1,5 +1,9 @@
 import express from 'express';
-import { storeOAuthToken, resolveAccessToken, resolveOAuthTokenRecord } from '../services/database.js';
+import {
+  storeOAuthToken,
+  resolveAccessToken,
+  resolveOAuthTokenRecord,
+} from '../services/database.js';
 import { resolveScope, sendOAuthResult } from './oauthHelper.js';
 import { createOAuthStateStore } from './oauthState.js';
 import { oauthProviderRoutes } from './oauthProviderRoutes.js';
@@ -12,16 +16,28 @@ import { readSecret } from '../secrets.js';
  */
 
 // HKDF domain 'github' must stay byte-identical across deploys — see oauthState.ts.
-const oauthStates = createOAuthStateStore<{ username: string; agentId: string | null; boardId: string | null }>('github');
+const oauthStates = createOAuthStateStore<{
+  username: string;
+  agentId: string | null;
+  boardId: string | null;
+}>('github');
 
-function generateOAuthState(username: string, agentId: string | null = null, boardId: string | null = null) {
+function generateOAuthState(
+  username: string,
+  agentId: string | null = null,
+  boardId: string | null = null
+) {
   return oauthStates.generate({ username, agentId, boardId });
 }
 
 function consumeOAuthState(state: string) {
   const entry = oauthStates.consume(state);
   if (!entry) return null;
-  return { username: entry.username, agentId: entry.agentId || null, boardId: entry.boardId || null };
+  return {
+    username: entry.username,
+    agentId: entry.agentId || null,
+    boardId: entry.boardId || null,
+  };
 }
 
 function getConfig() {
@@ -51,7 +67,7 @@ async function fetchWithRetry(
   url: string,
   init: RequestInit,
   attempts = 3,
-  baseDelayMs = 250,
+  baseDelayMs = 250
 ): Promise<Response> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
@@ -62,12 +78,15 @@ async function fetchWithRetry(
     } catch (err: any) {
       lastErr = err;
       const cause = err?.cause?.code || err?.cause?.message || err?.code || err?.message || '';
-      const transient = err?.name === 'TimeoutError'
-        || /terminated|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET/i.test(String(cause));
+      const transient =
+        err?.name === 'TimeoutError' ||
+        /terminated|ECONNRESET|ETIMEDOUT|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET/i.test(String(cause));
       if (!transient || i === attempts - 1) throw err;
       const delay = baseDelayMs * Math.pow(2, i);
-      console.warn(`[GitHub] fetch ${url} failed with "${cause}", retrying in ${delay}ms (attempt ${i + 2}/${attempts})`);
-      await new Promise((r) => setTimeout(r, delay));
+      console.warn(
+        `[GitHub] fetch ${url} failed with "${cause}", retrying in ${delay}ms (attempt ${i + 2}/${attempts})`
+      );
+      await new Promise(r => setTimeout(r, delay));
     }
   }
   throw lastErr;
@@ -88,13 +107,17 @@ export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
  */
 async function isGitHubTokenUsable(token: string): Promise<boolean> {
   try {
-    const res = await fetchWithRetry('https://api.github.com/user', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'User-Agent': 'PulsarTeam',
+    const res = await fetchWithRetry(
+      'https://api.github.com/user',
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'PulsarTeam',
+        },
       },
-    }, 2);
+      2
+    );
     return res.status !== 401;
   } catch {
     // Network error / timeout after retries — can't prove the token is dead, so
@@ -128,7 +151,7 @@ async function isGitHubTokenUsable(token: string): Promise<boolean> {
  */
 export async function getGitHubCredentialsForAgent(
   agentId: string | null,
-  boardId: string | null = null,
+  boardId: string | null = null
 ): Promise<{ token: string; login: string | null; provider: 'github' } | null> {
   const hit = await resolveOAuthTokenRecord('github', agentId, boardId);
   // Server-wide fallback: GITHUB_TOKEN (documented in .env.example, mountable
@@ -152,7 +175,7 @@ export async function getGitHubCredentialsForAgent(
     if (await isGitHubTokenUsable(oauthCreds.token)) return oauthCreds;
     console.warn(
       `[GitHub] Resolved OAuth token (scope=${hit.scopeType}) was rejected by GitHub (401); ` +
-      `falling back to server GITHUB_TOKEN so the agent can still push.`,
+        `falling back to server GITHUB_TOKEN so the agent can still push.`
     );
     // fall through to the server token
   }
@@ -174,17 +197,35 @@ async function handleOAuthRedirect(req, res) {
   const code = req.query.code as string | undefined;
   const state = req.query.state as string | undefined;
   if (!code || !state) {
-    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'Missing code or state parameter');
+    return sendOAuthResult(
+      res,
+      'GitHub',
+      'github-oauth-callback',
+      false,
+      'Missing code or state parameter'
+    );
   }
 
   const config = getConfig();
   if (!config) {
-    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'GitHub OAuth not configured on server');
+    return sendOAuthResult(
+      res,
+      'GitHub',
+      'github-oauth-callback',
+      false,
+      'GitHub OAuth not configured on server'
+    );
   }
 
   const stateData = consumeOAuthState(state);
   if (!stateData) {
-    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, 'Invalid or expired state. Please try again.');
+    return sendOAuthResult(
+      res,
+      'GitHub',
+      'github-oauth-callback',
+      false,
+      'Invalid or expired state. Please try again.'
+    );
   }
 
   try {
@@ -202,13 +243,26 @@ async function handleOAuthRedirect(req, res) {
     const data = await response.json();
     if (!response.ok || data.error || !data.access_token) {
       console.error('[GitHub] Token exchange failed:', data);
-      return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, data.error_description || data.error || data.message || `Token exchange failed (HTTP ${response.status})`);
+      return sendOAuthResult(
+        res,
+        'GitHub',
+        'github-oauth-callback',
+        false,
+        data.error_description ||
+          data.error ||
+          data.message ||
+          `Token exchange failed (HTTP ${response.status})`
+      );
     }
 
     let login = null;
     try {
       const userRes = await fetchWithRetry('https://api.github.com/user', {
-        headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'PulsarTeam' },
+        headers: {
+          Authorization: `Bearer ${data.access_token}`,
+          Accept: 'application/vnd.github+json',
+          'User-Agent': 'PulsarTeam',
+        },
       });
       if (userRes.ok) {
         const user = await userRes.json();
@@ -218,22 +272,37 @@ async function handleOAuthRedirect(req, res) {
       console.warn('[GitHub] Could not fetch user profile:', err.message);
     }
 
-    const { scopeType, scopeId } = resolveScope(stateData.agentId, stateData.boardId, stateData.username);
+    const { scopeType, scopeId } = resolveScope(
+      stateData.agentId,
+      stateData.boardId,
+      stateData.username
+    );
 
-    await storeOAuthToken({
-      provider: 'github',
-      scopeType,
-      scopeId,
-      accessToken: data.access_token,
-      meta: { scope: data.scope, tokenType: data.token_type, login },
-    }, { throwOnPersistError: true });
+    await storeOAuthToken(
+      {
+        provider: 'github',
+        scopeType,
+        scopeId,
+        accessToken: data.access_token,
+        meta: { scope: data.scope, tokenType: data.token_type, login },
+      },
+      { throwOnPersistError: true }
+    );
 
-    console.log(`✅ [GitHub] OAuth token stored for ${scopeType}:${scopeId} (${login || 'unknown'}) via redirect`);
+    console.log(
+      `✅ [GitHub] OAuth token stored for ${scopeType}:${scopeId} (${login || 'unknown'}) via redirect`
+    );
     return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', true, null, { login });
   } catch (err: any) {
     const cause = err?.cause?.code || err?.cause?.message || err?.message || 'unknown';
     console.error('[GitHub] OAuth redirect error:', err);
-    return sendOAuthResult(res, 'GitHub', 'github-oauth-callback', false, `Token exchange failed: ${cause}`);
+    return sendOAuthResult(
+      res,
+      'GitHub',
+      'github-oauth-callback',
+      false,
+      `Token exchange failed: ${cause}`
+    );
   }
 }
 
@@ -247,7 +316,8 @@ const githubSpec: OAuthProviderSpec<{ clientId: string; clientSecret: string }> 
   provider: 'github',
   label: 'GitHub',
   getConfig,
-  notConfiguredError: 'GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.',
+  notConfiguredError:
+    'GitHub OAuth not configured. Set GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET.',
   generateState: (username, agentId, boardId) => generateOAuthState(username, agentId, boardId),
   buildAuthUrl: (req, config, state) => {
     const params = new URLSearchParams({
@@ -258,7 +328,7 @@ const githubSpec: OAuthProviderSpec<{ clientId: string; clientSecret: string }> 
     });
     return `https://github.com/login/oauth/authorize?${params}`;
   },
-  isConnected: (token) => !!(token && token.accessToken),
+  isConnected: token => !!(token && token.accessToken),
   statusFields: (token, connected) => ({ login: connected ? token?.meta?.login || null : null }),
 };
 

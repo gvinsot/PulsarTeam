@@ -32,10 +32,16 @@ export class Bridge {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
-  private notify() { for (const fn of this.listeners) fn(); }
+  private notify() {
+    for (const fn of this.listeners) fn();
+  }
 
-  get connected(): boolean { return !!this.socket?.connected; }
-  get folders(): string[] { return this.guard.folders; }
+  get connected(): boolean {
+    return !!this.socket?.connected;
+  }
+  get folders(): string[] {
+    return this.guard.folders;
+  }
 
   /** (Re)connect with the freshest JWT. Idempotent for an unchanged token. */
   setToken(token: string | null): void {
@@ -43,19 +49,30 @@ export class Bridge {
     this.token = token;
     this.socket?.disconnect();
     this.socket = io(config.serverUrl, {
-      auth: (cb) => cb({ token: this.token, role: 'desktop-bridge' }),
+      auth: cb => cb({ token: this.token, role: 'desktop-bridge' }),
       transports: ['websocket', 'polling'],
     });
-    this.socket.on('connect', () => { console.log('🔌 bridge connected'); this.register(); this.notify(); });
-    this.socket.on('disconnect', () => { console.log('🔌 bridge disconnected'); this.notify(); });
-    this.socket.on('connect_error', (e) => console.error('bridge connect_error:', e.message));
+    this.socket.on('connect', () => {
+      console.log('🔌 bridge connected');
+      this.register();
+      this.notify();
+    });
+    this.socket.on('disconnect', () => {
+      console.log('🔌 bridge disconnected');
+      this.notify();
+    });
+    this.socket.on('connect_error', e => console.error('bridge connect_error:', e.message));
     this.socket.on(EV.TOOL_CALL, (payload, ack) => this.handleToolCall(payload, ack));
   }
 
   /** Share a folder: confine fsGuard + (re)start the office sidecar on it. */
   async setFolder(folder: string): Promise<void> {
     this.guard.setRoots([folder]);
-    try { await officeSidecar.ensure(folder); } catch (e: any) { console.error('sidecar start failed:', e?.message); }
+    try {
+      await officeSidecar.ensure(folder);
+    } catch (e: any) {
+      console.error('sidecar start failed:', e?.message);
+    }
     this.register();
     this.notify();
   }
@@ -69,10 +86,11 @@ export class Bridge {
     const reply = typeof ack === 'function' ? ack : () => {};
     const record: Activity = { at: Date.now(), tool, path: args?.path, ok: false };
     try {
-      if (this.guard.folders.length === 0) throw new GuardError('NO_FOLDER', 'No folder is shared in the desktop app.');
+      if (this.guard.folders.length === 0)
+        throw new GuardError('NO_FOLDER', 'No folder is shared in the desktop app.');
       let result: unknown;
       if (FS_TOOLS.has(tool)) {
-        result = dispatchFsTool(this.guard, tool, args);     // allow-listed filesystem
+        result = dispatchFsTool(this.guard, tool, args); // allow-listed filesystem
       } else {
         // Office tools: the sidecar has OFFICE_ROOT = shared folder, so it
         // confines paths the same way fsGuard does. Pass args through.

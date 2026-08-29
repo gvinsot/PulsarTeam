@@ -51,7 +51,9 @@ export default function EditableSelectRow({
           >
             <option value="">{emptyOptionLabel}</option>
             {options.map(o => (
-              <option key={o.key ?? o.value} value={o.value}>{o.label}</option>
+              <option key={o.key ?? o.value} value={o.value}>
+                {o.label}
+              </option>
             ))}
           </select>
           <button

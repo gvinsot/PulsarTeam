@@ -25,10 +25,10 @@ export function connectSocket(token) {
   const sock = io({
     // Function form so every reconnect handshake reads the freshest token
     // (e.g., refreshed by a re-login) instead of the one captured here.
-    auth: (cb) => {
+    auth: cb => {
       cb({ token: safeGet('token') || socketToken });
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
   });
   socket = sock;
 
@@ -43,14 +43,15 @@ export function connectSocket(token) {
     sock.emit(WsEvents.REQ_STREAM_STATE);
   });
 
-  sock.on('connect_error', (err) => {
+  sock.on('connect_error', err => {
     console.error('WebSocket error:', err.message);
     // socket.active stays true while socket.io retries on its own; false
     // means the server middleware rejected the handshake and reconnection
     // has stopped permanently.
     if (sock.active) return;
 
-    const isAuthError = err.message === 'Invalid token' || err.message === 'Authentication required';
+    const isAuthError =
+      err.message === 'Invalid token' || err.message === 'Authentication required';
     if (isAuthError && !retriedAuth) {
       // Retry exactly once in case localStorage holds a fresher token than
       // the one used for the failed handshake.
@@ -59,9 +60,11 @@ export function connectSocket(token) {
       return;
     }
 
-    window.dispatchEvent(new CustomEvent(isAuthError ? 'socket:auth-error' : 'socket:connect-error', {
-      detail: err.message,
-    }));
+    window.dispatchEvent(
+      new CustomEvent(isAuthError ? 'socket:auth-error' : 'socket:connect-error', {
+        detail: err.message,
+      })
+    );
   });
 
   return sock;

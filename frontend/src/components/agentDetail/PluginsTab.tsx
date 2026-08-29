@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { X, Wrench, KeyRound, Globe, Lock } from 'lucide-react';
 import { api } from '../../api';
 import PluginEditor from '../PluginEditor';
-import { AssignedPluginCard, AvailablePluginRow, CategoryFilterPills } from '../plugins/pluginShared';
+import {
+  AssignedPluginCard,
+  AvailablePluginRow,
+  CategoryFilterPills,
+} from '../plugins/pluginShared';
 
 // True if the plugin has at least one MCP that needs a bearer token AND no
 // per-MCP key is already stored (the user is expected to provide their own).
@@ -30,11 +34,12 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
   const availablePlugins = plugins.filter(s => !agentPluginIds.includes(s.id));
 
   const categories = ['all', ...new Set<string>(plugins.map(s => s.category).filter(Boolean))];
-  const filteredAvailable = categoryFilter === 'all'
-    ? availablePlugins
-    : availablePlugins.filter(s => s.category === categoryFilter);
+  const filteredAvailable =
+    categoryFilter === 'all'
+      ? availablePlugins
+      : availablePlugins.filter(s => s.category === categoryFilter);
 
-  const startActivation = (plugin) => {
+  const startActivation = plugin => {
     setActivationError(null);
     setActivatingPlugin(plugin);
     setActivationForm({
@@ -77,7 +82,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
     }
   };
 
-  const handleAssign = async (plugin) => {
+  const handleAssign = async plugin => {
     // If the plugin needs credentials we don't yet have, open the activation modal.
     if (pluginNeedsCredentials(plugin)) {
       startActivation(plugin);
@@ -94,7 +99,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
     }
   };
 
-  const handleRemove = async (pluginId) => {
+  const handleRemove = async pluginId => {
     setActionError(null);
     try {
       await api.removePlugin(agent.id, pluginId);
@@ -125,12 +130,14 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
                 plugin={plugin}
                 connectorProps={{ agentId: agent.id, onStatusChange: () => onRefresh?.() }}
                 onRemove={() => handleRemove(plugin.id)}
-                badges={plugin.shared && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
-                    <Globe className="w-2.5 h-2.5" /> partagé
-                  </span>
-                )}
-                extraActions={(
+                badges={
+                  plugin.shared && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
+                      <Globe className="w-2.5 h-2.5" /> partagé
+                    </span>
+                  )
+                }
+                extraActions={
                   <button
                     onClick={() => startActivation(plugin)}
                     className="p-1.5 text-dark-400 hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-all flex-shrink-0"
@@ -138,7 +145,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
                   >
                     <KeyRound className="w-3.5 h-3.5" />
                   </button>
-                )}
+                }
               />
             ))}
           </div>
@@ -158,7 +165,11 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
           </h3>
         </div>
 
-        <CategoryFilterPills categories={categories} value={categoryFilter} onChange={setCategoryFilter} />
+        <CategoryFilterPills
+          categories={categories}
+          value={categoryFilter}
+          onChange={setCategoryFilter}
+        />
 
         <div className="space-y-2 mt-3">
           {filteredAvailable.map(plugin => {
@@ -168,27 +179,41 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
                 key={plugin.id}
                 plugin={plugin}
                 onAdd={() => handleAssign(plugin)}
-                addLabel={needsCreds ? <><KeyRound className="w-3 h-3" /> Activer</> : 'Add'}
-                beforeMcpBadges={plugin.shared ? (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
-                    <Globe className="w-2.5 h-2.5" /> partagé
-                  </span>
-                ) : (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600 flex items-center gap-0.5">
-                    <Lock className="w-2.5 h-2.5" /> privé
-                  </span>
-                )}
-                afterMcpBadges={needsCreds && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-500/15 text-amber-400 border-amber-500/30 flex items-center gap-0.5">
-                    <KeyRound className="w-2.5 h-2.5" /> auth requise
-                  </span>
-                )}
+                addLabel={
+                  needsCreds ? (
+                    <>
+                      <KeyRound className="w-3 h-3" /> Activer
+                    </>
+                  ) : (
+                    'Add'
+                  )
+                }
+                beforeMcpBadges={
+                  plugin.shared ? (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-0.5">
+                      <Globe className="w-2.5 h-2.5" /> partagé
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-dark-700/60 text-dark-400 border border-dark-600 flex items-center gap-0.5">
+                      <Lock className="w-2.5 h-2.5" /> privé
+                    </span>
+                  )
+                }
+                afterMcpBadges={
+                  needsCreds && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-amber-500/15 text-amber-400 border-amber-500/30 flex items-center gap-0.5">
+                      <KeyRound className="w-2.5 h-2.5" /> auth requise
+                    </span>
+                  )
+                }
               />
             );
           })}
           {filteredAvailable.length === 0 && (
             <p className="text-center text-dark-500 text-xs py-4">
-              {availablePlugins.length === 0 ? 'All plugins assigned' : 'No plugins in this category'}
+              {availablePlugins.length === 0
+                ? 'All plugins assigned'
+                : 'No plugins in this category'}
             </p>
           )}
         </div>

@@ -12,13 +12,18 @@ import { encryptFields, decryptFields } from '../../lib/crypto.js';
  */
 export function createJsonDocStore(
   table: string,
-  opts: { secretFields?: readonly string[]; orderBy?: string; label?: string; labelPlural?: string } = {}
+  opts: {
+    secretFields?: readonly string[];
+    orderBy?: string;
+    label?: string;
+    labelPlural?: string;
+  } = {}
 ) {
   const orderBy = opts.orderBy || 'created_at';
   const label = opts.label || 'document';
   const labelPlural = opts.labelPlural || 'documents';
-  const dec = (d) => (opts.secretFields ? decryptFields(d, opts.secretFields) : d);
-  const enc = (d) => (opts.secretFields ? encryptFields(d, opts.secretFields) : d);
+  const dec = d => (opts.secretFields ? decryptFields(d, opts.secretFields) : d);
+  const enc = d => (opts.secretFields ? encryptFields(d, opts.secretFields) : d);
 
   return {
     async getAll() {

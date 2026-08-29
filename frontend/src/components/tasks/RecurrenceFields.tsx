@@ -5,9 +5,12 @@ import { RECURRENCE_PERIODS } from './taskConstants';
 // CreateTaskModal (indigo accent). Each modal keeps its own enable-checkbox
 // wrapper; `rowClass` lets CreateTaskModal preserve its mt-3 spacing.
 export default function RecurrenceFields({
-  period, onPeriodChange,
-  customInterval, onCustomIntervalChange,
-  retentionDays, onRetentionDaysChange,
+  period,
+  onPeriodChange,
+  customInterval,
+  onCustomIntervalChange,
+  retentionDays,
+  onRetentionDaysChange,
   focusClass = 'focus:border-indigo-500',
   rowClass = '',
 }) {
@@ -23,7 +26,9 @@ export default function RecurrenceFields({
             className={`w-full ${fieldClass}`}
           >
             {RECURRENCE_PERIODS.map(p => (
-              <option key={p.value} value={p.value}>{p.label}</option>
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
             ))}
           </select>
         </div>
@@ -50,7 +55,9 @@ export default function RecurrenceFields({
           min={0}
           max={3650}
           value={retentionDays}
-          onChange={e => onRetentionDaysChange(Math.max(0, Math.min(3650, parseInt(e.target.value) || 0)))}
+          onChange={e =>
+            onRetentionDaysChange(Math.max(0, Math.min(3650, parseInt(e.target.value) || 0)))
+          }
           className={`w-32 ${fieldClass}`}
         />
       </div>

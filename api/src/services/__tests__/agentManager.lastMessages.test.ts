@@ -18,8 +18,14 @@ test('getLastMessages returns newest messages with original indexes', async () =
 
   assert.equal(result.totalMessages, 3);
   assert.equal(result.returned, 2);
-  assert.deepEqual(result.messages.map((m) => m.content), ['two', 'three']);
-  assert.deepEqual(result.messages.map((m) => m.index), [1, 2]);
+  assert.deepEqual(
+    result.messages.map(m => m.content),
+    ['two', 'three']
+  );
+  assert.deepEqual(
+    result.messages.map(m => m.index),
+    [1, 2]
+  );
 });
 
 test('getLastMessagesByName is case-insensitive and clamps invalid limit', async () => {
@@ -36,5 +42,8 @@ test('getLastMessagesByName is case-insensitive and clamps invalid limit', async
   const result = manager.getLastMessagesByName('reviewer', 0);
   assert.equal(result.agentName, 'Reviewer');
   assert.equal(result.limit, 1);
-  assert.deepEqual(result.messages.map((m) => m.content), ['beta']);
+  assert.deepEqual(
+    result.messages.map(m => m.content),
+    ['beta']
+  );
 });

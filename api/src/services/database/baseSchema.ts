@@ -250,7 +250,7 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_tasks_position ON tasks(board_id, status, position)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_repo ON tasks(repo_full_name)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_storage ON tasks(storage_path)',
-  "CREATE INDEX IF NOT EXISTS idx_tasks_workflow_recheck ON tasks(environment, status) WHERE deleted_at IS NULL AND board_id IS NOT NULL",
+  'CREATE INDEX IF NOT EXISTS idx_tasks_workflow_recheck ON tasks(environment, status) WHERE deleted_at IS NULL AND board_id IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_task_audit_task ON task_audit_logs(task_id)',
   'CREATE INDEX IF NOT EXISTS idx_task_audit_date ON task_audit_logs(created_at)',
   'CREATE INDEX IF NOT EXISTS idx_board_shares_board ON board_shares(board_id)',

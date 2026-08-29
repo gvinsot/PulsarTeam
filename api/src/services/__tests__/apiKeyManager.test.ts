@@ -37,9 +37,7 @@ function makeFakePool() {
       }
 
       if (norm.startsWith('INSERT INTO api_keys')) {
-        const [id, key_hash, prefix, hash_version] = params as [
-          string, string, string, number,
-        ];
+        const [id, key_hash, prefix, hash_version] = params as [string, string, string, number];
         rows.push({ id, key_hash, prefix, created_at: new Date(), hash_version });
         return { rows: [] };
       }
@@ -56,7 +54,9 @@ function makeFakePool() {
 
       if (norm.startsWith('SELECT key_hash FROM api_keys')) {
         const v = params[0] as number;
-        return { rows: rows.filter(r => r.hash_version === v).map(r => ({ key_hash: r.key_hash })) };
+        return {
+          rows: rows.filter(r => r.hash_version === v).map(r => ({ key_hash: r.key_hash })),
+        };
       }
 
       throw new Error(`Unhandled query in test fake: ${norm}`);
@@ -126,7 +126,7 @@ test('validation uses crypto.timingSafeEqual on equal-length buffers', async () 
   // Spy on crypto.timingSafeEqual to confirm it is the comparator in use.
   const original = crypto.timingSafeEqual;
   let calls = 0;
-  let lengths: number[] = [];
+  const lengths: number[] = [];
   (crypto as any).timingSafeEqual = (a: Buffer, b: Buffer) => {
     calls++;
     lengths.push(a.length, b.length);
@@ -135,7 +135,10 @@ test('validation uses crypto.timingSafeEqual on equal-length buffers', async () 
   try {
     assert.equal(await validateApiKey(key), true);
     assert.ok(calls >= 1, 'timingSafeEqual must be called during validation');
-    assert.ok(lengths.every(l => l === 32), 'comparator receives 32-byte buffers (SHA-256)');
+    assert.ok(
+      lengths.every(l => l === 32),
+      'comparator receives 32-byte buffers (SHA-256)'
+    );
   } finally {
     (crypto as any).timingSafeEqual = original;
   }
@@ -155,10 +158,14 @@ test('getApiKeyInfo returns prefix only and revokeApiKey clears the key', async 
   const info = await getApiKeyInfo();
   assert.ok(info, 'info should exist');
   assert.equal(info.prefix, prefix);
-  assert.ok(!Object.prototype.hasOwnProperty.call(info, 'key_hash'),
-    'getApiKeyInfo must never expose the hash');
-  assert.ok(!JSON.stringify(info).includes(key),
-    'getApiKeyInfo must never expose the plaintext key');
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(info, 'key_hash'),
+    'getApiKeyInfo must never expose the hash'
+  );
+  assert.ok(
+    !JSON.stringify(info).includes(key),
+    'getApiKeyInfo must never expose the plaintext key'
+  );
 
   await revokeApiKey();
   assert.equal(await getApiKeyInfo(), null);

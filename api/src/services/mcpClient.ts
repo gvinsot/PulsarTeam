@@ -22,7 +22,10 @@ export class MCPClient {
   tools: any[];
   toolTimeoutMs: number;
 
-  constructor(name: string = 'PulsarTeam', { toolTimeoutMs = DEFAULT_TOOL_TIMEOUT_MS }: { toolTimeoutMs?: number } = {}) {
+  constructor(
+    name: string = 'PulsarTeam',
+    { toolTimeoutMs = DEFAULT_TOOL_TIMEOUT_MS }: { toolTimeoutMs?: number } = {}
+  ) {
     this.clientName = name;
     this.client = null;
     this.transport = null;
@@ -37,7 +40,10 @@ export class MCPClient {
    * @param {Record<string,string>} [options.headers] — extra HTTP headers (e.g. Authorization)
    * @returns {{ serverInfo, tools[] }}
    */
-  async connect(url: string, { headers }: { headers?: Record<string, string> } = {}): Promise<{ tools: any[] }> {
+  async connect(
+    url: string,
+    { headers }: { headers?: Record<string, string> } = {}
+  ): Promise<{ tools: any[] }> {
     await this.close();
 
     const parsedUrl = new URL(url);
@@ -54,7 +60,10 @@ export class MCPClient {
       console.log(`🔌 [MCP] Streamable HTTP failed for ${url}, trying SSE fallback...`);
       try {
         await this.close();
-        this.transport = new SSEClientTransport(parsedUrl, { requestInit, eventSourceInit: { fetch: (u: any, init: any) => fetch(u, { ...init, ...requestInit }) } });
+        this.transport = new SSEClientTransport(parsedUrl, {
+          requestInit,
+          eventSourceInit: { fetch: (u: any, init: any) => fetch(u, { ...init, ...requestInit }) },
+        });
         this.client = new Client({ name: this.clientName, version: '1.0.0' });
         await this.client.connect(this.transport);
         console.log(`🔌 [MCP] Connected via SSE to ${url}`);
@@ -67,7 +76,7 @@ export class MCPClient {
     // Discover tools
     this.tools = await this.listTools();
     return {
-      tools: this.tools
+      tools: this.tools,
     };
   }
 
@@ -94,7 +103,11 @@ export class MCPClient {
    * @param {object} args — tool arguments
    * @returns {{ content: Array, isError: boolean }}
    */
-  async callTool(name: string, args: Record<string, any> = {}, { timeoutMs }: { timeoutMs?: number } = {}): Promise<{ content: any[]; isError: boolean }> {
+  async callTool(
+    name: string,
+    args: Record<string, any> = {},
+    { timeoutMs }: { timeoutMs?: number } = {}
+  ): Promise<{ content: any[]; isError: boolean }> {
     if (!this.client) throw new Error('Not connected');
 
     // onprogress is required for resetTimeoutOnProgress to work: the SDK only
@@ -106,7 +119,7 @@ export class MCPClient {
     });
     return {
       content: (result.content as any[]) || [],
-      isError: (result.isError as boolean) || false
+      isError: (result.isError as boolean) || false,
     };
   }
 

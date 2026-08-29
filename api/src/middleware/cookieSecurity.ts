@@ -3,10 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 /**
  * Cookie security middleware (defense-in-depth).
  *
- * NOTE: This middleware is currently NOT mounted in index.ts — it protects
- * nothing at runtime today. It is retained (with its test suite) as ready-to-
- * mount hardening for the day the API starts issuing cookies. Mounting it is a
- * (mild) behavior change, so it is intentionally left unmounted until then.
+ * Mounted in index.ts immediately after CORS, ahead of every route.
  *
  * The API authenticates with JWTs in localStorage and intentionally does not
  * issue cookies. This middleware enforces secure flags on any Set-Cookie header
@@ -27,18 +24,33 @@ const isProd = () => process.env.NODE_ENV === 'production';
 
 function hasFlag(parts: string[], name: string): boolean {
   const lower = name.toLowerCase();
-  return parts.some(p => p.trim().toLowerCase() === lower
-    || p.trim().toLowerCase().startsWith(lower + '='));
+  return parts.some(
+    p =>
+      p.trim().toLowerCase() === lower ||
+      p
+        .trim()
+        .toLowerCase()
+        .startsWith(lower + '=')
+  );
 }
 
 function getFlagIndex(parts: string[], name: string): number {
   const lower = name.toLowerCase();
-  return parts.findIndex(p => p.trim().toLowerCase() === lower
-    || p.trim().toLowerCase().startsWith(lower + '='));
+  return parts.findIndex(
+    p =>
+      p.trim().toLowerCase() === lower ||
+      p
+        .trim()
+        .toLowerCase()
+        .startsWith(lower + '=')
+  );
 }
 
 export function hardenCookie(cookie: string, prod = isProd()): string {
-  const parts = cookie.split(';').map(p => p.trim()).filter(Boolean);
+  const parts = cookie
+    .split(';')
+    .map(p => p.trim())
+    .filter(Boolean);
   if (parts.length === 0) return cookie;
 
   const nameValue = parts[0];

@@ -10,10 +10,14 @@ import assert from 'node:assert/strict';
 
 // ── In-memory fixtures backing the database mock ────────────────────────────
 const boards: Record<string, any> = {
-  'board-A':       { id: 'board-A', user_id: 'user-A', is_default: false, name: 'A board' },
-  'board-B':       { id: 'board-B', user_id: 'user-B', is_default: false, name: 'B board' },
+  'board-A': { id: 'board-A', user_id: 'user-A', is_default: false, name: 'A board' },
+  'board-B': { id: 'board-B', user_id: 'user-B', is_default: false, name: 'B board' },
 };
-const boardShares: Array<{ board_id: string; user_id: string; permission: 'read' | 'edit' | 'admin' }> = [
+const boardShares: Array<{
+  board_id: string;
+  user_id: string;
+  permission: 'read' | 'edit' | 'admin';
+}> = [
   { board_id: 'board-A', user_id: 'user-C', permission: 'read' },
   { board_id: 'board-A', user_id: 'user-D', permission: 'edit' },
 ];
@@ -123,7 +127,12 @@ test('checkBoardAccess: unknown board returns 404', async () => {
 });
 
 test('checkBoardAccess: is_default does not grant implicit read access', async () => {
-  boards['board-legacy-default'] = { id: 'board-legacy-default', user_id: 'user-A', is_default: true, name: 'Default' };
+  boards['board-legacy-default'] = {
+    id: 'board-legacy-default',
+    user_id: 'user-A',
+    is_default: true,
+    name: 'Default',
+  };
   const r = await checkBoardAccess('board-legacy-default', 'user-Z', 'advanced', 'read');
   assert.equal(r.ok, false);
   assert.equal(r.status, 403);

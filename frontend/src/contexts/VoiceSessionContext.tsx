@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 
@@ -87,9 +95,9 @@ function normalizeFunctionOutput(output) {
 function isAutoplayBlocked(error) {
   const message = String(error?.message || '').toLowerCase();
   return (
-    error?.name === 'NotAllowedError'
-    || message.includes('autoplay')
-    || message.includes('user gesture')
+    error?.name === 'NotAllowedError' ||
+    message.includes('autoplay') ||
+    message.includes('user gesture')
   );
 }
 
@@ -114,7 +122,16 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   const activeAgentIdRef = useRef(activeAgentId);
   const responseBufferRef = useRef('');
   const transcriptBufferRef = useRef('');
-  const pendingResultsRef = useRef(new Set());
+  // Typed so the cleanup pass below survives strictFunctionTypes: an
+  // untyped `new Set()` is a Set<unknown>, and its forEach callback cannot
+  // destructure these fields.
+  type PendingResult = {
+    sock: any;
+    event: string;
+    handler: ((data: any) => void) | null;
+    timer: ReturnType<typeof setTimeout> | null;
+  };
+  const pendingResultsRef = useRef(new Set<PendingResult>());
   const connectSeqRef = useRef(0);
 
   useEffect(() => {
@@ -132,7 +149,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   }, [speakerOff]);
 
   const addEvent = useCallback((type, text) => {
-    setEvents((prev) => pushEvent(prev, type, text));
+    setEvents(prev => pushEvent(prev, type, text));
   }, []);
 
   const cleanupConnection = useCallback(() => {
@@ -165,7 +182,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       pc.onconnectionstatechange = null;
       pc.oniceconnectionstatechange = null;
       try {
-        pc.getSenders().forEach((sender) => sender.track?.stop?.());
+        pc.getSenders().forEach(sender => sender.track?.stop?.());
       } catch (err) {
         console.warn('Failed to stop peer senders cleanly:', err);
       }
@@ -177,12 +194,12 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     }
 
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
     }
 
     if (remoteStreamRef.current) {
-      remoteStreamRef.current.getTracks().forEach((track) => track.stop?.());
+      remoteStreamRef.current.getTracks().forEach(track => track.stop?.());
       remoteStreamRef.current = null;
     }
 
@@ -200,27 +217,30 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   // - keepAgent: reconnect keeps activeAgentId for its delayed re-connect
   // - keepMuted: a failed connect must not undo a mute toggled mid-setup
   // - clearEvents: only reconnect wipes the event log
-  const resetSessionState = useCallback(({
-    status = STATUS.DISCONNECTED,
-    error = null,
-    message = '',
-    clearEvents = false,
-    keepAgent = false,
-    keepMuted = false,
-  } = {}) => {
-    setStatus(status);
-    setError(error);
-    setDelegationTarget(null);
-    setCurrentTranscript('');
-    setCurrentResponse('');
-    setCurrentFunction(message);
-    if (!keepMuted) setMuted(false);
-    if (!keepAgent) {
-      setActiveAgentId(null);
-      activeAgentIdRef.current = null;
-    }
-    if (clearEvents) setEvents([]);
-  }, []);
+  const resetSessionState = useCallback(
+    ({
+      status = STATUS.DISCONNECTED,
+      error = null,
+      message = '',
+      clearEvents = false,
+      keepAgent = false,
+      keepMuted = false,
+    } = {}) => {
+      setStatus(status);
+      setError(error);
+      setDelegationTarget(null);
+      setCurrentTranscript('');
+      setCurrentResponse('');
+      setCurrentFunction(message);
+      if (!keepMuted) setMuted(false);
+      if (!keepAgent) {
+        setActiveAgentId(null);
+        activeAgentIdRef.current = null;
+      }
+      if (clearEvents) setEvents([]);
+    },
+    []
+  );
 
   const requestMicPermission = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -232,7 +252,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         const permission = await navigator.permissions.query({ name: 'microphone' });
         if (permission.state === 'denied') {
           throw new Error(
-            'Microphone access is blocked. Please allow microphone access for this site, then try again.',
+            'Microphone access is blocked. Please allow microphone access for this site, then try again.'
           );
         }
       } catch (err) {
@@ -269,7 +289,9 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     } catch (err) {
       console.error('Failed to autoplay remote voice audio:', err);
       if (isAutoplayBlocked(err)) {
-        setCurrentFunction('Audio received, but the browser blocked playback. Check that the tab is not muted.');
+        setCurrentFunction(
+          'Audio received, but the browser blocked playback. Check that the tab is not muted.'
+        );
         addEvent('error', 'Browser autoplay blocked remote voice playback');
       }
     }
@@ -281,14 +303,16 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       return;
     }
 
-    dc.send(JSON.stringify({
-      type: 'conversation.item.create',
-      item: {
-        type: 'function_call_output',
-        call_id: callId,
-        output: normalizeFunctionOutput(output),
-      },
-    }));
+    dc.send(
+      JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'function_call_output',
+          call_id: callId,
+          output: normalizeFunctionOutput(output),
+        },
+      })
+    );
     dc.send(JSON.stringify({ type: 'response.create' }));
   }, []);
 
@@ -299,512 +323,564 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   // must keep the { sock, event, handler, timer } shape — cleanupConnection
   // destructures exactly those fields. onResult/onTimeout carry the
   // flow-specific status updates and messages.
-  const awaitVoiceResult = useCallback(({ callId, resEvent, reqEvent, payload, timeoutMs, matches = (data): boolean => true, onResult, onTimeout }) => {
-    const sock = socketRef.current;
-    const agentId = activeAgentIdRef.current;
-    if (!sock || !agentId) {
-      sendFunctionOutput(callId, 'Voice session socket is not connected.');
-      return;
-    }
-
-    const pending = { sock, event: resEvent, handler: null, timer: null };
-    const settle = () => {
-      clearTimeout(pending.timer);
-      sock.off(pending.event, pending.handler);
-      pendingResultsRef.current.delete(pending);
-    };
-
-    pending.handler = (data) => {
-      if (data.agentId !== agentId || !matches(data)) {
+  const awaitVoiceResult = useCallback(
+    ({
+      callId,
+      resEvent,
+      reqEvent,
+      payload,
+      timeoutMs,
+      matches = (data): boolean => true,
+      onResult,
+      onTimeout,
+    }) => {
+      const sock = socketRef.current;
+      const agentId = activeAgentIdRef.current;
+      if (!sock || !agentId) {
+        sendFunctionOutput(callId, 'Voice session socket is not connected.');
         return;
       }
 
-      settle();
-      onResult(data);
-    };
+      const pending = { sock, event: resEvent, handler: null, timer: null };
+      const settle = () => {
+        clearTimeout(pending.timer);
+        sock.off(pending.event, pending.handler);
+        pendingResultsRef.current.delete(pending);
+      };
 
-    pending.timer = setTimeout(() => {
-      settle();
-      if (activeAgentIdRef.current !== agentId) {
+      pending.handler = data => {
+        if (data.agentId !== agentId || !matches(data)) {
+          return;
+        }
+
+        settle();
+        onResult(data);
+      };
+
+      pending.timer = setTimeout(() => {
+        settle();
+        if (activeAgentIdRef.current !== agentId) {
+          return;
+        }
+
+        onTimeout();
+      }, timeoutMs);
+      pendingResultsRef.current.add(pending);
+
+      sock.on(resEvent, pending.handler);
+      sock.emit(reqEvent, { agentId, ...payload });
+    },
+    [sendFunctionOutput]
+  );
+
+  const handleDelegation = useCallback(
+    (callId, agentName, task) => {
+      if (!agentName || !task) {
+        // The server silently ignores requests with missing fields — answer the
+        // model directly instead of waiting on a result that will never come.
+        sendFunctionOutput(callId, 'Missing agent_name or task for delegate.');
         return;
       }
 
-      onTimeout();
-    }, timeoutMs);
-    pendingResultsRef.current.add(pending);
+      setStatus(STATUS.DELEGATING);
+      setDelegationTarget(agentName);
+      setCurrentFunction(`Delegating to ${agentName}...`);
+      addEvent('delegation', `Delegating to ${agentName}: ${task}`);
 
-    sock.on(resEvent, pending.handler);
-    sock.emit(reqEvent, { agentId, ...payload });
-  }, [sendFunctionOutput]);
+      awaitVoiceResult({
+        callId,
+        resEvent: WsEvents.VOICE_DELEGATE_RESULT,
+        reqEvent: WsEvents.REQ_VOICE_DELEGATE,
+        payload: { targetAgentName: agentName, task },
+        timeoutMs: DELEGATE_RESULT_TIMEOUT_MS,
+        onResult: data => {
+          setDelegationTarget(null);
+          setStatus(STATUS.CONNECTED);
 
-  const handleDelegation = useCallback((callId, agentName, task) => {
-    if (!agentName || !task) {
-      // The server silently ignores requests with missing fields — answer the
-      // model directly instead of waiting on a result that will never come.
-      sendFunctionOutput(callId, 'Missing agent_name or task for delegate.');
-      return;
-    }
+          const resultText = data.error
+            ? `Error from ${agentName}: ${data.error}`
+            : data.result || 'Task completed.';
+          setCurrentFunction(
+            data.error ? `delegate failed: ${data.error}` : `delegated to ${agentName}`
+          );
+          addEvent(
+            data.error ? 'error' : 'delegation-result',
+            `${agentName}: ${resultText.slice(0, 200)}`
+          );
+          sendFunctionOutput(callId, resultText);
+        },
+        onTimeout: () => {
+          setDelegationTarget(null);
+          setStatus(prev => (prev === STATUS.DELEGATING ? STATUS.CONNECTED : prev));
+          setCurrentFunction(`delegate to ${agentName} timed out`);
+          addEvent('error', `Timed out waiting for delegate result from ${agentName}`);
+          sendFunctionOutput(callId, `Timed out waiting for ${agentName} to report a result.`);
+        },
+      });
+    },
+    [addEvent, awaitVoiceResult, sendFunctionOutput]
+  );
 
-    setStatus(STATUS.DELEGATING);
-    setDelegationTarget(agentName);
-    setCurrentFunction(`Delegating to ${agentName}...`);
-    addEvent('delegation', `Delegating to ${agentName}: ${task}`);
+  const handleAsk = useCallback(
+    (callId, agentName, question) => {
+      if (!agentName || !question) {
+        // The server silently ignores requests with missing fields — answer the
+        // model directly instead of waiting on a result that will never come.
+        sendFunctionOutput(callId, 'Missing agent_name or question for ask.');
+        return;
+      }
 
-    awaitVoiceResult({
-      callId,
-      resEvent: WsEvents.VOICE_DELEGATE_RESULT,
-      reqEvent: WsEvents.REQ_VOICE_DELEGATE,
-      payload: { targetAgentName: agentName, task },
-      timeoutMs: DELEGATE_RESULT_TIMEOUT_MS,
-      onResult: (data) => {
-        setDelegationTarget(null);
-        setStatus(STATUS.CONNECTED);
+      setStatus(STATUS.DELEGATING);
+      setDelegationTarget(agentName);
+      setCurrentFunction(`Asking ${agentName}...`);
+      addEvent('delegation', `Asking ${agentName}: ${question}`);
 
-        const resultText = data.error
-          ? `Error from ${agentName}: ${data.error}`
-          : data.result || 'Task completed.';
-        setCurrentFunction(data.error ? `delegate failed: ${data.error}` : `delegated to ${agentName}`);
-        addEvent(data.error ? 'error' : 'delegation-result', `${agentName}: ${resultText.slice(0, 200)}`);
-        sendFunctionOutput(callId, resultText);
-      },
-      onTimeout: () => {
-        setDelegationTarget(null);
-        setStatus((prev) => (prev === STATUS.DELEGATING ? STATUS.CONNECTED : prev));
-        setCurrentFunction(`delegate to ${agentName} timed out`);
-        addEvent('error', `Timed out waiting for delegate result from ${agentName}`);
-        sendFunctionOutput(callId, `Timed out waiting for ${agentName} to report a result.`);
-      },
-    });
-  }, [addEvent, awaitVoiceResult, sendFunctionOutput]);
+      awaitVoiceResult({
+        callId,
+        resEvent: WsEvents.VOICE_ASK_RESULT,
+        reqEvent: WsEvents.REQ_VOICE_ASK,
+        payload: { targetAgentName: agentName, question },
+        timeoutMs: DELEGATE_RESULT_TIMEOUT_MS,
+        onResult: data => {
+          setDelegationTarget(null);
+          setStatus(STATUS.CONNECTED);
 
-  const handleAsk = useCallback((callId, agentName, question) => {
-    if (!agentName || !question) {
-      // The server silently ignores requests with missing fields — answer the
-      // model directly instead of waiting on a result that will never come.
-      sendFunctionOutput(callId, 'Missing agent_name or question for ask.');
-      return;
-    }
+          const resultText = data.error
+            ? `Error from ${agentName}: ${data.error}`
+            : data.result || 'No answer.';
+          setCurrentFunction(data.error ? `ask failed: ${data.error}` : `asked ${agentName}`);
+          addEvent(
+            data.error ? 'error' : 'delegation-result',
+            `${agentName}: ${resultText.slice(0, 200)}`
+          );
+          sendFunctionOutput(callId, resultText);
+        },
+        onTimeout: () => {
+          setDelegationTarget(null);
+          setStatus(prev => (prev === STATUS.DELEGATING ? STATUS.CONNECTED : prev));
+          setCurrentFunction(`ask ${agentName} timed out`);
+          addEvent('error', `Timed out waiting for answer from ${agentName}`);
+          sendFunctionOutput(callId, `Timed out waiting for ${agentName} to answer.`);
+        },
+      });
+    },
+    [addEvent, awaitVoiceResult, sendFunctionOutput]
+  );
 
-    setStatus(STATUS.DELEGATING);
-    setDelegationTarget(agentName);
-    setCurrentFunction(`Asking ${agentName}...`);
-    addEvent('delegation', `Asking ${agentName}: ${question}`);
+  const handleManagement = useCallback(
+    (callId, functionName, args) => {
+      setCurrentFunction(`${functionName}...`);
+      addEvent('system', `${functionName}(${JSON.stringify(args)})`);
 
-    awaitVoiceResult({
-      callId,
-      resEvent: WsEvents.VOICE_ASK_RESULT,
-      reqEvent: WsEvents.REQ_VOICE_ASK,
-      payload: { targetAgentName: agentName, question },
-      timeoutMs: DELEGATE_RESULT_TIMEOUT_MS,
-      onResult: (data) => {
-        setDelegationTarget(null);
-        setStatus(STATUS.CONNECTED);
+      awaitVoiceResult({
+        callId,
+        resEvent: WsEvents.VOICE_MANAGEMENT_RESULT,
+        reqEvent: WsEvents.REQ_VOICE_MANAGEMENT,
+        payload: { functionName, args },
+        timeoutMs: MANAGEMENT_RESULT_TIMEOUT_MS,
+        matches: data => data.functionName === functionName,
+        onResult: data => {
+          const resultText = data.error ? `Error: ${data.error}` : data.result || 'Done.';
+          setCurrentFunction(
+            data.error ? `${functionName} failed: ${data.error}` : `${functionName} complete`
+          );
+          addEvent(
+            data.error ? 'error' : 'system',
+            `${functionName}: ${String(resultText).slice(0, 200)}`
+          );
+          sendFunctionOutput(callId, resultText);
+        },
+        onTimeout: () => {
+          setCurrentFunction(`${functionName} timed out`);
+          addEvent('error', `Timed out waiting for ${functionName} result`);
+          sendFunctionOutput(callId, `Timed out waiting for ${functionName} result.`);
+        },
+      });
+    },
+    [addEvent, awaitVoiceResult, sendFunctionOutput]
+  );
 
-        const resultText = data.error
-          ? `Error from ${agentName}: ${data.error}`
-          : data.result || 'No answer.';
-        setCurrentFunction(data.error ? `ask failed: ${data.error}` : `asked ${agentName}`);
-        addEvent(data.error ? 'error' : 'delegation-result', `${agentName}: ${resultText.slice(0, 200)}`);
-        sendFunctionOutput(callId, resultText);
-      },
-      onTimeout: () => {
-        setDelegationTarget(null);
-        setStatus((prev) => (prev === STATUS.DELEGATING ? STATUS.CONNECTED : prev));
-        setCurrentFunction(`ask ${agentName} timed out`);
-        addEvent('error', `Timed out waiting for answer from ${agentName}`);
-        sendFunctionOutput(callId, `Timed out waiting for ${agentName} to answer.`);
-      },
-    });
-  }, [addEvent, awaitVoiceResult, sendFunctionOutput]);
-
-  const handleManagement = useCallback((callId, functionName, args) => {
-    setCurrentFunction(`${functionName}...`);
-    addEvent('system', `${functionName}(${JSON.stringify(args)})`);
-
-    awaitVoiceResult({
-      callId,
-      resEvent: WsEvents.VOICE_MANAGEMENT_RESULT,
-      reqEvent: WsEvents.REQ_VOICE_MANAGEMENT,
-      payload: { functionName, args },
-      timeoutMs: MANAGEMENT_RESULT_TIMEOUT_MS,
-      matches: (data) => data.functionName === functionName,
-      onResult: (data) => {
-        const resultText = data.error
-          ? `Error: ${data.error}`
-          : data.result || 'Done.';
-        setCurrentFunction(data.error ? `${functionName} failed: ${data.error}` : `${functionName} complete`);
-        addEvent(data.error ? 'error' : 'system', `${functionName}: ${String(resultText).slice(0, 200)}`);
-        sendFunctionOutput(callId, resultText);
-      },
-      onTimeout: () => {
-        setCurrentFunction(`${functionName} timed out`);
-        addEvent('error', `Timed out waiting for ${functionName} result`);
-        sendFunctionOutput(callId, `Timed out waiting for ${functionName} result.`);
-      },
-    });
-  }, [addEvent, awaitVoiceResult, sendFunctionOutput]);
-
-  const handleToolCall = useCallback((event) => {
-    let args: Record<string, any> = {};
-    try {
-      args = JSON.parse(event.arguments || '{}');
-    } catch (err) {
-      console.error('Failed to parse tool arguments:', err);
-      setCurrentFunction('Failed to parse tool arguments.');
-      addEvent('error', 'Failed to parse tool arguments from Realtime event');
-      sendFunctionOutput(event.call_id, 'Failed to parse tool arguments.');
-      return;
-    }
-
-    if (event.name === 'delegate') {
-      handleDelegation(event.call_id, args.agent_name, args.task);
-      return;
-    }
-
-    if (event.name === 'ask') {
-      handleAsk(event.call_id, args.agent_name, args.question);
-      return;
-    }
-
-    if (MANAGEMENT_FUNCTIONS.has(event.name)) {
-      handleManagement(event.call_id, event.name, args);
-      return;
-    }
-
-    console.warn('Unknown function call:', event.name);
-    addEvent('error', `Unknown tool call: ${event.name}`);
-    sendFunctionOutput(event.call_id, `Unknown tool call: ${event.name}`);
-  }, [addEvent, handleAsk, handleDelegation, handleManagement, sendFunctionOutput]);
-
-  const handleRealtimeEvent = useCallback((event) => {
-    switch (event.type) {
-      case 'input_audio_buffer.speech_started':
-        setStatus(STATUS.LISTENING);
-        setCurrentFunction('Listening...');
-        break;
-
-      case 'input_audio_buffer.speech_stopped':
-        setStatus(STATUS.CONNECTED);
-        setCurrentFunction('Processing speech...');
-        break;
-
-      case 'conversation.item.input_audio_transcription.completed':
-        transcriptBufferRef.current = event.transcript || '';
-        setCurrentTranscript(transcriptBufferRef.current);
-        break;
-
-      case 'conversation.item.input_audio_transcription.failed':
-        setCurrentFunction(event.error?.message || 'Speech transcription failed.');
-        addEvent('error', event.error?.message || 'Speech transcription failed.');
-        break;
-
-      case 'response.created':
-        responseBufferRef.current = '';
-        setCurrentResponse('');
-        break;
-
-      case 'response.audio_transcript.delta':
-        responseBufferRef.current += event.delta || '';
-        setCurrentResponse(responseBufferRef.current);
-        break;
-
-      case 'response.audio_transcript.done':
-        setCurrentResponse(event.transcript || responseBufferRef.current);
-        break;
-
-      case 'response.audio.delta':
-      case 'output_audio_buffer.audio_started':
-        setStatus(STATUS.SPEAKING);
-        setCurrentFunction('Agent speaking...');
-        break;
-
-      case 'response.audio.done':
-      case 'output_audio_buffer.audio_stopped':
-        setStatus(STATUS.CONNECTED);
-        setCurrentFunction('Response complete.');
-        break;
-
-      case 'response.function_call_arguments.done':
-        handleToolCall(event);
-        break;
-
-      case 'response.done':
-        setDelegationTarget(null);
-        break;
-
-      case 'error':
-        console.error('Realtime error:', event);
-        setError(event.error?.message || event.message || 'Unknown realtime error');
-        setStatus(STATUS.ERROR);
-        setCurrentFunction(event.error?.message || event.message || 'Unknown realtime error');
-        addEvent('error', event.error?.message || event.message || 'Unknown realtime error');
-        break;
-
-      default:
-        break;
-    }
-  }, [addEvent, handleToolCall]);
-
-  const connect = useCallback(async (agentId) => {
-    if (!agentId) {
-      return;
-    }
-
-    if (activeAgentIdRef.current === agentId && pcRef.current) {
-      return;
-    }
-
-    cleanupConnection();
-    // Invalidated by any later connect()/cleanupConnection() — a stale
-    // in-flight connect must not assign refs or mutate session state.
-    const seq = ++connectSeqRef.current;
-    const isStale = () => connectSeqRef.current !== seq;
-
-    setEvents([]);
-    setError(null);
-    setDelegationTarget(null);
-    setCurrentTranscript('');
-    setCurrentResponse('');
-    setCurrentFunction('Requesting microphone access...');
-    setMuted(false);
-    setStatus(STATUS.CONNECTING);
-    setActiveAgentId(agentId);
-    activeAgentIdRef.current = agentId;
-
-    try {
-      let stream;
+  const handleToolCall = useCallback(
+    event => {
+      let args: Record<string, any> = {};
       try {
-        stream = await requestMicPermission();
-      } catch (micErr) {
-        const message =
-          micErr?.name === 'NotAllowedError' || micErr?.name === 'PermissionDeniedError'
-            ? 'Microphone access denied. Please allow microphone permission in your browser settings and try again.'
-            : micErr.message;
-        throw new Error(message);
-      }
-
-      if (isStale()) {
-        stream.getTracks().forEach((track) => track.stop());
+        args = JSON.parse(event.arguments || '{}');
+      } catch (err) {
+        console.error('Failed to parse tool arguments:', err);
+        setCurrentFunction('Failed to parse tool arguments.');
+        addEvent('error', 'Failed to parse tool arguments from Realtime event');
+        sendFunctionOutput(event.call_id, 'Failed to parse tool arguments.');
         return;
       }
 
-      localStreamRef.current = stream;
-
-      const microphoneTrack = stream.getAudioTracks()[0];
-      if (!microphoneTrack) {
-        throw new Error('No microphone track is available.');
-      }
-      if (microphoneTrack.readyState !== 'live') {
-        throw new Error('Microphone is not active.');
-      }
-
-      microphoneTrack.onended = () => {
-        setStatus(STATUS.ERROR);
-        setError('Microphone disconnected.');
-        setCurrentFunction('Microphone disconnected.');
-        addEvent('error', 'Microphone disconnected');
-      };
-
-      const {
-        token,
-        model,
-        voice = 'alloy',
-        transcriptionModel = DEFAULT_TRANSCRIPTION_MODEL,
-        session: sessionConfig,
-      } = await api.getRealtimeToken(agentId);
-
-      if (isStale()) {
+      if (event.name === 'delegate') {
+        handleDelegation(event.call_id, args.agent_name, args.task);
         return;
       }
 
-      if (!token) {
-        throw new Error('Realtime token was not returned by the server.');
+      if (event.name === 'ask') {
+        handleAsk(event.call_id, args.agent_name, args.question);
+        return;
       }
 
-      const pc = new RTCPeerConnection();
-      const remoteStream = new MediaStream();
+      if (MANAGEMENT_FUNCTIONS.has(event.name)) {
+        handleManagement(event.call_id, event.name, args);
+        return;
+      }
 
-      pcRef.current = pc;
-      remoteStreamRef.current = remoteStream;
+      console.warn('Unknown function call:', event.name);
+      addEvent('error', `Unknown tool call: ${event.name}`);
+      sendFunctionOutput(event.call_id, `Unknown tool call: ${event.name}`);
+    },
+    [addEvent, handleAsk, handleDelegation, handleManagement, sendFunctionOutput]
+  );
 
-      pc.ontrack = (event) => {
-        if (pcRef.current !== pc) {
-          return;
-        }
+  const handleRealtimeEvent = useCallback(
+    event => {
+      switch (event.type) {
+        case 'input_audio_buffer.speech_started':
+          setStatus(STATUS.LISTENING);
+          setCurrentFunction('Listening...');
+          break;
 
-        const incomingStream = event.streams?.[0];
-        if (incomingStream) {
-          incomingStream.getTracks().forEach((track) => {
-            if (!remoteStream.getTracks().some((existingTrack) => existingTrack.id === track.id)) {
-              remoteStream.addTrack(track);
-            }
-          });
-        } else if (event.track && !remoteStream.getTracks().some((track) => track.id === event.track.id)) {
-          remoteStream.addTrack(event.track);
-        }
+        case 'input_audio_buffer.speech_stopped':
+          setStatus(STATUS.CONNECTED);
+          setCurrentFunction('Processing speech...');
+          break;
 
-        if (event.track) {
-          event.track.onunmute = () => {
-            playRemoteAudio().catch((err) => {
-              console.error('Failed to play remote audio after unmute:', err);
-            });
-          };
-        }
+        case 'conversation.item.input_audio_transcription.completed':
+          transcriptBufferRef.current = event.transcript || '';
+          setCurrentTranscript(transcriptBufferRef.current);
+          break;
 
-        playRemoteAudio().catch((err) => {
-          console.error('Failed to attach remote audio stream:', err);
-        });
-      };
+        case 'conversation.item.input_audio_transcription.failed':
+          setCurrentFunction(event.error?.message || 'Speech transcription failed.');
+          addEvent('error', event.error?.message || 'Speech transcription failed.');
+          break;
 
-      pc.onconnectionstatechange = () => {
-        if (pcRef.current !== pc) {
-          return;
-        }
+        case 'response.created':
+          responseBufferRef.current = '';
+          setCurrentResponse('');
+          break;
 
-        if (pc.connectionState === 'failed') {
+        case 'response.audio_transcript.delta':
+          responseBufferRef.current += event.delta || '';
+          setCurrentResponse(responseBufferRef.current);
+          break;
+
+        case 'response.audio_transcript.done':
+          setCurrentResponse(event.transcript || responseBufferRef.current);
+          break;
+
+        case 'response.audio.delta':
+        case 'output_audio_buffer.audio_started':
+          setStatus(STATUS.SPEAKING);
+          setCurrentFunction('Agent speaking...');
+          break;
+
+        case 'response.audio.done':
+        case 'output_audio_buffer.audio_stopped':
+          setStatus(STATUS.CONNECTED);
+          setCurrentFunction('Response complete.');
+          break;
+
+        case 'response.function_call_arguments.done':
+          handleToolCall(event);
+          break;
+
+        case 'response.done':
+          setDelegationTarget(null);
+          break;
+
+        case 'error':
+          console.error('Realtime error:', event);
+          setError(event.error?.message || event.message || 'Unknown realtime error');
           setStatus(STATUS.ERROR);
-          setError('Peer connection failed.');
-          setCurrentFunction('Peer connection failed.');
-          addEvent('error', 'Peer connection failed');
-        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+          setCurrentFunction(event.error?.message || event.message || 'Unknown realtime error');
+          addEvent('error', event.error?.message || event.message || 'Unknown realtime error');
+          break;
+
+        default:
+          break;
+      }
+    },
+    [addEvent, handleToolCall]
+  );
+
+  const connect = useCallback(
+    async agentId => {
+      if (!agentId) {
+        return;
+      }
+
+      if (activeAgentIdRef.current === agentId && pcRef.current) {
+        return;
+      }
+
+      cleanupConnection();
+      // Invalidated by any later connect()/cleanupConnection() — a stale
+      // in-flight connect must not assign refs or mutate session state.
+      const seq = ++connectSeqRef.current;
+      const isStale = () => connectSeqRef.current !== seq;
+
+      setEvents([]);
+      setError(null);
+      setDelegationTarget(null);
+      setCurrentTranscript('');
+      setCurrentResponse('');
+      setCurrentFunction('Requesting microphone access...');
+      setMuted(false);
+      setStatus(STATUS.CONNECTING);
+      setActiveAgentId(agentId);
+      activeAgentIdRef.current = agentId;
+
+      try {
+        let stream;
+        try {
+          stream = await requestMicPermission();
+        } catch (micErr) {
+          const message =
+            micErr?.name === 'NotAllowedError' || micErr?.name === 'PermissionDeniedError'
+              ? 'Microphone access denied. Please allow microphone permission in your browser settings and try again.'
+              : micErr.message;
+          throw new Error(message);
+        }
+
+        if (isStale()) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+
+        localStreamRef.current = stream;
+
+        const microphoneTrack = stream.getAudioTracks()[0];
+        if (!microphoneTrack) {
+          throw new Error('No microphone track is available.');
+        }
+        if (microphoneTrack.readyState !== 'live') {
+          throw new Error('Microphone is not active.');
+        }
+
+        microphoneTrack.onended = () => {
+          setStatus(STATUS.ERROR);
+          setError('Microphone disconnected.');
+          setCurrentFunction('Microphone disconnected.');
+          addEvent('error', 'Microphone disconnected');
+        };
+
+        const {
+          token,
+          model,
+          voice = 'alloy',
+          transcriptionModel = DEFAULT_TRANSCRIPTION_MODEL,
+          session: sessionConfig,
+        } = await api.getRealtimeToken(agentId);
+
+        if (isStale()) {
+          return;
+        }
+
+        if (!token) {
+          throw new Error('Realtime token was not returned by the server.');
+        }
+
+        const pc = new RTCPeerConnection();
+        const remoteStream = new MediaStream();
+
+        pcRef.current = pc;
+        remoteStreamRef.current = remoteStream;
+
+        pc.ontrack = event => {
+          if (pcRef.current !== pc) {
+            return;
+          }
+
+          const incomingStream = event.streams?.[0];
+          if (incomingStream) {
+            incomingStream.getTracks().forEach(track => {
+              if (!remoteStream.getTracks().some(existingTrack => existingTrack.id === track.id)) {
+                remoteStream.addTrack(track);
+              }
+            });
+          } else if (
+            event.track &&
+            !remoteStream.getTracks().some(track => track.id === event.track.id)
+          ) {
+            remoteStream.addTrack(event.track);
+          }
+
+          if (event.track) {
+            event.track.onunmute = () => {
+              playRemoteAudio().catch(err => {
+                console.error('Failed to play remote audio after unmute:', err);
+              });
+            };
+          }
+
+          playRemoteAudio().catch(err => {
+            console.error('Failed to attach remote audio stream:', err);
+          });
+        };
+
+        pc.onconnectionstatechange = () => {
+          if (pcRef.current !== pc) {
+            return;
+          }
+
+          if (pc.connectionState === 'failed') {
+            setStatus(STATUS.ERROR);
+            setError('Peer connection failed.');
+            setCurrentFunction('Peer connection failed.');
+            addEvent('error', 'Peer connection failed');
+          } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+            setStatus(STATUS.DISCONNECTED);
+            setCurrentFunction('Disconnected.');
+            setActiveAgentId(null);
+            activeAgentIdRef.current = null;
+            addEvent('system', 'Voice session disconnected');
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          if (pcRef.current !== pc) {
+            return;
+          }
+
+          if (pc.iceConnectionState === 'failed') {
+            setStatus(STATUS.ERROR);
+            setError('ICE connection failed.');
+            setCurrentFunction('ICE connection failed.');
+            addEvent('error', 'ICE connection failed');
+          }
+        };
+
+        stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+        const dc = pc.createDataChannel('oai-events');
+        dcRef.current = dc;
+
+        const applySessionUpdate = () => {
+          if (dcRef.current !== dc || dc.readyState !== 'open') {
+            return;
+          }
+
+          dc.send(JSON.stringify(buildSessionUpdate(voice, transcriptionModel)));
+          setStatus(STATUS.CONNECTED);
+          setError(null);
+          setCurrentFunction(muted ? 'Microphone muted.' : 'Listening...');
+        };
+
+        dc.onopen = () => {
+          if (dcRef.current !== dc) {
+            return;
+          }
+
+          addEvent('system', 'Connected to voice agent');
+          applySessionUpdate();
+        };
+
+        dc.onmessage = messageEvent => {
+          if (dcRef.current !== dc) {
+            return;
+          }
+
+          try {
+            handleRealtimeEvent(JSON.parse(messageEvent.data));
+          } catch (err) {
+            console.warn('Failed to parse realtime event:', err);
+          }
+        };
+
+        dc.onclose = () => {
+          if (dcRef.current !== dc) {
+            return;
+          }
+
           setStatus(STATUS.DISCONNECTED);
           setCurrentFunction('Disconnected.');
           setActiveAgentId(null);
           activeAgentIdRef.current = null;
           addEvent('system', 'Voice session disconnected');
-        }
-      };
+        };
 
-      pc.oniceconnectionstatechange = () => {
-        if (pcRef.current !== pc) {
-          return;
-        }
+        dc.onerror = channelError => {
+          console.error('Realtime data channel error:', channelError);
+          if (dcRef.current !== dc) {
+            return;
+          }
 
-        if (pc.iceConnectionState === 'failed') {
           setStatus(STATUS.ERROR);
-          setError('ICE connection failed.');
-          setCurrentFunction('ICE connection failed.');
-          addEvent('error', 'ICE connection failed');
-        }
-      };
+          setError('Realtime data channel error.');
+          setCurrentFunction('Realtime data channel error.');
+          addEvent('error', 'Realtime data channel error');
+        };
 
-      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        setCurrentFunction('Microphone connected. Finishing realtime setup...');
 
-      const dc = pc.createDataChannel('oai-events');
-      dcRef.current = dc;
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
 
-      const applySessionUpdate = () => {
-        if (dcRef.current !== dc || dc.readyState !== 'open') {
+        if (isStale()) {
           return;
         }
 
-        dc.send(JSON.stringify(buildSessionUpdate(voice, transcriptionModel)));
-        setStatus(STATUS.CONNECTED);
-        setError(null);
-        setCurrentFunction(muted ? 'Microphone muted.' : 'Listening...');
-      };
+        const realtimeBaseUrl =
+          import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime/calls';
+        const fd = new FormData();
+        fd.set('sdp', offer.sdp);
+        fd.set('session', JSON.stringify(sessionConfig));
+        const sdpResponse = await fetch(realtimeBaseUrl, {
+          method: 'POST',
+          body: fd,
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          signal: AbortSignal.timeout(30000),
+        });
 
-      dc.onopen = () => {
-        if (dcRef.current !== dc) {
+        if (isStale()) {
           return;
         }
 
-        addEvent('system', 'Connected to voice agent');
-        applySessionUpdate();
-      };
+        if (!sdpResponse.ok) {
+          const errorBody = await sdpResponse.text().catch(() => '');
+          console.error('Realtime SDP error body:', errorBody);
+          throw new Error(`Realtime SDP exchange failed (${sdpResponse.status}): ${errorBody}`);
+        }
 
-      dc.onmessage = (messageEvent) => {
-        if (dcRef.current !== dc) {
+        const answerSdp = await sdpResponse.text();
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+
+        if (isStale()) {
           return;
         }
 
-        try {
-          handleRealtimeEvent(JSON.parse(messageEvent.data));
-        } catch (err) {
-          console.warn('Failed to parse realtime event:', err);
+        if (dc.readyState === 'open') {
+          applySessionUpdate();
         }
-      };
-
-      dc.onclose = () => {
-        if (dcRef.current !== dc) {
+      } catch (err) {
+        console.error('Voice connection error:', err);
+        if (isStale()) {
           return;
         }
 
-        setStatus(STATUS.DISCONNECTED);
-        setCurrentFunction('Disconnected.');
-        setActiveAgentId(null);
-        activeAgentIdRef.current = null;
-        addEvent('system', 'Voice session disconnected');
-      };
-
-      dc.onerror = (channelError) => {
-        console.error('Realtime data channel error:', channelError);
-        if (dcRef.current !== dc) {
-          return;
-        }
-
-        setStatus(STATUS.ERROR);
-        setError('Realtime data channel error.');
-        setCurrentFunction('Realtime data channel error.');
-        addEvent('error', 'Realtime data channel error');
-      };
-
-      setCurrentFunction('Microphone connected. Finishing realtime setup...');
-
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
-      await pc.setLocalDescription(offer);
-
-      if (isStale()) {
-        return;
+        cleanupConnection();
+        const message = err.message || 'Voice connection failed.';
+        resetSessionState({ status: STATUS.ERROR, error: message, message, keepMuted: true });
+        addEvent('error', message);
+        throw err;
       }
-
-      const realtimeBaseUrl =
-        import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime/calls';
-      const fd = new FormData();
-      fd.set('sdp', offer.sdp);
-      fd.set('session', JSON.stringify(sessionConfig));
-      const sdpResponse = await fetch(realtimeBaseUrl, {
-        method: 'POST',
-        body: fd,
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-        signal: AbortSignal.timeout(30000),
-      });
-
-      if (isStale()) {
-        return;
-      }
-
-      if (!sdpResponse.ok) {
-        const errorBody = await sdpResponse.text().catch(() => '');
-        console.error('Realtime SDP error body:', errorBody);
-        throw new Error(`Realtime SDP exchange failed (${sdpResponse.status}): ${errorBody}`);
-      }
-
-      const answerSdp = await sdpResponse.text();
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-
-      if (isStale()) {
-        return;
-      }
-
-      if (dc.readyState === 'open') {
-        applySessionUpdate();
-      }
-    } catch (err) {
-      console.error('Voice connection error:', err);
-      if (isStale()) {
-        return;
-      }
-
-      cleanupConnection();
-      const message = err.message || 'Voice connection failed.';
-      resetSessionState({ status: STATUS.ERROR, error: message, message, keepMuted: true });
-      addEvent('error', message);
-      throw err;
-    }
-  }, [addEvent, cleanupConnection, handleRealtimeEvent, muted, playRemoteAudio, requestMicPermission, resetSessionState]);
+    },
+    [
+      addEvent,
+      cleanupConnection,
+      handleRealtimeEvent,
+      muted,
+      playRemoteAudio,
+      requestMicPermission,
+      resetSessionState,
+    ]
+  );
 
   const disconnect = useCallback(() => {
     cleanupConnection();
@@ -822,7 +898,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     resetSessionState({ keepAgent: true, clearEvents: true });
 
     setTimeout(() => {
-      connect(agentId).catch((err) => {
+      connect(agentId).catch(err => {
         console.error('Voice reconnect failed:', err);
       });
     }, 100);
@@ -833,9 +909,9 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       return;
     }
 
-    setMuted((prev) => {
+    setMuted(prev => {
       const nextMuted = !prev;
-      localStreamRef.current?.getAudioTracks().forEach((track) => {
+      localStreamRef.current?.getAudioTracks().forEach(track => {
         track.enabled = !nextMuted;
       });
       setCurrentFunction(nextMuted ? 'Microphone muted.' : 'Listening...');
@@ -844,7 +920,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   }, []);
 
   const toggleSpeaker = useCallback(() => {
-    setSpeakerOff((prev) => {
+    setSpeakerOff(prev => {
       const nextSpeakerOff = !prev;
       if (audioElRef.current) {
         audioElRef.current.muted = nextSpeakerOff;
@@ -858,7 +934,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       return;
     }
 
-    const activeAgent = agents.find((agent) => agent.id === activeAgentId);
+    const activeAgent = agents.find(agent => agent.id === activeAgentId);
     if (!activeAgent || activeAgent.isVoice !== true) {
       disconnect();
     }
@@ -881,48 +957,48 @@ export function VoiceSessionProvider({ socket, agents, children }) {
 
   const isActive = status !== STATUS.DISCONNECTED && status !== STATUS.ERROR;
 
-  const isSessionForAgent = useCallback(
-    (agentId) => activeAgentId === agentId,
-    [activeAgentId],
-  );
+  const isSessionForAgent = useCallback(agentId => activeAgentId === agentId, [activeAgentId]);
 
-  const value = useMemo(() => ({
-    status,
-    activeAgentId,
-    muted,
-    speakerOff,
-    error,
-    delegationTarget,
-    events,
-    currentTranscript,
-    currentResponse,
-    currentFunction,
-    connect,
-    disconnect,
-    reconnect,
-    toggleMute,
-    toggleSpeaker,
-    isActive,
-    isSessionForAgent,
-  }), [
-    status,
-    activeAgentId,
-    muted,
-    speakerOff,
-    error,
-    delegationTarget,
-    events,
-    currentTranscript,
-    currentResponse,
-    currentFunction,
-    connect,
-    disconnect,
-    reconnect,
-    toggleMute,
-    toggleSpeaker,
-    isActive,
-    isSessionForAgent,
-  ]);
+  const value = useMemo(
+    () => ({
+      status,
+      activeAgentId,
+      muted,
+      speakerOff,
+      error,
+      delegationTarget,
+      events,
+      currentTranscript,
+      currentResponse,
+      currentFunction,
+      connect,
+      disconnect,
+      reconnect,
+      toggleMute,
+      toggleSpeaker,
+      isActive,
+      isSessionForAgent,
+    }),
+    [
+      status,
+      activeAgentId,
+      muted,
+      speakerOff,
+      error,
+      delegationTarget,
+      events,
+      currentTranscript,
+      currentResponse,
+      currentFunction,
+      connect,
+      disconnect,
+      reconnect,
+      toggleMute,
+      toggleSpeaker,
+      isActive,
+      isSessionForAgent,
+    ]
+  );
 
   return (
     <VoiceSessionContext.Provider value={value}>

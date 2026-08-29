@@ -135,7 +135,7 @@ mock.module('../database.js', {
     getOAuthTokenCache: () => new Map(),
     // tasks — Map-backed in-memory fake (identity-preserving)
     ...taskDbFake,
-    rowToTask: (r) => r,
+    rowToTask: r => r,
     tryAcquireTaskLock: async () => true,
     releaseTaskLock: async () => {},
     heldTaskLockCount: () => 0,
@@ -156,32 +156,42 @@ const TEST_WORKFLOW = {
   ],
   transitions: [
     {
-      from: 'todo', trigger: 'on_enter', conditions: [],
+      from: 'todo',
+      trigger: 'on_enter',
+      conditions: [],
       actions: [{ type: 'change_status', target: 'step1' }],
     },
     {
-      from: 'step1', trigger: 'on_enter', conditions: [],
+      from: 'step1',
+      trigger: 'on_enter',
+      conditions: [],
       actions: [
         { mode: 'set_type', role: 'assistant', type: 'run_agent' },
         { type: 'change_status', target: 'step2' },
       ],
     },
     {
-      from: 'step2', trigger: 'on_enter', conditions: [],
+      from: 'step2',
+      trigger: 'on_enter',
+      conditions: [],
       actions: [
         { mode: 'title', role: 'assistant', type: 'run_agent' },
         { type: 'change_status', target: 'step3' },
       ],
     },
     {
-      from: 'step3', trigger: 'on_enter', conditions: [],
+      from: 'step3',
+      trigger: 'on_enter',
+      conditions: [],
       actions: [
         { mode: 'refine', role: 'assistant', type: 'run_agent', instructions: '' },
         { type: 'change_status', target: 'step4' },
       ],
     },
     {
-      from: 'step4', trigger: 'on_enter', conditions: [],
+      from: 'step4',
+      trigger: 'on_enter',
+      conditions: [],
       actions: [{ type: 'change_status', target: 'done' }],
     },
   ],
@@ -207,8 +217,11 @@ mock.module('../configManager.js', {
     getSettings: async () => ({}),
     getWorkflow: async () => TEST_WORKFLOW,
     getReminderConfig: async () => ({
-      intervalMinutes: 5, cooldownMinutes: 1, maxReminders: 3,
-      intervalMs: 300000, cooldownMs: 60000,
+      intervalMinutes: 5,
+      cooldownMinutes: 1,
+      maxReminders: 3,
+      intervalMs: 300000,
+      cooldownMs: 60000,
     }),
   },
 });
@@ -219,7 +232,12 @@ const { processColumnEntry, reconcileStaleActionRunning } = await import('../wor
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const mockIo = { emit() {}, to() { return { emit() {} }; } };
+const mockIo = {
+  emit() {},
+  to() {
+    return { emit() {} };
+  },
+};
 
 async function setup(agentDefs: any[] = []) {
   taskRows.clear();
@@ -230,7 +248,9 @@ async function setup(agentDefs: any[] = []) {
     raw.status = 'idle';
     raw.boardId = 'board-test';
     raw.conversationHistory = [];
-    console.log(`[test-setup] agent "${raw.name}" role="${raw.role}" boardId="${raw.boardId}" enabled=${raw.enabled}`);
+    console.log(
+      `[test-setup] agent "${raw.name}" role="${raw.role}" boardId="${raw.boardId}" enabled=${raw.enabled}`
+    );
   }
 
   // Mock sendMessage — simulates LLM returning immediately
@@ -295,7 +315,7 @@ async function waitForStatus(mgr, agentId, taskId, expectedStatus, timeoutMs = 1
     .map(h => `${h.from}→${h.status}`);
   throw new Error(
     `Task ${taskId.slice(0, 12)} stuck at "${task?.status}" (expected "${expectedStatus}"). ` +
-    `Transitions: [${transitions.join(', ')}]`
+      `Transitions: [${transitions.join(', ')}]`
   );
 }
 
@@ -328,7 +348,9 @@ test('skipped decide action clears actionRunning before saving retry state', asy
     ],
     transitions: [
       {
-        from: 'code', trigger: 'on_enter', conditions: [],
+        from: 'code',
+        trigger: 'on_enter',
+        conditions: [],
         actions: [{ type: 'run_agent', mode: 'decide', role: 'assistant', instructions: '' }],
       },
     ],
@@ -368,7 +390,9 @@ test('assign_agent_individual no-change does not arm an on_enter retry', async (
     ],
     transitions: [
       {
-        from: 'nextsprint', trigger: 'on_enter', conditions: [],
+        from: 'nextsprint',
+        trigger: 'on_enter',
+        conditions: [],
         actions: [{ type: 'assign_agent_individual', agentId: null }],
       },
     ],
@@ -392,9 +416,7 @@ test('assign_agent_individual no-change does not arm an on_enter retry', async (
 test('3 parallel tasks all reach done', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);
 
-  const tasks = Array.from({ length: 3 }, (_, i) =>
-    createTask(mgr, `Parallel task ${i + 1}`)
-  );
+  const tasks = Array.from({ length: 3 }, (_, i) => createTask(mgr, `Parallel task ${i + 1}`));
 
   for (const { task, agentId } of tasks)
     await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
@@ -409,9 +431,7 @@ test('3 parallel tasks all reach done', async () => {
 test('5 parallel tasks with 1 agent all reach done', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);
 
-  const tasks = Array.from({ length: 5 }, (_, i) =>
-    createTask(mgr, `Stress task ${i + 1}`)
-  );
+  const tasks = Array.from({ length: 5 }, (_, i) => createTask(mgr, `Stress task ${i + 1}`));
 
   for (const { task, agentId } of tasks)
     await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
@@ -429,9 +449,7 @@ test('5 parallel tasks with 2 agents all reach done', async () => {
     { name: 'TitlesBot-B', role: 'assistant' },
   ]);
 
-  const tasks = Array.from({ length: 5 }, (_, i) =>
-    createTask(mgr, `Multi-agent task ${i + 1}`)
-  );
+  const tasks = Array.from({ length: 5 }, (_, i) => createTask(mgr, `Multi-agent task ${i + 1}`));
 
   for (const { task, agentId } of tasks)
     await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
@@ -455,8 +473,12 @@ test('task history records every transition in order', async () => {
     .map(h => `${h.from}→${h.status}`);
 
   const expected = [
-    'backlog→todo', 'todo→step1', 'step1→step2',
-    'step2→step3', 'step3→step4', 'step4→done',
+    'backlog→todo',
+    'todo→step1',
+    'step1→step2',
+    'step2→step3',
+    'step3→step4',
+    'step4→done',
   ];
   for (const t of expected) {
     assert.ok(transitions.includes(t), `Missing "${t}". Got: [${transitions.join(', ')}]`);
@@ -491,9 +513,7 @@ test('10 tasks fired rapidly with 3 agents all complete', async () => {
     { name: 'Bot-C', role: 'assistant' },
   ]);
 
-  const tasks = Array.from({ length: 10 }, (_, i) =>
-    createTask(mgr, `Rapid task ${i + 1}`)
-  );
+  const tasks = Array.from({ length: 10 }, (_, i) => createTask(mgr, `Rapid task ${i + 1}`));
 
   for (const { task, agentId } of tasks)
     await mgr.setTaskStatus(agentId, task.id, 'todo', { by: 'user' });
@@ -514,21 +534,36 @@ test('reconcileStaleActionRunning heals stranded tasks but spares live/fresh run
   const mkStranded = (label: string, startedAt: string | null, status = 'code') => {
     const id = `stale-${label}-${Math.random().toString(36).slice(2, 8)}`;
     const t: any = {
-      id, agentId, text: label, title: null, status, boardId: 'board-test',
-      assignee: null, taskType: null, history: [], commits: [], error: null,
-      startedAt, completedAt: null, executionStatus: null, completedActionIdx: null,
-      actionRunning: true, actionRunningAgentId: agentId, actionRunningMode: 'title',
-      environment: 'prod', createdAt: new Date().toISOString(),
+      id,
+      agentId,
+      text: label,
+      title: null,
+      status,
+      boardId: 'board-test',
+      assignee: null,
+      taskType: null,
+      history: [],
+      commits: [],
+      error: null,
+      startedAt,
+      completedAt: null,
+      executionStatus: null,
+      completedActionIdx: null,
+      actionRunning: true,
+      actionRunningAgentId: agentId,
+      actionRunningMode: 'title',
+      environment: 'prod',
+      createdAt: new Date().toISOString(),
     };
     taskRows.set(id, t);
     return t;
   };
 
   const old = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-  const corrupt = mkStranded('corrupt', null);                    // no startedAt → heal
-  const stale   = mkStranded('stale', old);                       // > 20min old → heal
-  const fresh   = mkStranded('fresh', new Date().toISOString());  // just started → spare
-  const live    = mkStranded('live', old);                        // old but a run is live → spare
+  const corrupt = mkStranded('corrupt', null); // no startedAt → heal
+  const stale = mkStranded('stale', old); // > 20min old → heal
+  const fresh = mkStranded('fresh', new Date().toISOString()); // just started → spare
+  const live = mkStranded('live', old); // old but a run is live → spare
 
   // Hold a live execution lock for the "live" task (mirrors executeRunAgent).
   const token = acquireLock(`${agentId}:${live.id}:decide`);
@@ -569,8 +604,18 @@ test('chain-continuation advances columns immediately, without waiting for the p
       { id: 'done', color: '#22c55e', label: 'Done' },
     ],
     transitions: [
-      { from: 'a', trigger: 'on_enter', conditions: [], actions: [{ type: 'change_status', target: 'b' }] },
-      { from: 'b', trigger: 'on_enter', conditions: [], actions: [{ type: 'change_status', target: 'done' }] },
+      {
+        from: 'a',
+        trigger: 'on_enter',
+        conditions: [],
+        actions: [{ type: 'change_status', target: 'b' }],
+      },
+      {
+        from: 'b',
+        trigger: 'on_enter',
+        conditions: [],
+        actions: [{ type: 'change_status', target: 'done' }],
+      },
     ],
   });
 
@@ -587,7 +632,11 @@ test('chain-continuation advances columns immediately, without waiting for the p
       await new Promise(r => setTimeout(r, 10));
     }
 
-    assert.equal(taskRows.get(task.id)?.status, 'done', 'reached done via continuation without the poll');
+    assert.equal(
+      taskRows.get(task.id)?.status,
+      'done',
+      'reached done via continuation without the poll'
+    );
   } finally {
     restore();
   }
@@ -602,8 +651,14 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
       { id: 'done', color: '#22c55e', label: 'Done' },
     ],
     transitions: [
-      { from: 'work', trigger: 'on_enter', conditions: [],
-        actions: [{ type: 'run_agent', mode: 'decide', role: 'assistant', instructions: 'do the work' }] },
+      {
+        from: 'work',
+        trigger: 'on_enter',
+        conditions: [],
+        actions: [
+          { type: 'run_agent', mode: 'decide', role: 'assistant', instructions: 'do the work' },
+        ],
+      },
     ],
   });
 
@@ -615,7 +670,8 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
     // agent advancing the card via update_task/change_status.
     mgr.sendMessage = async (aid: any) => {
       await mgr.setTaskStatus(agentId, task.id, 'review', { by: 'agent' });
-      const a = mgr.agents.get(aid); if (a) a.status = 'idle';
+      const a = mgr.agents.get(aid);
+      if (a) a.status = 'idle';
       return 'moved';
     };
 
@@ -623,7 +679,8 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
     const emitted: string[] = [];
     const origEmit = mgr._emit.bind(mgr);
     mgr._emit = (event: string, payload: any) => {
-      if (event === 'task:updated' && payload?.task?.id === task.id) emitted.push(payload.task.status);
+      if (event === 'task:updated' && payload?.task?.id === task.id)
+        emitted.push(payload.task.status);
       return origEmit(event, payload);
     };
 
@@ -642,9 +699,15 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
     // back. After the move to review, no emit may carry the stale "work" again.
     const afterMove = emitted.slice(emitted.indexOf('review'));
     assert.ok(emitted.includes('review'), `expected a review emit, got [${emitted.join(', ')}]`);
-    assert.ok(!afterMove.includes('work'),
-      `no stale "work" emit after reaching review — got [${emitted.join(', ')}]`);
-    assert.equal(emitted.at(-1), 'review', `last emit must be the current column, got [${emitted.join(', ')}]`);
+    assert.ok(
+      !afterMove.includes('work'),
+      `no stale "work" emit after reaching review — got [${emitted.join(', ')}]`
+    );
+    assert.equal(
+      emitted.at(-1),
+      'review',
+      `last emit must be the current column, got [${emitted.join(', ')}]`
+    );
   } finally {
     restore();
   }

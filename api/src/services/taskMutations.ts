@@ -37,7 +37,10 @@ export function enrichAssignee(agentManager: any, task: any): any {
 export function emitTaskUpdated(
   agentManager: any,
   task: any,
-  { emitAgent = true, stampUpdatedAt = false }: { emitAgent?: boolean; stampUpdatedAt?: boolean } = {},
+  {
+    emitAgent = true,
+    stampUpdatedAt = false,
+  }: { emitAgent?: boolean; stampUpdatedAt?: boolean } = {}
 ): void {
   if (stampUpdatedAt) task.updatedAt = new Date().toISOString();
   enrichAssignee(agentManager, task);
@@ -62,8 +65,11 @@ export function emitTaskUpdated(
 export function persistThenEmit(
   agentManager: any,
   task: any,
-  { fields = null, emitAgent = false, stampUpdatedAt = true }:
-    { fields?: Record<string, any> | null; emitAgent?: boolean; stampUpdatedAt?: boolean } = {},
+  {
+    fields = null,
+    emitAgent = false,
+    stampUpdatedAt = true,
+  }: { fields?: Record<string, any> | null; emitAgent?: boolean; stampUpdatedAt?: boolean } = {}
 ): Promise<void> {
   const ownerId = task.agentId ?? null;
   const payload = { ...task, agentId: ownerId };
@@ -83,7 +89,11 @@ export function persistThenEmit(
  */
 export function clearExecutionOnMove(
   task: any,
-  { toStatus, now = new Date().toISOString(), full = false }: { toStatus?: string; now?: string; full?: boolean } = {},
+  {
+    toStatus,
+    now = new Date().toISOString(),
+    full = false,
+  }: { toStatus?: string; now?: string; full?: boolean } = {}
 ): void {
   task.startedAt = null;
   task.executionStatus = null;
@@ -150,8 +160,13 @@ export async function applyTaskMove(
     editedFields?: string[];
     unassignOnStatusChange?: boolean;
     setTaskSignal?: (taskId: string, key: string, value: any) => void;
-  },
-): Promise<{ statusChanged: boolean; boardChanged: boolean; historyEntry: any; previousAssignee: string | null }> {
+  }
+): Promise<{
+  statusChanged: boolean;
+  boardChanged: boolean;
+  historyEntry: any;
+  previousAssignee: string | null;
+}> {
   const oldBoardId = task.boardId || null;
   const oldStatus = task.status;
 

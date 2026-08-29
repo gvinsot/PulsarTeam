@@ -16,7 +16,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { findAgentByRole, findAgentForAssignment, hasIdleAgentWithRole } from '../workflow/agentSelector.js';
+import {
+  findAgentByRole,
+  findAgentForAssignment,
+  hasIdleAgentWithRole,
+} from '../workflow/agentSelector.js';
 
 function makeAgents(list: any[]): Map<string, any> {
   const m = new Map<string, any>();
@@ -26,8 +30,24 @@ function makeAgents(list: any[]): Map<string, any> {
 
 test('findAgentByRole picks idle agent on different repo when same-repo agent is busy', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b1', status: 'busy',  project: 'org/repo-target', enabled: true },
-    { id: 'a2', name: 'A2', role: 'dev', boardId: 'b1', status: 'idle',  project: 'org/repo-other',  enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'busy',
+      project: 'org/repo-target',
+      enabled: true,
+    },
+    {
+      id: 'a2',
+      name: 'A2',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'idle',
+      project: 'org/repo-other',
+      enabled: true,
+    },
   ]);
 
   const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target') as any;
@@ -38,19 +58,47 @@ test('findAgentByRole picks idle agent on different repo when same-repo agent is
 
 test('findAgentByRole still prefers a same-repo idle agent over different-repo idle agents', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b1', status: 'idle', project: 'org/repo-target', enabled: true },
-    { id: 'a2', name: 'A2', role: 'dev', boardId: 'b1', status: 'idle', project: 'org/repo-other',  enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'idle',
+      project: 'org/repo-target',
+      enabled: true,
+    },
+    {
+      id: 'a2',
+      name: 'A2',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'idle',
+      project: 'org/repo-other',
+      enabled: true,
+    },
   ]);
 
   const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target') as any;
 
   assert.ok(picked);
-  assert.equal(picked.id, 'a1', 'same-repo idle agent should win to avoid an unnecessary repo switch');
+  assert.equal(
+    picked.id,
+    'a1',
+    'same-repo idle agent should win to avoid an unnecessary repo switch'
+  );
 });
 
 test('findAgentByRole returns null when no agent matches role+board', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'qa', boardId: 'b1', status: 'idle', project: 'org/repo', enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'qa',
+      boardId: 'b1',
+      status: 'idle',
+      project: 'org/repo',
+      enabled: true,
+    },
   ]);
 
   const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo');
@@ -59,8 +107,24 @@ test('findAgentByRole returns null when no agent matches role+board', () => {
 
 test('findAgentByRole returns null when matching agents are all non-idle', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b1', status: 'busy', project: 'org/repo-target', enabled: true },
-    { id: 'a2', name: 'A2', role: 'dev', boardId: 'b1', status: 'busy', project: 'org/repo-other',  enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'busy',
+      project: 'org/repo-target',
+      enabled: true,
+    },
+    {
+      id: 'a2',
+      name: 'A2',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'busy',
+      project: 'org/repo-other',
+      enabled: true,
+    },
   ]);
 
   const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target');
@@ -69,8 +133,24 @@ test('findAgentByRole returns null when matching agents are all non-idle', () =>
 
 test('findAgentByRole prefers the task board over the task repo', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b2', status: 'idle', project: 'org/repo-target', enabled: true },
-    { id: 'a2', name: 'A2', role: 'dev', boardId: 'b1', status: 'idle', project: 'org/repo-other',  enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b2',
+      status: 'idle',
+      project: 'org/repo-target',
+      enabled: true,
+    },
+    {
+      id: 'a2',
+      name: 'A2',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'idle',
+      project: 'org/repo-other',
+      enabled: true,
+    },
   ]);
 
   const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target') as any;
@@ -89,53 +169,144 @@ test('findAgentByRole prefers the task board over the task repo', () => {
 
 test('findAgentByRole falls back to another board when the role is staffed elsewhere', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b2', status: 'idle', project: 'org/repo-target', enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b2',
+      status: 'idle',
+      project: 'org/repo-target',
+      enabled: true,
+    },
   ]);
 
   const picked = findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo-target') as any;
 
-  assert.ok(picked, 'a role with no agent on this board must still run rather than strand the task');
+  assert.ok(
+    picked,
+    'a role with no agent on this board must still run rather than strand the task'
+  );
   assert.equal(picked.id, 'a1');
 });
 
 test('an idle agent that makes the condition green is reachable by the action', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b2', status: 'idle', project: 'org/repo', enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b2',
+      status: 'idle',
+      project: 'org/repo',
+      enabled: true,
+    },
   ]);
 
   assert.equal(hasIdleAgentWithRole(agents, 'dev'), true);
-  assert.ok(findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo'), 'condition and selection must agree');
+  assert.ok(
+    findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo'),
+    'condition and selection must agree'
+  );
 });
 
 test('findAgentByRole still returns null when no agent holds the role at all', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'qa', boardId: 'b2', status: 'idle', project: 'org/repo', enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'qa',
+      boardId: 'b2',
+      status: 'idle',
+      project: 'org/repo',
+      enabled: true,
+    },
   ]);
 
-  assert.equal(findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo'), null);
+  assert.equal(
+    findAgentByRole(agents, 'dev', null, () => [], 'b1', 'org/repo'),
+    null
+  );
 });
 
 test('findAgentForAssignment prefers the task board but falls back to another one', () => {
   const onBoard = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b2', status: 'busy', project: 'org/repo', enabled: true },
-    { id: 'a2', name: 'A2', role: 'dev', boardId: 'b1', status: 'busy', project: 'org/repo', enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b2',
+      status: 'busy',
+      project: 'org/repo',
+      enabled: true,
+    },
+    {
+      id: 'a2',
+      name: 'A2',
+      role: 'dev',
+      boardId: 'b1',
+      status: 'busy',
+      project: 'org/repo',
+      enabled: true,
+    },
   ]);
-  const picked = findAgentForAssignment(onBoard, 'dev', null, () => [], null, 'b1', 'org/repo') as any;
+  const picked = findAgentForAssignment(
+    onBoard,
+    'dev',
+    null,
+    () => [],
+    null,
+    'b1',
+    'org/repo'
+  ) as any;
   assert.equal(picked.id, 'a2', 'an agent on the task board wins');
 
   const offBoard = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b2', status: 'busy', project: 'org/repo', enabled: true },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b2',
+      status: 'busy',
+      project: 'org/repo',
+      enabled: true,
+    },
   ]);
-  const fallback = findAgentForAssignment(offBoard, 'dev', null, () => [], null, 'b1', 'org/repo') as any;
-  assert.ok(fallback, 'assignment must not return null just because the role lives on another board');
+  const fallback = findAgentForAssignment(
+    offBoard,
+    'dev',
+    null,
+    () => [],
+    null,
+    'b1',
+    'org/repo'
+  ) as any;
+  assert.ok(
+    fallback,
+    'assignment must not return null just because the role lives on another board'
+  );
   assert.equal(fallback.id, 'a1');
 });
 
 test('findAgentForAssignment still respects the owner scope', () => {
   const agents = makeAgents([
-    { id: 'a1', name: 'A1', role: 'dev', boardId: 'b2', status: 'idle', project: 'org/repo', enabled: true, ownerId: 'u2' },
+    {
+      id: 'a1',
+      name: 'A1',
+      role: 'dev',
+      boardId: 'b2',
+      status: 'idle',
+      project: 'org/repo',
+      enabled: true,
+      ownerId: 'u2',
+    },
   ]);
 
-  assert.equal(findAgentForAssignment(agents, 'dev', 'u1', () => [], null, 'b1', 'org/repo'), null);
-  assert.equal(findAgentByRole(agents, 'dev', 'u1', () => [], 'b1', 'org/repo'), null);
+  assert.equal(
+    findAgentForAssignment(agents, 'dev', 'u1', () => [], null, 'b1', 'org/repo'),
+    null
+  );
+  assert.equal(
+    findAgentByRole(agents, 'dev', 'u1', () => [], 'b1', 'org/repo'),
+    null
+  );
 });

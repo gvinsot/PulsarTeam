@@ -10,10 +10,22 @@
  */
 
 import { ActionType, AgentMode, AUTO_ROLE, columnExists } from './taskStateMachine.js';
-import { findAgentByRole, findAgentForAssignment, acquireLock, releaseLock, markAgentBusy, clearAgentBusy } from './agentSelector.js';
+import {
+  findAgentByRole,
+  findAgentForAssignment,
+  acquireLock,
+  releaseLock,
+  markAgentBusy,
+  clearAgentBusy,
+} from './agentSelector.js';
 import { resolveAutoRole } from './roleRouter.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
-import { saveTaskToDb, updateTaskExecutionStatus, updateTaskFields, getTaskById } from '../database.js';
+import {
+  saveTaskToDb,
+  updateTaskExecutionStatus,
+  updateTaskFields,
+  getTaskById,
+} from '../database.js';
 import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
@@ -49,12 +61,19 @@ async function bindAgentRunner(agentManager, agent) {
 async function _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead = null) {
   await bindAgentRunner(agentManager, agent);
   await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
-  return agentManager._waitForExecutionComplete(task.agentId, task.id, agent.id, agent.name, task.text, {
-    terminalDriven: true,
-    // Anchor for the terminal-independent commit sweep inside the wait loop —
-    // a CLI runner's git activity never surfaces as parseable terminal output.
-    gitBaselineHead,
-  });
+  return agentManager._waitForExecutionComplete(
+    task.agentId,
+    task.id,
+    agent.id,
+    agent.name,
+    task.text,
+    {
+      terminalDriven: true,
+      // Anchor for the terminal-independent commit sweep inside the wait loop —
+      // a CLI runner's git activity never surfaces as parseable terminal output.
+      gitBaselineHead,
+    }
+  );
 }
 
 /**
@@ -142,12 +161,27 @@ export function stripToolCalls(text) {
   if (!text) return text;
   let cleaned = text.replace(/<tool_call>\s*[\s\S]*?\s*<\/tool_call>/gi, '');
   const TOOL_NAMES = [
-    'read_file', 'write_file', 'append_file', 'list_dir', 'search_files',
-    'run_command', 'report_error', 'mcp_call',
-    'update_task', 'list_my_tasks', 'list_projects', 'check_status',
-    'get_action_status', 'build_stack', 'test_stack',
-    'deploy_stack', 'list_stacks', 'list_containers', 'list_computers',
-    'search_logs', 'get_log_metadata',
+    'read_file',
+    'write_file',
+    'append_file',
+    'list_dir',
+    'search_files',
+    'run_command',
+    'report_error',
+    'mcp_call',
+    'update_task',
+    'list_my_tasks',
+    'list_projects',
+    'check_status',
+    'get_action_status',
+    'build_stack',
+    'test_stack',
+    'deploy_stack',
+    'list_stacks',
+    'list_containers',
+    'list_computers',
+    'search_logs',
+    'get_log_metadata',
   ];
   const toolPattern = new RegExp(`@(${TOOL_NAMES.join('|')})\\s*\\(`, 'gi');
   const removals = [];
@@ -200,13 +234,17 @@ export async function executeAction(action, task, context) {
   // handlers below stay unchanged. On failure we return an { error } result and
   // let WorkflowEngine._executeActionChain mark the task in error — which also
   // stops the chain, so the on_enter/condition retry won't re-invoke the LLM.
-  if ((action.type === ActionType.RUN_AGENT || action.type === ActionType.ASSIGN_AGENT)
-      && action.role === AUTO_ROLE) {
+  if (
+    (action.type === ActionType.RUN_AGENT || action.type === ActionType.ASSIGN_AGENT) &&
+    action.role === AUTO_ROLE
+  ) {
     try {
       const resolvedRole = await resolveAutoRole(task, context);
       action = { ...action, role: resolvedRole };
     } catch (err) {
-      console.error(`[ActionExecutor] auto-role: resolution failed for task="${task.id}": ${err.message}`);
+      console.error(
+        `[ActionExecutor] auto-role: resolution failed for task="${task.id}": ${err.message}`
+      );
       return { executed: false, error: true, message: err.message };
     }
   }
@@ -247,7 +285,9 @@ async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
   ) as any;
 
   if (!agent) {
-    console.log(`[ActionExecutor] assign_agent: no agent with role "${action.role}" — skipping task="${task.id}"`);
+    console.log(
+      `[ActionExecutor] assign_agent: no agent with role "${action.role}" — skipping task="${task.id}"`
+    );
     return { executed: false, skipped: true, reason: 'no-agent-for-role' };
   }
 
@@ -257,7 +297,9 @@ async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     recordReassign(actualTask, agent.id);
     task.assignee = agent.id;
     persistThenEmit(agentManager, actualTask);
-    console.log(`[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
+    console.log(
+      `[ActionExecutor] assign_agent: assigned to "${agent.name}" (role: ${action.role}) task="${task.id}"`
+    );
   } else {
     // Board-level task (agent_id = null): no in-memory object, so the assignee
     // was never persisted and the board showed nobody had picked it up. Persist
@@ -265,7 +307,9 @@ async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
     task.assignee = agent.id;
     recordReassign(task, agent.id);
     persistThenEmit(agentManager, task, { fields: { assignee: agent.id, history: task.history } });
-    console.log(`[ActionExecutor] assign_agent: assigned board-level task to "${agent.name}" (role: ${action.role}) task="${task.id}"`);
+    console.log(
+      `[ActionExecutor] assign_agent: assigned board-level task to "${agent.name}" (role: ${action.role}) task="${task.id}"`
+    );
   }
 
   return { executed: true };
@@ -281,7 +325,9 @@ async function executeAssignAgentIndividual(action, task, { agentManager, io }) 
   // No-op guard: avoid clobbering an assignee set by a concurrent run_agent
   // action and spamming task:updated events when the target matches current.
   if (prev === targetAgentId) {
-    const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
+    const targetName = targetAgentId
+      ? agentManager.agents.get(targetAgentId)?.name || targetAgentId
+      : 'none';
     console.log(`[ActionExecutor] assign_agent_individual: "${targetName}" — no change`);
     return { executed: true };
   }
@@ -292,9 +338,13 @@ async function executeAssignAgentIndividual(action, task, { agentManager, io }) 
     persistThenEmit(agentManager, actualTask);
   } else {
     // Board-level task (agent_id = null): persist targeted + emit. Ownership stays null.
-    persistThenEmit(agentManager, task, { fields: { assignee: targetAgentId, history: task.history } });
+    persistThenEmit(agentManager, task, {
+      fields: { assignee: targetAgentId, history: task.history },
+    });
   }
-  const targetName = targetAgentId ? (agentManager.agents.get(targetAgentId)?.name || targetAgentId) : 'none';
+  const targetName = targetAgentId
+    ? agentManager.agents.get(targetAgentId)?.name || targetAgentId
+    : 'none';
   console.log(`[ActionExecutor] assign_agent_individual: "${prev || 'none'}" → "${targetName}"`);
   return { executed: true };
 }
@@ -309,7 +359,9 @@ async function executeChangeStatus(action, task, { agentManager, workflow }) {
     const cols = workflow?.columns || [];
     const curIdx = cols.findIndex(c => c.id === task.status);
     if (curIdx === -1 || curIdx >= cols.length - 1) {
-      console.log(`[ActionExecutor] change_status: __next__ — no column after "${task.status}" — skipping`);
+      console.log(
+        `[ActionExecutor] change_status: __next__ — no column after "${task.status}" — skipping`
+      );
       return { executed: false, skipped: true, reason: 'no-next-column' };
     }
     target = cols[curIdx + 1].id;
@@ -339,7 +391,9 @@ async function executeChangeStatus(action, task, { agentManager, workflow }) {
   // through applyTaskUpdate, the canonical board-level path (mutates the DB row,
   // emits, and fires the column-entry hook). Mirrors how MCP board moves work.
   if (!realTask) {
-    console.log(`[ActionExecutor] change_status (board-level): "${task.status}" → "${target}" task="${task.id}"`);
+    console.log(
+      `[ActionExecutor] change_status (board-level): "${task.status}" → "${target}" task="${task.id}"`
+    );
     const r = await applyTaskUpdate(agentManager, { task_id: task.id, status: target });
     if (!r.ok) {
       console.warn(`[ActionExecutor] change_status (board-level): ${r.error}`);
@@ -432,8 +486,14 @@ async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
       startedAt: task.startedAt,
       ...(assigneeChanged ? { assignee: agent.id } : {}),
     });
-  } catch { /* best-effort — the emit below still drives the live UI */ }
-  emitTaskUpdated(agentManager, { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
+  } catch {
+    /* best-effort — the emit below still drives the live UI */
+  }
+  emitTaskUpdated(
+    agentManager,
+    { ...task, agentId: task.agentId },
+    { emitAgent: false, stampUpdatedAt: true }
+  );
 }
 
 /** Persist + emit the cleared running flag for a board-level task (see above). */
@@ -450,11 +510,17 @@ async function _clearActionRunningBoardLevel(agentManager, task) {
       actionRunningMode: null,
       startedAt: null,
     });
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
   // Emit the fresh row (current status), not the captured `task`: a decide agent
   // may have moved this board-level task to its next column during the run, so
   // `task.status` is stale and would bounce the card back a column.
-  emitTaskUpdated(agentManager, updated ? { ...updated, agentId: task.agentId } : { ...task, agentId: task.agentId }, { emitAgent: false, stampUpdatedAt: true });
+  emitTaskUpdated(
+    agentManager,
+    updated ? { ...updated, agentId: task.agentId } : { ...task, agentId: task.agentId },
+    { emitAgent: false, stampUpdatedAt: true }
+  );
 }
 
 /**
@@ -486,7 +552,9 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
   // runner clones any that are missing.)
   if (!needsPrimarySwitch && !needsSecondaryEnsure) return { ok: true };
 
-  console.log(`[ActionExecutor] Ensuring "${agent.name}" on repo "${taskRepo || '(none)'}"${needsSecondaryEnsure ? ` (+${secondaryRepos.length} secondary)` : ''}`);
+  console.log(
+    `[ActionExecutor] Ensuring "${agent.name}" on repo "${taskRepo || '(none)'}"${needsSecondaryEnsure ? ` (+${secondaryRepos.length} secondary)` : ''}`
+  );
   // Hoisted so the catch can tell a missing token from a rejected one when the
   // clone fails with a GitHub auth error.
   let gitCreds: any = null;
@@ -505,25 +573,34 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
         gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
         await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl, gitCreds);
       } else {
-        console.warn(`[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`);
+        console.warn(
+          `[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`
+        );
       }
       // 3. Verify execution environment matches
       const envProject = agentManager.executionManager.getProject(agent.id);
       if (envProject && envProject !== taskRepo) {
-        throw new Error(`Execution environment is on "${envProject}" but task requires "${taskRepo}"`);
+        throw new Error(
+          `Execution environment is on "${envProject}" but task requires "${taskRepo}"`
+        );
       }
     }
     if (taskRepo) agent.project = taskRepo;
     return { ok: true };
   } catch (switchErr) {
-    console.error(`[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`);
+    console.error(
+      `[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`
+    );
     const switchErrTimestamp = new Date().toISOString();
     // Recognise a Git authentication failure (private repo + missing/expired
     // token) and surface a clear, actionable alert instead of the cryptic git
     // stderr ("could not read Username …"). This is the UI alert that tells the
     // user a repo-bound task can't run because GitHub isn't connected.
     const raw = switchErr.message || '';
-    const isAuthFailure = /could not read Username|Authentication failed|terminal prompts disabled|fatal: could not read|HTTP 40[13]\b|Permission denied|invalid username or password|access denied|repository not found/i.test(raw);
+    const isAuthFailure =
+      /could not read Username|Authentication failed|terminal prompts disabled|fatal: could not read|HTTP 40[13]\b|Permission denied|invalid username or password|access denied|repository not found/i.test(
+        raw
+      );
     let taskError: string;
     let alertDescription: string;
     if (isAuthFailure) {
@@ -580,7 +657,9 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
 
   const lockKey = `${task.agentId}:${task.id}:${mode}`;
   if (!acquireLock(lockKey)) {
-    console.log(`[ActionExecutor] run_agent: lock held for "${task.text?.slice(0, 60)}" — skipping`);
+    console.log(
+      `[ActionExecutor] run_agent: lock held for "${task.text?.slice(0, 60)}" — skipping`
+    );
     return { executed: false, skipped: true, reason: 'lock-held' };
   }
 
@@ -598,7 +677,9 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   ) as any;
 
   if (!agent) {
-    console.log(`[ActionExecutor] run_agent: no idle agent for role "${role}" — task stays pending`);
+    console.log(
+      `[ActionExecutor] run_agent: no idle agent for role "${role}" — task stays pending`
+    );
     releaseLock(lockKey);
     return { executed: false, skipped: true, reason: 'no-idle-agent' };
   }
@@ -624,46 +705,70 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   let execStartedAt;
   let gitBaselineHead = null;
   try {
+    // Set actionRunning flag on the task
+    actualTask = task.agentId ? await getTaskById(task.id) : null;
+    if (actualTask) {
+      await _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
+    } else {
+      // Board-level task (created unassigned via MCP add_task): not in the
+      // in-memory store, so mark + persist the running flag directly — otherwise
+      // the board never shows it as busy while the agent works.
+      await _markActionRunningBoardLevel(agentManager, task, agent, mode);
+    }
 
-  // Set actionRunning flag on the task
-  actualTask = task.agentId ? await getTaskById(task.id) : null;
-  if (actualTask) {
-    await _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
-  } else {
-    // Board-level task (created unassigned via MCP add_task): not in the
-    // in-memory store, so mark + persist the running flag directly — otherwise
-    // the board never shows it as busy while the agent works.
-    await _markActionRunningBoardLevel(agentManager, task, agent, mode);
-  }
+    // Auto-switch agent to the task's repo if needed.
+    const switched = await _ensureAgentOnTaskRepo(agent, task, actualTask, {
+      agentManager,
+      mode,
+      agentId: task.agentId,
+    });
+    if (!switched.ok) return switched.result;
+    execStartMsgIdx = (agent.conversationHistory || []).length;
+    execStartedAt = new Date().toISOString();
 
-  // Auto-switch agent to the task's repo if needed.
-  const switched = await _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, mode, agentId: task.agentId });
-  if (!switched.ok) return switched.result;
-  execStartMsgIdx = (agent.conversationHistory || []).length;
-  execStartedAt = new Date().toISOString();
-
-  // Snapshot the repo HEAD before a decide run (the only mode that executes
-  // code). The finally below diffs baseline..HEAD to link every commit made
-  // during the run — the only detection that works for CLI runners, whose
-  // git activity happens inside their PTY and never reaches the @run_command
-  // parser (and often isn't even rendered by the CLI's TUI).
-  if (mode === AgentMode.DECIDE) {
-    gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
-  }
+    // Snapshot the repo HEAD before a decide run (the only mode that executes
+    // code). The finally below diffs baseline..HEAD to link every commit made
+    // during the run — the only detection that works for CLI runners, whose
+    // git activity happens inside their PTY and never reaches the @run_command
+    // parser (and often isn't even rendered by the CLI's TUI).
+    if (mode === AgentMode.DECIDE) {
+      gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
+    }
 
     let result;
     switch (mode) {
       case AgentMode.TITLE:
-        result = await _runSimpleMode('title', agent, task, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runSimpleMode('title', agent, task, {
+          agentManager,
+          io,
+          execStartMsgIdx,
+          execStartedAt,
+        });
         break;
       case AgentMode.SET_TYPE:
-        result = await _runSimpleMode('set_type', agent, task, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runSimpleMode('set_type', agent, task, {
+          agentManager,
+          io,
+          execStartMsgIdx,
+          execStartedAt,
+        });
         break;
       case AgentMode.REFINE:
-        result = await _runRefineMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt });
+        result = await _runRefineMode(agent, task, instructions, {
+          agentManager,
+          io,
+          execStartMsgIdx,
+          execStartedAt,
+        });
         break;
       case AgentMode.DECIDE:
-        result = await _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt, gitBaselineHead });
+        result = await _runDecideMode(agent, task, instructions, columns, {
+          agentManager,
+          io,
+          execStartMsgIdx,
+          execStartedAt,
+          gitBaselineHead,
+        });
         break;
       default:
         console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
@@ -680,18 +785,43 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // from the board entirely. stopAgent already marked the task as stopped
     // and cleaned actionRunning flags, so we just log + return cleanly.
     if (isUserStopError(err)) {
-      console.log(`[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`);
-      agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, mode);
+      console.log(
+        `[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`
+      );
+      agentManager._saveExecutionLog(
+        task.agentId,
+        task.id,
+        agent.id,
+        execStartMsgIdx,
+        execStartedAt,
+        false,
+        mode
+      );
       // Belt-and-suspenders: ensure executionStatus=stopped is durable even
       // if stopAgent's iteration missed this task (e.g. race between assign
       // and stop). The in-memory 'stopped' signal is set by stopAgent itself.
-      try { await updateTaskExecutionStatus(task.id, 'stopped'); } catch { /* best-effort */ }
+      try {
+        await updateTaskExecutionStatus(task.id, 'stopped');
+      } catch {
+        /* best-effort */
+      }
       return { executed: false, skipped: true, reason: 'user-stop' };
     }
 
-    console.error(`[ActionExecutor] run_agent error for "${task.text?.slice(0, 60)}":`, err.message);
+    console.error(
+      `[ActionExecutor] run_agent error for "${task.text?.slice(0, 60)}":`,
+      err.message
+    );
     // Save error execution log
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, mode);
+    agentManager._saveExecutionLog(
+      task.agentId,
+      task.id,
+      agent.id,
+      execStartMsgIdx,
+      execStartedAt,
+      false,
+      mode
+    );
     // Emit system error report so leader + frontend are notified
     const errorTimestamp = new Date().toISOString();
     agentManager._emit('agent:error:report', {
@@ -717,10 +847,16 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
         });
         if (mutated) {
           await saveTaskToDb({ ...actualTask, agentId: task.agentId });
-          agentManager._emit('task:updated', { agentId: task.agentId, task: { ...actualTask, agentId: task.agentId } });
+          agentManager._emit('task:updated', {
+            agentId: task.agentId,
+            task: { ...actualTask, agentId: task.agentId },
+          });
         }
       } else {
-        agentManager.setTaskStatus(task.agentId, task.id, 'error', { skipAutoRefine: true, by: 'workflow' });
+        agentManager.setTaskStatus(task.agentId, task.id, 'error', {
+          skipAutoRefine: true,
+          by: 'workflow',
+        });
       }
     } catch (e) {
       console.error(`[ActionExecutor] Failed to set error status:`, e.message);
@@ -744,7 +880,9 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
           label: 'RunEndReconcile',
         });
       } catch (reconcileErr) {
-        console.warn(`[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr.message}`);
+        console.warn(
+          `[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr.message}`
+        );
       }
     }
     let cleanupMutated = false;
@@ -786,13 +924,14 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       // the next column emits, but on the FINAL action nothing corrects it, so the
       // card sticks a column back until a reload. cleanupFields is non-empty
       // whenever cleanupMutated, so the update runs and returns the current row.
-      const updated = Object.keys(cleanupFields).length > 0
-        ? await updateTaskFields(actualTask.id, cleanupFields)
-        : null;
+      const updated =
+        Object.keys(cleanupFields).length > 0
+          ? await updateTaskFields(actualTask.id, cleanupFields)
+          : null;
       emitTaskUpdated(
         agentManager,
         updated ? { ...updated, agentId: task.agentId } : { ...actualTask, agentId: task.agentId },
-        { emitAgent: false, stampUpdatedAt: true },
+        { emitAgent: false, stampUpdatedAt: true }
       );
     }
     // Board-level task: no in-memory copy, and board-level moves bypass
@@ -827,7 +966,7 @@ async function _withAgentStream<T>(agentManager, agentId, body: () => Promise<T>
  * while forwarding each chunk to the frontend (streamChunk + thinking).
  */
 function _makeStreamCollector(agentManager, agentId, buf: { text: string }) {
-  return (chunk) => {
+  return chunk => {
     buf.text += chunk;
     agentManager.wsEmitter.streamChunk(agentId, chunk);
     agentManager.wsEmitter.thinking(agentId);
@@ -838,12 +977,20 @@ function _makeStreamCollector(agentManager, agentId, buf: { text: string }) {
 // sendMessage, post-process the raw response, save the execution log, and emit
 // agentUpdated in a finally. Only the prompt builder, the announce message, and
 // the response post-processing differ — captured in SIMPLE_MODES.
-const SET_TYPE_VALID_TYPES = ['bug', 'feature', 'technical', 'improvement', 'documentation', 'other'];
+const SET_TYPE_VALID_TYPES = [
+  'bug',
+  'feature',
+  'technical',
+  'improvement',
+  'documentation',
+  'other',
+];
 
 const SIMPLE_MODES = {
   title: {
     buildPrompt: buildTitlePrompt,
-    announce: (task, agentName) => `[ActionExecutor] title: generating for "${task.text?.slice(0, 60)}" via ${agentName}`,
+    announce: (task, agentName) =>
+      `[ActionExecutor] title: generating for "${task.text?.slice(0, 60)}" via ${agentName}`,
     apply: (agentManager, task, raw, _agentName) => {
       const title = (raw || '').trim().replace(/^["']|["']$/g, '');
       if (title) {
@@ -854,9 +1001,13 @@ const SIMPLE_MODES = {
   },
   set_type: {
     buildPrompt: buildSetTypePrompt,
-    announce: (task, agentName) => `[ActionExecutor] set_type: classifying "${task.text?.slice(0, 60)}" via ${agentName}`,
+    announce: (task, agentName) =>
+      `[ActionExecutor] set_type: classifying "${task.text?.slice(0, 60)}" via ${agentName}`,
     apply: (agentManager, task, raw, agentName) => {
-      const rawType = (raw || '').trim().toLowerCase().replace(/[^a-z_]/g, '');
+      const rawType = (raw || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z_]/g, '');
       const taskType = SET_TYPE_VALID_TYPES.includes(rawType) ? rawType : 'other';
       agentManager.updateTaskType(task.agentId, task.id, taskType, agentName);
       console.log(`[ActionExecutor] set_type: "${taskType}"`);
@@ -864,7 +1015,12 @@ const SIMPLE_MODES = {
   },
 } as const;
 
-async function _runSimpleMode(modeName: 'title' | 'set_type', agent, task, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+async function _runSimpleMode(
+  modeName: 'title' | 'set_type',
+  agent,
+  task,
+  { agentManager, io, execStartMsgIdx, execStartedAt }
+) {
   const { buildPrompt, announce, apply } = SIMPLE_MODES[modeName];
   const maxLen = agent.contextLength || 4000;
   const description = (task.text || '').slice(0, maxLen);
@@ -875,10 +1031,26 @@ async function _runSimpleMode(modeName: 'title' | 'set_type', agent, task, { age
   try {
     const result = await agentManager.sendMessage(agent.id, prompt, () => {});
     apply(agentManager, task, result, agent.name);
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, modeName);
+    agentManager._saveExecutionLog(
+      task.agentId,
+      task.id,
+      agent.id,
+      execStartMsgIdx,
+      execStartedAt,
+      true,
+      modeName
+    );
   } catch (err) {
     console.error(`[ActionExecutor] ${modeName} failed:`, err.message);
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, false, modeName);
+    agentManager._saveExecutionLog(
+      task.agentId,
+      task.id,
+      agent.id,
+      execStartMsgIdx,
+      execStartedAt,
+      false,
+      modeName
+    );
   } finally {
     agentManager.wsEmitter.agentUpdated(agent.id);
   }
@@ -886,7 +1058,12 @@ async function _runSimpleMode(modeName: 'title' | 'set_type', agent, task, { age
   return { executed: true };
 }
 
-async function _runRefineMode(agent, task, instructions, { agentManager, io, execStartMsgIdx, execStartedAt }) {
+async function _runRefineMode(
+  agent,
+  task,
+  instructions,
+  { agentManager, io, execStartMsgIdx, execStartedAt }
+) {
   const prompt = buildRefinePrompt(task, instructions);
   console.log(`[ActionExecutor] refine: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
@@ -903,7 +1080,15 @@ async function _runRefineMode(agent, task, instructions, { agentManager, io, exe
     );
 
     const response = (result?.content || buf.text).trim();
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'refine');
+    agentManager._saveExecutionLog(
+      task.agentId,
+      task.id,
+      agent.id,
+      execStartMsgIdx,
+      execStartedAt,
+      true,
+      'refine'
+    );
 
     if (response) {
       const cleaned = stripToolCalls(response);
@@ -922,7 +1107,13 @@ async function _runRefineMode(agent, task, instructions, { agentManager, io, exe
 // actionable error instead of spinning.
 const MAX_DECIDE_NO_DECISION = 4;
 
-async function _runDecideMode(agent, task, instructions, columns, { agentManager, io, execStartMsgIdx, execStartedAt, gitBaselineHead = null }) {
+async function _runDecideMode(
+  agent,
+  task,
+  instructions,
+  columns,
+  { agentManager, io, execStartMsgIdx, execStartedAt, gitBaselineHead = null }
+) {
   if (!instructions) {
     console.log(`[ActionExecutor] decide: no instructions — skipping`);
     return { executed: false, skipped: true, reason: 'no-instructions' };
@@ -947,10 +1138,25 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
   // shared PTY. The agent's decision lands as a task mutation (update_task MCP)
   // which the before/after comparison below detects.
   if (isCliRunner(agent) && agentManager.executionManager?.sendTerminalInput) {
-    console.log(`[ActionExecutor] decide: injecting prompt into CLI terminal for "${agent.name}" (status=${agent.status})`);
+    console.log(
+      `[ActionExecutor] decide: injecting prompt into CLI terminal for "${agent.name}" (status=${agent.status})`
+    );
     const waitResult = await _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead);
-    _throwIfWaitError(agentManager, task, waitResult, 'Claude Code CLI ended in an authentication or runtime error');
-    agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
+    _throwIfWaitError(
+      agentManager,
+      task,
+      waitResult,
+      'Claude Code CLI ended in an authentication or runtime error'
+    );
+    agentManager._saveExecutionLog(
+      task.agentId,
+      task.id,
+      agent.id,
+      execStartMsgIdx,
+      execStartedAt,
+      true,
+      'decide'
+    );
   } else {
     await _withAgentStream(agentManager, agent.id, async () => {
       const workflowMeta = { type: 'workflow-action', mode: 'decide', taskId: task.id };
@@ -962,7 +1168,15 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
         workflowMeta
       );
 
-      agentManager._saveExecutionLog(task.agentId, task.id, agent.id, execStartMsgIdx, execStartedAt, true, 'decide');
+      agentManager._saveExecutionLog(
+        task.agentId,
+        task.id,
+        agent.id,
+        execStartMsgIdx,
+        execStartedAt,
+        true,
+        'decide'
+      );
     });
   }
 
@@ -991,12 +1205,16 @@ async function _runDecideMode(agent, task, instructions, columns, { agentManager
       throw new Error(`Decide action failed: ${why}`);
     }
 
-    console.warn(`[ActionExecutor] decide: agent "${agent.name}" produced no decision for task="${task.id}" (attempt ${attempts}/${MAX_DECIDE_NO_DECISION}) — flagging for retry`);
+    console.warn(
+      `[ActionExecutor] decide: agent "${agent.name}" produced no decision for task="${task.id}" (attempt ${attempts}/${MAX_DECIDE_NO_DECISION}) — flagging for retry`
+    );
     return { executed: false, skipped: true, reason: 'no-decision' };
   }
 
   // Decision made — clear the no-decision counter.
   agentManager._decideNoDecisionCounts.delete(task.id);
-  console.log(`[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`);
+  console.log(
+    `[ActionExecutor] decide: completed for task="${task.id}" "${task.text?.slice(0, 60)}"`
+  );
   return { executed: true };
 }

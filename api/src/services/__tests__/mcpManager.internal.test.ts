@@ -72,17 +72,20 @@ test('internal MCP agent-context set matches the per-agent credential servers', 
   // Every internal builtin server URL must have a definition (plus the alias).
   for (const server of BUILTIN_MCP_SERVERS) {
     if (typeof server.url === 'string' && server.url.startsWith('__internal__')) {
-      assert.ok(INTERNAL_MCP_SERVERS.has(server.url), `missing INTERNAL_MCP_SERVERS entry for ${server.url}`);
+      assert.ok(
+        INTERNAL_MCP_SERVERS.has(server.url),
+        `missing INTERNAL_MCP_SERVERS entry for ${server.url}`
+      );
     }
   }
 });
 
 test('builtin Code Index plugin is wired to the internal MCP server', () => {
-  const codeIndexServer = BUILTIN_MCP_SERVERS.find((server) => server.id === 'mcp-code-index');
+  const codeIndexServer = BUILTIN_MCP_SERVERS.find(server => server.id === 'mcp-code-index');
   assert.ok(codeIndexServer);
   assert.equal(codeIndexServer.url, '__internal__code_index');
 
-  const codeIndexSkill = BUILTIN_SKILLS.find((skill) => skill.id === 'skill-code-index');
+  const codeIndexSkill = BUILTIN_SKILLS.find(skill => skill.id === 'skill-code-index');
   assert.ok(codeIndexSkill);
   assert.deepEqual(codeIndexSkill.mcpServerIds, ['mcp-code-index']);
   assert.match(codeIndexSkill.instructions, /Code Index/i);
@@ -93,7 +96,7 @@ test('builtin MCP servers remain discoverable before explicit seeding', () => {
   const manager = new MCPManager();
 
   const listed = manager.getAll() as any[];
-  assert.ok(listed.some((server) => server.id === 'mcp-code-index'));
+  assert.ok(listed.some(server => server.id === 'mcp-code-index'));
 
   const byId = manager.getById('mcp-code-index');
   assert.ok(byId);
@@ -124,8 +127,12 @@ test('_callAgentClient retries once through a fresh client when the session expi
   const staleClient = {
     isConnected: true,
     closed: false,
-    async callTool() { throw new Error('404 session not found'); },
-    async close() { this.closed = true; },
+    async callTool() {
+      throw new Error('404 session not found');
+    },
+    async close() {
+      this.closed = true;
+    },
   };
   const freshClient = {
     isConnected: true,
@@ -144,7 +151,12 @@ test('_callAgentClient retries once through a fresh client when the session expi
   };
 
   const result = await manager._callAgentClient(
-    cacheKey, server, { 'X-Agent-Id': 'agent-1' }, 'do_thing', {}, 'Agent context session expired',
+    cacheKey,
+    server,
+    { 'X-Agent-Id': 'agent-1' },
+    'do_thing',
+    {},
+    'Agent context session expired'
   );
 
   assert.equal(result.success, true);
@@ -163,8 +175,12 @@ test('_callAgentClient rethrows non-expiry errors without retrying', async () =>
   const client = {
     isConnected: true,
     closed: false,
-    async callTool() { throw new Error('ECONNRESET'); },
-    async close() { this.closed = true; },
+    async callTool() {
+      throw new Error('ECONNRESET');
+    },
+    async close() {
+      this.closed = true;
+    },
   };
   manager.agentClients.set(cacheKey, client);
   manager._connectAgentClient = async () => {
@@ -172,8 +188,9 @@ test('_callAgentClient rethrows non-expiry errors without retrying', async () =>
   };
 
   await assert.rejects(
-    () => manager._callAgentClient(cacheKey, server, {}, 'do_thing', {}, 'Agent session/token expired'),
-    /ECONNRESET/,
+    () =>
+      manager._callAgentClient(cacheKey, server, {}, 'do_thing', {}, 'Agent session/token expired'),
+    /ECONNRESET/
   );
   assert.equal(client.closed, false, 'client must stay cached on non-expiry errors');
   assert.equal(manager.agentClients.get(cacheKey), client);
@@ -191,7 +208,7 @@ test('deprecated builtin skills are no longer exposed', () => {
     'skill-documentation',
   ];
 
-  const activeIds = new Set(BUILTIN_SKILLS.map((skill) => skill.id));
+  const activeIds = new Set(BUILTIN_SKILLS.map(skill => skill.id));
 
   for (const skillId of removedSkillIds) {
     assert.equal(activeIds.has(skillId), false);

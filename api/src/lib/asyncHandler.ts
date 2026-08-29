@@ -11,9 +11,7 @@ import type { RequestHandler } from 'express';
 // TypeScript infers at each `router.get('/:id', asyncHandler(...))` call
 // site with this wrapper's own generic types, which is more disruptive than
 // the loose typing already used throughout these route handlers.
-export function asyncHandler(
-  fn: (req: any, res: any, next: any) => any,
-): RequestHandler {
+export function asyncHandler(fn: (req: any, res: any, next: any) => any): RequestHandler {
   return (req, res, next) => {
     Promise.resolve()
       .then(() => fn(req, res, next))

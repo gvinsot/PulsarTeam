@@ -15,7 +15,7 @@ const WelcomeTutorialModal = lazy(() => import('./components/WelcomeTutorialModa
 // Normalizes the user object from any auth payload (verify, OAuth callback,
 // password login, impersonation) — the field names are identical across all
 // backend responses. Absent fields normalize to null.
-const toUser = (d) => ({
+const toUser = d => ({
   username: d.username,
   role: d.role,
   userId: d.userId,
@@ -63,17 +63,20 @@ export default function App() {
     }
   }, []);
 
-  const dismissToast = useCallback((id) => {
+  const dismissToast = useCallback(id => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
   // Use a ref to hold showToast so socket handlers always call the latest version
   const showToastRef = useRef(showToast);
-  useEffect(() => { showToastRef.current = showToast; }, [showToast]);
+  useEffect(() => {
+    showToastRef.current = showToast;
+  }, [showToast]);
 
   // Agents list + thinking/stream-buffer state and the whole agents/stream
   // socket protocol live in the hook; App only triggers initSocket/teardown.
-  const { agents, setAgents, thinkingMap, streamBuffers, initSocket, teardown } = useAgentsSocket(showToastRef);
+  const { agents, setAgents, thinkingMap, streamBuffers, initSocket, teardown } =
+    useAgentsSocket(showToastRef);
 
   const loadedRef = useRef({ templates: false, projects: false, skills: false, mcpServers: false });
 
@@ -177,8 +180,9 @@ export default function App() {
     let cancelled = false;
     const token = safeGet('token');
     if (token) {
-      api.verify()
-        .then(async (data) => {
+      api
+        .verify()
+        .then(async data => {
           if (cancelled) return;
           // Not completeLogin: this path needs the `cancelled` guard between
           // loadData and initSocket (StrictMode/unmount), and must not
@@ -189,7 +193,7 @@ export default function App() {
           initSocket(token);
           checkDbHealth();
         })
-        .catch((err) => {
+        .catch(err => {
           if (cancelled) return;
           // A transient backend stall (request timeout/abort) must not
           // silently log the user out — only drop the token when the
@@ -198,7 +202,9 @@ export default function App() {
             safeRemove('token');
           }
         })
-        .finally(() => { if (!cancelled) setLoading(false); });
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
     } else {
       setLoading(false);
     }
@@ -239,13 +245,14 @@ export default function App() {
     if (!code || !exchange) return;
 
     setOauthLoading(true);
-    const redirectUri = sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}${path}`;
+    const redirectUri =
+      sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}${path}`;
     sessionStorage.removeItem('oauth_redirect_uri');
     window.history.replaceState({}, '', '/');
 
     exchange(code, redirectUri)
-      .then((data) => completeLogin(data.token, data, { awaitHealth: true }))
-      .catch((err) => {
+      .then(data => completeLogin(data.token, data, { awaitHealth: true }))
+      .catch(err => {
         console.error('OAuth login failed:', err);
         showToast(err.message || 'Login failed', 'error');
       })
@@ -279,7 +286,11 @@ export default function App() {
     const onConnectError = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       console.error('WebSocket connection rejected:', detail);
-      showToastRef.current(`Realtime connection failed: ${detail || 'unknown error'}`, 'error', 8000);
+      showToastRef.current(
+        `Realtime connection failed: ${detail || 'unknown error'}`,
+        'error',
+        8000
+      );
     };
     window.addEventListener('socket:auth-error', onAuthError);
     window.addEventListener('socket:connect-error', onConnectError);
@@ -289,7 +300,7 @@ export default function App() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleImpersonate = (data) => {
+  const handleImpersonate = data => {
     // Save original token so we can return. Not completeLogin: impersonation
     // recycles the socket, skips the DB health probe and doesn't await loadData.
     const currentToken = safeGet('token');
@@ -307,19 +318,32 @@ export default function App() {
     safeSet('token', originalToken);
     safeRemove('originalToken');
     // Re-verify to get original user info
-    api.verify().then((verifyData) => {
-      setUser(verifyData.user);
-      disconnectSocket();
-      initSocket(originalToken);
-      loadData();
-    }).catch(() => {
-      handleLogout();
-    });
+    api
+      .verify()
+      .then(verifyData => {
+        setUser(verifyData.user);
+        disconnectSocket();
+        initSocket(originalToken);
+        loadData();
+      })
+      .catch(() => {
+        handleLogout();
+      });
   };
 
   const pathname = window.location.pathname;
-  if (pathname === '/terms') return <Suspense fallback={null}><TermsPage /></Suspense>;
-  if (pathname === '/privacy') return <Suspense fallback={null}><PrivacyPage /></Suspense>;
+  if (pathname === '/terms')
+    return (
+      <Suspense fallback={null}>
+        <TermsPage />
+      </Suspense>
+    );
+  if (pathname === '/privacy')
+    return (
+      <Suspense fallback={null}>
+        <PrivacyPage />
+      </Suspense>
+    );
 
   if (loading) {
     return (
@@ -340,14 +364,20 @@ export default function App() {
         <div
           key={toast.id}
           className={`flex items-start gap-3 p-4 rounded-lg shadow-lg border backdrop-blur-sm animate-slide-in-right ${
-            toast.type === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
-            toast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-            'bg-blue-500/10 border-blue-500/30 text-blue-400'
+            toast.type === 'error'
+              ? 'bg-red-500/10 border-red-500/30 text-red-400'
+              : toast.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
           }`}
         >
-          {toast.type === 'error' ? <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
-           toast.type === 'success' ? <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" /> :
-           <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />}
+          {toast.type === 'error' ? (
+            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          ) : toast.type === 'success' ? (
+            <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          ) : (
+            <Info className="w-5 h-5 flex-shrink-0 mt-0.5" />
+          )}
           <p className="text-sm flex-1">{toast.message}</p>
           <button
             onClick={() => dismissToast(toast.id)}
@@ -363,7 +393,9 @@ export default function App() {
   if (!user) {
     return (
       <>
-        <Suspense fallback={null}><LoginPage onLogin={handleLogin} oauthLoading={oauthLoading} /></Suspense>
+        <Suspense fallback={null}>
+          <LoginPage onLogin={handleLogin} oauthLoading={oauthLoading} />
+        </Suspense>
         {toastContainer}
       </>
     );
@@ -390,16 +422,17 @@ export default function App() {
         loadProjects={loadProjects}
         loadSkills={loadSkills}
         loadMcpServers={loadMcpServers}
-        onAgentCreated={(agent) => setAgents(prev =>
-          prev.some(a => a.id === agent.id) ? prev : [...prev, agent]
-        )}
+        onAgentCreated={agent =>
+          setAgents(prev => (prev.some(a => a.id === agent.id) ? prev : [...prev, agent]))
+        }
       />
 
       {dbUnavailable && (
         <div className="fixed top-0 inset-x-0 z-[200] flex items-center gap-3 px-4 py-2.5 bg-amber-500/15 border-b border-amber-500/30 text-amber-300 text-sm">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           <span className="flex-1">
-            <strong>Database unavailable</strong> — agents and settings will not be persisted. Check your PostgreSQL connection.
+            <strong>Database unavailable</strong> — agents and settings will not be persisted. Check
+            your PostgreSQL connection.
           </span>
           <button onClick={() => setDbUnavailable(false)} className="opacity-60 hover:opacity-100">
             <X className="w-4 h-4" />
@@ -407,13 +440,21 @@ export default function App() {
         </div>
       )}
 
-      {(!user.impersonatedBy && (!user.termsAcceptedAt || !user.tutorialCompletedAt)) && (
+      {!user.impersonatedBy && (!user.termsAcceptedAt || !user.tutorialCompletedAt) && (
         <Suspense fallback={null}>
           <WelcomeTutorialModal
             needTerms={!user.termsAcceptedAt}
             needTutorial={!user.tutorialCompletedAt}
-            onTermsAccepted={() => setUser(prev => prev ? { ...prev, termsAcceptedAt: new Date().toISOString() } : prev)}
-            onTutorialCompleted={() => setUser(prev => prev ? { ...prev, tutorialCompletedAt: new Date().toISOString() } : prev)}
+            onTermsAccepted={() =>
+              setUser(prev =>
+                prev ? { ...prev, termsAcceptedAt: new Date().toISOString() } : prev
+              )
+            }
+            onTutorialCompleted={() =>
+              setUser(prev =>
+                prev ? { ...prev, tutorialCompletedAt: new Date().toISOString() } : prev
+              )
+            }
             onDeclineLogout={handleLogout}
             showToast={showToast}
           />

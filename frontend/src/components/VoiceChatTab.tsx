@@ -14,7 +14,7 @@ export default function VoiceChatTab({ agent }) {
   const events = isThisAgent ? voice.events : [];
 
   const handleConnect = () => {
-    voice.connect(agent.id).catch((err) => {
+    voice.connect(agent.id).catch(err => {
       console.error('Voice connect failed:', err);
     });
   };
@@ -22,7 +22,7 @@ export default function VoiceChatTab({ agent }) {
   const handleSwitchSession = () => {
     voice.disconnect();
     setTimeout(() => {
-      voice.connect(agent.id).catch((err) => {
+      voice.connect(agent.id).catch(err => {
         console.error('Voice reconnect after switch failed:', err);
       });
     }, 150);
@@ -32,7 +32,8 @@ export default function VoiceChatTab({ agent }) {
     <div className="flex h-full flex-col">
       <div className="flex flex-1 flex-col items-center justify-center gap-6 p-8">
         <div className="relative">
-          <div className={`
+          <div
+            className={`
             flex h-32 w-32 items-center justify-center rounded-full transition-all duration-300
             ${status === STATUS.LISTENING ? 'bg-emerald-500/20 ring-4 ring-emerald-500/40 animate-pulse' : ''}
             ${status === STATUS.SPEAKING ? 'bg-indigo-500/20 ring-4 ring-indigo-500/40' : ''}
@@ -41,7 +42,8 @@ export default function VoiceChatTab({ agent }) {
             ${status === STATUS.CONNECTED ? 'bg-dark-700 ring-2 ring-dark-500' : ''}
             ${status === STATUS.DISCONNECTED ? 'bg-dark-800 ring-2 ring-dark-600' : ''}
             ${status === STATUS.ERROR ? 'bg-red-500/20 ring-2 ring-red-500/40' : ''}
-          `}>
+          `}
+          >
             {status === STATUS.SPEAKING && (
               <>
                 <div className="absolute inset-0 rounded-full border-2 border-indigo-500/30 animate-ping" />
@@ -66,7 +68,9 @@ export default function VoiceChatTab({ agent }) {
               </>
             )}
 
-            {status === STATUS.CONNECTING && <Loader2 className="h-10 w-10 animate-spin text-dark-300" />}
+            {status === STATUS.CONNECTING && (
+              <Loader2 className="h-10 w-10 animate-spin text-dark-300" />
+            )}
             {status === STATUS.DISCONNECTED && <Mic className="h-10 w-10 text-dark-500" />}
             {status === STATUS.CONNECTED && <Mic className="h-10 w-10 text-dark-300" />}
             {status === STATUS.LISTENING && <Mic className="h-10 w-10 text-emerald-400" />}
@@ -87,26 +91,32 @@ export default function VoiceChatTab({ agent }) {
               </div>
             )}
 
-            {status === STATUS.DELEGATING && <Loader2 className="h-10 w-10 animate-spin text-amber-400" />}
+            {status === STATUS.DELEGATING && (
+              <Loader2 className="h-10 w-10 animate-spin text-amber-400" />
+            )}
             {status === STATUS.ERROR && <MicOff className="h-10 w-10 text-red-400" />}
           </div>
         </div>
 
         <div className="text-center">
-          <p className={`text-lg font-medium ${
-            status === STATUS.LISTENING ? 'text-emerald-400' :
-            status === STATUS.SPEAKING ? 'text-indigo-400' :
-            status === STATUS.DELEGATING ? 'text-amber-400' :
-            status === STATUS.ERROR ? 'text-red-400' :
-            'text-dark-300'
-          }`}>
+          <p
+            className={`text-lg font-medium ${
+              status === STATUS.LISTENING
+                ? 'text-emerald-400'
+                : status === STATUS.SPEAKING
+                  ? 'text-indigo-400'
+                  : status === STATUS.DELEGATING
+                    ? 'text-amber-400'
+                    : status === STATUS.ERROR
+                      ? 'text-red-400'
+                      : 'text-dark-300'
+            }`}
+          >
             {status === STATUS.DELEGATING
               ? `Delegating to ${delegationTarget}...`
               : STATUS_LABELS[status]}
           </p>
-          {error && (
-            <p className="mt-1 text-sm text-red-400/70">{error}</p>
-          )}
+          {error && <p className="mt-1 text-sm text-red-400/70">{error}</p>}
         </div>
 
         <div className="flex items-center gap-3">
@@ -158,7 +168,11 @@ export default function VoiceChatTab({ agent }) {
                 }`}
                 title={voice.speakerOff ? 'Activer le haut-parleur' : 'Couper le haut-parleur'}
               >
-                {voice.speakerOff ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+                {voice.speakerOff ? (
+                  <VolumeX className="h-5 w-5" />
+                ) : (
+                  <Volume2 className="h-5 w-5" />
+                )}
               </button>
 
               <button
@@ -188,12 +202,14 @@ export default function VoiceChatTab({ agent }) {
               <span className="whitespace-nowrap text-dark-500">
                 {evt.time.toLocaleTimeString()}
               </span>
-              <span className={`
+              <span
+                className={`
                 ${evt.type === 'error' ? 'text-red-400' : ''}
                 ${evt.type === 'delegation' ? 'text-amber-400' : ''}
                 ${evt.type === 'delegation-result' ? 'text-emerald-400' : ''}
                 ${evt.type === 'system' ? 'text-dark-400' : ''}
-              `}>
+              `}
+              >
                 {evt.text}
               </span>
             </div>

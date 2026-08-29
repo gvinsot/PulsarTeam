@@ -12,7 +12,11 @@ import { openWindow } from './window.js';
 import { bridge } from './bridge.js';
 
 async function shutdown(code = 0): Promise<void> {
-  try { await bridge.stop(); } catch { /* ignore */ }
+  try {
+    await bridge.stop();
+  } catch {
+    /* ignore */
+  }
   process.exit(code);
 }
 

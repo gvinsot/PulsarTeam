@@ -46,7 +46,7 @@ const categoryColors = {
   general: 'bg-dark-500/20 text-dark-300 border-dark-500/30',
 };
 
-export const getCategoryClass = (cat) => categoryColors[cat] || categoryColors.general;
+export const getCategoryClass = cat => categoryColors[cat] || categoryColors.general;
 
 // Category filter pill row shared by the agent + board plugin surfaces.
 export function CategoryFilterPills({ categories, value, onChange }) {
@@ -73,7 +73,13 @@ export function CategoryFilterPills({ categories, value, onChange }) {
 // `badges` renders between the category badge and the MCP-count badge;
 // `extraActions` renders before the remove button; `connectorProps` is
 // spread onto each connector widget ({agentId|boardId, onStatusChange}).
-export function AssignedPluginCard({ plugin, badges, extraActions, onRemove, connectorProps }: {
+export function AssignedPluginCard({
+  plugin,
+  badges,
+  extraActions,
+  onRemove,
+  connectorProps,
+}: {
   plugin: any;
   badges?: any;
   extraActions?: any;
@@ -89,7 +95,9 @@ export function AssignedPluginCard({ plugin, badges, extraActions, onRemove, con
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-dark-200">{plugin.name}</span>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
+            <span
+              className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}
+            >
               {plugin.category}
             </span>
             {badges}
@@ -114,12 +122,7 @@ export function AssignedPluginCard({ plugin, badges, extraActions, onRemove, con
         <div className="px-3 pb-3 space-y-2">
           {connectorMcpIds.map(mcpId => {
             const Connector = MCP_CONNECTOR_MAP[mcpId];
-            return (
-              <Connector
-                key={mcpId}
-                {...connectorProps}
-              />
-            );
+            return <Connector key={mcpId} {...connectorProps} />;
           })}
         </div>
       )}
@@ -130,7 +133,13 @@ export function AssignedPluginCard({ plugin, badges, extraActions, onRemove, con
 // Available-plugin row. Badge slots keep DOM order configurable:
 // `beforeMcpBadges` renders between the category badge and the MCP-count
 // badge, `afterMcpBadges` after it.
-export function AvailablePluginRow({ plugin, beforeMcpBadges, afterMcpBadges, onAdd, addLabel = 'Add' }: {
+export function AvailablePluginRow({
+  plugin,
+  beforeMcpBadges,
+  afterMcpBadges,
+  onAdd,
+  addLabel = 'Add',
+}: {
   plugin: any;
   beforeMcpBadges?: any;
   afterMcpBadges?: any;
@@ -143,7 +152,9 @@ export function AvailablePluginRow({ plugin, beforeMcpBadges, afterMcpBadges, on
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-medium text-dark-300">{plugin.name}</span>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}>
+          <span
+            className={`text-[10px] px-1.5 py-0.5 rounded-full border ${getCategoryClass(plugin.category)}`}
+          >
             {plugin.category}
           </span>
           {beforeMcpBadges}

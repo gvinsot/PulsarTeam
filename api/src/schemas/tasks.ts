@@ -23,13 +23,20 @@ export const updateTaskSchema = z.object({
   recurrence: z.any().optional(),
   repoFullName: optionalString(300),
   repoProvider: optionalString(50),
-  secondaryRepos: z.array(z.union([
-    z.string().max(300),
-    z.object({
-      provider: z.string().max(50).optional(),
-      fullName: z.string().max(300),
-    }).passthrough(),
-  ])).max(10).optional(),
+  secondaryRepos: z
+    .array(
+      z.union([
+        z.string().max(300),
+        z
+          .object({
+            provider: z.string().max(50).optional(),
+            fullName: z.string().max(300),
+          })
+          .passthrough(),
+      ])
+    )
+    .max(10)
+    .optional(),
   storagePath: optionalString(500),
   storageProvider: optionalString(50),
 });

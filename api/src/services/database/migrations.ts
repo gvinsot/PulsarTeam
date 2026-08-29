@@ -26,7 +26,7 @@ function sqlMigration(id: string, name: string, statements: string[]): Migration
     id,
     name,
     fingerprint: statements.join('\n'),
-    up: (db) => runStatements(db, statements),
+    up: db => runStatements(db, statements),
   };
 }
 
@@ -117,8 +117,9 @@ const MIGRATIONS: Migration[] = [
   {
     id: '202607010001_remove_legacy_default_boards',
     name: 'remove legacy Default boards',
-    fingerprint: 'DROP INDEX uniq_boards_default; remove boards where is_default=true or name=Default; detach dependent rows',
-    up: async (db) => {
+    fingerprint:
+      'DROP INDEX uniq_boards_default; remove boards where is_default=true or name=Default; detach dependent rows',
+    up: async db => {
       await db.query('DROP INDEX IF EXISTS uniq_boards_default');
       await removeLegacyDefaultBoards(db);
     },
@@ -169,7 +170,9 @@ export async function runMigrations(pool: any, migrations: Migration[] = MIGRATI
 
     console.log('✅ Database migrations ready');
   } finally {
-    await client.query('SELECT pg_advisory_unlock(hashtext($1))', [MIGRATION_LOCK_KEY]).catch(() => {});
+    await client
+      .query('SELECT pg_advisory_unlock(hashtext($1))', [MIGRATION_LOCK_KEY])
+      .catch(() => {});
     client.release();
   }
 }

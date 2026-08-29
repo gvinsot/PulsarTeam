@@ -23,7 +23,18 @@ import { encryptString, tryDecrypt } from '../../lib/crypto.js';
  * notification dropped or a replica started before a write still resolves.
  */
 
-export type OAuthProvider = 'gmail' | 'gdrive' | 'onedrive' | 'outlook' | 'slack' | 'github' | 'jira' | 's3' | 'wordpress' | 'claude_code' | 'codex';
+export type OAuthProvider =
+  | 'gmail'
+  | 'gdrive'
+  | 'onedrive'
+  | 'outlook'
+  | 'slack'
+  | 'github'
+  | 'jira'
+  | 's3'
+  | 'wordpress'
+  | 'claude_code'
+  | 'codex';
 export type ScopeType = 'agent' | 'board' | 'user';
 
 export interface OAuthTokenRecord {
@@ -46,7 +57,12 @@ function cacheKey(provider: string, scopeType: string, scopeId: string): string 
 const NOTIFY_CHANNEL = 'oauth_token_change';
 
 /** Fire a NOTIFY so every API replica sharing this DB refreshes its cache. */
-async function notifyTokenChange(provider: string, scopeType: string, scopeId: string, op: 'upsert' | 'delete'): Promise<void> {
+async function notifyTokenChange(
+  provider: string,
+  scopeType: string,
+  scopeId: string,
+  op: 'upsert' | 'delete'
+): Promise<void> {
   const pool = getPool();
   if (!pool) return;
   try {
@@ -60,7 +76,11 @@ async function notifyTokenChange(provider: string, scopeType: string, scopeId: s
 }
 
 /** Read one record straight from the DB (used as a fallback when the cache is cold/stale). */
-async function loadOAuthTokenFromDb(provider: OAuthProvider, scopeType: ScopeType, scopeId: string): Promise<OAuthTokenRecord | null> {
+async function loadOAuthTokenFromDb(
+  provider: OAuthProvider,
+  scopeType: ScopeType,
+  scopeId: string
+): Promise<OAuthTokenRecord | null> {
   const pool = getPool();
   if (!pool) return null;
   try {
@@ -153,13 +173,21 @@ export async function storeOAuthToken(
 }
 
 /** Get an OAuth token by (provider, scopeType, scopeId). */
-export function getOAuthToken(provider: OAuthProvider, scopeType: ScopeType, scopeId: string): OAuthTokenRecord | null {
+export function getOAuthToken(
+  provider: OAuthProvider,
+  scopeType: ScopeType,
+  scopeId: string
+): OAuthTokenRecord | null {
   const key = cacheKey(provider, scopeType, scopeId);
   return tokenCache.get(key) || null;
 }
 
 /** Check if a token exists and is not expired (or is refreshable for providers with refresh tokens). */
-export function hasOAuthToken(provider: OAuthProvider, scopeType: ScopeType, scopeId: string): boolean {
+export function hasOAuthToken(
+  provider: OAuthProvider,
+  scopeType: ScopeType,
+  scopeId: string
+): boolean {
   const token = getOAuthToken(provider, scopeType, scopeId);
   if (!token) return false;
   if (!token.expiresAt) return true; // non-expiring tokens (Slack, GitHub)
@@ -168,7 +196,11 @@ export function hasOAuthToken(provider: OAuthProvider, scopeType: ScopeType, sco
 }
 
 /** Delete an OAuth token. */
-export async function deleteOAuthToken(provider: OAuthProvider, scopeType: ScopeType, scopeId: string): Promise<void> {
+export async function deleteOAuthToken(
+  provider: OAuthProvider,
+  scopeType: ScopeType,
+  scopeId: string
+): Promise<void> {
   const key = cacheKey(provider, scopeType, scopeId);
   tokenCache.delete(key);
 
@@ -187,7 +219,10 @@ export async function deleteOAuthToken(provider: OAuthProvider, scopeType: Scope
 }
 
 /** Delete all tokens for a given scope (e.g., when deleting an agent or board). */
-export async function deleteOAuthTokensByScope(scopeType: ScopeType, scopeId: string): Promise<void> {
+export async function deleteOAuthTokensByScope(
+  scopeType: ScopeType,
+  scopeId: string
+): Promise<void> {
   const affectedProviders: string[] = [];
   for (const [key, record] of tokenCache) {
     if (key.includes(`:${scopeType}:${scopeId}`)) {
@@ -200,15 +235,18 @@ export async function deleteOAuthTokensByScope(scopeType: ScopeType, scopeId: st
   if (!pool) return;
 
   try {
-    await pool.query(
-      'DELETE FROM oauth_tokens WHERE scope_type = $1 AND scope_id = $2',
-      [scopeType, scopeId]
-    );
+    await pool.query('DELETE FROM oauth_tokens WHERE scope_type = $1 AND scope_id = $2', [
+      scopeType,
+      scopeId,
+    ]);
     for (const provider of affectedProviders) {
       await notifyTokenChange(provider, scopeType, scopeId, 'delete');
     }
   } catch (err) {
-    console.error(`[OAuthStore] Failed to delete tokens for ${scopeType}:${scopeId}:`, (err as Error).message);
+    console.error(
+      `[OAuthStore] Failed to delete tokens for ${scopeType}:${scopeId}:`,
+      (err as Error).message
+    );
   }
 }
 
@@ -281,7 +319,10 @@ export async function resolveOAuthTokenRecord(
               tokenCache.set(cacheKey(token.provider, token.scopeType, token.scopeId), token);
             }
           } catch (err) {
-            console.error('[OAuthStore] resolveAccessToken user-scope DB fallback failed:', (err as Error).message);
+            console.error(
+              '[OAuthStore] resolveAccessToken user-scope DB fallback failed:',
+              (err as Error).message
+            );
           }
         }
       }
@@ -355,11 +396,16 @@ export async function loadOAuthTokens(): Promise<void> {
         tokenCache.set(key, record);
       } catch (err) {
         skipped++;
-        console.error(`[OAuthStore] Skipping token ${row.provider}:${row.scope_type}:${row.scope_id}:`, (err as Error).message);
+        console.error(
+          `[OAuthStore] Skipping token ${row.provider}:${row.scope_type}:${row.scope_id}:`,
+          (err as Error).message
+        );
       }
     }
     if (skipped > 0) {
-      console.warn(`[OAuthStore] ${skipped} token(s) skipped: undecryptable with the current ENCRYPTION_KEY`);
+      console.warn(
+        `[OAuthStore] ${skipped} token(s) skipped: undecryptable with the current ENCRYPTION_KEY`
+      );
     }
 
     if (tokenCache.size > 0) {
@@ -388,7 +434,12 @@ async function startOAuthTokenListener(): Promise<void> {
 
     client.on('notification', (msg: pg.Notification) => {
       if (msg.channel !== NOTIFY_CHANNEL || !msg.payload) return;
-      let payload: { provider: string; scopeType: string; scopeId: string; op: 'upsert' | 'delete' };
+      let payload: {
+        provider: string;
+        scopeType: string;
+        scopeId: string;
+        op: 'upsert' | 'delete';
+      };
       try {
         payload = JSON.parse(msg.payload);
       } catch {
@@ -402,17 +453,27 @@ async function startOAuthTokenListener(): Promise<void> {
         return;
       }
       // upsert: reload the affected key from DB (best effort)
-      loadOAuthTokenFromDb(payload.provider as OAuthProvider, payload.scopeType as ScopeType, payload.scopeId)
-        .then((rec) => {
+      loadOAuthTokenFromDb(
+        payload.provider as OAuthProvider,
+        payload.scopeType as ScopeType,
+        payload.scopeId
+      )
+        .then(rec => {
           if (rec) console.log(`[OAuthStore] cache refresh via NOTIFY: ${key}`);
         })
-        .catch(() => { /* already logged inside */ });
+        .catch(() => {
+          /* already logged inside */
+        });
     });
 
     client.on('error', (err: Error) => {
       console.error('[OAuthStore] LISTEN client error:', err.message);
       // Drop the dead handle; schedule reconnect.
-      try { client.release(true); } catch { /* ignore */ }
+      try {
+        client.release(true);
+      } catch {
+        /* ignore */
+      }
       _listenerClient = null;
       scheduleListenerReconnect();
     });
@@ -424,7 +485,11 @@ async function startOAuthTokenListener(): Promise<void> {
     // Return the checked-out client to the pool (destructively) — without this
     // every failed attempt leaks a client until the pool is exhausted. The
     // try/catch absorbs a double release when the 'error' handler already ran.
-    try { _listenerClient?.release(true); } catch { /* ignore */ }
+    try {
+      _listenerClient?.release(true);
+    } catch {
+      /* ignore */
+    }
     _listenerClient = null;
     scheduleListenerReconnect();
   }
@@ -434,7 +499,9 @@ function scheduleListenerReconnect(): void {
   if (_listenerReconnectTimer) return;
   _listenerReconnectTimer = setTimeout(() => {
     _listenerReconnectTimer = null;
-    startOAuthTokenListener().catch(() => { /* logged inside */ });
+    startOAuthTokenListener().catch(() => {
+      /* logged inside */
+    });
   }, 5000);
   // Don't keep the process alive just for this reconnect timer.
   _listenerReconnectTimer.unref?.();

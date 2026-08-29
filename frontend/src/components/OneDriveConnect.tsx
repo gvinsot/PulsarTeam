@@ -19,10 +19,12 @@ const ONEDRIVE_CONFIG: OAuthProviderConfig = {
   connectLabel: 'Connect with Microsoft',
   configuredHint: (
     <>
-      Set <code className="text-dark-400">MICROSOFT_CLIENT_ID</code> and <code className="text-dark-400">MICROSOFT_CLIENT_SECRET</code> — one Azure App serves OneDrive, Outlook, and Microsoft login.
+      Set <code className="text-dark-400">MICROSOFT_CLIENT_ID</code> and{' '}
+      <code className="text-dark-400">MICROSOFT_CLIENT_SECRET</code> — one Azure App serves
+      OneDrive, Outlook, and Microsoft login.
     </>
   ),
-  connectHint: (agentId) =>
+  connectHint: agentId =>
     agentId
       ? 'Click "Connect with Microsoft" to authorize this agent to access OneDrive files.'
       : 'Click "Connect with Microsoft" to authorize OneDrive access. A popup will open for Microsoft login.',
@@ -44,5 +46,12 @@ const ONEDRIVE_CONFIG: OAuthProviderConfig = {
 };
 
 export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
-  return <OAuthConnectWidget config={ONEDRIVE_CONFIG} agentId={agentId} boardId={boardId} onStatusChange={onStatusChange} />;
+  return (
+    <OAuthConnectWidget
+      config={ONEDRIVE_CONFIG}
+      agentId={agentId}
+      boardId={boardId}
+      onStatusChange={onStatusChange}
+    />
+  );
 }

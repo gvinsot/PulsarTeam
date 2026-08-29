@@ -21,11 +21,16 @@ const platform = process.platform;
 const outDir = path.join(root, 'release', platform);
 
 function copyDir(src, dst) {
-  if (!fs.existsSync(src)) { console.warn(`! missing (skipped): ${src}`); return false; }
+  if (!fs.existsSync(src)) {
+    console.warn(`! missing (skipped): ${src}`);
+    return false;
+  }
   fs.mkdirSync(dst, { recursive: true });
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
-    const s = path.join(src, e.name), d = path.join(dst, e.name);
-    if (e.isDirectory()) copyDir(s, d); else fs.copyFileSync(s, d);
+    const s = path.join(src, e.name),
+      d = path.join(dst, e.name);
+    if (e.isDirectory()) copyDir(s, d);
+    else fs.copyFileSync(s, d);
   }
   return true;
 }
@@ -35,7 +40,10 @@ function main() {
 
   // 1. Compiled app.
   const dist = path.join(root, 'dist');
-  if (!fs.existsSync(dist)) { console.error('Run `npm run build` first (no dist/).'); process.exit(1); }
+  if (!fs.existsSync(dist)) {
+    console.error('Run `npm run build` first (no dist/).');
+    process.exit(1);
+  }
   copyDir(dist, path.join(outDir, 'dist'));
 
   // 2. Built frontend bundle.

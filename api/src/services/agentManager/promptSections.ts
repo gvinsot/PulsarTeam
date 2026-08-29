@@ -26,7 +26,9 @@ export function agentRosterLines(agents: any[], excludeId: string): string[] {
     .map((a: any) => {
       const statusTag = ` [${a.status}]`;
       const projectTag = a.project ? ` [project: ${a.project}]` : ' [no project]';
-      const taskInfo = a.currentTask ? ` (working on: "${a.currentTask.slice(0, 60)}${a.currentTask.length > 60 ? '...' : ''}")` : '';
+      const taskInfo = a.currentTask
+        ? ` (working on: "${a.currentTask.slice(0, 60)}${a.currentTask.length > 60 ? '...' : ''}")`
+        : '';
       return `- ${a.name} (${a.role})${statusTag}${projectTag}${taskInfo}: ${a.description || 'No description'}`;
     });
 }
@@ -40,7 +42,7 @@ export function ragDocsSection(docs: any[], requireUrl: boolean): string {
   if (!Array.isArray(docs) || docs.length === 0) return '';
   let out = '\n\n--- Reference Documents ---\n';
   for (const doc of docs) {
-    const isUrl = requireUrl ? (doc.type === 'url' && doc.url) : doc.type === 'url';
+    const isUrl = requireUrl ? doc.type === 'url' && doc.url : doc.type === 'url';
     const label = isUrl ? `${doc.name} (source: ${doc.url})` : doc.name;
     out += `\n[${label}]:\n${doc.content}\n`;
   }
@@ -79,16 +81,15 @@ export function relevantTasksSection(
   rankedTasks: any[],
   totalActive: number,
   isActive: (status: string) => boolean,
-  overflowHint: (overflow: number) => string,
+  overflowHint: (overflow: number) => string
 ): string {
   if (!Array.isArray(rankedTasks) || rankedTasks.length === 0) return '';
   let out = `\n\n--- Relevant Tasks (${rankedTasks.length} of ${totalActive}) ---\n`;
   for (const task of rankedTasks) {
     const mark = isActive(task.status) ? '~' : '!';
     const text = String(task.text || '');
-    const truncated = text.length > TASK_TEXT_MAX_CHARS
-      ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…'
-      : text;
+    const truncated =
+      text.length > TASK_TEXT_MAX_CHARS ? text.slice(0, TASK_TEXT_MAX_CHARS).trimEnd() + '…' : text;
     out += `- [${mark}] (${task.id.slice(0, 8)}) ${truncated}\n`;
   }
   const overflow = totalActive - rankedTasks.length;

@@ -10,9 +10,17 @@
 // AgentManager instance (handlers do not rely on `this`).
 
 import {
-  saveAgent, searchAgentSkills, getAgentSkillById, saveAgentSkill, deleteAgentSkillFromDb,
-  getAllBoards, getBoardById, getTasksByStatusAndBoard, saveTaskToDb,
-  getTasksByAgent, getTaskByIdPrefix,
+  saveAgent,
+  searchAgentSkills,
+  getAgentSkillById,
+  saveAgentSkill,
+  deleteAgentSkillFromDb,
+  getAllBoards,
+  getBoardById,
+  getTasksByStatusAndBoard,
+  saveTaskToDb,
+  getTasksByAgent,
+  getTaskByIdPrefix,
 } from '../../database.js';
 import { getWorkflowForBoard } from '../../configManager.js';
 import { applyTaskUpdate } from '../../swarmApiMcp.js';
@@ -35,7 +43,12 @@ export type ToolHandler = (ctx: HandlerCtx) => Promise<any | null>;
  * history entry. `stampUpdatedAt` stamps task.updatedAt when no setTaskStatus
  * follows (recordTaskCompletion passes true; callers that move the task right
  * after can pass false since setTaskStatus stamps updatedAt itself). */
-export function appendTaskNote(task: any, agentName: string, note: string, stampUpdatedAt: boolean): void {
+export function appendTaskNote(
+  task: any,
+  agentName: string,
+  note: string,
+  stampUpdatedAt: boolean
+): void {
   const separator = '\n\n---\n';
   const detailBlock = `**[${agentName}]** ${note.trim()}`;
   task.text = (task.text || '') + separator + detailBlock;
@@ -56,7 +69,10 @@ export function appendTaskNote(task: any, agentName: string, note: string, stamp
  * mirrors the per-call difference: list_my_tasks try/catches per board (falling
  * back to the id), list_tasks lets a getBoardById throw bubble to its outer
  * catch. */
-async function resolveBoardNames(tasks: any[], swallowErrors: boolean): Promise<Record<string, string>> {
+async function resolveBoardNames(
+  tasks: any[],
+  swallowErrors: boolean
+): Promise<Record<string, string>> {
   const boardNames: Record<string, string> = {};
   for (const t of tasks as any[]) {
     const bid = (t as any).boardId;
@@ -65,7 +81,9 @@ async function resolveBoardNames(tasks: any[], swallowErrors: boolean): Promise<
         try {
           const board = await getBoardById(bid);
           boardNames[bid] = board?.name || bid;
-        } catch { boardNames[bid] = bid; }
+        } catch {
+          boardNames[bid] = bid;
+        }
       } else {
         const board = await getBoardById(bid);
         boardNames[bid] = board?.name || bid;
@@ -84,7 +102,7 @@ const handleReportError: ToolHandler = async ({ mgr, agent, agentId, call, strea
     agentName: agent.name,
     project: agent.project || null,
     description: errorDescription,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
   });
   if (streamCallback) {
     streamCallback(`\n\n🚨 **Error reported by ${agent.name}:** ${errorDescription}\n`);
@@ -94,7 +112,7 @@ const handleReportError: ToolHandler = async ({ mgr, agent, agentId, call, strea
     args: call.args,
     success: true,
     result: `Error reported: ${errorDescription}`,
-    isErrorReport: true
+    isErrorReport: true,
   };
 };
 
@@ -108,7 +126,7 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   const [taskId, rawStatus, comment, commits] = call.args;
   // Resolve DB-first (by id or unique prefix), regardless of owner.
   const found = await mgr._resolveTaskRef(taskId);
-  let task: any = found?.task || null;
+  const task: any = found?.task || null;
   const taskAgentId: string | null = found?.agentId ?? null;
 
   // Board-level task (no owner) → delegate to applyTaskUpdate, which owns the
@@ -126,30 +144,40 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
     if (r.ok) {
       const parts = [
         wantsStatusArg ? `moved to ${r.task?.status ?? rawStatus}` : null,
-        (comment || commits) ? 'marked finished' : null,
+        comment || commits ? 'marked finished' : null,
       ].filter(Boolean);
       return {
         tool: 'update_task',
         args: call.args,
         success: true,
         result: `Task "${String(r.task?.text ?? taskId).slice(0, 60)}" ${parts.join(' and ') || 'updated'}`,
-        isTerminal: (Boolean(r.completed) || wantsStatusArg) || undefined,
+        isTerminal: Boolean(r.completed) || wantsStatusArg || undefined,
       };
     }
     // applyTaskUpdate couldn't find/handle it either → a real not-found.
     const partial = await getTaskByIdPrefix(String(taskId).slice(0, 8));
-    const hint = partial ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?` : '';
-    return { tool: 'update_task', args: call.args, success: false, error: r.error || `Task not found: ${taskId}.${hint}` };
+    const hint = partial
+      ? ` Maybe you meant ${partial.id.slice(0, 8)} which is currently "${partial.status}"?`
+      : '';
+    return {
+      tool: 'update_task',
+      args: call.args,
+      success: false,
+      error: r.error || `Task not found: ${taskId}.${hint}`,
+    };
   }
 
   const hasStatus = Boolean(rawStatus && String(rawStatus).trim());
-  const hasCompletion = Boolean((comment && String(comment).trim()) || (commits && String(commits).trim()));
+  const hasCompletion = Boolean(
+    (comment && String(comment).trim()) || (commits && String(commits).trim())
+  );
   if (!hasStatus && !hasCompletion) {
     return {
       tool: 'update_task',
       args: call.args,
       success: false,
-      error: 'Provide a status and/or a comment. Use @update_task(taskId, status) to move it, or @update_task(taskId, status, "summary") to finish it.',
+      error:
+        'Provide a status and/or a comment. Use @update_task(taskId, status) to move it, or @update_task(taskId, status, "summary") to finish it.',
     };
   }
 
@@ -161,21 +189,43 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   let newStatus = rawStatus;
   if (hasStatus) {
     if (!task.boardId) {
-      return { tool: 'update_task', args: call.args, success: false, error: `Cannot update status: task ${task.id} is not bound to a board.` };
+      return {
+        tool: 'update_task',
+        args: call.args,
+        success: false,
+        error: `Cannot update status: task ${task.id} is not bound to a board.`,
+      };
     }
     let wf: any;
     try {
       wf = await getWorkflowForBoard(task.boardId);
     } catch (err: any) {
-      return { tool: 'update_task', args: call.args, success: false, error: `Cannot validate status: failed to load workflow for board ${task.boardId} (${err?.message || 'unknown error'}).` };
+      return {
+        tool: 'update_task',
+        args: call.args,
+        success: false,
+        error: `Cannot validate status: failed to load workflow for board ${task.boardId} (${err?.message || 'unknown error'}).`,
+      };
     }
     if (!wf?.columns?.length) {
-      return { tool: 'update_task', args: call.args, success: false, error: `Cannot update status: board ${task.boardId} has no workflow columns configured.` };
+      return {
+        tool: 'update_task',
+        args: call.args,
+        success: false,
+        error: `Cannot update status: board ${task.boardId} has no workflow columns configured.`,
+      };
     }
-    const match = wf.columns.find((c: any) => c.id.toLowerCase() === String(rawStatus).toLowerCase());
+    const match = wf.columns.find(
+      (c: any) => c.id.toLowerCase() === String(rawStatus).toLowerCase()
+    );
     if (!match) {
       const validIds = wf.columns.map((c: any) => c.id).join(', ');
-      return { tool: 'update_task', args: call.args, success: false, error: `Invalid status "${rawStatus}" for this task's board. Valid columns: ${validIds}.` };
+      return {
+        tool: 'update_task',
+        args: call.args,
+        success: false,
+        error: `Invalid status "${rawStatus}" for this task's board. Valid columns: ${validIds}.`,
+      };
     }
     if (match.id !== rawStatus) {
       console.log(`[UpdateTask] Normalizing status "${rawStatus}" → "${match.id}"`);
@@ -203,28 +253,52 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   // Status move.
   let moved = false;
   if (hasStatus) {
-    const updated = await mgr.setTaskStatus(taskAgentId, task.id, newStatus, { skipAutoRefine: false, by: agent.name });
+    const updated = await mgr.setTaskStatus(taskAgentId, task.id, newStatus, {
+      skipAutoRefine: false,
+      by: agent.name,
+    });
     moved = Boolean(updated);
     if (!moved && !hasCompletion) {
-      return { tool: 'update_task', args: call.args, success: false, error: `Cannot move task to "${newStatus}" (blocked by guard or same status).` };
+      return {
+        tool: 'update_task',
+        args: call.args,
+        success: false,
+        error: `Cannot move task to "${newStatus}" (blocked by guard or same status).`,
+      };
     }
   }
-  console.log(`📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}"${hasStatus ? ` → ${newStatus}` : ''}${hasCompletion ? ' (finished)' : ''}`);
+  console.log(
+    `📋 [Task] Agent "${agent.name}" updated task "${task.text.slice(0, 50)}"${hasStatus ? ` → ${newStatus}` : ''}${hasCompletion ? ' (finished)' : ''}`
+  );
 
   // Stop the chat loop when the task is done: inside a workflow action mode
   // (decide, refine, …) any status change is terminal; a recorded completion is
   // terminal in any mode.
   const isWorkflowMode = Boolean(task.actionRunningMode);
   const isTerminal = (isWorkflowMode && hasStatus) || completed;
-  const parts = [hasStatus && moved ? `moved to ${newStatus}` : null, hasCompletion ? 'marked finished' : null].filter(Boolean);
-  return { tool: 'update_task', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" ${parts.join(' and ') || 'updated'}`, isTerminal: isTerminal || undefined };
+  const parts = [
+    hasStatus && moved ? `moved to ${newStatus}` : null,
+    hasCompletion ? 'marked finished' : null,
+  ].filter(Boolean);
+  return {
+    tool: 'update_task',
+    args: call.args,
+    success: true,
+    result: `Task "${task.text.slice(0, 60)}" ${parts.join(' and ') || 'updated'}`,
+    isTerminal: isTerminal || undefined,
+  };
 };
 
 // ── @move_task_to_board() ──
 const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   const [taskId, targetBoardId] = call.args;
   if (!taskId || !targetBoardId) {
-    return { tool: 'move_task_to_board', args: call.args, success: false, error: 'Both taskId and boardId are required. Use: @move_task_to_board(taskId, boardId)' };
+    return {
+      tool: 'move_task_to_board',
+      args: call.args,
+      success: false,
+      error: 'Both taskId and boardId are required. Use: @move_task_to_board(taskId, boardId)',
+    };
   }
   // Resolve the task DB-first so board-level tasks (agent_id = NULL, never in
   // the in-memory store) are addressable too. taskAgentId is the task's real
@@ -234,12 +308,22 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
   const task: any = moveFound?.task || null;
   const taskAgentId: string | null = moveFound?.agentId ?? null;
   if (!task) {
-    return { tool: 'move_task_to_board', args: call.args, success: false, error: `Task not found: ${taskId}` };
+    return {
+      tool: 'move_task_to_board',
+      args: call.args,
+      success: false,
+      error: `Task not found: ${taskId}`,
+    };
   }
   // Verify target board exists
   const targetBoard = await getBoardById(targetBoardId);
   if (!targetBoard) {
-    return { tool: 'move_task_to_board', args: call.args, success: false, error: `Board not found: ${targetBoardId}` };
+    return {
+      tool: 'move_task_to_board',
+      args: call.args,
+      success: false,
+      error: `Board not found: ${targetBoardId}`,
+    };
   }
   const oldBoardId = task.boardId;
   const oldStatus = task.status;
@@ -249,12 +333,14 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
     const hasStatus = targetBoard.workflow.columns.some((c: any) => c.id === task.status);
     if (!hasStatus && targetBoard.workflow.columns.length > 0) {
       const firstCol = targetBoard.workflow.columns[0].id;
-      console.log(`📋 [MoveBoard] Task status "${task.status}" not found in target board — resetting to "${firstCol}"`);
+      console.log(
+        `📋 [MoveBoard] Task status "${task.status}" not found in target board — resetting to "${firstCol}"`
+      );
       task.status = firstCol;
     }
   }
   const statusChanged = task.status !== oldStatus;
-  const previousAssignee = statusChanged ? (task.assignee || null) : null;
+  const previousAssignee = statusChanged ? task.assignee || null : null;
   if (previousAssignee) task.assignee = null;
   if (!task.history) task.history = [];
   task.history.push({
@@ -270,7 +356,12 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
   try {
     await saveTaskToDb({ ...task, agentId: taskAgentId });
   } catch (err: any) {
-    return { tool: 'move_task_to_board', args: call.args, success: false, error: `Failed to persist board move: ${err?.message || err}` };
+    return {
+      tool: 'move_task_to_board',
+      args: call.args,
+      success: false,
+      error: `Failed to persist board move: ${err?.message || err}`,
+    };
   }
   const ownerAgent = mgr.agents.get(taskAgentId);
   if (ownerAgent) {
@@ -287,15 +378,27 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
       assigneeIcon: assigneeAgent?.icon || null,
     },
   });
-  console.log(`📋 [MoveBoard] Agent "${agent.name}" moved task "${task.text.slice(0, 50)}" to board "${targetBoard.name}" (${targetBoardId})`);
-  return { tool: 'move_task_to_board', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" moved to board "${targetBoard.name}" (status: ${task.status})` };
+  console.log(
+    `📋 [MoveBoard] Agent "${agent.name}" moved task "${task.text.slice(0, 50)}" to board "${targetBoard.name}" (${targetBoardId})`
+  );
+  return {
+    tool: 'move_task_to_board',
+    args: call.args,
+    success: true,
+    result: `Task "${task.text.slice(0, 60)}" moved to board "${targetBoard.name}" (status: ${task.status})`,
+  };
 };
 
 // ── @delete_task() ──
 const handleDeleteTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   const taskId = (call.args[0] || '').trim();
   if (!taskId) {
-    return { tool: 'delete_task', args: call.args, success: false, error: 'Task ID is required. Use: @delete_task(taskId)' };
+    return {
+      tool: 'delete_task',
+      args: call.args,
+      success: false,
+      error: 'Task ID is required. Use: @delete_task(taskId)',
+    };
   }
   // Resolve DB-first so board-level tasks (agent_id = NULL) are deletable too.
   // deleteTask(null, id) already falls back to a DB soft-delete for those.
@@ -303,14 +406,31 @@ const handleDeleteTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
   const task: any = delFound?.task || null;
   const taskAgentId: string | null = delFound?.agentId ?? null;
   if (!task) {
-    return { tool: 'delete_task', args: call.args, success: false, error: `Task not found: ${taskId}` };
+    return {
+      tool: 'delete_task',
+      args: call.args,
+      success: false,
+      error: `Task not found: ${taskId}`,
+    };
   }
   const deleted = await mgr.deleteTask(taskAgentId, task.id);
   if (deleted) {
-    console.log(`🗑️ [DeleteTask] Agent "${agent.name}" deleted task "${task.text.slice(0, 50)}" (${task.id})`);
-    return { tool: 'delete_task', args: call.args, success: true, result: `Task "${task.text.slice(0, 60)}" (${task.id}) deleted successfully.` };
+    console.log(
+      `🗑️ [DeleteTask] Agent "${agent.name}" deleted task "${task.text.slice(0, 50)}" (${task.id})`
+    );
+    return {
+      tool: 'delete_task',
+      args: call.args,
+      success: true,
+      result: `Task "${task.text.slice(0, 60)}" (${task.id}) deleted successfully.`,
+    };
   }
-  return { tool: 'delete_task', args: call.args, success: false, error: `Failed to delete task: ${taskId}` };
+  return {
+    tool: 'delete_task',
+    args: call.args,
+    success: false,
+    error: `Failed to delete task: ${taskId}`,
+  };
 };
 
 // ── @list_boards() ──
@@ -326,7 +446,12 @@ const handleListBoards: ToolHandler = async ({ agent }) => {
       return `- **${b.name}** (${b.id})\n  Columns: ${cols}`;
     });
     console.log(`📋 [ListBoards] Agent "${agent.name}" listed ${boards.length} board(s)`);
-    return { tool: 'list_boards', args: [], success: true, result: `Found ${boards.length} board(s):\n\n${lines.join('\n\n')}` };
+    return {
+      tool: 'list_boards',
+      args: [],
+      success: true,
+      result: `Found ${boards.length} board(s):\n\n${lines.join('\n\n')}`,
+    };
   } catch (err: any) {
     return { tool: 'list_boards', args: [], success: false, error: err.message };
   }
@@ -372,9 +497,21 @@ const handleListTasks: ToolHandler = async ({ agent, call }) => {
     }
     const tasks = await getTasksByStatusAndBoard(statusFilter, boardFilter);
     if (tasks.length === 0) {
-      const filterDesc = [statusFilter ? `status="${statusFilter}"` : null, boardFilter ? `board="${boardFilter}"` : null].filter(Boolean).join(', ');
-      console.log(`📋 [ListTasks] Agent "${agent.name}" listed tasks (status=${statusFilter || 'all'}, board=${boardFilter || 'all'}) — ${tasks.length} result(s)`);
-      return { tool: 'list_tasks', args: call.args, success: true, result: `No tasks found${filterDesc ? ` matching ${filterDesc}` : ''}.` };
+      const filterDesc = [
+        statusFilter ? `status="${statusFilter}"` : null,
+        boardFilter ? `board="${boardFilter}"` : null,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      console.log(
+        `📋 [ListTasks] Agent "${agent.name}" listed tasks (status=${statusFilter || 'all'}, board=${boardFilter || 'all'}) — ${tasks.length} result(s)`
+      );
+      return {
+        tool: 'list_tasks',
+        args: call.args,
+        success: true,
+        result: `No tasks found${filterDesc ? ` matching ${filterDesc}` : ''}.`,
+      };
     }
     // Group by board for clarity (no try/catch — a throw fails the whole call).
     const boardName = await resolveBoardNames(tasks as any[], false);
@@ -383,9 +520,21 @@ const handleListTasks: ToolHandler = async ({ agent, call }) => {
       const assigneeInfo = t.assignee ? ` (assignee: ${t.assignee.slice(0, 8)})` : '';
       return `- [${t.status}] ${t.id.slice(0, 8)} — ${t.text.slice(0, 100)}${board}${assigneeInfo}`;
     });
-    const filterDesc = [statusFilter ? `status="${statusFilter}"` : null, boardFilter ? `board="${boardFilter}"` : null].filter(Boolean).join(', ');
-    console.log(`📋 [ListTasks] Agent "${agent.name}" listed tasks (status=${statusFilter || 'all'}, board=${boardFilter || 'all'}) — ${tasks.length} result(s)`);
-    return { tool: 'list_tasks', args: call.args, success: true, result: `Found ${tasks.length} task(s)${filterDesc ? ` matching ${filterDesc}` : ''}:\n\n${lines.join('\n')}` };
+    const filterDesc = [
+      statusFilter ? `status="${statusFilter}"` : null,
+      boardFilter ? `board="${boardFilter}"` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    console.log(
+      `📋 [ListTasks] Agent "${agent.name}" listed tasks (status=${statusFilter || 'all'}, board=${boardFilter || 'all'}) — ${tasks.length} result(s)`
+    );
+    return {
+      tool: 'list_tasks',
+      args: call.args,
+      success: true,
+      result: `Found ${tasks.length} task(s)${filterDesc ? ` matching ${filterDesc}` : ''}:\n\n${lines.join('\n')}`,
+    };
   } catch (err: any) {
     return { tool: 'list_tasks', args: call.args, success: false, error: err.message };
   }
@@ -397,7 +546,12 @@ const handleListProjects: ToolHandler = async ({ mgr }) => {
   if (projects.length === 0) {
     return { tool: 'list_projects', args: [], success: true, result: 'No projects found.' };
   }
-  return { tool: 'list_projects', args: [], success: true, result: `Available projects:\n${projects.join('\n')}` };
+  return {
+    tool: 'list_projects',
+    args: [],
+    success: true,
+    result: `Available projects:\n${projects.join('\n')}`,
+  };
 };
 
 // ── @list_my_tasks() ──
@@ -413,23 +567,47 @@ const handleListMyTasks: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
   const tasks = await getTasksByAgent(agentId);
   const taskHash = JSON.stringify(tasks.map((t: any) => `${t.id}:${t.status}`));
   if (now - lastCall < 60000 && agent._lastListMyTasksHash === taskHash) {
-    console.log(`[Dedup] Skipping @list_my_tasks from "${agent.name}" — unchanged since ${Math.round((now - lastCall) / 1000)}s ago`);
-    return { tool: 'list_my_tasks', args: [], success: true, result: '[Tasks unchanged since last check — focus on your current task]' };
+    console.log(
+      `[Dedup] Skipping @list_my_tasks from "${agent.name}" — unchanged since ${Math.round((now - lastCall) / 1000)}s ago`
+    );
+    return {
+      tool: 'list_my_tasks',
+      args: [],
+      success: true,
+      result: '[Tasks unchanged since last check — focus on your current task]',
+    };
   }
   agent._lastListMyTasks = now;
   agent._lastListMyTasksHash = taskHash;
   const header = `Agent: ${agent.name} | Project: ${agent.project || 'none'} | Status: ${agent.status}`;
   if (tasks.length === 0) {
-    return { tool: 'list_my_tasks', args: [], success: true, result: `${header}\nNo tasks assigned.` };
+    return {
+      tool: 'list_my_tasks',
+      args: [],
+      success: true,
+      result: `${header}\nNo tasks assigned.`,
+    };
   }
   // Resolve board names for display (per-board try/catch falls back to the id).
   const boardNames = await resolveBoardNames(tasks, true);
   const lines = tasks.map((t: any) => {
-    const icon = t.status === 'done' ? '[x]' : t.status === 'error' ? '[!]' : mgr._isActiveTaskStatus(t.status) ? '[~]' : '[ ]';
+    const icon =
+      t.status === 'done'
+        ? '[x]'
+        : t.status === 'error'
+          ? '[!]'
+          : mgr._isActiveTaskStatus(t.status)
+            ? '[~]'
+            : '[ ]';
     const boardInfo = t.boardId ? ` [Board: ${boardNames[t.boardId] || t.boardId}]` : '';
     return `${icon} ${t.id} — ${t.text}${boardInfo}`;
   });
-  return { tool: 'list_my_tasks', args: [], success: true, result: `${header}\n${lines.join('\n')}` };
+  return {
+    tool: 'list_my_tasks',
+    args: [],
+    success: true,
+    result: `${header}\n${lines.join('\n')}`,
+  };
 };
 
 // ── @check_status() ──
@@ -442,13 +620,22 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
   // Cross-turn dedup: skip if called recently (within 30s)
   const csNow = Date.now();
   if (csNow - (agent._lastCheckStatus || 0) < 30000) {
-    console.log(`[Dedup] Skipping @check_status from "${agent.name}" — called ${Math.round((csNow - agent._lastCheckStatus) / 1000)}s ago`);
-    return { tool: 'check_status', args: [], success: true, result: '[Status unchanged — focus on your current task]' };
+    console.log(
+      `[Dedup] Skipping @check_status from "${agent.name}" — called ${Math.round((csNow - agent._lastCheckStatus) / 1000)}s ago`
+    );
+    return {
+      tool: 'check_status',
+      args: [],
+      success: true,
+      result: '[Status unchanged — focus on your current task]',
+    };
   }
   agent._lastCheckStatus = csNow;
   const { AgentManager } = await import('../index.js');
   const todoList = await getTasksByAgent(agentId);
-  const waitingTasks = todoList.filter((t: any) => !mgr._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error').length;
+  const waitingTasks = todoList.filter(
+    (t: any) => !mgr._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error'
+  ).length;
   const activeCount = todoList.filter((t: any) => mgr._isActiveTaskStatus(t.status)).length;
   const doneTasks = todoList.filter((t: any) => t.status === 'done').length;
   const errorTasks = todoList.filter((t: any) => t.status === 'error').length;
@@ -464,9 +651,10 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
   const projectAssignedAt = agent.projectChangedAt
     ? new Date(agent.projectChangedAt).toLocaleString()
     : 'n/a';
-  const projectDurationMs = agent.project && agent.projectChangedAt
-    ? Date.now() - new Date(agent.projectChangedAt).getTime()
-    : null;
+  const projectDurationMs =
+    agent.project && agent.projectChangedAt
+      ? Date.now() - new Date(agent.projectChangedAt).getTime()
+      : null;
   const projectDuration = AgentManager.formatDuration(projectDurationMs);
   const agentLlm = mgr.resolveLlmConfig(agent);
 
@@ -493,7 +681,9 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
     if (activeTasks.length > 10) lines.push(`  ... and ${activeTasks.length - 10} more`);
   }
 
-  console.log(`📊 [Check Status] Agent "${agent.name}": ${agent.status} | project=${agent.project || 'none'} | task=${currentTaskInfo}`);
+  console.log(
+    `📊 [Check Status] Agent "${agent.name}": ${agent.status} | project=${agent.project || 'none'} | task=${currentTaskInfo}`
+  );
   return { tool: 'check_status', args: [], success: true, result: lines.join('\n') };
 };
 
@@ -501,20 +691,42 @@ const handleCheckStatus: ToolHandler = async ({ mgr, agent, agentId, dedup }) =>
 const handleSearchSkill: ToolHandler = async ({ agent, call }) => {
   const query = (call.args[0] || '').trim();
   if (!query) {
-    return { tool: 'search_skill', args: call.args, success: false, error: 'Search query is required. Use: @search_skill(keyword)' };
+    return {
+      tool: 'search_skill',
+      args: call.args,
+      success: false,
+      error: 'Search query is required. Use: @search_skill(keyword)',
+    };
   }
   try {
     const skills = await searchAgentSkills(query);
     if (skills.length === 0) {
-      console.log(`🔍 [Skill Search] Agent "${agent.name}" searched for "${query}" — ${skills.length} result(s)`);
-      return { tool: 'search_skill', args: call.args, success: true, result: `No skills found matching "${query}".` };
+      console.log(
+        `🔍 [Skill Search] Agent "${agent.name}" searched for "${query}" — ${skills.length} result(s)`
+      );
+      return {
+        tool: 'search_skill',
+        args: call.args,
+        success: true,
+        result: `No skills found matching "${query}".`,
+      };
     }
     const lines = skills.map((s: any) => {
-      const mcps = Array.isArray(s.mcpServerIds) && s.mcpServerIds.length > 0 ? ` [MCPs: ${s.mcpServerIds.join(', ')}]` : '';
+      const mcps =
+        Array.isArray(s.mcpServerIds) && s.mcpServerIds.length > 0
+          ? ` [MCPs: ${s.mcpServerIds.join(', ')}]`
+          : '';
       return `- **${s.name}** (${s.id})\n  Category: ${s.category || 'general'}${mcps}\n  ${s.description || 'No description'}\n  Created by: ${s.createdBy || 'unknown'} | Updated: ${s.updatedAt || 'unknown'} | Used: ${s.useCount || 0} times`;
     });
-    console.log(`🔍 [Skill Search] Agent "${agent.name}" searched for "${query}" — ${skills.length} result(s)`);
-    return { tool: 'search_skill', args: call.args, success: true, result: `Found ${skills.length} skill(s) matching "${query}":\n\n${lines.join('\n\n')}` };
+    console.log(
+      `🔍 [Skill Search] Agent "${agent.name}" searched for "${query}" — ${skills.length} result(s)`
+    );
+    return {
+      tool: 'search_skill',
+      args: call.args,
+      success: true,
+      result: `Found ${skills.length} skill(s) matching "${query}":\n\n${lines.join('\n\n')}`,
+    };
   } catch (err: any) {
     return { tool: 'search_skill', args: call.args, success: false, error: err.message };
   }
@@ -525,12 +737,20 @@ const handleCreateSkill: ToolHandler = async ({ agent, agentId, call }) => {
   const skillName = (call.args[0] || '').trim();
   const dataArg = call.args[1] || '{}';
   if (!skillName) {
-    return { tool: 'create_skill', args: call.args, success: false, error: 'Skill name is required. Use: @create_skill(name, """{"description": "...", "instructions": "...", "category": "...", "mcpServerIds": [...]}""")' };
+    return {
+      tool: 'create_skill',
+      args: call.args,
+      success: false,
+      error:
+        'Skill name is required. Use: @create_skill(name, """{"description": "...", "instructions": "...", "category": "...", "mcpServerIds": [...]}""")',
+    };
   }
   try {
     let parsed: any = {};
     if (typeof dataArg === 'string') {
-      try { parsed = JSON.parse(dataArg); } catch {
+      try {
+        parsed = JSON.parse(dataArg);
+      } catch {
         // If not valid JSON, treat the entire second arg as instructions
         parsed = { instructions: dataArg };
       }
@@ -552,8 +772,15 @@ const handleCreateSkill: ToolHandler = async ({ agent, agentId, call }) => {
       updatedAt: nowStr,
     };
     await saveAgentSkill(skill);
-    console.log(`✨ [Skill Create] Agent "${agent.name}" created skill "${skillName}" (${skillId})`);
-    return { tool: 'create_skill', args: call.args, success: true, result: `Skill created successfully:\n- ID: ${skillId}\n- Name: ${skillName}\n- Category: ${skill.category}\n- Description: ${skill.description || '(none)'}\n- MCPs: ${skill.mcpServerIds.length > 0 ? skill.mcpServerIds.join(', ') : 'none'}` };
+    console.log(
+      `✨ [Skill Create] Agent "${agent.name}" created skill "${skillName}" (${skillId})`
+    );
+    return {
+      tool: 'create_skill',
+      args: call.args,
+      success: true,
+      result: `Skill created successfully:\n- ID: ${skillId}\n- Name: ${skillName}\n- Category: ${skill.category}\n- Description: ${skill.description || '(none)'}\n- MCPs: ${skill.mcpServerIds.length > 0 ? skill.mcpServerIds.join(', ') : 'none'}`,
+    };
   } catch (err: any) {
     return { tool: 'create_skill', args: call.args, success: false, error: err.message };
   }
@@ -564,16 +791,29 @@ const handleUpdateSkill: ToolHandler = async ({ agent, call }) => {
   const skillId = (call.args[0] || '').trim();
   const dataArg = call.args[1] || '{}';
   if (!skillId) {
-    return { tool: 'update_skill', args: call.args, success: false, error: 'Skill ID is required. Use: @update_skill(skill-id, """{"instructions": "updated instructions", ...}""")' };
+    return {
+      tool: 'update_skill',
+      args: call.args,
+      success: false,
+      error:
+        'Skill ID is required. Use: @update_skill(skill-id, """{"instructions": "updated instructions", ...}""")',
+    };
   }
   try {
     const existing = await getAgentSkillById(skillId);
     if (!existing) {
-      return { tool: 'update_skill', args: call.args, success: false, error: `Skill not found: ${skillId}` };
+      return {
+        tool: 'update_skill',
+        args: call.args,
+        success: false,
+        error: `Skill not found: ${skillId}`,
+      };
     }
     let parsed: any = {};
     if (typeof dataArg === 'string') {
-      try { parsed = JSON.parse(dataArg); } catch {
+      try {
+        parsed = JSON.parse(dataArg);
+      } catch {
         // If not valid JSON, treat the entire second arg as updated instructions
         parsed = { instructions: dataArg };
       }
@@ -587,8 +827,19 @@ const handleUpdateSkill: ToolHandler = async ({ agent, call }) => {
     (existing as any).updatedAt = new Date().toISOString();
     (existing as any).lastUpdatedBy = agent.name;
     await saveAgentSkill(existing);
-    console.log(`📝 [Skill Update] Agent "${agent.name}" updated skill "${(existing as any).name}" (${skillId})`);
-    return { tool: 'update_skill', args: call.args, success: true, result: `Skill "${(existing as any).name}" (${skillId}) updated successfully.\nUpdated fields: ${Object.keys(parsed).filter(k => allowedFields.includes(k)).join(', ') || 'none'}` };
+    console.log(
+      `📝 [Skill Update] Agent "${agent.name}" updated skill "${(existing as any).name}" (${skillId})`
+    );
+    return {
+      tool: 'update_skill',
+      args: call.args,
+      success: true,
+      result: `Skill "${(existing as any).name}" (${skillId}) updated successfully.\nUpdated fields: ${
+        Object.keys(parsed)
+          .filter(k => allowedFields.includes(k))
+          .join(', ') || 'none'
+      }`,
+    };
   } catch (err: any) {
     return { tool: 'update_skill', args: call.args, success: false, error: err.message };
   }
@@ -598,16 +849,33 @@ const handleUpdateSkill: ToolHandler = async ({ agent, call }) => {
 const handleDeleteSkill: ToolHandler = async ({ agent, call }) => {
   const skillId = (call.args[0] || '').trim();
   if (!skillId) {
-    return { tool: 'delete_skill', args: call.args, success: false, error: 'Skill ID is required. Use: @delete_skill(skill-id)' };
+    return {
+      tool: 'delete_skill',
+      args: call.args,
+      success: false,
+      error: 'Skill ID is required. Use: @delete_skill(skill-id)',
+    };
   }
   try {
     const existing = await getAgentSkillById(skillId);
     if (!existing) {
-      return { tool: 'delete_skill', args: call.args, success: false, error: `Skill not found: ${skillId}` };
+      return {
+        tool: 'delete_skill',
+        args: call.args,
+        success: false,
+        error: `Skill not found: ${skillId}`,
+      };
     }
     await deleteAgentSkillFromDb(skillId);
-    console.log(`🗑️ [Skill Delete] Agent "${agent.name}" deleted skill "${(existing as any).name}" (${skillId})`);
-    return { tool: 'delete_skill', args: call.args, success: true, result: `Skill "${(existing as any).name}" (${skillId}) deleted successfully.` };
+    console.log(
+      `🗑️ [Skill Delete] Agent "${agent.name}" deleted skill "${(existing as any).name}" (${skillId})`
+    );
+    return {
+      tool: 'delete_skill',
+      args: call.args,
+      success: true,
+      result: `Skill "${(existing as any).name}" (${skillId}) deleted successfully.`,
+    };
   } catch (err: any) {
     return { tool: 'delete_skill', args: call.args, success: false, error: err.message };
   }
@@ -618,18 +886,22 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
   const [serverName, toolName, argsJson] = call.args;
 
   if (!serverName || !serverName.trim()) {
-    const errMsg = 'MCP call requires a server name. Use: @mcp_call(ServerName, tool_name, {"arg": "value"})';
+    const errMsg =
+      'MCP call requires a server name. Use: @mcp_call(ServerName, tool_name, {"arg": "value"})';
     return { tool: 'mcp_call', args: call.args, success: false, error: errMsg };
   }
   if (!toolName || !toolName.trim()) {
-    const errMsg = 'MCP call requires a tool name. Use: @mcp_call(ServerName, tool_name, {"arg": "value"})';
+    const errMsg =
+      'MCP call requires a tool name. Use: @mcp_call(ServerName, tool_name, {"arg": "value"})';
     return { tool: 'mcp_call', args: call.args, success: false, error: errMsg };
   }
 
   // ── Tool Hooks: check MCP calls ──
   const mcpHookResult = checkToolHooks(agent.toolHooks, 'mcp_call', call.args);
   if (!mcpHookResult.allowed) {
-    console.log(`🛡️ [ToolHook] Blocked mcp_call for agent "${agent.name}": ${mcpHookResult.message}`);
+    console.log(
+      `🛡️ [ToolHook] Blocked mcp_call for agent "${agent.name}": ${mcpHookResult.message}`
+    );
     if (streamCallback) streamCallback(`\n✗ mcp_call — blocked by security rule\n`);
     return { tool: 'mcp_call', args: call.args, success: false, error: mcpHookResult.message };
   }
@@ -644,7 +916,9 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
     try {
       const _board = await getBoardById(agent.boardId);
       if (_board && Array.isArray(_board.plugins)) _boardPluginIds = _board.plugins;
-    } catch { /* board may not exist */ }
+    } catch {
+      /* board may not exist */
+    }
   }
   for (const sid of new Set([..._agentSkillIds, ..._boardPluginIds])) {
     const plugin = mgr.skillManager ? mgr.skillManager.getById(sid) : null;
@@ -652,7 +926,7 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
       for (const mid of (plugin as any).mcpServerIds) _allowedMcpIds.add(mid);
     }
   }
-  for (const mid of (agent.mcpServers || [])) _allowedMcpIds.add(mid);
+  for (const mid of agent.mcpServers || []) _allowedMcpIds.add(mid);
 
   // Resolve the requested server name to a known id without triggering
   // builtin auto-registration (we don't want to "wake up" a server the
@@ -660,8 +934,14 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
   const _requestedNameLc = String(serverName).toLowerCase();
   let _resolvedServerId: string | null = null;
   for (const s of mgr.mcpManager.servers.values()) {
-    if (s.name && s.name.toLowerCase() === _requestedNameLc) { _resolvedServerId = s.id; break; }
-    if (s.id && s.id.toLowerCase() === _requestedNameLc) { _resolvedServerId = s.id; break; }
+    if (s.name && s.name.toLowerCase() === _requestedNameLc) {
+      _resolvedServerId = s.id;
+      break;
+    }
+    if (s.id && s.id.toLowerCase() === _requestedNameLc) {
+      _resolvedServerId = s.id;
+      break;
+    }
   }
   if (!_resolvedServerId) {
     const _builtin = findBuiltinMcpServer(serverName);
@@ -669,20 +949,38 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
   }
 
   if (!_resolvedServerId || !_allowedMcpIds.has(_resolvedServerId)) {
-    const errMsg = `MCP server "${serverName}" is not enabled for this agent. ` +
+    const errMsg =
+      `MCP server "${serverName}" is not enabled for this agent. ` +
       `The agent must have a plugin that provides this server in its own plugin list, ` +
       `or in the current board's plugin list. ` +
       `Do not call @mcp_call(${serverName}, ...) — this tool is not available in this run.`;
-    console.log(`🛡️ [MCP Gate] Blocked @mcp_call(${serverName}, ${toolName}) for agent "${agent.name}": server not in enabled plugin set`);
-    if (streamCallback) streamCallback(`\n✗ MCP: ${serverName} → ${toolName} — blocked: server not enabled for this agent\n`);
-    mgr._emit('agent:tool:error', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', error: errMsg });
+    console.log(
+      `🛡️ [MCP Gate] Blocked @mcp_call(${serverName}, ${toolName}) for agent "${agent.name}": server not in enabled plugin set`
+    );
+    if (streamCallback)
+      streamCallback(
+        `\n✗ MCP: ${serverName} → ${toolName} — blocked: server not enabled for this agent\n`
+      );
+    mgr._emit('agent:tool:error', {
+      agentId,
+      agentName: agent.name,
+      project: agent.project || null,
+      tool: 'mcp_call',
+      error: errMsg,
+    });
     return { tool: 'mcp_call', args: call.args, success: false, error: errMsg };
   }
 
   const mcpLabel = `MCP: ${serverName} → ${toolName}`;
   agent.currentThinking = mcpLabel;
   mgr._emit('agent:thinking', { agentId, thinking: mcpLabel });
-  mgr._emit('agent:tool:start', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', args: call.args });
+  mgr._emit('agent:tool:start', {
+    agentId,
+    agentName: agent.name,
+    project: agent.project || null,
+    tool: 'mcp_call',
+    args: call.args,
+  });
 
   try {
     let parsedArgs: any;
@@ -703,8 +1001,8 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
           (elided
             ? `You wrote "..." instead of the arguments object for ${toolName}. `
             : `You sent empty arguments for ${toolName}. `) +
-          `Re-send the call with the real JSON values — do NOT abbreviate. ` +
-          `Example: @mcp_call(${serverName}, ${toolName}, {"key": "actual-value"}).`
+            `Re-send the call with the real JSON values — do NOT abbreviate. ` +
+            `Example: @mcp_call(${serverName}, ${toolName}, {"key": "actual-value"}).`
         );
       }
 
@@ -717,41 +1015,71 @@ const handleMcpCall: ToolHandler = async ({ mgr, agent, agentId, call, streamCal
         fixed = fixed.replace(/'/g, '"');
         try {
           parsedArgs = JSON.parse(fixed);
-          console.log(`🔧 [MCP] Repaired malformed JSON for ${toolName}: ${argsJson.slice(0, 100)}`);
+          console.log(
+            `🔧 [MCP] Repaired malformed JSON for ${toolName}: ${argsJson.slice(0, 100)}`
+          );
         } catch (e2: any) {
-          throw new Error(`Invalid JSON arguments for ${toolName}: ${e2.message}. Received: ${argsJson.slice(0, 200)}`);
+          throw new Error(
+            `Invalid JSON arguments for ${toolName}: ${e2.message}. Received: ${argsJson.slice(0, 200)}`
+          );
         }
       }
 
       const vals = Object.values(parsedArgs);
-      const looksLikeSchema = vals.length > 0 && vals.every((v: any) =>
-        (typeof v === 'object' && v !== null && ('type' in v || 'title' in v || 'anyOf' in v)) ||
-        (typeof v === 'string' && /^<[^>]+>$/.test(v))
-      );
+      const looksLikeSchema =
+        vals.length > 0 &&
+        vals.every(
+          (v: any) =>
+            (typeof v === 'object' &&
+              v !== null &&
+              ('type' in v || 'title' in v || 'anyOf' in v)) ||
+            (typeof v === 'string' && /^<[^>]+>$/.test(v))
+        );
       if (looksLikeSchema) {
         const paramNames = Object.keys(parsedArgs);
         throw new Error(
           `You passed the schema definition instead of actual values. ` +
-          `Do NOT copy the type descriptions — pass real values. ` +
-          `Example: @mcp_call(${serverName}, ${toolName}, {${paramNames.map(p => `"${p}": "actual-value-here"`).join(', ')}})`
+            `Do NOT copy the type descriptions — pass real values. ` +
+            `Example: @mcp_call(${serverName}, ${toolName}, {${paramNames.map(p => `"${p}": "actual-value-here"`).join(', ')}})`
         );
       }
     } else {
       parsedArgs = argsJson || {};
     }
-    const mcpResult = await mgr.mcpManager.callToolByNameForAgent(serverName, toolName, parsedArgs, agentId, agent.mcpAuth || {}, agent.boardId || null);
+    const mcpResult = await mgr.mcpManager.callToolByNameForAgent(
+      serverName,
+      toolName,
+      parsedArgs,
+      agentId,
+      agent.mcpAuth || {},
+      agent.boardId || null
+    );
 
     if (streamCallback) {
       const icon = mcpResult.success ? '✓' : '✗';
       streamCallback(`\n${icon} ${mcpLabel}\n`);
     }
 
-    mgr._emit('agent:tool:result', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', args: call.args, success: mcpResult.success, preview: (mcpResult.result || '').slice(0, 300) });
+    mgr._emit('agent:tool:result', {
+      agentId,
+      agentName: agent.name,
+      project: agent.project || null,
+      tool: 'mcp_call',
+      args: call.args,
+      success: mcpResult.success,
+      preview: (mcpResult.result || '').slice(0, 300),
+    });
     return { tool: 'mcp_call', args: call.args, ...mcpResult };
   } catch (mcpErr: any) {
     console.error(`❌ [MCP] Agent "${agent.name}" mcp_call failed: ${mcpErr.message}`);
     if (streamCallback) streamCallback(`\n✗ ${mcpLabel}: ${mcpErr.message}\n`);
-    mgr._emit('agent:tool:error', { agentId, agentName: agent.name, project: agent.project || null, tool: 'mcp_call', error: mcpErr.message });
+    mgr._emit('agent:tool:error', {
+      agentId,
+      agentName: agent.name,
+      project: agent.project || null,
+      tool: 'mcp_call',
+      error: mcpErr.message,
+    });
     return { tool: 'mcp_call', args: call.args, success: false, error: mcpErr.message };
   }
 };

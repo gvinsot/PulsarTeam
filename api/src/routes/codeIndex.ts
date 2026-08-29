@@ -3,26 +3,29 @@ import path from 'path';
 import fs from 'fs/promises';
 import { z } from 'zod';
 
-const booleanQuerySchema = z
-  .union([z.boolean(), z.string()])
-  .transform((value, ctx) => {
-    if (typeof value === 'boolean') return value;
-    const normalized = value.toLowerCase().trim();
-    if (normalized === 'true') return true;
-    if (normalized === 'false') return false;
+const booleanQuerySchema = z.union([z.boolean(), z.string()]).transform((value, ctx) => {
+  if (typeof value === 'boolean') return value;
+  const normalized = value.toLowerCase().trim();
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
 
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Expected "true" or "false"',
-    });
-    return z.NEVER;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'Expected "true" or "false"',
   });
+  return z.NEVER;
+});
 
 const indexFolderSchema = z.object({
   path: z.string().min(1).max(5000),
   repoName: z.string().min(1).max(200).optional(),
   maxFiles: z.number().int().min(1).max(20000).optional(),
-  maxFileSize: z.number().int().min(1024).max(5 * 1024 * 1024).optional(),
+  maxFileSize: z
+    .number()
+    .int()
+    .min(1024)
+    .max(5 * 1024 * 1024)
+    .optional(),
 });
 
 const repoParamsSchema = z.object({
@@ -171,35 +174,49 @@ export function codeIndexRoutes(codeIndexService) {
   // Auto-index a project by name — looks up REPOS_BASE_DIR/projectName locally
   router.post('/index-project', async (req, res) => {
     const { projectName } = req.body || {};
-    if (!projectName) return res.status(400).json({ error: 'projectName required' });
+    if (!projectName) {
+      res.status(400).json({ error: 'projectName required' });
+      return;
+    }
 
     // Strict validation: only safe alphanumeric names, no path separators or traversal
     if (!/^[a-zA-Z0-9._-]{1,100}$/.test(projectName)) {
-      return res.status(400).json({ error: 'Invalid project name' });
+      res.status(400).json({ error: 'Invalid project name' });
+      return;
     }
 
     const reposBaseDir = process.env.REPOS_BASE_DIR;
-    if (!reposBaseDir) return res.status(400).json({ error: 'REPOS_BASE_DIR not configured on server' });
+    if (!reposBaseDir) {
+      res.status(400).json({ error: 'REPOS_BASE_DIR not configured on server' });
+      return;
+    }
 
     const resolvedBase = path.resolve(reposBaseDir);
     const folderPath = path.resolve(resolvedBase, projectName);
 
     // Guard against path traversal — ensure resolved path stays within REPOS_BASE_DIR
     if (!folderPath.startsWith(resolvedBase + path.sep) && folderPath !== resolvedBase) {
-      return res.status(403).json({ error: 'Access denied' });
+      res.status(403).json({ error: 'Access denied' });
+      return;
     }
 
     try {
       await fs.access(folderPath);
     } catch {
-      return res.status(404).json({ error: 'Project folder not found' });
+      res.status(404).json({ error: 'Project folder not found' });
+      return;
     }
 
     // Fire and forget — respond immediately, indexing runs in background
     res.json({ status: 'indexing', projectName });
-    codeIndexService.indexFolder({ folderPath, repoName: projectName })
-      .then(repo => console.log(`[Code Index] Auto-indexed "${projectName}": ${repo.filesIndexed} files`))
-      .catch(err => console.error(`[Code Index] Auto-index failed for "${projectName}":`, err.message));
+    codeIndexService
+      .indexFolder({ folderPath, repoName: projectName })
+      .then(repo =>
+        console.log(`[Code Index] Auto-indexed "${projectName}": ${repo.filesIndexed} files`)
+      )
+      .catch(err =>
+        console.error(`[Code Index] Auto-index failed for "${projectName}":`, err.message)
+      );
   });
 
   // Update specific files in an indexed repo (incremental re-index)
@@ -208,15 +225,21 @@ export function codeIndexRoutes(codeIndexService) {
       const params = repoParamsSchema.parse(req.params);
       const { files } = req.body || {};
       if (!Array.isArray(files) || files.length === 0) {
-        return res.status(400).json({ error: 'files array required (each entry: { path: string, content?: string })' });
+        res
+          .status(400)
+          .json({ error: 'files array required (each entry: { path: string, content?: string })' });
+        return;
       }
       if (files.length > 100) {
-        return res.status(400).json({ error: 'Maximum 100 files per update' });
+        res.status(400).json({ error: 'Maximum 100 files per update' });
+        return;
       }
-      const fileEntries = files.map(f => ({
-        path: String(f.path || ''),
-        ...(f.content !== undefined ? { content: String(f.content) } : {}),
-      })).filter(f => f.path);
+      const fileEntries = files
+        .map(f => ({
+          path: String(f.path || ''),
+          ...(f.content !== undefined ? { content: String(f.content) } : {}),
+        }))
+        .filter(f => f.path);
 
       const result = await codeIndexService.updateFiles(params.repoId, fileEntries);
       res.json(result);

@@ -1,6 +1,16 @@
 import { useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Activity, Cpu, Clock, TrendingUp, Zap, AlertTriangle, FolderOpen, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  Activity,
+  Cpu,
+  Clock,
+  TrendingUp,
+  Zap,
+  AlertTriangle,
+  FolderOpen,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { api } from '../api';
 
 function formatHours(ms) {
@@ -18,7 +28,8 @@ export default function SwarmOverview({ stats, agents }) {
   const activeProjects = new Set(agents.filter(a => a.project).map(a => a.project));
 
   useEffect(() => {
-    api.getGlobalAgentTime(30)
+    api
+      .getGlobalAgentTime(30)
       .then(data => setTotalHoursMs(data.totalMs || 0))
       .catch(() => setTotalHoursMs(0));
   }, []);
@@ -42,7 +53,9 @@ export default function SwarmOverview({ stats, agents }) {
         </button>
 
         {/* Stats grid - hidden on mobile when collapsed, always visible on sm+ */}
-        <div className={`${collapsed ? 'hidden' : 'grid'} sm:grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3`}>
+        <div
+          className={`${collapsed ? 'hidden' : 'grid'} sm:grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3`}
+        >
           <StatCard
             icon={<Cpu className="w-4 h-4" />}
             label="Total Agents"
@@ -77,7 +90,9 @@ export default function SwarmOverview({ stats, agents }) {
             value={activeProjects.size}
             color="text-sky-400"
             bgColor="bg-sky-500/10"
-            tooltip={activeProjects.size > 0 ? [...activeProjects].join(', ') : 'No projects assigned'}
+            tooltip={
+              activeProjects.size > 0 ? [...activeProjects].join(', ') : 'No projects assigned'
+            }
           />
           <StatCard
             icon={<Clock className="w-4 h-4" />}
@@ -100,7 +115,14 @@ export default function SwarmOverview({ stats, agents }) {
   );
 }
 
-function StatCard({ icon, label, value, color, bgColor, tooltip }: {
+function StatCard({
+  icon,
+  label,
+  value,
+  color,
+  bgColor,
+  tooltip,
+}: {
   icon: ReactNode;
   label: string;
   value: ReactNode;
@@ -109,7 +131,10 @@ function StatCard({ icon, label, value, color, bgColor, tooltip }: {
   tooltip?: string;
 }) {
   return (
-    <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-dark-800/50 border border-dark-700/50" title={tooltip || undefined}>
+    <div
+      className="flex items-center gap-3 px-3 py-2 rounded-lg bg-dark-800/50 border border-dark-700/50"
+      title={tooltip || undefined}
+    >
       <div className={`p-1.5 rounded-md ${bgColor}`}>
         <span className={color}>{icon}</span>
       </div>

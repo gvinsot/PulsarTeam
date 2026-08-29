@@ -2,9 +2,9 @@ import React from 'react';
 
 const SOURCE_META = {
   agent: { color: '#a855f7', label: name => `Agent: ${name}` },
-  user:  { color: '#3b82f6', label: (name) => name || 'User' },
-  api:   { color: '#6b7280', label: () => 'API' },
-  mcp:   { color: '#f97316', label: () => 'MCP' },
+  user: { color: '#3b82f6', label: name => name || 'User' },
+  api: { color: '#6b7280', label: () => 'API' },
+  mcp: { color: '#f97316', label: () => 'MCP' },
 };
 
 function SourceBadge({ source }) {
@@ -33,7 +33,7 @@ function SourceBadge({ source }) {
 const STATUS_META = {
   backlog: { label: 'Backlog', color: '#a855f7' },
   error: { label: 'Error', color: '#ef4444' },
-  done: { label: 'Completed', color: '#22c55e' }
+  done: { label: 'Completed', color: '#22c55e' },
 };
 
 function StatusBadge({ status }) {
@@ -50,7 +50,7 @@ function StatusBadge({ status }) {
         borderRadius: 999,
         background: `${meta.color}22`,
         color: meta.color,
-        border: `1px solid ${meta.color}55`
+        border: `1px solid ${meta.color}55`,
       }}
       title={`Task status: ${meta.label}`}
     >
@@ -60,7 +60,7 @@ function StatusBadge({ status }) {
           height: 7,
           borderRadius: '50%',
           background: meta.color,
-          display: 'inline-block'
+          display: 'inline-block',
         }}
       />
       {meta.label}
@@ -73,13 +73,16 @@ export default function TaskList({
   onToggleTask,
   onDeleteTask,
   onExecuteTask,
-  onExecuteAllTasks
+  onExecuteAllTasks,
 }) {
   const openCount = tasks.filter(t => t.status !== 'done').length;
 
   return (
     <div className="task-list">
-      <div className="task-list-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        className="task-list-header"
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
         <h4 style={{ margin: 0 }}>Workflows</h4>
         <button
           onClick={onExecuteAllTasks}
@@ -93,7 +96,9 @@ export default function TaskList({
       {tasks.length === 0 ? (
         <p style={{ opacity: 0.7, marginTop: 8 }}>No tasks yet.</p>
       ) : (
-        <ul style={{ listStyle: 'none', padding: 0, margin: '10px 0 0 0', display: 'grid', gap: 8 }}>
+        <ul
+          style={{ listStyle: 'none', padding: 0, margin: '10px 0 0 0', display: 'grid', gap: 8 }}
+        >
           {tasks.map(task => {
             const isDone = task.status === 'done';
             const isActive = !['done', 'error', 'backlog'].includes(task.status || 'backlog');
@@ -104,28 +109,44 @@ export default function TaskList({
                   border: '1px solid #2a2a2a',
                   borderRadius: 8,
                   padding: 10,
-                  background: '#111'
+                  background: '#111',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                  }}
+                >
                   <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                    >
                       <StatusBadge status={task.status} />
                       {task.project && (
-                        <span style={{
-                          fontSize: 11,
-                          fontWeight: 600,
-                          padding: '1px 6px',
-                          borderRadius: 4,
-                          background: '#6366f122',
-                          color: '#818cf8',
-                          border: '1px solid #6366f144'
-                        }}>
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 600,
+                            padding: '1px 6px',
+                            borderRadius: 4,
+                            background: '#6366f122',
+                            color: '#818cf8',
+                            border: '1px solid #6366f144',
+                          }}
+                        >
                           {task.project}
                         </span>
                       )}
                       <SourceBadge source={task.source} />
-                      <span style={{ textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.75 : 1 }}>
+                      <span
+                        style={{
+                          textDecoration: isDone ? 'line-through' : 'none',
+                          opacity: isDone ? 0.75 : 1,
+                        }}
+                      >
                         {task.title || task.text}
                       </span>
                     </div>

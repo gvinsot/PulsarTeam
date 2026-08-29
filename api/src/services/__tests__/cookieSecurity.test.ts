@@ -56,7 +56,9 @@ test('hardenCookie does not duplicate HttpOnly', () => {
 test('cookieSecurity middleware rewrites string Set-Cookie via setHeader', () => {
   const headers: Record<string, any> = {};
   const fakeRes: any = {
-    setHeader(name: string, value: any) { headers[name.toLowerCase()] = value; },
+    setHeader(name: string, value: any) {
+      headers[name.toLowerCase()] = value;
+    },
   };
   const fakeReq: any = {};
   cookieSecurity()(fakeReq, fakeRes, () => {});
@@ -69,7 +71,9 @@ test('cookieSecurity middleware rewrites string Set-Cookie via setHeader', () =>
 test('cookieSecurity middleware rewrites array Set-Cookie via setHeader', () => {
   const headers: Record<string, any> = {};
   const fakeRes: any = {
-    setHeader(name: string, value: any) { headers[name.toLowerCase()] = value; },
+    setHeader(name: string, value: any) {
+      headers[name.toLowerCase()] = value;
+    },
   };
   const fakeReq: any = {};
   cookieSecurity()(fakeReq, fakeRes, () => {});
@@ -84,7 +88,9 @@ test('cookieSecurity middleware rewrites array Set-Cookie via setHeader', () => 
 test('cookieSecurity middleware leaves non-cookie headers untouched', () => {
   const headers: Record<string, any> = {};
   const fakeRes: any = {
-    setHeader(name: string, value: any) { headers[name.toLowerCase()] = value; },
+    setHeader(name: string, value: any) {
+      headers[name.toLowerCase()] = value;
+    },
   };
   const fakeReq: any = {};
   cookieSecurity()(fakeReq, fakeRes, () => {});

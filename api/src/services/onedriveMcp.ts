@@ -14,7 +14,10 @@ const MAX_READ_BYTES = 5 * 1024 * 1024;
  */
 function encodePath(path) {
   const clean = path.startsWith('/') ? path.slice(1) : path;
-  return clean.split('/').map(segment => encodeURIComponent(segment)).join('/');
+  return clean
+    .split('/')
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
 }
 
 /**
@@ -36,7 +39,9 @@ const graphFetch = createProviderFetch({
 function formatItem(item) {
   const isFolder = !!item.folder;
   const size = item.size ? `${(item.size / 1024).toFixed(1)} KB` : '';
-  const modified = item.lastModifiedDateTime ? new Date(item.lastModifiedDateTime).toLocaleString() : '';
+  const modified = item.lastModifiedDateTime
+    ? new Date(item.lastModifiedDateTime).toLocaleString()
+    : '';
   return {
     name: item.name,
     id: item.id,
@@ -68,8 +73,15 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
     'list_files',
     'List files and folders in a OneDrive directory. Use path "/" for the root.',
     {
-      path: z.string().default('/').describe('Folder path in OneDrive (e.g. "/" or "/Documents/Projects")'),
-      top: z.number().optional().default(50).describe('Max number of items to return (default 50, max 200)'),
+      path: z
+        .string()
+        .default('/')
+        .describe('Folder path in OneDrive (e.g. "/" or "/Documents/Projects")'),
+      top: z
+        .number()
+        .optional()
+        .default(50)
+        .describe('Max number of items to return (default 50, max 200)'),
     },
     async ({ path, top }) => {
       const limit = Math.min(top || 50, 200);
@@ -84,13 +96,17 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const data = await graphFetch(endpoint, agentId, boardId);
       const items = (data.value || []).map(formatItem);
 
-      const summary = items.map(i => {
-        const icon = i.type === 'folder' ? '📁' : '📄';
-        const meta = i.type === 'folder' ? `${i.childCount ?? '?'} items` : i.size;
-        return `${icon} ${i.name} (${meta})`;
-      }).join('\n');
+      const summary = items
+        .map(i => {
+          const icon = i.type === 'folder' ? '📁' : '📄';
+          const meta = i.type === 'folder' ? `${i.childCount ?? '?'} items` : i.size;
+          return `${icon} ${i.name} (${meta})`;
+        })
+        .join('\n');
 
-      return text(`Found ${items.length} item(s) in "${path || '/'}":\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}`);
+      return text(
+        `Found ${items.length} item(s) in "${path || '/'}":\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}`
+      );
     }
   );
 
@@ -109,12 +125,16 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const data = await graphFetch(endpoint, agentId, boardId);
       const items = (data.value || []).map(formatItem);
 
-      const summary = items.map(i => {
-        const icon = i.type === 'folder' ? '📁' : '📄';
-        return `${icon} ${i.path} (${i.size})`;
-      }).join('\n');
+      const summary = items
+        .map(i => {
+          const icon = i.type === 'folder' ? '📁' : '📄';
+          return `${icon} ${i.path} (${i.size})`;
+        })
+        .join('\n');
 
-      return text(`Search "${query}" found ${items.length} result(s):\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}`);
+      return text(
+        `Search "${query}" found ${items.length} result(s):\n\n${summary}\n\n---\nJSON:\n${JSON.stringify(items, null, 2)}`
+      );
     }
   );
 
@@ -131,21 +151,35 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const mimeType = meta.file?.mimeType || '';
 
       // Check if file is text-readable
-      const textTypes = ['text/', 'application/json', 'application/xml', 'application/javascript', 'application/typescript', 'application/x-yaml', 'application/x-sh'];
+      const textTypes = [
+        'text/',
+        'application/json',
+        'application/xml',
+        'application/javascript',
+        'application/typescript',
+        'application/x-yaml',
+        'application/x-sh',
+      ];
       const isText = textTypes.some(t => mimeType.startsWith(t)) || mimeType === '';
 
       if (!meta.folder && meta.size > MAX_READ_BYTES) {
         const dest = meta['@microsoft.graph.downloadUrl'] || meta.webUrl;
         if (!isText) {
-          return text(`File "${meta.name}" is a binary file (${mimeType}, ${(meta.size / 1024).toFixed(1)} KB). Download URL: ${dest}`);
+          return text(
+            `File "${meta.name}" is a binary file (${mimeType}, ${(meta.size / 1024).toFixed(1)} KB). Download URL: ${dest}`
+          );
         }
-        return text(`File "${meta.name}" is too large to read directly (${(meta.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_READ_BYTES / 1024 / 1024} MB). Use the download URL instead: ${dest}`);
+        return text(
+          `File "${meta.name}" is too large to read directly (${(meta.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_READ_BYTES / 1024 / 1024} MB). Use the download URL instead: ${dest}`
+        );
       }
 
       // Download content
       const downloadUrl = meta['@microsoft.graph.downloadUrl'];
       if (!downloadUrl) {
-        return text(`Cannot read "${meta.name}": no download URL available. Web URL: ${meta.webUrl}`);
+        return text(
+          `Cannot read "${meta.name}": no download URL available. Web URL: ${meta.webUrl}`
+        );
       }
 
       const response = await fetch(downloadUrl, { signal: AbortSignal.timeout(120_000) });
@@ -158,7 +192,9 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       // absent, and an unbounded read of a huge file would blow up the heap.
       const content = (await readBodyCapped(response, MAX_READ_BYTES)).toString('utf8');
 
-      return text(`File: ${meta.name}\nSize: ${(meta.size / 1024).toFixed(1)} KB\nType: ${mimeType}\nModified: ${meta.lastModifiedDateTime}\n\n--- Content ---\n${content}`);
+      return text(
+        `File: ${meta.name}\nSize: ${(meta.size / 1024).toFixed(1)} KB\nType: ${mimeType}\nModified: ${meta.lastModifiedDateTime}\n\n--- Content ---\n${content}`
+      );
     }
   );
 
@@ -173,7 +209,9 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const meta = await graphFetch(`/me/drive/root:/${encodePath(path)}`, agentId, boardId);
       const info = formatItem(meta);
 
-      return text(`File info for "${path}":\n${JSON.stringify(info, null, 2)}\n\nFull metadata:\n${JSON.stringify(meta, null, 2)}`);
+      return text(
+        `File info for "${path}":\n${JSON.stringify(info, null, 2)}\n\nFull metadata:\n${JSON.stringify(meta, null, 2)}`
+      );
     }
   );
 
@@ -202,7 +240,9 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         }),
       });
 
-      return text(`Folder "${name}" created successfully in "${parentPath}".\nID: ${result.id}\nWeb URL: ${result.webUrl}`);
+      return text(
+        `Folder "${name}" created successfully in "${parentPath}".\nID: ${result.id}\nWeb URL: ${result.webUrl}`
+      );
     }
   );
 
@@ -234,7 +274,9 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       }
 
       const result = await res.json();
-      return text(`File uploaded to "${path}".\nID: ${result.id}\nSize: ${(result.size / 1024).toFixed(1)} KB\nWeb URL: ${result.webUrl}`);
+      return text(
+        `File uploaded to "${path}".\nID: ${result.id}\nSize: ${(result.size / 1024).toFixed(1)} KB\nWeb URL: ${result.webUrl}`
+      );
     }
   );
 
@@ -270,7 +312,10 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
     'Create a sharing link for a file or folder in OneDrive.',
     {
       path: z.string().describe('Path of the file or folder'),
-      type: z.enum(['view', 'edit']).default('view').describe('Link type: "view" (read-only) or "edit" (read-write)'),
+      type: z
+        .enum(['view', 'edit'])
+        .default('view')
+        .describe('Link type: "view" (read-only) or "edit" (read-write)'),
     },
     async ({ path, type }) => {
       const result = await graphFetch(
@@ -286,7 +331,9 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         }
       );
 
-      return text(`Share link for "${path}" (${type}):\n${result.link?.webUrl || JSON.stringify(result)}`);
+      return text(
+        `Share link for "${path}" (${type}):\n${result.link?.webUrl || JSON.stringify(result)}`
+      );
     }
   );
 
@@ -303,15 +350,18 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const pct = total > 0 ? ((used / total) * 100).toFixed(1) : '?';
 
       return {
-        content: [{
-          type: 'text',
-          text: `OneDrive Info:\n` +
-            `Owner: ${drive.owner?.user?.displayName || 'Unknown'}\n` +
-            `Drive Type: ${drive.driveType}\n` +
-            `Storage: ${(used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(total / 1024 / 1024 / 1024).toFixed(2)} GB (${pct}%)\n` +
-            `Remaining: ${((total - used) / 1024 / 1024 / 1024).toFixed(2)} GB\n` +
-            `State: ${drive.quota?.state || 'unknown'}`
-        }],
+        content: [
+          {
+            type: 'text',
+            text:
+              `OneDrive Info:\n` +
+              `Owner: ${drive.owner?.user?.displayName || 'Unknown'}\n` +
+              `Drive Type: ${drive.driveType}\n` +
+              `Storage: ${(used / 1024 / 1024 / 1024).toFixed(2)} GB / ${(total / 1024 / 1024 / 1024).toFixed(2)} GB (${pct}%)\n` +
+              `Remaining: ${((total - used) / 1024 / 1024 / 1024).toFixed(2)} GB\n` +
+              `State: ${drive.quota?.state || 'unknown'}`,
+          },
+        ],
       };
     }
   );
@@ -326,5 +376,6 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
  */
 export function createOneDriveMcpHandler() {
   return createMcpHttpHandler('OneDrive', ({ agentId, boardId }) =>
-    createOneDriveMcpServer(agentId, boardId));
+    createOneDriveMcpServer(agentId, boardId)
+  );
 }

@@ -34,7 +34,8 @@ function makeValidator(target: ValidationTarget) {
     const handler = (req: Request, res: Response, next: NextFunction) => {
       const result = schema.safeParse((req as any)[target]);
       if (!result.success) {
-        return res.status(400).json(formatZodError(result.error));
+        res.status(400).json(formatZodError(result.error));
+        return;
       }
       // Replace the original input with the parsed value so coercions /
       // defaults / strips take effect for the rest of the chain.

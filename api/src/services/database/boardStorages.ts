@@ -19,13 +19,18 @@ function rowToStorage(row: any): DerivedStorage {
 }
 
 /** Distinct storages in use by non-deleted tasks across accessible boards of one project. */
-export async function getStoragesForProject(projectId: string, userId: string | null, role: string): Promise<DerivedStorage[]> {
+export async function getStoragesForProject(
+  projectId: string,
+  userId: string | null,
+  role: string
+): Promise<DerivedStorage[]> {
   const pool = getPool();
   if (!pool) return [];
   if (role !== 'admin' && !userId) return [];
-  const accessFilter = role === 'admin'
-    ? ''
-    : ` AND (
+  const accessFilter =
+    role === 'admin'
+      ? ''
+      : ` AND (
           b.user_id = $2
           OR EXISTS (
             SELECT 1 FROM board_shares bs

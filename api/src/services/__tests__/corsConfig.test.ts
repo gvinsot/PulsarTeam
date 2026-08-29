@@ -27,13 +27,16 @@ function withEnv<T>(vars: Record<string, string | undefined>, fn: () => T): T {
 }
 
 test('getCorsOrigins parses a comma-separated list and trims whitespace', () => {
-  withEnv({ CORS_ORIGINS: 'https://a.example.com, https://b.example.com ,https://c.example.com' }, () => {
-    assert.deepEqual(getCorsOrigins(), [
-      'https://a.example.com',
-      'https://b.example.com',
-      'https://c.example.com',
-    ]);
-  });
+  withEnv(
+    { CORS_ORIGINS: 'https://a.example.com, https://b.example.com ,https://c.example.com' },
+    () => {
+      assert.deepEqual(getCorsOrigins(), [
+        'https://a.example.com',
+        'https://b.example.com',
+        'https://c.example.com',
+      ]);
+    }
+  );
 });
 
 test('getCorsOrigins falls back to localhost defaults when CORS_ORIGINS is unset', () => {
@@ -65,7 +68,10 @@ test('isOriginAllowed is case-sensitive on host (RFC 6454 origins are normalised
 
 test('buildCorsOptions origin callback allows listed origin', () => {
   const opts = buildCorsOptions(['https://app.example.com']);
-  const origin = opts.origin as (o: string | undefined, cb: (e: Error | null, allow?: boolean) => void) => void;
+  const origin = opts.origin as (
+    o: string | undefined,
+    cb: (e: Error | null, allow?: boolean) => void
+  ) => void;
   origin('https://app.example.com', (err, allow) => {
     assert.equal(err, null);
     assert.equal(allow, true);
@@ -75,7 +81,10 @@ test('buildCorsOptions origin callback allows listed origin', () => {
 test('buildCorsOptions origin callback rejects unlisted origin without throwing', () => {
   _resetRejectionLogCache();
   const opts = buildCorsOptions(['https://app.example.com']);
-  const origin = opts.origin as (o: string | undefined, cb: (e: Error | null, allow?: boolean) => void) => void;
+  const origin = opts.origin as (
+    o: string | undefined,
+    cb: (e: Error | null, allow?: boolean) => void
+  ) => void;
   origin('https://evil.example.com', (err, allow) => {
     // The cors package convention: signal "no CORS headers" with (null, false),
     // not by passing an Error. Errors would short-circuit the request entirely.
@@ -93,7 +102,9 @@ test('logRejectedOrigin deduplicates within a one-minute window', () => {
   _resetRejectionLogCache();
   const captured: string[] = [];
   const orig = console.warn;
-  console.warn = (msg?: any) => { captured.push(String(msg)); };
+  console.warn = (msg?: any) => {
+    captured.push(String(msg));
+  };
   try {
     logRejectedOrigin('https://noisy.example.com', 'http');
     logRejectedOrigin('https://noisy.example.com', 'http');
@@ -109,7 +120,9 @@ test('logRejectedOrigin emits separate entries for distinct origins', () => {
   _resetRejectionLogCache();
   const captured: string[] = [];
   const orig = console.warn;
-  console.warn = (msg?: any) => { captured.push(String(msg)); };
+  console.warn = (msg?: any) => {
+    captured.push(String(msg));
+  };
   try {
     logRejectedOrigin('https://a.example.com', 'http');
     logRejectedOrigin('https://b.example.com', 'ws');
@@ -125,7 +138,9 @@ test('validateCorsConfig in dev only warns on wildcard, does not exit', () => {
   withEnv({ CORS_ORIGINS: '*', NODE_ENV: 'development' }, () => {
     const warned: string[] = [];
     const orig = console.warn;
-    console.warn = (msg?: any) => { warned.push(String(msg)); };
+    console.warn = (msg?: any) => {
+      warned.push(String(msg));
+    };
     try {
       // Should not throw / not call process.exit.
       validateCorsConfig();
@@ -141,7 +156,9 @@ test('validateCorsConfig in dev warns on invalid origin entry', () => {
   withEnv({ CORS_ORIGINS: 'not-a-url,https://ok.example.com', NODE_ENV: 'development' }, () => {
     const warned: string[] = [];
     const orig = console.warn;
-    console.warn = (msg?: any) => { warned.push(String(msg)); };
+    console.warn = (msg?: any) => {
+      warned.push(String(msg));
+    };
     try {
       validateCorsConfig();
     } finally {
@@ -155,7 +172,9 @@ test('validateCorsConfig in dev rejects origin with a path', () => {
   withEnv({ CORS_ORIGINS: 'https://ok.example.com/admin', NODE_ENV: 'development' }, () => {
     const warned: string[] = [];
     const orig = console.warn;
-    console.warn = (msg?: any) => { warned.push(String(msg)); };
+    console.warn = (msg?: any) => {
+      warned.push(String(msg));
+    };
     try {
       validateCorsConfig();
     } finally {
@@ -166,17 +185,22 @@ test('validateCorsConfig in dev rejects origin with a path', () => {
 });
 
 test('validateCorsConfig in dev passes silently for a clean allow-list', () => {
-  withEnv({ CORS_ORIGINS: 'https://app.example.com,http://localhost:5173', NODE_ENV: 'development' }, () => {
-    const warned: string[] = [];
-    const orig = console.warn;
-    console.warn = (msg?: any) => { warned.push(String(msg)); };
-    try {
-      validateCorsConfig();
-    } finally {
-      console.warn = orig;
+  withEnv(
+    { CORS_ORIGINS: 'https://app.example.com,http://localhost:5173', NODE_ENV: 'development' },
+    () => {
+      const warned: string[] = [];
+      const orig = console.warn;
+      console.warn = (msg?: any) => {
+        warned.push(String(msg));
+      };
+      try {
+        validateCorsConfig();
+      } finally {
+        console.warn = orig;
+      }
+      assert.equal(warned.length, 0);
     }
-    assert.equal(warned.length, 0);
-  });
+  );
 });
 
 test('validateCorsConfig in production exits when CORS_ORIGINS is unset', () => {
@@ -185,7 +209,9 @@ test('validateCorsConfig in production exits when CORS_ORIGINS is unset', () => 
     const origExit = process.exit;
     const errored: string[] = [];
     const origErr = console.error;
-    console.error = (msg?: any) => { errored.push(String(msg)); };
+    console.error = (msg?: any) => {
+      errored.push(String(msg));
+    };
     process.exit = ((code?: number) => {
       exitCode = code;
       throw new Error('__exit_called__');
@@ -207,7 +233,9 @@ test('validateCorsConfig in production exits when CORS_ORIGINS contains "*"', ()
     const origExit = process.exit;
     const errored: string[] = [];
     const origErr = console.error;
-    console.error = (msg?: any) => { errored.push(String(msg)); };
+    console.error = (msg?: any) => {
+      errored.push(String(msg));
+    };
     process.exit = ((code?: number) => {
       exitCode = code;
       throw new Error('__exit_called__');
@@ -225,15 +253,21 @@ test('validateCorsConfig in production exits when CORS_ORIGINS contains "*"', ()
 });
 
 test('validateCorsConfig in production passes for a clean explicit allow-list', () => {
-  withEnv({ CORS_ORIGINS: 'https://app.example.com,https://admin.example.com', NODE_ENV: 'production' }, () => {
-    const origExit = process.exit;
-    let exitCalled = false;
-    process.exit = ((_code?: number) => { exitCalled = true; throw new Error('exit'); }) as typeof process.exit;
-    try {
-      validateCorsConfig();
-    } finally {
-      process.exit = origExit;
+  withEnv(
+    { CORS_ORIGINS: 'https://app.example.com,https://admin.example.com', NODE_ENV: 'production' },
+    () => {
+      const origExit = process.exit;
+      let exitCalled = false;
+      process.exit = ((_code?: number) => {
+        exitCalled = true;
+        throw new Error('exit');
+      }) as typeof process.exit;
+      try {
+        validateCorsConfig();
+      } finally {
+        process.exit = origExit;
+      }
+      assert.equal(exitCalled, false);
     }
-    assert.equal(exitCalled, false);
-  });
+  );
 });

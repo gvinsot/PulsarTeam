@@ -40,7 +40,7 @@ import { runnerServiceUrlFor } from '../services/execution/runnerRegistry.js';
 // 'coder' alias to 'claudecode' and honours the legacy CODER_SERVICE_URL
 // fallback), so there are no local runner tables here to drift.
 
-const TERMINAL_PATH_RE = /^\/ws\/agents\/([^\/]+)\/terminal$/;
+const TERMINAL_PATH_RE = /^\/ws\/agents\/([^/]+)\/terminal$/;
 
 /**
  * Reject a WebSocket upgrade with a raw HTTP status line and tear down the
@@ -95,7 +95,9 @@ function noteConsoleOutput(agentId: string, agentManager: any): void {
       try {
         agentManager.setStatus(agentId, 'idle', 'Console quiet');
       } catch (err: any) {
-        console.warn(`[Terminal] setStatus(idle) failed for ${agentId.slice(0, 8)}: ${err.message}`);
+        console.warn(
+          `[Terminal] setStatus(idle) failed for ${agentId.slice(0, 8)}: ${err.message}`
+        );
       }
     }
   }, CONSOLE_IDLE_TIMEOUT_MS);
@@ -149,7 +151,11 @@ async function buildRunnerContext(agent: any): Promise<TerminalRunnerContext> {
  * `~/.git-credentials` file from its first byte. Without it, the LLM would
  * have to wait for the first `/projects/ensure` round-trip to authenticate.
  */
-export function installTerminalProxy(httpServer: HttpServer, executionManager?: any, agentManager?: any): void {
+export function installTerminalProxy(
+  httpServer: HttpServer,
+  executionManager?: any,
+  agentManager?: any
+): void {
   const wss = new WebSocketServer({
     noServer: true,
     perMessageDeflate: {
@@ -247,13 +253,25 @@ export function installTerminalProxy(httpServer: HttpServer, executionManager?: 
           await executionManager.installGitCredentials(agentId, gitCreds);
         }
       } catch (err: any) {
-        console.warn(`[Terminal] Project/credential provisioning failed for agent ${agentId.slice(0, 8)}: ${err.message}`);
+        console.warn(
+          `[Terminal] Project/credential provisioning failed for agent ${agentId.slice(0, 8)}: ${err.message}`
+        );
       }
     }
 
     // Finalise the upgrade now that auth + authz passed.
-    wss.handleUpgrade(req, socket as any, head, (clientWs) => {
-      wireProxy(clientWs, runner, agentId, agent.ownerId || '', runnerApiKey, cols, rows, runnerContext, agentManager);
+    wss.handleUpgrade(req, socket as any, head, clientWs => {
+      wireProxy(
+        clientWs,
+        runner,
+        agentId,
+        agent.ownerId || '',
+        runnerApiKey,
+        cols,
+        rows,
+        runnerContext,
+        agentManager
+      );
     });
   });
 }
@@ -271,18 +289,19 @@ function wireProxy(
   cols: string,
   rows: string,
   context: TerminalRunnerContext = {},
-  agentManager?: any,
+  agentManager?: any
 ): void {
   const baseUrl = runnerServiceUrlFor(runner);
   if (!baseUrl) {
     clientWs.close(1011, 'No runner URL configured');
     return;
   }
-  const wsUrl = baseUrl.replace(/^http/, 'ws')
-    + `/ws/terminal/${encodeURIComponent(agentId)}`
-    + `?api_key=${encodeURIComponent(apiKey)}`
-    + (ownerId ? `&owner_id=${encodeURIComponent(ownerId)}` : '')
-    + `&cols=${encodeURIComponent(cols)}&rows=${encodeURIComponent(rows)}`;
+  const wsUrl =
+    baseUrl.replace(/^http/, 'ws') +
+    `/ws/terminal/${encodeURIComponent(agentId)}` +
+    `?api_key=${encodeURIComponent(apiKey)}` +
+    (ownerId ? `&owner_id=${encodeURIComponent(ownerId)}` : '') +
+    `&cols=${encodeURIComponent(cols)}&rows=${encodeURIComponent(rows)}`;
 
   const headers: Record<string, string> = {};
   if (context.permissions) headers['X-Agent-Permissions'] = JSON.stringify(context.permissions);
@@ -301,8 +320,16 @@ function wireProxy(
   const closeBoth = (code = 1000, reason = '') => {
     if (closed) return;
     closed = true;
-    try { clientWs.close(code, reason); } catch { /* noop */ }
-    try { runnerWs.close(code, reason); } catch { /* noop */ }
+    try {
+      clientWs.close(code, reason);
+    } catch {
+      /* noop */
+    }
+    try {
+      runnerWs.close(code, reason);
+    } catch {
+      /* noop */
+    }
   };
 
   const connectionOpenedAt = Date.now();
@@ -325,12 +352,12 @@ function wireProxy(
     // CLI is currently working. Text frames are control envelopes (exit,
     // resize), not CLI output — skip them. The grace window suppresses the
     // scrollback replay sent right after attach.
-    if (isBinary && (Date.now() - connectionOpenedAt) > REPLAY_GRACE_MS) {
+    if (isBinary && Date.now() - connectionOpenedAt > REPLAY_GRACE_MS) {
       noteConsoleOutput(agentId, agentManager);
     }
   });
   runnerWs.on('close', (code, reason) => closeBoth(code, reason?.toString() || ''));
-  runnerWs.on('error', (err) => {
+  runnerWs.on('error', err => {
     // We can't surface the underlying error to a browser WS, so just close.
     // (The runner logs the real reason on its side.)
     closeBoth(1011, 'runner error');

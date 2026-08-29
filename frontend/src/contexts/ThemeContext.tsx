@@ -21,8 +21,8 @@ export function ThemeProvider({ children }) {
     safeSet('pulsar_theme', theme);
   }, [theme]);
 
-  const setTheme = (t) => setThemeState(t);
-  const toggleTheme = () => setThemeState(prev => prev === 'dark' ? 'light' : 'dark');
+  const setTheme = t => setThemeState(t);
+  const toggleTheme = () => setThemeState(prev => (prev === 'dark' ? 'light' : 'dark'));
 
   return (
     <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>

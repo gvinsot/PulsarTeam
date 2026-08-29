@@ -64,7 +64,8 @@ export const BUILTIN_MCP_SERVERS = [
     // External-URL server (like PulsarCD) — the office-engine sidecar/service.
     // Speaks Streamable HTTP MCP at /mcp; mcpClient.connect reaches it directly.
     url: (process.env.OFFICE_SERVICE_URL || 'http://office-service:8000') + '/mcp',
-    description: 'Office Documents — read, edit, generate and convert Word/Excel/PowerPoint/PDF (markitdown + python-docx/openpyxl/python-pptx/PyMuPDF + LibreOffice). Works for any configured LLM.',
+    description:
+      'Office Documents — read, edit, generate and convert Word/Excel/PowerPoint/PDF (markitdown + python-docx/openpyxl/python-pptx/PyMuPDF + LibreOffice). Works for any configured LLM.',
     icon: '📄',
     apiKey: '',
     builtin: true,
@@ -74,7 +75,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-local-folder',
     name: 'Local Folder',
     url: '__internal__local_folder',
-    description: 'Local Folder — read, edit and generate files in a folder on the user\'s own machine via the PulsarTeam desktop app. Files never leave the machine. Same office tools as Office Documents, plus list/read/write/search. Requires the desktop app to be open with a folder shared.',
+    description:
+      "Local Folder — read, edit and generate files in a folder on the user's own machine via the PulsarTeam desktop app. Files never leave the machine. Same office tools as Office Documents, plus list/read/write/search. Requires the desktop app to be open with a folder shared.",
     icon: '📁',
     apiKey: '',
     builtin: true,
@@ -84,7 +86,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-onedrive',
     name: 'OneDrive',
     url: '__internal__onedrive',
-    description: 'Microsoft OneDrive — browse, search, read, upload, and manage files via Microsoft Graph',
+    description:
+      'Microsoft OneDrive — browse, search, read, upload, and manage files via Microsoft Graph',
     icon: '☁️',
     apiKey: '',
     builtin: true,
@@ -104,7 +107,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-gandi-dns',
     name: 'Gandi DNS',
     url: '__internal__gandi_dns',
-    description: 'Gandi LiveDNS — create, update, delete DNS records (A, AAAA, CNAME, MX, TXT…) on your domains',
+    description:
+      'Gandi LiveDNS — create, update, delete DNS records (A, AAAA, CNAME, MX, TXT…) on your domains',
     icon: '🌐',
     apiKey: '',
     builtin: true,
@@ -114,7 +118,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-swarm-api',
     name: 'Swarm API',
     url: '__internal__swarm_api',
-    description: 'Swarm management — list agents, check agent status, list boards (with repos in use), add and update tasks (move between columns and/or mark finished with a summary via update_task, with optional repo or storage targeting)',
+    description:
+      'Swarm management — list agents, check agent status, list boards (with repos in use), add and update tasks (move between columns and/or mark finished with a summary via update_task, with optional repo or storage targeting)',
     icon: '👥',
     apiKey: '',
     builtin: true,
@@ -124,7 +129,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-pulsar-gateway',
     name: 'Pulsar Gateway',
     url: '__internal__pulsar_gateway',
-    description: 'The single always-on MCP for CLI runner agents — move and/or finish your current task with one tool (update_task) and dynamically discover + invoke every other MCP available to you or your board (list_mcps, call_mcp_tool)',
+    description:
+      'The single always-on MCP for CLI runner agents — move and/or finish your current task with one tool (update_task) and dynamically discover + invoke every other MCP available to you or your board (list_mcps, call_mcp_tool)',
     icon: '🛠️',
     apiKey: '',
     builtin: true,
@@ -134,7 +140,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-gdrive',
     name: 'Google Drive',
     url: '__internal__gdrive',
-    description: 'Google Drive — browse, search, read, upload, share, and manage files (per-agent OAuth)',
+    description:
+      'Google Drive — browse, search, read, upload, share, and manage files (per-agent OAuth)',
     icon: '🗂️',
     apiKey: '',
     builtin: true,
@@ -144,7 +151,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-gmail',
     name: 'Gmail',
     url: '__internal__gmail',
-    description: 'Gmail — read, search, send, reply, draft emails and manage labels via Gmail API (per-agent OAuth)',
+    description:
+      'Gmail — read, search, send, reply, draft emails and manage labels via Gmail API (per-agent OAuth)',
     icon: '📧',
     apiKey: '',
     builtin: true,
@@ -154,7 +162,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-outlook',
     name: 'Outlook',
     url: '__internal__outlook',
-    description: 'Microsoft Outlook — read, search, send, reply, draft emails, manage folders/flags and attachments via Microsoft Graph (per-agent OAuth, shared Microsoft credentials)',
+    description:
+      'Microsoft Outlook — read, search, send, reply, draft emails, manage folders/flags and attachments via Microsoft Graph (per-agent OAuth, shared Microsoft credentials)',
     icon: '📨',
     apiKey: '',
     builtin: true,
@@ -164,7 +173,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-slack',
     name: 'Slack',
     url: '__internal__slack',
-    description: 'Slack — list channels, read/send messages, reply in threads, list users, add reactions (per-agent OAuth)',
+    description:
+      'Slack — list channels, read/send messages, reply in threads, list users, add reactions (per-agent OAuth)',
     icon: '💬',
     apiKey: '',
     builtin: true,
@@ -174,7 +184,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-jira',
     name: 'Jira',
     url: '__internal__jira',
-    description: 'Jira — search issues, create/update issues, manage sprints, boards, comments, and transitions (per-agent API key)',
+    description:
+      'Jira — search issues, create/update issues, manage sprints, boards, comments, and transitions (per-agent API key)',
     icon: '🎫',
     apiKey: '',
     builtin: true,
@@ -184,7 +195,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-wordpress',
     name: 'WordPress',
     url: '__internal__wordpress',
-    description: 'WordPress — list/create/update/publish/delete posts and pages, upload media from disk, manage categories and tags (per-agent or per-board Application Password)',
+    description:
+      'WordPress — list/create/update/publish/delete posts and pages, upload media from disk, manage categories and tags (per-agent or per-board Application Password)',
     icon: '📝',
     apiKey: '',
     builtin: true,
@@ -194,7 +206,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-github',
     name: 'GitHub',
     url: '__internal__github',
-    description: 'GitHub — repos, issues, PRs, branches, commits, workflows, code search (per-agent OAuth)',
+    description:
+      'GitHub — repos, issues, PRs, branches, commits, workflows, code search (per-agent OAuth)',
     icon: '🐙',
     apiKey: '',
     builtin: true,
@@ -204,7 +217,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-aws-s3',
     name: 'AWS S3',
     url: '__internal__aws_s3',
-    description: 'Amazon S3 — list buckets, browse/read/upload/delete objects, presigned URLs, copy objects',
+    description:
+      'Amazon S3 — list buckets, browse/read/upload/delete objects, presigned URLs, copy objects',
     icon: '🪣',
     apiKey: '',
     builtin: true,
@@ -214,7 +228,8 @@ export const BUILTIN_MCP_SERVERS = [
     id: 'mcp-auto-learn',
     name: 'Auto Learn',
     url: '__internal__auto_learn',
-    description: 'Auto Learn — shared skill library where agents can create, search, update and reuse learned knowledge',
+    description:
+      'Auto Learn — shared skill library where agents can create, search, update and reuse learned knowledge',
     icon: '🎓',
     apiKey: '',
     builtin: true,
@@ -229,5 +244,5 @@ export const BUILTIN_MCP_SERVERS = [
     apiKey: '',
     builtin: true,
     enabled: true,
-  }
+  },
 ];

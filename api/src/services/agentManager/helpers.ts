@@ -2,7 +2,10 @@
 import fs from 'fs/promises';
 
 // ─── File System Handoff ────────────────────────────────────────────────────────
-export async function transferUserFiles(fromId: string, toId: string): Promise<{ success: boolean; message: string }> {
+export async function transferUserFiles(
+  fromId: string,
+  toId: string
+): Promise<{ success: boolean; message: string }> {
   const fromHomeDir = `/home/${fromId}`;
   const toHomeDir = `/home/${toId}`;
 
@@ -12,7 +15,10 @@ export async function transferUserFiles(fromId: string, toId: string): Promise<{
     // Agent home directories live in the runner-service container on most
     // deployments, not on this host — report that explicitly instead of
     // failing later with a misleading filesystem error.
-    return { success: false, message: `Source home directory ${fromHomeDir} does not exist on this host — no files were transferred` };
+    return {
+      success: false,
+      message: `Source home directory ${fromHomeDir} does not exist on this host — no files were transferred`,
+    };
   }
 
   try {

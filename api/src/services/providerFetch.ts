@@ -19,10 +19,7 @@ type ProviderFetchConfig = {
   /** Full error label, e.g. "Gmail API error" or "Microsoft Graph error". */
   errorLabel: string;
   /** Resolve per-agent credentials into an auth header + base URL. */
-  getAuth: (
-    agentId: string | null,
-    boardId: string | null,
-  ) => ProviderAuth | Promise<ProviderAuth>;
+  getAuth: (agentId: string | null, boardId: string | null) => ProviderAuth | Promise<ProviderAuth>;
   /** Extra headers sent on every request (overridable per call). */
   defaultHeaders?: Record<string, string>;
   /** Request timeout in ms (default 60s). */
@@ -53,7 +50,7 @@ export function createProviderFetch(cfg: ProviderFetchConfig) {
     path: string,
     agentId: string | null = null,
     boardId: string | null = null,
-    options: Record<string, any> = {},
+    options: Record<string, any> = {}
   ): Promise<any> {
     const { authorization, base } = await cfg.getAuth(agentId, boardId);
     const url = path.startsWith('http') ? path : `${base}${path}`;
@@ -66,7 +63,9 @@ export function createProviderFetch(cfg: ProviderFetchConfig) {
     };
     if (
       contentTypePolicy === 'onlyStringBody' &&
-      options.body && !headers['Content-Type'] && typeof options.body === 'string'
+      options.body &&
+      !headers['Content-Type'] &&
+      typeof options.body === 'string'
     ) {
       headers['Content-Type'] = 'application/json';
     }
@@ -78,9 +77,10 @@ export function createProviderFetch(cfg: ProviderFetchConfig) {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), ...options, headers });
 
     if (!res.ok) {
-      const text = cfg.maxErrorChars !== undefined
-        ? (await res.text().catch(() => '')).slice(0, cfg.maxErrorChars)
-        : await res.text();
+      const text =
+        cfg.maxErrorChars !== undefined
+          ? (await res.text().catch(() => '')).slice(0, cfg.maxErrorChars)
+          : await res.text();
       throw new Error(`${cfg.errorLabel} ${res.status}: ${text}`);
     }
 
@@ -108,7 +108,9 @@ export async function readBodyCapped(res: Response, maxBytes: number): Promise<B
   if (!reader) {
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length > maxBytes) {
-      throw new Error(`File too large to read (${(buf.length / 1024 / 1024).toFixed(1)} MB; max ${(maxBytes / 1024 / 1024).toFixed(1)} MB).`);
+      throw new Error(
+        `File too large to read (${(buf.length / 1024 / 1024).toFixed(1)} MB; max ${(maxBytes / 1024 / 1024).toFixed(1)} MB).`
+      );
     }
     return buf;
   }
@@ -121,7 +123,11 @@ export async function readBodyCapped(res: Response, maxBytes: number): Promise<B
     if (value) {
       total += value.length;
       if (total > maxBytes) {
-        try { await reader.cancel(); } catch { /* ignore */ }
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
         throw new Error(`File too large to read (>${(maxBytes / 1024 / 1024).toFixed(1)} MB).`);
       }
       chunks.push(value);

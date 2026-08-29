@@ -29,9 +29,11 @@ export type RunnerServiceType = keyof typeof RUNNER_SERVICES;
  */
 export function runnerServiceUrl(type: RunnerServiceType): string {
   const entry = RUNNER_SERVICES[type];
-  return process.env[entry.envVar]
-    || (type === 'claudecode' ? process.env.CODER_SERVICE_URL : undefined)
-    || entry.defaultUrl;
+  return (
+    process.env[entry.envVar] ||
+    (type === 'claudecode' ? process.env.CODER_SERVICE_URL : undefined) ||
+    entry.defaultUrl
+  );
 }
 
 /**
@@ -43,7 +45,7 @@ export function runnerServiceUrl(type: RunnerServiceType): string {
 export function resolveRunnerService(runnerId: string): RunnerServiceType | undefined {
   const id = String(runnerId || '').toLowerCase();
   const mapped = id === 'coder' ? 'claudecode' : id;
-  return (mapped in RUNNER_SERVICES) ? (mapped as RunnerServiceType) : undefined;
+  return mapped in RUNNER_SERVICES ? (mapped as RunnerServiceType) : undefined;
 }
 
 /**

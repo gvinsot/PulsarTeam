@@ -1,35 +1,78 @@
 // ── Balanced parsing helpers (mirrors server-side logic) ─────────────────────
 
 function _findBalancedCloseUI(text, start) {
-  let depth = 1, inTQ = false, inDQ = false, inSQ = false;
+  let depth = 1,
+    inTQ = false,
+    inDQ = false,
+    inSQ = false;
   for (let i = start; i < text.length; i++) {
-    if (text[i] === '"' && text[i+1] === '"' && text[i+2] === '"') {
-      if (inTQ) { inTQ = false; i += 2; continue; }
-      if (!inDQ && !inSQ) { inTQ = true; i += 2; continue; }
+    if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      if (inTQ) {
+        inTQ = false;
+        i += 2;
+        continue;
+      }
+      if (!inDQ && !inSQ) {
+        inTQ = true;
+        i += 2;
+        continue;
+      }
     }
     if (inTQ) continue;
-    if (text[i] === '\\' && (inDQ || inSQ)) { i++; continue; }
-    if (text[i] === '"' && !inSQ) { inDQ = !inDQ; continue; }
-    if (text[i] === "'" && !inDQ) { inSQ = !inSQ; continue; }
+    if (text[i] === '\\' && (inDQ || inSQ)) {
+      i++;
+      continue;
+    }
+    if (text[i] === '"' && !inSQ) {
+      inDQ = !inDQ;
+      continue;
+    }
+    if (text[i] === "'" && !inDQ) {
+      inSQ = !inSQ;
+      continue;
+    }
     if (!inDQ && !inSQ) {
       if (text[i] === '(') depth++;
-      else if (text[i] === ')') { depth--; if (depth === 0) return i; }
+      else if (text[i] === ')') {
+        depth--;
+        if (depth === 0) return i;
+      }
     }
   }
   return -1;
 }
 
 function _findTopLevelCommaUI(text) {
-  let inTQ = false, inDQ = false, inSQ = false, depth = 0;
+  let inTQ = false,
+    inDQ = false,
+    inSQ = false,
+    depth = 0;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === '"' && text[i+1] === '"' && text[i+2] === '"') {
-      if (inTQ) { inTQ = false; i += 2; continue; }
-      if (!inDQ && !inSQ) { inTQ = true; i += 2; continue; }
+    if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+      if (inTQ) {
+        inTQ = false;
+        i += 2;
+        continue;
+      }
+      if (!inDQ && !inSQ) {
+        inTQ = true;
+        i += 2;
+        continue;
+      }
     }
     if (inTQ) continue;
-    if (text[i] === '\\' && (inDQ || inSQ)) { i++; continue; }
-    if (text[i] === '"' && !inSQ) { inDQ = !inDQ; continue; }
-    if (text[i] === "'" && !inDQ) { inSQ = !inSQ; continue; }
+    if (text[i] === '\\' && (inDQ || inSQ)) {
+      i++;
+      continue;
+    }
+    if (text[i] === '"' && !inSQ) {
+      inDQ = !inDQ;
+      continue;
+    }
+    if (text[i] === "'" && !inDQ) {
+      inSQ = !inSQ;
+      continue;
+    }
     if (!inDQ && !inSQ) {
       if (text[i] === '(') depth++;
       if (text[i] === ')') depth--;
@@ -42,7 +85,8 @@ function _findTopLevelCommaUI(text) {
 function _stripWrapperQuotes(s) {
   s = s.trim();
   if (s.length >= 2) {
-    const f = s[0], l = s[s.length - 1];
+    const f = s[0],
+      l = s[s.length - 1];
     if ((f === '"' && l === '"') || (f === "'" && l === "'")) return s.slice(1, -1);
   }
   return s;
@@ -63,10 +107,14 @@ export function cleanToolSyntax(text) {
   cleaned = cleaned.replace(/<\|?\/?tool_call\|?>/gi, '');
   cleaned = cleaned.replace(/<\|?\/?tool_use\|?>/gi, '');
   cleaned = cleaned.replace(/\[TOOL_CALLS?\]/gi, '');
-  cleaned = cleaned.replace(/\n?\[Executing: @(?:read_file|write_file|list_dir|search_files|run_command|append_file)\([^)]*\)\.{3}\]\n?/gi, '');
+  cleaned = cleaned.replace(
+    /\n?\[Executing: @(?:read_file|write_file|list_dir|search_files|run_command|append_file)\([^)]*\)\.{3}\]\n?/gi,
+    ''
+  );
 
   // Use balanced parser to find and replace @tool(...) calls
-  const ALL_TOOLS = 'read_file|write_file|append_file|list_dir|search_files|run_command|report_error|list_my_tasks|check_status|list_projects|mcp_call|update_task';
+  const ALL_TOOLS =
+    'read_file|write_file|append_file|list_dir|search_files|run_command|report_error|list_my_tasks|check_status|list_projects|mcp_call|update_task';
   const toolPattern = new RegExp(`@(${ALL_TOOLS})\\s*\\(`, 'gi');
   let m;
   // Process from end to start so replacements don't shift indices
@@ -112,7 +160,11 @@ export function cleanToolSyntax(text) {
     } else if (toolName === 'report_error') {
       const desc = _stripWrapperQuotes(argsString);
       replacement = `\n> 🚨 **Error reported:** ${desc}\n`;
-    } else if (toolName === 'list_my_tasks' || toolName === 'check_status' || toolName === 'list_projects') {
+    } else if (
+      toolName === 'list_my_tasks' ||
+      toolName === 'check_status' ||
+      toolName === 'list_projects'
+    ) {
       // Internal status checks — remove from display entirely
       replacement = '';
     } else if (toolName === 'mcp_call') {
@@ -121,7 +173,10 @@ export function cleanToolSyntax(text) {
         const server = _stripWrapperQuotes(argsString.slice(0, commaIdx));
         const rest = argsString.slice(commaIdx + 1).trim();
         const commaIdx2 = _findTopLevelCommaUI(rest);
-        const tool = commaIdx2 !== -1 ? _stripWrapperQuotes(rest.slice(0, commaIdx2)) : _stripWrapperQuotes(rest);
+        const tool =
+          commaIdx2 !== -1
+            ? _stripWrapperQuotes(rest.slice(0, commaIdx2))
+            : _stripWrapperQuotes(rest);
         replacement = `\n> 🔌 **MCP:** ${tool} on \`${server}\`\n`;
       } else {
         replacement = `\n> 🔌 **MCP call:** ${_stripWrapperQuotes(argsString)}\n`;
@@ -131,7 +186,10 @@ export function cleanToolSyntax(text) {
       if (commaIdx !== -1) {
         const rest = argsString.slice(commaIdx + 1).trim();
         const commaIdx2 = _findTopLevelCommaUI(rest);
-        const status = commaIdx2 !== -1 ? _stripWrapperQuotes(rest.slice(0, commaIdx2)) : _stripWrapperQuotes(rest);
+        const status =
+          commaIdx2 !== -1
+            ? _stripWrapperQuotes(rest.slice(0, commaIdx2))
+            : _stripWrapperQuotes(rest);
         replacement = `\n> 📋 **Task updated** → ${status}\n`;
       } else {
         replacement = `\n> 📋 **Task updated**\n`;

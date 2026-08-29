@@ -1,6 +1,14 @@
 import { useState } from 'react';
 import {
-  Sparkles, FileText, Bot, ListChecks, Workflow, ArrowRight, ArrowLeft, Check, LogOut,
+  Sparkles,
+  FileText,
+  Bot,
+  ListChecks,
+  Workflow,
+  ArrowRight,
+  ArrowLeft,
+  Check,
+  LogOut,
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { api } from '../api';
@@ -10,9 +18,11 @@ type Lang = 'en' | 'fr';
 const COPY: Record<Lang, any> = {
   en: {
     welcomeTitle: 'Welcome to PulsarTeam',
-    welcomeIntro: 'A multi-agent orchestration platform where AI agents run autonomously on your projects, organised through Kanban workflows you control.',
+    welcomeIntro:
+      'A multi-agent orchestration platform where AI agents run autonomously on your projects, organised through Kanban workflows you control.',
     termsHeading: 'Before you start, please accept our Terms & Conditions',
-    termsSummary: 'You are responsible for the actions your agents take, including code commits and external integrations. PulsarTeam provides safety hooks but the final responsibility lies with you. By accepting, you agree to use the platform lawfully and acknowledge that your acceptance date will be stored.',
+    termsSummary:
+      'You are responsible for the actions your agents take, including code commits and external integrations. PulsarTeam provides safety hooks but the final responsibility lies with you. By accepting, you agree to use the platform lawfully and acknowledge that your acceptance date will be stored.',
     readFull: 'Read the full Terms and Conditions',
     acceptCheckbox: 'I have read and accept the Terms and Conditions',
     accept: 'Accept and continue',
@@ -44,11 +54,13 @@ const COPY: Record<Lang, any> = {
   },
   fr: {
     welcomeTitle: 'Bienvenue sur PulsarTeam',
-    welcomeIntro: 'Une plateforme d\'orchestration multi-agents : vos agents IA travaillent de manière autonome sur vos projets, organisés par des workflows Kanban que vous contrôlez.',
-    termsHeading: 'Avant de commencer, merci d\'accepter les Conditions Générales d\'Utilisation',
-    termsSummary: 'Vous êtes responsable des actions de vos agents, y compris des commits de code et des intégrations externes. PulsarTeam fournit des garde-fous, mais la responsabilité finale vous incombe. En acceptant, vous reconnaissez utiliser la plateforme de manière licite et que la date d\'acceptation sera enregistrée.',
-    readFull: 'Lire les Conditions Générales d\'Utilisation complètes',
-    acceptCheckbox: 'J\'ai lu et j\'accepte les Conditions Générales d\'Utilisation',
+    welcomeIntro:
+      "Une plateforme d'orchestration multi-agents : vos agents IA travaillent de manière autonome sur vos projets, organisés par des workflows Kanban que vous contrôlez.",
+    termsHeading: "Avant de commencer, merci d'accepter les Conditions Générales d'Utilisation",
+    termsSummary:
+      "Vous êtes responsable des actions de vos agents, y compris des commits de code et des intégrations externes. PulsarTeam fournit des garde-fous, mais la responsabilité finale vous incombe. En acceptant, vous reconnaissez utiliser la plateforme de manière licite et que la date d'acceptation sera enregistrée.",
+    readFull: "Lire les Conditions Générales d'Utilisation complètes",
+    acceptCheckbox: "J'ai lu et j'accepte les Conditions Générales d'Utilisation",
     accept: 'Accepter et continuer',
     declineLogout: 'Refuser et se déconnecter',
     tutorialTitle: 'Visite rapide',
@@ -63,7 +75,7 @@ const COPY: Record<Lang, any> = {
       {
         icon: Workflow,
         title: 'Configurez un workflow',
-        body: 'Dans l\'onglet Workflows, paramétrez les colonnes de votre Kanban (par ex. backlog → code → review → done). Un workflow appartient à un board et définit la progression des tâches.',
+        body: "Dans l'onglet Workflows, paramétrez les colonnes de votre Kanban (par ex. backlog → code → review → done). Un workflow appartient à un board et définit la progression des tâches.",
       },
       {
         icon: ListChecks,
@@ -73,7 +85,7 @@ const COPY: Record<Lang, any> = {
     ],
     previous: 'Précédent',
     next: 'Suivant',
-    finish: 'C\'est compris — je commence',
+    finish: "C'est compris — je commence",
     saving: 'Enregistrement…',
   },
 };
@@ -182,7 +194,7 @@ export default function WelcomeTutorialModal({
                 <input
                   type="checkbox"
                   checked={accepted}
-                  onChange={(e) => setAccepted(e.target.checked)}
+                  onChange={e => setAccepted(e.target.checked)}
                   className="mt-0.5 w-4 h-4 accent-indigo-500"
                 />
                 <span className="text-sm text-dark-200">{c.acceptCheckbox}</span>
@@ -203,10 +215,14 @@ export default function WelcomeTutorialModal({
                 disabled={!accepted || saving}
                 className="flex items-center gap-2 px-5 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:bg-dark-700 disabled:text-dark-500 text-white text-sm font-medium rounded-lg transition-colors"
               >
-                {saving ? c.saving : (<>
-                  <Check className="w-4 h-4" />
-                  {c.accept}
-                </>)}
+                {saving ? (
+                  c.saving
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    {c.accept}
+                  </>
+                )}
               </button>
             </div>
           </>
@@ -265,8 +281,8 @@ function TutorialBody({ copy, stepIndex, totalSteps, saving, onPrev, onNext }: a
                 i === stepIndex
                   ? 'w-8 bg-indigo-500'
                   : i < stepIndex
-                  ? 'w-1.5 bg-indigo-500/60'
-                  : 'w-1.5 bg-dark-700'
+                    ? 'w-1.5 bg-indigo-500/60'
+                    : 'w-1.5 bg-dark-700'
               }`}
             />
           ))}
@@ -288,7 +304,9 @@ function TutorialBody({ copy, stepIndex, totalSteps, saving, onPrev, onNext }: a
           disabled={saving}
           className="flex items-center gap-2 px-5 py-2.5 bg-indigo-500 hover:bg-indigo-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-60"
         >
-          {saving ? copy.saving : isLast ? (
+          {saving ? (
+            copy.saving
+          ) : isLast ? (
             <>
               <Check className="w-4 h-4" />
               {copy.finish}

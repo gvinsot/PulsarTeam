@@ -14,13 +14,15 @@ const GITHUB_CONFIG: OAuthProviderConfig = {
   messageType: 'github-oauth-callback',
   buttonClass: 'bg-gray-800 hover:bg-gray-700',
   connectLabel: 'Connect with GitHub',
-  badgeDetail: (status) => status.login || null,
+  badgeDetail: status => status.login || null,
   configuredHint: (
     <>
-      Set <code className="text-dark-400">GITHUB_OAUTH_CLIENT_ID</code> and <code className="text-dark-400">GITHUB_OAUTH_CLIENT_SECRET</code> — one OAuth App serves GitHub login and the per-agent GitHub plugin.
+      Set <code className="text-dark-400">GITHUB_OAUTH_CLIENT_ID</code> and{' '}
+      <code className="text-dark-400">GITHUB_OAUTH_CLIENT_SECRET</code> — one OAuth App serves
+      GitHub login and the per-agent GitHub plugin.
     </>
   ),
-  connectHint: (agentId) =>
+  connectHint: agentId =>
     agentId
       ? 'Click "Connect with GitHub" to authorize this agent to access GitHub repositories.'
       : 'Click "Connect with GitHub" to authorize access. A popup will open for GitHub login.',
@@ -32,5 +34,12 @@ const GITHUB_CONFIG: OAuthProviderConfig = {
 };
 
 export default function GitHubConnect({ agentId, boardId, onStatusChange }) {
-  return <OAuthConnectWidget config={GITHUB_CONFIG} agentId={agentId} boardId={boardId} onStatusChange={onStatusChange} />;
+  return (
+    <OAuthConnectWidget
+      config={GITHUB_CONFIG}
+      agentId={agentId}
+      boardId={boardId}
+      onStatusChange={onStatusChange}
+    />
+  );
 }

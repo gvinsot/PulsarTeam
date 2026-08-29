@@ -1,6 +1,24 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { X, GitCommit, Tag, ExternalLink, Loader2, AlertCircle, Clock, FolderOpen, File, ChevronRight, ChevronDown, GitBranch, ArrowLeft, FileText, RefreshCw, Network } from 'lucide-react';
+import {
+  X,
+  GitCommit,
+  Tag,
+  ExternalLink,
+  Loader2,
+  AlertCircle,
+  Clock,
+  FolderOpen,
+  File,
+  ChevronRight,
+  ChevronDown,
+  GitBranch,
+  ArrowLeft,
+  FileText,
+  RefreshCw,
+  Network,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api } from '../api';
 import { useEscapeKey, useBodyScrollLock } from '../hooks/useDismiss';
@@ -38,19 +56,31 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
   // Bump on each load so only the latest response updates state (guards against
   // a stale fetch landing after owner/repo/boardId changed or the modal closed).
   const reqIdRef = useRef(0);
-  const loadActivity = useCallback((opts = {}) => {
-    const reqId = ++reqIdRef.current;
-    setLoading(true);
-    setError(null);
-    return api.getGitHubActivity(owner, repo, boardId, opts)
-      .then(result => { if (reqId === reqIdRef.current) setData(result); })
-      .catch(err => { if (reqId === reqIdRef.current) setError(err.message); })
-      .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
-  }, [owner, repo, boardId]);
+  const loadActivity = useCallback(
+    (opts = {}) => {
+      const reqId = ++reqIdRef.current;
+      setLoading(true);
+      setError(null);
+      return api
+        .getGitHubActivity(owner, repo, boardId, opts)
+        .then(result => {
+          if (reqId === reqIdRef.current) setData(result);
+        })
+        .catch(err => {
+          if (reqId === reqIdRef.current) setError(err.message);
+        })
+        .finally(() => {
+          if (reqId === reqIdRef.current) setLoading(false);
+        });
+    },
+    [owner, repo, boardId]
+  );
 
-  useEffect(() => { loadActivity(); }, [loadActivity]);
+  useEffect(() => {
+    loadActivity();
+  }, [loadActivity]);
 
-  const formatDate = (dateStr) => {
+  const formatDate = dateStr => {
     if (!dateStr) return '';
     const d = new Date(dateStr);
     const now = new Date();
@@ -81,7 +111,9 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
         <div className="flex items-center justify-between px-5 py-3 border-b border-dark-700 shrink-0">
           <div className="flex items-center gap-2">
             <GithubIcon className="w-5 h-5 text-dark-100" />
-            <h2 className="text-base font-semibold text-dark-100">{owner}/{repo}</h2>
+            <h2 className="text-base font-semibold text-dark-100">
+              {owner}/{repo}
+            </h2>
             <span className="text-xs text-dark-400">Activity</span>
           </div>
           <div className="flex items-center gap-2">
@@ -128,7 +160,10 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             {data && (
               <span className="text-xs text-dark-500 ml-1">
                 ({data.commits.length}
-                {data.tags.length > 0 ? ` · ${data.tags.length} tag${data.tags.length > 1 ? 's' : ''}` : ''})
+                {data.tags.length > 0
+                  ? ` · ${data.tags.length} tag${data.tags.length > 1 ? 's' : ''}`
+                  : ''}
+                )
               </span>
             )}
           </button>
@@ -176,7 +211,9 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
           {data && !loading && tab === 'activity' && (
             <div className="space-y-1">
               {data.commits.length === 0 && data.tags.length === 0 ? (
-                <p className="text-dark-500 text-sm text-center py-8">No commits in the last 30 days</p>
+                <p className="text-dark-500 text-sm text-center py-8">
+                  No commits in the last 30 days
+                </p>
               ) : (
                 <>
                   {data.commits.map(c => {
@@ -187,7 +224,11 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
                         className="flex items-start gap-3 p-2.5 rounded-lg hover:bg-dark-800 transition-colors group"
                       >
                         {c.authorAvatar ? (
-                          <img src={c.authorAvatar} alt="" className="w-6 h-6 rounded-full mt-0.5 shrink-0" />
+                          <img
+                            src={c.authorAvatar}
+                            alt=""
+                            className="w-6 h-6 rounded-full mt-0.5 shrink-0"
+                          />
                         ) : (
                           <div className="w-6 h-6 rounded-full bg-dark-700 flex items-center justify-center mt-0.5 shrink-0">
                             <GitCommit size={12} className="text-dark-400" />
@@ -262,10 +303,15 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
                         >
                           <Tag size={14} className="text-green-400 shrink-0" />
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm text-dark-100 font-medium group-hover:text-green-300">{t.name}</p>
+                            <p className="text-sm text-dark-100 font-medium group-hover:text-green-300">
+                              {t.name}
+                            </p>
                             <code className="text-xs text-dark-500 font-mono">{t.shortSha}</code>
                           </div>
-                          <ExternalLink size={12} className="text-dark-600 group-hover:text-dark-400 shrink-0" />
+                          <ExternalLink
+                            size={12}
+                            className="text-dark-600 group-hover:text-dark-400 shrink-0"
+                          />
                         </a>
                       ))}
                     </div>
@@ -275,9 +321,7 @@ export default function GitHubActivityModal({ owner, repo, boardId, onClose }) {
             </div>
           )}
 
-          {tab === 'explorer' && (
-            <RepoExplorer owner={owner} repo={repo} boardId={boardId} />
-          )}
+          {tab === 'explorer' && <RepoExplorer owner={owner} repo={repo} boardId={boardId} />}
 
           {tab === 'callgraph' && (
             <div className="h-full min-h-[500px]" style={{ height: '70vh' }}>
@@ -314,22 +358,30 @@ function RepoExplorer({ owner, repo, boardId }) {
   useEffect(() => {
     let cancelled = false;
     setLoadingBranches(true);
-    api.getGitHubBranches(owner, repo, boardId)
+    api
+      .getGitHubBranches(owner, repo, boardId)
       .then(data => {
         if (cancelled) return;
         setBranches(data);
         // Auto-select main/master or first branch
-        const main = data.find(b => b.name === 'main') || data.find(b => b.name === 'master') || data[0];
+        const main =
+          data.find(b => b.name === 'main') || data.find(b => b.name === 'master') || data[0];
         if (main) setSelectedBranch(main.name);
       })
-      .catch(err => { if (!cancelled) setError(err.message); })
-      .finally(() => { if (!cancelled) setLoadingBranches(false); });
-    return () => { cancelled = true; };
+      .catch(err => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingBranches(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [owner, repo, boardId]);
 
   // Load tree when branch changes
   useEffect(() => {
-    if (!selectedBranch) return;
+    if (!selectedBranch) return undefined;
     let cancelled = false;
     setLoadingTree(true);
     setTree(null);
@@ -337,11 +389,20 @@ function RepoExplorer({ owner, repo, boardId }) {
     setFileContent(null);
     setExpandedDirs(new Set());
     setError(null);
-    api.getGitHubTree(owner, repo, selectedBranch, boardId)
-      .then(data => { if (!cancelled) setTree(data); })
-      .catch(err => { if (!cancelled) setError(err.message); })
-      .finally(() => { if (!cancelled) setLoadingTree(false); });
-    return () => { cancelled = true; };
+    api
+      .getGitHubTree(owner, repo, selectedBranch, boardId)
+      .then(data => {
+        if (!cancelled) setTree(data);
+      })
+      .catch(err => {
+        if (!cancelled) setError(err.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingTree(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [owner, repo, selectedBranch, boardId]);
 
   // Build nested tree structure from flat list
@@ -350,7 +411,7 @@ function RepoExplorer({ owner, repo, boardId }) {
     return buildNestedTree(tree.tree);
   }, [tree]);
 
-  const toggleDir = useCallback((path) => {
+  const toggleDir = useCallback(path => {
     setExpandedDirs(prev => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
@@ -359,15 +420,19 @@ function RepoExplorer({ owner, repo, boardId }) {
     });
   }, []);
 
-  const openFile = useCallback((filePath) => {
-    setSelectedFile(filePath);
-    setFileContent(null);
-    setLoadingFile(true);
-    api.getGitHubFile(owner, repo, selectedBranch, filePath, boardId)
-      .then(data => setFileContent(data))
-      .catch(err => setFileContent({ error: err.message }))
-      .finally(() => setLoadingFile(false));
-  }, [owner, repo, selectedBranch, boardId]);
+  const openFile = useCallback(
+    filePath => {
+      setSelectedFile(filePath);
+      setFileContent(null);
+      setLoadingFile(true);
+      api
+        .getGitHubFile(owner, repo, selectedBranch, filePath, boardId)
+        .then(data => setFileContent(data))
+        .catch(err => setFileContent({ error: err.message }))
+        .finally(() => setLoadingFile(false));
+    },
+    [owner, repo, selectedBranch, boardId]
+  );
 
   const goBackToTree = useCallback(() => {
     setSelectedFile(null);
@@ -396,7 +461,9 @@ function RepoExplorer({ owner, repo, boardId }) {
           className="bg-dark-800 border border-dark-600 text-dark-100 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-purple-500 min-w-0 flex-1 max-w-xs"
         >
           {branches.map(b => (
-            <option key={b.name} value={b.name}>{b.name}</option>
+            <option key={b.name} value={b.name}>
+              {b.name}
+            </option>
           ))}
         </select>
         {selectedFile && (
@@ -433,7 +500,9 @@ function RepoExplorer({ owner, repo, boardId }) {
             {selectedFile.split('/').map((part, i, arr) => (
               <span key={i} className="flex items-center gap-1">
                 {i > 0 && <span className="text-dark-600">/</span>}
-                <span className={i === arr.length - 1 ? 'text-dark-100 font-medium' : ''}>{part}</span>
+                <span className={i === arr.length - 1 ? 'text-dark-100 font-medium' : ''}>
+                  {part}
+                </span>
               </span>
             ))}
             {fileContent?.htmlUrl && (
@@ -511,22 +580,58 @@ function RepoExplorer({ owner, repo, boardId }) {
 
 /* ── Markdown components (dark theme) ────────────────────────────────────── */
 
-const mdComponents = {
-  pre: ({ children }) => <pre className="bg-dark-900 rounded-lg p-3 overflow-x-auto my-2 border border-dark-600">{children}</pre>,
-  code: ({ children }) => !String(children).includes('\n')
-    ? <code className="bg-dark-700 px-1.5 py-0.5 rounded text-purple-300 text-xs">{children}</code>
-    : <code className="text-green-300 text-xs">{children}</code>,
-  a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline">{children}</a>,
-  table: ({ children }) => <div className="overflow-x-auto my-2"><table className="border-collapse border border-dark-600 w-full text-xs">{children}</table></div>,
-  th: ({ children }) => <th className="border border-dark-600 px-2 py-1 bg-dark-700 text-left">{children}</th>,
+const mdComponents: Components = {
+  pre: ({ children }) => (
+    <pre className="bg-dark-900 rounded-lg p-3 overflow-x-auto my-2 border border-dark-600">
+      {children}
+    </pre>
+  ),
+  code: ({ children }) =>
+    !String(children).includes('\n') ? (
+      <code className="bg-dark-700 px-1.5 py-0.5 rounded text-purple-300 text-xs">{children}</code>
+    ) : (
+      <code className="text-green-300 text-xs">{children}</code>
+    ),
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-blue-400 hover:text-blue-300 underline"
+    >
+      {children}
+    </a>
+  ),
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-2">
+      <table className="border-collapse border border-dark-600 w-full text-xs">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="border border-dark-600 px-2 py-1 bg-dark-700 text-left">{children}</th>
+  ),
   td: ({ children }) => <td className="border border-dark-600 px-2 py-1">{children}</td>,
   ul: ({ children }) => <ul className="list-disc list-inside space-y-1">{children}</ul>,
   ol: ({ children }) => <ol className="list-decimal list-inside space-y-1">{children}</ol>,
-  h1: ({ children }) => <h1 className="text-lg font-bold text-dark-100 mt-4 mb-2 pb-1 border-b border-dark-700">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-base font-bold text-dark-100 mt-4 mb-2 pb-1 border-b border-dark-700">{children}</h2>,
+  h1: ({ children }) => (
+    <h1 className="text-lg font-bold text-dark-100 mt-4 mb-2 pb-1 border-b border-dark-700">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-base font-bold text-dark-100 mt-4 mb-2 pb-1 border-b border-dark-700">
+      {children}
+    </h2>
+  ),
   h3: ({ children }) => <h3 className="text-sm font-bold text-dark-100 mt-3 mb-1">{children}</h3>,
-  h4: ({ children }) => <h4 className="text-sm font-semibold text-dark-200 mt-2 mb-1">{children}</h4>,
-  blockquote: ({ children }) => <blockquote className="border-l-2 border-purple-500 pl-3 my-2 text-dark-400 italic">{children}</blockquote>,
+  h4: ({ children }) => (
+    <h4 className="text-sm font-semibold text-dark-200 mt-2 mb-1">{children}</h4>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-2 border-purple-500 pl-3 my-2 text-dark-400 italic">
+      {children}
+    </blockquote>
+  ),
   p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
   hr: () => <hr className="border-dark-600 my-3" />,
   li: ({ children }) => <li className="text-dark-200">{children}</li>,
@@ -565,11 +670,15 @@ function FileTreeNode({ node, expandedDirs, toggleDir, openFile, depth }) {
       <button
         className="w-full flex items-center gap-2 py-1.5 px-2 hover:bg-dark-800 transition-colors text-left group"
         style={{ paddingLeft: `${paddingLeft}px` }}
-        onClick={() => isDir ? toggleDir(node.path) : openFile(node.path)}
+        onClick={() => (isDir ? toggleDir(node.path) : openFile(node.path))}
       >
         {isDir ? (
           <>
-            {isExpanded ? <ChevronDown size={12} className="text-dark-500 shrink-0" /> : <ChevronRight size={12} className="text-dark-500 shrink-0" />}
+            {isExpanded ? (
+              <ChevronDown size={12} className="text-dark-500 shrink-0" />
+            ) : (
+              <ChevronRight size={12} className="text-dark-500 shrink-0" />
+            )}
             <FolderOpen size={14} className={`shrink-0 ${iconColor}`} />
           </>
         ) : (
@@ -578,11 +687,15 @@ function FileTreeNode({ node, expandedDirs, toggleDir, openFile, depth }) {
             <File size={14} className={`shrink-0 ${iconColor}`} />
           </>
         )}
-        <span className={`text-sm truncate ${isDir ? 'text-dark-100 font-medium' : 'text-dark-200 group-hover:text-dark-100'}`}>
+        <span
+          className={`text-sm truncate ${isDir ? 'text-dark-100 font-medium' : 'text-dark-200 group-hover:text-dark-100'}`}
+        >
           {node.name}
         </span>
         {!isDir && node.size > 0 && (
-          <span className="text-xs text-dark-600 ml-auto shrink-0">{formatFileSize(node.size)}</span>
+          <span className="text-xs text-dark-600 ml-auto shrink-0">
+            {formatFileSize(node.size)}
+          </span>
         )}
       </button>
       {isDir && isExpanded && node.children && (
@@ -634,7 +747,7 @@ function buildNestedTree(flatTree) {
   }
 
   // Sort each directory's children: dirs first, then files, alphabetical
-  const sortChildren = (nodes) => {
+  const sortChildren = nodes => {
     nodes.sort((a, b) => {
       if (a.type === 'tree' && b.type !== 'tree') return -1;
       if (a.type !== 'tree' && b.type === 'tree') return 1;
@@ -662,15 +775,31 @@ function formatFileSize(bytes) {
 function getFileIconColor(ext, isDir) {
   if (isDir) return 'text-blue-400';
   const colors = {
-    js: 'text-yellow-400', jsx: 'text-yellow-400', ts: 'text-blue-400', tsx: 'text-blue-400',
-    json: 'text-yellow-300', md: 'text-purple-400', mdx: 'text-purple-400',
-    css: 'text-blue-300', scss: 'text-pink-400', html: 'text-orange-400',
-    py: 'text-green-400', go: 'text-cyan-400', rs: 'text-orange-300',
-    yml: 'text-red-300', yaml: 'text-red-300', toml: 'text-red-300',
-    sh: 'text-green-300', bash: 'text-green-300',
-    dockerfile: 'text-blue-300', docker: 'text-blue-300',
-    svg: 'text-orange-300', png: 'text-green-300', jpg: 'text-green-300',
-    lock: 'text-dark-500', gitignore: 'text-dark-500',
+    js: 'text-yellow-400',
+    jsx: 'text-yellow-400',
+    ts: 'text-blue-400',
+    tsx: 'text-blue-400',
+    json: 'text-yellow-300',
+    md: 'text-purple-400',
+    mdx: 'text-purple-400',
+    css: 'text-blue-300',
+    scss: 'text-pink-400',
+    html: 'text-orange-400',
+    py: 'text-green-400',
+    go: 'text-cyan-400',
+    rs: 'text-orange-300',
+    yml: 'text-red-300',
+    yaml: 'text-red-300',
+    toml: 'text-red-300',
+    sh: 'text-green-300',
+    bash: 'text-green-300',
+    dockerfile: 'text-blue-300',
+    docker: 'text-blue-300',
+    svg: 'text-orange-300',
+    png: 'text-green-300',
+    jpg: 'text-green-300',
+    lock: 'text-dark-500',
+    gitignore: 'text-dark-500',
   };
   return colors[ext] || 'text-dark-300';
 }
@@ -680,7 +809,7 @@ function getFileIconColor(ext, isDir) {
 function GithubIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/>
+      <path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0112 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z" />
     </svg>
   );
 }

@@ -2,13 +2,21 @@ import { useState } from 'react';
 import { X, Edit3, User, Loader2, Save } from 'lucide-react';
 import RoleSelect from './RoleSelect';
 
-export default function InstructionsEditModal({ columnLabel, instructions, agents, boardId = null, onClose, onSave }) {
+export default function InstructionsEditModal({
+  columnLabel,
+  instructions,
+  agents,
+  boardId = null,
+  onClose,
+  onSave,
+}) {
   const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
   const [label, setLabel] = useState(columnLabel || '');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
-  const updateField = (idx, field, value) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it));
+  const updateField = (idx, field, value) =>
+    setItems(prev => prev.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
 
   const handleSave = async () => {
     setSaving(true);
@@ -37,7 +45,10 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
               className="text-sm font-semibold text-dark-100 bg-dark-800 border border-dark-700 rounded px-2 py-1 outline-none focus:border-indigo-500 transition-colors"
             />
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors">
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-dark-400 hover:text-dark-100 hover:bg-dark-700 transition-colors"
+          >
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -56,7 +67,9 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
                     className="px-2 py-1 bg-dark-800 border border-dark-600 rounded-lg text-xs text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
                   />
                 </div>
-                <span className="text-dark-600 text-[10px]">Transition #{item.transitionIdx + 1}, Action #{item.actionIdx + 1}</span>
+                <span className="text-dark-600 text-[10px]">
+                  Transition #{item.transitionIdx + 1}, Action #{item.actionIdx + 1}
+                </span>
               </div>
               <textarea
                 value={item.instructions}
@@ -69,14 +82,21 @@ export default function InstructionsEditModal({ columnLabel, instructions, agent
         </div>
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-dark-700">
           {saveError && (
-            <span className="text-xs text-red-400 max-w-[40vw] truncate" title={saveError}>{saveError}</span>
+            <span className="text-xs text-red-400 max-w-[40vw] truncate" title={saveError}>
+              {saveError}
+            </span>
           )}
-          <button onClick={onClose}
-            className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 transition-colors">
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 transition-colors"
+          >
             Cancel
           </button>
-          <button onClick={handleSave} disabled={saving}
-            className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+          >
             {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
             Save
           </button>

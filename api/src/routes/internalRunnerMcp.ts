@@ -12,7 +12,10 @@ export function internalRunnerMcpRoutes(agentManager, skillManager, mcpManager) 
   router.get('/agents/:agentId', async (req, res) => {
     try {
       const agent = agentManager.getById(req.params.agentId);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
 
       // CLI runners get exactly ONE MCP injected: the Pulsar Gateway. It always
       // carries task control (the unified update_task — move and/or finish your

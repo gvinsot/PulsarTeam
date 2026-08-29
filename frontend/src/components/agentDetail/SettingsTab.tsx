@@ -8,7 +8,14 @@ import CodexAuthSection from './CodexAuthSection';
 // per-agent llmConfigId is cleared.
 const MODEL_IN_TERMINAL_RUNNERS = new Set(['claudecode', 'codex']);
 
-export default function SettingsTab({ agent, projects, currentProject, onRefresh, userRole, currentUser }) {
+export default function SettingsTab({
+  agent,
+  projects,
+  currentProject,
+  onRefresh,
+  userRole,
+  currentUser,
+}) {
   const [form, setForm] = useState({
     name: agent.name,
     role: agent.role,
@@ -34,10 +41,17 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
   const [ttsAvailable, setTtsAvailable] = useState(false);
 
   useEffect(() => {
-    api.getLlmConfigs().then(setLlmConfigs).catch(() => {});
-    api.getBoards().then(setBoards).catch(() => {});
-    api.getExternalVoiceServices(agent.id)
-      .then((data) => setTtsAvailable(!!data?.tts?.available))
+    api
+      .getLlmConfigs()
+      .then(setLlmConfigs)
+      .catch(() => {});
+    api
+      .getBoards()
+      .then(setBoards)
+      .catch(() => {});
+    api
+      .getExternalVoiceServices(agent.id)
+      .then(data => setTtsAvailable(!!data?.tts?.available))
       .catch(() => setTtsAvailable(false));
   }, [agent.id]);
 
@@ -71,10 +85,11 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
 
   // Auto-select a runner based on the LLM config provider.
   // Mirrors the "Auto" option in the runner dropdown.
-  const resolveAutoRunner = (llmConfigId) => {
+  const resolveAutoRunner = llmConfigId => {
     const sel = llmConfigs.find(c => c.id === llmConfigId);
     const provider = (sel?.provider || '').toLowerCase();
-    if (provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid') return 'claudecode';
+    if (provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid')
+      return 'claudecode';
     if (provider === 'openai') return 'codex';
     return 'sandbox';
   };
@@ -100,8 +115,10 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
     setSaving(true);
     try {
       const payload = { ...form };
-      payload.costPerInputToken = payload.costPerInputToken !== '' ? parseFloat(payload.costPerInputToken) || null : null;
-      payload.costPerOutputToken = payload.costPerOutputToken !== '' ? parseFloat(payload.costPerOutputToken) || null : null;
+      payload.costPerInputToken =
+        payload.costPerInputToken !== '' ? parseFloat(payload.costPerInputToken) || null : null;
+      payload.costPerOutputToken =
+        payload.costPerOutputToken !== '' ? parseFloat(payload.costPerOutputToken) || null : null;
       payload.llmConfigId = payload.llmConfigId || null;
       payload.boardId = payload.boardId || null;
       // "Auto" resolves to a concrete runner so the backend (which rejects null/empty) accepts it.
@@ -137,7 +154,12 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
 
   const handleConvertToBatch = async () => {
     const total = Math.max(2, Math.min(50, Number(batchSize) || 2));
-    if (!confirm(`Convert "${agent.name}" into a batch of ${total} agents? The current agent will become #1 and keep its history and tasks.`)) return;
+    if (
+      !confirm(
+        `Convert "${agent.name}" into a batch of ${total} agents? The current agent will become #1 and keep its history and tasks.`
+      )
+    )
+      return;
     setBatching(true);
     try {
       await api.convertAgentToBatch(agent.id, total);
@@ -158,7 +180,9 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
       <div className="flex items-center justify-between px-3 py-2.5 bg-dark-800/50 rounded-lg border border-dark-700/50">
         <div>
           <span className="text-sm text-dark-200">Agent enabled</span>
-          <p className="text-[11px] text-dark-500 mt-0.5">Disabled agents are excluded from delegation, broadcast, and handoff</p>
+          <p className="text-[11px] text-dark-500 mt-0.5">
+            Disabled agents are excluded from delegation, broadcast, and handoff
+          </p>
         </div>
         <button
           onClick={async () => {
@@ -174,7 +198,9 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           }}
           className={`relative w-10 h-5 rounded-full transition-colors ${form.enabled ? 'bg-indigo-500' : 'bg-dark-600'}`}
         >
-          <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.enabled ? 'translate-x-5' : ''}`} />
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.enabled ? 'translate-x-5' : ''}`}
+          />
         </button>
       </div>
 
@@ -183,9 +209,13 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           <div className="flex items-center gap-2 min-w-0">
             <Users className="w-4 h-4 text-indigo-400 flex-shrink-0" />
             <div className="min-w-0">
-              <span className="text-sm text-dark-200">{agent.batchId ? 'Batch member' : 'Batch'}</span>
+              <span className="text-sm text-dark-200">
+                {agent.batchId ? 'Batch member' : 'Batch'}
+              </span>
               {agent.batchId && (
-                <p className="text-[11px] text-dark-500 mt-0.5">Member #{agent.batchIndex ?? '?'}</p>
+                <p className="text-[11px] text-dark-500 mt-0.5">
+                  Member #{agent.batchIndex ?? '?'}
+                </p>
               )}
             </div>
           </div>
@@ -196,7 +226,9 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
                 min={2}
                 max={50}
                 value={batchSize}
-                onChange={(e) => setBatchSize(Math.max(2, Math.min(50, parseInt(e.target.value) || 2)))}
+                onChange={e =>
+                  setBatchSize(Math.max(2, Math.min(50, parseInt(e.target.value) || 2)))
+                }
                 className="w-16 px-2 py-1.5 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                 title="Total agents"
               />
@@ -222,24 +254,27 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         <div className="col-span-2">
           <label className="block text-xs text-dark-400 mb-1.5">Name</label>
           <input
-            type="text" value={form.name}
-            onChange={(e) => updateField('name', e.target.value)}
+            type="text"
+            value={form.name}
+            onChange={e => updateField('name', e.target.value)}
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
           />
         </div>
         <div>
           <label className="block text-xs text-dark-400 mb-1.5">Role</label>
           <input
-            type="text" value={form.role}
-            onChange={(e) => updateField('role', e.target.value)}
+            type="text"
+            value={form.role}
+            onChange={e => updateField('role', e.target.value)}
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
           />
         </div>
         <div>
           <label className="block text-xs text-dark-400 mb-1.5">Icon</label>
           <input
-            type="text" value={form.icon}
-            onChange={(e) => updateField('icon', e.target.value)}
+            type="text"
+            value={form.icon}
+            onChange={e => updateField('icon', e.target.value)}
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
             maxLength={4}
           />
@@ -248,7 +283,7 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           <label className="block text-xs text-dark-400 mb-1.5">Description</label>
           <textarea
             value={form.description}
-            onChange={(e) => updateField('description', e.target.value)}
+            onChange={e => updateField('description', e.target.value)}
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 resize-none"
             rows={2}
           />
@@ -257,13 +292,16 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           <label className="block text-xs text-dark-400 mb-1.5">Runner (execution backend)</label>
           <select
             value={form.runner}
-            onChange={(e) => {
+            onChange={e => {
               const nextRunner = e.target.value;
               updateField('runner', nextRunner);
               // Claude Code / Codex pick their model in the terminal, so clear
               // any per-agent LLM config when switching to them. Other runners
               // only clear on a provider mismatch (kept for safety).
-              if (MODEL_IN_TERMINAL_RUNNERS.has(nextRunner) || !isLlmAllowedForRunner(form.llmConfigId, nextRunner)) {
+              if (
+                MODEL_IN_TERMINAL_RUNNERS.has(nextRunner) ||
+                !isLlmAllowedForRunner(form.llmConfigId, nextRunner)
+              ) {
                 updateField('llmConfigId', '');
               }
             }}
@@ -278,7 +316,10 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             <option value="aider">Aider Agent</option>
             <option value="codex">OpenAI Codex Agent</option>
           </select>
-          <p className="text-[11px] text-dark-500 mt-1">Choose the container runtime for this agent first, then pick a compatible model below. "Auto" selects based on the LLM configuration.</p>
+          <p className="text-[11px] text-dark-500 mt-1">
+            Choose the container runtime for this agent first, then pick a compatible model below.
+            "Auto" selects based on the LLM configuration.
+          </p>
         </div>
 
         {MODEL_IN_TERMINAL_RUNNERS.has(form.runner) ? (
@@ -305,14 +346,15 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
               const placeholderLabel = isCliRunner
                 ? 'Default LLM (use runner’s built-in model)'
                 : '-- Select an LLM config --';
-              const modelOptions = (agent.isVoice
-                ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
-                : llmConfigs
+              const modelOptions = (
+                agent.isVoice
+                  ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+                  : llmConfigs
               ).filter(c => isLlmAllowedForRunner(c.id, form.runner));
               return (
                 <select
                   value={form.llmConfigId}
-                  onChange={(e) => updateField('llmConfigId', e.target.value)}
+                  onChange={e => updateField('llmConfigId', e.target.value)}
                   className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                 >
                   <option value="">{placeholderLabel}</option>
@@ -325,34 +367,73 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
               );
             })()}
             {['opencode', 'hermes', 'openclaw', 'aider'].includes(form.runner) && (
-              <p className="text-[11px] text-dark-500 mt-1">Local vLLM/Ollama models are also injected into the runner; OpenCode lets you switch between them in the terminal. Your selection here is the default.</p>
+              <p className="text-[11px] text-dark-500 mt-1">
+                Local vLLM/Ollama models are also injected into the runner; OpenCode lets you switch
+                between them in the terminal. Your selection here is the default.
+              </p>
             )}
-            {agent.isVoice && !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
-              <p className="text-[11px] text-amber-400 mt-1">No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin Settings.</p>
-            )}
-            {form.llmConfigId && (() => {
-              const sel = llmConfigs.find(c => c.id === form.llmConfigId);
-              return sel ? (
-                <div className="mt-2 p-2.5 bg-dark-700/50 rounded-lg border border-dark-600/50 text-xs text-dark-400 space-y-0.5">
-                  <p><span className="text-dark-300">Provider:</span> {sel.provider}</p>
-                  <p><span className="text-dark-300">Model:</span> <span className="font-mono">{sel.model}</span></p>
-                  {sel.endpoint && <p><span className="text-dark-300">Endpoint:</span> <span className="font-mono">{sel.endpoint}</span></p>}
-                  {sel.isReasoning && <p><span className="text-dark-300">Reasoning:</span> Yes</p>}
-                  {sel.contextSize && <p><span className="text-dark-300">Context:</span> {(sel.contextSize / 1000).toFixed(0)}k tokens</p>}
-                  {sel.maxOutputTokens && <p><span className="text-dark-300">Max Output:</span> {(sel.maxOutputTokens / 1000).toFixed(0)}k tokens</p>}
-                  {sel.temperature != null && <p><span className="text-dark-300">Temperature:</span> {sel.temperature}</p>}
-                </div>
-              ) : null;
-            })()}
-            <p className="text-[11px] text-dark-500 mt-1">LLM configurations are managed in Admin Settings</p>
+            {agent.isVoice &&
+              !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
+                <p className="text-[11px] text-amber-400 mt-1">
+                  No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin
+                  Settings.
+                </p>
+              )}
+            {form.llmConfigId &&
+              (() => {
+                const sel = llmConfigs.find(c => c.id === form.llmConfigId);
+                return sel ? (
+                  <div className="mt-2 p-2.5 bg-dark-700/50 rounded-lg border border-dark-600/50 text-xs text-dark-400 space-y-0.5">
+                    <p>
+                      <span className="text-dark-300">Provider:</span> {sel.provider}
+                    </p>
+                    <p>
+                      <span className="text-dark-300">Model:</span>{' '}
+                      <span className="font-mono">{sel.model}</span>
+                    </p>
+                    {sel.endpoint && (
+                      <p>
+                        <span className="text-dark-300">Endpoint:</span>{' '}
+                        <span className="font-mono">{sel.endpoint}</span>
+                      </p>
+                    )}
+                    {sel.isReasoning && (
+                      <p>
+                        <span className="text-dark-300">Reasoning:</span> Yes
+                      </p>
+                    )}
+                    {sel.contextSize && (
+                      <p>
+                        <span className="text-dark-300">Context:</span>{' '}
+                        {(sel.contextSize / 1000).toFixed(0)}k tokens
+                      </p>
+                    )}
+                    {sel.maxOutputTokens && (
+                      <p>
+                        <span className="text-dark-300">Max Output:</span>{' '}
+                        {(sel.maxOutputTokens / 1000).toFixed(0)}k tokens
+                      </p>
+                    )}
+                    {sel.temperature != null && (
+                      <p>
+                        <span className="text-dark-300">Temperature:</span> {sel.temperature}
+                      </p>
+                    )}
+                  </div>
+                ) : null;
+              })()}
+            <p className="text-[11px] text-dark-500 mt-1">
+              LLM configurations are managed in Admin Settings
+            </p>
           </div>
         )}
 
         <div>
           <label className="block text-xs text-dark-400 mb-1.5">Color</label>
           <input
-            type="color" value={form.color}
-            onChange={(e) => updateField('color', e.target.value)}
+            type="color"
+            value={form.color}
+            onChange={e => updateField('color', e.target.value)}
             className="h-9 w-full rounded-lg border border-dark-600 cursor-pointer bg-dark-800"
           />
         </div>
@@ -363,15 +444,20 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         <label className="block text-xs text-dark-400 mb-1.5">Board</label>
         <select
           value={form.boardId}
-          onChange={(e) => updateField('boardId', e.target.value)}
+          onChange={e => updateField('boardId', e.target.value)}
           className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
         >
           <option value="">No board (visible to all)</option>
           {boards.map(b => (
-            <option key={b.id} value={b.id}>{b.name}</option>
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
           ))}
         </select>
-        <p className="text-[11px] text-dark-500 mt-1">Agents are visible to all users who have access to the selected board. An agent without a board is visible to everyone.</p>
+        <p className="text-[11px] text-dark-500 mt-1">
+          Agents are visible to all users who have access to the selected board. An agent without a
+          board is visible to everyone.
+        </p>
       </div>
 
       {/* TTS toggle — only shown when the global TTS service is configured.
@@ -403,7 +489,9 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
             className={`relative w-10 h-5 rounded-full transition-colors ${form.ttsEnabled ? 'bg-indigo-500' : 'bg-dark-600'} ${!ttsAvailable ? 'opacity-40 cursor-not-allowed' : ''}`}
             title={ttsAvailable ? 'Toggle TTS' : 'TTS service not configured'}
           >
-            <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.ttsEnabled ? 'translate-x-5' : ''}`} />
+            <span
+              className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${form.ttsEnabled ? 'translate-x-5' : ''}`}
+            />
           </button>
         </div>
       )}
@@ -431,7 +519,9 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
           <div>
             <p className="text-dark-500">Last Active</p>
             <p className="font-mono text-dark-200 text-[10px]">
-              {agent.metrics?.lastActiveAt ? new Date(agent.metrics.lastActiveAt).toLocaleTimeString() : 'Never'}
+              {agent.metrics?.lastActiveAt
+                ? new Date(agent.metrics.lastActiveAt).toLocaleTimeString()
+                : 'Never'}
             </p>
           </div>
           <div>
@@ -471,7 +561,12 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         </button>
         <button
           onClick={async () => {
-            if (!confirm('Reload agent context? This stops the agent and invalidates every cache (conversation, runner sessions, MCP connections, LLM config, file tree) so the next message picks up your latest configuration.')) return;
+            if (
+              !confirm(
+                'Reload agent context? This stops the agent and invalidates every cache (conversation, runner sessions, MCP connections, LLM config, file tree) so the next message picks up your latest configuration.'
+              )
+            )
+              return;
             await api.reloadContext(agent.id);
             onRefresh();
           }}
@@ -482,7 +577,12 @@ export default function SettingsTab({ agent, projects, currentProject, onRefresh
         </button>
         <button
           onClick={async () => {
-            if (!confirm('Restart agent? This restarts the CLI process, reconnects MCP and refreshes the file tree to apply config changes, while KEEPING the conversation so the agent resumes exactly where it left off.')) return;
+            if (
+              !confirm(
+                'Restart agent? This restarts the CLI process, reconnects MCP and refreshes the file tree to apply config changes, while KEEPING the conversation so the agent resumes exactly where it left off.'
+              )
+            )
+              return;
             await api.restartRuntime(agent.id);
             onRefresh();
           }}

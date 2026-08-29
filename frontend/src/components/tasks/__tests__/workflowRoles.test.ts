@@ -98,7 +98,15 @@ test('TasksBoard hands the workflow modals the full agent list + a board id', ()
     const start = source.indexOf(`<${component}`);
     assert.ok(start !== -1, `${component} is no longer rendered by TasksBoard`);
     const props = source.slice(start, source.indexOf('/>', start));
-    assert.match(props, /agents=\{agents\}/, `${component} must receive the unfiltered agents list`);
-    assert.match(props, /boardId=\{activeBoardId\}/, `${component} must receive the active board id`);
+    assert.match(
+      props,
+      /agents=\{agents\}/,
+      `${component} must receive the unfiltered agents list`
+    );
+    assert.match(
+      props,
+      /boardId=\{activeBoardId\}/,
+      `${component} must receive the active board id`
+    );
   }
 });

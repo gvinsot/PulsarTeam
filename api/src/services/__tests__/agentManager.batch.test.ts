@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentManager } from '../agentManager.js';
 
-const io = { emit() {}, to() { return { emit() {} }; } };
+const io = {
+  emit() {},
+  to() {
+    return { emit() {} };
+  },
+};
 
 test('convertToBatch keeps the original agent as member #1 and creates configured clones', async () => {
   const manager = new AgentManager(io, null, null, null) as any;
@@ -37,7 +42,10 @@ test('convertToBatch keeps the original agent as member #1 and creates configure
   assert.equal(batch[2].name, 'Builder #3');
   assert.equal(batch[0].batchId, batch[1].batchId);
   assert.equal(batch[1].batchId, batch[2].batchId);
-  assert.deepEqual(batch.map((agent: any) => agent.batchIndex), [1, 2, 3]);
+  assert.deepEqual(
+    batch.map((agent: any) => agent.batchIndex),
+    [1, 2, 3]
+  );
 
   const clone = manager.agents.get(batch[1].id);
   assert.equal(clone.role, 'developer');

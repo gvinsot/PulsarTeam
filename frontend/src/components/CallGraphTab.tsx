@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { Loader2, AlertCircle, ArrowRightLeft, Play, ZoomIn, ZoomOut, Maximize2, Sparkles } from 'lucide-react';
+import {
+  Loader2,
+  AlertCircle,
+  ArrowRightLeft,
+  Play,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Sparkles,
+} from 'lucide-react';
 import mermaid from 'mermaid';
 import { api } from '../api';
+import { sanitizeSvg } from '../lib/sanitizeSvg';
 
 type Direction = 'ui-to-service' | 'service-to-ui';
 
@@ -19,16 +29,29 @@ interface GraphResult {
 let mermaidInited = false;
 function initMermaid() {
   if (mermaidInited) return;
+  // The diagram source is built from repository contents and may be rewritten
+  // by an LLM, so it is untrusted input. 'strict' makes Mermaid run its own
+  // DOMPurify pass and disables click/callback directives; htmlLabels is off
+  // because strict mode renders labels as SVG <text> rather than raw HTML.
+  // The rendered SVG then goes through sanitizeSvg() before it reaches the DOM.
   mermaid.initialize({
     startOnLoad: false,
     theme: 'dark',
-    securityLevel: 'loose',
-    flowchart: { useMaxWidth: false, htmlLabels: true, curve: 'basis' },
+    securityLevel: 'strict',
+    flowchart: { useMaxWidth: false, htmlLabels: false, curve: 'basis' },
   });
   mermaidInited = true;
 }
 
-export default function CallGraphTab({ owner, repo, boardId }: { owner: string; repo: string; boardId: string }) {
+export default function CallGraphTab({
+  owner,
+  repo,
+  boardId,
+}: {
+  owner: string;
+  repo: string;
+  boardId: string;
+}) {
   const [direction, setDirection] = useState<Direction>('ui-to-service');
   const [data, setData] = useState<GraphResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -37,42 +60,55 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [svg, setSvg] = useState<string>('');
 
-  const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const dragRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(
+    null
+  );
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Run analysis on demand.
-  const runAnalysis = useCallback(async (refresh = false) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await api.analyzeCodeGraph(owner, repo, boardId, { direction, refresh });
-      setData(result);
-    } catch (err: any) {
-      setError(err.message || 'Analysis failed');
-    } finally {
-      setLoading(false);
-    }
-  }, [owner, repo, boardId, direction]);
+  const runAnalysis = useCallback(
+    async (refresh = false) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await api.analyzeCodeGraph(owner, repo, boardId, { direction, refresh });
+        setData(result);
+      } catch (err: any) {
+        setError(err.message || 'Analysis failed');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [owner, repo, boardId, direction]
+  );
 
   // Render mermaid → SVG when data changes.
   useEffect(() => {
-    if (!data?.mermaid) { setSvg(''); return; }
+    if (!data?.mermaid) {
+      setSvg('');
+      return undefined;
+    }
     initMermaid();
     let cancelled = false;
     (async () => {
       try {
         const id = `cg_${Math.random().toString(36).slice(2)}`;
         const { svg } = await mermaid.render(id, data.mermaid);
-        if (!cancelled) setSvg(svg);
+        if (!cancelled) setSvg(sanitizeSvg(svg));
       } catch (err: any) {
         if (!cancelled) setError(`Diagram render failed: ${err.message}`);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [data]);
 
   // Reset zoom/pan when direction or data switches.
-  useEffect(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, [data?.direction]);
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [data?.direction]);
 
   // ── Zoom & pan handlers ──────────────────────────────────────────────
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -91,7 +127,9 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
       y: dragRef.current.baseY + (e.clientY - dragRef.current.startY),
     });
   };
-  const onMouseUp = () => { dragRef.current = null; };
+  const onMouseUp = () => {
+    dragRef.current = null;
+  };
 
   const fitToContainer = () => {
     setZoom(1);
@@ -144,31 +182,46 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
             onClick={() => setZoom(z => Math.max(0.2, z * 0.9))}
             className="p-1.5 bg-dark-800 border border-dark-600 rounded text-dark-300 hover:text-dark-100"
             title="Zoom out"
-          ><ZoomOut size={14} /></button>
+          >
+            <ZoomOut size={14} />
+          </button>
           <span className="text-xs text-dark-400 w-12 text-center">{Math.round(zoom * 100)}%</span>
           <button
             onClick={() => setZoom(z => Math.min(4, z * 1.1))}
             className="p-1.5 bg-dark-800 border border-dark-600 rounded text-dark-300 hover:text-dark-100"
             title="Zoom in"
-          ><ZoomIn size={14} /></button>
+          >
+            <ZoomIn size={14} />
+          </button>
           <button
             onClick={fitToContainer}
             className="p-1.5 bg-dark-800 border border-dark-600 rounded text-dark-300 hover:text-dark-100"
             title="Reset view"
-          ><Maximize2 size={14} /></button>
+          >
+            <Maximize2 size={14} />
+          </button>
         </div>
       </div>
 
       {/* Stats / status */}
       {data && (
         <div className="flex items-center gap-3 flex-wrap text-[11px] text-dark-400 mb-2 px-1">
-          <span>{data.nodes.length} nodes · {data.edges.length} edges</span>
+          <span>
+            {data.nodes.length} nodes · {data.edges.length} edges
+          </span>
           {data.stats && (
-            <span>scanned {data.stats.filesScanned} files (UI: {data.stats.uiFiles} / service: {data.stats.serviceFiles})</span>
+            <span>
+              scanned {data.stats.filesScanned} files (UI: {data.stats.uiFiles} / service:{' '}
+              {data.stats.serviceFiles})
+            </span>
           )}
-          {data.stats?.truncated && <span className="text-amber-400">⚠ tree truncated by GitHub</span>}
+          {data.stats?.truncated && (
+            <span className="text-amber-400">⚠ tree truncated by GitHub</span>
+          )}
           {data.llm && (
-            <span className="text-purple-300">simplified by {data.llm.provider}/{data.llm.model}</span>
+            <span className="text-purple-300">
+              simplified by {data.llm.provider}/{data.llm.model}
+            </span>
           )}
         </div>
       )}
@@ -202,10 +255,9 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
             <ArrowRightLeft className="w-10 h-10 text-dark-600 mb-3" />
             <h3 className="text-sm font-semibold text-dark-200">Call-graph analysis</h3>
             <p className="text-xs text-dark-400 mt-1 max-w-md">
-              Scans the repository's source files and builds a graph linking UI features
-              to backend services. Pick a direction above and click <strong>Analyze</strong>.
-              The optional LLM step (configured in Admin Settings) is used to simplify the
-              graph for readability.
+              Scans the repository's source files and builds a graph linking UI features to backend
+              services. Pick a direction above and click <strong>Analyze</strong>. The optional LLM
+              step (configured in Admin Settings) is used to simplify the graph for readability.
             </p>
           </div>
         )}
@@ -214,6 +266,8 @@ export default function CallGraphTab({ owner, repo, boardId }: { owner: string; 
           <div
             className="absolute top-0 left-0 origin-top-left will-change-transform select-none"
             style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
+            // `svg` only ever holds sanitizeSvg() output (see the render effect
+            // above) — never assign a raw mermaid.render() result here.
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         )}

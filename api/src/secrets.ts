@@ -91,7 +91,7 @@ export function validateProductionSecrets(): void {
   if (isWeakSecret(jwt, 32)) {
     errors.push(
       'JWT_SECRET is missing, too short (<32 chars), or set to a known default placeholder. ' +
-      'Generate a random value (e.g. `openssl rand -hex 48`) and set it as a Docker secret.'
+        'Generate a random value (e.g. `openssl rand -hex 48`) and set it as a Docker secret.'
     );
   }
 
@@ -99,8 +99,8 @@ export function validateProductionSecrets(): void {
   if (isWeakSecret(coderKey, 16)) {
     errors.push(
       'CODER_API_KEY is missing, too short (<16 chars), or set to a known default placeholder. ' +
-      'Generate a random value (e.g. `openssl rand -hex 32`) and set it as a Docker secret. ' +
-      'Runner services authenticate API calls with this key — without it, every /v1/chat/completions request fails with 403.'
+        'Generate a random value (e.g. `openssl rand -hex 32`) and set it as a Docker secret. ' +
+        'Runner services authenticate API calls with this key — without it, every /v1/chat/completions request fails with 403.'
     );
   }
 
@@ -108,8 +108,8 @@ export function validateProductionSecrets(): void {
   if (isWeakSecret(encKey, 32)) {
     warnings.push(
       'ENCRYPTION_KEY is missing, too short (<32 chars), or a known default. ' +
-      'Required to encrypt OAuth tokens, LLM API keys, and MCP credentials at rest. ' +
-      'Generate one with `openssl rand -hex 32` and configure it as a Docker secret.'
+        'Required to encrypt OAuth tokens, LLM API keys, and MCP credentials at rest. ' +
+        'Generate one with `openssl rand -hex 32` and configure it as a Docker secret.'
     );
   }
 

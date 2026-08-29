@@ -102,7 +102,10 @@ test('encryptFields skips empty / already-encrypted / non-string values', () => 
 });
 
 test('decryptFields rejects non-encrypted string values, skips empty/non-string', () => {
-  assert.throws(() => decryptFields({ apiKey: 'plain-secret' }, ['apiKey']), /not in the expected encrypted format/);
+  assert.throws(
+    () => decryptFields({ apiKey: 'plain-secret' }, ['apiKey']),
+    /not in the expected encrypted format/
+  );
   const out = decryptFields({ apiKey: '', num: 42 } as any, ['apiKey', 'num']);
   assert.equal(out.apiKey, '');
   assert.equal(out.num, 42);
