@@ -2,6 +2,9 @@
 **/node_modules/
 **/dist/
 **/build/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
 api/tests/
 frontend/public/
 
@@ -10,6 +13,7 @@ frontend/public/
 *.log
 
 # Not source we own the formatting of
+.claude/
 docs/
 specs/
 LICENSE

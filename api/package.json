@@ -12,8 +12,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 1485",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format": "prettier --write . --ignore-path ../.gitignore --ignore-path ../.prettierignore",
+    "format:check": "prettier --check . --ignore-path ../.gitignore --ignore-path ../.prettierignore"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

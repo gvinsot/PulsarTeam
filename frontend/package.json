@@ -11,8 +11,8 @@
     "test": "node --test \"src/**/__tests__/*.test.ts\"",
     "lint": "eslint . --max-warnings 139",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format": "prettier --write . --ignore-path ../.gitignore --ignore-path ../.prettierignore",
+    "format:check": "prettier --check . --ignore-path ../.gitignore --ignore-path ../.prettierignore"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.4",
