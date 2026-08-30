@@ -9,9 +9,12 @@
 // the final transcript, forward it to the agent chat, play the TTS reply,
 // then reopen a fresh STT session for the next turn.
 //
-// All audio runs through the browser; this component only talks to the
-// backend to fetch STT/TTS WS URLs and to forward the transcript through
-// the regular agent chat endpoint.
+// The two sockets are OUR OWN api ("/ws/voice/stt/:agentId" and
+// "/ws/voice/tts/:agentId"), which relays them to the STT/TTS service: the audio
+// does travel through the backend, and the operator's speech API key never
+// reaches the browser. /external-voice/config returns those paths;
+// resolveVoiceWsUrl absolutises them. The transcript still goes out through the
+// regular agent chat endpoint.
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Mic,
@@ -30,10 +33,14 @@ import {
   MIN_SPEECH_MS,
   RMS_SPEECH,
   RMS_SILENCE,
+  VOICE_RELAY_HINT,
   decodePcm16ToBuffer,
+  resolveVoiceWsUrl,
+  voiceCloseDetail,
 } from '../lib/externalVoiceClient';
+import type { TtsStartMessage } from '../lib/externalVoiceClient';
 import { errorMessage } from '../utils/errors';
-import type { Agent } from '../types';
+import type { Agent, ConversationMessage, ExternalVoiceConfig } from '../types';
 
 type Status = 'disconnected' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
 
@@ -67,7 +74,7 @@ export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
   const playbackQueueRef = useRef<Promise<void>>(Promise.resolve());
   const mutedRef = useRef(false);
   const speakerOffRef = useRef(false);
-  const configRef = useRef<any>(null);
+  const configRef = useRef<ExternalVoiceConfig | null>(null);
   const sessionActiveRef = useRef(false);
   const sttRetryRef = useRef(0);
   const transcriptListRef = useRef<HTMLDivElement | null>(null);
@@ -192,7 +199,9 @@ export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
           : Array.isArray(updated)
             ? updated
             : [];
-        const lastAssistant = [...histArr].reverse().find((m: any) => m.role === 'assistant');
+        const lastAssistant = [...histArr]
+          .reverse()
+          .find((m: ConversationMessage) => m.role === 'assistant');
         const reply = (lastAssistant?.content || '').toString().trim();
         if (!reply) {
           if (sessionActiveRef.current) openStt();
@@ -219,16 +228,25 @@ export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
         if (sessionActiveRef.current) openStt();
         return;
       }
+      const ttsUrl = resolveVoiceWsUrl(cfg.tts.wsUrl);
+      if (!ttsUrl) {
+        setError('Voice config has no TTS endpoint');
+        if (sessionActiveRef.current) openStt();
+        return;
+      }
       setStatus('speaking');
-      const ws = new WebSocket(cfg.tts.wsUrl);
+      const ws = new WebSocket(ttsUrl);
       ws.binaryType = 'arraybuffer';
       ttsSocketRef.current = ws;
       ws.onopen = () => {
-        const startMsg: any = {
+        const startMsg: TtsStartMessage = {
           type: 'session.start',
-          config: { text, mode: 'zero_shot' },
+          config: {
+            text,
+            mode: 'zero_shot',
+            ...(cfg.tts.voiceId ? { voice_id: cfg.tts.voiceId } : {}),
+          },
         };
-        if (cfg.tts.voiceId) startMsg.config.voice_id = cfg.tts.voiceId;
         ws.send(JSON.stringify(startMsg));
       };
       ws.onmessage = evt => {
@@ -251,7 +269,7 @@ export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
           enqueuePcmChunk(evt.data as ArrayBuffer, cfg.tts.sampleRate);
         }
       };
-      ws.onerror = () => setError('TTS WebSocket error');
+      ws.onerror = () => setError(`TTS connection error (${VOICE_RELAY_HINT})`);
       ws.onclose = () => {
         // Wait for the playback queue to drain, then reopen STT.
         playbackQueueRef.current = playbackQueueRef.current.then(() => {
@@ -271,7 +289,15 @@ export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
     setPartial('');
     vadRef.current = { speechStartedAt: 0, lastSpeechAt: 0, ended: false };
 
-    const stt = new WebSocket(cfg.stt.wsUrl);
+    const sttUrl = resolveVoiceWsUrl(cfg.stt.wsUrl);
+    if (!sttUrl) {
+      setError('Voice config has no STT endpoint');
+      setStatus('error');
+      cleanup();
+      return;
+    }
+
+    const stt = new WebSocket(sttUrl);
     stt.binaryType = 'arraybuffer';
     sttSocketRef.current = stt;
 
@@ -307,14 +333,14 @@ export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
         console.warn('[ExternalVoice] STT message parse failed', e);
       }
     };
-    stt.onerror = () => setError('STT WebSocket error');
-    stt.onclose = () => {
+    stt.onerror = () => setError(`STT connection error (${VOICE_RELAY_HINT})`);
+    stt.onclose = ev => {
       // Intentional closes null the ref first; only genuine drops reach here.
       if (sttSocketRef.current !== stt) return;
       sttSocketRef.current = null;
       if (!sessionActiveRef.current) return;
       if (sttRetryRef.current >= 3) {
-        setError('STT connection lost');
+        setError(`STT connection lost (${VOICE_RELAY_HINT})${voiceCloseDetail(ev)}`);
         setStatus('error');
         cleanup();
         return;

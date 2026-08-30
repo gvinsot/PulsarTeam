@@ -14,6 +14,12 @@
 //
 // Both helpers are exposed as small classes so the React components only
 // wire up callbacks and start/stop.
+//
+// Both sockets go to OUR OWN api, not to the speech provider: the wsUrl in the
+// voice config is a same-origin path ("/ws/voice/stt/:agentId",
+// "/ws/voice/tts/:agentId") that the api proxies upstream, so the operator's
+// STT/TTS API key never reaches the browser. resolveVoiceWsUrl below turns that
+// path into an absolute ws:/wss: URL.
 
 import { errorMessage } from '../utils/errors';
 
@@ -79,6 +85,54 @@ class PcmDownsamplerProcessor extends AudioWorkletProcessor {
 registerProcessor('pcm-downsampler', PcmDownsamplerProcessor);
 `;
 
+// ── Voice WebSocket endpoints ──────────────────────────────────────────────
+//
+// /api/external-voice hands back a SAME-ORIGIN PATH ("/ws/voice/stt/<agentId>",
+// "/ws/voice/tts/<agentId>"); the api proxies the audio to the STT/TTS service.
+// It used to hand back the provider URL with the operator's api_key in the query
+// string, which put a shared credential in every tenant's browser.
+//
+// The path is absolutised exactly the way the terminal already does it
+// (components/agentDetail/TerminalTab.tsx:473-475): the page scheme picks ws: vs
+// wss:, the page host supplies the authority.
+//
+// An already-absolute ws:/wss: value is returned untouched. That is a deliberate
+// choice, not leniency: the SPA bundle and the api ship as separate images, so a
+// rolling deploy can briefly pair this bundle with an api still on the old
+// response. Accepting both keeps voice working across that window and concedes
+// nothing — keeping the key server-side is the api's job, and this function
+// neither reads nor rewrites a query string in either shape.
+export function resolveVoiceWsUrl(wsUrl: string): string {
+  const raw = (wsUrl || '').trim();
+  if (!raw) return '';
+  if (raw.startsWith('ws://') || raw.startsWith('wss://')) return raw;
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const path = raw.startsWith('/') ? raw : `/${raw}`;
+  return `${proto}//${window.location.host}${path}`;
+}
+
+// A failed voice socket is ambiguous by construction now: the browser talks to
+// our api and the api talks to the provider, and a drop at either tier arrives
+// as the same error/close event with nothing to tell them apart. The messages
+// say so rather than naming a tier we cannot identify.
+export const VOICE_RELAY_HINT = 'voice relay or speech service';
+
+// The one non-guess a close carries is the peer's own reason string — our api
+// can close with an explanation, and an upstream reason is relayed through it.
+// Surfaced verbatim when present, never substituted.
+export function voiceCloseDetail(ev: CloseEvent): string {
+  const reason = (ev.reason || '').trim();
+  return reason ? `: ${reason.slice(0, 200)}` : '';
+}
+
+// Body of the TTS `session.start` frame. Typed here because both this module and
+// ExternalVoiceChatTab build one, and both used `any` to attach the optional
+// voice_id.
+export interface TtsStartMessage {
+  type: 'session.start';
+  config: { text: string; mode: 'zero_shot'; voice_id?: string };
+}
+
 export interface SttConfig {
   wsUrl: string;
   sampleRate: number;
@@ -131,7 +185,9 @@ export class SttSession {
       node.port.onmessage = ev => this.onFrame(ev);
       source.connect(node);
 
-      const stt = new WebSocket(this.config.wsUrl);
+      const sttUrl = resolveVoiceWsUrl(this.config.wsUrl);
+      if (!sttUrl) throw new Error('Voice config has no STT endpoint');
+      const stt = new WebSocket(sttUrl);
       stt.binaryType = 'arraybuffer';
       this.socket = stt;
       stt.onopen = () => {
@@ -165,8 +221,8 @@ export class SttSession {
           console.warn('[SttSession] message parse failed', e);
         }
       };
-      stt.onerror = () => this.cb.onError?.('STT WebSocket error');
-      stt.onclose = () => {
+      stt.onerror = () => this.cb.onError?.(`STT connection error (${VOICE_RELAY_HINT})`);
+      stt.onclose = ev => {
         // On the normal final/error paths cleanup() nulls this.socket before
         // the close event fires, so this only handles the service dropping
         // the connection mid-utterance.
@@ -175,7 +231,9 @@ export class SttSession {
         if (!this.stopped) {
           this.stopped = true;
           this.cleanup();
-          this.cb.onError?.('STT connection closed before transcript');
+          this.cb.onError?.(
+            `STT connection closed before transcript (${VOICE_RELAY_HINT})${voiceCloseDetail(ev)}`
+          );
           this.cb.onStateChange?.('idle');
         }
       };
@@ -206,14 +264,14 @@ export class SttSession {
     }
   }
 
-  // The service may never answer session.end (restart, wedged connection) —
-  // bail out of 'finalizing' instead of leaving the mic recording forever.
+  // The relay or the service may never answer session.end (restart, wedged
+  // connection) — bail out of 'finalizing' instead of recording forever.
   private armFinalizeTimeout(): void {
     if (this.finalizeTimer) clearTimeout(this.finalizeTimer);
     this.finalizeTimer = setTimeout(() => {
       this.finalizeTimer = null;
       if (this.stopped) return;
-      this.cb.onError?.('STT service did not return a transcript');
+      this.cb.onError?.(`No transcript returned (${VOICE_RELAY_HINT})`);
       this.stop();
     }, 10000);
   }
@@ -317,13 +375,25 @@ export class TtsPlayer {
       this.cb.onEnd?.();
       return;
     }
-    const ws = new WebSocket(this.config.wsUrl);
+    const ttsUrl = resolveVoiceWsUrl(this.config.wsUrl);
+    if (!ttsUrl) {
+      this.cb.onError?.('Voice config has no TTS endpoint');
+      this.cb.onEnd?.();
+      return;
+    }
+    const ws = new WebSocket(ttsUrl);
     ws.binaryType = 'arraybuffer';
     this.socket = ws;
     this.cb.onStart?.();
     ws.onopen = () => {
-      const startMsg: any = { type: 'session.start', config: { text, mode: 'zero_shot' } };
-      if (this.config.voiceId) startMsg.config.voice_id = this.config.voiceId;
+      const startMsg: TtsStartMessage = {
+        type: 'session.start',
+        config: {
+          text,
+          mode: 'zero_shot',
+          ...(this.config.voiceId ? { voice_id: this.config.voiceId } : {}),
+        },
+      };
       ws.send(JSON.stringify(startMsg));
     };
     ws.onmessage = evt => {
@@ -347,7 +417,7 @@ export class TtsPlayer {
         this.enqueuePcm(evt.data as ArrayBuffer);
       }
     };
-    ws.onerror = () => this.cb.onError?.('TTS WebSocket error');
+    ws.onerror = () => this.cb.onError?.(`TTS connection error (${VOICE_RELAY_HINT})`);
     ws.onclose = () => {
       this.playbackQueue = this.playbackQueue.then(() => {
         this.socket = null;

@@ -472,13 +472,19 @@ export interface Settings {
   claudeFallbackLlmConfigId: string;
   /** '' = automatic role selection unavailable. */
   roleRouterLlmConfigId: string;
+  /** The provider endpoint the api's voice proxy dials. Operator-facing: it is
+   *  never handed to the browser as a connection target — see
+   *  ExternalVoiceConfig. */
   sttServiceUrl: string;
-  /** NOT masked, unlike LlmConfig.apiKey and McpServer.apiKey: this route has no
-   *  sanitizer and no role guard, so the plaintext key is echoed to any
-   *  authenticated caller. */
+  /** Masked to '********' (or '' when unset) for a non-admin caller, like
+   *  LlmConfig.apiKey and McpServer.apiKey — GET /api/settings is open to every
+   *  authenticated user and name-matches credential-shaped keys
+   *  (api/src/routes/settings.ts:22-44). Admins read the real value back because
+   *  the Admin Settings tab pre-fills its inputs from it. */
   sttApiKey: string;
+  /** Operator-facing, same as sttServiceUrl. */
   ttsServiceUrl: string;
-  /** Same un-masked exposure as sttApiKey. */
+  /** Same masking as sttApiKey. */
   ttsApiKey: string;
   ttsVoiceId: string;
 }
@@ -501,4 +507,34 @@ export interface ReminderConfig {
   /** `!!process.env.TASK_REMINDER_INTERVAL_MINUTES`. Read-only signal — the PUT
    *  handler ignores it if sent back. */
   envOverride: boolean;
+}
+
+/**
+ * GET /api/external-voice/config/:agentId — everything the browser needs to open
+ * the STT and TTS sockets of an external-voice agent. Produced by
+ * api/src/routes/externalVoice.ts.
+ *
+ * Both `wsUrl` values are SAME-ORIGIN PATHS ("/ws/voice/stt/<agentId>",
+ * "/ws/voice/tts/<agentId>"): the api proxies the audio upstream so the
+ * operator's STT/TTS key stays server-side. They were absolute provider URLs
+ * carrying that key in the query string until the proxy landed, which is why
+ * resolveVoiceWsUrl (lib/externalVoiceClient.ts) — the only place a consumer
+ * should absolutise them — still accepts the absolute form.
+ *
+ * NOT the same thing as SttConfig / TtsConfig (lib/externalVoiceClient.ts):
+ * those are the constructor arguments of the browser-side session classes, this
+ * is the wire payload they are built from.
+ */
+export interface ExternalVoiceConfig {
+  stt: { wsUrl: string; sampleRate: number; encoding: string; channels: number };
+  tts: {
+    wsUrl: string;
+    sampleRate: number;
+    encoding: string;
+    channels: number;
+    /** '' when neither the agent nor the global setting names a voice. */
+    voiceId: string;
+  };
+  /** null when the agent inherits the default LLM config. */
+  llmConfigId: string | null;
 }

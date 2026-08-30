@@ -30,6 +30,7 @@ import type {
   CodeIndexProjectResponse,
   CommitDiff,
   ConversationMessage,
+  ExternalVoiceConfig,
   GitHubActivityResponse,
   GitHubBranch,
   GitHubFileContent,
@@ -833,24 +834,17 @@ export const api = {
       transcriptionModel: string;
     }>('/realtime/token', { agentId }),
 
-  // External voice (STT + LLM + TTS pipeline) — returns WSS URLs for the browser.
-  // The SttConfig/TtsConfig pair that describes these blocks lives in
-  // lib/externalVoiceClient.ts on purpose and is not re-exported by ./types, so
-  // this stays structural.
+  // External voice (STT + LLM + TTS pipeline). The wsUrl values are same-origin
+  // PATHS onto the api's voice proxy, not provider URLs, and carry no API key —
+  // absolutise them with resolveVoiceWsUrl (lib/externalVoiceClient.ts).
+  // SttConfig/TtsConfig, the browser-side session classes' constructor args,
+  // stay in that module; ExternalVoiceConfig is the wire payload.
   getExternalVoiceConfig: (agentId: string) =>
-    get<{
-      stt: { wsUrl: string; sampleRate: number; encoding: string; channels: number };
-      tts: {
-        wsUrl: string;
-        sampleRate: number;
-        encoding: string;
-        channels: number;
-        voiceId: string;
-      };
-      llmConfigId: string | null;
-    }>(`/external-voice/config/${encodeURIComponent(agentId)}`),
+    get<ExternalVoiceConfig>(`/external-voice/config/${encodeURIComponent(agentId)}`),
 
-  // Global STT/TTS availability + WS URLs for the regular text chat.
+  // Global STT/TTS availability + WS endpoints for the regular text chat.
+  // Same rule as getExternalVoiceConfig: pass wsUrl through resolveVoiceWsUrl,
+  // which accepts both a proxy path and the absolute URL older builds returned.
   // agentId is optional and is only used to resolve a per-agent ttsVoiceId.
   // Each half is a two-arm union: the unavailable arm is `{ available: false }`
   // and carries no URL at all (api/src/routes/externalVoice.ts:91-101).

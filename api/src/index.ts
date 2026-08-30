@@ -90,6 +90,7 @@ import { contactRoutes } from './routes/contact.js';
 import taskRoutes from './routes/tasks.js';
 import { setAgentManager } from './services/userProvisioning.js';
 import { installTerminalProxy } from './routes/terminal.js';
+import { installVoiceProxy } from './routes/voiceProxy.js';
 
 const app = express();
 const httpServer = createServer(app);
@@ -144,6 +145,13 @@ app.set('agentManager', agentManager);
 // so the two upgrade handlers don't collide. Only intercepts paths that
 // match the terminal route; everything else flows on to socket.io.
 installTerminalProxy(httpServer, executionManager, agentManager);
+
+// Mount the external-voice WebSocket proxy on the same http.Server. Lives at
+// /ws/voice/{stt,tts}/:agentId — a third upgrade listener beside the terminal's
+// and socket.io's. Each one returns immediately for a path it does not own, so
+// they cohabit; this is what keeps the operator's STT/TTS key on the server
+// instead of in every browser (see routes/voiceProxy.ts).
+installVoiceProxy(httpServer);
 
 app.use(cors(buildCorsOptions(corsOrigins)));
 

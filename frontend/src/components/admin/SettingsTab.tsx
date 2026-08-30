@@ -468,7 +468,8 @@ export default function SettingsTab({ active, showToast }: SettingsTabProps) {
               placeholder="sk_..."
             />
             <p className="text-[10px] text-dark-500 mt-1">
-              Injected as <code>?api_key=…</code> when the browser opens the WS.
+              Held server-side. The browser connects to this instance, which bridges to the service
+              and adds the key — it never reaches the page.
             </p>
           </div>
         </div>

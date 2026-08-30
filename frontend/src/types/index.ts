@@ -62,7 +62,8 @@
 //   CredentialField,
 //   CredentialProviderConfig           → components/connect/CredentialConnectWidget.tsx
 //   OAuthProviderConfig                → components/connect/OAuthConnectWidget.tsx
-//   SttConfig, TtsConfig               → lib/externalVoiceClient.ts
+//   SttConfig, TtsConfig,
+//   TtsStartMessage                    → lib/externalVoiceClient.ts
 
 // ── task (ReservedTaskStatus / TaskStatus live in board.ts, with the columns
 //    that define them) ──────────────────────────────────────────────────────
@@ -222,6 +223,7 @@ export type {
   AgentSkill,
   Settings,
   ReminderConfig,
+  ExternalVoiceConfig,
 } from './config';
 
 // ── budget ─────────────────────────────────────────────────────────────────

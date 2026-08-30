@@ -326,7 +326,9 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
   // ── /api/external-voice ───────────────────────────────────────────
   'GET /api/external-voice/config/:agentId': ['authenticateToken'],
   'GET /api/external-voice/services': ['authenticateToken'],
-  'POST /api/external-voice/test/:service': ['authenticateToken'],
+  // Admin-only: it probes a caller-named URL, and used to pair it with the
+  // stored STT/TTS key — see the comment on the route.
+  'POST /api/external-voice/test/:service': ['authenticateToken', 'requireRole(admin)'],
 
   // ── /api/leader-tools ─────────────────────────────────────────────
   'GET /api/leader-tools/last-messages': ['authenticateToken'],
@@ -563,8 +565,9 @@ test('every route still carries the guards its policy declares', async () => {
     assert.fail(
       `${problems.length} route(s) no longer match their declared protection:\n\n` +
         `${problems.join('\n\n')}\n\n` +
-        'A guard that disappeared is an authorization regression: restore it. If the change ' +
-        'is deliberate, update ROUTE_POLICY in the same commit so it is reviewed as one.'
+        'A guard that DISAPPEARED is an authorization regression: restore it. A guard that ' +
+        'was ADDED is fine — the table simply has to say so. Either way, update ROUTE_POLICY ' +
+        'in the same commit, so the guard and its declaration are reviewed together.'
     );
   }
 });
