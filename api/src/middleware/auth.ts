@@ -31,15 +31,24 @@ export function authenticateToken(
   next();
 }
 
-// Role-based access control middleware
+// Role-based access control middleware.
+//
+// The returned middleware is given a name that records the roles it admits.
+// Express keeps only the function reference in its routing stack, so without a
+// name this guard is indistinguishable from any other anonymous middleware and
+// the route inventory (services/__tests__/routeInventory.test.ts) could not
+// tell that a route is admin-only — nor notice if that were quietly widened.
+// Naming is the whole change: the behavior below is untouched.
 export function requireRole(...roles: string[]) {
-  return (req: Request, res: Response, next: NextFunction): Response | void => {
+  const guard = (req: Request, res: Response, next: NextFunction): Response | void => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ error: 'Insufficient permissions' });
     }
     next();
   };
+  Object.defineProperty(guard, 'name', { value: `requireRole(${roles.join('|')})` });
+  return guard;
 }
 
 /**

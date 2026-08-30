@@ -42,6 +42,15 @@ mock.module('../database.js', {
     // taskMutations.ts imports these from ../database.js
     saveTaskToDb: taskDbFake.saveTaskToDb,
     updateTaskFields: taskDbFake.updateTaskFields,
+    // mcpHttpHandler now authorizes the X-Agent-Id / X-Board-Id headers through
+    // lib/agentAccess.js → middleware/authz.js, which imports these four names
+    // from this barrel. They are never called here (the tests drive the tool
+    // handlers directly, not the HTTP handler) — they only have to EXIST, or
+    // the mocked module fails to instantiate.
+    getAgentById: async () => null,
+    getBoardShare: async () => null,
+    getProjectById: async () => null,
+    hasProjectBoardAccess: async () => false,
   },
 });
 mock.module('../database/boardRepos.js', {

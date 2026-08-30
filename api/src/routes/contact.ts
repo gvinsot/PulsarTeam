@@ -4,6 +4,7 @@ import { getAllBoards, getAgentsByBoard } from '../services/database.js';
 import { validateBody } from '../lib/validate.js';
 import { contactSubmitSchema } from '../schemas/contact.js';
 import { detectEnvironment } from '../lib/environment.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 export function contactRoutes(agentManager: any) {
   const router = Router();
@@ -21,7 +22,7 @@ export function contactRoutes(agentManager: any) {
     '/',
     contactLimiter,
     validateBody(contactSubmitSchema),
-    async (req: Request, res: Response) => {
+    asyncHandler(async (req: Request, res: Response) => {
       try {
         const { email, phone, name, company, message, type } = req.body as any;
 
@@ -116,7 +117,7 @@ export function contactRoutes(agentManager: any) {
         console.error('[Contact] Error:', err.message);
         res.status(500).json({ error: 'Internal server error.' });
       }
-    }
+    })
   );
 
   return router;

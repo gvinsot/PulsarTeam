@@ -85,6 +85,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      # /api/health answers 503 once the DB has failed twice in a row, so a slow
+      # boot must not count toward `retries` — without this the first probe of a
+      # cold start marks the task unhealthy and Swarm restarts it in a loop.
+      start_period: 60s
     deploy:
       replicas: 1
       placement:
@@ -116,7 +120,38 @@ services:
         # after a manual page refresh.
         - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.Cross-Origin-Opener-Policy=same-origin-allow-popups'
         - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.X-Permitted-Cross-Domain-Policies=none'
+        # ─── Internal API deny middleware ───────────────────────────────────
+        # /api/internal/* is guarded only by the SHARED CODER_API_KEY, which is
+        # injected into every runner container - the very places where agents run
+        # arbitrary code. Those routes must never be reachable from the Internet.
+        # Runners reach the API in-cluster over the `backend` overlay
+        # (SWARM_API_BASE_URL=http://team-api:3001, which is also the code default),
+        # so they never traverse Traefik and are unaffected by this rule.
+        # Traefik has no "return status code" middleware, so an allow-list pinned
+        # to TEST-NET-1 (RFC 5737, never routable) makes every public client fail
+        # closed with 403 Forbidden. This rejects, it does not redirect.
+        - 'traefik.http.middlewares.pulsarteam-internal-deny.ipallowlist.sourcerange=192.0.2.1/32'
         # ─── API routers ─────────────────────────────────────────────────────
+        # Refuse /api/internal/* on both public entrypoints, ahead of the API
+        # routers. The priority is explicit (300 > pulsarteam-api's 100) rather
+        # than relying on Traefik's rule-length ordering, which would otherwise
+        # lose against the longer /api + /socket.io + /ws rule. PathRegexp with
+        # (?i) is used instead of PathPrefix because Express routing is
+        # case-insensitive by default, so a case-sensitive PathPrefix would let
+        # `/api/INTERNAL/...` reach the same handlers. Both routers target
+        # noop@internal so that even if the middleware were dropped the request
+        # still could not be forwarded to the API service.
+        - 'traefik.http.routers.pulsarteam-api-internal-deny.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && PathRegexp(`(?i)^/api/internal`)'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny.entrypoints=websecure'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny.tls.certresolver=letsencrypt'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny.middlewares=pulsarteam-internal-deny'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny.service=noop@internal'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny.priority=300'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny-http.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && PathRegexp(`(?i)^/api/internal`)'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny-http.entrypoints=web'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny-http.middlewares=pulsarteam-internal-deny'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny-http.service=noop@internal'
+        - 'traefik.http.routers.pulsarteam-api-internal-deny-http.priority=300'
         - 'traefik.http.routers.pulsarteam-api.rule=(Host(`www.pulsarteam.io`) || Host(`pulsarteam.io`)) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`) || PathPrefix(`/ws`))'
         - 'traefik.http.routers.pulsarteam-api.entrypoints=websecure'
         - 'traefik.http.routers.pulsarteam-api.tls.certresolver=letsencrypt'

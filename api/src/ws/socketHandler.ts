@@ -4,6 +4,7 @@ import { errorMessage } from '../lib/errors.js';
 import { WsEvents } from './events.js';
 import type { AgentManager } from '../services/agentManager/index.js';
 import type { SessionClaims } from '../middleware/session.js';
+import { canSeeAgent } from '../lib/agentAccess.js';
 
 // ── Socket identity ──────────────────────────────────────────────────
 // index.ts installs an `io.use` guard that verifies the session token and
@@ -181,11 +182,14 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
     await agentManager._enrichAllAgentsStats();
     socket.emit(WsEvents.AGENTS_LIST, agentManager.getAllForUser(userId, userRole, userBoardIds));
 
+    // Same rule as every HTTP surface — see lib/agentAccess.ts. This was the
+    // third `if (!agent.boardId) return true` fail-open: the HTTP side was
+    // closed while the socket still let any authenticated user act on any
+    // board-less agent of any tenant.
     function canAccessAgent(agentId: string): boolean {
       const agent = agentManager.agents.get(agentId);
       if (!agent) return false;
-      if (!agent.boardId) return true;
-      return userBoardIds.has(agent.boardId);
+      return canSeeAgent(agent, { userId, role: userRole }, userBoardIds);
     }
 
     // Shared task-execution streamer: emits STREAM_START → chunks → STREAM_END

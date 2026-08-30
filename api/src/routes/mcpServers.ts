@@ -97,67 +97,70 @@ export function mcpServerRoutes(mcpManager: MCPManager) {
 
   // Test MCP connection by server ID (without persisting state changes)
   // Accepts optional { apiKey } in body to test with a specific key
-  router.post('/:id/test', async (req, res) => {
-    try {
-      const server = mcpManager.getById(req.params.id);
-      if (!server) {
-        res.status(404).json({ error: 'MCP server not found' });
-        return;
-      }
-
-      const { MCPClient } = await import('../services/mcpClient.js');
-      const { resolveInternalMcpConfig } = await import('../services/mcpManager.js');
-
-      // Use provided apiKey (per-agent test) or fall back to global server key
-      const testApiKey = req.body?.apiKey || server.apiKey;
-
-      const client = new MCPClient('PulsarTeam-Test');
-      const connectOpts: { headers?: Record<string, string> } = {};
-      if (testApiKey) {
-        connectOpts.headers = { Authorization: `Bearer ${testApiKey}` };
-      }
-      const internalConfig = resolveInternalMcpConfig(server.url);
-      const connectUrl = internalConfig.url;
-      // `resolveInternalMcpConfig` answers `{}` for an external URL and a signed
-      // `{ Authorization }` bearer for an internal one — read that one header by
-      // name rather than spreading the union, whose empty branch types
-      // `Authorization` as `undefined` and so is not a Record<string, string>.
-      const { Authorization: internalAuth } = internalConfig.headers;
-      if (internalAuth) {
-        connectOpts.headers = { ...(connectOpts.headers || {}), Authorization: internalAuth };
-      }
-
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('MCP connection test timed out after 15s')),
-          15_000
-        );
-      });
-      const connectPromise = client.connect(connectUrl, connectOpts);
-      // connect()'s SSE fallback can install a fresh transport after a
-      // mid-flight close(), so always chain a final close onto the connect
-      // promise itself — the finally below only covers the current transport.
-      const closeQuietly = () => {
-        client.close().catch(() => {});
-      };
-      connectPromise.then(closeQuietly, closeQuietly);
+  router.post(
+    '/:id/test',
+    asyncHandler(async (req, res) => {
       try {
-        const { tools } = await Promise.race([connectPromise, timeout]);
-        res.json({
-          success: true,
-          name: server.name,
-          toolCount: tools.length,
-          tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
+        const server = mcpManager.getById(req.params.id);
+        if (!server) {
+          res.status(404).json({ error: 'MCP server not found' });
+          return;
+        }
+
+        const { MCPClient } = await import('../services/mcpClient.js');
+        const { resolveInternalMcpConfig } = await import('../services/mcpManager.js');
+
+        // Use provided apiKey (per-agent test) or fall back to global server key
+        const testApiKey = req.body?.apiKey || server.apiKey;
+
+        const client = new MCPClient('PulsarTeam-Test');
+        const connectOpts: { headers?: Record<string, string> } = {};
+        if (testApiKey) {
+          connectOpts.headers = { Authorization: `Bearer ${testApiKey}` };
+        }
+        const internalConfig = resolveInternalMcpConfig(server.url);
+        const connectUrl = internalConfig.url;
+        // `resolveInternalMcpConfig` answers `{}` for an external URL and a signed
+        // `{ Authorization }` bearer for an internal one — read that one header by
+        // name rather than spreading the union, whose empty branch types
+        // `Authorization` as `undefined` and so is not a Record<string, string>.
+        const { Authorization: internalAuth } = internalConfig.headers;
+        if (internalAuth) {
+          connectOpts.headers = { ...(connectOpts.headers || {}), Authorization: internalAuth };
+        }
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('MCP connection test timed out after 15s')),
+            15_000
+          );
         });
-      } finally {
-        clearTimeout(timer);
-        await client.close().catch(() => {});
+        const connectPromise = client.connect(connectUrl, connectOpts);
+        // connect()'s SSE fallback can install a fresh transport after a
+        // mid-flight close(), so always chain a final close onto the connect
+        // promise itself — the finally below only covers the current transport.
+        const closeQuietly = () => {
+          client.close().catch(() => {});
+        };
+        connectPromise.then(closeQuietly, closeQuietly);
+        try {
+          const { tools } = await Promise.race([connectPromise, timeout]);
+          res.json({
+            success: true,
+            name: server.name,
+            toolCount: tools.length,
+            tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
+          });
+        } finally {
+          clearTimeout(timer);
+          await client.close().catch(() => {});
+        }
+      } catch (err) {
+        res.status(200).json({ success: false, error: errorMessage(err) });
       }
-    } catch (err) {
-      res.status(200).json({ success: false, error: errorMessage(err) });
-    }
-  });
+    })
+  );
 
   return router;
 }

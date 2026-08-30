@@ -7,6 +7,7 @@ import { sendOAuthResult } from './oauthHelper.js';
 import { runOAuthCodeExchange } from './oauthCallback.js';
 import { createOAuthStateStore } from './oauthState.js';
 
+import { asyncHandler } from '../lib/asyncHandler.js';
 /**
  * Unified Google OAuth callback handler.
  *
@@ -122,6 +123,6 @@ export async function handleGoogleOAuthCallback(req: express.Request, res: expre
 
 export function googleOAuthRedirectRouter() {
   const router = express.Router();
-  router.get('/oauth-redirect', handleGoogleOAuthCallback);
+  router.get('/oauth-redirect', asyncHandler(handleGoogleOAuthCallback));
   return router;
 }

@@ -12,7 +12,10 @@
 // HighSpeedToText (https://speech-ui.methodinfo.fr/) documents.
 import express from 'express';
 import { getSettings } from '../services/configManager.js';
+import { sessionUser } from '../middleware/auth.js';
+import { checkAgentAccess } from '../lib/agentAccess.js';
 import type { AgentManager } from '../services/agentManager/index.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 function buildWsUrl(rawUrl: string, apiKey: string): string | null {
   if (!rawUrl) return null;
@@ -36,75 +39,99 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
   // Returns connection info for a given external-voice agent so the browser
   // can open STT + TTS WebSockets directly. No audio passes through this
   // backend — only credentials and per-agent voice config.
-  router.get('/config/:agentId', async (req, res) => {
-    const agent = agentManager.agents.get(req.params.agentId);
-    if (!agent) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    if (!agent.isVoice || agent.voiceMode !== 'external') {
-      res.status(400).json({ error: 'Agent is not an external voice agent' });
-      return;
-    }
+  router.get(
+    '/config/:agentId',
+    asyncHandler(async (req, res) => {
+      const agent = agentManager.agents.get(req.params.agentId);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      // :agentId is caller-supplied. This route hands back the STT/TTS service
+      // URLs with the operator's API keys already injected plus the agent's voice
+      // config, so it is gated on the same rule as every other agent surface.
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const access = await checkAgentAccess(agent, user, 'read');
+      if (!access.ok) {
+        res.status(access.status || 403).json({ error: access.error });
+        return;
+      }
+      if (!agent.isVoice || agent.voiceMode !== 'external') {
+        res.status(400).json({ error: 'Agent is not an external voice agent' });
+        return;
+      }
 
-    const settings = await getSettings();
-    const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
-    const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
+      const settings = await getSettings();
+      const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
+      const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
 
-    if (!sttUrl || !ttsUrl) {
-      res.status(503).json({
-        error:
-          'STT/TTS services are not configured. Set sttServiceUrl and ttsServiceUrl in Admin Settings.',
+      if (!sttUrl || !ttsUrl) {
+        res.status(503).json({
+          error:
+            'STT/TTS services are not configured. Set sttServiceUrl and ttsServiceUrl in Admin Settings.',
+        });
+        return;
+      }
+
+      res.json({
+        stt: { wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 },
+        tts: {
+          wsUrl: ttsUrl,
+          sampleRate: 22050,
+          encoding: 'pcm16',
+          channels: 1,
+          voiceId: agent.ttsVoiceId || settings.ttsVoiceId || '',
+        },
+        llmConfigId: agent.llmConfigId || null,
       });
-      return;
-    }
-
-    res.json({
-      stt: { wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 },
-      tts: {
-        wsUrl: ttsUrl,
-        sampleRate: 22050,
-        encoding: 'pcm16',
-        channels: 1,
-        voiceId: agent.ttsVoiceId || settings.ttsVoiceId || '',
-      },
-      llmConfigId: agent.llmConfigId || null,
-    });
-  });
+    })
+  );
 
   // Returns the global STT/TTS service availability and WS URLs so that the
   // regular text chat (any agent) can offer mic-input (STT) and spoken reply
   // (TTS). Unlike /config/:agentId, this route does not require the agent to
   // be a voice agent — it just exposes whatever the operator configured.
   // The per-agent ttsVoiceId is used when an agentId is provided.
-  router.get('/services', async (req, res) => {
-    const settings = await getSettings();
-    const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
-    const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
+  router.get(
+    '/services',
+    asyncHandler(async (req, res) => {
+      const settings = await getSettings();
+      const sttUrl = buildWsUrl(settings.sttServiceUrl, settings.sttApiKey);
+      const ttsUrl = buildWsUrl(settings.ttsServiceUrl, settings.ttsApiKey);
 
-    let voiceId = settings.ttsVoiceId || '';
-    const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : null;
-    if (agentId) {
-      const agent = agentManager.agents.get(agentId);
-      if (agent && agent.ttsVoiceId) voiceId = agent.ttsVoiceId;
-    }
+      let voiceId = settings.ttsVoiceId || '';
+      const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : null;
+      if (agentId) {
+        const user = sessionUser(req, res);
+        if (!user) return;
+        const agent = agentManager.agents.get(agentId);
+        // The per-agent override is a personalisation, not a permission: an
+        // agentId the caller may not read silently falls back to the global voice
+        // rather than 403-ing, so a stale id in the UI cannot break text chat.
+        if (agent && agent.ttsVoiceId) {
+          const access = await checkAgentAccess(agent, user, 'read');
+          if (access.ok) voiceId = agent.ttsVoiceId;
+        }
+      }
 
-    res.json({
-      stt: sttUrl
-        ? { available: true, wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 }
-        : { available: false },
-      tts: ttsUrl
-        ? {
-            available: true,
-            wsUrl: ttsUrl,
-            sampleRate: 22050,
-            encoding: 'pcm16',
-            channels: 1,
-            voiceId,
-          }
-        : { available: false },
-    });
-  });
+      res.json({
+        stt: sttUrl
+          ? { available: true, wsUrl: sttUrl, sampleRate: 16000, encoding: 'pcm16', channels: 1 }
+          : { available: false },
+        tts: ttsUrl
+          ? {
+              available: true,
+              wsUrl: ttsUrl,
+              sampleRate: 22050,
+              encoding: 'pcm16',
+              channels: 1,
+              voiceId,
+            }
+          : { available: false },
+      });
+    })
+  );
 
   // Quick connectivity probe — opens the WS, waits for the server's first
   // ack, then closes. Used by Admin Settings "Test connection" buttons.
@@ -173,38 +200,41 @@ export function externalVoiceRoutes(agentManager: AgentManager) {
     });
   }
 
-  router.post('/test/:service', async (req, res) => {
-    const service = String(req.params.service || '').toLowerCase();
-    if (service !== 'stt' && service !== 'tts') {
-      res.status(400).json({ ok: false, error: 'Service must be "stt" or "tts"' });
-      return;
-    }
-    const settings = await getSettings();
-    const url =
-      typeof req.body?.url === 'string' && req.body.url.trim()
-        ? req.body.url.trim()
-        : service === 'stt'
-          ? settings.sttServiceUrl
-          : settings.ttsServiceUrl;
-    const apiKey =
-      typeof req.body?.apiKey === 'string'
-        ? req.body.apiKey
-        : service === 'stt'
-          ? settings.sttApiKey
-          : settings.ttsApiKey;
+  router.post(
+    '/test/:service',
+    asyncHandler(async (req, res) => {
+      const service = String(req.params.service || '').toLowerCase();
+      if (service !== 'stt' && service !== 'tts') {
+        res.status(400).json({ ok: false, error: 'Service must be "stt" or "tts"' });
+        return;
+      }
+      const settings = await getSettings();
+      const url =
+        typeof req.body?.url === 'string' && req.body.url.trim()
+          ? req.body.url.trim()
+          : service === 'stt'
+            ? settings.sttServiceUrl
+            : settings.ttsServiceUrl;
+      const apiKey =
+        typeof req.body?.apiKey === 'string'
+          ? req.body.apiKey
+          : service === 'stt'
+            ? settings.sttApiKey
+            : settings.ttsApiKey;
 
-    if (!url) {
-      res.status(400).json({ ok: false, error: `${service.toUpperCase()} URL is not set` });
-      return;
-    }
-    const fullUrl = buildWsUrl(url, apiKey || '');
-    if (!fullUrl) {
-      res.status(400).json({ ok: false, error: 'Could not build a valid WebSocket URL' });
-      return;
-    }
-    const result = await probeWebSocket(fullUrl);
-    res.json(result);
-  });
+      if (!url) {
+        res.status(400).json({ ok: false, error: `${service.toUpperCase()} URL is not set` });
+        return;
+      }
+      const fullUrl = buildWsUrl(url, apiKey || '');
+      if (!fullUrl) {
+        res.status(400).json({ ok: false, error: 'Could not build a valid WebSocket URL' });
+        return;
+      }
+      const result = await probeWebSocket(fullUrl);
+      res.json(result);
+    })
+  );
 
   return router;
 }

@@ -2,6 +2,7 @@ import express from 'express';
 import type { AgentManager } from '../services/agentManager/index.js';
 import type { SkillManager } from '../services/skillManager.js';
 import type { MCPManager } from '../services/mcpManager.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 /**
  * Internal endpoint consumed by CLI runners to materialize the agent's plugin
@@ -16,32 +17,35 @@ export function internalRunnerMcpRoutes(
 ) {
   const router = express.Router();
 
-  router.get('/agents/:agentId', async (req, res) => {
-    try {
-      const agent = agentManager.getById(req.params.agentId);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
+  router.get(
+    '/agents/:agentId',
+    asyncHandler(async (req, res) => {
+      try {
+        const agent = agentManager.getById(req.params.agentId);
+        if (!agent) {
+          res.status(404).json({ error: 'Agent not found' });
+          return;
+        }
 
-      // CLI runners get exactly ONE MCP injected: the Pulsar Gateway. It always
-      // carries task control (the unified update_task — move and/or finish your
-      // current task) plus list_mcps / call_mcp_tool, through which the agent discovers and invokes
-      // every other MCP available to it or its board — even ones attached after
-      // spawn. `exclusive` suppresses the old per-plugin static wiring so the
-      // gateway is the single source of tools.
-      const config = mcpManager.getClaudeMcpConfigForAgent(agent, skillManager, {
-        forceServerIds: ['mcp-pulsar-gateway'],
-        exclusive: true,
-      });
-      res.json({
-        configured: Object.keys(config.mcpServers || {}).length > 0,
-        ...config,
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'internal error' });
-    }
-  });
+        // CLI runners get exactly ONE MCP injected: the Pulsar Gateway. It always
+        // carries task control (the unified update_task — move and/or finish your
+        // current task) plus list_mcps / call_mcp_tool, through which the agent discovers and invokes
+        // every other MCP available to it or its board — even ones attached after
+        // spawn. `exclusive` suppresses the old per-plugin static wiring so the
+        // gateway is the single source of tools.
+        const config = mcpManager.getClaudeMcpConfigForAgent(agent, skillManager, {
+          forceServerIds: ['mcp-pulsar-gateway'],
+          exclusive: true,
+        });
+        res.json({
+          configured: Object.keys(config.mcpServers || {}).length > 0,
+          ...config,
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: err?.message || 'internal error' });
+      }
+    })
+  );
 
   return router;
 }

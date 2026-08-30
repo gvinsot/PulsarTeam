@@ -1,5 +1,7 @@
 // ─── Agent Getters: read-only lookups ────────────────────────────────────────
 
+import { canSeeAgent } from '../../lib/agentAccess.js';
+
 /** @this {import('./index.js').AgentManager} */
 export const gettersMethods = {
   getAll(this: any): any[] {
@@ -8,7 +10,8 @@ export const gettersMethods = {
 
   /**
    * Return agents visible to a user based on board access.
-   * A user sees: agents on boards they own or have been shared + agents with no board.
+   * A user sees: agents on boards they own or have been shared, plus the
+   * board-less agents they own themselves. See lib/agentAccess.ts.
    * @param userBoardIds - Set of board IDs the user has access to
    */
   getAllForUser(
@@ -23,28 +26,28 @@ export const gettersMethods = {
   /**
    * Internal: return raw (unsanitized) agents visible to a user.
    *
-   * @param role - The caller's user role. It is read only when no board set is
-   *   supplied: 'admin' is then the one role allowed to see board-scoped agents.
+   * The rule itself is `canSeeAgent` in lib/agentAccess.ts — the same three
+   * cases the request-time guard enforces. It replaces the previous
+   * "agents without a board are visible to everyone" fallback, which on a
+   * multi-tenant instance published every board-less agent (and its status,
+   * project and task counts) to every account.
+   *
+   * @param role - The caller's user role. 'admin' sees everything, including
+   *   the ownerless legacy agents nobody else can claim.
    * @param userBoardIds - Set of board IDs the user has access to. When it is
-   *   missing the filter CLOSES rather than opens: a non-admin caller sees only
-   *   the agents that carry no board at all. The unscoped swarm-leader routes
+   *   missing the filter CLOSES rather than opens: a non-admin caller then sees
+   *   no board-scoped agent at all. The unscoped swarm-leader routes
    *   (routes/lib/agentStatusHandlers.ts) are the callers that omit it.
    */
   _agentsForUser(
     this: any,
-    _userId: string,
+    userId: string,
     role: string | null | undefined,
     userBoardIds?: Set<string>
   ): any[] {
-    const isAdmin = role === 'admin';
-    return Array.from(this.agents.values()).filter((a: any) => {
-      // Agents without a board are visible to everyone
-      if (!a.boardId) return true;
-      // If we have board IDs, check membership
-      if (userBoardIds) return userBoardIds.has(a.boardId);
-      // No board info: only an admin may see agents that belong to a board
-      return isAdmin;
-    });
+    return Array.from(this.agents.values()).filter((a: any) =>
+      canSeeAgent(a, { userId, role }, userBoardIds)
+    );
   },
 
   getById(this: any, id: string): any {

@@ -5,6 +5,7 @@ import { setCurrentEnvironmentFromHost } from './lib/environment.js';
 import { ZodError } from 'zod';
 import { formatZodError } from './lib/validate.js';
 import { createServer } from 'http';
+import { randomUUID } from 'crypto';
 import { Server } from 'socket.io';
 import { authenticateToken, requireRole } from './middleware/auth.js';
 import { readSessionCookie, verifySessionToken } from './middleware/session.js';
@@ -40,7 +41,7 @@ import {
 } from './middleware/corsConfig.js';
 import { cookieSecurity } from './middleware/cookieSecurity.js';
 import { BUILTIN_MCP_SERVERS } from './data/mcpServers.js';
-import { initDatabase, isDatabaseConnected, getPool } from './services/database.js';
+import { initDatabase, getPool } from './services/database.js';
 import { onedriveRoutes } from './routes/onedrive.js';
 import { microsoftOAuthRedirectRouter } from './routes/microsoftOAuth.js';
 import { createOneDriveMcpHandler } from './services/onedriveMcp.js';
@@ -153,8 +154,10 @@ app.use(cors(buildCorsOptions(corsOrigins)));
 // routes so it wraps res.setHeader for every request.
 app.use(cookieSecurity());
 
-// Security headers — defense-in-depth when accessed without a reverse proxy
-app.use((req, res, next) => {
+// Security headers — defense-in-depth when accessed without a reverse proxy.
+// Named (rather than an arrow) so it is identifiable in Express's routing
+// stack; see services/__tests__/routeInventory.test.ts.
+app.use(function securityHeaders(req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
@@ -172,7 +175,7 @@ app.use((req, res, next) => {
 // so the workflow engine only picks up tasks tagged for our deployment when
 // several replicas share the same database. Internal/healthcheck hosts are
 // ignored by setCurrentEnvironmentFromHost.
-app.use((req, _res, next) => {
+app.use(function lockEnvironmentFromHost(req, _res, next) {
   setCurrentEnvironmentFromHost(req.hostname);
   next();
 });
@@ -309,12 +312,77 @@ const swarmApiMcpHandler = createSwarmApiMcpHandler(agentManager);
 app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(req, res));
 app.use('/api/swarm', authenticateApiKey, swarmApiRoutes(agentManager));
 
-// Public liveness probe — returns minimal info for health checks
-app.get('/api/health', (_req, res) => {
-  const dbConnected = isDatabaseConnected();
-  res.json({
-    status: 'ok',
-    database: dbConnected ? 'connected' : 'unavailable',
+// Public liveness/readiness probe — unauthenticated, because it is what Docker,
+// Swarm and Traefik poll.
+//
+// It used to report `database` from a boolean that initDatabase() set once at
+// boot, so a pool that had died under a running process still answered
+// "connected" with 200 and the probe could never take a bad replica out of
+// rotation. It now runs a real `SELECT 1` against the live pool.
+//
+// Two guard rails keep that honest without making it twitchy:
+//   - One failed probe answers 200 with status "degraded". Only the SECOND
+//     consecutive failure answers 503, so a single dropped packet or one slow
+//     query does not evict a replica that is otherwise serving fine.
+//   - The verdict is cached for HEALTH_CACHE_MS. This endpoint is reachable
+//     from the public internet, so without the cache every anonymous request
+//     would buy a database round-trip. The orchestrator polls every 30s, far
+//     longer than the cache, so it always observes a fresh probe.
+const HEALTH_DB_TIMEOUT_MS = 2_000;
+const HEALTH_CACHE_MS = 5_000;
+const HEALTH_FAILURE_THRESHOLD = 2;
+
+// Build identity, when the deployment supplies one. Nothing in this repo sets
+// either variable today (no build ARG in api/Dockerfile, no environment entry
+// in the compose files), so the field is omitted rather than reported as
+// "unknown" — a missing SHA should read as missing, not as a bad build stamp.
+const BUILD_SHA = process.env.BUILD_SHA || process.env.GIT_SHA || '';
+
+let dbProbeHealthy = false;
+let dbProbeFailures = 0;
+let dbProbeCheckedAt = 0;
+
+/**
+ * Run `SELECT 1` against the live pool.
+ *
+ * Never rejects: the caller wants a verdict, not an exception, and it runs
+ * inside an async Express handler that has no error plumbing of its own.
+ */
+async function probeDatabase(): Promise<boolean> {
+  const pool = getPool();
+  if (!pool) return false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // A pool that is up but wedged would hang the probe past the orchestrator's
+    // own healthcheck timeout, so the query races a short timer. Promise.race
+    // subscribes to the query either way, so a late rejection cannot resurface
+    // as an unhandledRejection.
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('health probe timed out')), HEALTH_DB_TIMEOUT_MS);
+    });
+    await Promise.race([pool.query('SELECT 1'), timeout]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+app.get('/api/health', async (_req, res) => {
+  const now = Date.now();
+  if (now - dbProbeCheckedAt >= HEALTH_CACHE_MS) {
+    // Stamped before the await so concurrent requests read the cached verdict
+    // instead of each opening a probe of their own.
+    dbProbeCheckedAt = now;
+    dbProbeHealthy = await probeDatabase();
+    dbProbeFailures = dbProbeHealthy ? 0 : Math.min(dbProbeFailures + 1, HEALTH_FAILURE_THRESHOLD);
+  }
+  const unhealthy = dbProbeFailures >= HEALTH_FAILURE_THRESHOLD;
+  res.status(unhealthy ? 503 : 200).json({
+    status: unhealthy ? 'error' : dbProbeHealthy ? 'ok' : 'degraded',
+    database: dbProbeHealthy ? 'connected' : 'unavailable',
+    ...(BUILD_SHA ? { build: BUILD_SHA } : {}),
   });
 });
 
@@ -357,13 +425,66 @@ app.get('/api/health/details', authenticateToken, (_req, res) => {
 // maps to 400 with the same {error, details} shape as the validate middleware;
 // everything else maps to 500. Routes that need a different status (403, 409,
 // 502, ...) still catch and respond for themselves before it gets here.
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+//
+// Two things it must not do, both of which it used to:
+//
+//   - Swallow the stack. `err?.message || err` never reached its fallback for a
+//     real Error, so `err.stack` never made it to the log and every 500 across
+//     ~99 routes had to be reproduced blind. The stack is now always logged,
+//     together with the caller identity authenticateToken already put on the
+//     request (anonymous when the failure happened before or outside auth).
+//   - Hand the raw message to the client. On a publicly routed multi-tenant
+//     deployment that message maps the internal network (hostnames such as
+//     `http://mcp-browser:8000`) and the database schema for free. In
+//     production the client gets a fixed string; in development the message is
+//     preserved, because that is what contributors and the frontend's error
+//     toasts read. frontend/src/api.ts errorFromBody() surfaces `error`
+//     verbatim and branches on the HTTP status, never on the message text, so
+//     masking changes what is displayed, not what any client decides.
+//
+// Both bodies carry an `errorId` that appears verbatim in the log line, so a
+// user-reported 500 can be traced without exposing anything.
+const isProduction = (): boolean => process.env.NODE_ENV === 'production';
+
+/** Full server-side detail: the stack when there is one, else the best string. */
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.stack || `${err.name}: ${err.message}`;
+  if (typeof err === 'string') return err;
+  try {
+    const json = JSON.stringify(err);
+    if (typeof json === 'string') return json;
+  } catch {
+    // Circular or otherwise non-serializable — fall through to String().
+  }
+  return String(err);
+}
+
+/** What a non-production client is allowed to see. */
+function clientErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string' && err) return err;
+  return 'Internal server error';
+}
+
+app.use(function errorHandler(
+  err: unknown,
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
   if (res.headersSent) return next(err);
   if (err instanceof ZodError) {
     return res.status(400).json(formatZodError(err));
   }
-  console.error(`[Error] ${req.method} ${req.originalUrl}:`, err?.message || err);
-  res.status(500).json({ error: err?.message || 'Internal server error' });
+  const errorId = randomUUID();
+  const actor = req.user ? `user=${req.user.userId} (${req.user.username})` : 'user=anonymous';
+  console.error(
+    `[Error] ${errorId} ${req.method} ${req.originalUrl} ${actor}\n${describeError(err)}`
+  );
+  res.status(500).json({
+    error: isProduction() ? 'Internal server error' : clientErrorMessage(err),
+    errorId,
+  });
 });
 
 io.use((socket, next) => {

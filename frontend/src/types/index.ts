@@ -119,6 +119,9 @@ export type {
   AgentStatusEvent,
   AgentLastMessage,
   AgentLastMessages,
+  OrphanAgent,
+  OrphanAgentsResponse,
+  OrphanAgentOwnerResult,
 } from './agent';
 
 // ── board (also owns the workflow AND the task-status vocabulary) ──────────

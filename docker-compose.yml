@@ -97,6 +97,10 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+      # /api/health answers 503 once the DB has failed twice in a row, so a slow
+      # boot must not count toward `retries` — without this the first probe of a
+      # cold start marks the task unhealthy and Swarm restarts it in a loop.
+      start_period: 60s
     restart: unless-stopped
 
   frontend:

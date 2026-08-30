@@ -1,6 +1,9 @@
 import express from 'express';
 import { errorMessage } from '../lib/errors.js';
+import { sessionUser } from '../middleware/auth.js';
+import { checkAgentAccess } from '../lib/agentAccess.js';
 import type { AgentManager } from '../services/agentManager/index.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe';
 
@@ -108,77 +111,90 @@ export function buildRealtimeSessionConfig({
 export function realtimeRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
-  router.post('/token', async (req, res) => {
-    const { agentId } = req.body || {};
-    if (!agentId) {
-      return res.status(400).json({ error: 'agentId required' });
-    }
-
-    const agent = agentManager.agents.get(agentId);
-    if (!agent) {
-      return res.status(404).json({ error: 'Agent not found' });
-    }
-    if (!agent.isVoice) {
-      return res.status(400).json({ error: 'Agent is not a voice agent' });
-    }
-
-    // Resolve API key from the agent's LLM config.
-    const llmConfig = agentManager.resolveLlmConfig(agent);
-    const apiKey = llmConfig.apiKey;
-    if (!apiKey) {
-      return res.status(500).json({
-        error:
-          'No OpenAI API key configured. Set an API key in the LLM Configuration assigned to this voice agent.',
-      });
-    }
-
-    try {
-      const instructions = await agentManager.buildVoiceInstructions(agentId);
-      const voice = agent.voice || process.env.OPENAI_REALTIME_VOICE || 'alloy';
-      const DEFAULT_REALTIME_MODEL = 'gpt-realtime-1.5';
-      const candidateModel = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || '';
-      const model = candidateModel.includes('realtime') ? candidateModel : DEFAULT_REALTIME_MODEL;
-      const transcriptionModel =
-        process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
-
-      const session = buildRealtimeSessionConfig({
-        instructions,
-        voice,
-        model,
-        transcriptionModel,
-      });
-
-      const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ session }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('OpenAI Realtime token error:', errorText);
-        return res.status(response.status).json({ error: `OpenAI API error: ${errorText}` });
+  router.post(
+    '/token',
+    asyncHandler(async (req, res) => {
+      const { agentId } = req.body || {};
+      if (!agentId) {
+        return res.status(400).json({ error: 'agentId required' });
       }
 
-      const data = await response.json();
-      return res.json({
-        token: data.client_secret?.value || data.value,
-        expiresAt: data.client_secret?.expires_at || data.expires_at,
-        session,
-        voice,
-        model,
-        transcriptionModel,
-      });
-    } catch (err) {
-      console.error('Failed to create realtime token:', err);
-      return res
-        .status(500)
-        .json({ error: errorMessage(err) || 'Failed to create realtime token' });
-    }
-  });
+      const agent = agentManager.agents.get(agentId);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found' });
+      }
+      // The agent id arrives in the request body. Minting a token for it spends
+      // the agent's OpenAI key, ships its system instructions and swarm context
+      // to the caller's browser, and hands over VOICE_TOOLS — delegate,
+      // stop_agent, clear_all_chats — so this is 'edit', not 'read'.
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const access = await checkAgentAccess(agent, user, 'edit');
+      if (!access.ok) {
+        return res.status(access.status || 403).json({ error: access.error });
+      }
+      if (!agent.isVoice) {
+        return res.status(400).json({ error: 'Agent is not a voice agent' });
+      }
+
+      // Resolve API key from the agent's LLM config.
+      const llmConfig = agentManager.resolveLlmConfig(agent);
+      const apiKey = llmConfig.apiKey;
+      if (!apiKey) {
+        return res.status(500).json({
+          error:
+            'No OpenAI API key configured. Set an API key in the LLM Configuration assigned to this voice agent.',
+        });
+      }
+
+      try {
+        const instructions = await agentManager.buildVoiceInstructions(agentId);
+        const voice = agent.voice || process.env.OPENAI_REALTIME_VOICE || 'alloy';
+        const DEFAULT_REALTIME_MODEL = 'gpt-realtime-1.5';
+        const candidateModel = process.env.OPENAI_REALTIME_MODEL || llmConfig.model || '';
+        const model = candidateModel.includes('realtime') ? candidateModel : DEFAULT_REALTIME_MODEL;
+        const transcriptionModel =
+          process.env.OPENAI_REALTIME_TRANSCRIBE_MODEL || DEFAULT_REALTIME_TRANSCRIPTION_MODEL;
+
+        const session = buildRealtimeSessionConfig({
+          instructions,
+          voice,
+          model,
+          transcriptionModel,
+        });
+
+        const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ session }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('OpenAI Realtime token error:', errorText);
+          return res.status(response.status).json({ error: `OpenAI API error: ${errorText}` });
+        }
+
+        const data = await response.json();
+        return res.json({
+          token: data.client_secret?.value || data.value,
+          expiresAt: data.client_secret?.expires_at || data.expires_at,
+          session,
+          voice,
+          model,
+          transcriptionModel,
+        });
+      } catch (err) {
+        console.error('Failed to create realtime token:', err);
+        return res
+          .status(500)
+          .json({ error: errorMessage(err) || 'Failed to create realtime token' });
+      }
+    })
+  );
 
   return router;
 }

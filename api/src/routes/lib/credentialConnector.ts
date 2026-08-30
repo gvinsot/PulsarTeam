@@ -1,6 +1,7 @@
 import express from 'express';
 import { storeOAuthToken, getOAuthToken, deleteOAuthToken } from '../../services/database.js';
 import type { OAuthProvider, ScopeType } from '../../services/database.js';
+import { asyncHandler } from '../../lib/asyncHandler.js';
 
 /**
  * Shared scaffolding for the "simple credential connector" plugin routes
@@ -108,52 +109,60 @@ export function credentialConnectorRoutes(opts: CredentialConnectorOptions): exp
     });
   });
 
-  router.post('/connect', async (req, res) => {
-    const body = req.body || {};
-    const { agentId, boardId } = body;
+  router.post(
+    '/connect',
+    asyncHandler(async (req, res) => {
+      const body = req.body || {};
+      const { agentId, boardId } = body;
 
-    try {
-      const result = await opts.connect(body);
-      if (isFailure(result)) {
-        res.status(result.status ?? 400).json({ error: result.error });
+      try {
+        const result = await opts.connect(body);
+        if (isFailure(result)) {
+          res.status(result.status ?? 400).json({ error: result.error });
+          return;
+        }
+
+        const scope = resolveScope(agentId, boardId)!;
+        await storeOAuthToken(
+          {
+            provider,
+            scopeType: scope.scopeType,
+            scopeId: scope.scopeId,
+            accessToken: result.accessToken,
+            meta: result.meta,
+          },
+          { throwOnPersistError: true }
+        );
+
+        const target = agentId
+          ? `agent "${agentId.slice(0, 8)}"`
+          : `board "${boardId?.slice(0, 8)}"`;
+        console.log(`✅ [${label}] Credentials stored for ${target} ${result.logSuffix}`);
+        res.json({ success: true, agentId, boardId, ...(result.extra || {}) });
+      } catch (err: any) {
+        console.error(`[${label}] Connection test failed:`, err);
+        const { status, message } = opts.onError(err);
+        res.status(status).json({ error: message });
+      }
+    })
+  );
+
+  router.post(
+    '/disconnect',
+    asyncHandler(async (req, res) => {
+      const agentId = req.body?.agentId || null;
+      const boardId = req.body?.boardId || null;
+      if (!agentId && !boardId) {
+        res.status(400).json({ error: 'agentId or boardId is required' });
         return;
       }
-
       const scope = resolveScope(agentId, boardId)!;
-      await storeOAuthToken(
-        {
-          provider,
-          scopeType: scope.scopeType,
-          scopeId: scope.scopeId,
-          accessToken: result.accessToken,
-          meta: result.meta,
-        },
-        { throwOnPersistError: true }
-      );
-
+      await deleteOAuthToken(provider, scope.scopeType, scope.scopeId);
       const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
-      console.log(`✅ [${label}] Credentials stored for ${target} ${result.logSuffix}`);
-      res.json({ success: true, agentId, boardId, ...(result.extra || {}) });
-    } catch (err: any) {
-      console.error(`[${label}] Connection test failed:`, err);
-      const { status, message } = opts.onError(err);
-      res.status(status).json({ error: message });
-    }
-  });
-
-  router.post('/disconnect', async (req, res) => {
-    const agentId = req.body?.agentId || null;
-    const boardId = req.body?.boardId || null;
-    if (!agentId && !boardId) {
-      res.status(400).json({ error: 'agentId or boardId is required' });
-      return;
-    }
-    const scope = resolveScope(agentId, boardId)!;
-    await deleteOAuthToken(provider, scope.scopeType, scope.scopeId);
-    const target = agentId ? `agent "${agentId.slice(0, 8)}"` : `board "${boardId?.slice(0, 8)}"`;
-    console.log(`🔌 [${label}] Disconnected ${target}`);
-    res.json({ success: true });
-  });
+      console.log(`🔌 [${label}] Disconnected ${target}`);
+      res.json({ success: true });
+    })
+  );
 
   return router;
 }

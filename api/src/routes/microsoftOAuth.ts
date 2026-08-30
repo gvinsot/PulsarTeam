@@ -8,6 +8,7 @@ import { sendOAuthResult } from './oauthHelper.js';
 import { runOAuthCodeExchange } from './oauthCallback.js';
 import { createOAuthStateStore } from './oauthState.js';
 
+import { asyncHandler } from '../lib/asyncHandler.js';
 /**
  * Unified Microsoft OAuth callback handler.
  *
@@ -136,6 +137,6 @@ export async function handleMicrosoftOAuthCallback(req: express.Request, res: ex
 
 export function microsoftOAuthRedirectRouter() {
   const router = express.Router();
-  router.get('/oauth-redirect', handleMicrosoftOAuthCallback);
+  router.get('/oauth-redirect', asyncHandler(handleMicrosoftOAuthCallback));
   return router;
 }

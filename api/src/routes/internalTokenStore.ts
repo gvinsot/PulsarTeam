@@ -7,6 +7,7 @@ import {
 import type { OAuthProvider, OAuthTokenRecord } from '../services/database/oauthTokens.js';
 import { getPool } from '../services/database/connection.js';
 import { tryDecrypt } from '../lib/crypto.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 /**
  * Shared token-store routes for the internal runner endpoints
@@ -68,66 +69,75 @@ export function internalTokenRoutes(
 ): express.Router {
   const router = express.Router();
 
-  router.get('/:ownerId', async (req, res) => {
-    const { ownerId } = req.params;
-    if (!ownerId) {
-      res.status(400).json({ error: 'ownerId required' });
-      return;
-    }
+  router.get(
+    '/:ownerId',
+    asyncHandler(async (req, res) => {
+      const { ownerId } = req.params;
+      if (!ownerId) {
+        res.status(400).json({ error: 'ownerId required' });
+        return;
+      }
 
-    // DB fallback so a sibling deployment that wrote the token a moment ago
-    // (or that this replica started before) is still resolvable.
-    const record = await fetchOAuthTokenWithDbFallback(provider, SCOPE_TYPE, ownerId);
-    if (!record) {
-      res.status(404).json({ error: 'Token not found' });
-      return;
-    }
+      // DB fallback so a sibling deployment that wrote the token a moment ago
+      // (or that this replica started before) is still resolvable.
+      const record = await fetchOAuthTokenWithDbFallback(provider, SCOPE_TYPE, ownerId);
+      if (!record) {
+        res.status(404).json({ error: 'Token not found' });
+        return;
+      }
 
-    res.json(shape.serialize(record));
-  });
+      res.json(shape.serialize(record));
+    })
+  );
 
-  router.post('/:ownerId', async (req, res) => {
-    const { ownerId } = req.params;
-    if (!ownerId) {
-      res.status(400).json({ error: 'ownerId required' });
-      return;
-    }
+  router.post(
+    '/:ownerId',
+    asyncHandler(async (req, res) => {
+      const { ownerId } = req.params;
+      if (!ownerId) {
+        res.status(400).json({ error: 'ownerId required' });
+        return;
+      }
 
-    const parsed = shape.parse(req.body || {});
-    if (!parsed) {
-      res.status(400).json({ error: 'accessToken required' });
-      return;
-    }
+      const parsed = shape.parse(req.body || {});
+      if (!parsed) {
+        res.status(400).json({ error: 'accessToken required' });
+        return;
+      }
 
-    await storeOAuthToken({
-      provider,
-      scopeType: SCOPE_TYPE,
-      scopeId: ownerId,
-      accessToken: parsed.accessToken,
-      refreshToken: parsed.refreshToken,
-      expiresAt: parsed.expiresAt,
-      meta: parsed.meta,
-    });
+      await storeOAuthToken({
+        provider,
+        scopeType: SCOPE_TYPE,
+        scopeId: ownerId,
+        accessToken: parsed.accessToken,
+        refreshToken: parsed.refreshToken,
+        expiresAt: parsed.expiresAt,
+        meta: parsed.meta,
+      });
 
-    // Read back to verify durable persistence so the runner can retry.
-    if (!(await verifyPersisted(provider, ownerId, parsed.accessToken))) {
-      res.status(500).json({ error: 'failed to persist token' });
-      return;
-    }
+      // Read back to verify durable persistence so the runner can retry.
+      if (!(await verifyPersisted(provider, ownerId, parsed.accessToken))) {
+        res.status(500).json({ error: 'failed to persist token' });
+        return;
+      }
 
-    res.json({ ok: true });
-  });
+      res.json({ ok: true });
+    })
+  );
 
-  router.delete('/:ownerId', async (req, res) => {
-    const { ownerId } = req.params;
-    if (!ownerId) {
-      res.status(400).json({ error: 'ownerId required' });
-      return;
-    }
+  router.delete(
+    '/:ownerId',
+    asyncHandler(async (req, res) => {
+      const { ownerId } = req.params;
+      if (!ownerId) {
+        res.status(400).json({ error: 'ownerId required' });
+        return;
+      }
 
-    await deleteOAuthToken(provider, SCOPE_TYPE, ownerId);
-    res.json({ ok: true });
-  });
+      await deleteOAuthToken(provider, SCOPE_TYPE, ownerId);
+      res.json({ ok: true });
+    })
+  );
 
   return router;
 }

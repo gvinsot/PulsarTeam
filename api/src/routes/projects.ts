@@ -110,31 +110,34 @@ export function projectRoutes() {
 
   // ── DB-backed projects CRUD ──────────────────────────────────────────────
 
-  router.get('/', async (req: any, res) => {
-    try {
-      const userId = req.user?.userId || null;
-      const role = req.user?.role || 'basic';
-      const projects = await getProjectsForUser(userId, role);
-      // Enrich with board/repo/storage counts
-      const enriched = await Promise.all(
-        projects.map(async p => {
-          const boards = await getBoardsForProject(p.id, userId, role);
-          const repos = await getReposForProject(p.id, userId, role);
-          const storages = await getStoragesForProject(p.id, userId, role);
-          return {
-            ...p,
-            boardCount: boards.length,
-            repoCount: repos.length,
-            storageCount: storages.length,
-          };
-        })
-      );
-      res.json(enriched);
-    } catch (err: any) {
-      console.error('Failed to list projects:', err.message);
-      res.status(500).json({ error: 'Failed to list projects' });
-    }
-  });
+  router.get(
+    '/',
+    asyncHandler(async (req: any, res) => {
+      try {
+        const userId = req.user?.userId || null;
+        const role = req.user?.role || 'basic';
+        const projects = await getProjectsForUser(userId, role);
+        // Enrich with board/repo/storage counts
+        const enriched = await Promise.all(
+          projects.map(async p => {
+            const boards = await getBoardsForProject(p.id, userId, role);
+            const repos = await getReposForProject(p.id, userId, role);
+            const storages = await getStoragesForProject(p.id, userId, role);
+            return {
+              ...p,
+              boardCount: boards.length,
+              repoCount: repos.length,
+              storageCount: storages.length,
+            };
+          })
+        );
+        res.json(enriched);
+      } catch (err: any) {
+        console.error('Failed to list projects:', err.message);
+        res.status(500).json({ error: 'Failed to list projects' });
+      }
+    })
+  );
 
   router.get(
     '/:id',
@@ -256,33 +259,36 @@ export function projectRoutes() {
 
   // ── (Global) repos pool used by agent pickers (Add Agent, Broadcast) ─────
   // Returns the distinct union of repos used by tasks on boards the user can access.
-  router.get('/available-repos', async (req: any, res) => {
-    try {
-      const repos = await getAccessibleBoardRepos(
-        req.user?.userId || null,
-        req.user?.role || 'user'
-      );
-      res.json(
-        repos.map(r => ({
-          provider: r.provider,
-          fullName: r.fullName,
-          htmlUrl: r.htmlUrl,
-          defaultBranch: '',
-          description: '',
-        }))
-      );
-    } catch (err: any) {
-      console.error('Failed to list available repos:', err.message);
-      res.json([]);
-    }
-  });
+  router.get(
+    '/available-repos',
+    asyncHandler(async (req: any, res) => {
+      try {
+        const repos = await getAccessibleBoardRepos(
+          req.user?.userId || null,
+          req.user?.role || 'user'
+        );
+        res.json(
+          repos.map(r => ({
+            provider: r.provider,
+            fullName: r.fullName,
+            htmlUrl: r.htmlUrl,
+            defaultBranch: '',
+            description: '',
+          }))
+        );
+      } catch (err: any) {
+        console.error('Failed to list available repos:', err.message);
+        res.json([]);
+      }
+    })
+  );
 
   // (Board-scoped) Repos accessible via the board's GitHub plugin OAuth token.
   // This is what the BoardReposPanel uses to populate the "Add Repo" picker.
   router.get(
     '/boards/:boardId/available-repos',
     authorizeBoardAccess('read', 'boardId'),
-    async (req: any, res) => {
+    asyncHandler(async (req: any, res) => {
       try {
         const tok = getOAuthToken('github', 'board', req.params.boardId);
         if (!tok || !tok.accessToken) {
@@ -333,7 +339,7 @@ export function projectRoutes() {
         console.error('Failed to list board repos:', err.message);
         res.status(500).json({ error: 'Failed to list repos' });
       }
-    }
+    })
   );
 
   // (Board-scoped) Storage roots accessible via the board's OneDrive plugin.
@@ -343,7 +349,7 @@ export function projectRoutes() {
   router.get(
     '/boards/:boardId/available-storages',
     authorizeBoardAccess('read', 'boardId'),
-    async (req: any, res) => {
+    asyncHandler(async (req: any, res) => {
       try {
         const tok = getOAuthToken('onedrive', 'board', req.params.boardId);
         if (!tok || !tok.accessToken) {
@@ -397,7 +403,7 @@ export function projectRoutes() {
         console.error('Failed to list board storages:', err.message);
         res.status(500).json({ error: 'Failed to list storages' });
       }
-    }
+    })
   );
 
   // ── GitHub repo explorer (used by repo detail UI) ────────────────────────
@@ -434,7 +440,7 @@ export function projectRoutes() {
   router.get(
     '/github-activity/:owner/:repo',
     authorizeBoardAccess('read', 'boardId'),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const auth = await resolveBoardGitHubAuth(req, res);
       if (!auth.ok) return;
 
@@ -490,13 +496,13 @@ export function projectRoutes() {
           return { commits, tags, fetchedAt: new Date().toISOString() };
         },
       });
-    }
+    })
   );
 
   router.get(
     '/github-branches/:owner/:repo',
     authorizeBoardAccess('read', 'boardId'),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const auth = await resolveBoardGitHubAuth(req, res);
       if (!auth.ok) return;
 
@@ -520,13 +526,13 @@ export function projectRoutes() {
           return data.map((b: any) => ({ name: b.name, sha: b.commit.sha }));
         },
       });
-    }
+    })
   );
 
   router.get(
     '/github-tree/:owner/:repo/:ref',
     authorizeBoardAccess('read', 'boardId'),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const auth = await resolveBoardGitHubAuth(req, res);
       if (!auth.ok) return;
 
@@ -556,13 +562,13 @@ export function projectRoutes() {
           return { tree, truncated: !!data.truncated };
         },
       });
-    }
+    })
   );
 
   router.get(
     '/github-file/:owner/:repo/:ref/*',
     authorizeBoardAccess('read', 'boardId'),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const auth = await resolveBoardGitHubAuth(req, res);
       if (!auth.ok) return;
 
@@ -614,7 +620,7 @@ export function projectRoutes() {
           };
         },
       });
-    }
+    })
   );
 
   // ── Code call-graph analysis ──────────────────────────────────────────────
@@ -625,7 +631,7 @@ export function projectRoutes() {
   router.post(
     '/code-graph/:owner/:repo',
     authorizeBoardAccess('read', 'boardId'),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const auth = await resolveBoardGitHubAuth(req, res);
       if (!auth.ok) return;
 
@@ -711,7 +717,7 @@ export function projectRoutes() {
         console.error(`[CodeGraph] analysis failed for ${owner}/${repo}:`, err.message);
         res.status(500).json({ error: `Code graph analysis failed: ${err.message}` });
       }
-    }
+    })
   );
 
   return router;

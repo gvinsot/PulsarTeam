@@ -3,8 +3,11 @@ import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { getWorkflowForBoard } from '../services/configManager.js';
 import {
+  getAllAgents,
   getAllBoards,
+  getAllUsers,
   getBoardsByUser,
+  getUserById,
   saveTaskToDb,
   updateTaskFields,
   getAgentById,
@@ -12,8 +15,8 @@ import {
 import { isValidRepoFullName } from '../services/taskRepos.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
-import { checkBoardAccess } from '../middleware/authz.js';
-import { sessionUser } from '../middleware/auth.js';
+import { requireRole, sessionUser } from '../middleware/auth.js';
+import { agentAccessMiddleware, type AgentAccessLevel } from '../lib/agentAccess.js';
 import { detectEnvironment } from '../lib/environment.js';
 import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
 import { getMemTask } from './tasks.js';
@@ -49,47 +52,30 @@ function sanitizeAgent(
 export function agentRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
-  // Board-based access guard: users can access agents on their boards or
-  // unscoped agents. 'read' is permissive; 'edit' is the stricter guard for
-  // mutating endpoints so that read-only shares cannot modify agents/tasks.
-  const agentAccess =
-    (level: 'read' | 'edit') =>
-    async (
-      // Mounted only on ':id' routes, so the param is declared here instead of
-      // falling back to express's ParamsDictionary, whose values widen to
-      // `string | string[]`.
-      req: express.Request<{ id: string }>,
-      res: express.Response,
-      next: express.NextFunction
-    ): Promise<express.Response | void> => {
-      const agent = agentManager.agents.get(req.params.id);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
-      // Same claims `req.user` carried before this signature was typed: the
-      // router is mounted behind authenticateToken, so the 401 below is
-      // unreachable in practice.
-      const user = sessionUser(req, res);
-      if (!user) return;
-      if (user.role === 'admin') return next();
-      // Agents without a board are accessible to everyone (legacy)
-      if (!agent.boardId) return next();
-      const access = await checkBoardAccess(agent.boardId, user.userId, user.role, level);
-      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-      next();
-    };
+  // Agent access guard. The rule itself now lives in lib/agentAccess.ts so the
+  // MCP handlers, the OAuth plugin routes and the voice routes enforce exactly
+  // the same one; this router only supplies the lookup (its in-memory map).
+  // 'read' is permissive; 'edit' is the stricter guard for mutating endpoints
+  // so that read-only shares cannot modify agents/tasks.
+  const agentAccess = (level: AgentAccessLevel) =>
+    agentAccessMiddleware(id => agentManager.agents.get(id), level);
   const requireAgentAccess = agentAccess('read');
   const requireAgentEditAccess = agentAccess('edit');
 
   // List agents (filtered by board access — each user sees agents on their boards + unscoped)
-  router.get('/', async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    const userBoardIds = await getUserBoardIds(user.userId);
-    // Refresh cached task counts + token totals so the agents view shows
-    // accurate tasks-in-progress and lifetime tokens on the initial HTTP load.
-    await agentManager._enrichAllAgentsStats();
-    const agents = agentManager.getAllForUser(user.userId, user.role, userBoardIds);
-    res.json(agents.map(sanitizeAgent));
-  });
+  router.get(
+    '/',
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const userBoardIds = await getUserBoardIds(user.userId);
+      // Refresh cached task counts + token totals so the agents view shows
+      // accurate tasks-in-progress and lifetime tokens on the initial HTTP load.
+      await agentManager._enrichAllAgentsStats();
+      const agents = agentManager.getAllForUser(user.userId, user.role, userBoardIds);
+      res.json(agents.map(sanitizeAgent));
+    })
+  );
 
   // Status routes mount the SCOPED status handlers (scoped=true): each user
   // sees only agents on their boards (+ unscoped). See leaderTools.ts for the
@@ -110,21 +96,137 @@ export function agentRoutes(agentManager: AgentManager) {
   router.get('/swarm-status', asyncHandler(swarmStatusHandler(agentManager, true)));
 
   // ── Admin: reset instructions for all agents of a role to default template ──
-  router.post('/reset-instructions/:role', async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    if (user.role !== 'admin') {
-      res.status(403).json({ error: 'Admin only' });
-      return;
-    }
-    const { role } = req.params;
-    const result = await agentManager.resetInstructionsByRole(role);
-    if (result.error === 'no_template') {
-      res.status(404).json({ error: `No default template found for role "${role}"` });
-      return;
-    }
-    res.json({ success: true, role, resetCount: result.reset.length, agentIds: result.reset });
-  });
+  router.post(
+    '/reset-instructions/:role',
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      if (user.role !== 'admin') {
+        res.status(403).json({ error: 'Admin only' });
+        return;
+      }
+      const { role } = req.params;
+      const result = await agentManager.resetInstructionsByRole(role);
+      if (result.error === 'no_template') {
+        res.status(404).json({ error: `No default template found for role "${role}"` });
+        return;
+      }
+      res.json({ success: true, role, resetCount: result.reset.length, agentIds: result.reset });
+    })
+  );
+
+  // ── Admin: orphaned agents ─────────────────────────────────────────────────
+  //
+  // MOUNTED HERE, ABOVE '/:id', on purpose: Express serves the first route that
+  // matches, so declared after it this path would be read as the agent whose id
+  // is "orphans". Same reason the literal routes above sit where they do.
+  //
+  // An agent is ORPHANED when the application cannot resolve its owner to a
+  // live user, which covers two populations:
+  //   • no ownerId at all — created before the owner column existed, or
+  //     deliberately unowned;
+  //   • an ownerId pointing at a deleted account — `agents.owner_id` is
+  //     ON DELETE SET NULL, but nothing rewrites the copy inside the `data`
+  //     JSONB, so the application goes on reading the agent as owned by a user
+  //     who is gone (see rowToAgent in services/database/agents.ts).
+  // Either way lib/agentAccess.ts case 3 now closes the agent to everyone but
+  // an admin — correct, and exactly what this screen exists to undo.
+  //
+  // Board membership is deliberately NOT part of the test. A board-scoped agent
+  // whose owner is gone needs a new one just as much (the owner is what carries
+  // the OAuth tokens and the token accounting); it is merely still reachable in
+  // the meantime.
+  router.get(
+    '/orphans',
+    requireRole('admin'),
+    asyncHandler(async (_req, res) => {
+      // Two queries total, never one per agent: the user ids are read once and
+      // the ownership test runs against the set.
+      const [agents, users] = await Promise.all([getAllAgents(), getAllUsers()]);
+      // getAllUsers() is fail-soft: it logs and returns [] on ANY query error
+      // (database/users.ts), which is indistinguishable from "no users exist".
+      // Without this guard a single failed statement would make EVERY agent
+      // look orphaned and invite an admin to mass-reassign a healthy install.
+      // Agents cannot exist without a user having created them, so an empty
+      // user set alongside a non-empty agent set is a read failure, not a fact.
+      if (agents.length > 0 && users.length === 0) {
+        res.status(503).json({ error: 'User directory unavailable — try again' });
+        return;
+      }
+      const userIds = new Set(users.map(user => user.id));
+      const orphans = agents
+        .filter(agent => !agent.ownerId || !userIds.has(agent.ownerId))
+        .map(agent => ({
+          id: agent.id,
+          name: agent.name,
+          boardId: agent.boardId ?? null,
+          ownerId: agent.ownerId ?? null,
+          // Computed rather than hard-coded false: every agent the filter above
+          // admits fails this test today, but the flag is what lets the client
+          // tell "never had an owner" (ownerId null) from "owner was deleted"
+          // (ownerId set, user gone), and it stays true to its name if the
+          // filter is ever widened.
+          ownerExists: !!agent.ownerId && userIds.has(agent.ownerId),
+          createdAt: typeof agent.createdAt === 'string' ? agent.createdAt : undefined,
+        }));
+      res.json({ agents: orphans });
+    })
+  );
+
+  // ── Admin: give an orphaned agent an owner ─────────────────────────────────
+  //
+  // Reassignment goes through agentManager.update — the application path — and
+  // never through SQL. `update` mutates the in-memory agent every other surface
+  // reads, then saveAgent writes BOTH stores in one statement: the `owner_id`
+  // column and the `ownerId` inside the `data` JSONB. An
+  // `UPDATE agents SET owner_id = …` would leave the JSONB stale, so the change
+  // would be invisible to the running process and, after a restart, would only
+  // hold until the next saveAgent overwrote the column from the stale JSONB.
+  //
+  // Admin-only, like the listing: reassigning ownership hands one tenant's
+  // agent — and the credentials it carries — to another account.
+  router.put<{ id: string }>(
+    '/:id/owner',
+    requireRole('admin'),
+    asyncHandler(async (req, res) => {
+      const ownerId: unknown = req.body?.ownerId;
+      if (typeof ownerId !== 'string' || !ownerId.trim()) {
+        res.status(400).json({ error: 'ownerId required' });
+        return;
+      }
+      // The target user is checked BEFORE the write because `owner_id` is a
+      // foreign key: an unknown id makes saveAgent's INSERT … ON CONFLICT fail,
+      // and saveAgent logs and swallows that error, which would leave the
+      // in-memory agent claiming an owner the database never accepted.
+      const owner = await getUserById(ownerId);
+      if (!owner) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
+      // `ownerId` is in AGENT_UPDATE_FIELDS, and BATCH_SHARED_FIELDS is built
+      // from that list (crud.ts), so updating one member of a batch reassigns
+      // EVERY member. That is the right semantics — a batch is one job split
+      // across N agents and cannot be half-owned — but it is a surprise if the
+      // caller sees a single row move, so the count is reported rather than
+      // left silent. Read before the write: `update` returns only the agent
+      // that was addressed.
+      const before = agentManager.agents.get(req.params.id);
+      const batchId: unknown = before?.batchId;
+      const affected =
+        typeof batchId === 'string' && batchId
+          ? Array.from(agentManager.agents.values()).filter(
+              candidate => candidate.batchId === batchId
+            ).length
+          : 1;
+
+      const agent = await agentManager.update(req.params.id, { ownerId });
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      res.json({ success: true, agent: sanitizeAgent(agent), affected });
+    })
+  );
 
   // Get single agent detailed status (lightweight, includes project + currentTask)
   router.get(
@@ -206,20 +308,24 @@ export function agentRoutes(agentManager: AgentManager) {
   );
 
   // Delete agent (basic users cannot delete, ownership enforced by middleware)
-  router.delete<{ id: string }>('/:id', requireAgentEditAccess, async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    if (user.role === 'basic') {
-      res.status(403).json({ error: 'Basic users cannot delete agents' });
-      return;
-    }
-    const success = await agentManager.delete(req.params.id);
-    if (!success) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  router.delete<{ id: string }>(
+    '/:id',
+    requireAgentEditAccess,
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      if (user.role === 'basic') {
+        res.status(403).json({ error: 'Basic users cannot delete agents' });
+        return;
+      }
+      const success = await agentManager.delete(req.params.id);
+      if (!success) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      res.json({ success: true });
+    })
+  );
 
   // Send message to agent
   router.post(
@@ -256,31 +362,35 @@ export function agentRoutes(agentManager: AgentManager) {
   // Params type passed explicitly so `req.params.id` stays a `string`: the
   // typed `requireAgentAccess` otherwise pins `P` to express's loose
   // `ParamsDictionary`, whose values are `string | string[]`.
-  router.post<{ id: string }>('/:id/history/reload', requireAgentAccess, async (req, res) => {
-    const agent = agentManager.agents.get(req.params.id);
-    if (!agent) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    const fresh = await getAgentById(req.params.id);
-    if (!fresh) {
-      res.status(404).json({ error: 'Agent not found in database' });
-      return;
-    }
-    agent.conversationHistory = Array.isArray(fresh.conversationHistory)
-      ? fresh.conversationHistory
-      : [];
-    // History diverged from whatever the runner's JSONL holds — force a fresh
-    // CLI session on next call so the model sees the reloaded history.
-    agent.runnerSessions = {};
-    agent.currentThinking = '';
-    delete agent._compactionArmed;
-    agentManager._emit?.(
-      'agent:updated',
-      agentManager._sanitize ? agentManager._sanitize(agent) : agent
-    );
-    res.json(agent.conversationHistory);
-  });
+  router.post<{ id: string }>(
+    '/:id/history/reload',
+    requireAgentAccess,
+    asyncHandler(async (req, res) => {
+      const agent = agentManager.agents.get(req.params.id);
+      if (!agent) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      const fresh = await getAgentById(req.params.id);
+      if (!fresh) {
+        res.status(404).json({ error: 'Agent not found in database' });
+        return;
+      }
+      agent.conversationHistory = Array.isArray(fresh.conversationHistory)
+        ? fresh.conversationHistory
+        : [];
+      // History diverged from whatever the runner's JSONL holds — force a fresh
+      // CLI session on next call so the model sees the reloaded history.
+      agent.runnerSessions = {};
+      agent.currentThinking = '';
+      delete agent._compactionArmed;
+      agentManager._emit?.(
+        'agent:updated',
+        agentManager._sanitize ? agentManager._sanitize(agent) : agent
+      );
+      res.json(agent.conversationHistory);
+    })
+  );
 
   // Stop agent
   router.post<{ id: string }>('/:id/stop', requireAgentEditAccess, (req, res) => {
@@ -293,41 +403,53 @@ export function agentRoutes(agentManager: AgentManager) {
   });
 
   // Clear conversation history
-  router.delete<{ id: string }>('/:id/history', requireAgentEditAccess, async (req, res) => {
-    const success = await agentManager.clearHistory(req.params.id);
-    if (!success) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  router.delete<{ id: string }>(
+    '/:id/history',
+    requireAgentEditAccess,
+    asyncHandler(async (req, res) => {
+      const success = await agentManager.clearHistory(req.params.id);
+      if (!success) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      res.json({ success: true });
+    })
+  );
 
   // Reload context — stronger than clearHistory: stops the agent and
   // invalidates every per-agent cache (stream buffer, chat lock, retry
   // counters, runner sessions, MCP connections, file tree) plus the global
   // LLM config cache, so any pending config change is picked up on the
   // next message.
-  router.post<{ id: string }>('/:id/reload-context', requireAgentEditAccess, async (req, res) => {
-    const success = await agentManager.reloadContext(req.params.id);
-    if (!success) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  router.post<{ id: string }>(
+    '/:id/reload-context',
+    requireAgentEditAccess,
+    asyncHandler(async (req, res) => {
+      const success = await agentManager.reloadContext(req.params.id);
+      if (!success) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      res.json({ success: true });
+    })
+  );
 
   // Restart runtime — resets the live process/connections (CLI session, MCP
   // clients, file tree) and refreshes config caches WITHOUT erasing the
   // conversation or the runner session UUIDs, so the agent resumes exactly
   // where it left off with any pending config change applied.
-  router.post<{ id: string }>('/:id/restart', requireAgentEditAccess, async (req, res) => {
-    const success = await agentManager.restartRuntime(req.params.id);
-    if (!success) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  router.post<{ id: string }>(
+    '/:id/restart',
+    requireAgentEditAccess,
+    asyncHandler(async (req, res) => {
+      const success = await agentManager.restartRuntime(req.params.id);
+      if (!success) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      res.json({ success: true });
+    })
+  );
 
   // Truncate conversation history after a specific message index
   router.delete<{ id: string; index: string }>(
@@ -676,7 +798,7 @@ export function agentRoutes(agentManager: AgentManager) {
   router.delete<{ id: string; taskId: string }>(
     '/:id/tasks/:taskId',
     requireAgentEditAccess,
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const agent = agentManager.agents.get(req.params.id);
       const taskToDelete = await getMemTask(agentManager, req.params.id, req.params.taskId);
       // Block deletion of tasks being executed — user must stop the agent first
@@ -694,13 +816,13 @@ export function agentRoutes(agentManager: AgentManager) {
         return;
       }
       res.json({ success: true });
-    }
+    })
   );
 
   router.post<{ id: string; taskId: string }>(
     '/:id/tasks/:taskId/transfer',
     requireAgentEditAccess,
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const user = sessionUser(req, res);
       if (!user) return;
       const { targetAgentId } = req.body;
@@ -730,13 +852,13 @@ export function agentRoutes(agentManager: AgentManager) {
         return;
       }
       res.status(201).json(task);
-    }
+    })
   );
 
   router.patch<{ id: string; taskId: string }>(
     '/:id/tasks/:taskId/assignee',
     requireAgentEditAccess,
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const { assigneeId } = req.body;
       // assigneeId can be null to unassign
       if (assigneeId && !agentManager.agents.get(assigneeId)) {
@@ -753,14 +875,14 @@ export function agentRoutes(agentManager: AgentManager) {
         return;
       }
       res.json(task);
-    }
+    })
   );
 
   // ── Task commit association ────────────────────────────────────────
   router.post<{ id: string; taskId: string }>(
     '/:id/tasks/:taskId/commits',
     requireAgentEditAccess,
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const { hash, message } = req.body;
       if (!hash) {
         res.status(400).json({ error: 'Commit hash required' });
@@ -777,13 +899,13 @@ export function agentRoutes(agentManager: AgentManager) {
         return;
       }
       res.status(201).json(task);
-    }
+    })
   );
 
   router.delete<{ id: string; taskId: string; hash: string }>(
     '/:id/tasks/:taskId/commits/:hash',
     requireAgentEditAccess,
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       const task = await agentManager.removeTaskCommit(
         req.params.id,
         req.params.taskId,
@@ -794,7 +916,7 @@ export function agentRoutes(agentManager: AgentManager) {
         return;
       }
       res.json(task);
-    }
+    })
   );
 
   // ── On-demand AI refinement (synchronous — waits for result) ────────
@@ -854,36 +976,40 @@ export function agentRoutes(agentManager: AgentManager) {
     res.status(201).json(doc);
   });
 
-  router.post<{ id: string }>('/:id/rag/url', requireAgentEditAccess, async (req, res) => {
-    try {
-      const { name, url } = req.body;
-      if (!name || !url) {
-        res.status(400).json({ error: 'Name and url required' });
-        return;
-      }
+  router.post<{ id: string }>(
+    '/:id/rag/url',
+    requireAgentEditAccess,
+    asyncHandler(async (req, res) => {
       try {
-        new URL(url);
-      } catch {
-        {
-          res.status(400).json({ error: 'Invalid URL' });
+        const { name, url } = req.body;
+        if (!name || !url) {
+          res.status(400).json({ error: 'Name and url required' });
           return;
         }
+        try {
+          new URL(url);
+        } catch {
+          {
+            res.status(400).json({ error: 'Invalid URL' });
+            return;
+          }
+        }
+        const doc = await agentManager.addRagUrlDocument(req.params.id, name, url);
+        if (!doc) {
+          res.status(404).json({ error: 'Agent not found' });
+          return;
+        }
+        res.status(201).json(doc);
+      } catch (err: any) {
+        res.status(502).json({ error: `Failed to fetch URL: ${err.message}` });
       }
-      const doc = await agentManager.addRagUrlDocument(req.params.id, name, url);
-      if (!doc) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
-      res.status(201).json(doc);
-    } catch (err: any) {
-      res.status(502).json({ error: `Failed to fetch URL: ${err.message}` });
-    }
-  });
+    })
+  );
 
   router.post<{ id: string; docId: string }>(
     '/:id/rag/:docId/refresh',
     requireAgentEditAccess,
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       try {
         const doc = await agentManager.refreshRagUrlDocument(req.params.id, req.params.docId);
         if (!doc) {
@@ -894,7 +1020,7 @@ export function agentRoutes(agentManager: AgentManager) {
       } catch (err: any) {
         res.status(502).json({ error: `Failed to refresh: ${err.message}` });
       }
-    }
+    })
   );
 
   router.delete<{ id: string; docId: string }>(
@@ -952,52 +1078,64 @@ export function agentRoutes(agentManager: AgentManager) {
 
   // ── Task History & Stats ──────────────────────────────────────────────────────
 
-  router.get('/tasks/stats', async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    const { project } = req.query as { project?: string };
-    const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
-    const stats = await agentManager.getTaskStats(project || null, userBoardIds);
-    res.json(stats);
-  });
+  router.get(
+    '/tasks/stats',
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const { project } = req.query as { project?: string };
+      const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
+      const stats = await agentManager.getTaskStats(project || null, userBoardIds);
+      res.json(stats);
+    })
+  );
 
-  router.get('/tasks/stats/timeseries', async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    const { project, days } = req.query as { project?: string; days?: string };
-    const d = Math.min(Math.max(parseInt(days ?? '') || 30, 1), 365);
-    const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
-    const timeseries = await agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
-    res.json(timeseries);
-  });
+  router.get(
+    '/tasks/stats/timeseries',
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const { project, days } = req.query as { project?: string; days?: string };
+      const d = Math.min(Math.max(parseInt(days ?? '') || 30, 1), 365);
+      const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
+      const timeseries = await agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
+      res.json(timeseries);
+    })
+  );
 
-  router.get('/tasks/stats/agent-time', async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    const { project, days } = req.query as { project?: string; days?: string };
-    const d = Math.min(Math.max(parseInt(days ?? '') || 30, 1), 365);
-    const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
-    const agentTime = await agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
-    res.json(agentTime);
-  });
+  router.get(
+    '/tasks/stats/agent-time',
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const { project, days } = req.query as { project?: string; days?: string };
+      const d = Math.min(Math.max(parseInt(days ?? '') || 30, 1), 365);
+      const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
+      const agentTime = await agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
+      res.json(agentTime);
+    })
+  );
 
-  router.get('/tasks/:id/history', async (req, res) => {
-    const user = sessionUser(req, res);
-    if (!user) return;
-    const task = await agentManager.getTask(req.params.id);
-    if (!task) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    if (user.role !== 'admin') {
-      const userBoardIds = await getUserBoardIds(user.userId);
-      if (task.boardId && !userBoardIds.has(task.boardId)) {
-        res.status(403).json({ error: 'Access denied' });
+  router.get(
+    '/tasks/:id/history',
+    asyncHandler(async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const task = await agentManager.getTask(req.params.id);
+      if (!task) {
+        res.status(404).json({ error: 'Not found' });
         return;
       }
-    }
-    res.json(task.history || []);
-  });
+      if (user.role !== 'admin') {
+        const userBoardIds = await getUserBoardIds(user.userId);
+        if (task.boardId && !userBoardIds.has(task.boardId)) {
+          res.status(403).json({ error: 'Access denied' });
+          return;
+        }
+      }
+      res.json(task.history || []);
+    })
+  );
 
   router.delete('/:id/skills/:skillId', requireAgentEditAccess, pluginRemoveHandler);
 

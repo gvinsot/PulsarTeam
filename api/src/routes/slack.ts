@@ -6,6 +6,7 @@ import { oauthProviderRoutes } from './oauthProviderRoutes.js';
 import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
 import { readSecret } from '../secrets.js';
 
+import { asyncHandler } from '../lib/asyncHandler.js';
 /**
  * Slack OAuth2 routes — unified token store.
  * Resolution: agent → board → user → error
@@ -158,7 +159,7 @@ async function handleOAuthRedirect(req: express.Request, res: express.Response) 
 
 export function slackOAuthRedirectRouter() {
   const router = express.Router();
-  router.get('/oauth-redirect', handleOAuthRedirect);
+  router.get('/oauth-redirect', asyncHandler(handleOAuthRedirect));
   return router;
 }
 

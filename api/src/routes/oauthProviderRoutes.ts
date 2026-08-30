@@ -7,6 +7,13 @@ import {
 } from '../services/database.js';
 import type { OAuthProvider, OAuthTokenRecord } from '../services/database.js';
 import { resolveScope } from './oauthHelper.js';
+import { sessionUser } from '../middleware/auth.js';
+import {
+  checkAgentIdAccess,
+  checkBoardIdAccess,
+  type AgentAccessLevel,
+} from '../lib/agentAccess.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 /**
  * Shared scaffolding for the per-provider OAuth plugin routes
@@ -116,57 +123,120 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
   };
 }
 
+/**
+ * Authorize the caller-supplied token SCOPE.
+ *
+ * `resolveScope` turns (agentId, boardId, username) into the key an OAuth token
+ * is stored under, so an unchecked agentId/boardId let any authenticated
+ * account read the connection state of — and, on /disconnect, destroy — another
+ * tenant's Google / Microsoft / GitHub / Slack tokens. The 'user' scope needs
+ * no check: it is keyed on the caller's own username.
+ *
+ * Returns the caller's identity when the request may proceed, or null after
+ * having already sent the 401/403 — so every call site is `if (!x) return;`.
+ */
+async function authorizeScope(
+  req: express.Request,
+  res: express.Response,
+  agentId: string | null,
+  boardId: string | null,
+  level: AgentAccessLevel
+): Promise<{ username: string } | null> {
+  const user = sessionUser(req, res);
+  if (!user) return null;
+  if (agentId) {
+    const access = await checkAgentIdAccess(agentId, user, level);
+    if (!access.ok) {
+      res.status(access.status || 403).json({ error: access.error });
+      return null;
+    }
+  } else if (boardId) {
+    // `else if` mirrors resolveScope's agent → board → user precedence: only
+    // the id that actually becomes the scope is authorized.
+    const access = await checkBoardIdAccess(boardId, user, level);
+    if (!access.ok) {
+      res.status(access.status || 403).json({ error: access.error });
+      return null;
+    }
+  }
+  return { username: user.username };
+}
+
+/** Reads a single-valued query param without widening to `string | string[]`. */
+function queryValue(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
 /** The /status, /auth-url, and /disconnect handlers shared by every provider. */
 export function oauthProviderRoutes<TConfig extends { clientId: string; clientSecret: string }>(
   spec: OAuthProviderSpec<TConfig>
 ): express.Router {
   const router = express.Router();
 
-  router.get('/status', (req, res) => {
-    const config = spec.getConfig();
-    const agentId = (req.query.agentId as string | undefined) || null;
-    const boardId = (req.query.boardId as string | undefined) || null;
-    const username = req.user?.username;
+  router.get(
+    '/status',
+    asyncHandler(async (req, res) => {
+      const config = spec.getConfig();
+      const agentId = queryValue(req.query.agentId);
+      const boardId = queryValue(req.query.boardId);
+      const authorized = await authorizeScope(req, res, agentId, boardId, 'read');
+      if (!authorized) return;
+      const username = authorized.username;
 
-    const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
-    const token = getOAuthToken(spec.provider, scopeType, scopeId);
-    const connected = spec.isConnected
-      ? spec.isConnected(token)
-      : hasOAuthToken(spec.provider, scopeType, scopeId);
+      const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
+      const token = getOAuthToken(spec.provider, scopeType, scopeId);
+      const connected = spec.isConnected
+        ? spec.isConnected(token)
+        : hasOAuthToken(spec.provider, scopeType, scopeId);
 
-    res.json({
-      configured: !!config,
-      connected,
-      ...spec.statusFields(token, connected, username),
-      agentId: agentId || null,
-      boardId: boardId || null,
-    });
-  });
+      res.json({
+        configured: !!config,
+        connected,
+        ...spec.statusFields(token, connected, username),
+        agentId: agentId || null,
+        boardId: boardId || null,
+      });
+    })
+  );
 
-  router.get('/auth-url', (req, res) => {
-    const config = spec.getConfig();
-    if (!config) {
-      res.status(500).json({ error: spec.notConfiguredError });
-      return;
-    }
+  router.get(
+    '/auth-url',
+    asyncHandler(async (req, res) => {
+      const config = spec.getConfig();
+      if (!config) {
+        res.status(500).json({ error: spec.notConfiguredError });
+        return;
+      }
 
-    const agentId = (req.query.agentId as string | undefined) || null;
-    const boardId = (req.query.boardId as string | undefined) || null;
+      const agentId = queryValue(req.query.agentId);
+      const boardId = queryValue(req.query.boardId);
+      // 'edit': the signed state this mints is what binds the consent callback to
+      // that scope, so issuing one writes a token there.
+      const authorized = await authorizeScope(req, res, agentId, boardId, 'edit');
+      if (!authorized) return;
 
-    const state = spec.generateState(req.user?.username || 'default', agentId, boardId, req);
+      const state = spec.generateState(authorized.username || 'default', agentId, boardId, req);
 
-    res.json({ authUrl: spec.buildAuthUrl(req, config, state) });
-  });
+      res.json({ authUrl: spec.buildAuthUrl(req, config, state) });
+    })
+  );
 
-  router.post('/disconnect', async (req, res) => {
-    const agentId = req.body?.agentId || null;
-    const boardId = req.body?.boardId || null;
-    const username = req.user?.username || 'default';
-    const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
-    await deleteOAuthToken(spec.provider, scopeType, scopeId);
-    console.log(`🔌 [${spec.label}] Disconnected ${scopeType}:${scopeId}`);
-    res.json({ success: true });
-  });
+  router.post(
+    '/disconnect',
+    asyncHandler(async (req, res) => {
+      const agentId = queryValue(req.body?.agentId);
+      const boardId = queryValue(req.body?.boardId);
+      // 'edit': deleting a provider token is destructive and irreversible from
+      // here — the user has to walk the consent flow again.
+      const authorized = await authorizeScope(req, res, agentId, boardId, 'edit');
+      if (!authorized) return;
+      const username = authorized.username || 'default';
+      const { scopeType, scopeId } = resolveScope(agentId, boardId, username);
+      await deleteOAuthToken(spec.provider, scopeType, scopeId);
+      console.log(`🔌 [${spec.label}] Disconnected ${scopeType}:${scopeId}`);
+      res.json({ success: true });
+    })
+  );
 
   return router;
 }

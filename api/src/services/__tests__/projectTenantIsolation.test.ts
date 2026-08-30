@@ -1,6 +1,7 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import express from 'express';
+import type { RequestHandler, Router } from 'express';
+import { createRouteHarness, harnessUser } from './helpers/routeHarness.js';
 
 const projectListCalls: any[][] = [];
 const projectResourceCalls: Record<string, any[][]> = {
@@ -91,22 +92,13 @@ mock.module('../agentManager/tasks.js', {
 const { projectRoutes } = await import('../../routes/projects.js');
 const { default: taskRoutes } = await import('../../routes/tasks.js');
 
-async function request(router: any, path: string) {
-  const app = express();
-  app.use((req: any, _res, next) => {
-    req.user = { userId: 'user-A', role: 'basic' };
-    next();
-  });
-  app.use(router);
-  const server = app.listen(0);
-  await new Promise<void>(resolve => server.once('listening', resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === 'object');
-  try {
-    return await fetch(`http://127.0.0.1:${address.port}${path}`);
-  } finally {
-    server.close();
-  }
+// The listen/fetch/close plumbing this file used to carry now lives in
+// helpers/routeHarness.ts, where it also gained the HTTP method, a JSON body
+// and `as(user)` — the pieces an authorization test needs to replay the same
+// request under a second identity. 'user-A' with role 'basic' is the tenant
+// these assertions are written around.
+function request(router: Router | RequestHandler, path: string): Promise<Response> {
+  return createRouteHarness(router, harnessUser({ userId: 'user-A', role: 'basic' })).get(path);
 }
 
 test('GET /projects lists and enriches only projects accessible to the caller', async () => {

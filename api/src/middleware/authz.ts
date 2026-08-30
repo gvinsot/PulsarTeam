@@ -66,7 +66,7 @@ export async function checkBoardAccess(
  * second DB round-trip.
  */
 export function authorizeBoardAccess(required: Permission = 'read', paramName: string = 'id') {
-  return async (req: any, res: any, next: any) => {
+  const guard = async (req: any, res: any, next: any) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     const boardId = (req.params?.[paramName] || req.query?.[paramName]) as string;
     try {
@@ -82,6 +82,12 @@ export function authorizeBoardAccess(required: Permission = 'read', paramName: s
       return res.status(500).json({ error: 'Authorization check failed' });
     }
   };
+  // Express stores only the function reference, so the guard carries its own
+  // identity — including the permission level it demands, which is what makes
+  // an 'edit' → 'read' downgrade visible to the route inventory
+  // (services/__tests__/routeInventory.test.ts). Naming only; no behavior change.
+  Object.defineProperty(guard, 'name', { value: `authorizeBoardAccess(${required})` });
+  return guard;
 }
 
 // Attached by authorizeBoardAccess so downstream handlers can reuse the loaded
@@ -134,7 +140,7 @@ export async function checkProjectAccess(
 }
 
 export function authorizeProjectAccess(required: Permission = 'read', paramName: string = 'id') {
-  return async (req: any, res: any, next: any) => {
+  const guard = async (req: any, res: any, next: any) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
     const projectId = (req.params?.[paramName] || req.query?.[paramName]) as string;
     try {
@@ -146,6 +152,10 @@ export function authorizeProjectAccess(required: Permission = 'read', paramName:
       return res.status(500).json({ error: 'Authorization check failed' });
     }
   };
+  // Same reason as authorizeBoardAccess above: identifiable in the routing
+  // stack, permission level included. Naming only; no behavior change.
+  Object.defineProperty(guard, 'name', { value: `authorizeProjectAccess(${required})` });
+  return guard;
 }
 
 // Attached by authorizeProjectAccess so downstream handlers can reuse the

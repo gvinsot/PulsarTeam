@@ -1,5 +1,6 @@
 import express from 'express';
 import type { AgentManager } from '../services/agentManager/index.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 /**
  * Internal endpoint consumed by CLI runners to materialize the agent's base
@@ -17,23 +18,26 @@ import type { AgentManager } from '../services/agentManager/index.js';
 export function internalRunnerInstructionsRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
-  router.get('/agents/:agentId', async (req, res) => {
-    try {
-      const agent = agentManager.getById(req.params.agentId);
-      if (!agent) {
-        res.status(404).json({ error: 'Agent not found' });
-        return;
-      }
+  router.get(
+    '/agents/:agentId',
+    asyncHandler(async (req, res) => {
+      try {
+        const agent = agentManager.getById(req.params.agentId);
+        if (!agent) {
+          res.status(404).json({ error: 'Agent not found' });
+          return;
+        }
 
-      const instructions = await agentManager.buildRunnerInstructions(req.params.agentId);
-      res.json({
-        configured: Boolean(instructions && instructions.trim()),
-        instructions: instructions || '',
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'internal error' });
-    }
-  });
+        const instructions = await agentManager.buildRunnerInstructions(req.params.agentId);
+        res.json({
+          configured: Boolean(instructions && instructions.trim()),
+          instructions: instructions || '',
+        });
+      } catch (err: any) {
+        res.status(500).json({ error: err?.message || 'internal error' });
+      }
+    })
+  );
 
   return router;
 }

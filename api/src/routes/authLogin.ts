@@ -40,6 +40,7 @@ import {
   signSessionToken,
   verifySessionToken,
 } from '../middleware/session.js';
+import { asyncHandler } from '../lib/asyncHandler.js';
 
 const router = express.Router();
 
@@ -261,51 +262,55 @@ export async function ensureAdminSeeded() {
 }
 
 // Login
-router.post('/login', validateBody(loginSchema), async (req, res) => {
-  try {
-    const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
-    if (!checkLoginRateLimit(clientIp)) {
-      res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
-      return;
+router.post(
+  '/login',
+  validateBody(loginSchema),
+  asyncHandler(async (req, res) => {
+    try {
+      const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
+      if (!checkLoginRateLimit(clientIp)) {
+        res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+        return;
+      }
+
+      const { username, password } = req.body;
+
+      // Distinguish "DB unreachable" from "bad credentials". Without this, a
+      // misconfigured DATABASE_CONNECTION_STRING on a replica causes
+      // getUserByUsername to silently return null, and every login attempt
+      // — including ones with valid credentials
+      // that work on other replicas of the same DB — falls through to the
+      // "Invalid credentials" branch. Surface the real cause so the operator
+      // can fix it.
+      if (!isDatabaseConnected()) {
+        console.error(
+          'Login attempted while database is not connected — check DATABASE_CONNECTION_STRING.'
+        );
+        res
+          .status(503)
+          .json({ error: 'Authentication backend unavailable. Please contact the administrator.' });
+        return;
+      }
+
+      const user = await getUserByUsername(username);
+      if (!user || !user.password) {
+        res.status(401).json({ error: 'Invalid credentials' });
+        return;
+      }
+
+      const valid = await bcrypt.compare(password, user.password);
+      if (!valid) {
+        res.status(401).json({ error: 'Invalid credentials' });
+        return;
+      }
+
+      sendLoginResponse(res, user);
+    } catch (err) {
+      console.error('Login error:', errorMessage(err));
+      res.status(500).json({ error: 'Internal server error' });
     }
-
-    const { username, password } = req.body;
-
-    // Distinguish "DB unreachable" from "bad credentials". Without this, a
-    // misconfigured DATABASE_CONNECTION_STRING on a replica causes
-    // getUserByUsername to silently return null, and every login attempt
-    // — including ones with valid credentials
-    // that work on other replicas of the same DB — falls through to the
-    // "Invalid credentials" branch. Surface the real cause so the operator
-    // can fix it.
-    if (!isDatabaseConnected()) {
-      console.error(
-        'Login attempted while database is not connected — check DATABASE_CONNECTION_STRING.'
-      );
-      res
-        .status(503)
-        .json({ error: 'Authentication backend unavailable. Please contact the administrator.' });
-      return;
-    }
-
-    const user = await getUserByUsername(username);
-    if (!user || !user.password) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    sendLoginResponse(res, user);
-  } catch (err) {
-    console.error('Login error:', errorMessage(err));
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 // Verify the current session.
 //
@@ -313,46 +318,49 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
 // whether the HttpOnly cookie is still valid (nothing in the page can read it),
 // and it re-hands the CSRF token, which is held in memory and therefore lost on
 // every reload.
-router.get('/verify', async (req, res) => {
-  const resolved = resolveSessionToken(req);
-  if (!resolved) {
-    res.status(401).json({ error: 'No token provided' });
-    return;
-  }
-
-  const decoded = verifySessionToken(resolved.token);
-  if (!decoded) {
-    res.status(401).json({ error: 'Invalid token' });
-    return;
-  }
-
-  try {
-    // Fetch fresh user data from DB to catch role changes
-    const user = await getUserById(decoded.userId);
-    if (!user) {
-      res.status(401).json({ error: 'User not found' });
+router.get(
+  '/verify',
+  asyncHandler(async (req, res) => {
+    const resolved = resolveSessionToken(req);
+    if (!resolved) {
+      res.status(401).json({ error: 'No token provided' });
       return;
     }
 
-    const responseUser: any = {
-      userId: user.id,
-      username: user.username,
-      role: user.role,
-      displayName: user.display_name,
-      termsAcceptedAt: user.terms_accepted_at || null,
-      tutorialCompletedAt: user.tutorial_completed_at || null,
-    };
-
-    // If this token was issued via impersonation, include that info
-    if (decoded.impersonatedBy) {
-      responseUser.impersonatedBy = decoded.impersonatedBy;
+    const decoded = verifySessionToken(resolved.token);
+    if (!decoded) {
+      res.status(401).json({ error: 'Invalid token' });
+      return;
     }
 
-    res.json({ valid: true, user: responseUser, csrfToken: decoded.csrf });
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-});
+    try {
+      // Fetch fresh user data from DB to catch role changes
+      const user = await getUserById(decoded.userId);
+      if (!user) {
+        res.status(401).json({ error: 'User not found' });
+        return;
+      }
+
+      const responseUser: any = {
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+        displayName: user.display_name,
+        termsAcceptedAt: user.terms_accepted_at || null,
+        tutorialCompletedAt: user.tutorial_completed_at || null,
+      };
+
+      // If this token was issued via impersonation, include that info
+      if (decoded.impersonatedBy) {
+        responseUser.impersonatedBy = decoded.impersonatedBy;
+      }
+
+      res.json({ valid: true, user: responseUser, csrfToken: decoded.csrf });
+    } catch (err) {
+      res.status(401).json({ error: 'Invalid token' });
+    }
+  })
+);
 
 // Log out. A stateless JWT cannot be revoked server-side, so dropping the
 // cookie the page cannot read *is* the logout. csrfProtection waves through a
@@ -371,7 +379,7 @@ router.post<{ userId: string }>(
   '/impersonate/:userId',
   authenticateToken,
   validateParams(impersonateParamsSchema),
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     try {
       const adminUser = req.user;
       if (!adminUser || adminUser.role !== 'admin') {
@@ -408,7 +416,7 @@ router.post<{ userId: string }>(
       console.error('Impersonate error:', errorMessage(err));
       res.status(500).json({ error: 'Internal server error' });
     }
-  }
+  })
 );
 
 /**
@@ -420,29 +428,33 @@ router.post<{ userId: string }>(
  * inside the impersonation token (`impersonatorId`) and the real session is
  * minted here, server-side.
  */
-router.post('/stop-impersonation', authenticateToken, async (req, res) => {
-  try {
-    const current = req.user;
-    if (!current?.impersonatorId) {
-      res.status(400).json({ error: 'Not impersonating' });
-      return;
-    }
+router.post(
+  '/stop-impersonation',
+  authenticateToken,
+  asyncHandler(async (req, res) => {
+    try {
+      const current = req.user;
+      if (!current?.impersonatorId) {
+        res.status(400).json({ error: 'Not impersonating' });
+        return;
+      }
 
-    const admin = await getUserById(current.impersonatorId);
-    // Refuse to restore a session that is no longer entitled to one: the
-    // impersonator may have been demoted or deleted mid-impersonation.
-    if (!admin || admin.role !== 'admin') {
-      clearSessionCookie(res);
-      res.status(403).json({ error: 'Original account is no longer an administrator' });
-      return;
-    }
+      const admin = await getUserById(current.impersonatorId);
+      // Refuse to restore a session that is no longer entitled to one: the
+      // impersonator may have been demoted or deleted mid-impersonation.
+      if (!admin || admin.role !== 'admin') {
+        clearSessionCookie(res);
+        res.status(403).json({ error: 'Original account is no longer an administrator' });
+        return;
+      }
 
-    sendLoginResponse(res, admin);
-  } catch (err) {
-    console.error('Stop impersonation error:', errorMessage(err));
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+      sendLoginResponse(res, admin);
+    } catch (err) {
+      console.error('Stop impersonation error:', errorMessage(err));
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  })
+);
 
 // ── Table-driven OAuth login providers ────────────────────────────────────────
 // Google, Microsoft and GitHub previously carried three structurally identical
@@ -831,43 +843,51 @@ for (const spec of LOGIN_PROVIDERS) {
   router.post(
     `/${spec.provider}/callback`,
     validateBody(oauthCallbackSchema),
-    handleCallback(spec)
+    asyncHandler(handleCallback(spec))
   );
 }
 
 // ── Terms & onboarding ─────────────────────────────────────────────────────
 // Record terms acceptance for the current user. Required: a valid JWT.
-router.post('/accept-terms', authenticateToken, async (req, res) => {
-  const user = sessionUser(req, res);
-  if (!user) return;
-  try {
-    const row = await acceptTerms(user.userId);
-    if (!row) {
-      res.status(404).json({ error: 'User not found' });
-      return;
+router.post(
+  '/accept-terms',
+  authenticateToken,
+  asyncHandler(async (req, res) => {
+    const user = sessionUser(req, res);
+    if (!user) return;
+    try {
+      const row = await acceptTerms(user.userId);
+      if (!row) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
+      res.json({ termsAcceptedAt: row.terms_accepted_at });
+    } catch (err) {
+      console.error('Accept terms error:', errorMessage(err));
+      res.status(500).json({ error: 'Internal server error' });
     }
-    res.json({ termsAcceptedAt: row.terms_accepted_at });
-  } catch (err) {
-    console.error('Accept terms error:', errorMessage(err));
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 // Record tutorial completion for the current user.
-router.post('/complete-tutorial', authenticateToken, async (req, res) => {
-  const user = sessionUser(req, res);
-  if (!user) return;
-  try {
-    const row = await completeTutorial(user.userId);
-    if (!row) {
-      res.status(404).json({ error: 'User not found' });
-      return;
+router.post(
+  '/complete-tutorial',
+  authenticateToken,
+  asyncHandler(async (req, res) => {
+    const user = sessionUser(req, res);
+    if (!user) return;
+    try {
+      const row = await completeTutorial(user.userId);
+      if (!row) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+      }
+      res.json({ tutorialCompletedAt: row.tutorial_completed_at });
+    } catch (err) {
+      console.error('Complete tutorial error:', errorMessage(err));
+      res.status(500).json({ error: 'Internal server error' });
     }
-    res.json({ tutorialCompletedAt: row.tutorial_completed_at });
-  } catch (err) {
-    console.error('Complete tutorial error:', errorMessage(err));
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
+  })
+);
 
 export { router as authRouter };

@@ -40,24 +40,28 @@ export function userRoutes() {
   );
 
   // Create user
-  router.post('/', validateBody(createUserSchema), async (req, res) => {
-    try {
-      const parsed = req.body as any;
-      const hash = await bcrypt.hash(parsed.password, 10);
-      const user = await createUser(
-        parsed.username,
-        hash,
-        parsed.role,
-        parsed.displayName || parsed.username
-      );
-      await provisionNewUser(user.id).catch(err =>
-        console.error('Provisioning error:', err.message)
-      );
-      res.status(201).json(user);
-    } catch (err) {
-      res.status(400).json({ error: errorMessage(err) });
-    }
-  });
+  router.post(
+    '/',
+    validateBody(createUserSchema),
+    asyncHandler(async (req, res) => {
+      try {
+        const parsed = req.body as any;
+        const hash = await bcrypt.hash(parsed.password, 10);
+        const user = await createUser(
+          parsed.username,
+          hash,
+          parsed.role,
+          parsed.displayName || parsed.username
+        );
+        await provisionNewUser(user.id).catch(err =>
+          console.error('Provisioning error:', err.message)
+        );
+        res.status(201).json(user);
+      } catch (err) {
+        res.status(400).json({ error: errorMessage(err) });
+      }
+    })
+  );
 
   // Update user
   // The route's params type is passed explicitly (the express typings ask for
@@ -67,7 +71,7 @@ export function userRoutes() {
     '/:id',
     validateParams(userIdParamsSchema),
     validateBody(updateUserSchema),
-    async (req, res) => {
+    asyncHandler(async (req, res) => {
       try {
         const parsed = req.body as any;
         const fields: Record<string, any> = {};
@@ -91,7 +95,7 @@ export function userRoutes() {
       } catch (err) {
         res.status(400).json({ error: errorMessage(err) });
       }
-    }
+    })
   );
 
   // Delete user

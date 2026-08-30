@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { X, Users, Crown, Settings, Cpu, LayoutGrid } from 'lucide-react';
+import { X, Users, Crown, Settings, Cpu, LayoutGrid, UserX } from 'lucide-react';
 import UsersTab from './admin/UsersTab';
 import SettingsTab from './admin/SettingsTab';
 import LlmConfigsTab from './admin/LlmConfigsTab';
 import BoardsTab from './admin/BoardsTab';
+import OrphanAgentsTab from './admin/OrphanAgentsTab';
 import type { ImpersonateResponse, ShowToastFn } from '../types';
 
 const TABS = [
@@ -11,6 +12,7 @@ const TABS = [
   { id: 'settings', label: 'Settings', icon: Settings },
   { id: 'llm', label: 'LLM Models', icon: Cpu },
   { id: 'boards', label: 'Boards', icon: LayoutGrid },
+  { id: 'orphans', label: 'Orphan Agents', icon: UserX },
 ];
 
 interface AdminPanelProps {
@@ -77,6 +79,9 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminP
           </div>
           <div className={activeTab === 'boards' ? 'space-y-6' : 'hidden'}>
             <BoardsTab active={activeTab === 'boards'} showToast={showToast} />
+          </div>
+          <div className={activeTab === 'orphans' ? 'space-y-6' : 'hidden'}>
+            <OrphanAgentsTab active={activeTab === 'orphans'} showToast={showToast} />
           </div>
         </div>
       </div>

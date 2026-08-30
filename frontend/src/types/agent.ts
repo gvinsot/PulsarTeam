@@ -612,3 +612,61 @@ export interface AgentLastMessages {
   limit: number;
   messages: AgentLastMessage[];
 }
+
+/**
+ * One row of GET /api/agents/orphans — the admin-only listing of agents that
+ * belong to nobody: no board AND no reachable owner. The hardening pass that
+ * hid those agents from every non-admin is what makes this listing the only way
+ * left to re-attach them to a user.
+ *
+ * NOT an `Agent` and not a subset of one: the route projects a handful of fields
+ * out of the stored blob and adds `ownerExists`, which is a lookup result rather
+ * than a stored field. Nothing else is on the wire, so do not widen it into
+ * Agent.
+ */
+export interface OrphanAgent {
+  id: string;
+  /** OPTIONAL for the same reason as Agent.name: create() writes it, nothing
+   *  re-defaults it, so a blob written before the key existed has none. `id` is
+   *  the only label always available. */
+  name?: string;
+  /** null is the normal value here — "attached to no board" is half of what
+   *  makes the agent an orphan — but the field is served as the nullable column
+   *  it is, not as the literal `null`. */
+  boardId: string | null;
+  /** null = no owner was ever recorded. A non-null value paired with
+   *  `ownerExists: false` is the other orphan case: the id points at a user row
+   *  that has since been deleted. */
+  ownerId: string | null;
+  /** false when `ownerId` names no existing user. It does NOT on its own tell
+   *  the two orphan cases apart — a null `ownerId` has nothing to resolve — so
+   *  consumers test `ownerId` first and read this flag second. */
+  ownerExists: boolean;
+  /** OPTIONAL, ISO 8601, exactly like Agent.createdAt: the API guards its own
+   *  reads of the key rather than guaranteeing it. */
+  createdAt?: string;
+}
+
+/** Envelope of GET /api/agents/orphans. The array is the whole payload; it is
+ *  wrapped so the route can grow sibling keys without a breaking change. */
+export interface OrphanAgentsResponse {
+  agents: OrphanAgent[];
+}
+
+/**
+ * Body of PUT /api/agents/:id/owner. `agent` is the FULL sanitized agent — the
+ * same shape GET /agents serves — not the thin OrphanAgent projection the list
+ * is built from, because the agent is no longer an orphan once the write lands.
+ */
+export interface OrphanAgentOwnerResult {
+  success: true;
+  agent: Agent;
+  /**
+   * How many agents the write actually moved. `ownerId` is a batch-shared
+   * field (api crud.ts BATCH_SHARED_FIELDS is built from AGENT_UPDATE_FIELDS),
+   * so reassigning one member of a batch reassigns every member — correct, a
+   * batch cannot be half-owned, but surprising unless it is reported. 1 for a
+   * standalone agent.
+   */
+  affected: number;
+}

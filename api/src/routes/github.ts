@@ -11,6 +11,7 @@ import { oauthProviderRoutes } from './oauthProviderRoutes.js';
 import type { OAuthProviderSpec } from './oauthProviderRoutes.js';
 import { readSecret } from '../secrets.js';
 
+import { asyncHandler } from '../lib/asyncHandler.js';
 /**
  * GitHub OAuth2 routes — unified token store.
  * Resolution: agent → board → user → error
@@ -312,7 +313,7 @@ async function handleOAuthRedirect(req: express.Request, res: express.Response) 
 
 export function githubOAuthRedirectRouter() {
   const router = express.Router();
-  router.get('/oauth-redirect', handleOAuthRedirect);
+  router.get('/oauth-redirect', asyncHandler(handleOAuthRedirect));
   return router;
 }
 

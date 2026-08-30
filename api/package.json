@@ -10,7 +10,7 @@
     "dev": "tsx --watch src/index.ts",
     "test": "node --import tsx --experimental-test-module-mocks --test src/services/__tests__/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings 1415",
+    "lint": "eslint . --max-warnings 1404",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write . --ignore-path ../.gitignore --ignore-path ../.prettierignore",
     "format:check": "prettier --check . --ignore-path ../.gitignore --ignore-path ../.prettierignore"

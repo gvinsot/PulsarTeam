@@ -60,18 +60,40 @@ export interface Agent {
 interface AgentRow {
   data: Agent;
   board_id?: string | null;
+  owner_id?: string | null;
 }
 
 /**
  * Convert an `agents` row to the in-memory agent object.
  *
- * The board_id column is the source of truth (saveAgent writes it from the same
- * object, and it is what board queries index on); the JSON copy is only a
- * fallback for rows written before the column existed.
+ * `board_id` and `owner_id` are MIRRORS, not separate facts: `saveAgent` writes
+ * each column and its JSONB copy from the same object, in the same statement.
+ * So they diverge in exactly two ways, and the `??` chain answers both:
+ *
+ *   1. The row predates the columns (migrations.ts, 202601010003 added owner_id
+ *      and board_id). The column is NULL and the JSONB copy is the only record
+ *      of the owner, so a NULL column must NOT win — letting it win would
+ *      orphan every agent created before that migration.
+ *   2. Something wrote the column alone. `owner_id` is
+ *      `REFERENCES users(id) ON DELETE SET NULL` (baseSchema.ts), so deleting a
+ *      user NULLs it while the JSONB keeps the now-dangling id; a hand-written
+ *      `UPDATE agents SET owner_id = …` does the reverse. A non-NULL column is
+ *      the more recent value AND the one the foreign key vouches for, so it
+ *      wins over the JSONB copy.
+ *
+ * That leaves one case the chain cannot decide on its own: a NULL column next
+ * to a JSONB id pointing at a deleted user is byte-for-byte a case-1 legacy
+ * row. The difference simply is not in this table, so it is not guessed here —
+ * whoever needs it resolves the id against `users` (routes/agents.ts
+ * GET /orphans, which is what the `ownerExists` flag reports).
+ *
+ * Every SELECT feeding this must name the columns, or the fixup silently reads
+ * `undefined` and the JSONB copy always wins.
  */
 export function rowToAgent(row: AgentRow): Agent {
   const agent = row.data;
   agent.boardId = row.board_id ?? agent.boardId ?? null;
+  agent.ownerId = row.owner_id ?? agent.ownerId ?? null;
   return agent;
 }
 
@@ -81,7 +103,7 @@ export async function getAllAgents(): Promise<Agent[]> {
 
   try {
     const result = await pool.query<AgentRow>(
-      'SELECT data, board_id FROM agents ORDER BY created_at'
+      'SELECT data, board_id, owner_id FROM agents ORDER BY created_at'
     );
     return result.rows.map(rowToAgent);
   } catch (err) {
@@ -94,9 +116,10 @@ export async function getAgentById(id: string): Promise<Agent | null> {
   const pool = getPool();
   if (!pool) return null;
   try {
-    const result = await pool.query<AgentRow>('SELECT data, board_id FROM agents WHERE id = $1', [
-      id,
-    ]);
+    const result = await pool.query<AgentRow>(
+      'SELECT data, board_id, owner_id FROM agents WHERE id = $1',
+      [id]
+    );
     const row = result.rows[0];
     if (!row) return null;
     return rowToAgent(row);
@@ -139,13 +162,18 @@ export async function getAgentsByBoard(boardId: string): Promise<Agent[]> {
   const pool = getPool();
   if (!pool) return [];
   try {
-    // Only `data` is selected here, so the boardId fixup rowToAgent applies has
-    // nothing to read — the filter already pinned every row to this board.
+    // Selects the mirrored columns and goes through rowToAgent like every other
+    // listing. It used to select `data` alone, on the stated grounds that no
+    // caller read ownerId — which was wrong: userProvisioning.ts:31 compares
+    // `agent.ownerId` to decide whether a user already has a developer agent.
+    // Reading that off the JSONB alone resurrects a deleted owner (the FK's
+    // ON DELETE SET NULL clears the column but not the blob), so provisioning
+    // would skip a user who no longer owns anything.
     const result = await pool.query<AgentRow>(
-      'SELECT data FROM agents WHERE board_id = $1 ORDER BY created_at',
+      'SELECT data, owner_id, board_id FROM agents WHERE board_id = $1 ORDER BY created_at',
       [boardId]
     );
-    return result.rows.map(row => row.data);
+    return result.rows.map(rowToAgent);
   } catch (err) {
     console.error('Failed to get agents by board:', errorMessage(err));
     return [];

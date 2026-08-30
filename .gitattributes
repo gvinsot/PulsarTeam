@@ -1,2 +1,26 @@
-# Force shell scripts to LF (required for Docker containers)
-*.sh text eol=lf
+# Line endings.
+#
+# Every text file is stored LF in the object database and checked out LF on
+# every platform. Without the `eol=lf` half, a Windows checkout gets CRLF while
+# .prettierrc pins `endOfLine: "lf"` — so `npm run format:check` fails on files
+# nobody touched, and the only way to "fix" it is a repo-wide rewrite that
+# buries the real change. CI (Linux) never saw the problem, which is the worst
+# shape a divergence can take: green there, red here.
+#
+# Applying this to an existing clone needs one renormalisation pass on a CLEAN
+# tree — `git add --renormalize .` then commit — otherwise the change only
+# lands file by file as they are next touched.
+* text=auto eol=lf
+
+# Binary: never touch these, and never try to diff them as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+# Lockfiles are generated: keep them out of diffs by default.
+package-lock.json linguist-generated=true -diff

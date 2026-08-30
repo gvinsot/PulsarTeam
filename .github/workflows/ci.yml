@@ -1,0 +1,133 @@
+# The gates, executed.
+#
+# `npm run typecheck`, `lint`, `test` and `build` all existed and were green
+# before this file did — nothing ran them. Everything the strictness campaign
+# bought (`strict: true` on all three projects, the `--max-warnings` ceilings,
+# the route-authorization inventory) was protected only by whoever remembered
+# to type the commands. A ratchet nothing executes is not a ratchet.
+#
+# Deliberately ONE workflow with an explicit matrix rather than per-project
+# files: the three projects are independent npm roots with no shared graph
+# (the frontend talks to the API over HTTP, never by import), so there is
+# nothing to orchestrate — only the same gates to apply three times.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch cancels the previous run: on a single-maintainer
+# repo the older result is never the interesting one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: ${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Never stop the other projects because one failed: a red frontend should
+      # not hide the state of the API.
+      fail-fast: false
+      matrix:
+        include:
+          - project: api
+            lint: true
+            format: true
+          - project: frontend
+            lint: true
+            format: true
+          # desktop has neither an eslint config nor an eslint dependency, so it
+          # has no `lint` or `format:check` script. Declared false rather than
+          # papered over with `--if-present`, which would also stay silent the
+          # day someone deletes a script from api or frontend.
+          - project: desktop
+            lint: false
+            format: false
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      # `lint` carries the `--max-warnings` ceiling. It fails on the first
+      # `any` added beyond the current count — that is the whole mechanism.
+      - name: lint
+        if: matrix.lint
+        run: npm run lint
+
+      - name: test
+        run: npm test
+
+      - name: build
+        run: npm run build
+
+      - name: format
+        if: matrix.format
+        run: npm run format:check
+
+  # The ceiling is only a ratchet if it cannot go back up. `npm run lint` fails
+  # when the warning count EXCEEDS the ceiling, but nothing stops someone from
+  # raising the ceiling to make it pass. This compares the number in the branch
+  # to the number on the base and refuses an increase.
+  #
+  # Lowering it is always allowed, and is the point: remove an `any`, drop the
+  # ceiling, it can never come back.
+  any-ratchet:
+    name: no-explicit-any ratchet
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: compare ceilings against the base branch
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          status=0
+          for project in api frontend; do
+            ceiling() {
+              # The number in `eslint . --max-warnings <n>`; missing script or
+              # missing flag yields an empty string, handled below.
+              sed -n 's/.*--max-warnings[ =]\([0-9]\+\).*/\1/p' "$1" | head -1
+            }
+            head_value=$(ceiling "$project/package.json")
+            base_value=$(git show "origin/${{ github.base_ref }}:$project/package.json" 2>/dev/null | ceiling /dev/stdin || true)
+
+            if [ -z "$head_value" ]; then
+              echo "::error::$project no longer pins --max-warnings. The ratchet is the ceiling; do not remove it."
+              status=1
+              continue
+            fi
+            if [ -z "$base_value" ]; then
+              echo "$project: no ceiling on the base branch, nothing to compare (head=$head_value)"
+              continue
+            fi
+            if [ "$head_value" -gt "$base_value" ]; then
+              echo "::error::$project raised its no-explicit-any ceiling from $base_value to $head_value. Type the value instead, or explain in the PR why the ceiling must move."
+              status=1
+            elif [ "$head_value" -lt "$base_value" ]; then
+              echo "$project: ceiling lowered $base_value -> $head_value 👍"
+            else
+              echo "$project: ceiling unchanged at $head_value"
+            fi
+          done
+          exit $status

@@ -41,6 +41,8 @@ import type {
   McpTestResult,
   OAuthAuthUrlResponse,
   OAuthProviderStatus,
+  OrphanAgentOwnerResult,
+  OrphanAgentsResponse,
   Plugin,
   PluginDraft,
   PluginMcpDraft,
@@ -570,6 +572,15 @@ export const api = {
     post<AgentBatchCreated>(`/agents/${id}/batch`, { batchSize }, { long: true }),
 
   deleteAgent: (id: string) => del<SuccessAck>(`/agents/${id}`),
+
+  // Orphan agents (admin only). Agents with no board AND no reachable owner are
+  // invisible to every non-admin, so both of these are requireRole('admin') and
+  // are only ever reached from the AdminPanel.
+  getOrphanAgents: () => get<OrphanAgentsResponse>('/agents/orphans'),
+
+  // Reassigning an owner is an administration act, never a user-level one.
+  setAgentOwner: (id: string, ownerId: string) =>
+    put<OrphanAgentOwnerResult>(`/agents/${id}/owner`, { ownerId }),
 
   stopAgent: (id: string) => post<OkAck & { stopped: boolean }>(`/agents/${id}/stop`),
 
