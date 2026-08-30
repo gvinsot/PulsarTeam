@@ -123,8 +123,29 @@ const MIGRATIONS: Migration[] = [
   },
 ];
 
-export async function runMigrations(pool: any, migrations: Migration[] = MIGRATIONS) {
-  const client = await pool.connect();
+/**
+ * Apply pending migrations on a session the CALLER owns.
+ *
+ * It takes a connected client, not a Pool, and neither acquires nor releases
+ * one. Two reasons, and the second is why this signature is not negotiable:
+ *
+ *  - `pg_advisory_lock` is SESSION-scoped, and every migration below runs in an
+ *    explicit BEGIN/COMMIT. Both are only meaningful if the lock, the DDL and
+ *    the bookkeeping insert share one connection. Taking our own would let the
+ *    caller's session and ours diverge.
+ *  - initDatabase runs the whole bootstrap on one dedicated connection that it
+ *    has set `statement_timeout = 0` on, because a backfilling ALTER
+ *    legitimately outruns the 30s cap the pool applies to API traffic. That
+ *    opt-out is session-scoped too, so a connection of our own would silently
+ *    run the migrations under the wrong limit.
+ *
+ * This used to take the Pool and call `pool.connect()` itself. When the
+ * bootstrap connection was introduced, the caller started passing that client
+ * straight through — and `.connect()` on an already-connected client throws
+ * "Client has already been connected. You cannot reuse a client.", which
+ * failed every boot attempt and left the API running with no database.
+ */
+export async function runMigrations(client: Queryable, migrations: Migration[] = MIGRATIONS) {
   try {
     await client.query('SELECT pg_advisory_lock(hashtext($1))', [MIGRATION_LOCK_KEY]);
     await ensureMigrationTable(client);
@@ -167,15 +188,15 @@ export async function runMigrations(pool: any, migrations: Migration[] = MIGRATI
 
     console.log('✅ Database migrations ready');
   } finally {
+    // The session belongs to the caller: unlock, but never release it here.
     await client
       .query('SELECT pg_advisory_unlock(hashtext($1))', [MIGRATION_LOCK_KEY])
       .catch(() => {});
-    client.release();
   }
 }
 
 export const schemaMigrationsForTest = MIGRATIONS;
 
-export async function runSchemaMigrations(pool: any) {
-  return runMigrations(pool, MIGRATIONS);
+export async function runSchemaMigrations(client: Queryable) {
+  return runMigrations(client, MIGRATIONS);
 }
