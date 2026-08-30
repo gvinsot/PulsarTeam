@@ -32,6 +32,8 @@ import {
   RMS_SILENCE,
   decodePcm16ToBuffer,
 } from '../lib/externalVoiceClient';
+import { errorMessage } from '../utils/errors';
+import type { Agent } from '../types';
 
 type Status = 'disconnected' | 'connecting' | 'listening' | 'thinking' | 'speaking' | 'error';
 
@@ -44,7 +46,7 @@ const STATUS_LABEL: Record<Status, string> = {
   error: 'Error',
 };
 
-export default function ExternalVoiceChatTab({ agent }) {
+export default function ExternalVoiceChatTab({ agent }: { agent: Agent }) {
   const [status, setStatus] = useState<Status>('disconnected');
   const [error, setError] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
@@ -197,9 +199,9 @@ export default function ExternalVoiceChatTab({ agent }) {
           return;
         }
         speak(reply);
-      } catch (err: any) {
+      } catch (err) {
         console.error('[ExternalVoice] chat error', err);
-        setError(err.message || 'Chat call failed');
+        setError(errorMessage(err) || 'Chat call failed');
         setStatus('error');
         cleanup();
       }
@@ -386,9 +388,9 @@ export default function ExternalVoiceChatTab({ agent }) {
 
       // ── Kick off the first STT session ───────────────────────────────
       openStt();
-    } catch (err: any) {
+    } catch (err) {
       console.error('[ExternalVoice] connect failed', err);
-      setError(err.message || 'Connection failed');
+      setError(errorMessage(err) || 'Connection failed');
       setStatus('error');
       cleanup();
     }

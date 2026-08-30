@@ -32,7 +32,7 @@ test('validateBody rejects invalid payload with 400 and structured details', asy
         username: z.string().min(2).max(50),
         password: z.string().min(4),
       });
-      app.post('/login', validateBody(schema), (req, res) => res.json({ ok: true }));
+      app.post('/login', validateBody(schema), (_req, res) => res.json({ ok: true }));
     },
     async baseUrl => {
       const resp = await fetch(`${baseUrl}/login`, {
@@ -82,7 +82,7 @@ test('validateBody rejects missing required field with explicit path', async () 
   await withServer(
     app => {
       const schema = z.object({ email: z.string().email() });
-      app.post('/x', validateBody(schema), (req, res) => res.json({ ok: true }));
+      app.post('/x', validateBody(schema), (_req, res) => res.json({ ok: true }));
     },
     async baseUrl => {
       const resp = await fetch(`${baseUrl}/x`, {

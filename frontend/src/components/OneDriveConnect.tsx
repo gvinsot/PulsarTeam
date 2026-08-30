@@ -1,6 +1,7 @@
 import { Cloud, CloudOff } from 'lucide-react';
 import { api } from '../api';
 import OAuthConnectWidget, { OAuthProviderConfig } from './connect/OAuthConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * OneDrive OAuth connection widget — thin config over the shared OAuthConnectWidget.
@@ -45,7 +46,15 @@ const ONEDRIVE_CONFIG: OAuthProviderConfig = {
   },
 };
 
-export default function OneDriveConnect({ agentId, boardId, onStatusChange }) {
+export default function OneDriveConnect({
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: (status: ConnectStatus) => void;
+}) {
   return (
     <OAuthConnectWidget
       config={ONEDRIVE_CONFIG}

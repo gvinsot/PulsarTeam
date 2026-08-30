@@ -3,7 +3,26 @@ import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
+import type { MCPManager } from './mcpManager.js';
+
 const GANDI_API = 'https://api.gandi.net/v5/livedns';
+
+// The two Gandi LiveDNS payload shapes this file reads back. gandiRequest hands
+// over raw JSON.parse output, so these describe what is consumed, not what is
+// verified — every field below is already dereferenced unguarded today.
+
+/** An entry of GET /domains. */
+interface GandiDomain {
+  fqdn: string;
+}
+
+/** An entry of GET /domains/{fqdn}/records. */
+interface GandiRecord {
+  rrset_name: string;
+  rrset_type: string;
+  rrset_ttl: number;
+  rrset_values: string[];
+}
 
 /**
  * Call the Gandi LiveDNS API.
@@ -32,7 +51,7 @@ async function gandiRequest(pat: string, path: string, options: Record<string, a
 
 // ─── MCP Server ──────────────────────────────────────────────────────────────
 
-export function createGandiDnsMcpServer(mcpManager) {
+export function createGandiDnsMcpServer(mcpManager: MCPManager) {
   const server = new McpServer({ name: 'Gandi DNS', version: '1.0.0' });
 
   /** Resolve the Gandi PAT from the MCP server config (apiKey field). */
@@ -51,7 +70,7 @@ export function createGandiDnsMcpServer(mcpManager) {
 
   server.tool('list_domains', 'List all domains managed by Gandi LiveDNS.', {}, async () => {
     const pat = getPat();
-    const domains = await gandiRequest(pat, '/domains');
+    const domains: GandiDomain[] = await gandiRequest(pat, '/domains');
     const summary = domains.length
       ? domains.map(d => `- ${d.fqdn}`).join('\n')
       : 'No domains found.';
@@ -68,7 +87,10 @@ export function createGandiDnsMcpServer(mcpManager) {
     },
     async ({ domain }) => {
       const pat = getPat();
-      const records = await gandiRequest(pat, `/domains/${encodeURIComponent(domain)}/records`);
+      const records: GandiRecord[] = await gandiRequest(
+        pat,
+        `/domains/${encodeURIComponent(domain)}/records`
+      );
       const summary = records.length
         ? records
             .map(
@@ -150,6 +172,6 @@ export function createGandiDnsMcpServer(mcpManager) {
 
 // ─── Express Handler ─────────────────────────────────────────────────────────
 
-export function createGandiDnsMcpHandler(mcpManager) {
+export function createGandiDnsMcpHandler(mcpManager: MCPManager) {
   return createMcpHttpHandler('Gandi DNS', () => createGandiDnsMcpServer(mcpManager));
 }

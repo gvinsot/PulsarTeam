@@ -41,6 +41,13 @@ export const updateTaskSchema = z.object({
   storageProvider: optionalString(50),
 });
 
+/**
+ * Body of PUT /tasks/:id once `validateBody(updateTaskSchema)` has run — the
+ * body type is inferred from the schema that validates it, so the two cannot
+ * drift. Same pattern applies to every other schema in this folder.
+ */
+export type UpdateTaskBody = z.infer<typeof updateTaskSchema>;
+
 export const bulkMoveSchema = z.object({
   taskIds: z.array(z.string().uuid()).min(1).max(2000),
   boardId: z.string().uuid(),

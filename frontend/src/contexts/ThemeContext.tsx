@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
 import { safeGet, safeSet } from '../lib/safeStorage';
 
 interface ThemeContextValue {
@@ -9,7 +10,7 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-export function ThemeProvider({ children }) {
+export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState(() => {
     return safeGet('pulsar_theme') || 'dark';
   });
@@ -21,7 +22,7 @@ export function ThemeProvider({ children }) {
     safeSet('pulsar_theme', theme);
   }, [theme]);
 
-  const setTheme = t => setThemeState(t);
+  const setTheme = (t: string) => setThemeState(t);
   const toggleTheme = () => setThemeState(prev => (prev === 'dark' ? 'light' : 'dark'));
 
   return (

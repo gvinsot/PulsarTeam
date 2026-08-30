@@ -16,9 +16,33 @@ import {
   AlertTriangle,
   Ban,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { api } from '../../api';
+import type {
+  Agent,
+  AgentPermissionsExecution,
+  AgentPermissionsFilesystem,
+  AgentPermissionsLinuxUser,
+  AgentPermissionsNetwork,
+  AgentToolHookRule,
+} from '../../types';
 
-const DEFAULT_PERMISSIONS = {
+/**
+ * The permissions blob this tab edits: AgentPermissions with every section and
+ * every grant present, because buildPerms() merges the agent's stored (and
+ * entirely optional) permissions over DEFAULT_PERMISSIONS below. `Required<…>`
+ * of the four exported section interfaces is what "merged over the defaults"
+ * means in the type system.
+ */
+interface EditablePermissions {
+  linuxUser: Required<AgentPermissionsLinuxUser>;
+  network: Required<AgentPermissionsNetwork>;
+  filesystem: Required<AgentPermissionsFilesystem>;
+  execution: Required<AgentPermissionsExecution>;
+}
+
+const DEFAULT_PERMISSIONS: EditablePermissions = {
   linuxUser: {
     runAsRoot: false,
   },
@@ -37,7 +61,15 @@ const DEFAULT_PERMISSIONS = {
   },
 };
 
-function ToggleSwitch({ enabled, onChange, disabled = false }) {
+function ToggleSwitch({
+  enabled,
+  onChange,
+  disabled = false,
+}: {
+  enabled: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
   return (
     <button
       onClick={() => !disabled && onChange(!enabled)}
@@ -51,7 +83,17 @@ function ToggleSwitch({ enabled, onChange, disabled = false }) {
   );
 }
 
-function PermissionCard({ icon: Icon, title, description, children }) {
+function PermissionCard({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="p-4 bg-dark-800/50 rounded-lg border border-dark-700/50">
       <div className="flex items-center gap-2 mb-3">
@@ -64,7 +106,15 @@ function PermissionCard({ icon: Icon, title, description, children }) {
   );
 }
 
-function PermissionRow({ label, description, children }) {
+function PermissionRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0">
@@ -76,7 +126,15 @@ function PermissionRow({ label, description, children }) {
   );
 }
 
-function TagInput({ tags, onChange, placeholder }) {
+function TagInput({
+  tags,
+  onChange,
+  placeholder,
+}: {
+  tags: string[];
+  onChange: (next: string[]) => void;
+  placeholder?: string;
+}) {
   const [input, setInput] = useState('');
 
   const addTag = () => {
@@ -87,7 +145,7 @@ function TagInput({ tags, onChange, placeholder }) {
     setInput('');
   };
 
-  const removeTag = idx => {
+  const removeTag = (idx: number) => {
     onChange(tags.filter((_, i) => i !== idx));
   };
 
@@ -130,7 +188,17 @@ function TagInput({ tags, onChange, placeholder }) {
   );
 }
 
-function CredentialInput({ name, hasValue, onSave, onDelete }) {
+function CredentialInput({
+  name,
+  hasValue,
+  onSave,
+  onDelete,
+}: {
+  name: string;
+  hasValue: boolean;
+  onSave: (name: string, value: string) => void;
+  onDelete: (name: string) => void;
+}) {
   const [value, setValue] = useState('');
   const [visible, setVisible] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -212,7 +280,7 @@ function CredentialInput({ name, hasValue, onSave, onDelete }) {
   );
 }
 
-const BUILTIN_RULES = [
+const BUILTIN_RULES: AgentToolHookRule[] = [
   {
     id: 'block-drop-database',
     name: 'Block DROP DATABASE',
@@ -312,7 +380,7 @@ const BUILTIN_RULE_IDS = new Set(BUILTIN_RULES.map(r => r.id));
 // Merge the agent's stored permissions over the defaults. The top-level
 // spread keeps unknown extra permission keys intact across the save
 // round-trip via api.updateAgent.
-function buildPerms(agent) {
+function buildPerms(agent: Agent): EditablePermissions {
   return {
     ...DEFAULT_PERMISSIONS,
     ...agent.permissions,
@@ -325,15 +393,21 @@ function buildPerms(agent) {
 
 // Overlay stored rule overrides onto the builtin table, then append the
 // agent's custom (non-builtin) rules.
-function buildHookRules(agent) {
+function buildHookRules(agent: Agent) {
   const existing = agent.toolHooks?.rules || [];
   return BUILTIN_RULES.map(builtin => {
-    const override = existing.find((r: any) => r.id === builtin.id);
+    const override = existing.find(r => r.id === builtin.id);
     return override ? { ...builtin, ...override } : { ...builtin };
-  }).concat(existing.filter((r: any) => !BUILTIN_RULE_IDS.has(r.id)));
+  }).concat(existing.filter(r => !BUILTIN_RULE_IDS.has(r.id)));
 }
 
-export default function PermissionsTab({ agent, onRefresh }) {
+export default function PermissionsTab({
+  agent,
+  onRefresh,
+}: {
+  agent: Agent;
+  onRefresh: () => void;
+}) {
   const [perms, setPerms] = useState(() => buildPerms(agent));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -369,11 +443,16 @@ export default function PermissionsTab({ agent, onRefresh }) {
     setSaved(false);
   };
 
-  const update = (section, key, value) => {
-    setPerms(prev => ({
-      ...prev,
-      [section]: { ...prev[section], [key]: value },
-    }));
+  const update = <S extends keyof EditablePermissions, K extends keyof EditablePermissions[S]>(
+    section: S,
+    key: K,
+    value: EditablePermissions[S][K]
+  ) => {
+    setPerms(prev => {
+      const next: EditablePermissions = { ...prev };
+      next[section] = Object.assign({}, prev[section], { [key]: value });
+      return next;
+    });
     markDirty();
   };
 
@@ -772,7 +851,7 @@ export default function PermissionsTab({ agent, onRefresh }) {
             <CredentialInput
               key={name}
               name={name}
-              hasValue={(meta as any).hasValue}
+              hasValue={meta.hasValue}
               onSave={handleSaveCredential}
               onDelete={handleDeleteCredential}
             />

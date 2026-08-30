@@ -44,12 +44,12 @@ function getConfig() {
   return { clientId, clientSecret, redirectUri };
 }
 
-export function getSlackAccessTokenForAgent(agentId, boardId = null) {
+export function getSlackAccessTokenForAgent(agentId: string | null, boardId: string | null = null) {
   // Slack tokens don't expire, no refresh needed
   return resolveAccessToken('slack', agentId, boardId);
 }
 
-async function handleOAuthRedirect(req, res) {
+async function handleOAuthRedirect(req: express.Request, res: express.Response) {
   const error = req.query.error as string | undefined;
   if (error) {
     const desc = req.query.error_description || error;
@@ -173,7 +173,7 @@ const slackSpec: OAuthProviderSpec<{
   notConfiguredError:
     'Slack not configured. Set SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, and SLACK_REDIRECT_URI.',
   generateState: (username, agentId, boardId) => generateOAuthState(username, agentId, boardId),
-  buildAuthUrl: (req, config, state) => {
+  buildAuthUrl: (_req, config, state) => {
     const scopes = [
       'channels:read',
       'channels:history',

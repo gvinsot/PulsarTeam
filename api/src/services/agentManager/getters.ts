@@ -11,22 +11,39 @@ export const gettersMethods = {
    * A user sees: agents on boards they own or have been shared + agents with no board.
    * @param userBoardIds - Set of board IDs the user has access to
    */
-  getAllForUser(this: any, userId: string, role: string, userBoardIds?: Set<string>): any[] {
+  getAllForUser(
+    this: any,
+    userId: string,
+    role: string | null | undefined,
+    userBoardIds?: Set<string>
+  ): any[] {
     return this._agentsForUser(userId, role, userBoardIds).map((a: any) => this._sanitize(a));
   },
 
   /**
    * Internal: return raw (unsanitized) agents visible to a user.
-   * @param userBoardIds - Set of board IDs the user has access to
+   *
+   * @param role - The caller's user role. It is read only when no board set is
+   *   supplied: 'admin' is then the one role allowed to see board-scoped agents.
+   * @param userBoardIds - Set of board IDs the user has access to. When it is
+   *   missing the filter CLOSES rather than opens: a non-admin caller sees only
+   *   the agents that carry no board at all. The unscoped swarm-leader routes
+   *   (routes/lib/agentStatusHandlers.ts) are the callers that omit it.
    */
-  _agentsForUser(this: any, userId: string, role: string, userBoardIds?: Set<string>): any[] {
+  _agentsForUser(
+    this: any,
+    _userId: string,
+    role: string | null | undefined,
+    userBoardIds?: Set<string>
+  ): any[] {
+    const isAdmin = role === 'admin';
     return Array.from(this.agents.values()).filter((a: any) => {
       // Agents without a board are visible to everyone
       if (!a.boardId) return true;
       // If we have board IDs, check membership
       if (userBoardIds) return userBoardIds.has(a.boardId);
-      // Fallback: no board info means show all (admin-like)
-      return true;
+      // No board info: only an admin may see agents that belong to a board
+      return isAdmin;
     });
   },
 

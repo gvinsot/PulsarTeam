@@ -71,7 +71,7 @@ export async function _detectCommitHashes(
   const rawCmd = (call.args[0] || '').toLowerCase();
   if (!_isGitMutatingCmd(rawCmd)) return [];
 
-  const output = result.result;
+  const output: string = result.result;
   // Skip if the output indicates an error or nothing happened
   if (_isGitNoop(output)) return [];
   if (_isGitError(output)) return [];

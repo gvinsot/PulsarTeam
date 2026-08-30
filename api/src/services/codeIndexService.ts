@@ -6,10 +6,11 @@ import {
   EMBEDDING_DIMENSION,
   normalizeText,
 } from './codeSearch/embedding.js';
-import { extractSymbolsFromContent } from './codeSearch/symbolExtractor.js';
+import { extractSymbolsFromContent, type ExtractedSymbol } from './codeSearch/symbolExtractor.js';
 import { createVectorStore } from './codeSearch/vectorStore.js';
+import { errorMessage } from '../lib/errors.js';
 
-function parsePositiveInt(rawValue, fallback) {
+function parsePositiveInt(rawValue: string | undefined, fallback: number): number {
   if (rawValue == null || rawValue === '') return fallback;
   const parsed = Number.parseInt(rawValue, 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
@@ -62,15 +63,136 @@ const IGNORED_DIRECTORIES = new Set([
   'out',
 ]);
 
-function toPosixPath(value) {
+/** A file kept by discoverFiles, after its stat call succeeded. */
+interface DiscoveredFile {
+  absolutePath: string;
+  relativePath: string;
+  size: number;
+}
+
+/** The `repo` header stored in every index file, and the shape listRepos returns. */
+interface RepoInfo {
+  id: string;
+  name: string;
+  rootPath: string;
+  indexedAt: string;
+  filesIndexed: number;
+  symbolsIndexed: number;
+  filesWithoutSymbols: number;
+  vectorBackend: string;
+  /** Only present on repos that went through an incremental updateFiles pass. */
+  lastUpdatedAt?: string;
+}
+
+/** One entry of `files` in an index (built by _indexFileContent). */
+interface FileRecord {
+  path: string;
+  language: string;
+  size: number;
+  contentHash: string;
+  symbolIds: string[];
+}
+
+/** One entry of `symbols` in an index (built by buildSymbolRecord). */
+interface SymbolRecord {
+  id: string;
+  filePath: string;
+  language: string;
+  name: string;
+  qualifiedName: string;
+  kind: string;
+  signature: string;
+  summary: string;
+  parentName: string | null;
+  startLine: number;
+  endLine: number;
+  lineCount: number;
+  source: string;
+  sourceHash: string;
+  sourceTruncated: boolean;
+}
+
+/** Document handed to the vector store for one symbol (mirrors its VectorDoc shape). */
+interface SymbolVectorDoc {
+  id: string;
+  vector: number[];
+  fields: { kind: string; filePath: string };
+}
+
+/** A node of the tree built by getFileTree: `children` is set on directories only. */
+interface FileTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileTreeNode[];
+  language?: string;
+  symbolCount?: number;
+  size?: number;
+}
+
+/** A symbol kept by the lexical searches, with the score that selected it. */
+interface ScoredSymbol {
+  symbol: SymbolRecord;
+  score: number;
+}
+
+/** Why discoverFiles left an entry out — counters only, stored under `stats`. */
+interface SkipCounts {
+  ignoredDirectory: number;
+  unsupportedExtension: number;
+  tooLarge: number;
+  symlink: number;
+  unreadableDirectory: number;
+}
+
+/**
+ * The whole `index.json` document: what saveIndex writes and what loadIndex
+ * reads back. The file is written by this class alone, so the parse result is
+ * taken at this shape rather than re-validated at every read.
+ */
+interface RepoIndex {
+  repo: RepoInfo;
+  stats: { skipped: SkipCounts; truncated: boolean };
+  files: FileRecord[];
+  symbols: SymbolRecord[];
+}
+
+/**
+ * What getSymbol returns: the stored record plus its repo header. The three live
+ * fields are only filled in on the path that re-reads the file from disk, so a
+ * cheap lookup (no verify, no context, untruncated source) returns without them.
+ */
+interface SymbolDetail extends SymbolRecord {
+  repo: RepoInfo;
+  driftDetected: boolean;
+  liveSourceAvailable?: boolean;
+  currentSource?: string;
+}
+
+/** The score bag folded into a hit by toSearchHit; `vectorScore` is semantic-only. */
+interface SearchScores {
+  score: number;
+  vectorScore?: number;
+}
+
+/** Whatever `createVectorStore` hands back — the in-memory or the zvec backend. */
+type VectorStore = Awaited<ReturnType<typeof createVectorStore>>;
+
+/** One file to re-index incrementally; `content` short-circuits the disk read. */
+interface FileUpdateEntry {
+  path: string;
+  content?: string | null;
+}
+
+function toPosixPath(value: string): string {
   return value.split(path.sep).join('/');
 }
 
-function hashContent(value) {
+function hashContent(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function createRepoId(repoName, rootPath) {
+function createRepoId(repoName: string, rootPath: string): string {
   const slug =
     String(repoName || path.basename(rootPath) || 'repo')
       .toLowerCase()
@@ -82,7 +204,9 @@ function createRepoId(repoName, rootPath) {
   return `${slug}-${suffix}`;
 }
 
-function sortTreeNode(node) {
+// Generic so the caller keeps whatever it passed in — getFileTree hands over a
+// node whose `children` is known to exist, and must get that same type back.
+function sortTreeNode<T extends FileTreeNode>(node: T): T {
   if (!node.children) return node;
   node.children.sort((left, right) => {
     if (left.type !== right.type) return left.type === 'directory' ? -1 : 1;
@@ -92,11 +216,11 @@ function sortTreeNode(node) {
   return node;
 }
 
-function escapeRegExp(value) {
+function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function scoreTextMatch(query, symbol) {
+function scoreTextMatch(query: string, symbol: SymbolRecord): number {
   const normalizedQuery = normalizeText(query);
   if (!normalizedQuery) return 0;
 
@@ -127,7 +251,7 @@ function scoreTextMatch(query, symbol) {
   return score;
 }
 
-function createPreview(source, query = '') {
+function createPreview(source: string, query = '') {
   const snippet = source.trim().slice(0, 240);
   if (!query) return snippet;
 
@@ -140,7 +264,7 @@ function createPreview(source, query = '') {
   return source.slice(start, end).trim();
 }
 
-async function pathExists(targetPath) {
+async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await fs.access(targetPath);
     return true;
@@ -149,7 +273,12 @@ async function pathExists(targetPath) {
   }
 }
 
-function toSearchHit(symbol, query, scores, { withDoc = true } = {}) {
+function toSearchHit(
+  symbol: SymbolRecord,
+  query: string,
+  scores: SearchScores,
+  { withDoc = true }: { withDoc?: boolean } = {}
+) {
   return {
     id: symbol.id,
     filePath: symbol.filePath,
@@ -167,9 +296,9 @@ export class CodeIndexService {
   maxFiles: number;
   maxFileSize: number;
   embeddingDimension: number;
-  vectorStoreFactory: () => any;
-  vectorStorePromise: Promise<any> | null;
-  _repoCache: Map<string, any>;
+  vectorStoreFactory: () => VectorStore | Promise<VectorStore>;
+  vectorStorePromise: Promise<VectorStore> | VectorStore | null;
+  _repoCache: Map<string, { data: RepoIndex; ts: number }>;
   _repoLocks: Map<string, Promise<any>>;
   _memoryVectorRebuilds: Map<string, Promise<void>>;
 
@@ -183,7 +312,7 @@ export class CodeIndexService {
   }: {
     storageRoot?: string;
     allowedRoots?: string[] | null;
-    vectorStoreFactory?: (() => any) | null;
+    vectorStoreFactory?: (() => VectorStore | Promise<VectorStore>) | null;
     maxFiles?: number;
     maxFileSize?: number;
     embeddingDimension?: number;
@@ -212,7 +341,7 @@ export class CodeIndexService {
     this._memoryVectorRebuilds = new Map();
   }
 
-  _withRepoLock(repoId, task) {
+  _withRepoLock<T>(repoId: string, task: () => Promise<T>): Promise<T> {
     const previous = this._repoLocks.get(repoId) || Promise.resolve();
     const run = previous.then(() => task());
     const tail = run.catch(() => {});
@@ -223,14 +352,14 @@ export class CodeIndexService {
     return run;
   }
 
-  _getCachedRepo(repoId) {
+  _getCachedRepo(repoId: string) {
     const entry = this._repoCache.get(repoId);
     if (entry && Date.now() - entry.ts < REPO_CACHE_TTL_MS) return entry.data;
     if (entry) this._repoCache.delete(repoId);
     return null;
   }
 
-  _setCachedRepo(repoId, data) {
+  _setCachedRepo(repoId: string, data: RepoIndex) {
     this._repoCache.set(repoId, { data, ts: Date.now() });
     const timer = setTimeout(() => {
       const entry = this._repoCache.get(repoId);
@@ -239,7 +368,7 @@ export class CodeIndexService {
     timer.unref?.();
   }
 
-  _invalidateCache(repoId) {
+  _invalidateCache(repoId?: string | null) {
     if (repoId) this._repoCache.delete(repoId);
     else this._repoCache.clear();
   }
@@ -251,14 +380,14 @@ export class CodeIndexService {
     return this.vectorStorePromise;
   }
 
-  isPathAllowed(targetPath) {
+  isPathAllowed(targetPath: string): boolean {
     return this.allowedRoots.some(root => {
       const relative = path.relative(root, targetPath);
       return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
     });
   }
 
-  async resolveInputFolder(folderPath) {
+  async resolveInputFolder(folderPath: string): Promise<string> {
     const direct = path.resolve(folderPath);
     if (await pathExists(direct)) return direct;
 
@@ -274,11 +403,11 @@ export class CodeIndexService {
     await fs.mkdir(this.storageRoot, { recursive: true });
   }
 
-  repoDir(repoId) {
+  repoDir(repoId: string): string {
     return path.join(this.storageRoot, repoId);
   }
 
-  repoIndexPath(repoId) {
+  repoIndexPath(repoId: string): string {
     return path.join(this.repoDir(repoId), 'index.json');
   }
 
@@ -291,17 +420,17 @@ export class CodeIndexService {
       .sort();
   }
 
-  async loadIndex(repoId) {
+  async loadIndex(repoId: string) {
     const cached = this._getCachedRepo(repoId);
     if (cached) return cached;
     const filePath = this.repoIndexPath(repoId);
     const raw = await fs.readFile(filePath, 'utf8');
-    let repoIndex;
+    let repoIndex: RepoIndex;
     try {
       repoIndex = JSON.parse(raw);
     } catch (error) {
       console.error(
-        `Code index: corrupt index file for repo "${repoId}" at ${filePath}: ${error.message}`
+        `Code index: corrupt index file for repo "${repoId}" at ${filePath}: ${errorMessage(error)}`
       );
       throw error;
     }
@@ -309,7 +438,7 @@ export class CodeIndexService {
     return repoIndex;
   }
 
-  async saveIndex(repoIndex) {
+  async saveIndex(repoIndex: RepoIndex) {
     const repoDirectory = this.repoDir(repoIndex.repo.id);
     await fs.mkdir(repoDirectory, { recursive: true });
     const indexPath = this.repoIndexPath(repoIndex.repo.id);
@@ -323,9 +452,12 @@ export class CodeIndexService {
     }
   }
 
-  async discoverFiles(rootPath, { maxFiles = this.maxFiles, maxFileSize = this.maxFileSize } = {}) {
-    const results = [];
-    const skipped = {
+  async discoverFiles(
+    rootPath: string,
+    { maxFiles = this.maxFiles, maxFileSize = this.maxFileSize } = {}
+  ) {
+    const results: DiscoveredFile[] = [];
+    const skipped: SkipCounts = {
       ignoredDirectory: 0,
       unsupportedExtension: 0,
       tooLarge: 0,
@@ -337,6 +469,9 @@ export class CodeIndexService {
 
     while (queue.length > 0 && !truncated) {
       const current = queue.pop();
+      // The `queue.length > 0` guard above already rules this out; it is here so the
+      // string reaches readdir without an assertion.
+      if (current === undefined) break;
       const entries = await fs.readdir(current, { withFileTypes: true }).catch(error => {
         // An unreadable root would otherwise produce an empty index that replaces a good one
         if (current === rootPath) throw error;
@@ -344,7 +479,7 @@ export class CodeIndexService {
         return [];
       });
 
-      const fileCandidates = [];
+      const fileCandidates: Omit<DiscoveredFile, 'size'>[] = [];
       for (const entry of entries) {
         const absolutePath = path.join(current, entry.name);
 
@@ -407,7 +542,7 @@ export class CodeIndexService {
     };
   }
 
-  buildSymbolRecord(fileRecord, symbol) {
+  buildSymbolRecord(fileRecord: FileRecord, symbol: ExtractedSymbol): SymbolRecord {
     const id = `${fileRecord.path}::${symbol.qualifiedName}#${symbol.kind}`;
     // Hash the full source so drift verification stays correct even when storage is truncated
     const sourceHash = hashContent(symbol.source);
@@ -432,7 +567,7 @@ export class CodeIndexService {
     };
   }
 
-  createEmbeddingText(symbol) {
+  createEmbeddingText(symbol: SymbolRecord): string {
     return [
       symbol.qualifiedName,
       symbol.kind,
@@ -445,7 +580,7 @@ export class CodeIndexService {
       .join('\n');
   }
 
-  _toVectorDoc(symbol) {
+  _toVectorDoc(symbol: SymbolRecord): SymbolVectorDoc {
     return {
       id: symbol.id,
       vector: createHashedEmbedding(this.createEmbeddingText(symbol), this.embeddingDimension),
@@ -456,9 +591,9 @@ export class CodeIndexService {
     };
   }
 
-  _indexFileContent(relativePath, content, size) {
+  _indexFileContent(relativePath: string, content: string, size: number) {
     const { language, symbols: extracted } = extractSymbolsFromContent(relativePath, content);
-    const fileRecord = {
+    const fileRecord: FileRecord = {
       path: relativePath,
       language,
       size,
@@ -466,8 +601,8 @@ export class CodeIndexService {
       symbolIds: [],
     };
 
-    const symbolRecords = [];
-    const vectorDocs = [];
+    const symbolRecords: SymbolRecord[] = [];
+    const vectorDocs: SymbolVectorDoc[] = [];
     for (const symbol of extracted) {
       const symbolRecord = this.buildSymbolRecord(fileRecord, symbol);
       fileRecord.symbolIds.push(symbolRecord.id);
@@ -483,6 +618,11 @@ export class CodeIndexService {
     repoName = null,
     maxFiles = this.maxFiles,
     maxFileSize = this.maxFileSize,
+  }: {
+    folderPath: string;
+    repoName?: string | null;
+    maxFiles?: number;
+    maxFileSize?: number;
   }) {
     await this.ensureStorageRoot();
 
@@ -510,11 +650,23 @@ export class CodeIndexService {
     );
   }
 
-  async _indexFolderLocked({ absoluteRoot, safeRepoName, repoId, maxFiles, maxFileSize }) {
+  async _indexFolderLocked({
+    absoluteRoot,
+    safeRepoName,
+    repoId,
+    maxFiles,
+    maxFileSize,
+  }: {
+    absoluteRoot: string;
+    safeRepoName: string;
+    repoId: string;
+    maxFiles: number;
+    maxFileSize: number;
+  }) {
     const discovery = await this.discoverFiles(absoluteRoot, { maxFiles, maxFileSize });
-    const symbols = [];
-    const files = [];
-    const vectorDocs = [];
+    const symbols: SymbolRecord[] = [];
+    const files: FileRecord[] = [];
+    const vectorDocs: SymbolVectorDoc[] = [];
 
     // Read and parse files in parallel batches
     for (let i = 0; i < discovery.files.length; i += FILE_IO_CONCURRENCY) {
@@ -548,7 +700,7 @@ export class CodeIndexService {
       await vectorStore.upsert(repoId, vectorDocs);
     }
 
-    const repoIndex = {
+    const repoIndex: RepoIndex = {
       repo: {
         id: repoId,
         name: safeRepoName,
@@ -575,7 +727,7 @@ export class CodeIndexService {
 
   async listRepos() {
     const repoIds = await this.listRepoIds();
-    const repos = [];
+    const repos: RepoInfo[] = [];
 
     for (const repoId of repoIds) {
       const repoIndex = await this.loadIndex(repoId).catch(() => null);
@@ -585,10 +737,10 @@ export class CodeIndexService {
     return repos.sort((left, right) => right.indexedAt.localeCompare(left.indexedAt));
   }
 
-  async getRepoSummary(repoId) {
+  async getRepoSummary(repoId: string) {
     const repoIndex = await this.loadIndex(repoId);
-    const byKind = {};
-    const byLanguage = {};
+    const byKind: Record<string, number> = {};
+    const byLanguage: Record<string, number> = {};
 
     for (const symbol of repoIndex.symbols) {
       byKind[symbol.kind] = (byKind[symbol.kind] || 0) + 1;
@@ -610,9 +762,9 @@ export class CodeIndexService {
     };
   }
 
-  async getFileTree(repoId) {
+  async getFileTree(repoId: string) {
     const repoIndex = await this.loadIndex(repoId);
-    const root = {
+    const root: FileTreeNode & { children: FileTreeNode[] } = {
       name: repoIndex.repo.name,
       path: '',
       type: 'directory',
@@ -621,14 +773,16 @@ export class CodeIndexService {
 
     for (const file of repoIndex.files) {
       const parts = file.path.split('/');
-      let cursor = root;
+      // Track the child list rather than the node: only `children` is ever read here,
+      // and a directory node always has one.
+      let cursor = root.children;
       let currentPath = '';
 
       for (let index = 0; index < parts.length; index += 1) {
         const part = parts[index];
         currentPath = currentPath ? `${currentPath}/${part}` : part;
         const isLeaf = index === parts.length - 1;
-        let next = cursor.children.find(child => child.name === part);
+        let next: FileTreeNode | undefined = cursor.find(child => child.name === part);
 
         if (!next) {
           next = {
@@ -637,7 +791,7 @@ export class CodeIndexService {
             type: isLeaf ? 'file' : 'directory',
           };
           if (!isLeaf) next.children = [];
-          cursor.children.push(next);
+          cursor.push(next);
         }
 
         if (isLeaf) {
@@ -645,7 +799,10 @@ export class CodeIndexService {
           next.symbolCount = file.symbolIds.length;
           next.size = file.size;
         } else {
-          cursor = next;
+          // Non-leaf nodes are created with a child list just above; this only fires
+          // when the index holds a path used both as a file and as a directory.
+          if (!next.children) next.children = [];
+          cursor = next.children;
         }
       }
     }
@@ -653,7 +810,7 @@ export class CodeIndexService {
     return sortTreeNode(root);
   }
 
-  async getFileOutline(repoId, filePath) {
+  async getFileOutline(repoId: string, filePath: string) {
     const repoIndex = await this.loadIndex(repoId);
     const normalizedPath = toPosixPath(filePath);
     const file = repoIndex.files.find(entry => entry.path === normalizedPath);
@@ -668,14 +825,18 @@ export class CodeIndexService {
     };
   }
 
-  async getSymbol(repoId, symbolId, { verify = false, contextLines = 0 } = {}) {
+  async getSymbol(
+    repoId: string,
+    symbolId: string,
+    { verify = false, contextLines = 0 }: { verify?: boolean; contextLines?: number } = {}
+  ) {
     const repoIndex = await this.loadIndex(repoId);
     const symbol = repoIndex.symbols.find(entry => entry.id === symbolId);
     if (!symbol) {
       throw new Error(`Symbol "${symbolId}" not found in repo "${repoId}"`);
     }
 
-    const response = {
+    const response: SymbolDetail = {
       ...symbol,
       repo: repoIndex.repo,
       driftDetected: false,
@@ -723,7 +884,7 @@ export class CodeIndexService {
     }
   ) {
     const repoIndex = await this.loadIndex(repoId);
-    const scored = [];
+    const scored: ScoredSymbol[] = [];
     for (const symbol of repoIndex.symbols) {
       if (kind && symbol.kind !== kind) continue;
       const score = scoreTextMatch(query, symbol);
@@ -746,7 +907,7 @@ export class CodeIndexService {
     const normalizedQuery = normalizeText(query);
     if (!normalizedQuery) return [];
 
-    const scored = [];
+    const scored: ScoredSymbol[] = [];
     for (const symbol of repoIndex.symbols) {
       const haystack = normalizeText(`${symbol.signature}\n${symbol.summary}\n${symbol.source}`);
       const occurrences = haystack.split(normalizedQuery).length - 1;
@@ -764,7 +925,7 @@ export class CodeIndexService {
 
   // The in-memory vector backend loses its collections on restart while index.json
   // persists — rebuild the collection from stored symbols when it falls out of sync.
-  async _ensureMemoryVectors(repoId, repoIndex, vectorStore) {
+  async _ensureMemoryVectors(repoId: string, repoIndex: RepoIndex, vectorStore: VectorStore) {
     if (typeof vectorStore.backend !== 'string' || !vectorStore.backend.startsWith('memory'))
       return;
     if (!Array.isArray(repoIndex.symbols) || repoIndex.symbols.length === 0) return;
@@ -805,7 +966,8 @@ export class CodeIndexService {
       if (matchedIds.has(symbol.id)) symbolById.set(symbol.id, symbol);
     }
 
-    const results = [];
+    // toSearchHit folds an open `scores` object into its result, so its shape is not fixed here.
+    const results: ReturnType<typeof toSearchHit>[] = [];
     for (const match of vectorMatches) {
       const symbol = symbolById.get(match.id);
       if (!symbol) continue;
@@ -831,11 +993,11 @@ export class CodeIndexService {
    *   it is used directly; otherwise the file is read from disk using the repo rootPath.
    * @returns {{ updated: number, removed: number, added: number }}
    */
-  async updateFiles(repoId, fileEntries) {
+  async updateFiles(repoId: string, fileEntries: FileUpdateEntry[]) {
     return this._withRepoLock(repoId, () => this._updateFilesLocked(repoId, fileEntries));
   }
 
-  async _updateFilesLocked(repoId, fileEntries) {
+  async _updateFilesLocked(repoId: string, fileEntries: FileUpdateEntry[]) {
     try {
       return await this._applyFileUpdates(repoId, fileEntries);
     } catch (error) {
@@ -845,7 +1007,7 @@ export class CodeIndexService {
     }
   }
 
-  async _applyFileUpdates(repoId, fileEntries) {
+  async _applyFileUpdates(repoId: string, fileEntries: FileUpdateEntry[]) {
     const repoIndex = await this.loadIndex(repoId);
     const rootPath = repoIndex.repo.rootPath;
     const vectorStore = await this.getVectorStore();
@@ -879,7 +1041,9 @@ export class CodeIndexService {
       const fileSize = content !== null ? Buffer.byteLength(content) : 0;
       const indexable =
         content && DEFAULT_ALLOWED_EXTENSIONS.has(extension) && fileSize <= this.maxFileSize;
-      if (!indexable) {
+      // `content === null` is already covered by `!indexable` (null is falsy); it is
+      // repeated so the narrowing survives to the _indexFileContent call below.
+      if (!indexable || content === null) {
         if (oldFileIdx >= 0) removed++;
         continue;
       }
@@ -920,13 +1084,13 @@ export class CodeIndexService {
    * @param {string} projectName
    * @returns {Promise<Array<{ id: string, name: string, rootPath: string }>>}
    */
-  async findReposByProject(projectName) {
+  async findReposByProject(projectName: string) {
     const repos = await this.listRepos();
     const normalizedName = projectName.toLowerCase();
     return repos.filter(r => r.name.toLowerCase() === normalizedName);
   }
 
-  async invalidate(repoId) {
+  async invalidate(repoId: string) {
     return this._withRepoLock(repoId, async () => {
       this._invalidateCache(repoId);
       this._memoryVectorRebuilds.delete(repoId);

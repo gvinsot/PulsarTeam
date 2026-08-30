@@ -1,4 +1,10 @@
 import { getPool, getAllBoards, getBoardById } from './database.js';
+import { errorMessage } from '../lib/errors.js';
+import type {
+  BoardWorkflow,
+  WorkflowConfig,
+  WorkflowTransition,
+} from './workflow/taskStateMachine.js';
 
 const DEFAULTS = {
   ideasAgent: '',
@@ -28,24 +34,32 @@ const DEFAULTS = {
   ttsVoiceId: '',
 };
 
-export async function getSettings() {
+/**
+ * The known keys above, plus whatever else the settings table holds: the read
+ * below copies every row in, without filtering against DEFAULTS.
+ */
+export type Settings = typeof DEFAULTS & Record<string, string>;
+
+export async function getSettings(): Promise<Settings> {
   const pool = getPool();
   if (!pool) return { ...DEFAULTS };
 
   try {
-    const result = await pool.query('SELECT key, value FROM settings');
-    const settings = { ...DEFAULTS };
+    const result = await pool.query<{ key: string; value: string }>(
+      'SELECT key, value FROM settings'
+    );
+    const settings: Settings = { ...DEFAULTS };
     for (const row of result.rows) {
       settings[row.key] = row.value;
     }
     return settings;
   } catch (err) {
-    console.error('[ConfigManager] settings read failed, serving defaults:', err?.message);
+    console.error('[ConfigManager] settings read failed, serving defaults:', errorMessage(err));
     return { ...DEFAULTS };
   }
 }
 
-export async function updateSettings(patch) {
+export async function updateSettings(patch: Record<string, unknown>) {
   const pool = getPool();
   if (!pool) throw new Error('Database not available');
 
@@ -81,7 +95,7 @@ export async function updateSettings(patch) {
 // Priority: env var > DB setting > default
 export async function getReminderConfig() {
   const settings = await getSettings();
-  const intOrDefault = (val, def) => {
+  const intOrDefault = (val: string, def: number) => {
     const n = parseInt(val, 10);
     return Number.isNaN(n) ? def : n;
   };
@@ -103,13 +117,18 @@ export async function getReminderConfig() {
 
 // ── Workflow configuration (database-backed) ──────────────────────────────────
 
+/** Narrowing gate for the unvalidated JSONB read back from the board workflow column. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 const DEFAULT_COLUMNS = [
   { id: 'todo', label: 'Todo', color: '#6b7280' },
   { id: 'in_progress', label: 'In Progress', color: '#3b82f6' },
   { id: 'done', label: 'Done', color: '#22c55e' },
 ];
 
-const DEFAULT_TRANSITIONS = [
+const DEFAULT_TRANSITIONS: WorkflowTransition[] = [
   {
     from: 'in_progress',
     trigger: 'on_enter',
@@ -132,7 +151,7 @@ const DEFAULT_WORKFLOW = {
   version: 1,
 };
 
-export async function getWorkflow() {
+export async function getWorkflow(): Promise<WorkflowConfig> {
   return { ...DEFAULT_WORKFLOW };
 }
 
@@ -145,14 +164,20 @@ export async function getWorkflow() {
  * becomes a no-op decide (decide requires instructions), so such boards need a
  * prompt added — but nothing silently misbehaves.
  */
-export function mapLegacyExecuteMode(transitions) {
+export function mapLegacyExecuteMode<T>(transitions: T): T;
+export function mapLegacyExecuteMode(transitions: unknown): unknown {
+  // The board `workflow` column is unvalidated JSONB, so nothing here may assume
+  // a shape: every access goes through isRecord/Array.isArray, exactly as the
+  // optional chaining it replaces did.
   if (!Array.isArray(transitions)) return transitions;
+  const list: unknown[] = transitions;
   let changed = false;
-  const mapped = transitions.map(t => {
-    if (!Array.isArray(t?.actions)) return t;
+  const mapped = list.map(t => {
+    if (!isRecord(t) || !Array.isArray(t.actions)) return t;
+    const currentActions: unknown[] = t.actions;
     let actionsChanged = false;
-    const actions = t.actions.map(a => {
-      if (a?.type === 'run_agent' && a?.mode === 'execute') {
+    const actions = currentActions.map(a => {
+      if (isRecord(a) && a.type === 'run_agent' && a.mode === 'execute') {
         actionsChanged = true;
         return { ...a, mode: 'decide' };
       }
@@ -169,7 +194,9 @@ export function mapLegacyExecuteMode(transitions) {
  * Get workflow for a specific board.
  * Falls back to the built-in workflow if boardId is null or board not found.
  */
-export async function getWorkflowForBoard(boardId) {
+export async function getWorkflowForBoard(
+  boardId: string | null | undefined
+): Promise<WorkflowConfig> {
   if (!boardId) return getWorkflow();
   try {
     const board = await getBoardById(boardId);
@@ -182,7 +209,7 @@ export async function getWorkflowForBoard(boardId) {
       };
     }
   } catch (err) {
-    console.error('[ConfigManager] Failed to read workflow for board:', err.message);
+    console.error('[ConfigManager] Failed to read workflow for board:', errorMessage(err));
   }
   return getWorkflow();
 }
@@ -191,7 +218,7 @@ export async function getWorkflowForBoard(boardId) {
  * Get all board workflows. Returns array of { boardId, workflow }.
  * Used by services that need to scan transitions across all boards (e.g. Jira sync).
  */
-export async function getAllBoardWorkflows() {
+export async function getAllBoardWorkflows(): Promise<BoardWorkflow[]> {
   try {
     const boards = await getAllBoards();
     return boards
@@ -205,7 +232,7 @@ export async function getAllBoardWorkflows() {
         },
       }));
   } catch (err) {
-    console.error('[ConfigManager] Failed to read all board workflows:', err.message);
+    console.error('[ConfigManager] Failed to read all board workflows:', errorMessage(err));
     return [];
   }
 }

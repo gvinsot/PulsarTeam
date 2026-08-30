@@ -7,8 +7,12 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { ReactNode } from 'react';
+import type { Socket } from 'socket.io-client';
 import { api } from '../api';
+import type { Agent } from '../types';
 import { WsEvents } from '../socketEvents';
+import { errorMessage, errorName } from '../utils/errors';
 
 export const STATUS = {
   DISCONNECTED: 'disconnected',
@@ -58,13 +62,129 @@ const DEFAULT_TURN_DETECTION = Object.freeze({
 const DELEGATE_RESULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MANAGEMENT_RESULT_TIMEOUT_MS = 2 * 60 * 1000;
 
-const VoiceSessionContext = createContext(null);
+/**
+ * One line of the session log rendered by VoiceChatTab. UI-LOCAL: assembled by
+ * pushEvent below, never sent by the API. `time` is a live Date object, not an
+ * ISO string — VoiceChatTab calls `evt.time.toLocaleTimeString()` on it.
+ */
+interface VoiceSessionEvent {
+  /** 'system' | 'error' | 'delegation' | 'delegation-result' at the call sites;
+   *  the renderer keys four class names off it and ignores anything else, so it
+   *  stays a plain string. */
+  type: string;
+  text: string;
+  time: Date;
+}
 
-function pushEvent(list, type, text) {
+/** Options of resetSessionState — every field falls back to the value the
+ *  disconnect path uses, so `{}` is a full reset. */
+interface ResetSessionOptions {
+  status?: string;
+  error?: string | null;
+  message?: string;
+  clearEvents?: boolean;
+  keepAgent?: boolean;
+  keepMuted?: boolean;
+}
+
+/**
+ * Fields shared by the three voice result frames the API emits
+ * (api/src/ws/socketHandler.ts:443, :508, :583). `error` and `result` are always
+ * both present, one of them null.
+ */
+interface VoiceResultBase {
+  /** The VOICE agent's id, not the target's — what the handler filters on. */
+  agentId: string;
+  error: string | null;
+}
+
+/** voice:delegate:result and voice:ask:result — `result` is the target agent's
+ *  reply text (agentManager.sendMessage), null whenever `error` is set. */
+interface VoiceAgentResult extends VoiceResultBase {
+  targetAgentName?: string;
+  result: string | null;
+}
+
+/** voice:management:result — `result` is whatever the management tool returned,
+ *  so it is only ever stringified, never read as text. */
+interface VoiceManagementResult extends VoiceResultBase {
+  functionName?: string;
+  result: unknown;
+}
+
+/** Options of awaitVoiceResult, generic over which of the two result frames the
+ *  caller subscribed to. */
+interface AwaitVoiceResultOptions<T extends VoiceResultBase> {
+  /** See RealtimeEvent.call_id — absent on a frame that carried none. */
+  callId: string | undefined;
+  resEvent: string;
+  reqEvent: string;
+  /** Merged into the emitted request next to `agentId`. */
+  payload: Record<string, unknown>;
+  timeoutMs: number;
+  /** Extra filter on top of the agentId match; accept-all by default. */
+  matches?: (data: T) => boolean;
+  onResult: (data: T) => void;
+  onTimeout: () => void;
+}
+
+/**
+ * One OpenAI Realtime server event, as it arrives JSON-parsed off the data
+ * channel. Every field is optional because the wire carries a dozen event
+ * shapes under one `type` discriminant and this handler reads across them; the
+ * switch below is what decides which fields a given frame actually has.
+ */
+interface RealtimeEvent {
+  type?: string;
+  /** transcription.completed / audio_transcript.done */
+  transcript?: string;
+  /** audio_transcript.delta */
+  delta?: string;
+  /** 'error' frames put the text here or under `error`. */
+  message?: string;
+  error?: { message?: string };
+  /** response.function_call_arguments.done only. */
+  name?: string;
+  call_id?: string;
+  /** JSON text — parsed at the call site. */
+  arguments?: string;
+}
+
+/** What useVoiceSession() hands to VoiceChatTab and ActiveVoiceIndicator. */
+interface VoiceSessionValue {
+  /** One of the STATUS values above; that object is a plain string map. */
+  status: string;
+  activeAgentId: string | null;
+  muted: boolean;
+  speakerOff: boolean;
+  error: string | null;
+  /** Name of the agent a delegate/ask is waiting on. */
+  delegationTarget: string | null;
+  events: VoiceSessionEvent[];
+  currentTranscript: string;
+  currentResponse: string;
+  currentFunction: string;
+  connect: (agentId: string) => Promise<void>;
+  disconnect: () => void;
+  reconnect: () => void;
+  toggleMute: () => void;
+  toggleSpeaker: () => void;
+  isActive: boolean;
+  isSessionForAgent: (agentId: string) => boolean;
+}
+
+// null outside a provider — useVoiceSession() throws on that case rather than
+// letting a consumer read through it.
+const VoiceSessionContext = createContext<VoiceSessionValue | null>(null);
+
+function pushEvent(list: VoiceSessionEvent[], type: string, text: string): VoiceSessionEvent[] {
   return [...list.slice(-99), { type, text, time: new Date() }];
 }
 
-function buildSessionUpdate(voice, transcriptionModel = DEFAULT_TRANSCRIPTION_MODEL) {
+function buildSessionUpdate(
+  voice: string,
+  transcriptionModel: string = DEFAULT_TRANSCRIPTION_MODEL
+) {
   return {
     type: 'session.update',
     session: {
@@ -80,7 +200,9 @@ function buildSessionUpdate(voice, transcriptionModel = DEFAULT_TRANSCRIPTION_MO
   };
 }
 
-function normalizeFunctionOutput(output) {
+// The Realtime function_call_output is a string, but the value we get handed is
+// whatever the server put in `result` — a tool payload, an error text, or null.
+function normalizeFunctionOutput(output: unknown) {
   if (typeof output === 'string') {
     return output.slice(0, 4000);
   }
@@ -92,41 +214,56 @@ function normalizeFunctionOutput(output) {
   }
 }
 
-function isAutoplayBlocked(error) {
-  const message = String(error?.message || '').toLowerCase();
+// `error` is whatever audio.play() rejected with — a DOMException in practice,
+// but a rejection carries no type. Both fields are read through `in`, which
+// keeps the exact `error?.field` semantics for a non-object.
+function isAutoplayBlocked(error: unknown): boolean {
+  const name =
+    typeof error === 'object' && error !== null && 'name' in error ? error.name : undefined;
+  const rawMessage =
+    typeof error === 'object' && error !== null && 'message' in error ? error.message : undefined;
+  const message = String(rawMessage || '').toLowerCase();
   return (
-    error?.name === 'NotAllowedError' ||
-    message.includes('autoplay') ||
-    message.includes('user gesture')
+    name === 'NotAllowedError' || message.includes('autoplay') || message.includes('user gesture')
   );
 }
 
-export function VoiceSessionProvider({ socket, agents, children }) {
+interface VoiceSessionProviderProps {
+  /** The live socket.io client, or null before login / after logout — App
+   *  passes getSocket() straight through. */
+  socket: Socket | null;
+  /** The agents list App owns; only id and isVoice are read here. */
+  agents: Agent[];
+  children: ReactNode;
+}
+
+export function VoiceSessionProvider({ socket, agents, children }: VoiceSessionProviderProps) {
   const [status, setStatus] = useState(STATUS.DISCONNECTED);
-  const [activeAgentId, setActiveAgentId] = useState(null);
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const [speakerOff, setSpeakerOff] = useState(false);
-  const [error, setError] = useState(null);
-  const [delegationTarget, setDelegationTarget] = useState(null);
-  const [events, setEvents] = useState([]);
+  const [error, setError] = useState<string | null>(null);
+  const [delegationTarget, setDelegationTarget] = useState<string | null>(null);
+  const [events, setEvents] = useState<VoiceSessionEvent[]>([]);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [currentResponse, setCurrentResponse] = useState('');
   const [currentFunction, setCurrentFunction] = useState('');
 
-  const pcRef = useRef(null);
-  const dcRef = useRef(null);
-  const audioElRef = useRef(null);
-  const localStreamRef = useRef(null);
-  const remoteStreamRef = useRef(null);
-  const socketRef = useRef(socket);
-  const activeAgentIdRef = useRef(activeAgentId);
+  // WebRTC / DOM / timer handles — nothing here is a domain shape.
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const dcRef = useRef<RTCDataChannel | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const socketRef = useRef<Socket | null>(socket);
+  const activeAgentIdRef = useRef<string | null>(activeAgentId);
   const responseBufferRef = useRef('');
   const transcriptBufferRef = useRef('');
   // Typed so the cleanup pass below survives strictFunctionTypes: an
   // untyped `new Set()` is a Set<unknown>, and its forEach callback cannot
   // destructure these fields.
   type PendingResult = {
-    sock: any;
+    sock: Socket;
     event: string;
     handler: ((data: any) => void) | null;
     timer: ReturnType<typeof setTimeout> | null;
@@ -148,7 +285,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     }
   }, [speakerOff]);
 
-  const addEvent = useCallback((type, text) => {
+  const addEvent = useCallback((type: string, text: string) => {
     setEvents(prev => pushEvent(prev, type, text));
   }, []);
 
@@ -156,8 +293,11 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     connectSeqRef.current += 1;
 
     pendingResultsRef.current.forEach(({ sock, event, handler, timer }) => {
-      clearTimeout(timer);
-      sock.off(event, handler);
+      // `?? undefined` only satisfies the DOM/socket.io signatures: both calls
+      // are no-ops for null and for undefined alike, and in practice neither
+      // field is ever null on a record that reached this Set.
+      clearTimeout(timer ?? undefined);
+      sock.off(event, handler ?? undefined);
     });
     pendingResultsRef.current.clear();
 
@@ -225,7 +365,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       clearEvents = false,
       keepAgent = false,
       keepMuted = false,
-    } = {}) => {
+    }: ResetSessionOptions = {}) => {
       setStatus(status);
       setError(error);
       setDelegationTarget(null);
@@ -256,7 +396,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
           );
         }
       } catch (err) {
-        const message = String(err?.message || '');
+        const message = errorMessage(err);
         if (message.includes('blocked') || message.includes('allow microphone')) {
           throw err;
         }
@@ -297,7 +437,9 @@ export function VoiceSessionProvider({ socket, agents, children }) {
     }
   }, [addEvent, speakerOff]);
 
-  const sendFunctionOutput = useCallback((callId, output) => {
+  // `callId` mirrors RealtimeEvent.call_id: an absent one drops the key from the
+  // item, which is what JSON.stringify already did with the untyped value.
+  const sendFunctionOutput = useCallback((callId: string | undefined, output: unknown) => {
     const dc = dcRef.current;
     if (!dc || dc.readyState !== 'open') {
       return;
@@ -324,16 +466,16 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   // destructures exactly those fields. onResult/onTimeout carry the
   // flow-specific status updates and messages.
   const awaitVoiceResult = useCallback(
-    ({
+    <T extends VoiceResultBase>({
       callId,
       resEvent,
       reqEvent,
       payload,
       timeoutMs,
-      matches = (data): boolean => true,
+      matches = (_data): boolean => true,
       onResult,
       onTimeout,
-    }) => {
+    }: AwaitVoiceResultOptions<T>) => {
       const sock = socketRef.current;
       const agentId = activeAgentIdRef.current;
       if (!sock || !agentId) {
@@ -341,14 +483,16 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         return;
       }
 
-      const pending = { sock, event: resEvent, handler: null, timer: null };
+      const pending: PendingResult = { sock, event: resEvent, handler: null, timer: null };
       const settle = () => {
-        clearTimeout(pending.timer);
-        sock.off(pending.event, pending.handler);
+        // Same `?? undefined` note as cleanupConnection: both are no-ops either
+        // way, and settle only ever runs after both fields are assigned.
+        clearTimeout(pending.timer ?? undefined);
+        sock.off(pending.event, pending.handler ?? undefined);
         pendingResultsRef.current.delete(pending);
       };
 
-      pending.handler = data => {
+      pending.handler = (data: T) => {
         if (data.agentId !== agentId || !matches(data)) {
           return;
         }
@@ -374,7 +518,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   );
 
   const handleDelegation = useCallback(
-    (callId, agentName, task) => {
+    (callId: string | undefined, agentName: string, task: string) => {
       if (!agentName || !task) {
         // The server silently ignores requests with missing fields — answer the
         // model directly instead of waiting on a result that will never come.
@@ -387,7 +531,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       setCurrentFunction(`Delegating to ${agentName}...`);
       addEvent('delegation', `Delegating to ${agentName}: ${task}`);
 
-      awaitVoiceResult({
+      awaitVoiceResult<VoiceAgentResult>({
         callId,
         resEvent: WsEvents.VOICE_DELEGATE_RESULT,
         reqEvent: WsEvents.REQ_VOICE_DELEGATE,
@@ -422,7 +566,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   );
 
   const handleAsk = useCallback(
-    (callId, agentName, question) => {
+    (callId: string | undefined, agentName: string, question: string) => {
       if (!agentName || !question) {
         // The server silently ignores requests with missing fields — answer the
         // model directly instead of waiting on a result that will never come.
@@ -435,7 +579,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
       setCurrentFunction(`Asking ${agentName}...`);
       addEvent('delegation', `Asking ${agentName}: ${question}`);
 
-      awaitVoiceResult({
+      awaitVoiceResult<VoiceAgentResult>({
         callId,
         resEvent: WsEvents.VOICE_ASK_RESULT,
         reqEvent: WsEvents.REQ_VOICE_ASK,
@@ -468,11 +612,11 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   );
 
   const handleManagement = useCallback(
-    (callId, functionName, args) => {
+    (callId: string | undefined, functionName: string, args: Record<string, unknown>) => {
       setCurrentFunction(`${functionName}...`);
       addEvent('system', `${functionName}(${JSON.stringify(args)})`);
 
-      awaitVoiceResult({
+      awaitVoiceResult<VoiceManagementResult>({
         callId,
         resEvent: WsEvents.VOICE_MANAGEMENT_RESULT,
         reqEvent: WsEvents.REQ_VOICE_MANAGEMENT,
@@ -501,7 +645,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   );
 
   const handleToolCall = useCallback(
-    event => {
+    (event: RealtimeEvent) => {
       let args: Record<string, any> = {};
       try {
         args = JSON.parse(event.arguments || '{}');
@@ -523,7 +667,9 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         return;
       }
 
-      if (MANAGEMENT_FUNCTIONS.has(event.name)) {
+      // The `!== undefined` guard is a no-op at runtime — a Set of strings never
+      // holds undefined — and is what lets `name` narrow to string below.
+      if (event.name !== undefined && MANAGEMENT_FUNCTIONS.has(event.name)) {
         handleManagement(event.call_id, event.name, args);
         return;
       }
@@ -536,7 +682,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   );
 
   const handleRealtimeEvent = useCallback(
-    event => {
+    (event: RealtimeEvent) => {
       switch (event.type) {
         case 'input_audio_buffer.speech_started':
           setStatus(STATUS.LISTENING);
@@ -608,7 +754,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
   );
 
   const connect = useCallback(
-    async agentId => {
+    async (agentId: string) => {
       if (!agentId) {
         return;
       }
@@ -640,9 +786,9 @@ export function VoiceSessionProvider({ socket, agents, children }) {
           stream = await requestMicPermission();
         } catch (micErr) {
           const message =
-            micErr?.name === 'NotAllowedError' || micErr?.name === 'PermissionDeniedError'
+            errorName(micErr) === 'NotAllowedError' || errorName(micErr) === 'PermissionDeniedError'
               ? 'Microphone access denied. Please allow microphone permission in your browser settings and try again.'
-              : micErr.message;
+              : errorMessage(micErr);
           throw new Error(message);
         }
 
@@ -670,7 +816,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
 
         const {
           token,
-          model,
+          model: _model,
           voice = 'alloy',
           transcriptionModel = DEFAULT_TRANSCRIPTION_MODEL,
           session: sessionConfig,
@@ -827,7 +973,11 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         const realtimeBaseUrl =
           import.meta.env.VITE_OPENAI_REALTIME_URL || 'https://api.openai.com/v1/realtime/calls';
         const fd = new FormData();
-        fd.set('sdp', offer.sdp);
+        // RTCSessionDescriptionInit.sdp is optional in the DOM types (createOffer
+        // always fills it in practice). String() keeps the exact current
+        // behaviour — FormData already stringifies its value, so an absent sdp
+        // was, and still is, sent as the literal 'undefined'.
+        fd.set('sdp', String(offer.sdp));
         fd.set('session', JSON.stringify(sessionConfig));
         const sdpResponse = await fetch(realtimeBaseUrl, {
           method: 'POST',
@@ -865,7 +1015,7 @@ export function VoiceSessionProvider({ socket, agents, children }) {
         }
 
         cleanupConnection();
-        const message = err.message || 'Voice connection failed.';
+        const message = errorMessage(err) || 'Voice connection failed.';
         resetSessionState({ status: STATUS.ERROR, error: message, message, keepMuted: true });
         addEvent('error', message);
         throw err;
@@ -957,7 +1107,10 @@ export function VoiceSessionProvider({ socket, agents, children }) {
 
   const isActive = status !== STATUS.DISCONNECTED && status !== STATUS.ERROR;
 
-  const isSessionForAgent = useCallback(agentId => activeAgentId === agentId, [activeAgentId]);
+  const isSessionForAgent = useCallback(
+    (agentId: string) => activeAgentId === agentId,
+    [activeAgentId]
+  );
 
   const value = useMemo(
     () => ({

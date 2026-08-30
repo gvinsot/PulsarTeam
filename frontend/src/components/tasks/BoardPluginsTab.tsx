@@ -6,10 +6,18 @@ import {
   AvailablePluginRow,
   CategoryFilterPills,
 } from '../plugins/pluginShared';
+import type { Board, Plugin } from '../../types';
 
-export default function BoardPluginsTab({ board, onClose }) {
-  const [plugins, setPlugins] = useState([]);
-  const [boardPlugins, setBoardPlugins] = useState([]);
+interface BoardPluginsTabProps {
+  /** Only `id` (every api call below) and `name` (the header) are read. */
+  board: Board;
+  onClose: () => void;
+}
+
+export default function BoardPluginsTab({ board, onClose }: BoardPluginsTabProps) {
+  const [plugins, setPlugins] = useState<Plugin[]>([]);
+  // BoardPluginsResponse.plugins is a list of plugin ids, not Plugin objects.
+  const [boardPlugins, setBoardPlugins] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState('all');
 
@@ -40,12 +48,12 @@ export default function BoardPluginsTab({ board, onClose }) {
       ? availablePlugins
       : availablePlugins.filter(s => s.category === categoryFilter);
 
-  const handleAssign = async pluginId => {
+  const handleAssign = async (pluginId: string) => {
     await api.assignBoardPlugin(board.id, pluginId);
     setBoardPlugins(prev => [...prev, pluginId]);
   };
 
-  const handleRemove = async pluginId => {
+  const handleRemove = async (pluginId: string) => {
     await api.removeBoardPlugin(board.id, pluginId);
     setBoardPlugins(prev => prev.filter(id => id !== pluginId));
   };

@@ -10,6 +10,11 @@
  * and never touches the database.  Side-effects are handled by ActionExecutor.
  */
 
+// `Task` is type-only: it is erased at compile time, so this module stays the
+// pure, dependency-free logic layer its header describes.
+import type { Task } from '../database/tasks.js';
+import type { Agent } from '../database/agents.js';
+
 // ── Reserved / built-in statuses ────────────────────────────────────────────
 const INACTIVE_STATUSES = new Set(['done', 'backlog', 'error']);
 
@@ -41,19 +46,100 @@ export const AgentMode = Object.freeze({
 // picks the best-fit role at execution time (see workflow/roleRouter.ts).
 export const AUTO_ROLE = '__auto__';
 
+// ── Workflow config shapes ──────────────────────────────────────────────────
+// A board's `workflow` column is user-authored JSON, validated on the way in by
+// the passthrough zod schemas in schemas/boards.ts. "Passthrough" is why every
+// shape below keeps an `unknown` index signature: unknown keys are preserved
+// end-to-end, so the types describe what this module reads without pretending
+// the object has nothing else on it. Narrow an extra key with a typeof check
+// rather than asserting it.
+// (columnIds.ts keeps its own private `Workflow`/`WorkflowColumn` aliases for
+// the id-normalization helpers — those are local to that file; use these.)
+
+/**
+ * Resolve an agent by id. Every call site passes `agentManager.agents.get`,
+ * which returns undefined for an unknown id.
+ */
+export type GetAgentById = (agentId: string) => Agent | null | undefined;
+
+/** One kanban column. `id` is the value a task's `status` holds. */
+export interface WorkflowColumn {
+  id: string;
+  label?: string;
+  color?: string;
+  /** Role auto-assigned on entry — see _autoAssignByColumn. */
+  autoAssignRole?: string | null;
+  [key: string]: unknown;
+}
+
+/** One action of a transition's action chain — see the ActionType values. */
+export interface WorkflowAction {
+  type: string;
+  role?: string;
+  mode?: string;
+  instructions?: string;
+  status?: string;
+  /** change_status: destination column id, or the `__next__` sentinel. */
+  target?: string;
+  /** assign_agent_individual: the hand-picked agent. `null` means "unassign" —
+   * see actionExecutor's `action.agentId || null`. */
+  agentId?: string | null;
+  [key: string]: unknown;
+}
+
+/** One condition guarding a transition — see evaluateCondition. */
+export interface WorkflowCondition {
+  field: string;
+  operator?: string;
+  value?: string;
+  [key: string]: unknown;
+}
+
+/** One configured transition out of a column. */
+export interface WorkflowTransition {
+  from: string;
+  trigger: string;
+  actions?: WorkflowAction[];
+  conditions?: WorkflowCondition[];
+  [key: string]: unknown;
+}
+
+/**
+ * One entry of configManager.getAllBoardWorkflows: a board id plus its workflow.
+ * `columns` / `transitions` are required here — unlike on WorkflowConfig — because
+ * that getter always materializes them (defaulting when the board has none).
+ */
+export interface BoardWorkflow {
+  boardId: string;
+  workflow: WorkflowConfig & {
+    columns: WorkflowColumn[];
+    transitions: WorkflowTransition[];
+  };
+}
+
+/** A board's whole workflow config. */
+export interface WorkflowConfig {
+  columns?: WorkflowColumn[];
+  transitions?: WorkflowTransition[];
+  version?: number;
+  /** Board owner, hydrated by WorkflowEngine when it loads the board. */
+  userId?: string | null;
+  [key: string]: unknown;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Check if a status is considered "active" (i.e. not terminal, not backlog, not error).
  */
-export function isActiveStatus(status) {
+export function isActiveStatus(status: string) {
   return !INACTIVE_STATUSES.has(status);
 }
 
 /**
  * Validate that a column exists in the workflow.
  */
-export function columnExists(workflow, columnId) {
+export function columnExists(workflow: WorkflowConfig | null | undefined, columnId: string) {
   if (!workflow?.columns || !Array.isArray(workflow.columns)) return false;
   return workflow.columns.some(c => c.id === columnId);
 }
@@ -61,7 +147,11 @@ export function columnExists(workflow, columnId) {
 /**
  * Validate a transition object from the workflow config.
  */
-export function isValidTransition(transition) {
+// The parameter is the declared transition shape rather than `unknown`: every
+// call site iterates an array already typed as WorkflowTransition[], and the
+// runtime guard below stays as the defence against user-authored JSON that
+// slipped through the passthrough schema.
+export function isValidTransition(transition: WorkflowTransition) {
   return (
     transition &&
     typeof transition.from === 'string' &&
@@ -78,7 +168,7 @@ export function isValidTransition(transition) {
  * @param {Function} getAgent  - (agentId) => agent  — to resolve assignee info
  * @returns {boolean}
  */
-export function evaluateCondition(cond, task, getAgent) {
+export function evaluateCondition(cond: WorkflowCondition, task: Task, getAgent: GetAgentById) {
   const assigneeAgent = task.assignee ? getAgent(task.assignee) : null;
   let fieldValue;
 
@@ -121,7 +211,12 @@ export function evaluateCondition(cond, task, getAgent) {
  * @param {Function} hasIdleAgentWithRole - (role) => boolean (for idle_agent_available)
  * @returns {boolean}
  */
-export function evaluateAllConditions(conditions, task, getAgent, hasIdleAgentWithRole) {
+export function evaluateAllConditions(
+  conditions: WorkflowCondition[] | null | undefined,
+  task: Task,
+  getAgent: GetAgentById,
+  hasIdleAgentWithRole: (role?: string) => boolean
+) {
   if (!conditions || conditions.length === 0) return true;
 
   return conditions.every(cond => {
@@ -136,7 +231,10 @@ export function evaluateAllConditions(conditions, task, getAgent, hasIdleAgentWi
 /**
  * Get all transitions (on_enter + condition) for a given status.
  */
-export function getMatchingTransitions(workflow, status) {
+export function getMatchingTransitions(
+  workflow: WorkflowConfig | null | undefined,
+  status: string
+) {
   if (!workflow?.transitions) return [];
   return workflow.transitions.filter(isValidTransition).filter(t => t.from === status);
 }
@@ -146,8 +244,8 @@ export function getMatchingTransitions(workflow, status) {
  * at least one run_agent action or conditional transition.  Used by the
  * task loop to avoid double-processing.
  */
-export function getWorkflowManagedStatuses(allBoardWorkflows) {
-  const managed = new Set();
+export function getWorkflowManagedStatuses(allBoardWorkflows: BoardWorkflow[]) {
+  const managed = new Set<string>();
   for (const { workflow } of allBoardWorkflows) {
     for (const t of workflow.transitions) {
       if (!isValidTransition(t)) continue;
@@ -162,7 +260,7 @@ export function getWorkflowManagedStatuses(allBoardWorkflows) {
 }
 
 // Action types that (re)assign the task's assignee when a column is entered.
-const ASSIGNING_ACTIONS = new Set([
+const ASSIGNING_ACTIONS = new Set<string>([
   ActionType.RUN_AGENT,
   ActionType.ASSIGN_AGENT,
   ActionType.ASSIGN_AGENT_INDIVIDUAL,
@@ -182,8 +280,8 @@ const ASSIGNING_ACTIONS = new Set([
  * member #1) but, for any other member, left the board showing nobody had
  * picked the task up.
  */
-export function getReassigningStatuses(allBoardWorkflows) {
-  const reassigning = new Set();
+export function getReassigningStatuses(allBoardWorkflows: BoardWorkflow[]) {
+  const reassigning = new Set<string>();
   for (const { workflow } of allBoardWorkflows) {
     for (const t of workflow.transitions || []) {
       if (!isValidTransition(t)) continue;

@@ -35,10 +35,50 @@ const gmailFetch = createProviderFetch({
   }),
 });
 
+// The Gmail API payload fields this file reads back. gmailFetch hands over raw
+// parsed JSON, so these describe what is consumed, not what is verified.
+
+/** One entry of payload.headers. */
+interface GmailHeader {
+  name: string;
+  value: string;
+}
+
+/** A MIME part of a message payload; `parts` nests for multipart messages. */
+interface GmailPart {
+  mimeType: string;
+  filename?: string;
+  headers?: GmailHeader[];
+  body?: { data?: string; size: number; attachmentId?: string };
+  parts?: GmailPart[];
+}
+
+interface GmailMessage {
+  id?: string;
+  threadId?: string;
+  snippet?: string;
+  labelIds?: string[];
+  payload?: GmailPart;
+}
+
+interface GmailLabel {
+  id?: string;
+  name?: string;
+  type?: string;
+}
+
+interface GmailLabelsResponse {
+  labels?: GmailLabel[];
+}
+
+interface GmailThread {
+  messages?: GmailMessage[];
+}
+
 /**
  * Decode base64url encoded content (used by Gmail API).
  */
-function decodeBase64Url(str) {
+function decodeBase64Url(str: string) {
   if (!str) return '';
   const base64 = str.replace(/-/g, '+').replace(/_/g, '/');
   return Buffer.from(base64, 'base64').toString('utf-8');
@@ -47,7 +87,7 @@ function decodeBase64Url(str) {
 /**
  * Encode content to base64url (used for sending emails).
  */
-function encodeBase64Url(str) {
+function encodeBase64Url(str: string) {
   return Buffer.from(str)
     .toString('base64')
     .replace(/\+/g, '-')
@@ -58,7 +98,7 @@ function encodeBase64Url(str) {
 /**
  * Extract header value from a Gmail message.
  */
-function getHeader(headers, name) {
+function getHeader(headers: GmailHeader[] | undefined, name: string) {
   const header = (headers || []).find(h => h.name.toLowerCase() === name.toLowerCase());
   return header ? header.value : null;
 }
@@ -66,7 +106,7 @@ function getHeader(headers, name) {
 /**
  * Extract readable text from a Gmail message payload.
  */
-function extractBody(payload) {
+function extractBody(payload: GmailPart | undefined): string {
   if (!payload) return '';
 
   // Simple body
@@ -108,7 +148,7 @@ function extractBody(payload) {
 /**
  * Format a Gmail message for display.
  */
-function formatMessage(msg) {
+function formatMessage(msg: GmailMessage) {
   const headers = msg.payload?.headers || [];
   const from = getHeader(headers, 'From') || 'Unknown';
   const to = getHeader(headers, 'To') || '';
@@ -476,8 +516,13 @@ export function createGmailMcpServer(
       const body = extractBody(msg.payload);
 
       // List attachments
-      const attachments = [];
-      function findAttachments(parts) {
+      const attachments: {
+        filename: string;
+        mimeType: string;
+        size: number;
+        attachmentId: string;
+      }[] = [];
+      function findAttachments(parts: GmailPart[] | undefined) {
         for (const part of parts || []) {
           if (part.filename && part.body?.attachmentId) {
             attachments.push({
@@ -672,13 +717,13 @@ export function createGmailMcpServer(
     'List all Gmail labels (folders/categories) in the account.',
     {},
     async () => {
-      const data = await gmailFetch('/users/me/labels', agentId, boardId);
+      const data: GmailLabelsResponse = await gmailFetch('/users/me/labels', agentId, boardId);
       const labels = data.labels || [];
 
       const system = labels.filter(l => l.type === 'system');
       const user = labels.filter(l => l.type === 'user');
 
-      const format = l => `  - ${l.name} (ID: ${l.id})`;
+      const format = (l: GmailLabel) => `  - ${l.name} (ID: ${l.id})`;
 
       return {
         content: [
@@ -725,7 +770,7 @@ export function createGmailMcpServer(
         }),
       });
 
-      const changes = [];
+      const changes: string[] = [];
       if (addIds.length > 0) changes.push(`Added: ${addIds.join(', ')}`);
       if (removeIds.length > 0) changes.push(`Removed: ${removeIds.join(', ')}`);
 
@@ -796,7 +841,7 @@ export function createGmailMcpServer(
       threadId: z.string().describe('The Gmail thread ID (returned in message details)'),
     },
     async ({ threadId }) => {
-      const thread = await gmailFetch(
+      const thread: GmailThread = await gmailFetch(
         `/users/me/threads/${threadId}?format=full`,
         agentId,
         boardId

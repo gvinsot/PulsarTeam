@@ -1,8 +1,41 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Trash2, Edit3, ChevronDown, Plus, KanbanSquare, Users, Share2 } from 'lucide-react';
+import type { BoardPermission } from '../../types';
 
-export default function BoardTabs({
+/**
+ * What this component actually reads off a board.
+ *
+ * Structural rather than `BoardListItem`, because the caller's array is not one
+ * shape: GET /boards yields BoardListItem (both sharing columns present, either
+ * of them null), while createBoard / updateBoard / updateBoardWorkflow yield a
+ * bare `Board` that is spliced into the same array and carries NEITHER key. So
+ * the two sharing fields are optional AND nullable here — which is exactly the
+ * state that makes a renamed shared board render as owned.
+ */
+export interface BoardTabsBoard {
+  id: string;
+  name: string;
+  share_permission?: BoardPermission | null;
+  owner_username?: string | null;
+}
+
+/**
+ * Generic over the board so `onShare` hands the caller back the very element it
+ * passed in — the parent keeps a full board in state, not this projection.
+ */
+interface BoardTabsProps<B extends BoardTabsBoard> {
+  boards: B[];
+  /** null until a board is selected (and while the project filter hides them all). */
+  activeBoardId: string | null;
+  onSelect: (boardId: string) => void;
+  onCreate: () => void;
+  onRename: (boardId: string, name: string) => void;
+  onDelete: (boardId: string) => void;
+  onShare: (board: B) => void;
+}
+
+export default function BoardTabs<B extends BoardTabsBoard>({
   boards,
   activeBoardId,
   onSelect,
@@ -10,14 +43,15 @@ export default function BoardTabs({
   onRename,
   onDelete,
   onShare,
-}) {
-  const [renaming, setRenaming] = useState(null);
+}: BoardTabsProps<B>) {
+  // Both hold the id of the board being renamed / showing its context menu.
+  const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [contextMenu, setContextMenu] = useState(null);
+  const [contextMenu, setContextMenu] = useState<string | null>(null);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
-  const renameRef = useRef(null);
-  const contextRef = useRef(null);
-  const triggerRefs = useRef({});
+  const renameRef = useRef<HTMLInputElement | null>(null);
+  const contextRef = useRef<HTMLDivElement | null>(null);
+  const triggerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   useEffect(() => {
     if (renaming && renameRef.current) {
@@ -28,14 +62,19 @@ export default function BoardTabs({
 
   useEffect(() => {
     if (!contextMenu) return undefined;
-    const handler = e => {
-      if (contextRef.current && !contextRef.current.contains(e.target)) setContextMenu(null);
+    const handler = (e: MouseEvent) => {
+      // `EventTarget` is not a `Node`, and Node.contains() only takes one. A
+      // mousedown on the document always targets a node, so the added test is
+      // unreachable rather than a new branch.
+      const target = e.target;
+      if (contextRef.current && target instanceof Node && !contextRef.current.contains(target))
+        setContextMenu(null);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [contextMenu]);
 
-  const handleRenameSubmit = boardId => {
+  const handleRenameSubmit = (boardId: string) => {
     const trimmed = renameValue.trim();
     if (trimmed && trimmed !== (boards || []).find(b => b.id === boardId)?.name) {
       onRename(boardId, trimmed);
@@ -43,7 +82,9 @@ export default function BoardTabs({
     setRenaming(null);
   };
 
-  const openContextMenu = (boardId, triggerEl) => {
+  /** `triggerEl` is null when the ref for that board has not been attached yet;
+   *  the menu then opens at the last position. */
+  const openContextMenu = (boardId: string, triggerEl: HTMLElement | null) => {
     if (contextMenu === boardId) {
       setContextMenu(null);
       return;

@@ -4,12 +4,11 @@
 // Refactored: delegates to the new workflow/ module for all transition logic.
 // This file now contains thin wrappers that call into WorkflowEngine.
 //
-import { saveAgent, saveTaskToDb, hasActiveTask } from '../database.js';
+import { hasActiveTask } from '../database.js';
 import {
   processColumnEntry,
   recheckPendingTransitions,
   isValidTransition,
-  isActiveStatus,
   evaluateCondition as _evalCond,
   columnExists,
 } from '../workflow/index.js';

@@ -1,19 +1,27 @@
 import { getPool } from './connection.js';
 import { normalizeBoardName } from '../boardDefaults.js';
+import { errorMessage } from '../../lib/errors.js';
+import type { Queryable } from './baseSchema.js';
 
 // ── Legacy default board cleanup ────────────────────────────────────────────
 
-async function relationExists(p, relationName) {
-  const result = await p.query('SELECT to_regclass($1) AS relation', [relationName]);
+// `p` is a Queryable, not the module-level pool: this runs from the migration
+// runner on a checked-out client inside the migration transaction.
+async function relationExists(p: Queryable, relationName: string) {
+  const result = await p.query<{ relation: string | null }>('SELECT to_regclass($1) AS relation', [
+    relationName,
+  ]);
   return Boolean(result.rows[0]?.relation);
 }
 
-export async function removeLegacyDefaultBoards(p) {
+export async function removeLegacyDefaultBoards(p: Queryable) {
   try {
-    const existing = await p.query(
+    const existing = await p.query<{ id: string }>(
       `SELECT id FROM boards
        WHERE is_default = TRUE OR lower(btrim(name)) = 'default'`
     );
+    // Naming the row shape above is what keeps `row` typed here — the callback
+    // needs no annotation of its own.
     const ids = existing.rows.map(row => row.id);
     if (ids.length === 0) return;
 
@@ -59,7 +67,7 @@ export async function removeLegacyDefaultBoards(p) {
       console.log(`✅ Removed ${deleted.rowCount} legacy Default board(s)`);
     }
   } catch (err) {
-    console.error('Failed to remove legacy Default boards:', err.message);
+    console.error('Failed to remove legacy Default boards:', errorMessage(err));
     throw err;
   }
 }
@@ -78,12 +86,12 @@ export async function getAllBoards() {
     );
     return result.rows;
   } catch (err) {
-    console.error('Failed to get all boards:', err.message);
+    console.error('Failed to get all boards:', errorMessage(err));
     return [];
   }
 }
 
-export async function getBoardsByUser(userId) {
+export async function getBoardsByUser(userId: string) {
   const pool = getPool();
   if (!pool) return [];
   try {
@@ -106,12 +114,12 @@ export async function getBoardsByUser(userId) {
     );
     return result.rows;
   } catch (err) {
-    console.error('Failed to get boards:', err.message);
+    console.error('Failed to get boards:', errorMessage(err));
     return [];
   }
 }
 
-export async function getBoardById(id) {
+export async function getBoardById(id: string) {
   const pool = getPool();
   if (!pool) return null;
   try {
@@ -121,12 +129,15 @@ export async function getBoardById(id) {
     );
     return result.rows[0] || null;
   } catch (err) {
-    console.error('Failed to get board:', err.message);
+    console.error('Failed to get board:', errorMessage(err));
     return null;
   }
 }
 
-export async function createBoard(userId, name, workflow = {}, filters = {}) {
+// `name` is deliberately `unknown`: it goes straight into normalizeBoardName,
+// which is itself declared `(value: unknown, fallback)` because it is fed
+// unvalidated request bodies and falls back when the value is not a string.
+export async function createBoard(userId: string, name: unknown, workflow = {}, filters = {}) {
   const pool = getPool();
   if (!pool) throw new Error('Database not connected');
   try {
@@ -145,18 +156,22 @@ export async function createBoard(userId, name, workflow = {}, filters = {}) {
     );
     return result.rows[0];
   } catch (err) {
-    console.error('Failed to create board:', err.message);
+    console.error('Failed to create board:', errorMessage(err));
     throw err;
   }
 }
 
-export async function updateBoard(id, fields) {
+/**
+ * Patch a board. `fields` is keyed by COLUMN name and filtered against the
+ * `allowed` list below, so unknown keys are dropped rather than rejected.
+ */
+export async function updateBoard(id: string, fields: Record<string, unknown>) {
   const pool = getPool();
   if (!pool) throw new Error('Database not connected');
   const allowed = ['name', 'workflow', 'filters', 'position', 'plugins', 'mcp_auth'];
   const jsonbFields = ['workflow', 'filters', 'plugins', 'mcp_auth'];
-  const setClauses = [];
-  const values = [];
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
   let idx = 1;
 
   for (const [key, value] of Object.entries(fields)) {
@@ -183,19 +198,19 @@ export async function updateBoard(id, fields) {
     );
     return result.rows[0] || null;
   } catch (err) {
-    console.error('Failed to update board:', err.message);
+    console.error('Failed to update board:', errorMessage(err));
     throw err;
   }
 }
 
-export async function deleteBoard(id) {
+export async function deleteBoard(id: string) {
   const pool = getPool();
   if (!pool) return false;
   try {
     const result = await pool.query('DELETE FROM boards WHERE id = $1', [id]);
-    return result.rowCount > 0;
+    return (result.rowCount ?? 0) > 0;
   } catch (err) {
-    console.error('Failed to delete board:', err.message);
+    console.error('Failed to delete board:', errorMessage(err));
     return false;
   }
 }

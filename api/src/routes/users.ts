@@ -1,4 +1,5 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import bcrypt from 'bcryptjs';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import {
@@ -19,7 +20,7 @@ export function userRoutes() {
   // List all users (admin only — enforced by requireRole in index.js)
   router.get(
     '/',
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (_req, res) => {
       const users = await getAllUsers();
       const connected = getConnectedUserIds();
       res.json(users.map(u => ({ ...u, is_online: connected.has(u.id) })));
@@ -54,12 +55,15 @@ export function userRoutes() {
       );
       res.status(201).json(user);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(400).json({ error: errorMessage(err) });
     }
   });
 
   // Update user
-  router.put(
+  // The route's params type is passed explicitly (the express typings ask for
+  // it): without it `P` is inferred from the `validateParams` middleware as the
+  // loose `ParamsDictionary`, whose values are `string | string[]`.
+  router.put<{ id: string }>(
     '/:id',
     validateParams(userIdParamsSchema),
     validateBody(updateUserSchema),
@@ -78,9 +82,14 @@ export function userRoutes() {
           res.status(404).json({ error: 'User not found' });
           return;
         }
-        res.json(user);
+        // Strip the hash the same way GET /:id does. The UPDATE path returns an
+        // explicit column list that never includes it, but a body that sets no
+        // field at all (every key of updateUserSchema is optional, so `{}`
+        // validates) short-circuits to getUserById, which is a `SELECT *`.
+        const { password, ...safe } = user;
+        res.json(safe);
       } catch (err) {
-        res.status(400).json({ error: err.message });
+        res.status(400).json({ error: errorMessage(err) });
       }
     }
   );

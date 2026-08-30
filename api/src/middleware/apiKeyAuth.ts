@@ -1,10 +1,16 @@
+import type { NextFunction, Request, Response } from 'express';
 import { validateApiKey } from '../services/apiKeyManager.js';
+import { errorMessage } from '../lib/errors.js';
 
 /**
  * Express middleware that authenticates requests via API key (Bearer token).
  * Used for the external Swarm API (REST + MCP).
  */
-export async function authenticateApiKey(req, res, next) {
+export async function authenticateApiKey(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<Response | void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'API key required. Use Authorization: Bearer <api-key>' });
@@ -16,7 +22,7 @@ export async function authenticateApiKey(req, res, next) {
       return res.status(403).json({ error: 'Invalid API key' });
     }
   } catch (err) {
-    console.error('API key validation failed:', err.message);
+    console.error('API key validation failed:', errorMessage(err));
     return res.status(503).json({ error: 'Auth backend unavailable' });
   }
   next();

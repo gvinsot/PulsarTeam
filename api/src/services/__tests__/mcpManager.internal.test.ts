@@ -13,9 +13,13 @@ test('resolveInternalMcpConfig maps internal MCP URLs and signs an auth token', 
     jwtSecret: secret,
   });
   assert.equal(codeIndex.url, 'http://localhost:4123/api/code-index/mcp');
-  assert.ok(codeIndex.headers.Authorization.startsWith('Bearer '));
+  // Only a url that resolves to a known internal server gets headers at all,
+  // so an absent Authorization here means the lookup missed, not a bad token.
+  const codeIndexAuth = codeIndex.headers.Authorization;
+  assert.ok(codeIndexAuth, 'code_index should resolve to an internal server and be signed');
+  assert.ok(codeIndexAuth.startsWith('Bearer '));
 
-  const token = codeIndex.headers.Authorization.slice('Bearer '.length);
+  const token = codeIndexAuth.slice('Bearer '.length);
   const decoded = jwt.verify(token, secret) as any;
   assert.equal(decoded.username, 'internal-mcp');
   assert.equal(decoded.role, 'admin');

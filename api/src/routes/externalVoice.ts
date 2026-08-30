@@ -12,6 +12,7 @@
 // HighSpeedToText (https://speech-ui.methodinfo.fr/) documents.
 import express from 'express';
 import { getSettings } from '../services/configManager.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 
 function buildWsUrl(rawUrl: string, apiKey: string): string | null {
   if (!rawUrl) return null;
@@ -29,7 +30,7 @@ function buildWsUrl(rawUrl: string, apiKey: string): string | null {
   }
 }
 
-export function externalVoiceRoutes(agentManager) {
+export function externalVoiceRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   // Returns connection info for a given external-voice agent so the browser

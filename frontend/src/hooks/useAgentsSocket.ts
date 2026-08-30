@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { MutableRefObject } from 'react';
 import { connectSocket, getSocket } from '../socket';
 import { WsEvents } from '../socketEvents';
+import type { Agent, ShowToastFn } from '../types';
 
 const SOCKET_EVENTS = [
   WsEvents.AGENTS_LIST,
@@ -31,16 +33,20 @@ function withoutKey<T extends Record<string, unknown>>(obj: T, key: string): T {
 // thinking state and stream buffers, and the STREAM_START/CHUNK/END/RESUME/
 // ERROR choreography. App keeps auth/session lifecycle and calls
 // initSocket/teardown.
-export function useAgentsSocket(showToastRef) {
-  const [agents, setAgents] = useState([]);
-  const [thinkingMap, setThinkingMap] = useState({});
-  const [streamBuffers, setStreamBuffers] = useState({});
-  const streamEndedAgents = useRef(new Set()); // Track agents whose stream just ended
+export function useAgentsSocket(showToastRef: MutableRefObject<ShowToastFn>) {
+  // agents:list / agent:created / agent:updated all carry the full _sanitize
+  // output, so the list holds real Agents.
+  const [agents, setAgents] = useState<Agent[]>([]);
+  // agentId → the agent's current thinking text (agent:thinking payload).
+  const [thinkingMap, setThinkingMap] = useState<Record<string, string>>({});
+  // agentId → the streamed response accumulated so far.
+  const [streamBuffers, setStreamBuffers] = useState<Record<string, string>>({});
+  const streamEndedAgents = useRef(new Set<string>()); // Track agents whose stream just ended
   // Agents currently streaming on the server (from STREAM_START/STREAM_RESUME).
   // Used as the source of truth for whether to keep a streamBuffer alive,
   // so we don't race against agent.status updates arriving out of order.
-  const activeStreamAgents = useRef(new Set());
-  const lastAgentJson = useRef(new Map()); // Dedup: last JSON per agentId
+  const activeStreamAgents = useRef(new Set<string>());
+  const lastAgentJson = useRef(new Map<string, string>()); // Dedup: last JSON per agentId
 
   // Safety: clear stale thinking state for agents that are no longer busy.
   // Handles edge cases where socket events (STREAM_END) were lost due to
@@ -68,8 +74,9 @@ export function useAgentsSocket(showToastRef) {
   const initSocket = useCallback(() => {
     const sock = connectSocket();
 
-    const clearThinking = agentId => setThinkingMap(prev => withoutKey(prev, agentId));
-    const clearStreamBuffer = agentId => setStreamBuffers(prev => withoutKey(prev, agentId));
+    const clearThinking = (agentId: string) => setThinkingMap(prev => withoutKey(prev, agentId));
+    const clearStreamBuffer = (agentId: string) =>
+      setStreamBuffers(prev => withoutKey(prev, agentId));
 
     // Remove any previously registered listeners to prevent duplicates
     SOCKET_EVENTS.forEach(ev => sock.off(ev));
@@ -135,8 +142,12 @@ export function useAgentsSocket(showToastRef) {
     // buffers whose agent isn't streaming anymore — that covers the case
     // where the server crashed before sending STREAM_END.
     sock.on(WsEvents.STREAM_RESUME, ({ streams }) => {
-      const list = Array.isArray(streams) ? streams : [];
-      const activeIds = new Set(list.map((s: any) => s.agentId));
+      // Only the two fields this handler reads are declared — the frame is an
+      // untyped socket payload, so the array type is the contract we rely on.
+      const list: Array<{ agentId: string; buffer?: string }> = Array.isArray(streams)
+        ? streams
+        : [];
+      const activeIds = new Set(list.map(s => s.agentId));
       activeStreamAgents.current = activeIds;
       setStreamBuffers(() => {
         const next: Record<string, string> = {};

@@ -1,3 +1,6 @@
+import { errorMessage } from '../lib/errors.js';
+import type { ExecutionProvider } from './execution/executionProvider.js';
+
 // Tool definitions that will be injected into agent prompts
 export const TOOL_DEFINITIONS = `
 --- AVAILABLE TOOLS ---
@@ -96,7 +99,7 @@ IMPORTANT:
 `;
 
 // Sanitize a tool argument: only strip a matching pair of surrounding quotes.
-function sanitizeArg(arg) {
+function sanitizeArg(arg: string): string {
   if (!arg) return arg;
   arg = arg.trim();
   if (arg.length >= 2) {
@@ -110,7 +113,7 @@ function sanitizeArg(arg) {
 }
 
 // Normalize path: strip absolute prefixes and prevent traversal attacks
-function normalizePath(pathArg) {
+function normalizePath(pathArg: string): string {
   let p = sanitizeArg(pathArg);
   // Decode any URL-encoded characters that could bypass path checks
   try {
@@ -182,6 +185,39 @@ function validateCommand(command: string): string | null {
 }
 
 /**
+ * Per-tool extras attached to a tool result. `path` / `query` / `command` are
+ * declared because consumers read them back; everything else a tool chooses to
+ * report (sizes, line ranges, truncation flags) rides on the index signature as
+ * `unknown`, so reading one has to narrow it first.
+ */
+export interface ToolResultMeta {
+  /** File or directory the tool touched. */
+  path?: string;
+  /** Search term — search_files. */
+  query?: string;
+  /** Shell command that ran — run_command. */
+  command?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * What every tool hands back.
+ *
+ * `result` and `error` are both optional rather than split into a discriminated
+ * union on `success`: the failure branch frequently carries partial output in
+ * `result` too (a command that failed still produced stdout), and this tsc does
+ * not narrow the negative branch of such a union anyway.
+ */
+export interface ToolResult {
+  success: boolean;
+  /** Tool output — the command's stdout, the file's contents, ... */
+  result?: string;
+  /** Failure reason, set whenever `success` is false. */
+  error?: string;
+  meta?: ToolResultMeta;
+}
+
+/**
  * Execute a tool command using the execution provider (sandbox or coder-service).
  * @param {string} toolName
  * @param {string[]} args
@@ -189,7 +225,13 @@ function validateCommand(command: string): string | null {
  * @param {import('./execution/executionProvider.js').ExecutionProvider} provider
  * @param {string} agentId
  */
-export async function executeTool(toolName, args, projectPath, provider, agentId) {
+export async function executeTool(
+  toolName: string,
+  args: string[],
+  projectPath: string | null,
+  provider: ExecutionProvider,
+  agentId: string
+): Promise<ToolResult> {
   if (!provider || !agentId) {
     return { success: false, error: 'Execution provider not available' };
   }
@@ -200,7 +242,7 @@ export async function executeTool(toolName, args, projectPath, provider, agentId
       await provider.ensureProject(agentId, projectPath || null);
     } catch (initErr) {
       console.error(
-        `⚠️  [Tool] Provider lazy init failed for agent ${agentId.slice(0, 8)}: ${initErr.message}`
+        `⚠️  [Tool] Provider lazy init failed for agent ${agentId.slice(0, 8)}: ${errorMessage(initErr)}`
       );
     }
     if (!provider.hasEnvironment(agentId)) {
@@ -259,7 +301,7 @@ export async function executeTool(toolName, args, projectPath, provider, agentId
         return { success: false, error: `Unknown tool: ${toolName}` };
     }
   } catch (err) {
-    return { success: false, error: err.message };
+    return { success: false, error: errorMessage(err) };
   }
 }
 
@@ -276,19 +318,25 @@ const IMAGE_EXTENSIONS = new Set([
   '.ico',
 ]);
 
-function getFileExtension(path) {
+function getFileExtension(path: string): string {
   const dot = path.lastIndexOf('.');
   return dot >= 0 ? path.slice(dot).toLowerCase() : '';
 }
 
-async function toolReadFile(provider, agentId, filePath, startLineArg, endLineArg) {
+async function toolReadFile(
+  provider: ExecutionProvider,
+  agentId: string,
+  filePath: string,
+  startLineArg: string,
+  endLineArg: string
+) {
   if (filePath === '__blocked_path__') {
     return { success: false, error: 'Path blocked: detected path traversal attempt' };
   }
   try {
     const ext = getFileExtension(filePath);
     if (IMAGE_EXTENSIONS.has(ext) && ext !== '.svg') {
-      const mimeMap = {
+      const mimeMap: Record<string, string> = {
         '.png': 'image/png',
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -359,14 +407,19 @@ async function toolReadFile(provider, agentId, filePath, startLineArg, endLineAr
       meta: { path: filePath, size: content.length, lines: allLines.length },
     };
   } catch (err) {
-    if (err.message.includes('No such file')) {
+    if (errorMessage(err).includes('No such file')) {
       return { success: false, error: `File not found: ${filePath}` };
     }
     throw err;
   }
 }
 
-async function toolWriteFile(provider, agentId, filePath, content) {
+async function toolWriteFile(
+  provider: ExecutionProvider,
+  agentId: string,
+  filePath: string,
+  content: string
+) {
   if (filePath === '__blocked_path__') {
     return { success: false, error: 'Path blocked: detected path traversal attempt' };
   }
@@ -378,7 +431,7 @@ async function toolWriteFile(provider, agentId, filePath, content) {
   };
 }
 
-async function toolListDir(provider, agentId, dirPath) {
+async function toolListDir(provider: ExecutionProvider, agentId: string, dirPath: string) {
   const output = await provider.listDir(agentId, dirPath);
   return {
     success: true,
@@ -387,7 +440,12 @@ async function toolListDir(provider, agentId, dirPath) {
   };
 }
 
-async function toolSearchFiles(provider, agentId, pattern, query) {
+async function toolSearchFiles(
+  provider: ExecutionProvider,
+  agentId: string,
+  pattern: string,
+  query: string
+) {
   const output = await provider.searchFiles(agentId, pattern, query);
   return {
     success: true,
@@ -400,7 +458,7 @@ async function toolSearchFiles(provider, agentId, pattern, query) {
 // RTK wraps common CLI commands to produce compressed output that saves 60-90%
 // tokens when sent back to the LLM.  Only safe, read-only commands are rewritten.
 
-const RTK_REWRITE_RULES = [
+const RTK_REWRITE_RULES: { pattern: RegExp; rewrite: (cmd: string) => string }[] = [
   // git commands (read-only)
   { pattern: /^git\s+status\b/, rewrite: cmd => cmd.replace(/^git\s+status/, 'rtk git status') },
   { pattern: /^git\s+diff\b/, rewrite: cmd => cmd.replace(/^git\s+diff/, 'rtk git diff') },
@@ -440,7 +498,7 @@ const RTK_SKIP_PATTERNS = [
  * Attempt to rewrite a command with RTK prefix for token-optimized output.
  * Returns the original command if RTK is not applicable.
  */
-function rtkRewrite(command) {
+function rtkRewrite(command: string): string {
   const trimmed = command.trim();
   // Skip if any exclusion pattern matches
   if (RTK_SKIP_PATTERNS.some(p => p.test(trimmed))) return trimmed;
@@ -453,7 +511,29 @@ function rtkRewrite(command) {
   return trimmed;
 }
 
-async function toolRunCommand(provider, agentId, command) {
+/**
+ * A failed `exec` rejects with an error that also carries the captured streams
+ * and the exit status. Read them off the caught `unknown` without assuming the
+ * shape: a rejection from anywhere else simply yields empty output.
+ */
+function execFailure(err: unknown): {
+  stdout: string;
+  stderr: string;
+  code: string | number | undefined;
+} {
+  if (err !== null && typeof err === 'object') {
+    const source = err as Record<string, unknown>;
+    const code = source.code;
+    return {
+      stdout: typeof source.stdout === 'string' ? source.stdout : '',
+      stderr: typeof source.stderr === 'string' ? source.stderr : '',
+      code: typeof code === 'string' || typeof code === 'number' ? code : undefined,
+    };
+  }
+  return { stdout: '', stderr: '', code: undefined };
+}
+
+async function toolRunCommand(provider: ExecutionProvider, agentId: string, command: string) {
   // Security: validate command before execution
   const blockReason = validateCommand(command);
   if (blockReason) {
@@ -507,35 +587,42 @@ async function toolRunCommand(provider, agentId, command) {
           },
         };
       } catch (fallbackErr) {
-        const output = (fallbackErr.stdout || '') + (fallbackErr.stderr || '');
+        const fallbackFailure = execFailure(fallbackErr);
+        const output = fallbackFailure.stdout + fallbackFailure.stderr;
         if (output.trim()) {
           return {
             success: true,
             result: output.slice(0, 10000),
-            meta: { command, exitCode: fallbackErr.code || 1 },
+            meta: { command, exitCode: fallbackFailure.code || 1 },
           };
         }
-        return { success: false, error: fallbackErr.message, result: '' };
+        return { success: false, error: errorMessage(fallbackErr), result: '' };
       }
     }
     // Original command error handling (non-RTK path)
-    const output = (err.stdout || '') + (err.stderr || '');
+    const failure = execFailure(err);
+    const output = failure.stdout + failure.stderr;
     if (output.trim()) {
       return {
         success: true,
         result: output.slice(0, 10000),
-        meta: { command, exitCode: err.code || 1 },
+        meta: { command, exitCode: failure.code || 1 },
       };
     }
     return {
       success: false,
-      error: err.message,
+      error: errorMessage(err),
       result: '',
     };
   }
 }
 
-async function toolAppendFile(provider, agentId, filePath, content) {
+async function toolAppendFile(
+  provider: ExecutionProvider,
+  agentId: string,
+  filePath: string,
+  content: string
+) {
   if (filePath === '__blocked_path__') {
     return { success: false, error: 'Path blocked: detected path traversal attempt' };
   }
@@ -568,7 +655,7 @@ async function toolAppendFile(provider, agentId, filePath, content) {
 type ToolArity = 'single' | 'read' | 'multi' | 'three';
 interface ToolSpec {
   arity: ToolArity;
-  fromJson?: (args: any) => any[];
+  fromJson?: (args: any) => string[];
 }
 
 const TOOL_SPECS: Record<string, ToolSpec> = {
@@ -660,7 +747,7 @@ const TOOL_SPECS: Record<string, ToolSpec> = {
 const KNOWN_TOOLS = Object.keys(TOOL_SPECS).filter(name => TOOL_SPECS[name].fromJson);
 
 // Convert a JSON-format tool call (from <tool_call> blocks) to our internal format
-function jsonToToolCall(name, args) {
+function jsonToToolCall(name: string, args: unknown): ToolCall | null {
   if (!args || typeof args !== 'object') args = {};
   const spec = TOOL_SPECS[name];
   return spec?.fromJson ? { tool: name, args: spec.fromJson(args) } : null;
@@ -668,7 +755,7 @@ function jsonToToolCall(name, args) {
 
 // ── Balanced parsing helpers ─────────────────────────────────────────────────
 
-function _findBalancedClose(text, start) {
+function _findBalancedClose(text: string, start: number): number {
   let depth = 1;
   let inTripleQuote = false;
   let inDoubleQuote = false;
@@ -719,7 +806,7 @@ function _findBalancedClose(text, start) {
 // Only ever reached on the parse-failure path, so it strictly recovers calls
 // that would otherwise be dropped (a drop executes nothing → no continuation →
 // a decide/execute loop stalls until it errors out).
-function _recoverToolCallClose(text, argsStart) {
+function _recoverToolCallClose(text: string, argsStart: number): number {
   let inTriple = false,
     inDouble = false,
     inSingle = false;
@@ -755,7 +842,7 @@ function _recoverToolCallClose(text, argsStart) {
   return lineEnd === -1 ? text.length : lineEnd;
 }
 
-function _findTopLevelComma(text) {
+function _findTopLevelComma(text: string): number {
   let inTripleQuote = false;
   let inDoubleQuote = false;
   let inSingleQuote = false;
@@ -802,9 +889,21 @@ function _findTopLevelComma(text) {
   return -1;
 }
 
+/**
+ * A tool invocation parsed out of an agent response.
+ *
+ * `args` is positional, not keyed: the JSON path goes through `TOOL_SPECS`
+ * `fromJson`, which flattens named fields into the same order the `@tool(a, b)`
+ * text syntax uses, so both phases below produce the same shape.
+ */
+export interface ToolCall {
+  tool: string;
+  args: string[];
+}
+
 // Parse tool calls from agent response
-export function parseToolCalls(response) {
-  const toolCalls = [];
+export function parseToolCalls(response: string): ToolCall[] {
+  const toolCalls: ToolCall[] = [];
 
   // ── Phase 1: Parse <tool_call> JSON blocks ──────────────────────────
   const jsonCallPattern = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;

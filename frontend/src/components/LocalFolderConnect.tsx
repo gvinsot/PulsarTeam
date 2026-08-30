@@ -3,6 +3,7 @@ import { FolderCheck, MonitorX, Download, RefreshCw } from 'lucide-react';
 import { api } from '../api';
 import { getSocket } from '../socket';
 import { WsEvents } from '../socketEvents';
+import type { ConnectWidgetProps } from './connect/useConnectStatus';
 
 type Status = { connected: boolean; folders: string[]; downloadUrl: string | null };
 
@@ -15,11 +16,7 @@ type Status = { connected: boolean; folders: string[]; downloadUrl: string | nul
  * Status is per-user, so agentId/boardId are accepted (to match the connector
  * widget interface) but not used.
  */
-export default function LocalFolderConnect(_props: {
-  agentId?: string;
-  boardId?: string;
-  onStatusChange?: () => void;
-}) {
+export default function LocalFolderConnect(_props: ConnectWidgetProps) {
   const [status, setStatus] = useState<Status>({
     connected: false,
     folders: [],

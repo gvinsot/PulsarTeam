@@ -11,31 +11,52 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { api } from '../../api';
+import { errorMessage } from '../../utils/errors';
+import type {
+  AgentTemplateRole,
+  LlmConfig,
+  ReminderConfig,
+  Settings,
+  ShowToastFn,
+} from '../../types';
+
+// Body of POST /external-voice/test/:service — `{ ok, error? }` plus whatever
+// else the server-side probe adds (latencyMs is read below, and arrives typed
+// `unknown` through the index signature).
+type VoiceTestResult = Awaited<ReturnType<typeof api.testExternalVoiceService>>;
+
+interface SettingsTabProps {
+  active: boolean;
+  showToast?: ShowToastFn;
+}
 
 // `active` flips true when the Settings tab is selected; each activation
 // re-fetches settings, reminder config, reset roles and LLM configs.
-export default function SettingsTab({ active, showToast }) {
-  const [settings, setSettings] = useState(null);
+export default function SettingsTab({ active, showToast }: SettingsTabProps) {
+  const [settings, setSettings] = useState<Settings | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [customCurrency, setCustomCurrency] = useState('');
 
   // Reminder config state
-  const [reminderConfig, setReminderConfig] = useState(null);
+  const [reminderConfig, setReminderConfig] = useState<ReminderConfig | null>(null);
   const [reminderLoading, setReminderLoading] = useState(false);
   const [reminderSaving, setReminderSaving] = useState(false);
 
   // Reset instructions state
   const [resetRole, setResetRole] = useState('');
-  const [resetRoles, setResetRoles] = useState([]);
+  const [resetRoles, setResetRoles] = useState<AgentTemplateRole[]>([]);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
 
   // LLM configs (for the Code Graph / Claude fallback LLM pickers)
-  const [llmConfigs, setLlmConfigs] = useState([]);
+  const [llmConfigs, setLlmConfigs] = useState<LlmConfig[]>([]);
 
   // Voice services (STT/TTS) connection test state
-  const [voiceTest, setVoiceTest] = useState<{ stt: any; tts: any }>({ stt: null, tts: null });
+  const [voiceTest, setVoiceTest] = useState<{
+    stt: VoiceTestResult | null;
+    tts: VoiceTestResult | null;
+  }>({ stt: null, tts: null });
   const [voiceTesting, setVoiceTesting] = useState<{ stt: boolean; tts: boolean }>({
     stt: false,
     tts: false,
@@ -61,9 +82,9 @@ export default function SettingsTab({ active, showToast }) {
             'error'
           );
         }
-      } catch (err: any) {
-        setVoiceTest(s => ({ ...s, [service]: { ok: false, error: err.message } }));
-        showToast?.(`${service.toUpperCase()} test failed: ${err.message}`, 'error');
+      } catch (err) {
+        setVoiceTest(s => ({ ...s, [service]: { ok: false, error: errorMessage(err) } }));
+        showToast?.(`${service.toUpperCase()} test failed: ${errorMessage(err)}`, 'error');
       } finally {
         setVoiceTesting(s => ({ ...s, [service]: false }));
       }
@@ -81,7 +102,7 @@ export default function SettingsTab({ active, showToast }) {
         setCustomCurrency(data.currency);
       }
     } catch (err) {
-      showToast?.(`Failed to load settings: ${err.message}`, 'error');
+      showToast?.(`Failed to load settings: ${errorMessage(err)}`, 'error');
     } finally {
       setSettingsLoading(false);
     }
@@ -93,7 +114,7 @@ export default function SettingsTab({ active, showToast }) {
       const data = await api.getReminderConfig();
       setReminderConfig(data);
     } catch (err) {
-      showToast?.(`Failed to load reminder config: ${err.message}`, 'error');
+      showToast?.(`Failed to load reminder config: ${errorMessage(err)}`, 'error');
     } finally {
       setReminderLoading(false);
     }
@@ -114,7 +135,7 @@ export default function SettingsTab({ active, showToast }) {
       const data = await api.getLlmConfigs();
       setLlmConfigs(data);
     } catch (err) {
-      showToast?.(`Failed to load LLM configs: ${err.message}`, 'error');
+      showToast?.(`Failed to load LLM configs: ${errorMessage(err)}`, 'error');
     }
   }, [showToast]);
 
@@ -128,6 +149,10 @@ export default function SettingsTab({ active, showToast }) {
   }, [active, loadSettings, loadReminderConfig, loadResetRoles, loadLlmConfigs]);
 
   const handleSaveSettings = async () => {
+    // The Save button only renders inside the `settings ?` branch below, so this
+    // is unreachable; it keeps a null out of the PUT body rather than changing
+    // any observable behaviour.
+    if (!settings) return;
     try {
       setSettingsSaving(true);
       const updated = await api.updateSettings(settings);
@@ -139,7 +164,7 @@ export default function SettingsTab({ active, showToast }) {
       }
       showToast?.('Settings saved', 'success');
     } catch (err) {
-      showToast?.(`Failed to save settings: ${err.message}`, 'error');
+      showToast?.(`Failed to save settings: ${errorMessage(err)}`, 'error');
     } finally {
       setSettingsSaving(false);
       setReminderSaving(false);
@@ -180,9 +205,9 @@ export default function SettingsTab({ active, showToast }) {
                 key={opt.value}
                 onClick={() => {
                   if (isCustom) {
-                    setSettings(s => ({ ...s, currency: customCurrency || '₿' }));
+                    setSettings(s => (s ? { ...s, currency: customCurrency || '₿' } : s));
                   } else {
-                    setSettings(s => ({ ...s, currency: opt.value }));
+                    setSettings(s => (s ? { ...s, currency: opt.value } : s));
                     setCustomCurrency('');
                   }
                 }}
@@ -205,7 +230,7 @@ export default function SettingsTab({ active, showToast }) {
               value={settings.currency || ''}
               onChange={e => {
                 const v = e.target.value.slice(0, 5);
-                setSettings(s => ({ ...s, currency: v }));
+                setSettings(s => (s ? { ...s, currency: v } : s));
                 setCustomCurrency(v);
               }}
               className="w-24 px-3 py-1.5 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
@@ -241,10 +266,11 @@ export default function SettingsTab({ active, showToast }) {
                 max="60"
                 value={reminderConfig.intervalMinutes ?? 10}
                 onChange={e =>
-                  setReminderConfig(c => ({
-                    ...c,
-                    intervalMinutes: Math.max(1, parseInt(e.target.value, 10) || 1),
-                  }))
+                  setReminderConfig(c =>
+                    c
+                      ? { ...c, intervalMinutes: Math.max(1, parseInt(e.target.value, 10) || 1) }
+                      : c
+                  )
                 }
                 className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
               />
@@ -258,10 +284,9 @@ export default function SettingsTab({ active, showToast }) {
                 max="50"
                 value={reminderConfig.maxReminders ?? 12}
                 onChange={e =>
-                  setReminderConfig(c => ({
-                    ...c,
-                    maxReminders: Math.max(1, parseInt(e.target.value, 10) || 1),
-                  }))
+                  setReminderConfig(c =>
+                    c ? { ...c, maxReminders: Math.max(1, parseInt(e.target.value, 10) || 1) } : c
+                  )
                 }
                 className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
               />
@@ -275,10 +300,11 @@ export default function SettingsTab({ active, showToast }) {
                 max="30"
                 value={reminderConfig.cooldownMinutes ?? 2}
                 onChange={e =>
-                  setReminderConfig(c => ({
-                    ...c,
-                    cooldownMinutes: Math.max(0, parseInt(e.target.value, 10) || 0),
-                  }))
+                  setReminderConfig(c =>
+                    c
+                      ? { ...c, cooldownMinutes: Math.max(0, parseInt(e.target.value, 10) || 0) }
+                      : c
+                  )
                 }
                 className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
               />
@@ -311,7 +337,7 @@ export default function SettingsTab({ active, showToast }) {
         </div>
         <select
           value={settings.codeGraphLlmConfigId || ''}
-          onChange={e => setSettings(s => ({ ...s, codeGraphLlmConfigId: e.target.value }))}
+          onChange={e => setSettings(s => (s ? { ...s, codeGraphLlmConfigId: e.target.value } : s))}
           className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
         >
           <option value="">— None (parse only, no LLM) —</option>
@@ -339,7 +365,9 @@ export default function SettingsTab({ active, showToast }) {
         </div>
         <select
           value={settings.roleRouterLlmConfigId || ''}
-          onChange={e => setSettings(s => ({ ...s, roleRouterLlmConfigId: e.target.value }))}
+          onChange={e =>
+            setSettings(s => (s ? { ...s, roleRouterLlmConfigId: e.target.value } : s))
+          }
           className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
         >
           <option value="">— None (automatic role selection disabled) —</option>
@@ -367,7 +395,9 @@ export default function SettingsTab({ active, showToast }) {
         </div>
         <select
           value={settings.claudeFallbackLlmConfigId || ''}
-          onChange={e => setSettings(s => ({ ...s, claudeFallbackLlmConfigId: e.target.value }))}
+          onChange={e =>
+            setSettings(s => (s ? { ...s, claudeFallbackLlmConfigId: e.target.value } : s))
+          }
           className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
         >
           <option value="">— None (use safe defaults) —</option>
@@ -422,7 +452,7 @@ export default function SettingsTab({ active, showToast }) {
             <input
               type="text"
               value={settings.sttServiceUrl || ''}
-              onChange={e => setSettings(s => ({ ...s, sttServiceUrl: e.target.value }))}
+              onChange={e => setSettings(s => (s ? { ...s, sttServiceUrl: e.target.value } : s))}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
               placeholder="wss://speech.methodinfo.fr/v1/ws/transcribe"
             />
@@ -433,7 +463,7 @@ export default function SettingsTab({ active, showToast }) {
             <input
               type="password"
               value={settings.sttApiKey || ''}
-              onChange={e => setSettings(s => ({ ...s, sttApiKey: e.target.value }))}
+              onChange={e => setSettings(s => (s ? { ...s, sttApiKey: e.target.value } : s))}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
               placeholder="sk_..."
             />
@@ -498,7 +528,7 @@ export default function SettingsTab({ active, showToast }) {
             <input
               type="text"
               value={settings.ttsServiceUrl || ''}
-              onChange={e => setSettings(s => ({ ...s, ttsServiceUrl: e.target.value }))}
+              onChange={e => setSettings(s => (s ? { ...s, ttsServiceUrl: e.target.value } : s))}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
               placeholder="wss://speech.methodinfo.fr/v1/ws/synthesize"
             />
@@ -509,7 +539,7 @@ export default function SettingsTab({ active, showToast }) {
             <input
               type="password"
               value={settings.ttsApiKey || ''}
-              onChange={e => setSettings(s => ({ ...s, ttsApiKey: e.target.value }))}
+              onChange={e => setSettings(s => (s ? { ...s, ttsApiKey: e.target.value } : s))}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
               placeholder="sk_..."
             />
@@ -519,7 +549,7 @@ export default function SettingsTab({ active, showToast }) {
             <input
               type="text"
               value={settings.ttsVoiceId || ''}
-              onChange={e => setSettings(s => ({ ...s, ttsVoiceId: e.target.value }))}
+              onChange={e => setSettings(s => (s ? { ...s, ttsVoiceId: e.target.value } : s))}
               className="w-full px-3 py-2 bg-dark-900 border border-dark-600 rounded-lg text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 font-mono"
               placeholder="voice-uuid (optional — per-agent ttsVoiceId overrides)"
             />
@@ -603,7 +633,7 @@ export default function SettingsTab({ active, showToast }) {
                     );
                     setResetConfirm(false);
                   } catch (err) {
-                    showToast?.(`Reset failed: ${err.message}`, 'error');
+                    showToast?.(`Reset failed: ${errorMessage(err)}`, 'error');
                   } finally {
                     setResetLoading(false);
                   }

@@ -1,9 +1,6 @@
 import { createHash } from 'crypto';
 import { removeLegacyDefaultBoards } from './boards.js';
-
-type Queryable = {
-  query: (sql: string, params?: any[]) => Promise<any>;
-};
+import type { Queryable } from './baseSchema.js';
 
 export type Migration = {
   id: string;

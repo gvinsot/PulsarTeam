@@ -15,7 +15,7 @@ interface McpEntry {
   [key: string]: any;
 }
 
-interface Skill {
+export interface Skill {
   id: string;
   name: string;
   description: string;

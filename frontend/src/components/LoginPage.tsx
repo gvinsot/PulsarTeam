@@ -13,7 +13,6 @@ import {
   ArrowRight,
   Play,
   X,
-  ChevronDown,
   Mail,
   Phone,
   Building2,
@@ -23,6 +22,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api';
 import { useLanguage } from '../contexts/LanguageContext';
+import { errorMessage } from '../utils/errors';
 
 /* ── Reusable tiny components ── */
 
@@ -206,8 +206,8 @@ function LoginPanel({
     setLoading(true);
     try {
       await onLogin(username, password);
-    } catch (err: any) {
-      setError(err.message || 'Login failed');
+    } catch (err) {
+      setError(errorMessage(err) || 'Login failed');
     } finally {
       setLoading(false);
     }
@@ -429,8 +429,8 @@ function ContactFormModal({
     try {
       await api.submitContact({ ...form, type });
       setSuccess(true);
-    } catch (err: any) {
-      setError(err.message || 'Failed to submit. Please try again.');
+    } catch (err) {
+      setError(errorMessage(err) || 'Failed to submit. Please try again.');
     } finally {
       setSending(false);
     }
@@ -689,11 +689,11 @@ function LanguageToggle() {
 
 export default function LoginPage({
   onLogin,
-  onGoogleLogin,
+  onGoogleLogin: _onGoogleLogin,
   oauthLoading,
 }: {
   onLogin: (u: string, p: string) => Promise<void>;
-  onGoogleLogin?: any;
+  onGoogleLogin?: () => void;
   oauthLoading?: boolean;
 }) {
   const { t } = useLanguage();

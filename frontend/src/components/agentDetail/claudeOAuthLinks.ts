@@ -138,7 +138,7 @@ export function reconstructClaudeOAuthUrlFromBuffer(term: XTerminal, uri: string
 //
 // We join the URL prefix with the following non-empty trimmed lines until a
 // blank line is encountered, producing a single URL.
-export function reconstructWrappedOAuthUrlsInText(text) {
+export function reconstructWrappedOAuthUrlsInText(text: string): string {
   if (typeof text !== 'string') return text;
   const marker =
     /https?:\/\/(?:claude\.com\/cai\/oauth\/authorize\?code=|claude\.ai\/oauth\/authorize\?)\S*/g;

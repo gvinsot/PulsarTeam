@@ -71,12 +71,15 @@ const onedriveSpec: OAuthProviderSpec<MicrosoftOAuthConfig> = {
 
     return `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}`;
   },
-  statusFields: (token, connected, username) => ({ username: connected ? username : null }),
+  statusFields: (_token, connected, username) => ({ username: connected ? username : null }),
 };
 
 const refreshOnedriveToken = makeRefresh(onedriveSpec);
 
-export async function getOnedriveAccessTokenForAgent(agentId, boardId = null) {
+export async function getOnedriveAccessTokenForAgent(
+  agentId: string | null,
+  boardId: string | null = null
+) {
   return resolveAccessToken('onedrive', agentId, boardId, refreshOnedriveToken);
 }
 

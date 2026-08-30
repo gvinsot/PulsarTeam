@@ -1,6 +1,32 @@
 import { useState } from 'react';
 import { X, Edit3, User, Loader2, Save } from 'lucide-react';
+import type { Agent } from '../../types';
 import RoleSelect from './RoleSelect';
+import { errorMessage } from '../../utils/errors';
+
+/** One "Instructions (agent)" run_agent action, located by its position in the
+ *  workflow so the edit can be written back. Owned here because this modal is
+ *  the only editor of the shape; TasksBoard builds and consumes it. */
+export interface ColumnInstructionEntry {
+  instructions: string;
+  /** `act.role || ''` on the way in, so always a string there. Optional because
+   *  the modal may hand an entry back without it — which is what the save
+   *  handler's `!== undefined` test is for. */
+  role?: string;
+  transitionIdx: number;
+  actionIdx: number;
+}
+
+interface InstructionsEditModalProps {
+  /** Display name of the edited column; the modal lets the user rename it. */
+  columnLabel: string;
+  instructions: ColumnInstructionEntry[];
+  agents: Agent[];
+  /** A board id is a UUID string, or null before a board is selected. */
+  boardId?: string | null;
+  onClose: () => void;
+  onSave: (items: ColumnInstructionEntry[], label: string) => void | Promise<void>;
+}
 
 export default function InstructionsEditModal({
   columnLabel,
@@ -9,13 +35,16 @@ export default function InstructionsEditModal({
   boardId = null,
   onClose,
   onSave,
-}) {
-  const [items, setItems] = useState(() => instructions.map(i => ({ ...i })));
+}: InstructionsEditModalProps) {
+  const [items, setItems] = useState<ColumnInstructionEntry[]>(() =>
+    instructions.map(i => ({ ...i }))
+  );
   const [label, setLabel] = useState(columnLabel || '');
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const updateField = (idx, field, value) =>
+  // Only the two string fields the modal renders are editable.
+  const updateField = (idx: number, field: 'role' | 'instructions', value: string) =>
     setItems(prev => prev.map((it, i) => (i === idx ? { ...it, [field]: value } : it)));
 
   const handleSave = async () => {
@@ -24,7 +53,7 @@ export default function InstructionsEditModal({
     try {
       await onSave(items, label);
     } catch (err) {
-      setSaveError(err?.message || 'Failed to save instructions');
+      setSaveError(errorMessage(err) || 'Failed to save instructions');
     } finally {
       setSaving(false);
     }

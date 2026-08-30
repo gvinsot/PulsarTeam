@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Users, ChevronDown } from 'lucide-react';
 import AgentCard from './AgentCard';
+import type { Agent } from '../types';
 
 /**
  * Wraps an AgentCard for a group of agents that share the same batchId.
@@ -9,6 +10,17 @@ import AgentCard from './AgentCard';
  * data (status, thinking, tasks) is still pulled from the individual
  * agent that the dropdown has selected, so the card stays live.
  */
+interface BatchAgentCardProps {
+  /** The agents sharing one batchId. */
+  members: Agent[];
+  /** agentId → streamed "thinking" text. */
+  thinkingMap?: Record<string, string>;
+  selectedAgentId?: string | null;
+  viewMode?: string;
+  onSelect: (agentId: string) => void;
+  onStop?: (agentId: string) => void;
+}
+
 export default function BatchAgentCard({
   members,
   thinkingMap,
@@ -16,7 +28,7 @@ export default function BatchAgentCard({
   viewMode,
   onSelect,
   onStop,
-}) {
+}: BatchAgentCardProps) {
   const sorted = useMemo(
     () => [...members].sort((a, b) => (a.batchIndex || 0) - (b.batchIndex || 0)),
     [members]
@@ -45,7 +57,9 @@ export default function BatchAgentCard({
 
   const busyCount = sorted.filter(a => a.status === 'busy' || thinkingMap?.[a.id]).length;
   const errorCount = sorted.filter(a => a.status === 'error').length;
-  const baseName = active.name.replace(/\s+#\d+$/, '');
+  // Agent.name is optional on the wire (loadFromDatabase never backfills it), and
+  // this read was unguarded. '' matches how AgentCard renders a nameless agent.
+  const baseName = (active.name || '').replace(/\s+#\d+$/, '');
 
   // Member switcher lives in the card's reserved footer slot (not an absolute
   // overlay) so it never covers the metrics row underneath.

@@ -139,7 +139,7 @@ function formatMessageSummary(msg: any): string {
   const subject = msg.subject || '(no subject)';
   const date = msg.receivedDateTime || msg.sentDateTime || '';
   const snippet = (msg.bodyPreview || '').trim();
-  const flags = [];
+  const flags: string[] = [];
   if (msg.isRead === false) flags.push('📩');
   if (msg.flag?.flagStatus === 'flagged') flags.push('⭐');
   if (msg.hasAttachments) flags.push('📎');

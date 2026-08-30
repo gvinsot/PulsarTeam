@@ -127,7 +127,7 @@ function makeFakeMcpManager() {
       toolName: string,
       args: any,
       agentId: string,
-      auth: any,
+      _auth: any,
       boardId: string
     ) {
       calls.callToolByNameForAgent.push({ serverName, toolName, args, agentId, boardId });

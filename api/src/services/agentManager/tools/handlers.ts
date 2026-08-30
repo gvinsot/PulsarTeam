@@ -290,7 +290,7 @@ const handleUpdateTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
 };
 
 // ── @move_task_to_board() ──
-const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call }) => {
+const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, call }) => {
   const [taskId, targetBoardId] = call.args;
   if (!taskId || !targetBoardId) {
     return {
@@ -390,7 +390,7 @@ const handleMoveTaskToBoard: ToolHandler = async ({ mgr, agent, agentId, call })
 };
 
 // ── @delete_task() ──
-const handleDeleteTask: ToolHandler = async ({ mgr, agent, agentId, call }) => {
+const handleDeleteTask: ToolHandler = async ({ mgr, agent, call }) => {
   const taskId = (call.args[0] || '').trim();
   if (!taskId) {
     return {
@@ -821,14 +821,14 @@ const handleUpdateSkill: ToolHandler = async ({ agent, call }) => {
     const allowedFields = ['name', 'description', 'category', 'instructions', 'mcpServerIds'];
     for (const key of allowedFields) {
       if (parsed[key] !== undefined) {
-        (existing as any)[key] = parsed[key];
+        existing[key] = parsed[key];
       }
     }
-    (existing as any).updatedAt = new Date().toISOString();
-    (existing as any).lastUpdatedBy = agent.name;
+    existing.updatedAt = new Date().toISOString();
+    existing.lastUpdatedBy = agent.name;
     await saveAgentSkill(existing);
     console.log(
-      `📝 [Skill Update] Agent "${agent.name}" updated skill "${(existing as any).name}" (${skillId})`
+      `📝 [Skill Update] Agent "${agent.name}" updated skill "${existing.name}" (${skillId})`
     );
     return {
       tool: 'update_skill',

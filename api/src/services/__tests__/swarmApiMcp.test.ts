@@ -11,8 +11,6 @@ import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTaskDbFake } from './helpers/taskDbFake.js';
 
-const noop = async () => {};
-
 // swarmApiMcp resolves tasks via ../database/tasks.js (getTaskByIdPrefix,
 // getTasksByAgent) now that the in-memory store is gone. Back it with the
 // Map-backed fake; the fake agentManager below seeds tasks into the same rows.

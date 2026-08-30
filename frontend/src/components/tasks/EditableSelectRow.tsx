@@ -1,5 +1,30 @@
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { X, Edit3 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+interface EditableSelectRowOption {
+  /** Optional React key for rows whose `value` is not unique on its own. */
+  key?: string;
+  value: string;
+  label: string;
+}
+
+interface EditableSelectRowProps {
+  icon: LucideIcon;
+  label: ReactNode;
+  value: string;
+  options: EditableSelectRowOption[];
+  emptyOptionLabel?: string;
+  /** Receives `e.target.value || null`; may throw to keep the editor open. */
+  onSave: (next: string | null) => void | Promise<void>;
+  view: ReactNode;
+  selectClassName?: string;
+  disableWhenEmpty?: boolean;
+  editTitle?: string;
+  pencilHoverClass?: string;
+  pencilReplacement?: ReactNode;
+}
 
 // Inline-edit metadata row for TaskDetailModal: icon + label on the left;
 // view mode renders the `view` badge plus an Edit3 pencil (or
@@ -21,7 +46,7 @@ export default function EditableSelectRow({
   editTitle,
   pencilHoverClass = 'hover:text-indigo-400',
   pencilReplacement = null,
-}) {
+}: EditableSelectRowProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   return (

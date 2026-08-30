@@ -1,7 +1,8 @@
 import { Mic, MicOff, PhoneOff, RefreshCw, Loader2, Volume2, VolumeX } from 'lucide-react';
 import { STATUS, STATUS_LABELS, useVoiceSession } from '../contexts/VoiceSessionContext';
+import type { Agent } from '../types';
 
-export default function VoiceChatTab({ agent }) {
+export default function VoiceChatTab({ agent }: { agent: Agent }) {
   const voice = useVoiceSession();
 
   const isThisAgent = voice.isSessionForAgent(agent.id);

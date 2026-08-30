@@ -254,7 +254,9 @@ export function findAgentByRole(
  */
 export function findAgentForAssignment(
   agents: Map<any, any>,
-  role: string,
+  // Unlike findAgentByRole, this one lower-cases through `(role || '')`, so an
+  // action with no role configured is a legitimate (match-nothing) call.
+  role: string | undefined,
   ownerId: string | null = null,
   getAgentTasks: (agentId: any) => any[] = () => [],
   excludeTaskId: string | null = null,

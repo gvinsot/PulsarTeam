@@ -1,13 +1,20 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import type { AvailableRepo, AvailableStorage } from '../types';
 
 // Shared fetch pattern for board-scoped plugin resources (repos, storages):
 // clear the list when no board is selected, otherwise fetch and surface the
 // failure message. The cancelled guard drops late responses after a board
 // switch so they can't overwrite fresher state.
-function useBoardList(boardId, fetcher, fallbackMsg) {
-  const [items, setItems] = useState([]);
-  const [error, setError] = useState(null);
+function useBoardList<T>(
+  // A board id is a UUID string, null before a board is selected, and undefined
+  // where the caller has no board scope at all — the effect below guards all three.
+  boardId: string | null | undefined,
+  fetcher: (boardId: string) => Promise<T[]>,
+  fallbackMsg: string
+) {
+  const [items, setItems] = useState<T[]>([]);
+  const [error, setError] = useState<string | null>(null);
   // `loading` lets callers tell "still fetching" apart from "loaded, empty" —
   // the latter now means "no plugin connected" (the endpoints return 200 [] for
   // an unconnected board instead of erroring), which must render differently
@@ -43,8 +50,14 @@ function useBoardList(boardId, fetcher, fallbackMsg) {
 }
 
 // Repos accessible via the board's GitHub plugin OAuth (picker source)
-export function useBoardRepos(boardId) {
-  const { items, error, loading } = useBoardList(
+//
+// The element type is AvailableRepo widened with `name?: undefined` — the same
+// encoding api.ts already uses for GET /projects/available-repos: neither
+// available-repos route emits a `name` key, but AgentDetail.tsx:116 reads
+// `r.fullName || r.name` on this very list. `name?: undefined` says exactly
+// that — readable, always absent — instead of pretending the key exists.
+export function useBoardRepos(boardId: string | null | undefined) {
+  const { items, error, loading } = useBoardList<AvailableRepo & { name?: undefined }>(
     boardId,
     api.getBoardAvailableRepos,
     'Failed to load repos'
@@ -53,8 +66,8 @@ export function useBoardRepos(boardId) {
 }
 
 // Storage roots accessible via the board's OneDrive plugin OAuth
-export function useBoardStorages(boardId) {
-  const { items, error, loading } = useBoardList(
+export function useBoardStorages(boardId: string | null | undefined) {
+  const { items, error, loading } = useBoardList<AvailableStorage>(
     boardId,
     api.getBoardAvailableStorages,
     'Failed to load storages'

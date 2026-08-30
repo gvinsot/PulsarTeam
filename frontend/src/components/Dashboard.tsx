@@ -31,6 +31,19 @@ import SwarmOverview from './SwarmOverview';
 import ActiveVoiceIndicator from './ActiveVoiceIndicator';
 import ApiKeyModal from './ApiKeyModal';
 import { Crown, UserCheck } from 'lucide-react';
+import type { Socket } from 'socket.io-client';
+import type {
+  Agent,
+  AgentTemplate,
+  AppUser,
+  BoardListItem,
+  ImpersonateResponse,
+  McpServer,
+  Plugin,
+  ProjectListItem,
+  RepoPickerOption,
+  ShowToastFn,
+} from '../types';
 
 const TasksBoard = lazy(() => import('./TasksBoard'));
 const AddAgentModal = lazy(() => import('./AddAgentModal'));
@@ -52,6 +65,35 @@ const NAV_VIEWS = [
   { key: 'budget', label: 'Budget', icon: DollarSign, title: 'Budget' },
 ];
 
+interface DashboardProps {
+  /** App renders Dashboard only past `if (!user) return <LoginPage/>` (App.tsx:394),
+   *  so this is never null here despite the defensive `user?.` reads below. */
+  user: AppUser;
+  agents: Agent[];
+  templates: AgentTemplate[];
+  /** The client-normalised repo picker options App builds, not AvailableRepo[]. */
+  projects: RepoPickerOption[];
+  /** The API and DB call these "skills"; the entity is Plugin — App fills the
+   *  prop with api.getPlugins(). */
+  skills: Plugin[];
+  mcpServers: McpServer[];
+  /** agentId → the streamed "thinking" text, keyed by agent id. */
+  thinkingMap: Record<string, string>;
+  streamBuffers: Record<string, string>;
+  onLogout: () => void;
+  onRefresh: () => void;
+  /** getSocket() returns null until the first connect. */
+  socket: Socket | null;
+  showToast: ShowToastFn;
+  onImpersonate: (data: ImpersonateResponse) => void;
+  onStopImpersonation: () => void;
+  loadTemplates: () => void;
+  loadProjects: () => void;
+  loadSkills: () => void;
+  loadMcpServers: () => void;
+  onAgentCreated?: (agent: Agent) => void;
+}
+
 export default function Dashboard({
   user,
   agents,
@@ -72,8 +114,8 @@ export default function Dashboard({
   loadSkills,
   loadMcpServers,
   onAgentCreated,
-}) {
-  const [selectedAgent, setSelectedAgent] = useState(null);
+}: DashboardProps) {
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showBroadcast, setShowBroadcast] = useState(false);
   const [viewMode, setViewMode] = useState('grid'); // grid | list
@@ -81,34 +123,34 @@ export default function Dashboard({
     const hash = window.location.hash.replace('#', '').toLowerCase();
     return VALID_VIEWS.includes(hash) ? hash : 'tasks';
   });
-  const setActiveView = useCallback(view => {
+  const setActiveView = useCallback((view: string) => {
     setActiveViewRaw(view);
     window.history.replaceState(null, '', `#${view}`);
   }, []);
   const [detailActiveTab, setDetailActiveTab] = useState('chat');
-  const [requestedTab, setRequestedTab] = useState(null);
+  const [requestedTab, setRequestedTab] = useState<string | null>(null);
   const [showApiKeyModal, setShowApiKeyModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [projectDrawerOpen, setProjectDrawerOpen] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [boards, setBoards] = useState([]);
+  const [boards, setBoards] = useState<BoardListItem[]>([]);
   const [boardFilter, setBoardFilterRaw] = useState(() => safeGet('activeBoardId') || '');
-  const setBoardFilter = useCallback(val => {
+  const setBoardFilter = useCallback((val: string) => {
     setBoardFilterRaw(val);
     if (val) safeSet('activeBoardId', val);
     else safeRemove('activeBoardId');
   }, []);
-  const [dbProjects, setDbProjects] = useState([]);
+  const [dbProjects, setDbProjects] = useState<ProjectListItem[]>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [projectFilter, setProjectFilterRaw] = useState(() => safeGet('activeProjectId') || '');
-  const setProjectFilter = useCallback(val => {
+  const setProjectFilter = useCallback((val: string) => {
     setProjectFilterRaw(val);
     if (val) safeSet('activeProjectId', val);
     else safeRemove('activeProjectId');
   }, []);
-  const mobileMenuRef = useRef(null);
-  const userMenuRef = useRef(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
   // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
   const { theme, toggleTheme } = useTheme() as { theme: string; toggleTheme: () => void };
   const isAdmin = user?.role === 'admin';
@@ -144,7 +186,7 @@ export default function Dashboard({
 
   // Build lookup: boardId → project_id (from boards loaded above)
   const boardProjectMap = useMemo(() => {
-    const m = new Map();
+    const m = new Map<string, string | null>();
     (boards || []).forEach(b => {
       if (b?.id) m.set(b.id, b.project_id || null);
     });
@@ -198,7 +240,7 @@ export default function Dashboard({
   useClickOutside(mobileMenuRef, () => setMobileMenuOpen(false), mobileMenuOpen);
   useClickOutside(userMenuRef, () => setUserMenuOpen(false), userMenuOpen);
 
-  const handleNavigateToVoiceAgent = useCallback(agentId => {
+  const handleNavigateToVoiceAgent = useCallback((agentId: string) => {
     setSelectedAgent(agentId);
     setRequestedTab('chat');
     // Clear requestedTab after it's consumed
@@ -206,7 +248,7 @@ export default function Dashboard({
   }, []);
 
   const handleNavigateToAgent = useCallback(
-    agentId => {
+    (agentId: string) => {
       setActiveView('agents');
       setSelectedAgent(agentId);
       setRequestedTab('chat');
@@ -234,7 +276,7 @@ export default function Dashboard({
 
   const selectedAgentData = sortedAgents.find(a => a.id === selectedAgent);
 
-  const handleStopAgent = agentId => {
+  const handleStopAgent = (agentId: string) => {
     if (socket) {
       socket.emit(WsEvents.REQ_STOP, { agentId });
     }
@@ -646,7 +688,7 @@ export default function Dashboard({
               remainder. */}
           {activeView === 'agents' && selectedAgentData && (
             <div
-              className={`w-full min-w-0 ${CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}
+              className={`w-full min-w-0 ${selectedAgentData.runner !== null && CLI_RUNNERS.has(selectedAgentData.runner) ? 'lg:w-3/5 xl:w-3/5' : 'lg:w-1/2 xl:w-2/5'} border-l border-dark-700 bg-dark-900/50 min-h-0 overflow-hidden`}
             >
               <AgentDetail
                 key={selectedAgentData.id}

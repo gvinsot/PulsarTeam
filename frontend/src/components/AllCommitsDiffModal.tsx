@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { getCommitDiff, api } from '../api';
 import { useClickOutside, useEscapeKey } from '../hooks/useDismiss';
+import { errorMessage } from '../utils/errors';
+import type { CommitDiff, CommitFileStatus, TaskCommit } from '../types';
 
 // ── Commit colours (deterministic per hash prefix) ───────────────────────────
 const COMMIT_COLORS = [
@@ -19,13 +21,24 @@ const COMMIT_COLORS = [
   '#3b82f6',
   '#2563eb',
 ];
-function commitColor(hash) {
+function commitColor(hash: string) {
   const idx = parseInt((hash || '').substring(0, 6), 16) || 0;
   return COMMIT_COLORS[idx % COMMIT_COLORS.length];
 }
 
 // ── Status badge for file changes ────────────────────────────────────────────
-const FILE_STATUS = {
+interface FileStatusBadge {
+  label: string;
+  bg: string;
+  text: string;
+}
+
+// CommitFileStatus also carries 'changed' and 'unchanged', which have no entry
+// here and fall back to the 'modified' badge at the call site — so the map is
+// partial over the union, with `modified` pinned as the guaranteed fallback.
+const FILE_STATUS: Partial<Record<CommitFileStatus, FileStatusBadge>> & {
+  modified: FileStatusBadge;
+} = {
   added: { label: 'A', bg: 'bg-green-500/20', text: 'text-green-400' },
   removed: { label: 'D', bg: 'bg-red-500/20', text: 'text-red-400' },
   modified: { label: 'M', bg: 'bg-yellow-500/20', text: 'text-yellow-400' },
@@ -33,7 +46,7 @@ const FILE_STATUS = {
   copied: { label: 'C', bg: 'bg-purple-500/20', text: 'text-purple-400' },
 };
 
-function renderPatch(patch) {
+function renderPatch(patch: string) {
   if (!patch)
     return <span className="text-gray-500 italic text-xs">No diff available (binary file?)</span>;
   return patch.split('\n').map((line, i) => {
@@ -60,7 +73,23 @@ function renderPatch(patch) {
 // ═════════════════════════════════════════════════════════════════════════════
 // Single commit section (collapsible)
 // ═════════════════════════════════════════════════════════════════════════════
-function CommitSection({ commit, diff, loading, error, selected, onToggleSelect, showSelect }) {
+function CommitSection({
+  commit,
+  diff,
+  loading,
+  error,
+  selected,
+  onToggleSelect,
+  showSelect,
+}: {
+  commit: TaskCommit;
+  diff: CommitDiff | null;
+  loading: boolean;
+  error: string | null;
+  selected: boolean;
+  onToggleSelect: (hash: string) => void;
+  showSelect: boolean;
+}) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -181,7 +210,19 @@ function CommitSection({ commit, diff, loading, error, selected, onToggleSelect,
 // ═════════════════════════════════════════════════════════════════════════════
 // Revert Confirmation Modal
 // ═════════════════════════════════════════════════════════════════════════════
-function RevertConfirmModal({ selectedCommits, commits, onConfirm, onCancel, reverting }) {
+function RevertConfirmModal({
+  selectedCommits,
+  commits,
+  onConfirm,
+  onCancel,
+  reverting,
+}: {
+  selectedCommits: Set<string>;
+  commits: TaskCommit[];
+  onConfirm: () => void;
+  onCancel: () => void;
+  reverting: boolean;
+}) {
   const selected = commits.filter(c => selectedCommits.has(c.hash));
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
@@ -274,42 +315,36 @@ function RevertConfirmModal({ selectedCommits, commits, onConfirm, onCancel, rev
 // All Commits Diff Modal
 // ═════════════════════════════════════════════════════════════════════════════
 
-// Shape of GET /api/tasks/:id/commits/:hash/diff (see api/src/routes/tasks.ts)
-interface CommitDiffFile {
-  filename: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  changes?: number;
-  patch?: string;
-}
-interface CommitDiff {
-  sha?: string;
-  message?: string;
-  author?: string;
-  date?: string;
-  stats?: { additions: number; deletions: number; total?: number };
-  files?: CommitDiffFile[];
-}
-
 export default function AllCommitsDiffModal({
   taskId,
   commits,
   onClose,
   initialHash,
   agentId,
-  project,
+  project: _project,
+}: {
+  taskId: string;
+  commits: TaskCommit[];
+  onClose: () => void;
+  /** The commit the caller wants scrolled into view, or null for "none". */
+  initialHash: string | null;
+  /** Task.agentId — null for a board-level task, which hides the revert flow. */
+  agentId: string | null;
+  /** Task.project. Accepted for parity with the caller and deliberately unused. */
+  project: string | null;
 }) {
   const [diffs, setDiffs] = useState<Record<string, CommitDiff>>({}); // hash -> diff data
   const [loading, setLoading] = useState<Record<string, boolean>>({}); // hash -> boolean
   const [errors, setErrors] = useState<Record<string, string>>({}); // hash -> error string
   const [revertMode, setRevertMode] = useState(false);
-  const [selectedCommits, setSelectedCommits] = useState(new Set());
+  const [selectedCommits, setSelectedCommits] = useState<Set<string>>(new Set());
   const [showConfirm, setShowConfirm] = useState(false);
   const [reverting, setReverting] = useState(false);
-  const [revertSuccess, setRevertSuccess] = useState(null); // null | { taskId }
-  const modalRef = useRef(null);
-  const scrollRef = useRef(null);
+  // Only its truthiness is ever read (the success banner); `taskId` is nullable
+  // because `result.taskId` below is a key no producer writes — see handleRevert.
+  const [revertSuccess, setRevertSuccess] = useState<{ taskId: string | undefined } | null>(null);
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Fetch all commit diffs on mount
   useEffect(() => {
@@ -358,7 +393,7 @@ export default function AllCommitsDiffModal({
     onClose();
   });
 
-  function toggleSelect(hash) {
+  function toggleSelect(hash: string) {
     setSelectedCommits(prev => {
       const next = new Set(prev);
       if (next.has(hash)) next.delete(hash);
@@ -388,7 +423,7 @@ export default function AllCommitsDiffModal({
       setRevertSuccess({ taskId: result.id || result.taskId });
       setShowConfirm(false);
     } catch (err) {
-      alert('Failed to create revert task: ' + err.message);
+      alert('Failed to create revert task: ' + errorMessage(err));
     } finally {
       setReverting(false);
     }

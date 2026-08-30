@@ -1,7 +1,61 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import type { DragEvent } from 'react';
 import { Trash2, Edit3, Plus, ArrowRight, GripVertical } from 'lucide-react';
 import { useTheme } from '../../contexts/ThemeContext';
 import TaskCard from './TaskCard';
+import type { TaskSocketPayload } from '../../types';
+// `buildColumns` now declares a return type, so its shape is imported by name
+// rather than re-described here. The local `BoardColumn` duplicate this replaces
+// listed the same fifteen fields; it existed only because taskConstants.ts was
+// still unannotated.
+import type { BoardColumnView } from './taskConstants';
+
+interface KanbanColumnProps {
+  col: BoardColumnView;
+  /** The board's task state holds `task:updated` frames as well as GET /tasks
+   *  rows, so a card is a frame — not a `Task`. See types/task.ts. */
+  tasks: TaskSocketPayload[];
+  onDelete: (task: TaskSocketPayload) => void;
+  onStop: (task: TaskSocketPayload) => void;
+  onResume?: (task: TaskSocketPayload) => void;
+  onClearStopped?: (task: TaskSocketPayload) => void;
+  /** Receives this column back so the board can read its `dropStatus`. */
+  onDrop: (e: DragEvent<HTMLDivElement>, col: BoardColumnView, dropIdx: number) => void;
+  onOpen: (task: TaskSocketPayload) => void;
+  /** Absent on a read-only board, which hides the "Add task" button. */
+  onAddTask?: () => void;
+  onEditInstructions: (colId: string) => void;
+  hasInstructions?: boolean;
+  showAgent?: boolean;
+  showCreator?: boolean;
+  showProject?: boolean;
+  showTaskType?: boolean;
+  onTouchDrop: (agentId: string | null, taskId: string, columnId: string) => void;
+  onNavigateToAgent?: (agentId: string) => void;
+  onOpenCommits?: (task: TaskSocketPayload) => void;
+  /** Every column of the board — the batch "Move all to…" menu targets. */
+  columns?: BoardColumnView[];
+  /** Both batch handlers are absent on a read-only board. */
+  onBatchMove?: (
+    sourceColId: string,
+    targetColId: string,
+    tasks: TaskSocketPayload[]
+  ) => void | Promise<void>;
+  onBatchDelete?: (colId: string, tasks: TaskSocketPayload[]) => void | Promise<void>;
+  canReorderColumns?: boolean;
+  /** Id of the column currently being dragged, or null when none is. */
+  draggingColumnId?: string | null;
+  onColumnDragStart?: (colId: string) => void;
+  onColumnDragEnd?: () => void;
+  onColumnReorder?: (
+    draggedColId: string,
+    targetColId: string,
+    position: 'before' | 'after'
+  ) => void;
+  /** Passed by the board but unread here; kept so the contract stays visible. */
+  isFirstColumn?: boolean;
+  isLastColumn?: boolean;
+}
 
 export default function KanbanColumn({
   col,
@@ -30,20 +84,20 @@ export default function KanbanColumn({
   onColumnDragStart,
   onColumnDragEnd,
   onColumnReorder,
-  isFirstColumn,
-  isLastColumn,
-}) {
+  isFirstColumn: _isFirstColumn,
+  isLastColumn: _isLastColumn,
+}: KanbanColumnProps) {
   const { theme } = useTheme() as { theme?: string };
   const isLight = theme === 'light';
   const [dragOver, setDragOver] = useState(false);
-  const [hovered, setHovered] = useState(false);
+  const [_hovered, setHovered] = useState(false);
   const [dropIndex, setDropIndex] = useState(-1);
   const [showBatchMenu, setShowBatchMenu] = useState(false);
   const [batchMoving, setBatchMoving] = useState(false);
   const [confirmTrash, setConfirmTrash] = useState(false);
-  const [columnDropSide, setColumnDropSide] = useState(null); // 'left' | 'right' | null
-  const batchMenuRef = useRef(null);
-  const dropZoneRef = useRef(null);
+  const [columnDropSide, setColumnDropSide] = useState<'left' | 'right' | null>(null);
+  const batchMenuRef = useRef<HTMLDivElement | null>(null);
+  const dropZoneRef = useRef<HTMLDivElement | null>(null);
 
   const isDraggingThisColumn = draggingColumnId === col.id;
   const isColumnDragActive = !!draggingColumnId && draggingColumnId !== col.id;
@@ -51,8 +105,11 @@ export default function KanbanColumn({
   // Close batch menu on outside click
   useEffect(() => {
     if (!showBatchMenu) return undefined;
-    const handleClick = e => {
-      if (batchMenuRef.current && !batchMenuRef.current.contains(e.target)) {
+    const handleClick = (e: MouseEvent) => {
+      // Same `instanceof Node` shape as the drag-leave handlers below: an
+      // EventTarget is not necessarily a Node, and `contains` only takes one.
+      const target = e.target instanceof Node ? e.target : null;
+      if (batchMenuRef.current && !batchMenuRef.current.contains(target)) {
         setShowBatchMenu(false);
         setConfirmTrash(false);
       }
@@ -62,7 +119,7 @@ export default function KanbanColumn({
   }, [showBatchMenu]);
 
   const handleBatchMove = useCallback(
-    async targetColId => {
+    async (targetColId: string) => {
       if (!onBatchMove || batchMoving) return;
       setBatchMoving(true);
       setShowBatchMenu(false);
@@ -89,7 +146,7 @@ export default function KanbanColumn({
 
   // Compute which index the dragged item should be inserted at
   const computeDropIndex = useCallback(
-    e => {
+    (e: DragEvent<HTMLDivElement>) => {
       const container = dropZoneRef.current;
       if (!container) return tasks.length;
       const cards = container.querySelectorAll('[data-task-id]');
@@ -105,7 +162,7 @@ export default function KanbanColumn({
 
   // Handle column-reorder drag-over: decide left/right insertion based on cursor position
   const handleColumnDragOver = useCallback(
-    e => {
+    (e: DragEvent<HTMLDivElement>) => {
       if (!isColumnDragActive || !onColumnReorder) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
@@ -117,7 +174,7 @@ export default function KanbanColumn({
   );
 
   const handleColumnDrop = useCallback(
-    e => {
+    (e: DragEvent<HTMLDivElement>) => {
       if (!isColumnDragActive || !onColumnReorder || !draggingColumnId) {
         setColumnDropSide(null);
         return;

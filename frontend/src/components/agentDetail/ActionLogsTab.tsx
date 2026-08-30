@@ -1,8 +1,10 @@
-import { Play, Clock, Zap, AlertCircle, Activity, ListTodo } from 'lucide-react';
+import { Play, Clock, Zap, AlertCircle, Info, Activity, ListTodo } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { Agent } from '../../types';
 
 const MAX_LOGS_DISPLAYED = 30;
 
-function formatDuration(ms) {
+function formatDuration(ms: number | null | undefined) {
   if (ms == null) return null;
   if (ms < 1000) return '<1s';
   const totalSec = Math.floor(ms / 1000);
@@ -14,13 +16,23 @@ function formatDuration(ms) {
   return `${s}s`;
 }
 
-const formatTokens = n => {
+const formatTokens = (n: number) => {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 };
 
-const typeConfig = {
+interface LogTypeStyle {
+  icon: LucideIcon;
+  color: string;
+  bg: string;
+  border: string;
+  label: string;
+}
+
+// Keyed by AgentActionLogType; typed by plain string so the `|| idle` fallback at
+// the render site stays a safety net for any type the API may add later.
+const typeConfig: Record<string, LogTypeStyle> = {
   busy: {
     icon: Zap,
     color: 'text-amber-400',
@@ -42,6 +54,13 @@ const typeConfig = {
     border: 'border-red-500/20',
     label: 'Error',
   },
+  info: {
+    icon: Info,
+    color: 'text-blue-400',
+    bg: 'bg-blue-500/10',
+    border: 'border-blue-500/20',
+    label: 'Info',
+  },
   warning: {
     icon: AlertCircle,
     color: 'text-orange-400',
@@ -51,7 +70,7 @@ const typeConfig = {
   },
 };
 
-export default function ActionLogsTab({ agent }) {
+export default function ActionLogsTab({ agent }: { agent: Agent }) {
   const logs = agent.actionLogs || [];
 
   // Compute stats over the full log set (logs are important for stats)

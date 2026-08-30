@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import {
   Trash2,
   Clock,
@@ -15,6 +15,46 @@ import {
   Pause,
 } from 'lucide-react';
 import { SOURCE_META, TASK_TYPE_MAP, PRIORITY_MAP, isToday, timeAgo } from './taskConstants';
+import type { TaskSocketPayload } from '../../types';
+
+interface TaskCardProps {
+  /** A card is rendered out of the board's task state, which holds
+   *  `task:updated` frames as well as GET /tasks rows — so it is a frame, not a
+   *  `Task`. See the head of types/task.ts. */
+  task: TaskSocketPayload;
+  onDelete: (task: TaskSocketPayload) => void;
+  onStop: (task: TaskSocketPayload) => void;
+  onResume?: (task: TaskSocketPayload) => void;
+  onClearStopped?: (task: TaskSocketPayload) => void;
+  onOpen: (task: TaskSocketPayload) => void;
+  showAgent?: boolean;
+  showCreator?: boolean;
+  showProject?: boolean;
+  showTaskType?: boolean;
+  /** `agentId` is declared non-null because that is what the board's handler
+   *  takes (TasksBoard.tsx:725) — a card's own `task.agentId` is nullable, see
+   *  finalizeTouchDrop below. */
+  /** `agentId` is null for a board-level task (MCP add_task), matching
+   *  `Task.agentId`. See TasksBoard's handleTouchDrop. */
+  onTouchDrop: (agentId: string | null, taskId: string, columnId: string) => void;
+  onNavigateToAgent?: (agentId: string) => void;
+  onOpenCommits?: (task: TaskSocketPayload) => void;
+}
+
+// Live state of a touch drag, held in a ref so the native listeners below never
+// read a stale closure. `scrollContainer` is only resolved once the drag has
+// actually started, hence the optional key.
+interface TouchDragState {
+  startX: number;
+  startY: number;
+  started: boolean;
+  ghost: HTMLElement | null;
+  lastColumnId: string | null;
+  lastTouchX: number;
+  lastTouchY: number;
+  originEl: HTMLElement;
+  scrollContainer?: Element | null;
+}
 
 export default function TaskCard({
   task,
@@ -30,16 +70,17 @@ export default function TaskCard({
   onTouchDrop,
   onNavigateToAgent,
   onOpenCommits,
-}) {
+}: TaskCardProps) {
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
   const today = isToday(task.createdAt);
   const isDraggingRef = useRef(false);
-  const touchDragRef = useRef(null);
-  const cardRef = useRef(null);
-  const longPressTimerRef = useRef(null);
+  const touchDragRef = useRef<TouchDragState | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressArmedRef = useRef(false);
-  const autoScrollRef = useRef(null);
+  // requestAnimationFrame handle for the edge auto-scroll loop.
+  const autoScrollRef = useRef<number | null>(null);
   // Refs for native touch listeners (avoid stale closures)
   const onTouchDropRef = useRef(onTouchDrop);
   const taskRef = useRef(task);
@@ -51,10 +92,14 @@ export default function TaskCard({
   }, [task]);
 
   const sourceMeta = task.source ? SOURCE_META[task.source.type] || SOURCE_META.api : null;
+  // Same value as task.assignee, read once so the navigate handler below keeps the
+  // non-null narrowing its surrounding guard establishes (a property narrowing is
+  // lost inside a nested closure, a const local's is not).
+  const assigneeId = task.assignee;
 
   // Find which column contains a given viewport coordinate using bounding rects.
   // More reliable on mobile than elementFromPoint (no z-index / pointer-events issues).
-  function getColumnAtPoint(x, y) {
+  function getColumnAtPoint(x: number, y: number) {
     const cols = document.querySelectorAll('[data-column-id]');
     for (const col of cols) {
       const r = col.getBoundingClientRect();
@@ -65,7 +110,7 @@ export default function TaskCard({
     return null;
   }
 
-  function highlightColumn(colEl) {
+  function highlightColumn(colEl: Element | null) {
     document
       .querySelectorAll('[data-column-id]')
       .forEach(c => c.classList.remove('touch-drag-over'));
@@ -73,7 +118,7 @@ export default function TaskCard({
   }
 
   // Shared drop cleanup + execution (used by both touchend and touchcancel)
-  function finalizeTouchDrop(touchX, touchY) {
+  function finalizeTouchDrop(touchX: number | null, touchY: number | null) {
     const t = taskRef.current;
     if (!touchDragRef.current) return;
     if (!touchDragRef.current.started) {
@@ -103,7 +148,11 @@ export default function TaskCard({
     highlightColumn(null);
 
     if (dropColId) {
-      onTouchDropRef.current(t.agentId, t.id, dropColId);
+      // The board's handler now declares `agentId` nullable, so the real value
+      // is forwarded instead of the `''` that used to stand in for null on a
+      // board-level task. Both resolve the same task there (the id-only
+      // fallback), so this drops the substitution without changing the move.
+      onTouchDropRef.current(t.agentId ?? null, t.id, dropColId);
     }
     setTimeout(() => {
       isDraggingRef.current = false;
@@ -112,10 +161,10 @@ export default function TaskCard({
   }
 
   // Document-level touchmove blocker — active only while drag is armed.
-  const docTouchBlocker = useRef(null);
+  const docTouchBlocker = useRef<((e: TouchEvent) => void) | null>(null);
   function installDocTouchBlocker() {
     if (docTouchBlocker.current) return;
-    const handler = e => {
+    const handler = (e: TouchEvent) => {
       if (longPressArmedRef.current || touchDragRef.current) {
         e.preventDefault();
       }
@@ -131,10 +180,13 @@ export default function TaskCard({
 
   // Document-level touchend/touchcancel — registered when the long-press arms.
   // This guarantees drop detection even if the finger is released far from the card.
-  const docTouchEndRef = useRef(null);
+  const docTouchEndRef = useRef<{
+    handleEnd: (e: TouchEvent) => void;
+    handleCancel: () => void;
+  } | null>(null);
   function installDocTouchEnd() {
     if (docTouchEndRef.current) return;
-    const handleEnd = e => {
+    const handleEnd = (e: TouchEvent) => {
       if (!touchDragRef.current) return;
       const wasDragging = touchDragRef.current.started;
       const originEl = touchDragRef.current.originEl;
@@ -189,7 +241,7 @@ export default function TaskCard({
     const el = cardRef.current;
     if (!el) return undefined;
 
-    const handleTouchStart = e => {
+    const handleTouchStart = (e: TouchEvent) => {
       if (taskRef.current?.actionRunning) return;
       const touch = e.touches[0];
       const startX = touch.clientX;
@@ -217,7 +269,7 @@ export default function TaskCard({
       }, 500);
     };
 
-    const handleTouchMove = e => {
+    const handleTouchMove = (e: TouchEvent) => {
       if (longPressTimerRef.current && !longPressArmedRef.current) {
         clearTimeout(longPressTimerRef.current);
         longPressTimerRef.current = null;
@@ -238,7 +290,9 @@ export default function TaskCard({
         touchDragRef.current.started = true;
         isDraggingRef.current = true;
 
-        const ghost = el.cloneNode(true);
+        // cloneNode is typed as Node; el is the card <div>, so the clone is an
+        // HTMLElement and the style writes below are real.
+        const ghost = el.cloneNode(true) as HTMLElement;
         ghost.style.position = 'fixed';
         ghost.style.zIndex = '9999';
         ghost.style.pointerEvents = 'none';
@@ -271,7 +325,7 @@ export default function TaskCard({
 
         const touchX = touch.clientX;
         const touchY = touch.clientY;
-        const startAutoScroll = direction => {
+        const startAutoScroll = (direction: number) => {
           const tick = () => {
             scrollEl.scrollLeft += direction * scrollSpeed;
             const col2 = getColumnAtPoint(touchX, touchY);
@@ -456,23 +510,24 @@ export default function TaskCard({
           })()}
         {showCreator && sourceMeta && (
           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ring-1 ${sourceMeta.cls}`}>
-            {sourceMeta.label(task.source)}
+            {/* `?? null`: SourceMeta.label takes `TaskSource | null`, and on a
+                socket frame the key can also be absent. Every labeller treats
+                the two the same (`s?.name || …`). */}
+            {sourceMeta.label(task.source ?? null)}
           </span>
         )}
         {showAgent && task.assigneeName && (
           <span
-            className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20${task.assignee && onNavigateToAgent ? ' cursor-pointer hover:bg-cyan-500/20 transition-colors' : ''}`}
+            className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-cyan-500/10 text-cyan-400 ring-1 ring-cyan-500/20${assigneeId && onNavigateToAgent ? ' cursor-pointer hover:bg-cyan-500/20 transition-colors' : ''}`}
             onClick={
-              task.assignee && onNavigateToAgent
+              assigneeId && onNavigateToAgent
                 ? e => {
                     e.stopPropagation();
-                    onNavigateToAgent(task.assignee);
+                    onNavigateToAgent(assigneeId);
                   }
                 : undefined
             }
-            title={
-              task.assignee && onNavigateToAgent ? `Open ${task.assigneeName}'s chat` : undefined
-            }
+            title={assigneeId && onNavigateToAgent ? `Open ${task.assigneeName}'s chat` : undefined}
           >
             <User className="w-2.5 h-2.5" />
             {`${task.assigneeIcon || ''} ${task.assigneeName}`.trim()}

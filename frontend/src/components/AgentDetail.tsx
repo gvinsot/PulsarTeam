@@ -15,6 +15,17 @@ import {
 import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 import { useBoardRepos } from '../hooks/useBoardResources';
+import type { Socket } from 'socket.io-client';
+import type {
+  Agent,
+  AppUser,
+  ChatImage,
+  ConversationMessage,
+  Plugin,
+  RepoPickerOption,
+  ShowToastFn,
+  UserRole,
+} from '../types';
 
 // How long the client waits for the server's ack before assuming the
 // REQ_CHAT message was lost (socket reconnecting, server crash, etc.).
@@ -55,6 +66,45 @@ const TABS = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
+/**
+ * UI-LOCAL. One entry of the repository <select>, merged from three sources with
+ * different key sets: the board's GitHub repos, the global RepoPickerOption list
+ * and the currently-selected project. Only `name`/`fullName` are guaranteed —
+ * the currently-selected-project fallback carries nothing else.
+ */
+interface RepoOption {
+  name: string;
+  fullName: string;
+  description?: string;
+  htmlUrl?: string;
+}
+
+interface AgentDetailProps {
+  agent: Agent;
+  /** The full sorted list, for the mobile agent switcher. */
+  agents: Agent[];
+  /** The client-normalised repo picker options, not AvailableRepo[]. */
+  projects: RepoPickerOption[];
+  /** The API and DB call these "skills"; the entity is Plugin. */
+  skills: Plugin[];
+  /** thinkingMap[agent.id] — absent while the agent is not thinking. */
+  thinking?: string;
+  /** streamBuffers[agent.id] — absent outside a stream. */
+  streamBuffer?: string;
+  /** getSocket() returns null until the first connect; the REST fallback below
+   *  is what runs in that window. */
+  socket: Socket | null;
+  onClose: () => void;
+  onSelectAgent?: (agentId: string) => void;
+  onRefresh: () => void;
+  onActiveTabChange?: (tabId: string) => void;
+  /** A tab the parent asks for out of band (voice indicator navigation). */
+  requestedTab?: string | null;
+  userRole?: UserRole;
+  currentUser?: AppUser | null;
+  showToast?: ShowToastFn;
+}
+
 export default function AgentDetail({
   agent,
   agents,
@@ -71,12 +121,14 @@ export default function AgentDetail({
   userRole,
   currentUser,
   showToast,
-}) {
+}: AgentDetailProps) {
   const [activeTab, setActiveTab] = useState('chat');
-  const isCliRunner = CLI_RUNNERS.has(agent.runner);
+  // `runner` is null for "Auto" agents; Set.has(null) was already false, the
+  // guard only makes that visible to the type checker.
+  const isCliRunner = agent.runner !== null && CLI_RUNNERS.has(agent.runner);
 
   // Notify parent of active tab changes
-  const handleTabChange = tabId => {
+  const handleTabChange = (tabId: string) => {
     setActiveTab(tabId);
     onActiveTabChange?.(tabId);
   };
@@ -96,9 +148,9 @@ export default function AgentDetail({
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false); // Ref-based guard to prevent double-sends
-  const [history, setHistory] = useState(agent?.conversationHistory || []);
-  const [pendingImages, setPendingImages] = useState([]);
-  const chatEndRef = useRef(null);
+  const [history, setHistory] = useState<ConversationMessage[]>(agent?.conversationHistory || []);
+  const [pendingImages, setPendingImages] = useState<ChatImage[]>([]);
+  const chatEndRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [currentProject, setCurrentProject] = useState(agent?.project || '');
   const [projectSaving, setProjectSaving] = useState(false);
@@ -112,7 +164,7 @@ export default function AgentDetail({
   // fallback. Always include the currently-selected project so the dropdown
   // can render it even when the board OAuth isn't connected.
   const repoOptions = (() => {
-    const map = new Map();
+    const map = new Map<string, RepoOption>();
     for (const r of boardRepos) {
       const key = r.fullName || r.name;
       if (!key) continue;
@@ -139,7 +191,7 @@ export default function AgentDetail({
     setCurrentProject(agent?.project || '');
   }, [agent?.id, agent?.project]);
 
-  const handleProjectChange = async project => {
+  const handleProjectChange = async (project: string) => {
     setCurrentProject(project);
     setProjectSaving(true);
 
@@ -302,7 +354,7 @@ export default function AgentDetail({
     }
   };
 
-  const handleTruncateHistory = async afterIndex => {
+  const handleTruncateHistory = async (afterIndex: number) => {
     if (!confirm('Restart from this message? Everything after it will be deleted.')) return;
     const newHistory = await api.truncateHistory(agent.id, afterIndex);
     setHistory(newHistory);

@@ -57,7 +57,10 @@ const gdriveSpec: OAuthProviderSpec<GoogleOAuthConfig> = {
 
 const refreshGdriveToken = makeRefresh(gdriveSpec);
 
-export async function getGdriveAccessTokenForAgent(agentId, boardId = null) {
+export async function getGdriveAccessTokenForAgent(
+  agentId: string | null,
+  boardId: string | null = null
+) {
   return resolveAccessToken('gdrive', agentId, boardId, refreshGdriveToken);
 }
 

@@ -1,14 +1,28 @@
 import { useState, useCallback } from 'react';
+import type { MouseEvent } from 'react';
 import { FolderGit2, Plus, X, Loader2, Trash2, Settings, Check, LayoutGrid } from 'lucide-react';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useDismiss';
 import ProjectDetailModal from './ProjectDetailModal';
+import { errorMessage } from '../utils/errors';
+import type { Agent, ProjectListItem } from '../types';
 
 // ── ProjectDrawer ────────────────────────────────────────────────────────────
 // Temporary left-side drawer that is the single entry point for projects:
 //  - "All Projects" (clears the filter) + one row per project (sets the filter)
 //  - create / delete inline, deep management via ProjectDetailModal
 // Replaces the former top-level "Projects" view and the header project <select>.
+interface ProjectDrawerProps {
+  open: boolean;
+  onClose: () => void;
+  projects?: ProjectListItem[];
+  /** A project id, or '' for "All Projects". */
+  projectFilter?: string;
+  onSelect: (projectId: string) => void;
+  agents?: Agent[];
+  onProjectsChanged?: () => void;
+}
+
 export default function ProjectDrawer({
   open,
   onClose,
@@ -17,11 +31,11 @@ export default function ProjectDrawer({
   onSelect,
   agents = [],
   onProjectsChanged,
-}) {
-  const [selectedProjectId, setSelectedProjectId] = useState(null);
+}: ProjectDrawerProps) {
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState(null);
+  const [createError, setCreateError] = useState<string | null>(null);
   const [newProject, setNewProject] = useState({ name: '', description: '' });
 
   // Esc closes the drawer, but only when no child modal owns the foreground
@@ -37,15 +51,15 @@ export default function ProjectDrawer({
       setShowCreate(false);
       setNewProject({ name: '', description: '' });
       onProjectsChanged?.();
-    } catch (err: any) {
-      setCreateError(err.message || 'Failed to create project');
+    } catch (err) {
+      setCreateError(errorMessage(err) || 'Failed to create project');
     } finally {
       setCreating(false);
     }
   }, [newProject, onProjectsChanged]);
 
   const handleDelete = useCallback(
-    async (e, project) => {
+    async (e: MouseEvent<HTMLButtonElement>, project: ProjectListItem) => {
       e.stopPropagation();
       if (
         !confirm(
@@ -56,19 +70,19 @@ export default function ProjectDrawer({
       try {
         await api.deleteProject(project.id);
         onProjectsChanged?.();
-      } catch (err: any) {
-        alert(err.message || 'Failed to delete project');
+      } catch (err) {
+        alert(errorMessage(err) || 'Failed to delete project');
       }
     },
     [onProjectsChanged]
   );
 
-  const pick = id => {
+  const pick = (id: string) => {
     onSelect(id);
     onClose();
   };
 
-  const rowClass = active =>
+  const rowClass = (active: boolean) =>
     `w-full flex items-center justify-between gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
       active
         ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'

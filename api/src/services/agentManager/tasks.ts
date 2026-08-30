@@ -7,18 +7,15 @@ import {
   hardDeleteTaskFromDb,
   restoreTaskFromDb,
   getDeletedTasks,
-  getDeletedTaskById,
   getTasksForResume,
   updateTaskExecutionStatus,
   getTaskById,
   getTasksByAgent,
   getAllTaskIds,
-  getActiveTasksByAgent,
   getActiveTaskForExecutor,
   getTasksByAssignee,
   getTaskByActionRunningAgent,
   getRecurringTasks,
-  hasActiveTask,
   updateTaskFields,
   clearAllStaleActionRunning,
 } from '../database.js';
@@ -34,14 +31,20 @@ import {
 import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
 import { snapshotGitBaseline, reconcileTaskCommits } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
+import type { Task } from '../database/tasks.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
+
+/** Credential record returned by the lazily-imported GitHub route helper. */
+type GitHubCredentials = Awaited<
+  ReturnType<typeof import('../../routes/github.js').getGitHubCredentialsForAgent>
+>;
 
 async function bindAgentRunner(manager: any, agent: any): Promise<void> {
   if (!manager.executionManager?.bindAgent || !agent?.id) return;
   const llmConfig = manager.resolveLlmConfig?.(agent) || {};
   const providerType = agent.runner || (llmConfig.managesContext ? 'claudecode' : 'sandbox');
-  let gitCreds = null;
+  let gitCreds: GitHubCredentials = null;
   try {
     const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
     gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
@@ -343,14 +346,14 @@ export const tasksMethods = {
    * entry, persist, and emit agent:updated. `applyExtra` runs after the field
    * assignment (e.g. to set a paired provider default). Returns the task, or
    * null when the agent or task is missing. */
-  async _editTaskField(
+  async _editTaskField<K extends keyof Task>(
     this: any,
     agentId: string,
     taskId: string,
-    field: string,
-    value: any,
-    { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: any) => void } = {}
-  ): Promise<any> {
+    field: K,
+    value: Task[K],
+    { by = 'user', applyExtra }: { by?: string; applyExtra?: (task: Task) => void } = {}
+  ): Promise<Task | null> {
     const agent = this.agents.get(agentId);
     if (!agent) return null;
     const task = await getTaskById(taskId);
@@ -389,13 +392,11 @@ export const tasksMethods = {
     repoProvider: string | null = null
   ): any {
     return this._editTaskField(agentId, taskId, 'repoFullName', repoFullName || null, {
-      applyExtra: (task: any) => {
+      applyExtra: (task: Task) => {
         task.repoProvider = repoFullName ? repoProvider || task.repoProvider || 'github' : null;
         // Keep the invariant: a repo can't be both primary and secondary.
         if (repoFullName && Array.isArray(task.secondaryRepos)) {
-          task.secondaryRepos = task.secondaryRepos.filter(
-            (r: any) => r?.fullName !== repoFullName
-          );
+          task.secondaryRepos = task.secondaryRepos.filter(r => r?.fullName !== repoFullName);
         }
       },
     });
@@ -437,7 +438,7 @@ export const tasksMethods = {
     storageProvider: string | null = null
   ): any {
     return this._editTaskField(agentId, taskId, 'storagePath', storagePath || null, {
-      applyExtra: (task: any) => {
+      applyExtra: (task: Task) => {
         task.storageProvider = storagePath
           ? storageProvider || task.storageProvider || 'onedrive'
           : null;
@@ -498,7 +499,7 @@ export const tasksMethods = {
   async _getFirstColumnStatus(this: any, boardId: string): Promise<string> {
     try {
       const workflow = await getWorkflowForBoard(boardId);
-      if (workflow?.columns?.length > 0) {
+      if (workflow?.columns && workflow.columns.length > 0) {
         return workflow.columns[0].id;
       }
     } catch {
@@ -613,7 +614,7 @@ export const tasksMethods = {
 
   async addTaskCommit(
     this: any,
-    agentId: string,
+    _agentId: string,
     taskId: string,
     hash: string,
     message: string,
@@ -673,7 +674,7 @@ export const tasksMethods = {
     return task;
   },
 
-  async removeTaskCommit(this: any, agentId: string, taskId: string, hash: string): Promise<any> {
+  async removeTaskCommit(this: any, _agentId: string, taskId: string, hash: string): Promise<any> {
     const task: any = await getTaskById(taskId);
     if (!task) return null;
     const ownerAgentId: string = task.agentId;
@@ -794,7 +795,12 @@ export const tasksMethods = {
     return newTask;
   },
 
-  async executeTask(this: any, agentId: string, taskId: string, streamCallback: any): Promise<any> {
+  async executeTask(
+    this: any,
+    agentId: string,
+    taskId: string,
+    _streamCallback: any
+  ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
     const task = await getTaskById(taskId);
@@ -912,7 +918,7 @@ export const tasksMethods = {
 
   _refreshWorkflowManagedStatuses(this: any): void {
     getAllBoardWorkflows()
-      .then((boardWorkflows: any) => {
+      .then(boardWorkflows => {
         const next = getWorkflowManagedStatuses(boardWorkflows);
         this._workflowManagedStatuses = next;
         // Statuses whose entry will reassign the task — drives whether

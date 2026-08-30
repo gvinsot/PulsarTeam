@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Trash2,
   X,
@@ -12,11 +12,9 @@ import {
   Check,
   Layers,
   Code,
-  Loader2,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { api } from '../../api';
 import {
   AVAILABLE_COLORS,
   ACTION_OPTIONS,
@@ -25,10 +23,77 @@ import {
   validTransition,
 } from './taskConstants';
 import RoleSelect from './RoleSelect';
+import { errorMessage } from '../../utils/errors';
+import type {
+  Agent,
+  BoardWorkflow,
+  BoardWorkflowColumn,
+  WorkflowCondition,
+  WorkflowConditionField,
+  WorkflowConditionOperator,
+  WorkflowTransition,
+  WorkflowTrigger,
+} from '../../types';
+
+// ── Select coercions ─────────────────────────────────────────────────────────
+//
+// Three of the selects below author a value that is a closed union on the wire,
+// while `e.target.value` is a `string`. Each one's option list sits a few lines
+// under it, so these map the value back onto its union rather than assert it:
+// the fallback branch is the option the select already defaults to, and it is
+// unreachable while the option lists and the unions agree.
+
+const asTrigger = (value: string): WorkflowTrigger =>
+  value === 'condition' ? 'condition' : 'on_enter';
+
+const asConditionOperator = (value: string): WorkflowConditionOperator =>
+  value === 'neq' ? 'neq' : 'eq';
+
+/** Default `value` per condition field, and the list of the fields the editor
+ *  can AUTHOR — a subset of WorkflowConditionField, whose creator_ and owner_
+ *  aliases are legacy and only ever arrive on a stored board. */
+const CONDITION_FIELD_DEFAULTS = {
+  assignee_status: 'idle',
+  assignee_enabled: 'true',
+  assignee_role: '',
+  task_has_assignee: 'true',
+  idle_agent_available: '',
+} satisfies Partial<Record<WorkflowConditionField, string>>;
+
+type AuthorableConditionField = keyof typeof CONDITION_FIELD_DEFAULTS;
+
+const isAuthorableConditionField = (value: string): value is AuthorableConditionField =>
+  Object.prototype.hasOwnProperty.call(CONDITION_FIELD_DEFAULTS, value);
+
+/**
+ * The action fields the widgets below write, one key at a time. `type` is
+ * deliberately absent: changing an action's type goes through changeActionType,
+ * which REPLACES the object via createAction, so a patch never has to keep the
+ * discriminant and its payload in sync.
+ */
+interface WorkflowActionPatch {
+  role?: string;
+  agentId?: string;
+  target?: string;
+  instructions?: string;
+}
 
 // ── Condition value widget ───────────────────────────────────────────────────
 
-function ConditionValueWidget({ cond, onChange, agents = [], boardId = null }) {
+interface ConditionValueWidgetProps {
+  cond: WorkflowCondition;
+  onChange: (cond: WorkflowCondition) => void;
+  agents?: Agent[];
+  /** A board id is a UUID string, or null before a board is selected. */
+  boardId?: string | null;
+}
+
+function ConditionValueWidget({
+  cond,
+  onChange,
+  agents = [],
+  boardId = null,
+}: ConditionValueWidgetProps) {
   if (cond.field === 'assignee_status') {
     return (
       <select
@@ -92,7 +157,14 @@ function ConditionValueWidget({ cond, onChange, agents = [], boardId = null }) {
 
 // ── Color picker (swatches instead of color names) ───────────────────────────
 
-function ColorPicker({ value, onChange }) {
+interface ColorPickerProps {
+  /** A `BoardWorkflowColumn['color']`: optional, and a free hex string when
+   *  present, so `current` below can legitimately find no swatch. */
+  value?: string;
+  onChange: (hex: string) => void;
+}
+
+function ColorPicker({ value, onChange }: ColorPickerProps) {
   const [open, setOpen] = useState(false);
   const current = AVAILABLE_COLORS.find(c => c.hex === value);
   return (
@@ -135,17 +207,45 @@ function ColorPicker({ value, onChange }) {
 
 // ── WorkflowEditor ──────────────────────────────────────────────────────────
 
-export default function WorkflowEditor({ workflow, agents, boardId = null, onClose, onSave }) {
-  const [cols, setCols] = useState(() => JSON.parse(JSON.stringify(workflow.columns)));
-  const [transitions, setTransitions] = useState(() => {
-    const raw = JSON.parse(JSON.stringify(workflow.transitions));
+interface WorkflowEditorProps {
+  workflow: BoardWorkflow;
+  agents: Agent[];
+  /** The edited board, or null before a board is selected. */
+  boardId?: string | null;
+  onClose: () => void;
+  onSave: (workflow: BoardWorkflow) => void | Promise<void>;
+}
+
+export default function WorkflowEditor({
+  workflow,
+  agents,
+  boardId = null,
+  onClose,
+  onSave,
+}: WorkflowEditorProps) {
+  // Both states are a structural clone of the board's workflow, so the editor
+  // can be cancelled without having mutated the board in place. `JSON.parse`
+  // hands back `any`; the state's type argument is what says what the clone is.
+  //
+  // Both keys are OPTIONAL on `BoardWorkflow`, and `JSON.parse(JSON.stringify(
+  // undefined))` throws rather than yielding undefined. `columns` is safe — the
+  // caller only mounts this editor once it has one — but `transitions` is
+  // genuinely absent on a workflow last saved by a column reorder, and that
+  // throws here. Left as-is: fixing it is a behaviour change, see realBugs.
+  const [cols, setCols] = useState<BoardWorkflowColumn[]>(() =>
+    JSON.parse(JSON.stringify(workflow.columns))
+  );
+  const [transitions, setTransitions] = useState<WorkflowTransition[]>(() => {
+    // `unknown[]`, not WorkflowTransition[]: nothing has checked these yet —
+    // validTransition is the guard that turns them into transitions.
+    const raw: unknown[] = JSON.parse(JSON.stringify(workflow.transitions));
     return raw.filter(validTransition);
   });
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showJson, setShowJson] = useState(false);
   const [jsonText, setJsonText] = useState('');
-  const [jsonError, setJsonError] = useState(null);
+  const [jsonError, setJsonError] = useState<string | null>(null);
 
   // `agents` is the full list the user can see — never pre-filter it by board
   // here: role/agent pickers must offer everything the Agents view shows, with
@@ -161,7 +261,7 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
       await onSave({ columns: cols, transitions, version: workflow.version });
       onClose();
     } catch (err) {
-      setSaveError(err?.message || 'Failed to save workflow');
+      setSaveError(errorMessage(err) || 'Failed to save workflow');
     } finally {
       setSaving(false);
     }
@@ -170,9 +270,9 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
   // ── Column helpers ──
   // The API derives a new id when a label rename is saved, then migrates task
   // statuses and change_status targets so existing board state remains visible.
-  const updateCol = (idx, patch) =>
+  const updateCol = (idx: number, patch: Partial<BoardWorkflowColumn>) =>
     setCols(prev => prev.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
-  const removeCol = idx => {
+  const removeCol = (idx: number) => {
     const removed = cols[idx];
     setCols(prev => prev.filter((_, i) => i !== idx));
     setTransitions(prev => prev.filter(t => t.from !== removed.id));
@@ -198,12 +298,13 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
   };
 
   // ── Transition helpers ──
-  const updateTransition = (idx, patch) =>
+  const updateTransition = (idx: number, patch: Partial<WorkflowTransition>) =>
     setTransitions(prev => prev.map((t, i) => (i === idx ? { ...t, ...patch } : t)));
-  const removeTransition = idx => setTransitions(prev => prev.filter((_, i) => i !== idx));
+  const removeTransition = (idx: number) =>
+    setTransitions(prev => prev.filter((_, i) => i !== idx));
 
   // ── Action helpers ──
-  const updateAction = (tIdx, aIdx, patch) => {
+  const updateAction = (tIdx: number, aIdx: number, patch: WorkflowActionPatch) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
@@ -212,7 +313,7 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
       })
     );
   };
-  const removeAction = (tIdx, aIdx) => {
+  const removeAction = (tIdx: number, aIdx: number) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
@@ -220,7 +321,7 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
       })
     );
   };
-  const addAction = tIdx => {
+  const addAction = (tIdx: number) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
@@ -228,7 +329,7 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
       })
     );
   };
-  const changeActionType = (tIdx, aIdx, newKey) => {
+  const changeActionType = (tIdx: number, aIdx: number, newKey: string) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
@@ -240,31 +341,36 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
   };
 
   // ── Condition helpers ──
-  const updateCondition = (tIdx, cIdx, cond) => {
+  // `conditions` is OPTIONAL on the wire: the board defaults write [], but
+  // neither validator requires the key and the engine reads `(t.conditions ||
+  // [])`. The three mutators below used to spread it unguarded — a TypeError on
+  // any stored transition that simply has no key. Same `|| []` the renderer at
+  // the condition list already uses; see realBugs.
+  const updateCondition = (tIdx: number, cIdx: number, cond: WorkflowCondition) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
-        const newConds = t.conditions.map((c, j) => (j === cIdx ? cond : c));
+        const newConds = (t.conditions || []).map((c, j) => (j === cIdx ? cond : c));
         return { ...t, conditions: newConds };
       })
     );
   };
-  const removeCondition = (tIdx, cIdx) => {
+  const removeCondition = (tIdx: number, cIdx: number) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
-        return { ...t, conditions: t.conditions.filter((_, j) => j !== cIdx) };
+        return { ...t, conditions: (t.conditions || []).filter((_, j) => j !== cIdx) };
       })
     );
   };
-  const addCondition = tIdx => {
+  const addCondition = (tIdx: number) => {
     setTransitions(prev =>
       prev.map((t, i) => {
         if (i !== tIdx) return t;
         return {
           ...t,
           conditions: [
-            ...t.conditions,
+            ...(t.conditions || []),
             { field: 'idle_agent_available', operator: 'eq', value: '' },
           ],
         };
@@ -416,7 +522,9 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
                             </div>
                             <select
                               value={t.trigger || 'on_enter'}
-                              onChange={e => updateTransition(idx, { trigger: e.target.value })}
+                              onChange={e =>
+                                updateTransition(idx, { trigger: asTrigger(e.target.value) })
+                              }
                               className="w-full px-2 py-1 bg-dark-700 border border-dark-600 rounded text-xs text-dark-200"
                             >
                               <option value="on_enter">On enter (immediate)</option>
@@ -432,18 +540,14 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
                                     <select
                                       value={cond.field || 'assignee_status'}
                                       onChange={e => {
-                                        const f = e.target.value;
-                                        const defaults = {
-                                          assignee_status: 'idle',
-                                          assignee_enabled: 'true',
-                                          assignee_role: '',
-                                          task_has_assignee: 'true',
-                                          idle_agent_available: '',
-                                        };
+                                        const raw = e.target.value;
+                                        const f = isAuthorableConditionField(raw)
+                                          ? raw
+                                          : 'assignee_status';
                                         updateCondition(idx, ci, {
                                           ...cond,
                                           field: f,
-                                          value: defaults[f] || '',
+                                          value: CONDITION_FIELD_DEFAULTS[f],
                                         });
                                       }}
                                       className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200"
@@ -466,7 +570,7 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
                                         onChange={e =>
                                           updateCondition(idx, ci, {
                                             ...cond,
-                                            operator: e.target.value,
+                                            operator: asConditionOperator(e.target.value),
                                           })
                                         }
                                         className="px-1.5 py-0.5 bg-dark-700 border border-dark-600 rounded text-[10px] text-dark-200"
@@ -744,7 +848,7 @@ export default function WorkflowEditor({ workflow, agents, boardId = null, onClo
                       setTransitions(parsed.transitions.filter(validTransition));
                       setShowJson(false);
                     } catch (err) {
-                      setJsonError('Invalid JSON: ' + err.message);
+                      setJsonError('Invalid JSON: ' + errorMessage(err));
                     }
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-colors"

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { FormEvent } from 'react';
 import {
   Users,
   Plus,
@@ -11,6 +12,8 @@ import {
   Save,
 } from 'lucide-react';
 import { api } from '../../api';
+import { errorMessage } from '../../utils/errors';
+import type { ImpersonateResponse, ShowToastFn, User } from '../../types';
 
 function timeAgo(date: string | null): string {
   if (!date) return 'never';
@@ -49,11 +52,17 @@ const ROLE_CONFIG = {
   },
 };
 
-export default function UsersTab({ showToast, onImpersonate, onClose }) {
-  const [users, setUsers] = useState([]);
+interface UsersTabProps {
+  showToast?: ShowToastFn;
+  onImpersonate?: (data: ImpersonateResponse) => void;
+  onClose: () => void;
+}
+
+export default function UsersTab({ showToast, onImpersonate, onClose }: UsersTabProps) {
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingUser, setEditingUser] = useState(null);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [createForm, setCreateForm] = useState({
     username: '',
     password: '',
@@ -73,7 +82,7 @@ export default function UsersTab({ showToast, onImpersonate, onClose }) {
       const data = await api.getUsers();
       setUsers(data);
     } catch (err) {
-      showToast?.(`Failed to load users: ${err.message}`, 'error');
+      showToast?.(`Failed to load users: ${errorMessage(err)}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -83,7 +92,7 @@ export default function UsersTab({ showToast, onImpersonate, onClose }) {
     loadUsers();
   }, [loadUsers]);
 
-  const handleCreate = async e => {
+  const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     try {
       await api.createUser({
@@ -97,11 +106,11 @@ export default function UsersTab({ showToast, onImpersonate, onClose }) {
       showToast?.('User created', 'success');
       loadUsers();
     } catch (err) {
-      showToast?.(`Failed to create user: ${err.message}`, 'error');
+      showToast?.(`Failed to create user: ${errorMessage(err)}`, 'error');
     }
   };
 
-  const handleUpdate = async e => {
+  const handleUpdate = async (e: FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
     try {
@@ -118,32 +127,32 @@ export default function UsersTab({ showToast, onImpersonate, onClose }) {
       showToast?.('User updated', 'success');
       loadUsers();
     } catch (err) {
-      showToast?.(`Failed to update user: ${err.message}`, 'error');
+      showToast?.(`Failed to update user: ${errorMessage(err)}`, 'error');
     }
   };
 
-  const handleDelete = async user => {
+  const handleDelete = async (user: User) => {
     if (!confirm(`Delete user "${user.username}"? This cannot be undone.`)) return;
     try {
       await api.deleteUser(user.id);
       showToast?.('User deleted', 'success');
       loadUsers();
     } catch (err) {
-      showToast?.(`Failed to delete user: ${err.message}`, 'error');
+      showToast?.(`Failed to delete user: ${errorMessage(err)}`, 'error');
     }
   };
 
-  const handleImpersonate = async user => {
+  const handleImpersonate = async (user: User) => {
     try {
       const data = await api.impersonate(user.id);
       onImpersonate?.(data);
       onClose();
     } catch (err) {
-      showToast?.(`Failed to impersonate: ${err.message}`, 'error');
+      showToast?.(`Failed to impersonate: ${errorMessage(err)}`, 'error');
     }
   };
 
-  const startEdit = user => {
+  const startEdit = (user: User) => {
     setEditingUser(user);
     setEditForm({
       username: user.username,

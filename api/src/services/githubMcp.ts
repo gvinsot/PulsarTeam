@@ -7,6 +7,116 @@ import { createProviderFetch } from './providerFetch.js';
 
 const GITHUB_API = 'https://api.github.com';
 
+// The GitHub REST payload fields this file reads back. githubFetch hands over raw
+// parsed JSON, so these describe what is consumed, not what is verified — every
+// field below is already dereferenced (mostly optionally) today.
+
+/** The `user` sub-object GitHub attaches to issues, comments, PRs and reviews. */
+interface GitHubActor {
+  login?: string;
+}
+
+interface GitHubRepo {
+  full_name?: string;
+  private?: boolean;
+  description?: string;
+  language?: string;
+  stargazers_count?: number;
+  forks_count?: number;
+  updated_at?: string;
+}
+
+interface GitHubIssue {
+  number?: number;
+  title?: string;
+  state?: string;
+  body?: string;
+  created_at?: string;
+  updated_at?: string;
+  /** Always returned by the REST API — the comment count, not the comments. */
+  comments: number;
+  /** Present only when the "issue" is really a pull request. */
+  pull_request?: unknown;
+  user?: GitHubActor;
+  assignee?: GitHubActor;
+  milestone?: { title?: string };
+  labels?: { name?: string }[];
+}
+
+interface GitHubComment {
+  body?: string;
+  created_at?: string;
+  user?: GitHubActor;
+}
+
+interface GitHubPullRequest {
+  number?: number;
+  title?: string;
+  state?: string;
+  draft?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  user?: GitHubActor;
+  head?: { ref?: string };
+  base?: { ref?: string };
+}
+
+interface GitHubReview {
+  state?: string;
+  submitted_at?: string;
+  user?: GitHubActor;
+}
+
+interface GitHubBranch {
+  name?: string;
+  protected?: boolean;
+  commit?: { sha?: string };
+}
+
+interface GitHubCodeSearchItem {
+  path?: string;
+  sha?: string;
+  score?: number;
+  repository?: { full_name?: string };
+}
+
+interface GitHubCodeSearchResponse {
+  items?: GitHubCodeSearchItem[];
+  total_count?: number;
+}
+
+interface GitHubCommit {
+  sha?: string;
+  commit?: { message?: string; author?: { name?: string; date?: string } };
+}
+
+interface GitHubWorkflow {
+  id?: number;
+  name?: string;
+  state?: string;
+  path?: string;
+}
+
+interface GitHubWorkflowsResponse {
+  workflows?: GitHubWorkflow[];
+}
+
+interface GitHubWorkflowRun {
+  name?: string;
+  run_number?: number;
+  status?: string;
+  conclusion?: string;
+  head_branch?: string;
+  head_sha?: string;
+  created_at?: string;
+  html_url?: string;
+}
+
+interface GitHubWorkflowRunsResponse {
+  workflow_runs?: GitHubWorkflowRun[];
+  total_count?: number;
+}
+
 const githubFetch = createProviderFetch({
   errorLabel: 'GitHub API error',
   getAuth: async (agentId, boardId) => ({
@@ -21,7 +131,10 @@ const githubFetch = createProviderFetch({
   contentType: 'none',
 });
 
-export function createGitHubMcpServer(agentId = null, boardId = null) {
+export function createGitHubMcpServer(
+  agentId: string | null = null,
+  boardId: string | null = null
+) {
   const server = new McpServer({
     name: 'GitHub',
     version: '1.0.0',
@@ -70,7 +183,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         per_page: String(Math.min(per_page || 30, 100)),
         page: String(page || 1),
       });
-      const repos = await githubFetch(`/user/repos?${params}`, agentId, boardId);
+      const repos: GitHubRepo[] = await githubFetch(`/user/repos?${params}`, agentId, boardId);
 
       if (!repos.length) {
         return text('No repositories found.');
@@ -134,7 +247,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       if (labels) params.set('labels', labels);
       if (assignee) params.set('assignee', assignee);
 
-      const issues = await githubFetch(
+      const issues: GitHubIssue[] = await githubFetch(
         `/repos/${owner}/${repo}/issues?${params}`,
         agentId,
         boardId
@@ -166,7 +279,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       issue_number: z.number().describe('Issue number'),
     },
     async ({ owner, repo, issue_number }) => {
-      const issue = await githubFetch(
+      const issue: GitHubIssue = await githubFetch(
         `/repos/${owner}/${repo}/issues/${issue_number}`,
         agentId,
         boardId
@@ -175,7 +288,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
 
       let commentsText = '';
       if (issue.comments > 0) {
-        const comments = await githubFetch(
+        const comments: GitHubComment[] = await githubFetch(
           `/repos/${owner}/${repo}/issues/${issue_number}/comments?per_page=20`,
           agentId,
           boardId
@@ -333,7 +446,11 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         per_page: String(Math.min(per_page || 30, 100)),
       });
 
-      const prs = await githubFetch(`/repos/${owner}/${repo}/pulls?${params}`, agentId, boardId);
+      const prs: GitHubPullRequest[] = await githubFetch(
+        `/repos/${owner}/${repo}/pulls?${params}`,
+        agentId,
+        boardId
+      );
 
       if (!prs.length) {
         return text(`No pull requests found for ${owner}/${repo} (state: ${state}).`);
@@ -368,7 +485,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
 
       let reviewsText = '';
       try {
-        const reviews = await githubFetch(
+        const reviews: GitHubReview[] = await githubFetch(
           `/repos/${owner}/${repo}/pulls/${pull_number}/reviews?per_page=10`,
           agentId,
           boardId
@@ -440,7 +557,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
     },
     async ({ owner, repo, per_page }) => {
       const params = new URLSearchParams({ per_page: String(Math.min(per_page || 30, 100)) });
-      const branches = await githubFetch(
+      const branches: GitHubBranch[] = await githubFetch(
         `/repos/${owner}/${repo}/branches?${params}`,
         agentId,
         boardId
@@ -515,7 +632,11 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
         q: query,
         per_page: String(Math.min(per_page || 20, 100)),
       });
-      const result = await githubFetch(`/search/code?${params}`, agentId, boardId);
+      const result: GitHubCodeSearchResponse = await githubFetch(
+        `/search/code?${params}`,
+        agentId,
+        boardId
+      );
       const items = result.items || [];
 
       if (!items.length) {
@@ -547,7 +668,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const params = new URLSearchParams({ per_page: String(Math.min(per_page || 20, 100)) });
       if (sha) params.set('sha', sha);
 
-      const commits = await githubFetch(
+      const commits: GitHubCommit[] = await githubFetch(
         `/repos/${owner}/${repo}/commits?${params}`,
         agentId,
         boardId
@@ -573,7 +694,11 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       repo: z.string().describe('Repository name'),
     },
     async ({ owner, repo }) => {
-      const data = await githubFetch(`/repos/${owner}/${repo}/actions/workflows`, agentId, boardId);
+      const data: GitHubWorkflowsResponse = await githubFetch(
+        `/repos/${owner}/${repo}/actions/workflows`,
+        agentId,
+        boardId
+      );
       const workflows = data.workflows || [];
 
       if (!workflows.length) {
@@ -619,7 +744,7 @@ export function createGitHubMcpServer(agentId = null, boardId = null) {
       const params = new URLSearchParams({ per_page: String(Math.min(per_page || 10, 100)) });
       if (status) params.set('status', status);
 
-      const data = await githubFetch(
+      const data: GitHubWorkflowRunsResponse = await githubFetch(
         `/repos/${owner}/${repo}/actions/runs?${params}`,
         agentId,
         boardId

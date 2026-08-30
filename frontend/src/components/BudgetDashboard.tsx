@@ -23,8 +23,18 @@ import {
   Filler,
 } from 'chart.js';
 import type { ChartOptions } from 'chart.js';
-import { Bar, Line, Doughnut } from 'react-chartjs-2';
+import { Line, Doughnut } from 'react-chartjs-2';
 import { useTheme } from '../contexts/ThemeContext';
+import { errorMessage } from '../utils/errors';
+import type {
+  Agent,
+  BudgetAlertsResponse,
+  BudgetByAgentRow,
+  BudgetConfig,
+  BudgetDailyPoint,
+  BudgetSummaryResponse,
+  BudgetTimelinePoint,
+} from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -39,10 +49,22 @@ ChartJS.register(
   Filler
 );
 
-function getChartColors(theme) {
+function getChartColors(theme: string) {
   if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
   return { legend: '#94a3b8', tick: '#64748b', grid: '#1e293b' };
 }
+
+/**
+ * What this component reads off GET /budget/summary.
+ *
+ * `total_calls` is NOT a field of BudgetSummaryResponse and never arrives: no
+ * SELECT in api/src/services/database/tokenUsage.ts emits one (the only per-call
+ * count the API produces anywhere is `request_count`, on /budget/by-agent), so
+ * the "API Calls Today" card and its "Avg/call" line always render 0 and '0'.
+ * Declared optional — never removed — so the reads below keep their current
+ * output; see the pass report, the fix belongs on the API side.
+ */
+type BudgetSummaryView = BudgetSummaryResponse & { total_calls?: number };
 
 const COLORS = [
   '#6366f1',
@@ -57,21 +79,30 @@ const COLORS = [
   '#a855f7',
 ];
 
-export default function BudgetDashboard({ agents = [] }) {
+export default function BudgetDashboard({ agents: _agents = [] }: { agents?: Agent[] }) {
   // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
   const { theme } = useTheme() as { theme: string };
-  const [summary, setSummary] = useState(null);
-  const [byAgent, setByAgent] = useState([]);
-  const [timeline, setTimeline] = useState([]);
-  const [daily, setDaily] = useState([]);
-  const [config, setConfig] = useState(null);
-  const [alerts, setAlerts] = useState(null);
+  const [summary, setSummary] = useState<BudgetSummaryView | null>(null);
+  const [byAgent, setByAgent] = useState<BudgetByAgentRow[]>([]);
+  const [timeline, setTimeline] = useState<BudgetTimelinePoint[]>([]);
+  const [daily, setDaily] = useState<BudgetDailyPoint[]>([]);
+  // `Partial`, not `BudgetConfig`: `handleSaveConfig` copies the draft straight
+  // into this state (`setConfig(editConfig)`), and the draft can be `{}` — see
+  // the note on `editConfig` below.
+  const [config, setConfig] = useState<Partial<BudgetConfig> | null>(null);
+  const [alerts, setAlerts] = useState<BudgetAlertsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState(7);
   const [showSettings, setShowSettings] = useState(false);
-  const [editConfig, setEditConfig] = useState(null);
+  // The draft is `{ ...config }`, and `{ ...null }` is `{}` at runtime — reachable,
+  // because a failed /budget/config load leaves `config` null while the ⚙️ Settings
+  // button still renders. The truthful type is therefore Partial<BudgetConfig>, and
+  // sending it is legal: the PUT body schema defaults BOTH fields
+  // (api/src/routes/budget.ts:23-24), which is why api.ts now declares
+  // `updateBudgetConfig(config: Partial<BudgetConfig>)`.
+  const [editConfig, setEditConfig] = useState<Partial<BudgetConfig> | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [currency, setCurrency] = useState('$');
 
   const loadData = useCallback(async () => {
@@ -109,6 +140,9 @@ export default function BudgetDashboard({ agents = [] }) {
   }, [loadData]);
 
   const handleSaveConfig = async () => {
+    // Unreachable: the Save button only exists inside `showSettings && editConfig`.
+    // Returning before any state write keeps the observable behaviour identical.
+    if (!editConfig) return;
     setSaving(true);
     setSaveError(null);
     try {
@@ -118,7 +152,7 @@ export default function BudgetDashboard({ agents = [] }) {
       loadData();
     } catch (err) {
       console.error('Save config error:', err);
-      setSaveError(err.message || 'Failed to save settings');
+      setSaveError(errorMessage(err) || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -273,7 +307,7 @@ export default function BudgetDashboard({ agents = [] }) {
       </div>
 
       {/* Alerts */}
-      {alerts?.alerts?.length > 0 && (
+      {alerts && alerts.alerts.length > 0 && (
         <div className="space-y-2">
           {alerts.alerts.map((a, i) => (
             <div
@@ -458,7 +492,7 @@ export default function BudgetDashboard({ agents = [] }) {
                     <td className="text-right px-4 py-2 text-dark-300">{a.request_count || 0}</td>
                     <td className="text-right px-4 py-2 text-dark-400">
                       {currency}
-                      {a.request_count ? (a.total_cost / a.request_count).toFixed(6) : '0'}
+                      {a.request_count ? ((a.total_cost || 0) / a.request_count).toFixed(6) : '0'}
                     </td>
                   </tr>
                 ))

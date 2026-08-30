@@ -1,6 +1,7 @@
 import express from 'express';
 import { getLlmConfig, getAllLlmConfigs } from '../services/database.js';
 import { getSettings } from '../services/configManager.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 
 // Providers treated as "local" self-hosted models that multi-provider CLI
 // runners (opencode/hermes/openclaw/aider) inject into their on-disk config so
@@ -29,7 +30,7 @@ const LOCAL_PROVIDERS = new Set(['vllm', 'ollama']);
  * Response when nothing is selected:
  *   { configured: false }
  */
-export function internalRunnerLlmRoutes(agentManager) {
+export function internalRunnerLlmRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   router.get('/local-models', async (_req, res) => {

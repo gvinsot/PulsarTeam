@@ -1,6 +1,7 @@
 import { Github, Unplug } from 'lucide-react';
 import { api } from '../api';
 import OAuthConnectWidget, { OAuthProviderConfig } from './connect/OAuthConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * GitHub OAuth connection widget — thin config over the shared OAuthConnectWidget.
@@ -33,7 +34,15 @@ const GITHUB_CONFIG: OAuthProviderConfig = {
   },
 };
 
-export default function GitHubConnect({ agentId, boardId, onStatusChange }) {
+export default function GitHubConnect({
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: (status: ConnectStatus) => void;
+}) {
   return (
     <OAuthConnectWidget
       config={GITHUB_CONFIG}

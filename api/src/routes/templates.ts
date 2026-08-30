@@ -4,7 +4,7 @@ import { AGENT_TEMPLATES } from '../data/templates.js';
 export function templateRoutes() {
   const router = express.Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', (_req, res) => {
     res.json(AGENT_TEMPLATES);
   });
 

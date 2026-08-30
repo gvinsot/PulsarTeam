@@ -3,19 +3,23 @@ import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChevronDown, ChevronRight, ArrowRight, Clock, Scissors } from 'lucide-react';
+import type { ConversationMessage } from '../../types';
 
 const markdownRemarkPlugins = [remarkGfm];
 import { cleanToolSyntax } from './cleanToolSyntax';
 import ToolResultMessage from './ToolResultMessage';
 import { reconstructWrappedOAuthUrlsInText } from './claudeOAuthLinks';
 
+/** One slice of assistant text: either plain markdown or a parsed @delegate() call. */
+type DelegationSegment =
+  { type: 'text'; content: string } | { type: 'delegation'; agent: string; task: string };
+
 /**
  * Split text into interleaved text segments and @delegate() blocks.
- * Returns an array of { type: 'text'|'delegation', content?, agent?, task? }.
  */
-function parseDelegationBlocks(text) {
+function parseDelegationBlocks(text: string): DelegationSegment[] {
   if (!text) return [{ type: 'text', content: text }];
-  const segments = [];
+  const segments: DelegationSegment[] = [];
   // Regex to find @delegate(Agent, "task") or @delegate(Agent, 'task')
   const re = /@delegate\s*\(\s*([^,]+?)\s*,\s*(["'])/gi;
   let lastIdx = 0;
@@ -68,7 +72,7 @@ function parseDelegationBlocks(text) {
 }
 
 /** Styled delegation block shown in leader assistant messages */
-function DelegationCallBlock({ agent, task }) {
+function DelegationCallBlock({ agent, task }: { agent: string; task: string }) {
   const [expanded, setExpanded] = useState(false);
   const preview = task.length > 140 ? task.slice(0, 140) + '…' : task;
   const needsExpand = task.length > 140;
@@ -102,7 +106,9 @@ function DelegationCallBlock({ agent, task }) {
   );
 }
 
-function formatDuration(ms) {
+// ConversationMessage.durationMs is optional, and the `== null` guard below is
+// the producer-agnostic form, so null is accepted as well as undefined.
+function formatDuration(ms: number | null | undefined) {
   if (ms == null || ms < 0) return '';
   if (ms < 1000) return `${ms} ms`;
   const seconds = ms / 1000;
@@ -113,7 +119,7 @@ function formatDuration(ms) {
 }
 
 // Convert raw URLs to markdown links so ReactMarkdown renders them clickable
-function linkifyRawUrls(text) {
+function linkifyRawUrls(text: string) {
   if (typeof text !== 'string') return text;
   const reconstructed = reconstructWrappedOAuthUrlsInText(text);
   return reconstructed.replace(/(https?:\/\/[^\s,)"']+)/g, url => `[${url}](${url})`);
@@ -129,7 +135,7 @@ const markdownLinkNewTab: Components = {
 };
 
 /** Renders assistant content with @delegate blocks styled as cards */
-export function RichAssistantContent({ text }) {
+export function RichAssistantContent({ text }: { text: string }) {
   const cleaned = cleanToolSyntax(text);
   const segments = parseDelegationBlocks(cleaned);
   // If there are no delegation blocks, fast-path to plain markdown
@@ -163,7 +169,15 @@ export function RichAssistantContent({ text }) {
 // Module scope (like DelegationCallBlock) to avoid per-render remounts; must
 // be rendered inside a `group relative` wrapper — the group-hover visibility
 // and absolute positioning depend on that ancestor.
-function TruncateButton({ isLast, onTruncate, index }) {
+function TruncateButton({
+  isLast,
+  onTruncate,
+  index,
+}: {
+  isLast: boolean;
+  onTruncate?: (index: number) => void;
+  index: number;
+}) {
   if (isLast || !onTruncate) return null;
   return (
     <button
@@ -176,7 +190,17 @@ function TruncateButton({ isLast, onTruncate, index }) {
   );
 }
 
-export default function ChatMessage({ message, index, isLast, onTruncate }) {
+export default function ChatMessage({
+  message,
+  index,
+  isLast,
+  onTruncate,
+}: {
+  message: ConversationMessage;
+  index: number;
+  isLast: boolean;
+  onTruncate?: (index: number) => void;
+}) {
   const isUser = message.role === 'user';
   const isToolResult = message.type === 'tool-result';
   const isDelegationTask =

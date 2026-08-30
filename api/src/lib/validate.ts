@@ -27,12 +27,19 @@ export function formatZodError(err: ZodError): ValidationErrorBody {
 }
 
 function makeValidator(target: ValidationTarget) {
-  // Returned as `any` so TypeScript can't widen the surrounding handler's
-  // request shape — the validator only mutates `req[target]`, which the
-  // caller already treats as untyped via `req.body` / `req.query` access.
+  // The returned validator is a `RequestHandler`, i.e. `RequestHandler<
+  // ParamsDictionary>`. Express takes every handler in a `router.get(path, ...)`
+  // call as an inference candidate for its `P` (params) type parameter, so this
+  // one pins `P` to ParamsDictionary — whose values are `string | string[]` on
+  // express 5 — instead of letting `RouteParameters<Route>` win.
+  //
+  // The express typings answer this themselves ("This generic is meant to be
+  // passed explicitly"): name the params at the route, as
+  // `router.put<{ id: string }>('/:id', validateParams(schema), handler)`.
+  // See routes/users.ts, routes/authLogin.ts and routes/agents.ts for the idiom.
   return <S extends ZodTypeAny>(schema: S): RequestHandler => {
     const handler = (req: Request, res: Response, next: NextFunction) => {
-      const result = schema.safeParse((req as any)[target]);
+      const result = schema.safeParse(req[target]);
       if (!result.success) {
         res.status(400).json(formatZodError(result.error));
         return;
@@ -48,7 +55,7 @@ function makeValidator(target: ValidationTarget) {
       }
       next();
     };
-    return handler as any;
+    return handler;
   };
 }
 

@@ -10,6 +10,8 @@
  */
 
 import { ActionType, AgentMode, AUTO_ROLE, columnExists } from './taskStateMachine.js';
+import type { WorkflowAction, WorkflowColumn, WorkflowConfig } from './taskStateMachine.js';
+import type { Agent } from '../database/agents.js';
 import {
   findAgentByRole,
   findAgentForAssignment,
@@ -31,13 +33,55 @@ import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { isCliRunner } from '../runners.js';
+import { errorMessage } from '../../lib/errors.js';
 import { snapshotGitBaseline, reconcileTaskCommits } from '../agentManager/tools/gitReconcile.js';
+import type { AgentManager } from '../agentManager/index.js';
+import type { Task } from '../database/tasks.js';
 
-async function bindAgentRunner(agentManager, agent) {
+// ── Handler context shapes ──────────────────────────────────────────────────
+// Both are plain bags built by the caller and destructured by every handler
+// below; naming them is what lets those destructured parameters be typed at
+// all. `io` is deliberately spelled as AgentManager's own socket.io field
+// rather than restated here — it is the same object, and typing socket.io is
+// a separate job from this pass.
+
+/** Built once per action chain by WorkflowEngine and threaded through
+ * executeAction into each action handler. */
+export interface ActionContext {
+  agentManager: AgentManager;
+  io: AgentManager['io'];
+  /** Board owner, used to scope agent selection; null for an ownerless board. */
+  ownerId: string | null;
+  workflow: WorkflowConfig | null;
+  /** Status the chain started from — set by _executeActionChain only. */
+  originalStatus?: string;
+}
+
+/** Context for the repo-ensure step of a run_agent action. */
+export interface EnsureRepoContext {
+  agentManager: AgentManager;
+  mode: string;
+  /** Owning agent of the task; null for a board-level task. */
+  agentId: string | null;
+}
+
+/** Built by executeRunAgent for the per-mode runners, once the agent is bound
+ * and the execution log window is open. */
+export interface ModeRunContext {
+  agentManager: AgentManager;
+  io: AgentManager['io'];
+  /** Index into the agent's conversation history where this run starts. */
+  execStartMsgIdx: number;
+  execStartedAt: string;
+  /** Repo HEAD before a decide run, diffed afterwards to link commits. */
+  gitBaselineHead?: string | null;
+}
+
+async function bindAgentRunner(agentManager: AgentManager, agent: Agent) {
   if (!agentManager.executionManager?.bindAgent || !agent?.id) return;
   const llmConfig = agentManager.resolveLlmConfig?.(agent) || {};
   const providerType = agent.runner || (llmConfig.managesContext ? 'claudecode' : 'sandbox');
-  let gitCreds = null;
+  let gitCreds: Awaited<ReturnType<typeof getGitHubCredentialsForAgent>> = null;
   try {
     gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
   } catch {
@@ -58,7 +102,13 @@ async function bindAgentRunner(agentManager, agent) {
  * (submitting it), then wait for the terminal-driven execution to complete.
  * Returns the wait result string (e.g. 'completed', 'error').
  */
-async function _runViaCliTerminal(agentManager, agent, task, prompt, gitBaselineHead = null) {
+async function _runViaCliTerminal(
+  agentManager: AgentManager,
+  agent: Agent,
+  task: Task,
+  prompt: string,
+  gitBaselineHead: string | null = null
+) {
   await bindAgentRunner(agentManager, agent);
   await agentManager.executionManager.sendTerminalInput(agent.id, prompt, { submit: true });
   return agentManager._waitForExecutionComplete(
@@ -80,7 +130,12 @@ async function _runViaCliTerminal(agentManager, agent, task, prompt, gitBaseline
  * Throw if a terminal-driven wait ended in a hard error so the chain doesn't
  * advance over a task that never ran. Surfaces a consumed auth error when present.
  */
-function _throwIfWaitError(agentManager, task, waitResult, errorLabel) {
+function _throwIfWaitError(
+  agentManager: AgentManager,
+  task: Task,
+  waitResult: string,
+  errorLabel: string
+) {
   if (waitResult === 'error') {
     const authError = agentManager._consumeTaskAuthError?.(task.id);
     throw new Error(authError || errorLabel);
@@ -92,7 +147,7 @@ function _throwIfWaitError(agentManager, task, waitResult, errorLabel) {
  * decision detection). Read straight from the DB — the single source of truth for
  * both owned and board-level tasks.
  */
-async function _liveTaskSnapshot(agentManager, task) {
+async function _liveTaskSnapshot(_agentManager: AgentManager, task: Task) {
   return getTaskById(task.id);
 }
 
@@ -100,7 +155,7 @@ async function _liveTaskSnapshot(agentManager, task) {
  * Append a 'reassign' history entry recording the task's current status and the
  * new assignee. Mirrors the guard the inline copies used.
  */
-export function recordReassign(task, assignee) {
+export function recordReassign(task: Task, assignee: string | null) {
   if (!task.history) task.history = [];
   task.history.push({
     status: task.status,
@@ -117,7 +172,7 @@ export function recordReassign(task, assignee) {
  * Format task commits into a readable context block for the agent prompt.
  * Returns an empty string if no commits are associated.
  */
-function formatCommitsContext(task) {
+function formatCommitsContext(task: Task) {
   if (!task.commits || task.commits.length === 0) return '';
   const lines = task.commits.map(c => {
     const dateStr = c.date ? ` (${c.date.slice(0, 16).replace('T', ' ')})` : '';
@@ -126,19 +181,19 @@ function formatCommitsContext(task) {
   return `\nAssociated commits:\n${lines.join('\n')}\n`;
 }
 
-function buildTitlePrompt(description) {
+function buildTitlePrompt(description: string) {
   return `Generate a short, concise title (max 20 words) for the following task description. Reply with ONLY the title, nothing else.\n\n${description}`;
 }
 
-function buildSetTypePrompt(description) {
+function buildSetTypePrompt(description: string) {
   return `Classify the following task into exactly one type. The possible types are: bug, feature, technical, improvement, documentation, other.\n\nReply with ONLY the type (a single word, lowercase), nothing else.\n\nTask:\n${description}`;
 }
 
-function buildRefinePrompt(task, instructions) {
+function buildRefinePrompt(task: Task, instructions: string) {
   return `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
 }
 
-function buildInstructionsPrompt(task, instructions, columns) {
+function buildInstructionsPrompt(task: Task, instructions: string, columns: WorkflowColumn[]) {
   const columnList = columns?.length
     ? `\nValid statuses (column IDs): ${columns.map(c => c.id).join(', ')}`
     : '';
@@ -157,7 +212,7 @@ ${instructions}`;
  * Strip tool calls (@tool(...) and <tool_call> blocks) from an LLM response
  * so that only the descriptive text remains.
  */
-export function stripToolCalls(text) {
+export function stripToolCalls(text: string | null | undefined) {
   if (!text) return text;
   let cleaned = text.replace(/<tool_call>\s*[\s\S]*?\s*<\/tool_call>/gi, '');
   const TOOL_NAMES = [
@@ -184,7 +239,7 @@ export function stripToolCalls(text) {
     'get_log_metadata',
   ];
   const toolPattern = new RegExp(`@(${TOOL_NAMES.join('|')})\\s*\\(`, 'gi');
-  const removals = [];
+  const removals: Array<{ start: number; end: number }> = [];
   let match;
   while ((match = toolPattern.exec(cleaned)) !== null) {
     const start = match.index;
@@ -207,15 +262,21 @@ export function stripToolCalls(text) {
 
 // ── Result types ────────────────────────────────────────────────────────────
 
-/**
- * @typedef {Object} ActionResult
- * @property {boolean}  executed   - true if the action ran to completion
- * @property {boolean} skipped    - true if the action was skipped (no agent, lock held, etc.)
- * @property {string}  [reason]   - why it was skipped
- * @property {boolean} [error]    - true if an error occurred
- * @property {string}  [message]  - error message
- * @property {boolean} [statusChanged] - true if a change_status action moved the task
- */
+/** What every action handler returns, and what WorkflowEngine's chain reads. */
+export interface ActionResult {
+  /** true if the action ran to completion */
+  executed: boolean;
+  /** true if the action was skipped (no agent, lock held, etc.) */
+  skipped?: boolean;
+  /** why it was skipped */
+  reason?: string;
+  /** true if an error occurred */
+  error?: boolean;
+  /** error message */
+  message?: string;
+  /** true if a change_status action moved the task */
+  statusChanged?: boolean;
+}
 
 // ── Main executor ───────────────────────────────────────────────────────────
 
@@ -227,7 +288,11 @@ export function stripToolCalls(text) {
  * @param {Object} context       - { agentManager, io, ownerId, workflow }
  * @returns {Promise<ActionResult>}
  */
-export async function executeAction(action, task, context) {
+export async function executeAction(
+  action: WorkflowAction,
+  task: Task,
+  context: ActionContext
+): Promise<ActionResult> {
   // Automatic role selection: a run_agent / assign_agent action may defer its
   // role choice to the admin-configured Role Router LLM by setting
   // role === AUTO_ROLE. Resolve it to a concrete role BEFORE dispatch so the
@@ -243,9 +308,9 @@ export async function executeAction(action, task, context) {
       action = { ...action, role: resolvedRole };
     } catch (err) {
       console.error(
-        `[ActionExecutor] auto-role: resolution failed for task="${task.id}": ${err.message}`
+        `[ActionExecutor] auto-role: resolution failed for task="${task.id}": ${errorMessage(err)}`
       );
-      return { executed: false, error: true, message: err.message };
+      return { executed: false, error: true, message: errorMessage(err) };
     }
   }
 
@@ -270,7 +335,11 @@ export async function executeAction(action, task, context) {
 
 // ── assign_agent ────────────────────────────────────────────────────────────
 
-async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
+async function executeAssignAgent(
+  action: WorkflowAction,
+  task: Task,
+  { agentManager, io: _io, ownerId }: ActionContext
+): Promise<ActionResult> {
   // Precompute owned-task counts once from the DB so the (sync) load-balancer
   // can tie-break by task count without an in-memory store.
   const tasksByAgent = await agentManager._tasksByAgentMap();
@@ -317,7 +386,11 @@ async function executeAssignAgent(action, task, { agentManager, io, ownerId }) {
 
 // ── assign_agent_individual ─────────────────────────────────────────────────
 
-async function executeAssignAgentIndividual(action, task, { agentManager, io }) {
+async function executeAssignAgentIndividual(
+  action: WorkflowAction,
+  task: Task,
+  { agentManager, io: _io }: ActionContext
+): Promise<ActionResult> {
   const targetAgentId = action.agentId || null;
   const actualTask = task.agentId ? await getTaskById(task.id) : null;
   const mutable = actualTask || task; // board-level tasks: mutate the working copy
@@ -351,7 +424,11 @@ async function executeAssignAgentIndividual(action, task, { agentManager, io }) 
 
 // ── change_status ───────────────────────────────────────────────────────────
 
-async function executeChangeStatus(action, task, { agentManager, workflow }) {
+async function executeChangeStatus(
+  action: WorkflowAction,
+  task: Task,
+  { agentManager, workflow }: ActionContext
+): Promise<ActionResult> {
   let target = action.target;
 
   // Resolve __next__ to the column immediately after the current one
@@ -428,7 +505,13 @@ async function executeChangeStatus(action, task, { agentManager, workflow }) {
  * flags, stamp startedAt, (re)assign the agent recording history, then save and
  * emit (deferred so loadTasks() reads the committed row).
  */
-async function _markActionRunning(actualTask, agent, mode, agentManager, agentId) {
+async function _markActionRunning(
+  actualTask: Task,
+  agent: Agent,
+  mode: string,
+  agentManager: AgentManager,
+  _agentId: string | null
+) {
   actualTask.actionRunning = true;
   actualTask.actionRunningAgentId = agent.id;
   actualTask.actionRunningMode = mode;
@@ -465,7 +548,12 @@ async function _markActionRunning(actualTask, agent, mode, agentManager, agentId
  * the transient task copy may not carry) and emit so the board updates live.
  * agentId stays null — ownership is unchanged.
  */
-async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
+async function _markActionRunningBoardLevel(
+  agentManager: AgentManager,
+  task: Task,
+  agent: Agent,
+  mode: string
+) {
   task.actionRunning = true;
   task.actionRunningAgentId = agent.id;
   task.actionRunningMode = mode;
@@ -497,7 +585,7 @@ async function _markActionRunningBoardLevel(agentManager, task, agent, mode) {
 }
 
 /** Persist + emit the cleared running flag for a board-level task (see above). */
-async function _clearActionRunningBoardLevel(agentManager, task) {
+async function _clearActionRunningBoardLevel(agentManager: AgentManager, task: Task) {
   task.actionRunning = false;
   task.startedAt = null;
   delete task.actionRunningAgentId;
@@ -532,7 +620,12 @@ async function _clearActionRunningBoardLevel(agentManager, task) {
  *
  * @returns {{ ok: true } | { ok: false; result: ActionResult }}
  */
-async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, mode, agentId }) {
+async function _ensureAgentOnTaskRepo(
+  agent: Agent,
+  task: Task,
+  actualTask: Task | null,
+  { agentManager, mode, agentId: _agentId }: EnsureRepoContext
+): Promise<{ ok: true } | { ok: false; result: ActionResult }> {
   // Auto-switch agent to the task's repo if needed.
   // Tasks carry two related fields: `repoFullName` ("owner/repo", set on
   // creation/by GitHub sync) and `project` (set/edited via the task UI). We
@@ -589,14 +682,14 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
     return { ok: true };
   } catch (switchErr) {
     console.error(
-      `[ActionExecutor] Project switch failed for "${agent.name}": ${switchErr.message}`
+      `[ActionExecutor] Project switch failed for "${agent.name}": ${errorMessage(switchErr)}`
     );
     const switchErrTimestamp = new Date().toISOString();
     // Recognise a Git authentication failure (private repo + missing/expired
     // token) and surface a clear, actionable alert instead of the cryptic git
     // stderr ("could not read Username …"). This is the UI alert that tells the
     // user a repo-bound task can't run because GitHub isn't connected.
-    const raw = switchErr.message || '';
+    const raw = errorMessage(switchErr);
     const isAuthFailure =
       /could not read Username|Authentication failed|terminal prompts disabled|fatal: could not read|HTTP 40[13]\b|Permission denied|invalid username or password|access denied|repository not found/i.test(
         raw
@@ -646,7 +739,11 @@ async function _ensureAgentOnTaskRepo(agent, task, actualTask, { agentManager, m
  * Execute a run_agent action. This is the main entry point that replaces the
  * old monolithic processTransition function.
  */
-async function executeRunAgent(action, task, { agentManager, io, ownerId, workflow }) {
+async function executeRunAgent(
+  action: WorkflowAction,
+  task: Task,
+  { agentManager, io, ownerId, workflow }: ActionContext
+): Promise<ActionResult> {
   // Default to DECIDE for a run_agent action with no explicit mode (also the
   // landing spot for legacy 'execute' actions, which configManager maps to
   // 'decide' at load — see mapLegacyExecuteMode).
@@ -703,7 +800,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
   let actualTask;
   let execStartMsgIdx;
   let execStartedAt;
-  let gitBaselineHead = null;
+  let gitBaselineHead: string | null = null;
   try {
     // Set actionRunning flag on the task
     actualTask = task.agentId ? await getTaskById(task.id) : null;
@@ -735,7 +832,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
     }
 
-    let result;
+    let result: ActionResult;
     switch (mode) {
       case AgentMode.TITLE:
         result = await _runSimpleMode('title', agent, task, {
@@ -810,7 +907,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
 
     console.error(
       `[ActionExecutor] run_agent error for "${task.text?.slice(0, 60)}":`,
-      err.message
+      errorMessage(err)
     );
     // Save error execution log
     agentManager._saveExecutionLog(
@@ -828,7 +925,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
       agentId: agent.id,
       agentName: agent.name,
       project: agent.project || task.project || null,
-      description: `[System Error] Workflow action "${mode}" failed for task "${task.text?.slice(0, 100)}": ${err.message}`,
+      description: `[System Error] Workflow action "${mode}" failed for task "${task.text?.slice(0, 100)}": ${errorMessage(err)}`,
       timestamp: errorTimestamp,
       isSystemError: true,
       taskId: task.id,
@@ -839,7 +936,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
     // workflow (renamed/deleted columns).
     try {
       if (actualTask) {
-        const mutated = markTaskError(actualTask, err.message, {
+        const mutated = markTaskError(actualTask, errorMessage(err), {
           by: agent.name || 'workflow',
           mode,
           agentName: agent.name,
@@ -859,9 +956,9 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
         });
       }
     } catch (e) {
-      console.error(`[ActionExecutor] Failed to set error status:`, e.message);
+      console.error(`[ActionExecutor] Failed to set error status:`, errorMessage(e));
     }
-    return { executed: false, error: true, message: err.message };
+    return { executed: false, error: true, message: errorMessage(err) };
   } finally {
     releaseLock(lockKey);
     clearAgentBusy(agent.id);
@@ -881,7 +978,7 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
         });
       } catch (reconcileErr) {
         console.warn(
-          `[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr.message}`
+          `[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${errorMessage(reconcileErr)}`
         );
       }
     }
@@ -951,7 +1048,11 @@ async function executeRunAgent(action, task, { agentManager, io, ownerId, workfl
  * waits) so the wire-order of streamEnd/agentUpdated is byte-identical to the
  * pasted copies: they always fire last, after the body's awaits and returns.
  */
-async function _withAgentStream<T>(agentManager, agentId, body: () => Promise<T>): Promise<T> {
+async function _withAgentStream<T>(
+  agentManager: AgentManager,
+  agentId: string,
+  body: () => Promise<T>
+): Promise<T> {
   agentManager.wsEmitter.streamStart(agentId);
   try {
     return await body();
@@ -965,8 +1066,8 @@ async function _withAgentStream<T>(agentManager, agentId, body: () => Promise<T>
  * Build a sendMessage stream callback that accumulates chunks into `buf.text`
  * while forwarding each chunk to the frontend (streamChunk + thinking).
  */
-function _makeStreamCollector(agentManager, agentId, buf: { text: string }) {
-  return chunk => {
+function _makeStreamCollector(agentManager: AgentManager, agentId: string, buf: { text: string }) {
+  return (chunk: string) => {
     buf.text += chunk;
     agentManager.wsEmitter.streamChunk(agentId, chunk);
     agentManager.wsEmitter.thinking(agentId);
@@ -989,9 +1090,9 @@ const SET_TYPE_VALID_TYPES = [
 const SIMPLE_MODES = {
   title: {
     buildPrompt: buildTitlePrompt,
-    announce: (task, agentName) =>
+    announce: (task: Task, agentName: string) =>
       `[ActionExecutor] title: generating for "${task.text?.slice(0, 60)}" via ${agentName}`,
-    apply: (agentManager, task, raw, _agentName) => {
+    apply: (agentManager: AgentManager, task: Task, raw: string, _agentName: string) => {
       const title = (raw || '').trim().replace(/^["']|["']$/g, '');
       if (title) {
         agentManager.updateTaskTitle(task.agentId, task.id, title);
@@ -1001,9 +1102,9 @@ const SIMPLE_MODES = {
   },
   set_type: {
     buildPrompt: buildSetTypePrompt,
-    announce: (task, agentName) =>
+    announce: (task: Task, agentName: string) =>
       `[ActionExecutor] set_type: classifying "${task.text?.slice(0, 60)}" via ${agentName}`,
-    apply: (agentManager, task, raw, agentName) => {
+    apply: (agentManager: AgentManager, task: Task, raw: string, agentName: string) => {
       const rawType = (raw || '')
         .trim()
         .toLowerCase()
@@ -1017,10 +1118,10 @@ const SIMPLE_MODES = {
 
 async function _runSimpleMode(
   modeName: 'title' | 'set_type',
-  agent,
-  task,
-  { agentManager, io, execStartMsgIdx, execStartedAt }
-) {
+  agent: Agent,
+  task: Task,
+  { agentManager, io: _io, execStartMsgIdx, execStartedAt }: ModeRunContext
+): Promise<ActionResult> {
   const { buildPrompt, announce, apply } = SIMPLE_MODES[modeName];
   const maxLen = agent.contextLength || 4000;
   const description = (task.text || '').slice(0, maxLen);
@@ -1041,7 +1142,7 @@ async function _runSimpleMode(
       modeName
     );
   } catch (err) {
-    console.error(`[ActionExecutor] ${modeName} failed:`, err.message);
+    console.error(`[ActionExecutor] ${modeName} failed:`, errorMessage(err));
     agentManager._saveExecutionLog(
       task.agentId,
       task.id,
@@ -1059,11 +1160,11 @@ async function _runSimpleMode(
 }
 
 async function _runRefineMode(
-  agent,
-  task,
-  instructions,
-  { agentManager, io, execStartMsgIdx, execStartedAt }
-) {
+  agent: Agent,
+  task: Task,
+  instructions: string,
+  { agentManager, io: _io, execStartMsgIdx, execStartedAt }: ModeRunContext
+): Promise<ActionResult> {
   const prompt = buildRefinePrompt(task, instructions);
   console.log(`[ActionExecutor] refine: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
@@ -1108,12 +1209,12 @@ async function _runRefineMode(
 const MAX_DECIDE_NO_DECISION = 4;
 
 async function _runDecideMode(
-  agent,
-  task,
-  instructions,
-  columns,
-  { agentManager, io, execStartMsgIdx, execStartedAt, gitBaselineHead = null }
-) {
+  agent: Agent,
+  task: Task,
+  instructions: string,
+  columns: WorkflowColumn[],
+  { agentManager, io: _io, execStartMsgIdx, execStartedAt, gitBaselineHead = null }: ModeRunContext
+): Promise<ActionResult> {
   if (!instructions) {
     console.log(`[ActionExecutor] decide: no instructions — skipping`);
     return { executed: false, skipped: true, reason: 'no-instructions' };

@@ -1,7 +1,6 @@
 import express from 'express';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import {
-  recordTokenUsage,
   getTokenUsageByAgent,
   getTokenUsageTimeline,
   getTokenUsageSummary,
@@ -14,6 +13,7 @@ import {
 } from '../services/database.js';
 import { requireRole } from '../middleware/auth.js';
 import { validateBody, z } from '../lib/validate.js';
+import type { SessionClaims } from '../middleware/session.js';
 
 const router = express.Router();
 
@@ -27,6 +27,23 @@ const budgetConfigSchema = z
   .passthrough();
 
 /**
+ * The two numeric fields /alerts does arithmetic on. `getSetting` hands back
+ * `unknown` — the settings table stores free-form JSON — so the value is
+ * narrowed at the point of use rather than trusted. `budgetConfigSchema` above
+ * is what keeps the persisted object in this shape.
+ */
+interface BudgetConfig {
+  dailyBudget: number;
+  alertThreshold: number;
+}
+
+function isBudgetConfig(value: unknown): value is BudgetConfig {
+  if (typeof value !== 'object' || value === null) return false;
+  if (!('dailyBudget' in value) || !('alertThreshold' in value)) return false;
+  return typeof value.dailyBudget === 'number' && typeof value.alertThreshold === 'number';
+}
+
+/**
  * Build a map from raw (provider, model) pairs to human-friendly config names.
  * This fixes historical records that stored the raw provider type ("vllm", "mistral", "")
  * instead of the LLM config display name.
@@ -34,7 +51,7 @@ const budgetConfigSchema = z
 async function buildProviderNameMap() {
   try {
     const configs = await getAllLlmConfigs();
-    const map = new Map();
+    const map = new Map<string, string>();
     for (const cfg of configs) {
       if (cfg.name && cfg.provider) {
         // Key: raw provider + model → display name
@@ -47,12 +64,15 @@ async function buildProviderNameMap() {
     }
     return map;
   } catch {
-    return new Map();
+    return new Map<string, string>();
   }
 }
 
 /** Enrich budget rows: replace raw provider types with config display names */
-function enrichProviderNames(rows, nameMap) {
+function enrichProviderNames<T extends { provider?: string | null; model?: string | null }>(
+  rows: T[],
+  nameMap: Map<string, string>
+) {
   return rows.map(row => {
     const key = `${row.provider || ''}::${row.model || ''}`;
     const keyProviderOnly = `${row.provider || ''}::`;
@@ -62,7 +82,9 @@ function enrichProviderNames(rows, nameMap) {
 }
 
 /** Return userId for per-user filtering, or null for admins (see all) */
-function budgetUserId(req) {
+// Only the session claims are read; every route in this router is mounted
+// behind authenticateToken (index.ts), which is what puts them there.
+function budgetUserId(req: { user: SessionClaims }) {
   return req.user.role === 'admin' ? null : req.user.userId;
 }
 
@@ -108,7 +130,7 @@ router.get(
 
 router.get(
   '/config',
-  asyncHandler((req, res) => {
+  asyncHandler((_req, res) => {
     const config = getSetting('budget_config') || { dailyBudget: 10.0, alertThreshold: 80 };
     res.json(config);
   })
@@ -132,11 +154,14 @@ router.put(
 router.get(
   '/alerts',
   asyncHandler(async (req, res) => {
-    const config = getSetting('budget_config') || { dailyBudget: 10.0, alertThreshold: 80 };
+    const storedConfig = getSetting('budget_config');
+    const config: BudgetConfig = isBudgetConfig(storedConfig)
+      ? storedConfig
+      : { dailyBudget: 10.0, alertThreshold: 80 };
     const uid = budgetUserId(req);
     const todaySummary = uid ? await getTokenUsageSummaryAsync(1, uid) : getTokenUsageSummary(1);
     const todayCost = todaySummary?.total_cost || 0;
-    const alerts = [];
+    const alerts: { level: string; message: string }[] = [];
     if (config.dailyBudget > 0) {
       const pct = (todayCost / config.dailyBudget) * 100;
       if (pct >= 100)

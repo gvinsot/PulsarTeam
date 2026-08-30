@@ -1,4 +1,5 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import { getSettings, updateSettings, getReminderConfig } from '../services/configManager.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -6,7 +7,7 @@ export function settingsRoutes() {
   const router = express.Router();
 
   // ── General settings ──────────────────────────────────────────────
-  router.get('/', async (req, res) => {
+  router.get('/', async (_req, res) => {
     try {
       const settings = await getSettings();
       res.json(settings);
@@ -20,12 +21,12 @@ export function settingsRoutes() {
       const settings = await updateSettings(req.body || {});
       res.json(settings);
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: errorMessage(err) });
     }
   });
 
   // ── Reminder configuration ──────────────────────────────────────
-  router.get('/reminders', async (req, res) => {
+  router.get('/reminders', async (_req, res) => {
     try {
       const config = await getReminderConfig();
       res.json({
@@ -60,7 +61,7 @@ export function settingsRoutes() {
         envOverride: !!process.env.TASK_REMINDER_INTERVAL_MINUTES,
       });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: errorMessage(err) });
     }
   });
 

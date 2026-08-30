@@ -60,7 +60,9 @@ export interface CodeGraph {
     serviceFiles: number;
     truncated: boolean;
   };
-  llm?: { model: string; provider: string } | null;
+  // Both are optional because an `llm_configs` row carries them optionally —
+  // see LlmConfig. In practice a configured row always has them.
+  llm?: { model?: string; provider?: string } | null;
 }
 
 type FileMeta = { path: string; type: string; size: number };
@@ -354,6 +356,12 @@ const LAYER_STYLE: Record<GraphNode['layer'], { label: string; cls: string; def:
   },
 };
 
+/**
+ * The same four layers in the same declared order, as a typed list: `Object.entries`
+ * widens its keys to `string`, which then indexes neither layer-keyed record.
+ */
+const LAYER_KEYS: readonly GraphNode['layer'][] = ['ui', 'api-client', 'route', 'service'];
+
 function toMermaid(
   direction: 'ui-to-service' | 'service-to-ui',
   nodes: GraphNode[],
@@ -392,9 +400,11 @@ function toMermaid(
   for (const style of Object.values(LAYER_STYLE)) {
     lines.push(`  classDef ${style.cls} ${style.def};`);
   }
-  for (const [layer, style] of Object.entries(LAYER_STYLE)) {
+  for (const layer of LAYER_KEYS) {
     if (layers[layer].length) {
-      lines.push(`  class ${layers[layer].map(n => safeId(n.id)).join(',')} ${style.cls};`);
+      lines.push(
+        `  class ${layers[layer].map(n => safeId(n.id)).join(',')} ${LAYER_STYLE[layer].cls};`
+      );
     }
   }
 
@@ -512,7 +522,6 @@ async function refineWithLlm(graph: CodeGraph, llmConfigId: string) {
   if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) return null;
 
   // Filter to ids that still appear in input or stay as-is — but allow new merged labels.
-  const inputIds = new Set(graph.nodes.map(n => n.id));
   const cleanedNodes: GraphNode[] = parsed.nodes
     .filter((n: any) => n && typeof n.id === 'string')
     .map((n: any) => ({

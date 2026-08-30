@@ -3,6 +3,7 @@ import { api } from '../api';
 import CredentialConnectWidget, {
   CredentialProviderConfig,
 } from './connect/CredentialConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * AWS S3 connection widget — thin config over the shared CredentialConnectWidget.
@@ -79,7 +80,7 @@ export default function S3Connect({
 }: {
   agentId?: string;
   boardId?: string;
-  onStatusChange?: (status: any) => void;
+  onStatusChange?: (status: ConnectStatus) => void;
 }) {
   return (
     <CredentialConnectWidget

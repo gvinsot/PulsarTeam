@@ -40,9 +40,26 @@ import {
   createClaudeOAuthLinkProvider,
   reconstructClaudeOAuthUrlFromBuffer,
 } from './claudeOAuthLinks';
+import type { Agent } from '../../types';
+
+/**
+ * A JSON control frame sent on the terminal WebSocket's TEXT channel (binary
+ * frames are raw PTY output). Every field is optional: the frame is parsed
+ * before its `type` is known, and each variant only fills its own keys —
+ * 'reset' carries none, 'exit' carries code/tail, 'error' carries message.
+ */
+interface TerminalControlFrame {
+  type?: string;
+  /** 'exit' only. Explicitly null when the session was killed by a signal. */
+  code?: number | null;
+  /** 'exit' only: the last lines the runner printed before dying. */
+  tail?: string;
+  /** 'error' only. */
+  message?: string;
+}
 
 interface TerminalTabProps {
-  agent: { id: string; name?: string; runner?: string };
+  agent: Agent;
 }
 
 // Backoff schedule for reconnects: 0.5s → 1s → 2s → … capped at 15s.
@@ -248,7 +265,9 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
   const adjustForViewport = () => {
     const el = containerRef.current;
     if (!el) return;
-    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    // lib.dom types this `VisualViewport | null`; `?? undefined` keeps the
+    // local's existing `| undefined` shape without asserting anything away.
+    const vv = window.visualViewport ?? undefined;
     if (!vv || vv.height >= window.innerHeight - 1) {
       el.style.maxHeight = '';
       el.style.maxWidth = '';
@@ -350,7 +369,9 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
       fitTerminal();
     };
     const onOrientationChange = onViewportChange;
-    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    // lib.dom types this `VisualViewport | null`; `?? undefined` keeps the
+    // local's existing `| undefined` shape without asserting anything away.
+    const vv = window.visualViewport ?? undefined;
     if (vv) {
       vv.addEventListener('resize', onViewportChange);
       vv.addEventListener('scroll', onViewportChange);
@@ -491,7 +512,7 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
           // — render a discrete notice in the terminal and let the close
           // handler trigger the reconnect.
           try {
-            const ctrl = JSON.parse(ev.data);
+            const ctrl: TerminalControlFrame = JSON.parse(ev.data);
             if (ctrl?.type === 'reset') {
               t.reset();
               t.clear();
@@ -529,7 +550,7 @@ export default function TerminalTab({ agent }: TerminalTabProps) {
         }
         // Binary frame = raw PTY bytes.
         const buf =
-          ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : new Uint8Array(ev.data as any);
+          ev.data instanceof ArrayBuffer ? new Uint8Array(ev.data) : new Uint8Array(ev.data);
         if (buf.byteLength > 0) markTerminalActivity();
         t.write(buf);
       };

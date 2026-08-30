@@ -1,6 +1,7 @@
 import { MessageSquare, XCircle } from 'lucide-react';
 import { api } from '../api';
 import OAuthConnectWidget, { OAuthProviderConfig } from './connect/OAuthConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * Slack OAuth connection widget — thin config over the shared OAuthConnectWidget.
@@ -33,7 +34,15 @@ const SLACK_CONFIG: OAuthProviderConfig = {
   },
 };
 
-export default function SlackConnect({ agentId, boardId, onStatusChange }) {
+export default function SlackConnect({
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: (status: ConnectStatus) => void;
+}) {
   return (
     <OAuthConnectWidget
       config={SLACK_CONFIG}

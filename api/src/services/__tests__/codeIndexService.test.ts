@@ -6,7 +6,7 @@ import test from 'node:test';
 import { CodeIndexService } from '../codeIndexService.js';
 import { InMemoryVectorStore } from '../codeSearch/vectorStore.js';
 
-async function withTempDir(run) {
+async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'code-index-service-'));
   try {
     await run(dir);
@@ -15,7 +15,7 @@ async function withTempDir(run) {
   }
 }
 
-async function writeFixtureRepo(rootDir) {
+async function writeFixtureRepo(rootDir: string) {
   const repoDir = path.join(rootDir, 'sample-repo');
   await fs.mkdir(path.join(repoDir, 'src'), { recursive: true });
 
@@ -96,12 +96,13 @@ test('CodeIndexService indexes a folder and exposes outlines, trees and symbol r
     const targetSymbol = outline.symbols.find(
       symbol => symbol.qualifiedName === 'AuthService.validateToken'
     );
+    assert.ok(targetSymbol, 'Should find AuthService.validateToken in the outline');
     const symbol = await service.getSymbol(repo.id, targetSymbol.id, {
       verify: true,
       contextLines: 1,
     });
     assert.equal(symbol.driftDetected, false);
-    assert.ok(symbol.currentSource.includes('validateToken(token)'));
+    assert.ok(symbol.currentSource?.includes('validateToken(token)'));
     assert.ok(symbol.source.includes('return token && token.startsWith'));
   });
 });

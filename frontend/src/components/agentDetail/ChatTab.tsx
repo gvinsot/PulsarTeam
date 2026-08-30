@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
+import type { RefObject } from 'react';
 import {
   MessageSquare,
   Send,
@@ -18,6 +19,11 @@ import ChatMessage from './ChatMessage';
 import { RichAssistantContent } from './ChatMessage';
 import { api } from '../../api';
 import { SttSession, TtsPlayer } from '../../lib/externalVoiceClient';
+import type { Agent, ChatImage, ConversationMessage } from '../../types';
+
+// The /external-voice/services body, straight from the api wrapper so the two
+// `{ available: true } | { available: false }` arms stay in sync with it.
+type VoiceServices = Awaited<ReturnType<typeof api.getExternalVoiceServices>>;
 
 // Image ingestion policy — accepted formats (also drives the file input's
 // accept attr), size cap, and dataURL extraction. Shared by the file picker
@@ -83,15 +89,40 @@ export default function ChatTab({
   onAddImages,
   onRemoveImage,
   agent,
+}: {
+  history: ConversationMessage[];
+  thinking?: string;
+  streamBuffer?: string;
+  message: string;
+  setMessage: (value: string) => void;
+  sending: boolean;
+  isBusy: boolean;
+  /** The STT final-transcript path calls it with the dictated text; the button
+   *  and Enter key call it with none. */
+  onSend: (text?: string) => void;
+  onStop: () => void;
+  onClear: () => void;
+  onReload?: () => void | Promise<void>;
+  onTruncate?: (index: number) => void;
+  chatEndRef: RefObject<HTMLDivElement>;
+  /** Agent.name is optional on the wire — see types/agent.ts. */
+  agentName?: string;
+  autoScroll: boolean;
+  onToggleAutoScroll: () => void;
+  supportsImages: boolean;
+  pendingImages?: ChatImage[];
+  onAddImages?: (images: ChatImage[]) => void;
+  onRemoveImage?: (index: number) => void;
+  agent: Agent;
 }) {
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [reloading, setReloading] = useState(false);
 
   // ── STT / TTS state ──────────────────────────────────────────────────
   // Voice services are global (Admin Settings). We probe availability once
   // per agent and only render the mic/speaker affordances when the operator
   // actually configured the services.
-  const [voiceServices, setVoiceServices] = useState<any>(null);
+  const [voiceServices, setVoiceServices] = useState<VoiceServices | null>(null);
   const [sttState, setSttState] = useState<'idle' | 'listening' | 'finalizing'>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [partial, setPartial] = useState('');
@@ -302,7 +333,10 @@ export default function ChatTab({
 
       const reader = new FileReader();
       reader.onload = ev => {
-        const dataUrl = ev.target.result;
+        // `ev.target` is typed nullable by the DOM lib but is always the reader
+        // inside its own onload; the existing typeof guard below absorbs the
+        // undefined this produces, exactly as it already absorbs an ArrayBuffer.
+        const dataUrl = ev.target?.result;
         // readAsDataURL always yields a string; guard narrows the type.
         if (typeof dataUrl !== 'string') return;
         // Extract base64 data and media type from data URL
@@ -315,7 +349,7 @@ export default function ChatTab({
     }
   };
 
-  const handleFileSelect = e => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from<File>(e.target.files || []);
     if (files.length === 0) return;
     ingestImageFiles(files);
@@ -567,7 +601,11 @@ export default function ChatTab({
                 const imageItems = items.filter(item => item.type.match(IMAGE_MIME_RE));
                 if (imageItems.length === 0) return;
                 e.preventDefault();
-                ingestImageFiles(imageItems.map(item => item.getAsFile()).filter(Boolean));
+                // Same filter as `.filter(Boolean)` — getAsFile() only ever
+                // returns a File or null — but typed so File[] survives.
+                ingestImageFiles(
+                  imageItems.map(item => item.getAsFile()).filter((f): f is File => f !== null)
+                );
               }}
               className="w-full px-4 py-2.5 bg-dark-800 border border-dark-600 rounded-xl text-sm text-dark-100 placeholder-dark-500 focus:outline-none focus:border-indigo-500 resize-none"
               placeholder={

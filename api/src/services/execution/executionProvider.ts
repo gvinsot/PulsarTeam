@@ -33,7 +33,7 @@ export class ExecutionProvider {
    * by providers that support authenticated HTTPS git operations.
    * No-op by default.
    */
-  setGitCredentials(agentId: string, creds: GitCredentials | null): void {
+  setGitCredentials(_agentId: string, _creds: GitCredentials | null): void {
     // no-op
   }
 
@@ -43,7 +43,10 @@ export class ExecutionProvider {
    * with GitHub repos on its own initiative even when no `project` is pinned.
    * Default no-op; only providers backed by a remote runner override this.
    */
-  async installGitCredentials(agentId: string, creds: GitCredentials | null = null): Promise<void> {
+  async installGitCredentials(
+    _agentId: string,
+    _creds: GitCredentials | null = null
+  ): Promise<void> {
     // no-op
   }
 
@@ -52,7 +55,7 @@ export class ExecutionProvider {
    * runner can forward provider/model/API-key when invoking CLI backends
    * (opencode, claudecode, codex, ...). No-op by default.
    */
-  setLlmConfig(agentId: string, llmConfig: any | null): void {
+  setLlmConfig(_agentId: string, _llmConfig: any | null): void {
     // no-op
   }
 
@@ -63,8 +66,8 @@ export class ExecutionProvider {
    * instead of pruning. No-op by default.
    */
   setSecondaryRepos(
-    agentId: string,
-    repos: Array<{ provider?: string; fullName: string }> | null
+    _agentId: string,
+    _repos: Array<{ provider?: string; fullName: string }> | null
   ): void {
     // no-op
   }
@@ -81,10 +84,10 @@ export class ExecutionProvider {
    *        clone / push via authenticated HTTPS.
    */
   async ensureProject(
-    agentId: string,
-    project: string | null = null,
-    gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null
+    _agentId: string,
+    _project: string | null = null,
+    _gitUrl: string | null = null,
+    _gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     throw new Error('ensureProject() not implemented');
   }
@@ -93,10 +96,10 @@ export class ExecutionProvider {
    * Switch the agent to a different project, cleaning up the old one.
    */
   async switchProject(
-    agentId: string,
-    newProject: string,
-    gitUrl: string | null = null,
-    gitCredentials: GitCredentials | null = null
+    _agentId: string,
+    _newProject: string,
+    _gitUrl: string | null = null,
+    _gitCredentials: GitCredentials | null = null
   ): Promise<void> {
     throw new Error('switchProject() not implemented');
   }
@@ -105,7 +108,7 @@ export class ExecutionProvider {
    * Tear down the execution environment for one agent.
    * @param agentId
    */
-  async destroySandbox(agentId: string): Promise<void> {
+  async destroySandbox(_agentId: string): Promise<void> {
     throw new Error('destroySandbox() not implemented');
   }
 
@@ -118,7 +121,7 @@ export class ExecutionProvider {
    * Close the interactive terminal session for this agent, if the provider
    * supports one. The next terminal attach will spawn a fresh CLI process.
    */
-  async closeTerminalSession(agentId: string): Promise<boolean> {
+  async closeTerminalSession(_agentId: string): Promise<boolean> {
     return false;
   }
 
@@ -126,7 +129,7 @@ export class ExecutionProvider {
    * Ask an interactive terminal-backed CLI to abort its active run while
    * keeping the shared terminal session alive.
    */
-  async interruptTerminalSession(agentId: string): Promise<boolean> {
+  async interruptTerminalSession(_agentId: string): Promise<boolean> {
     return false;
   }
 
@@ -136,9 +139,9 @@ export class ExecutionProvider {
    * to submit the task prompt to an idle CLI runner.
    */
   async sendTerminalInput(
-    agentId: string,
-    input: string,
-    options: { submit?: boolean } = {}
+    _agentId: string,
+    _input: string,
+    _options: { submit?: boolean } = {}
   ): Promise<boolean> {
     return false;
   }
@@ -148,7 +151,7 @@ export class ExecutionProvider {
    * latched `auth_error`, …) or null when no session / unsupported. Used by
    * the workflow engine to detect CLI auth failures on terminal-driven tasks.
    */
-  async getTerminalSession(agentId: string): Promise<any | null> {
+  async getTerminalSession(_agentId: string): Promise<any | null> {
     return null;
   }
 
@@ -158,7 +161,7 @@ export class ExecutionProvider {
    * @param agentId
    * @returns true if the provider has an active environment for this agent
    */
-  hasEnvironment(agentId: string): boolean {
+  hasEnvironment(_agentId: string): boolean {
     throw new Error('hasEnvironment() not implemented');
   }
 
@@ -166,7 +169,7 @@ export class ExecutionProvider {
    * @param agentId
    * @returns currently active project name, or null
    */
-  getProject(agentId: string): string | null {
+  getProject(_agentId: string): string | null {
     throw new Error('getProject() not implemented');
   }
 
@@ -174,7 +177,7 @@ export class ExecutionProvider {
    * Get a compact file tree for the agent's project root.
    * @param agentId
    */
-  getFileTree(agentId: string): string | null {
+  getFileTree(_agentId: string): string | null {
     return null;
   }
 
@@ -182,7 +185,7 @@ export class ExecutionProvider {
    * Force refresh the cached file tree.
    * @param agentId
    */
-  async refreshFileTree(agentId: string): Promise<void> {
+  async refreshFileTree(_agentId: string): Promise<void> {
     // no-op by default
   }
 
@@ -194,7 +197,7 @@ export class ExecutionProvider {
    * @param filePath — relative to project root
    * @returns file contents
    */
-  async readFile(agentId: string, filePath: string): Promise<string> {
+  async readFile(_agentId: string, _filePath: string): Promise<string> {
     throw new Error('readFile() not implemented');
   }
 
@@ -204,7 +207,7 @@ export class ExecutionProvider {
    * @param filePath
    * @param content
    */
-  async writeFile(agentId: string, filePath: string, content: string): Promise<any> {
+  async writeFile(_agentId: string, _filePath: string, _content: string): Promise<any> {
     throw new Error('writeFile() not implemented');
   }
 
@@ -214,7 +217,7 @@ export class ExecutionProvider {
    * @param filePath
    * @param content
    */
-  async appendFile(agentId: string, filePath: string, content: string): Promise<any> {
+  async appendFile(_agentId: string, _filePath: string, _content: string): Promise<any> {
     throw new Error('appendFile() not implemented');
   }
 
@@ -223,7 +226,7 @@ export class ExecutionProvider {
    * @param agentId
    * @param dirPath — relative to project root
    */
-  async listDir(agentId: string, dirPath: string): Promise<string> {
+  async listDir(_agentId: string, _dirPath: string): Promise<string> {
     throw new Error('listDir() not implemented');
   }
 
@@ -233,7 +236,7 @@ export class ExecutionProvider {
    * @param pattern — glob (e.g. "*.js")
    * @param query   — search text
    */
-  async searchFiles(agentId: string, pattern: string, query: string): Promise<string> {
+  async searchFiles(_agentId: string, _pattern: string, _query: string): Promise<string> {
     throw new Error('searchFiles() not implemented');
   }
 
@@ -246,9 +249,9 @@ export class ExecutionProvider {
    * @param options
    */
   async exec(
-    agentId: string,
-    command: string,
-    options: { cwd?: string; timeout?: number } = {}
+    _agentId: string,
+    _command: string,
+    _options: { cwd?: string; timeout?: number } = {}
   ): Promise<{ stdout: string; stderr: string }> {
     throw new Error('exec() not implemented');
   }

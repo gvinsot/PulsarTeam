@@ -1,6 +1,9 @@
 import { useState, ReactNode } from 'react';
 import { Loader2, CheckCircle, AlertCircle, Save } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useConnectStatus, ConnectStatus } from './useConnectStatus';
+import type { IntegrationAck, SuccessAck } from '../../api';
+import { errorMessage } from '../../utils/errors';
 
 /**
  * Generic credential-form connection widget shared by the providers that use
@@ -52,9 +55,9 @@ export interface CredentialProviderConfig {
   name: string;
   /** Short name for the loading label + console prefix (e.g. 'S3' vs 'AWS S3'). */
   statusName?: string;
-  Icon: any;
+  Icon: LucideIcon;
   /** Icon shown on the Disconnect button. */
-  IconDisconnect: any;
+  IconDisconnect: LucideIcon;
   color: 'blue' | 'orange' | 'sky';
   /** Label of the form-toggle button (e.g. 'Connect Jira'). */
   connectButtonLabel: string;
@@ -69,10 +72,10 @@ export interface CredentialProviderConfig {
     agentId: string,
     boardId: string | undefined,
     values: Record<string, string>
-  ) => Promise<any>;
+  ) => Promise<IntegrationAck>;
   api: {
     getStatus: (agentId?: string, boardId?: string) => Promise<ConnectStatus>;
-    disconnect: (agentId?: string, boardId?: string) => Promise<any>;
+    disconnect: (agentId?: string, boardId?: string) => Promise<SuccessAck>;
   };
   /** Hint shown below the card while disconnected and the form is closed. */
   connectHint: string;
@@ -122,8 +125,8 @@ export default function CredentialConnectWidget({
       setShowForm(false);
       setValues(initialValues(config.fields));
       await fetchStatus();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(errorMessage(err));
     } finally {
       setConnecting(false);
     }
@@ -134,8 +137,8 @@ export default function CredentialConnectWidget({
     try {
       await config.api.disconnect(agentId || undefined, boardId || undefined);
       await fetchStatus();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(errorMessage(err));
     } finally {
       setDisconnecting(false);
     }

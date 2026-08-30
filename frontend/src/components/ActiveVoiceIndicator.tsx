@@ -1,12 +1,21 @@
 import { Mic, PhoneOff, MicOff } from 'lucide-react';
 import { useVoiceSession, STATUS } from '../contexts/VoiceSessionContext';
+import type { Agent } from '../types';
+
+interface ActiveVoiceIndicatorProps {
+  agents: Agent[];
+  selectedAgentId?: string | null;
+  /** The AgentDetail tab currently open, so the pill hides on the voice agent's chat. */
+  activeTab?: string;
+  onNavigateToAgent: (agentId: string) => void;
+}
 
 export default function ActiveVoiceIndicator({
   agents,
   selectedAgentId,
   activeTab,
   onNavigateToAgent,
-}) {
+}: ActiveVoiceIndicatorProps) {
   const { status, activeAgentId, isActive, disconnect, muted } = useVoiceSession();
 
   if (!isActive) return null;
@@ -38,9 +47,11 @@ export default function ActiveVoiceIndicator({
 
   return (
     <div className="fixed bottom-6 left-6 z-[90] flex items-center gap-2">
-      {/* Main pill — click to navigate */}
+      {/* Main pill — click to navigate. `agent` was located by `a.id === activeAgentId`,
+          so agent.id IS activeAgentId, without the context's nullable typing. */}
+
       <button
-        onClick={() => onNavigateToAgent(activeAgentId)}
+        onClick={() => onNavigateToAgent(agent.id)}
         className="flex items-center gap-3 px-4 py-2.5 bg-dark-800/95 backdrop-blur-sm border border-dark-600 rounded-full shadow-xl hover:bg-dark-700 transition-colors group"
       >
         {/* Pulsing dot */}

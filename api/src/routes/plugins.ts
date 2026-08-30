@@ -1,6 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/asyncHandler.js';
+import type { SkillManager } from '../services/skillManager.js';
+import type { MCPManager } from '../services/mcpManager.js';
 
 const mcpConfigSchema = z
   .object({
@@ -40,11 +42,14 @@ declare global {
   }
 }
 
+/** One MCP entry of a plugin document, derived from the schema above. */
+type McpConfig = z.infer<typeof mcpConfigSchema>;
+
 const createPluginSchema = pluginSchema;
 const updatePluginSchema = pluginSchema.partial();
 const shareSchema = z.object({ shared: z.boolean() });
 
-function sanitizeMcp(mcp) {
+function sanitizeMcp(mcp: McpConfig | null | undefined) {
   if (!mcp) return mcp;
   return {
     ...mcp,
@@ -54,7 +59,12 @@ function sanitizeMcp(mcp) {
   };
 }
 
-function sanitizePlugin(plugin) {
+/**
+ * Plugin documents reach this from two places: `skillManager`, whose `Skill`
+ * carries a `[key: string]: any` index signature, and `req.plugin`, typed `any`
+ * by the augmentation above. `Record<string, unknown>` is what both satisfy.
+ */
+function sanitizePlugin(plugin: Record<string, unknown>) {
   return {
     ...plugin,
     userConfig: plugin.userConfig || {},
@@ -63,10 +73,10 @@ function sanitizePlugin(plugin) {
   };
 }
 
-export function pluginRoutes(skillManager, mcpManager) {
+export function pluginRoutes(skillManager: SkillManager, mcpManager: MCPManager) {
   const router = express.Router();
 
-  function currentUser(req) {
+  function currentUser(req: express.Request) {
     return {
       userId: req.user?.userId || null,
       isAdmin: req.user?.role === 'admin',
@@ -79,26 +89,36 @@ export function pluginRoutes(skillManager, mcpManager) {
    * and attaches the loaded plugin as req.plugin.
    * Mirrors the agentAccess pattern in agents.ts.
    */
-  const requirePlugin = (level: 'view' | 'manage', message?: string) => (req, res, next) => {
-    const { userId, isAdmin } = currentUser(req);
-    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+  const requirePlugin =
+    (level: 'view' | 'manage', message?: string) =>
+    (
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ): express.Response | void => {
+      const { userId, isAdmin } = currentUser(req);
+      if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-    const plugin = skillManager.getById(req.params.id);
-    if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
+      // Express types `req.params` values as `string | string[]`; a single `:id`
+      // segment is always a string at runtime, and anything else falls through to
+      // the same 404 below.
+      const pluginId = req.params.id;
+      const plugin = typeof pluginId === 'string' ? skillManager.getById(pluginId) : null;
+      if (!plugin) return res.status(404).json({ error: 'Plugin not found' });
 
-    if (!skillManager.canView(plugin, userId, isAdmin)) {
-      return res.status(404).json({ error: 'Plugin not found' });
-    }
+      if (!skillManager.canView(plugin, userId, isAdmin)) {
+        return res.status(404).json({ error: 'Plugin not found' });
+      }
 
-    if (level === 'manage' && !skillManager.canManage(plugin, userId, isAdmin)) {
-      return res
-        .status(403)
-        .json({ error: message ?? 'Only the plugin owner can manage this plugin' });
-    }
+      if (level === 'manage' && !skillManager.canManage(plugin, userId, isAdmin)) {
+        return res
+          .status(403)
+          .json({ error: message ?? 'Only the plugin owner can manage this plugin' });
+      }
 
-    req.plugin = plugin;
-    next();
-  };
+      req.plugin = plugin;
+      next();
+    };
 
   router.get('/', (req, res) => {
     const { userId, isAdmin } = currentUser(req);
@@ -148,7 +168,7 @@ export function pluginRoutes(skillManager, mcpManager) {
         }
         // If they sent mcps, restrict the per-mcp changes to credentials only
         if (Array.isArray(parsed.mcps)) {
-          const currentMcps = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
+          const currentMcps: McpConfig[] = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
           parsed.mcps = parsed.mcps
             .map(m => {
               const existing = currentMcps.find(cm => cm.id === m.id);
@@ -160,13 +180,15 @@ export function pluginRoutes(skillManager, mcpManager) {
                 enabled: m.enabled !== undefined ? m.enabled : existing.enabled,
               };
             })
-            .filter(Boolean);
+            // Same predicate as the previous `.filter(Boolean)`: the only falsy
+            // element the map can produce is the `undefined` of an unmatched id.
+            .filter(m => m !== undefined);
         }
       }
 
       // Preserve existing API keys when the frontend sends the masked placeholder
       if (Array.isArray(parsed.mcps)) {
-        const currentMcps = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
+        const currentMcps: McpConfig[] = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
         for (const mcp of parsed.mcps) {
           if (mcp.apiKey === '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' && mcp.id) {
             const existing = currentMcps.find(m => m.id === mcp.id);
@@ -202,6 +224,7 @@ export function pluginRoutes(skillManager, mcpManager) {
     asyncHandler(async (req, res) => {
       const { shared } = shareSchema.parse(req.body);
       const updated = await skillManager.setShared(req.params.id, shared);
+      if (!updated) return res.status(404).json({ error: 'Plugin not found' });
       res.json(sanitizePlugin(updated));
     })
   );
@@ -238,6 +261,7 @@ export function pluginRoutes(skillManager, mcpManager) {
       }
 
       const updated = await skillManager.update(req.params.id, { mcps });
+      if (!updated) return res.status(404).json({ error: 'Plugin not found' });
       res.json(sanitizePlugin(updated));
     })
   );
@@ -246,10 +270,10 @@ export function pluginRoutes(skillManager, mcpManager) {
     '/:id/mcps/:mcpId',
     requirePlugin('manage', 'Only the plugin owner can modify MCP wiring'),
     asyncHandler(async (req, res) => {
-      const mcps = (Array.isArray(req.plugin.mcps) ? req.plugin.mcps : []).filter(
-        m => m.id !== req.params.mcpId
-      );
+      const existingMcps: McpConfig[] = Array.isArray(req.plugin.mcps) ? req.plugin.mcps : [];
+      const mcps = existingMcps.filter(m => m.id !== req.params.mcpId);
       const updated = await skillManager.update(req.params.id, { mcps });
+      if (!updated) return res.status(404).json({ error: 'Plugin not found' });
       res.json(sanitizePlugin(updated));
     })
   );

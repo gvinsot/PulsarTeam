@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { X, Save, Eye, EyeOff, Cpu } from 'lucide-react';
+import type { LlmConfigDraft } from '../types';
 
 const PROVIDER_OPTIONS = [
   'anthropic',
@@ -12,17 +13,23 @@ const PROVIDER_OPTIONS = [
   'vllm',
   'ollama',
 ];
-const PROVIDER_LABELS = { 'claude-paid': 'Anthropic Paid Plan' };
+// Overrides only: any provider without an entry falls back to its capitalised
+// id below, so the lookup is keyed on the open provider string, not a union.
+const PROVIDER_LABELS: Record<string, string | undefined> = {
+  'claude-paid': 'Anthropic Paid Plan',
+};
 
 interface LlmConfigModalProps {
-  config: any;
-  onSave: (config: any) => Promise<void>;
+  /** The three-state slot LlmConfigsTab holds: `{}` when creating, a full
+   *  LlmConfig spread when editing. Draft, not LlmConfig — see LlmConfigDraft. */
+  config: LlmConfigDraft;
+  onSave: (config: LlmConfigDraft) => Promise<void>;
   onClose: () => void;
   saving: boolean;
 }
 
 export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmConfigModalProps) {
-  const [form, setForm] = useState({ ...config });
+  const [form, setForm] = useState<LlmConfigDraft>({ ...config });
   const [showApiKey, setShowApiKey] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -78,7 +85,7 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
                 value={form.provider || ''}
                 onChange={e => {
                   const prov = e.target.value;
-                  const updates: any = { provider: prov, model: '' };
+                  const updates: LlmConfigDraft = { provider: prov, model: '' };
                   if (prov === 'claude-paid') {
                     updates.endpoint = 'http://claudecode-service:8000';
                     updates.apiKey = '';

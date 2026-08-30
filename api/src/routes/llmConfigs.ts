@@ -8,12 +8,13 @@ import {
   deleteLlmConfig,
 } from '../services/database.js';
 import { requireRole } from '../middleware/auth.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 
-function maskApiKey(config, isAdmin) {
+function maskApiKey<T extends { apiKey?: string | null }>(config: T, isAdmin: boolean) {
   return { ...config, apiKey: isAdmin ? config.apiKey : config.apiKey ? '********' : '' };
 }
 
-export function llmConfigRoutes(agentManager) {
+export function llmConfigRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   // List all LLM configs (any authenticated user)

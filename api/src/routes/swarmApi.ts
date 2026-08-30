@@ -1,4 +1,5 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import { z } from 'zod';
 import {
   getAllBoards,
@@ -7,6 +8,7 @@ import {
   getTasksByAgent,
 } from '../services/database.js';
 import { detectEnvironment } from '../lib/environment.js';
+import type { WorkflowColumn } from '../services/workflow/taskStateMachine.js';
 
 const createTaskSchema = z.object({
   task: z.string().min(1).max(5000),
@@ -95,7 +97,7 @@ export function swarmApiRoutes(agentManager: any) {
   });
 
   // ── List boards ────────────────────────────────────────────────────────
-  router.get('/boards', async (req, res) => {
+  router.get('/boards', async (_req, res) => {
     try {
       const boards = await getAllBoards();
       const result = boards.map(b => ({
@@ -103,7 +105,10 @@ export function swarmApiRoutes(agentManager: any) {
         name: b.name,
         user: b.display_name || b.username || null,
         user_id: b.user_id,
-        columns: (b.workflow?.columns || []).map(c => ({ id: c.id, label: c.label })),
+        columns: (b.workflow?.columns || []).map((c: WorkflowColumn) => ({
+          id: c.id,
+          label: c.label,
+        })),
       }));
       res.json({ count: result.length, boards: result });
     } catch (err: any) {
@@ -123,7 +128,7 @@ export function swarmApiRoutes(agentManager: any) {
     } catch (err) {
       console.warn(
         `\u26A0\uFE0F [SwarmAPI] Task validation failed for agent "${req.params.id}":`,
-        err instanceof z.ZodError ? err.issues : err.message
+        err instanceof z.ZodError ? err.issues : errorMessage(err)
       );
       if (err instanceof z.ZodError) {
         res.status(400).json({ error: 'Validation failed', details: err.issues });

@@ -11,6 +11,38 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeTaskDbFake } from './helpers/taskDbFake.js';
+import type { WorkflowColumn } from '../workflow/taskStateMachine.js';
+import type { TaskHistoryEntry } from '../database/tasks.js';
+
+/**
+ * A workflow config as the mocked configManager serves it here.
+ *
+ * `columns` is the engine's own type. A transition is spelled out instead of
+ * reusing WorkflowTransition because one fixture below builds
+ * `{ type: 'assign_agent_individual', agentId: null }` and WorkflowAction
+ * declares `agentId?: string` — an action stays the raw passthrough bag it is
+ * on disk until that interface admits the null.
+ */
+interface WorkflowFixture {
+  columns: WorkflowColumn[];
+  transitions: Array<{
+    from: string;
+    trigger: string;
+    conditions?: unknown[];
+    actions?: Array<Record<string, unknown>>;
+  }>;
+}
+
+/**
+ * What the helpers below need from the manager `setup` builds. It is a real
+ * AgentManager with `sendMessage` and `_saveExecutionLog` swapped for test
+ * doubles, so the helpers ask for the two members they actually touch rather
+ * than for the whole interface.
+ */
+interface PipelineManager {
+  agents: Map<string, unknown>;
+  _recheckConditionalTransitions(): void;
+}
 
 // ── Module mocks — must be registered BEFORE importing modules under test ────
 
@@ -135,7 +167,7 @@ mock.module('../database.js', {
     getOAuthTokenCache: () => new Map(),
     // tasks — Map-backed in-memory fake (identity-preserving)
     ...taskDbFake,
-    rowToTask: r => r,
+    rowToTask: (r: unknown) => r,
     tryAcquireTaskLock: async () => true,
     releaseTaskLock: async () => {},
     heldTaskLockCount: () => 0,
@@ -145,7 +177,7 @@ mock.module('../database.js', {
 });
 
 // Mock configManager
-const TEST_WORKFLOW = {
+const TEST_WORKFLOW: WorkflowFixture = {
   columns: [
     { id: 'todo', color: '#6b7280', label: 'Todo' },
     { id: 'step1', color: '#3b82f6', label: 'Step1' },
@@ -197,7 +229,7 @@ const TEST_WORKFLOW = {
   ],
 };
 
-function replaceWorkflow(next) {
+function replaceWorkflow(next: WorkflowFixture) {
   const previous = {
     columns: TEST_WORKFLOW.columns,
     transitions: TEST_WORKFLOW.transitions,
@@ -245,6 +277,7 @@ async function setup(agentDefs: any[] = []) {
   for (const def of agentDefs) {
     const created = await mgr.create({ boardId: 'board-test', ...def });
     const raw = mgr.agents.get(created.id);
+    assert.ok(raw, 'created agent should be registered in the manager');
     raw.status = 'idle';
     raw.boardId = 'board-test';
     raw.conversationHistory = [];
@@ -254,7 +287,7 @@ async function setup(agentDefs: any[] = []) {
   }
 
   // Mock sendMessage — simulates LLM returning immediately
-  mgr.sendMessage = async (agentId, message, streamCallback) => {
+  mgr.sendMessage = async (agentId, _message, _streamCallback) => {
     await new Promise(r => setTimeout(r, 2));
     const agent = mgr.agents.get(agentId);
     if (agent) agent.status = 'idle';
@@ -267,7 +300,7 @@ async function setup(agentDefs: any[] = []) {
   return mgr;
 }
 
-function createTask(mgr, text, status = 'backlog') {
+function createTask(mgr: PipelineManager, text: string, status = 'backlog') {
   const [firstAgentId] = mgr.agents.keys();
   const task: any = {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -295,12 +328,18 @@ function createTask(mgr, text, status = 'backlog') {
 }
 
 /** Live task lookup from the DB fake (identity-preserving). */
-function findTask(agentId, taskId) {
+function findTask(agentId: string, taskId: string) {
   const t = taskRows.get(taskId);
   return t && !t.deletedAt && t.agentId === agentId ? t : null;
 }
 
-async function waitForStatus(mgr, agentId, taskId, expectedStatus, timeoutMs = 15000) {
+async function waitForStatus(
+  mgr: PipelineManager,
+  agentId: string,
+  taskId: string,
+  expectedStatus: string,
+  timeoutMs = 15000
+) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const task = findTask(agentId, taskId);
@@ -311,8 +350,8 @@ async function waitForStatus(mgr, agentId, taskId, expectedStatus, timeoutMs = 1
   }
   const task = findTask(agentId, taskId);
   const transitions = (task?.history || [])
-    .filter(h => h.from !== undefined)
-    .map(h => `${h.from}→${h.status}`);
+    .filter((h: TaskHistoryEntry) => h.from !== undefined)
+    .map((h: TaskHistoryEntry) => `${h.from}→${h.status}`);
   throw new Error(
     `Task ${taskId.slice(0, 12)} stuck at "${task?.status}" (expected "${expectedStatus}"). ` +
       `Transitions: [${transitions.join(', ')}]`
@@ -333,7 +372,9 @@ test('single task flows through entire pipeline: todo → done', async () => {
   assert.equal(final.status, 'done');
   assert.ok(final.completedAt, 'completedAt should be set');
 
-  const statuses = final.history.filter(h => h.from !== undefined).map(h => h.status);
+  const statuses = final.history
+    .filter((h: TaskHistoryEntry) => h.from !== undefined)
+    .map((h: TaskHistoryEntry) => h.status);
   for (const step of ['todo', 'step1', 'step2', 'step3', 'step4', 'done']) {
     assert.ok(statuses.includes(step), `Missing transition to "${step}"`);
   }
@@ -469,8 +510,8 @@ test('task history records every transition in order', async () => {
   const final = await waitForStatus(mgr, agentId, task.id, 'done');
 
   const transitions = final.history
-    .filter(h => h.from !== undefined)
-    .map(h => `${h.from}→${h.status}`);
+    .filter((h: TaskHistoryEntry) => h.from !== undefined)
+    .map((h: TaskHistoryEntry) => `${h.from}→${h.status}`);
 
   const expected = [
     'backlog→todo',

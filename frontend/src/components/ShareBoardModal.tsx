@@ -1,9 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Users, Shield, Eye, Edit3, Crown, Trash2, UserPlus, Loader2 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { api } from '../api';
 import { useClickOutside, useEscapeKey } from '../hooks/useDismiss';
+import { errorMessage } from '../utils/errors';
+import type {
+  Board,
+  BoardListItem,
+  BoardPermission,
+  BoardShare,
+  UserDirectoryEntry,
+} from '../types';
 
-const PERMISSION_LEVELS = [
+interface PermissionLevel {
+  value: BoardPermission;
+  label: string;
+  icon: LucideIcon;
+  desc: string;
+  cls: string;
+}
+
+const PERMISSION_LEVELS: PermissionLevel[] = [
   {
     value: 'read',
     label: 'Read',
@@ -27,16 +44,36 @@ const PERMISSION_LEVELS = [
   },
 ];
 
-export default function ShareBoardModal({ board, onClose, currentUserId }) {
-  const [shares, setShares] = useState([]);
-  const [allUsers, setAllUsers] = useState([]);
+/**
+ * `board` is whatever TasksBoard is holding: a plain Board (a rename/workflow-save
+ * response) or a GET /boards row, which additionally carries the two sharing columns.
+ */
+interface ShareBoardModalProps {
+  board: Board & Partial<Pick<BoardListItem, 'share_permission' | 'owner_username'>>;
+  onClose: () => void;
+  currentUserId?: string;
+}
+
+/**
+ * Narrow a <select> value back to the closed permission set. The three <option>s are
+ * built from PERMISSION_LEVELS, so this is total in practice; the fallback repeats the
+ * 'read' the invite form already defaults to.
+ */
+function toPermission(value: string): BoardPermission {
+  const match = PERMISSION_LEVELS.find(p => p.value === value);
+  return match ? match.value : 'read';
+}
+
+export default function ShareBoardModal({ board, onClose, currentUserId }: ShareBoardModalProps) {
+  const [shares, setShares] = useState<BoardShare[]>([]);
+  const [allUsers, setAllUsers] = useState<UserDirectoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [username, setUsername] = useState('');
-  const [permission, setPermission] = useState('read');
+  const [permission, setPermission] = useState<BoardPermission>('read');
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const modalRef = useRef(null);
-  const inputRef = useRef(null);
+  const [error, setError] = useState<string | null>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Owned boards from getBoardsByUser have share_permission=null; shared boards have a value
   // Use both UUID comparison and share_permission for robust ownership detection
@@ -58,7 +95,7 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
           setAllUsers(usersData || []);
         }
       } catch (err) {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setError(errorMessage(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -87,7 +124,7 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
         .slice(0, 5)
     : [];
 
-  const handleShare = async e => {
+  const handleShare = async (e?: React.FormEvent) => {
     e?.preventDefault();
     const trimmed = username.trim();
     if (!trimmed) return;
@@ -101,30 +138,30 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
       setUsername('');
       setPermission('read');
     } catch (err) {
-      setError(err.message);
+      setError(errorMessage(err));
     } finally {
       setSaving(false);
     }
   };
 
-  const handleUpdatePermission = async (userId, newPermission) => {
+  const handleUpdatePermission = async (userId: string, newPermission: BoardPermission) => {
     try {
       await api.updateBoardShare(board.id, userId, newPermission);
       setShares(prev =>
         prev.map(s => (s.user_id === userId ? { ...s, permission: newPermission } : s))
       );
     } catch (err) {
-      setError(err.message);
+      setError(errorMessage(err));
     }
   };
 
-  const handleRevoke = async (userId, displayName) => {
+  const handleRevoke = async (userId: string, displayName: string) => {
     if (!confirm(`Remove ${displayName}'s access to this board?`)) return;
     try {
       await api.removeBoardShare(board.id, userId);
       setShares(prev => prev.filter(s => s.user_id !== userId));
     } catch (err) {
-      setError(err.message);
+      setError(errorMessage(err));
     }
   };
 
@@ -206,7 +243,7 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                 </div>
                 <select
                   value={permission}
-                  onChange={e => setPermission(e.target.value)}
+                  onChange={e => setPermission(toPermission(e.target.value))}
                   className="px-2 py-2 bg-dark-800 border border-dark-700 rounded-lg text-xs text-dark-200
                     focus:outline-none focus:border-indigo-500"
                 >
@@ -280,7 +317,9 @@ export default function ShareBoardModal({ board, onClose, currentUserId }) {
                         <div className="flex items-center gap-1.5">
                           <select
                             value={share.permission}
-                            onChange={e => handleUpdatePermission(share.user_id, e.target.value)}
+                            onChange={e =>
+                              handleUpdatePermission(share.user_id, toPermission(e.target.value))
+                            }
                             className="px-2 py-1 bg-dark-800 border border-dark-700 rounded text-xs text-dark-300
                               focus:outline-none focus:border-indigo-500"
                           >

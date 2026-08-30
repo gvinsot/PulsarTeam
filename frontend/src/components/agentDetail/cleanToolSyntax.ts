@@ -1,6 +1,6 @@
 // ── Balanced parsing helpers (mirrors server-side logic) ─────────────────────
 
-function _findBalancedCloseUI(text, start) {
+function _findBalancedCloseUI(text: string, start: number) {
   let depth = 1,
     inTQ = false,
     inDQ = false,
@@ -42,7 +42,7 @@ function _findBalancedCloseUI(text, start) {
   return -1;
 }
 
-function _findTopLevelCommaUI(text) {
+function _findTopLevelCommaUI(text: string) {
   let inTQ = false,
     inDQ = false,
     inSQ = false,
@@ -82,7 +82,7 @@ function _findTopLevelCommaUI(text) {
   return -1;
 }
 
-function _stripWrapperQuotes(s) {
+function _stripWrapperQuotes(s: string) {
   s = s.trim();
   if (s.length >= 2) {
     const f = s[0],
@@ -95,7 +95,7 @@ function _stripWrapperQuotes(s) {
 // Clean raw @tool() syntax and [Executing:...] markers from assistant text.
 // Replaces them with clean markdown code blocks showing the command and hides
 // the internal @tool_name wrapper.
-export function cleanToolSyntax(text) {
+export function cleanToolSyntax(text: string): string {
   if (!text) return text;
   let cleaned = text;
 
@@ -118,7 +118,7 @@ export function cleanToolSyntax(text) {
   const toolPattern = new RegExp(`@(${ALL_TOOLS})\\s*\\(`, 'gi');
   let m;
   // Process from end to start so replacements don't shift indices
-  const replacements = [];
+  const replacements: { start: number; end: number; replacement: string }[] = [];
 
   while ((m = toolPattern.exec(cleaned)) !== null) {
     const toolName = m[1].toLowerCase();
@@ -127,7 +127,7 @@ export function cleanToolSyntax(text) {
     if (closeIdx === -1) continue;
 
     const argsString = cleaned.slice(argsStart, closeIdx);
-    let replacement;
+    let replacement: string | undefined;
 
     if (toolName === 'run_command') {
       const cmd = _stripWrapperQuotes(argsString);

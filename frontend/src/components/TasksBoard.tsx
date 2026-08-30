@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import type { DragEvent } from 'react';
+import type { Socket } from 'socket.io-client';
 import { Search, X, GitCommit, Plus, Settings, ArrowUpDown, Archive, Puzzle } from 'lucide-react';
 import {
   api,
@@ -7,17 +9,32 @@ import {
   reorderTasks,
   clearTaskStopped,
 } from '../api';
+import type {
+  Agent,
+  AppUser,
+  Board,
+  BoardListItem,
+  BoardWorkflow,
+  BoardWorkflowColumn,
+  GitHubActivityTarget,
+  TaskCreatedEvent,
+  TaskSocketPayload,
+  WorkflowTransition,
+} from '../types';
 import AllCommitsDiffModal from './AllCommitsDiffModal';
 import GitHubActivityModal from './GitHubActivityModal';
 import ShareBoardModal from './ShareBoardModal';
 import { getSocket } from '../socket';
 import { WsEvents } from '../socketEvents';
 import { safeGet, safeSet } from '../lib/safeStorage';
+import { errorMessage } from '../utils/errors';
 
 import { buildColumns, buildStatusOptions, sortTasks, SORT_OPTIONS } from './tasks/taskConstants';
+import type { BoardColumnView } from './tasks/taskConstants';
 import CreateTaskModal from './tasks/CreateTaskModal';
 import TaskDetailModal from './tasks/TaskDetailModal';
 import InstructionsEditModal from './tasks/InstructionsEditModal';
+import type { ColumnInstructionEntry } from './tasks/InstructionsEditModal';
 import KanbanColumn from './tasks/KanbanColumn';
 import WorkflowEditor from './tasks/WorkflowEditor';
 import DeletedTasksPanel from './tasks/DeletedTasksPanel';
@@ -26,6 +43,48 @@ import BoardPluginsTab from './tasks/BoardPluginsTab';
 
 // ── TasksBoard (multi-board) ────────────────────────────────────────────────
 
+/**
+ * What the `boards` state actually holds.
+ *
+ * GET /boards returns `BoardListItem` — a board row plus the two sharing columns
+ * its UNION adds. But createBoard, updateBoard and updateBoardWorkflow all return
+ * a BARE `Board`, and this component splices those responses straight back into
+ * the same array (handleCreateBoard, handleRenameBoard, handleSaveWorkflow). So an
+ * entry may or may not carry the sharing columns — and that absence is not
+ * cosmetic: it is exactly why renaming a shared board makes `boardPermission`
+ * below fall back to 'admin' (documented at `Board` in types/board.ts).
+ */
+type BoardEntry = Board & Partial<Pick<BoardListItem, 'share_permission' | 'owner_username'>>;
+
+/**
+ * A board workflow known to carry its `columns` array. `BoardWorkflow.columns` is
+ * optional on the wire (the boards.workflow column defaults to '{}') and the
+ * `workflow` memo below returns null in exactly that case, so everything
+ * downstream of the memo can rely on the array. `transitions` stays optional: a
+ * workflow saved by a column reorder genuinely has none.
+ */
+type ActiveWorkflow = BoardWorkflow & { columns: BoardWorkflowColumn[] };
+
+/** Predicate form of the memo's own `workflow?.columns` test, so the narrowing
+ *  survives without copying the object. */
+const hasColumns = (workflow?: BoardWorkflow): workflow is ActiveWorkflow => !!workflow?.columns;
+
+/** `createdAt` is required on a `Task` but optional on a `task:updated` frame, and
+ *  `dbTasks` holds both. Both call sites filter on a truthy `createdAt` first, so
+ *  the 0 branch is unreachable from them — it states the frame's optionality
+ *  instead of leaning on `new Date(undefined)`. */
+const createdAtMs = (t: TaskSocketPayload) => (t.createdAt ? new Date(t.createdAt).getTime() : 0);
+
+interface TasksBoardProps {
+  agents: Agent[];
+  onRefresh: () => void;
+  /** Optional AND nullable because the only read is `user?.userId`. */
+  user?: AppUser | null;
+  onNavigateToAgent: (agentId: string) => void;
+  onBoardChange?: (boardId: string) => void;
+  projectFilter?: string;
+}
+
 export default function TasksBoard({
   agents,
   onRefresh,
@@ -33,26 +92,29 @@ export default function TasksBoard({
   onNavigateToAgent,
   onBoardChange,
   projectFilter = '',
-}) {
+}: TasksBoardProps) {
   const [repoFilter, setRepoFilter] = useState(() => safeGet('tasks_repoFilter') || '');
   const [agentFilter, setAgentFilter] = useState(() => safeGet('tasks_agentFilter') || '');
   const [search, setSearch] = useState(() => safeGet('tasks_search') || '');
   const [sortBy, setSortBy] = useState(() => safeGet('tasks_sortBy') || 'manual');
-  const [selectedTask, setSelectedTask] = useState(null);
-  const [commitModalTask, setCommitModalTask] = useState(null);
+  // Both task modals are opened from a card, i.e. from `dbTasks` — which holds
+  // socket frames as well as GET /tasks rows. See `dbTasks` below.
+  const [selectedTask, setSelectedTask] = useState<TaskSocketPayload | null>(null);
+  const [commitModalTask, setCommitModalTask] = useState<TaskSocketPayload | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
-  const [createDefaultStatus, setCreateDefaultStatus] = useState(null);
+  // A workflow column id (BoardWorkflowColumn.id), which is also a task status.
+  const [createDefaultStatus, setCreateDefaultStatus] = useState<string | null>(null);
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
-  const [editInstructionsCol, setEditInstructionsCol] = useState(null);
+  const [editInstructionsCol, setEditInstructionsCol] = useState<string | null>(null);
   const [showDeletedTasks, setShowDeletedTasks] = useState(false);
-  const [shareBoard, setShareBoard] = useState(null);
-  const [activityTarget, setActivityTarget] = useState(null);
+  const [shareBoard, setShareBoard] = useState<BoardEntry | null>(null);
+  const [activityTarget, setActivityTarget] = useState<GitHubActivityTarget | null>(null);
   const [showBoardPlugins, setShowBoardPlugins] = useState(false);
-  const boardScrollRef = useRef(null);
+  const boardScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Multi-board state
-  const [boards, setBoards] = useState([]);
-  const [activeBoardId, setActiveBoardId] = useState(null);
+  const [boards, setBoards] = useState<BoardEntry[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
   const [boardsLoaded, setBoardsLoaded] = useState(false);
 
   // Load boards on mount
@@ -141,10 +203,10 @@ export default function TasksBoard({
   const canEdit = boardPermission === 'edit' || boardPermission === 'admin';
 
   // Get workflow from the active board
-  const workflow = useMemo(
-    () => (activeBoard?.workflow?.columns ? activeBoard.workflow : null),
-    [activeBoard]
-  );
+  const workflow = useMemo(() => {
+    const wf = activeBoard?.workflow;
+    return hasColumns(wf) ? wf : null;
+  }, [activeBoard]);
 
   const columns = useMemo(() => (workflow ? buildColumns(workflow.columns) : []), [workflow]);
   const statusOptions = useMemo(
@@ -153,9 +215,9 @@ export default function TasksBoard({
   );
 
   // Map column IDs to their "Instructions (agent)" decide actions from transitions
-  const columnInstructionsMap = useMemo(() => {
+  const columnInstructionsMap = useMemo<Record<string, ColumnInstructionEntry[]>>(() => {
     if (!workflow?.transitions) return {};
-    const map = {};
+    const map: Record<string, ColumnInstructionEntry[]> = {};
     workflow.transitions.forEach((tr, tIdx) => {
       (tr.actions || []).forEach((act, aIdx) => {
         if (act.type === 'run_agent' && (act.mode === 'decide' || act.mode === 'execute')) {
@@ -178,7 +240,19 @@ export default function TasksBoard({
   // We MERGE results with current state by updatedAt so a slow GET /tasks
   // (whose SELECT may run on a pool connection in parallel with in-flight
   // UPDATEs) cannot overwrite a more recent task:updated received via socket.
-  const [dbTasks, setDbTasks] = useState([]);
+  //
+  // ELEMENT TYPE: `TaskSocketPayload`, not `Task`, and deliberately so. This
+  // array has TWO producers. `api.getAllTasks()` yields real rowToTask `Task`s
+  // (every one of which is assignable to TaskSocketPayload, so nothing is lost on
+  // that path), but the `task:updated` socket handler below inserts a raw frame
+  // VERBATIM for an unknown id and spreads one over an existing entry for a known
+  // one. A frame is not a Task: the frame emitted right after creation has no
+  // updatedAt / commits / title / project / assignee / actionRunning key at all,
+  // and the mutation paths write EXPLICIT nulls where rowToTask normalises to
+  // undefined — on a column drag, the most frequent path there is. Typing the
+  // state as Task[] would launder that in one expression; TaskSocketPayload states
+  // it, and every read below is guarded accordingly. See types/task.ts.
+  const [dbTasks, setDbTasks] = useState<TaskSocketPayload[]>([]);
   // Tracks tasks with an in-flight optimistic mutation. Protects them from
   // being clobbered by a stale GET /tasks SELECT that ran before the PUT
   // committed. We use this instead of stamping client-clock timestamps on
@@ -186,7 +260,7 @@ export default function TasksBoard({
   // task:updated events look "older" than the optimistic copy and get
   // rejected, leaving the UI stuck (e.g. no actionRunning spinner) until
   // a manual page refresh.
-  const inFlightTaskIds = useRef(new Set());
+  const inFlightTaskIds = useRef(new Set<string>());
   const loadTasks = useCallback(async () => {
     if (!activeBoardId) return; // Wait until a board is selected
     try {
@@ -196,7 +270,7 @@ export default function TasksBoard({
       // board's list, so drop it.
       if (activeBoardId !== activeBoardIdRef.current) return;
       setDbTasks(prev => {
-        const prevById = new Map(prev.map(t => [t.id, t]));
+        const prevById = new Map<string, TaskSocketPayload>(prev.map(t => [t.id, t]));
         const serverIds = new Set(tasks.map(t => t.id));
 
         const merged = tasks.map(serverTask => {
@@ -231,7 +305,7 @@ export default function TasksBoard({
         return merged;
       });
     } catch (err) {
-      console.error('[TasksBoard] Failed to load tasks:', err.message);
+      console.error('[TasksBoard] Failed to load tasks:', errorMessage(err));
     }
   }, [activeBoardId]);
 
@@ -273,7 +347,9 @@ export default function TasksBoard({
   // Handles both updates to existing tasks AND insertion of newly created tasks.
   // For existing tasks, we only accept the incoming data if its updatedAt >= local copy.
   useEffect(() => {
-    const handler = ({ task }) => {
+    // The envelope is untrusted wire input, hence the existing `!task?.id` guard;
+    // `task` itself is a TaskSocketPayload — see the dbTasks declaration.
+    const handler = ({ task }: { task?: TaskSocketPayload | null }) => {
       if (!task?.id) return;
       setDbTasks(prev => {
         const idx = prev.findIndex(t => t.id === task.id);
@@ -302,7 +378,7 @@ export default function TasksBoard({
     // loads) and gets REPLACED on impersonation/stop-impersonation, so track
     // the instance for the component's whole lifetime and re-attach the
     // handler whenever it changes.
-    let attached = null;
+    let attached: Socket | null = null;
     const sync = () => {
       const sock = getSocket();
       if (sock === attached) return;
@@ -322,8 +398,10 @@ export default function TasksBoard({
   // When called with a newly created task, optimistically insert it into
   // state so it appears immediately — even if the DB write hasn't committed
   // by the time the subsequent loadTasks() query runs.
+  // `newTask` is the 201 body of POST /agents/:id/tasks — the hand-built in-memory
+  // `newTask`, which api.ts already types as TaskCreatedEvent.
   const refreshAll = useCallback(
-    (newTask?: { id?: string }) => {
+    (newTask?: TaskCreatedEvent) => {
       if (newTask?.id) {
         setDbTasks(prev => {
           if (prev.some(t => t.id === newTask.id)) return prev;
@@ -346,7 +424,7 @@ export default function TasksBoard({
 
   // Repos in use on the active board — derived from tasks (distinct repoFullName)
   const boardRepos = useMemo(() => {
-    const seen = new Map();
+    const seen = new Map<string, { fullName: string; provider: string }>();
     for (const t of allTasks) {
       if (t.deletedAt || !t.repoFullName) continue;
       if (!seen.has(t.repoFullName)) {
@@ -371,14 +449,23 @@ export default function TasksBoard({
   // Active board's project name (derived). Used by CreateTaskModal as the read-only label.
   const activeProjectName = useMemo(() => {
     const fromTask = allTasks.find(t => !t.deletedAt && t.project)?.project;
-    return fromTask || activeBoard?.project_name || null;
+    // `project_name` is not a column of ANY board payload: neither the GET /boards
+    // UNION (api/src/services/database/boards.ts:87-105) nor createBoard /
+    // updateBoard / getBoardById select it, so this fallback has ALWAYS resolved
+    // to undefined at runtime. Kept as a runtime probe rather than deleted, so the
+    // observable result is byte-for-byte what it was — see realBugs.
+    const fromBoard =
+      activeBoard && 'project_name' in activeBoard && typeof activeBoard.project_name === 'string'
+        ? activeBoard.project_name
+        : null;
+    return fromTask || fromBoard || null;
   }, [allTasks, activeBoard]);
 
   // Last repo used on this board — pre-fills the repo picker on new tasks.
   const lastRepoFullName = useMemo(() => {
     const candidate = allTasks
       .filter(t => !t.deletedAt && t.repoFullName && t.createdAt)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+      .sort((a, b) => createdAtMs(b) - createdAtMs(a))[0];
     return candidate?.repoFullName || null;
   }, [allTasks]);
 
@@ -386,7 +473,7 @@ export default function TasksBoard({
   const lastStoragePath = useMemo(() => {
     const candidate = allTasks
       .filter(t => !t.deletedAt && t.storagePath && t.createdAt)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+      .sort((a, b) => createdAtMs(b) - createdAtMs(a))[0];
     return candidate?.storagePath || null;
   }, [allTasks]);
 
@@ -394,7 +481,7 @@ export default function TasksBoard({
   // field a user can see on a task card — title, details, the assigned
   // agent's name, repo and storage path — so any visible text is searchable.
   const agentNameById = useMemo(() => {
-    const m = new Map();
+    const m = new Map<string, string>();
     for (const a of agents) m.set(a.id, a.name || '');
     return m;
   }, [agents]);
@@ -404,8 +491,17 @@ export default function TasksBoard({
       if (agentFilter && t.agentId !== agentFilter) return false;
       if (repoFilter && t.repoFullName !== repoFilter) return false;
       if (q) {
-        const agentName = agentNameById.get(t.agentId) || '';
-        const haystack = [t.text, t.details, t.repoFullName, t.storagePath, t.project, agentName]
+        // `agentId` is null for board-level tasks (MCP add_task) and absent on a
+        // socket frame; Map.get(null) was already returning undefined here.
+        const agentName = (t.agentId && agentNameById.get(t.agentId)) || '';
+        // `details` is not a column of the tasks table and rowToTask never emits
+        // one (api/src/services/database/baseSchema.ts:123-159), so this element
+        // has ALWAYS been undefined and .filter(Boolean) has always dropped it —
+        // the "details" the search tooltip promises is not in fact searched. Kept
+        // as a runtime probe so the haystack stays byte-for-byte what it was —
+        // see realBugs.
+        const details = 'details' in t && typeof t.details === 'string' ? t.details : undefined;
+        const haystack = [t.text, details, t.repoFullName, t.storagePath, t.project, agentName]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();
@@ -428,12 +524,14 @@ export default function TasksBoard({
   // always fall back to the first column, logging once so the underlying
   // data bug can still be diagnosed.
   const resolveTaskColumnId = useCallback(
-    t => {
+    (t: TaskSocketPayload) => {
       const fallbackColId = columns[0]?.id;
       const validColIds = new Set(columns.map(c => c.id));
       // For tasks whose status maps to a column (col.statuses = [col.id] in
       // taskConstants.buildColumns), pick that column.
-      if (t.status !== 'error' && validColIds.has(t.status)) return t.status;
+      // `status` is optional AND nullable on a socket frame; `has(null)` was
+      // already false, so the null test only makes that visible to the checker.
+      if (t.status != null && t.status !== 'error' && validColIds.has(t.status)) return t.status;
       // Errored tasks render in their originating column.
       if (t.status === 'error' && t.errorFromStatus && validColIds.has(t.errorFromStatus)) {
         return t.errorFromStatus;
@@ -454,13 +552,20 @@ export default function TasksBoard({
   // Group by column — error is an internal state, not a workflow column.
   // Use errorFromStatus to keep error tasks visible in their originating column.
   const tasksByColumn = useMemo(() => {
-    const groups = {};
-    const buckets = new Map();
+    const groups: Record<string, TaskSocketPayload[]> = {};
+    const buckets = new Map<string, TaskSocketPayload[]>();
     for (const t of filteredTasks) {
       const colId = resolveTaskColumnId(t);
       if (!colId) continue;
-      if (!buckets.has(colId)) buckets.set(colId, []);
-      buckets.get(colId).push(t);
+      // Same create-then-push as before, written so the bucket is held rather
+      // than re-fetched: Map.has() does not narrow Map.get()'s `| undefined`, and
+      // a stored bucket is always a (truthy) array.
+      let bucket = buckets.get(colId);
+      if (!bucket) {
+        bucket = [];
+        buckets.set(colId, bucket);
+      }
+      bucket.push(t);
     }
     columns.forEach(col => {
       groups[col.id] = sortTasks(buckets.get(col.id) || [], sortBy);
@@ -469,7 +574,7 @@ export default function TasksBoard({
   }, [filteredTasks, columns, sortBy, resolveTaskColumnId]);
 
   const handleDelete = useCallback(
-    async task => {
+    async (task: TaskSocketPayload) => {
       await deleteTaskById(task.id);
       refreshAll();
     },
@@ -477,7 +582,7 @@ export default function TasksBoard({
   );
 
   const handleStopAction = useCallback(
-    async task => {
+    async (task: TaskSocketPayload) => {
       const agentId = task.actionRunningAgentId || task.assignee;
       try {
         if (agentId) {
@@ -502,20 +607,20 @@ export default function TasksBoard({
     [refreshAll]
   );
 
-  const handleResumeTask = useCallback(task => {
+  const handleResumeTask = useCallback((task: TaskSocketPayload) => {
     const socket = getSocket();
     const agentId = task.agentId || task.assignee;
     if (!socket || !agentId) return;
     socket.emit(WsEvents.REQ_TASK_EXECUTE, { agentId, taskId: task.id });
   }, []);
 
-  const handleClearStopped = useCallback(async task => {
+  const handleClearStopped = useCallback(async (task: TaskSocketPayload) => {
     await clearTaskStopped(task.id);
   }, []);
 
   // Helper: reorder tasks in a column after a drop, updating positions via API
   const reorderColumnTasks = useCallback(
-    async (colId, draggedTaskId, dropIdx) => {
+    async (colId: string, draggedTaskId: string, dropIdx: number) => {
       // Get current tasks in this column (sorted by current sort)
       const currentTasks = tasksByColumn[colId] || [];
       // When dragging downward within the same column, the dragged card is still
@@ -534,14 +639,14 @@ export default function TasksBoard({
       const orderedIds = reordered.map(t => t.id);
       // Optimistic UI: update positions in local state
       setDbTasks(prev => {
-        const posMap = new Map(orderedIds.map((id, i) => [id, i]));
+        const posMap = new Map<string, number>(orderedIds.map((id, i) => [id, i]));
         return prev.map(t => (posMap.has(t.id) ? { ...t, position: posMap.get(t.id) } : t));
       });
       // Persist
       try {
         await reorderTasks(orderedIds);
       } catch (err) {
-        console.error('[TasksBoard] Reorder failed:', err.message);
+        console.error('[TasksBoard] Reorder failed:', errorMessage(err));
         refreshAll();
       }
     },
@@ -552,7 +657,12 @@ export default function TasksBoard({
   // handling stays in the callers (drop reorders, touch drop is a no-op), as
   // do the isReadOnly/actionRunning guards and the outer try/catch.
   const moveTaskToColumn = useCallback(
-    async (task, col, insertIdx, errLabel) => {
+    async (
+      task: TaskSocketPayload,
+      col: BoardColumnView,
+      insertIdx: number | undefined,
+      errLabel: string
+    ) => {
       const taskId = task.id;
       const prevStatus = task.status;
       // Optimistic: change status only. Don't stamp updatedAt with the
@@ -573,7 +683,7 @@ export default function TasksBoard({
         }
         refreshAll();
       } catch (apiErr) {
-        console.error(`[TasksBoard] ${errLabel} API failed, reverting:`, apiErr.message);
+        console.error(`[TasksBoard] ${errLabel} API failed, reverting:`, errorMessage(apiErr));
         setDbTasks(prev => prev.map(t => (t.id === taskId ? { ...t, status: prevStatus } : t)));
       } finally {
         // Hold the in-flight guard briefly to cover the window where
@@ -585,9 +695,10 @@ export default function TasksBoard({
   );
 
   const handleDrop = useCallback(
-    async (e, col, dropIdx) => {
+    async (e: DragEvent, col: BoardColumnView, dropIdx: number | undefined) => {
       if (isReadOnly) return;
-      let agentId, taskId;
+      // Both come out of JSON.parse, i.e. from untrusted drag payload data.
+      let agentId: string | undefined, taskId: string | undefined;
       try {
         ({ agentId, taskId } = JSON.parse(e.dataTransfer.getData('application/json')));
       } catch {
@@ -600,24 +711,31 @@ export default function TasksBoard({
         if (task.actionRunning) return;
 
         if (resolveTaskColumnId(task) === col.id) {
-          // Same column — just reorder
+          // Same column — just reorder. `task.id` rather than the parsed
+          // `taskId`: both finds above key on `t.id === taskId`, so they are the
+          // same string, and this one is known to be present.
           if (dropIdx !== undefined) {
-            await reorderColumnTasks(col.id, taskId, dropIdx);
+            await reorderColumnTasks(col.id, task.id, dropIdx);
           }
           return;
         }
 
         await moveTaskToColumn(task, col, dropIdx, 'Drop');
       } catch (err) {
-        console.error('[TasksBoard] Drop status change failed:', err.message);
+        console.error('[TasksBoard] Drop status change failed:', errorMessage(err));
       }
     },
     [allTasks, columns, isReadOnly, reorderColumnTasks, resolveTaskColumnId, moveTaskToColumn]
   );
 
   // Touch drag-and-drop handler
+  // `agentId` is nullable because `Task.agentId` is: a board-level task (MCP
+  // add_task) has none. It only biases the first `find` below, which falls back
+  // to an id-only lookup, so null and the `''` the card used to substitute
+  // resolve the same task — this widens the declaration to the value that was
+  // already arriving, it does not change which task is moved.
   const handleTouchDrop = useCallback(
-    async (agentId, taskId, targetColumnId) => {
+    async (agentId: string | null, taskId: string, targetColumnId: string) => {
       if (isReadOnly) return;
       try {
         let task = allTasks.find(t => t.id === taskId && t.agentId === agentId);
@@ -638,7 +756,7 @@ export default function TasksBoard({
         // Touch drop appends to end of target column
         await moveTaskToColumn(task, col, (tasksByColumn[col.id] || []).length, 'Touch drop');
       } catch (err) {
-        console.error('[TasksBoard] Touch drop failed:', err.message);
+        console.error('[TasksBoard] Touch drop failed:', errorMessage(err));
       }
     },
     [allTasks, columns, isReadOnly, tasksByColumn, resolveTaskColumnId, moveTaskToColumn]
@@ -646,7 +764,7 @@ export default function TasksBoard({
 
   // Batch move all tasks from one column to another
   const handleBatchMove = useCallback(
-    async (sourceColId, targetColId, tasks) => {
+    async (_sourceColId: string, targetColId: string, tasks: TaskSocketPayload[]) => {
       if (isReadOnly || !tasks.length) return;
       const targetCol = columns.find(c => c.id === targetColId);
       if (!targetCol) return;
@@ -660,7 +778,7 @@ export default function TasksBoard({
         await Promise.all(tasks.map(t => updateTaskById(t.id, { column: targetCol.dropStatus })));
         refreshAll();
       } catch (err) {
-        console.error('[TasksBoard] Batch move failed:', err.message);
+        console.error('[TasksBoard] Batch move failed:', errorMessage(err));
         refreshAll();
       } finally {
         setTimeout(() => taskIds.forEach(id => inFlightTaskIds.current.delete(id)), 2000);
@@ -670,7 +788,7 @@ export default function TasksBoard({
   );
 
   const handleBatchDelete = useCallback(
-    async (colId, tasks) => {
+    async (_colId: string, tasks: TaskSocketPayload[]) => {
       if (isReadOnly || !tasks.length) return;
       const taskIds = tasks.map(t => t.id);
       setDbTasks(prev => prev.filter(t => !taskIds.includes(t.id)));
@@ -678,7 +796,7 @@ export default function TasksBoard({
         await Promise.all(tasks.map(t => deleteTaskById(t.id)));
         refreshAll();
       } catch (err) {
-        console.error('[TasksBoard] Batch delete failed:', err.message);
+        console.error('[TasksBoard] Batch delete failed:', errorMessage(err));
         refreshAll();
       }
     },
@@ -700,27 +818,31 @@ export default function TasksBoard({
           await api.attachBoardToProject(projectFilter, board.id);
           board.project_id = projectFilter;
         } catch (err) {
-          console.error('Failed to attach board to project:', err.message);
+          console.error('Failed to attach board to project:', errorMessage(err));
         }
       }
       setBoards(prev => [...prev, board]);
       setActiveBoardId(board.id);
     } catch (err) {
-      console.error('Failed to create board:', err.message);
+      console.error('Failed to create board:', errorMessage(err));
     }
   }, [boards.length, projectFilter]);
 
-  const handleRenameBoard = useCallback(async (boardId, newName) => {
+  const handleRenameBoard = useCallback(async (boardId: string, newName: string) => {
     try {
       const updated = await api.updateBoard(boardId, { name: newName });
-      setBoards(prev => prev.map(b => (b.id === boardId ? updated : b)));
+      // NULLABLE: PUT /boards/:id res.json()s updateBoard()'s `rows[0] || null`
+      // with no guard (api/src/routes/boards.ts:190), so a board deleted under
+      // the rename yields null. Keep the existing entry rather than splicing a
+      // null into the array every later read dereferences — see realBugs.
+      setBoards(prev => prev.map(b => (b.id === boardId && updated ? updated : b)));
     } catch (err) {
-      console.error('Failed to rename board:', err.message);
+      console.error('Failed to rename board:', errorMessage(err));
     }
   }, []);
 
   const handleDeleteBoard = useCallback(
-    async boardId => {
+    async (boardId: string) => {
       if (boards.length <= 1) return;
       try {
         await api.deleteBoard(boardId);
@@ -732,27 +854,29 @@ export default function TasksBoard({
           return remaining;
         });
       } catch (err) {
-        console.error('Failed to delete board:', err.message);
+        console.error('Failed to delete board:', errorMessage(err));
       }
     },
     [boards.length, activeBoardId]
   );
 
   const handleSaveWorkflow = useCallback(
-    async updated => {
+    async (updated: BoardWorkflow) => {
       if (!activeBoardId) return;
       const updatedBoard = await api.updateBoardWorkflow(activeBoardId, updated);
-      setBoards(prev => prev.map(b => (b.id === activeBoardId ? updatedBoard : b)));
+      // Same unguarded `rows[0] || null` as the rename above
+      // (api/src/routes/boards.ts:214) — keep the existing entry when it is null.
+      setBoards(prev => prev.map(b => (b.id === activeBoardId && updatedBoard ? updatedBoard : b)));
     },
     [activeBoardId]
   );
 
   // Track which column is being dragged (for column reorder, distinct from task drag)
-  const [draggingColumnId, setDraggingColumnId] = useState(null);
+  const [draggingColumnId, setDraggingColumnId] = useState<string | null>(null);
 
   // Reorder columns within the workflow (does not edit any other workflow setting)
   const handleReorderColumns = useCallback(
-    async (draggedColId, targetColId, position) => {
+    async (draggedColId: string, targetColId: string, position: string) => {
       if (!workflow || !activeBoardId) return;
       if (draggedColId === targetColId) return;
       const cols = workflow.columns;
@@ -782,7 +906,7 @@ export default function TasksBoard({
       try {
         await handleSaveWorkflow(updated);
       } catch (err) {
-        console.error('[TasksBoard] Column reorder failed:', err.message);
+        console.error('[TasksBoard] Column reorder failed:', errorMessage(err));
         // Reload boards on failure
         try {
           const list = await api.getBoards();
@@ -797,7 +921,7 @@ export default function TasksBoard({
 
   const handleAddColumn = useCallback(async () => {
     if (!workflow || !activeBoardId) return;
-    const slugify = name =>
+    const slugify = (name: string) =>
       name
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
@@ -809,8 +933,8 @@ export default function TasksBoard({
     while (existingIds.has(slugify(name))) {
       name = `${baseName} ${suffix++}`;
     }
-    const newCol = { id: slugify(name), label: name, color: '#6b7280' };
-    const newTransition = {
+    const newCol: BoardWorkflowColumn = { id: slugify(name), label: name, color: '#6b7280' };
+    const newTransition: WorkflowTransition = {
       from: newCol.id,
       trigger: 'on_enter',
       conditions: [],
@@ -821,13 +945,18 @@ export default function TasksBoard({
     };
     const updated = {
       columns: [...workflow.columns, newCol],
-      transitions: [...workflow.transitions, newTransition],
+      // `transitions` is genuinely optional on the wire: a workflow saved by a
+      // column reorder re-emits the key only when the incoming one had an array
+      // (columnIds.ts:171), so this spread can hit undefined. `|| []` matches the
+      // fallback this file already uses for a missing transitions list (see
+      // columnInstructionsMap) — see realBugs.
+      transitions: [...(workflow.transitions || []), newTransition],
       version: workflow.version,
     };
     try {
       await handleSaveWorkflow(updated);
     } catch (err) {
-      console.error('[TasksBoard] Add column failed:', err.message);
+      console.error('[TasksBoard] Add column failed:', errorMessage(err));
     }
   }, [workflow, activeBoardId, handleSaveWorkflow]);
 
@@ -1091,12 +1220,17 @@ export default function TasksBoard({
           agents={agents}
           boardId={activeBoardId}
           onClose={() => setEditInstructionsCol(null)}
-          onSave={async (updatedEntries, newLabel) => {
+          onSave={async (updatedEntries: ColumnInstructionEntry[], newLabel?: string | null) => {
             if (!workflow) return;
-            const updated = JSON.parse(JSON.stringify(workflow));
+            // A deep clone of the active workflow, so it keeps its type.
+            const updated: ActiveWorkflow = JSON.parse(JSON.stringify(workflow));
             for (const entry of updatedEntries) {
-              const action = updated.transitions[entry.transitionIdx]?.actions?.[entry.actionIdx];
-              if (action) {
+              const action = updated.transitions?.[entry.transitionIdx]?.actions?.[entry.actionIdx];
+              // Both guards are no-ops for the entries this modal was opened
+              // with: columnInstructionsMap (:217) only emits an entry when
+              // `transitions` exists and only for a 'run_agent' action. They are
+              // what lets the two writes below narrow off the action union.
+              if (action && action.type === 'run_agent') {
                 action.instructions = entry.instructions;
                 if (entry.role !== undefined) action.role = entry.role;
               }
@@ -1177,19 +1311,33 @@ export default function TasksBoard({
       )}
 
       {/* Commit diff modal from card badge */}
-      {commitModalTask && commitModalTask.commits?.length > 0 && (
+      {/* `commits` is `TaskCommit[]` on a GET /tasks row but absent on a socket
+          frame, so the length test is spelled out rather than optional-chained —
+          same truth value as `commits?.length > 0`, and it narrows the prop. The
+          two `?? null` normalise a frame's ABSENT key to the null the modal
+          declares; it only ever reads their truthiness (and ignores `project`). */}
+      {commitModalTask && commitModalTask.commits && commitModalTask.commits.length > 0 && (
         <AllCommitsDiffModal
           taskId={commitModalTask.id}
           commits={commitModalTask.commits}
           onClose={() => setCommitModalTask(null)}
           initialHash={null}
-          agentId={commitModalTask.agentId}
-          project={commitModalTask.project}
+          agentId={commitModalTask.agentId ?? null}
+          project={commitModalTask.project ?? null}
         />
       )}
 
-      {/* GitHub Activity modal */}
-      {activityTarget && (
+      {/* GitHub Activity modal.
+          Gated on `activeBoardId` the same way the BoardPluginsTab render below
+          is gated on `activeBoard`: every endpoint the modal calls goes through
+          `authorizeBoardAccess('read', 'boardId')`, which answers 400 "boardId
+          required" for a falsy id (api/src/middleware/authz.ts:39) — so the
+          modal has no reachable content without one, and `boardId: string` on
+          both the modal and the four api.ts github wrappers is the honest type.
+          The button that sets `activityTarget` only renders for repos of the
+          active board (boardProjectsWithGithub), so this guard is inert on every
+          path a user can take to open it. */}
+      {activityTarget && activeBoardId && (
         <GitHubActivityModal
           owner={activityTarget.owner}
           repo={activityTarget.repo}

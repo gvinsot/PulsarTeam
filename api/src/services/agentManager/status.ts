@@ -155,7 +155,6 @@ export const statusMethods = {
    * owned tasks). Synchronous so the bulk getters can map over a grouped set
    * without a per-agent await. */
   _buildAgentStatus(this: any, agent: any, todoList: any[]): any {
-    const id = agent.id;
     const waitingTasks = todoList.filter(
       (t: any) => !this._isActiveTaskStatus(t.status) && t.status !== 'done' && t.status !== 'error'
     ).length;
@@ -229,10 +228,9 @@ export const statusMethods = {
     role: string | null = null,
     userBoardIds?: Set<string>
   ): Promise<any[]> {
-    const agents =
-      userId && role
-        ? this._agentsForUser(userId, role, userBoardIds)
-        : Array.from(this.agents.values());
+    const agents = userId
+      ? this._agentsForUser(userId, role, userBoardIds)
+      : Array.from(this.agents.values());
     const enabled = (agents as any[]).filter((a: any) => a.enabled !== false);
     const byAgent = await this._tasksByAgentMap();
     return enabled
@@ -248,10 +246,9 @@ export const statusMethods = {
     userBoardIds?: Set<string>
   ): Promise<any[]> {
     if (!projectName) return [];
-    const agents =
-      userId && role
-        ? this._agentsForUser(userId, role, userBoardIds)
-        : Array.from(this.agents.values());
+    const agents = userId
+      ? this._agentsForUser(userId, role, userBoardIds)
+      : Array.from(this.agents.values());
     const matched = (agents as any[]).filter(
       (a: any) =>
         a.enabled !== false && (a.project || '').toLowerCase() === projectName.toLowerCase()
@@ -268,10 +265,9 @@ export const statusMethods = {
     role: string | null = null,
     userBoardIds?: Set<string>
   ): any {
-    const agents =
-      userId && role
-        ? this._agentsForUser(userId, role, userBoardIds)
-        : Array.from(this.agents.values());
+    const agents = userId
+      ? this._agentsForUser(userId, role, userBoardIds)
+      : Array.from(this.agents.values());
     const enabled = (agents as any[]).filter((a: any) => a.enabled !== false);
     const projectMap: Record<string, any> = {};
     const unassigned: any[] = [];
@@ -321,10 +317,9 @@ export const statusMethods = {
     role: string | null = null,
     userBoardIds?: Set<string>
   ): Promise<any> {
-    const allAgents =
-      userId && role
-        ? this._agentsForUser(userId, role, userBoardIds)
-        : Array.from(this.agents.values());
+    const allAgents = userId
+      ? this._agentsForUser(userId, role, userBoardIds)
+      : Array.from(this.agents.values());
     const enabled = (allAgents as any[]).filter((a: any) => a.enabled !== false);
     const disabled = (allAgents as any[]).filter((a: any) => a.enabled === false);
     const byAgent = await this._tasksByAgentMap();

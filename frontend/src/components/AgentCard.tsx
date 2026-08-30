@@ -1,6 +1,8 @@
-import { MessageSquare, Clock, Cpu, Zap, FolderOpen, Crown, StopCircle } from 'lucide-react';
+import { MessageSquare, Cpu, Zap, FolderOpen, Crown, StopCircle } from 'lucide-react';
+import type { ReactNode } from 'react';
+import type { Agent, AgentRunner, AgentStatusValue } from '../types';
 
-const STATUS_STYLES = {
+const STATUS_STYLES: Record<AgentStatusValue, { dot: string; label: string; textColor: string }> = {
   idle: { dot: 'bg-emerald-500', label: 'Idle', textColor: 'text-emerald-400' },
   busy: { dot: 'bg-amber-500 animate-pulse', label: 'Working...', textColor: 'text-amber-400' },
   error: { dot: 'bg-red-500', label: 'Error', textColor: 'text-red-400' },
@@ -9,7 +11,8 @@ const STATUS_STYLES = {
 // Friendly names for the execution runners. Used when an agent has no explicit
 // LLM config and therefore runs on the runner's built-in default model — in
 // that case provider/model are empty/stale, so we show the runner name instead.
-const RUNNER_LABELS = {
+// Partial: 'aider' and the deprecated 'coder' alias have no entry here.
+const RUNNER_LABELS: Partial<Record<AgentRunner, string>> = {
   sandbox: 'Pulsar Agent',
   claudecode: 'Claude Code',
   openclaw: 'OpenClaw',
@@ -17,6 +20,20 @@ const RUNNER_LABELS = {
   opencode: 'OpenCode',
   codex: 'OpenAI Codex',
 };
+
+interface AgentCardProps {
+  agent: Agent;
+  /** The live streamed "thinking" text, when the agent is mid-turn. */
+  thinking?: string;
+  isSelected?: boolean;
+  /** 'grid' (default card) or 'list'. */
+  viewMode?: string;
+  onClick?: () => void;
+  onStop?: (agentId: string) => void;
+  emphasizedBorder?: boolean;
+  /** Reserved slot under the metrics row — the batch member switcher uses it. */
+  footer?: ReactNode;
+}
 
 export default function AgentCard({
   agent,
@@ -27,7 +44,7 @@ export default function AgentCard({
   onStop,
   emphasizedBorder = false,
   footer = null,
-}) {
+}: AgentCardProps) {
   const effectiveStatus = thinking ? 'busy' : agent.status;
   const status = STATUS_STYLES[effectiveStatus] || STATUS_STYLES.idle;
   const truncatedThinking = thinking
@@ -35,7 +52,7 @@ export default function AgentCard({
     : null;
   const disabled = agent.enabled === false;
   // No explicit LLM config → the agent uses the runner's built-in default model.
-  const runnerLabel = RUNNER_LABELS[agent.runner];
+  const runnerLabel = agent.runner ? RUNNER_LABELS[agent.runner] : undefined;
   const usesRunnerDefaultLlm = !agent.llmConfigId && !!runnerLabel;
 
   if (viewMode === 'list') {
@@ -237,7 +254,7 @@ export default function AgentCard({
   );
 }
 
-function formatTokens(inp, out) {
+function formatTokens(inp: number, out: number) {
   const total = inp + out;
   if (total >= 1000000) return (total / 1000000).toFixed(1) + 'M';
   if (total >= 1000) return (total / 1000).toFixed(1) + 'K';

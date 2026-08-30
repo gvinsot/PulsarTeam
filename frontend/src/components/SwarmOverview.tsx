@@ -12,17 +12,34 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import { api } from '../api';
+import type { Agent } from '../types';
 
-function formatHours(ms) {
+function formatHours(ms: number) {
   if (!ms || ms <= 0) return '0h';
   const hours = ms / 3600000;
   if (hours < 10) return hours.toFixed(1) + 'h';
   return Math.round(hours) + 'h';
 }
 
-export default function SwarmOverview({ stats, agents }) {
+/** The counters Dashboard derives from its project-scoped agent list. */
+interface SwarmStats {
+  total: number;
+  busy: number;
+  idle: number;
+  errors: number;
+  totalTokensIn: number;
+  totalTokensOut: number;
+}
+
+interface SwarmOverviewProps {
+  stats: SwarmStats;
+  agents: Agent[];
+}
+
+export default function SwarmOverview({ stats, agents }: SwarmOverviewProps) {
   const [collapsed, setCollapsed] = useState(true);
-  const [totalHoursMs, setTotalHoursMs] = useState(null);
+  /** null while the 30-day total is still loading. */
+  const [totalHoursMs, setTotalHoursMs] = useState<number | null>(null);
 
   // Count unique active projects
   const activeProjects = new Set(agents.filter(a => a.project).map(a => a.project));
@@ -146,7 +163,7 @@ function StatCard({
   );
 }
 
-function formatNumber(n) {
+function formatNumber(n: number) {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
   return n.toString();

@@ -59,7 +59,10 @@ const outlookSpec: OAuthProviderSpec<MicrosoftOAuthConfig> = {
 
 const refreshOutlookToken = makeRefresh(outlookSpec);
 
-export async function getOutlookAccessTokenForAgent(agentId, boardId = null) {
+export async function getOutlookAccessTokenForAgent(
+  agentId: string | null,
+  boardId: string | null = null
+) {
   return resolveAccessToken('outlook', agentId, boardId, refreshOutlookToken);
 }
 

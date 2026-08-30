@@ -1,16 +1,14 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
+import type { ReactNode } from 'react';
 import {
   X,
   Users,
-  ListTodo,
-  Activity,
   FolderGit2,
   BarChart3,
   FileText,
   Save,
   Loader2,
   KanbanSquare,
-  Plus,
   Trash2,
   GitBranch,
   Cloud,
@@ -22,6 +20,8 @@ import ProjectStats from './ProjectStats';
 import GitHubActivityModal from './GitHubActivityModal';
 import { api } from '../api';
 import { useEscapeKey, useBodyScrollLock } from '../hooks/useDismiss';
+import { errorMessage } from '../utils/errors';
+import type { Agent, BoardListItem, GitHubActivityTarget, ProjectDetail } from '../types';
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: FolderGit2 },
@@ -32,8 +32,20 @@ const TABS = [
   { id: 'statistics', label: 'Statistics', icon: BarChart3 },
 ];
 
-export default function ProjectDetailModal({ projectId, agents = [], onClose, onChange }) {
-  const [project, setProject] = useState(null);
+interface ProjectDetailModalProps {
+  projectId: string;
+  agents?: Agent[];
+  onClose: () => void;
+  onChange?: () => void;
+}
+
+export default function ProjectDetailModal({
+  projectId,
+  agents = [],
+  onClose,
+  onChange,
+}: ProjectDetailModalProps) {
+  const [project, setProject] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
 
@@ -60,7 +72,9 @@ export default function ProjectDetailModal({ projectId, agents = [], onClose, on
   const projectAgents = useMemo(() => {
     if (!project?.boards?.length) return [];
     const boardIds = new Set(project.boards.map(b => b.id));
-    return agents.filter(a => boardIds.has(a.boardId));
+    // `Set<string>.has(null)` was already false for an unassigned agent; the
+    // explicit test keeps that and satisfies the nullable column.
+    return agents.filter(a => a.boardId !== null && boardIds.has(a.boardId));
   }, [project, agents]);
 
   const handleChanged = () => {
@@ -138,7 +152,7 @@ export default function ProjectDetailModal({ projectId, agents = [], onClose, on
 }
 
 /* ── Overview ─────────────────────────────────────────────────────────────── */
-function OverviewTab({ project, agents }) {
+function OverviewTab({ project, agents }: { project: ProjectDetail; agents: Agent[] }) {
   const boards = project.boards || [];
   const repos = project.repos || [];
   const storages = project.storages || [];
@@ -202,8 +216,8 @@ function OverviewTab({ project, agents }) {
 }
 
 /* ── Boards (link/unlink) ─────────────────────────────────────────────────── */
-function BoardsTab({ project, onChanged }) {
-  const [allBoards, setAllBoards] = useState([]);
+function BoardsTab({ project, onChanged }: { project: ProjectDetail; onChanged: () => void }) {
+  const [allBoards, setAllBoards] = useState<BoardListItem[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -216,7 +230,7 @@ function BoardsTab({ project, onChanged }) {
   const linkedIds = new Set((project.boards || []).map(b => b.id));
   const linkable = allBoards.filter(b => !linkedIds.has(b.id) && !b.project_id);
 
-  const link = async boardId => {
+  const link = async (boardId: string) => {
     setBusy(true);
     try {
       await api.attachBoardToProject(project.id, boardId);
@@ -225,7 +239,7 @@ function BoardsTab({ project, onChanged }) {
       setBusy(false);
     }
   };
-  const unlink = async boardId => {
+  const unlink = async (boardId: string) => {
     setBusy(true);
     try {
       await api.detachBoardFromProject(project.id, boardId);
@@ -300,10 +314,10 @@ function BoardsTab({ project, onChanged }) {
 
 /* ── Repos ────────────────────────────────────────────────────────────────── */
 // Read-only — repos are derived from the tasks of the project's boards.
-function ReposTab({ project }) {
+function ReposTab({ project }: { project: ProjectDetail }) {
   const boards = project.boards || [];
   const repos = project.repos || [];
-  const [activityTarget, setActivityTarget] = useState(null);
+  const [activityTarget, setActivityTarget] = useState<GitHubActivityTarget | null>(null);
 
   if (boards.length === 0) {
     return (
@@ -375,7 +389,7 @@ function ReposTab({ project }) {
 
 /* ── Storages ─────────────────────────────────────────────────────────────── */
 // Read-only — storages are derived from the tasks of the project's boards.
-function StoragesTab({ project }) {
+function StoragesTab({ project }: { project: ProjectDetail }) {
   const boards = project.boards || [];
   const storages = project.storages || [];
 
@@ -416,7 +430,7 @@ function StoragesTab({ project }) {
 }
 
 /* ── Context (description + rules editing) ────────────────────────────────── */
-function ContextTab({ project, onSaved }) {
+function ContextTab({ project, onSaved }: { project: ProjectDetail; onSaved?: () => void }) {
   const [name, setName] = useState(project.name || '');
   const [description, setDescription] = useState(project.description || '');
   const [rules, setRules] = useState(project.rules || '');
@@ -437,8 +451,8 @@ function ContextTab({ project, onSaved }) {
       setSaved(true);
       onSaved?.();
       setTimeout(() => setSaved(false), 2000);
-    } catch (err: any) {
-      alert(err.message || 'Failed to save');
+    } catch (err) {
+      alert(errorMessage(err) || 'Failed to save');
     } finally {
       setSaving(false);
     }
@@ -491,12 +505,22 @@ function ContextTab({ project, onSaved }) {
 }
 
 /* ── Statistics ───────────────────────────────────────────────────────────── */
-function StatisticsTab({ project }) {
+function StatisticsTab({ project }: { project: ProjectDetail }) {
   return <ProjectStats projectName={project.name} />;
 }
 
 /* ── Shared subcomponents ─────────────────────────────────────────────────── */
-function SummaryCard({ icon, label, value, color }) {
+function SummaryCard({
+  icon,
+  label,
+  value,
+  color,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: number;
+  color: string;
+}) {
   return (
     <div className="bg-dark-800 border border-dark-700 rounded-lg px-4 py-3">
       <div className={`flex items-center gap-1.5 ${color} mb-1`}>
@@ -508,7 +532,15 @@ function SummaryCard({ icon, label, value, color }) {
   );
 }
 
-function Section({ title, icon, children }) {
+function Section({
+  title,
+  icon,
+  children,
+}: {
+  title: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div>
       <h3 className="text-sm font-semibold text-dark-200 flex items-center gap-2 mb-3">

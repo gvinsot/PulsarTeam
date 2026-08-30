@@ -3,6 +3,7 @@ import { api } from '../api';
 import CredentialConnectWidget, {
   CredentialProviderConfig,
 } from './connect/CredentialConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * WordPress connection widget — Application Password (Basic Auth).
@@ -57,7 +58,7 @@ export default function WordPressConnect({
 }: {
   agentId?: string;
   boardId?: string;
-  onStatusChange?: (status: any) => void;
+  onStatusChange?: (status: ConnectStatus) => void;
 }) {
   return (
     <CredentialConnectWidget

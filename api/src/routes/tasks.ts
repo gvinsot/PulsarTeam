@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess } from '../middleware/authz.js';
@@ -17,13 +18,45 @@ import { validateBody } from '../lib/validate.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { isCliRunner } from '../services/runners.js';
 import { reorderTasksSchema, updateTaskSchema, bulkMoveSchema } from '../schemas/tasks.js';
+import type { UpdateTaskBody } from '../schemas/tasks.js';
+import type { z } from 'zod';
+import type { AgentManager } from '../services/agentManager/index.js';
+import type { Task } from '../services/database/tasks.js';
+import type { SessionClaims } from '../middleware/session.js';
+import type { WorkflowConfig } from '../services/workflow/taskStateMachine.js';
+
+/** Body of PUT /tasks/reorder, derived from the schema `validateBody` runs. */
+type ReorderTasksBody = z.infer<typeof reorderTasksSchema>;
+
+/**
+ * The board shape these helpers read — only the workflow columns are consulted.
+ * `BoardAccessResult.board` is still `any` in middleware/authz.ts, so this is
+ * the narrowest honest contract available from here.
+ */
+type BoardWithWorkflow = { workflow?: WorkflowConfig | null } | null | undefined;
+
+/**
+ * What `applyTaskFieldEdits` may write, which is wider than the read model on
+ * five fields: the PUT body allows `null` where `rowToTask` produces
+ * `undefined` (title, text, taskType, priority), and it carries `dueDate` as an
+ * ISO string while `Task.dueDate` is the `Date` the pg driver returns. Stating
+ * the divergence here keeps `Task` honest for every reader; the mismatch itself
+ * is pre-existing and is left untouched by this annotation pass.
+ */
+type EditableTask = Omit<Task, 'title' | 'text' | 'taskType' | 'priority' | 'dueDate'> & {
+  title?: string | null;
+  text?: string | null;
+  taskType?: string | null;
+  priority?: string | null;
+  dueDate?: Date | string | null;
+};
 
 const router = Router();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Check if the authenticated user has access to a task (via agent ownership OR board access) */
-async function requireTaskAccess(mgr, task, user) {
+async function requireTaskAccess(mgr: AgentManager, task: Task, user: SessionClaims) {
   if (user.role === 'admin') return true;
   const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
   // Agent owner always has access (covers agent-scoped tasks).
@@ -39,7 +72,13 @@ async function requireTaskAccess(mgr, task, user) {
 }
 
 /** Log an audit event for task operations */
-async function auditLog(action, taskId, userId, username, details = null) {
+async function auditLog(
+  action: string,
+  taskId: string | null,
+  userId: string,
+  username: string,
+  details: Record<string, unknown> | null = null
+) {
   const pool = getPool();
   if (!pool) return;
   try {
@@ -49,12 +88,16 @@ async function auditLog(action, taskId, userId, username, details = null) {
       [taskId, action, userId, username, details ? JSON.stringify(details) : null]
     );
   } catch (err) {
-    console.error('Failed to write task audit log:', err.message);
+    console.error('Failed to write task audit log:', errorMessage(err));
   }
 }
 
 /** Validate destination board access (exists + user has write permission) */
-async function validateBoardAccess(boardId, userId, userRole) {
+async function validateBoardAccess(
+  boardId: string | null | undefined,
+  userId: string,
+  userRole: string
+) {
   if (!boardId) return { ok: true, board: null };
   const access = await checkBoardAccess(boardId, userId, userRole, 'edit');
   if (!access.ok) {
@@ -68,7 +111,7 @@ async function validateBoardAccess(boardId, userId, userRole) {
 }
 
 /** Validate that a column exists in a board; fallback to first column */
-function validateColumn(board, columnId) {
+function validateColumn(board: BoardWithWorkflow, columnId: string | undefined) {
   if (!board?.workflow?.columns?.length) return columnId;
   const exists = board.workflow.columns.some(c => c.id === columnId);
   if (exists) return columnId;
@@ -77,25 +120,25 @@ function validateColumn(board, columnId) {
 
 /** Look up a task by id from the DB (the single source of truth). `agentId` is
  * accepted for call-site compatibility but not needed — ids are globally unique. */
-export async function getMemTask(mgr, agentId, taskId) {
+export async function getMemTask(_mgr: AgentManager, _agentId: unknown, taskId: string) {
   return getTaskById(taskId);
 }
 
 /** Clear the actionRunning trio on a task object (uses delete, not = null). */
-function clearActionRunning(t) {
+function clearActionRunning(t: Task) {
   t.actionRunning = false;
   delete t.actionRunningAgentId;
   delete t.actionRunningMode;
 }
 
 /** Stop the agent executing a task and clear its actionRunning flags. */
-function stopTaskExecutor(mgr, task) {
+function stopTaskExecutor(mgr: AgentManager, task: Task) {
   const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
   if (executorId) mgr.stopAgent(executorId);
   clearActionRunning(task);
 }
 
-function requestTaskCliInterrupt(mgr, task): void {
+function requestTaskCliInterrupt(mgr: AgentManager, task: Task): void {
   const executorId = task.actionRunningAgentId || task.assignee || task.agentId;
   if (!executorId || !mgr?.executionManager) return;
   const executor = mgr.agents.get(executorId);
@@ -130,7 +173,12 @@ function requestTaskCliInterrupt(mgr, task): void {
  * error }` when an assignee validation fails so the caller can surface the HTTP
  * error before anything is persisted.
  */
-async function applyTaskFieldEdits(mgr, task, body, user) {
+async function applyTaskFieldEdits(
+  mgr: AgentManager,
+  task: EditableTask,
+  body: UpdateTaskBody,
+  user: SessionClaims
+) {
   const {
     title,
     description,
@@ -322,7 +370,7 @@ router.put(
   '/reorder',
   validateBody(reorderTasksSchema),
   asyncHandler(async (req, res) => {
-    const { orderedIds } = req.body;
+    const { orderedIds }: ReorderTasksBody = req.body;
 
     const pool = getPool();
     if (!pool) return res.status(500).json({ error: 'Database not available' });
@@ -481,7 +529,10 @@ router.post(
       : access.board?.workflow?.columns?.[0]?.id || 'todo';
 
     const now = new Date().toISOString();
-    const results = { moved: [], failed: [] };
+    const results: {
+      moved: { taskId: string; title: string }[];
+      failed: { taskId: string; error: string }[];
+    } = { moved: [], failed: [] };
 
     for (const taskId of taskIds) {
       const task = await mgr.getTask(taskId);
@@ -913,7 +964,16 @@ router.post(
 );
 
 // ── Helper: extract owner/repo from task context ────────────────────────────
-async function resolveOwnerRepo(task, mgr) {
+/**
+ * `githubIssue` is read here but produced by no task row (`rowToTask` never
+ * emits it), so branch 2 below is dead today. Typed as optional rather than
+ * removed: deleting the branch would be a behaviour change.
+ */
+type TaskWithGithubIssue = Task & {
+  githubIssue?: { owner?: string; repo?: string } | null;
+};
+
+async function resolveOwnerRepo(task: TaskWithGithubIssue, mgr: AgentManager) {
   // 1. task.repoFullName (stored directly on the task row)
   if (task.repoFullName && task.repoFullName.includes('/')) {
     const [owner, repo] = task.repoFullName.split('/');
@@ -924,12 +984,35 @@ async function resolveOwnerRepo(task, mgr) {
     return { owner: task.githubIssue.owner, repo: task.githubIssue.repo };
   }
   // 3. Fallback: agent's currently-active project (string in "owner/repo" form)
-  const agentProject = mgr.agents.get(task.agentId)?.project;
+  const agentProject = task.agentId ? mgr.agents.get(task.agentId)?.project : undefined;
   if (agentProject && agentProject.includes('/')) {
     const [owner, repo] = agentProject.split('/');
     if (owner && repo) return { owner, repo };
   }
   return null;
+}
+
+/**
+ * The subset of GitHub's `GET /repos/{owner}/{repo}/commits/{ref}` payload this
+ * route consumes. `Response.json()` hands back `any`, so the shape is declared
+ * where it is read rather than trusted wholesale; every field below is one the
+ * response mapper actually touches.
+ */
+interface GitHubCommitFile {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+}
+
+interface GitHubCommitResponse {
+  sha: string;
+  commit: { message: string; author?: { name?: string; date?: string } };
+  author?: { login?: string } | null;
+  stats?: { additions?: number; deletions?: number; total?: number };
+  files?: GitHubCommitFile[];
 }
 
 // ── GET /tasks/:id/commits/:hash/diff — fetch commit diff from GitHub ───────
@@ -984,7 +1067,7 @@ router.get(
       if (resp.status === 404) return res.status(404).json({ error: 'Commit not found on GitHub' });
       throw new Error(`GitHub API error: ${resp.status} ${resp.statusText}`);
     }
-    const commit = await resp.json();
+    const commit: GitHubCommitResponse = await resp.json();
 
     res.json({
       sha: commit.sha,

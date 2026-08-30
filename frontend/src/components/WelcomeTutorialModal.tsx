@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { api } from '../api';
+import { errorMessage } from '../utils/errors';
+import type { ShowToastFn } from '../types';
 
 type Lang = 'en' | 'fr';
 
@@ -96,7 +98,7 @@ interface Props {
   onTermsAccepted: () => void;
   onTutorialCompleted: () => void;
   onDeclineLogout: () => void;
-  showToast?: (msg: string, type?: string) => void;
+  showToast?: ShowToastFn;
 }
 
 export default function WelcomeTutorialModal({
@@ -128,8 +130,8 @@ export default function WelcomeTutorialModal({
         // No tutorial needed (already completed), just close
         onTutorialCompleted();
       }
-    } catch (err: any) {
-      showToast?.(err?.message || 'Failed to record acceptance', 'error');
+    } catch (err) {
+      showToast?.(errorMessage(err) || 'Failed to record acceptance', 'error');
     } finally {
       setSaving(false);
     }

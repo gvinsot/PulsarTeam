@@ -1,5 +1,23 @@
+import type { Server } from 'socket.io';
 import { getBoardsByUser, updateLastSeen, getPool, getTasksByAgent } from '../services/database.js';
+import { errorMessage } from '../lib/errors.js';
 import { WsEvents } from './events.js';
+import type { AgentManager } from '../services/agentManager/index.js';
+import type { SessionClaims } from '../middleware/session.js';
+
+// ── Socket identity ──────────────────────────────────────────────────
+// index.ts installs an `io.use` guard that verifies the session token and
+// stamps the claims onto the socket, refusing the handshake when it does not
+// verify. Every socket that reaches a `connection` handler has been through
+// that guard, which is why `user` is declared present rather than optional:
+// the only code that ever holds a socket without it is the guard itself, and
+// the guard only writes it. The shape is SessionClaims, the same single
+// definition src/types/express.d.ts pins onto `req.user`.
+declare module 'socket.io' {
+  interface Socket {
+    user: SessionClaims;
+  }
+}
 
 const connectedUserIds = new Set<string>();
 
@@ -33,7 +51,7 @@ export function getDesktopBridgeInfo(
 
 // ── Per-socket rate limiter for mutating WebSocket events ────────────
 function createSocketRateLimiter(maxEvents = 30, windowMs = 60_000) {
-  const timestamps = [];
+  const timestamps: number[] = [];
   return function checkLimit() {
     const now = Date.now();
     const cutoff = now - windowMs;
@@ -45,8 +63,8 @@ function createSocketRateLimiter(maxEvents = 30, windowMs = 60_000) {
 }
 
 // Global dedup cache: stores recently processed messageIds to reject replays.
-const _recentMessageIds = new Map();
-function _trackMessageId(messageId) {
+const _recentMessageIds = new Map<string, number>();
+function _trackMessageId(messageId: string | undefined): boolean {
   if (!messageId) return false;
   if (_recentMessageIds.has(messageId)) return true;
   _recentMessageIds.set(messageId, Date.now());
@@ -54,12 +72,45 @@ function _trackMessageId(messageId) {
   return false;
 }
 
-export function setupSocketHandlers(io, agentManager) {
+// ── Client payload narrowing ─────────────────────────────────────────
+// Socket payloads come straight off the network and nothing validates them on
+// the way in, so every handler below takes `unknown` and reads its fields
+// through these helpers. They are the typed spelling of what the handlers
+// already did by hand: `fields` is the `data || {}` destructuring (a payload
+// that is not an object yields an empty bag) and `str` is the `if (!x) return`
+// guard (a field that is not a string is treated as absent).
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function fields(data: unknown): Record<string, unknown> {
+  return isRecord(data) ? data : {};
+}
+
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** The client chooses whether to ask for an acknowledgement, so the last
+ * argument is either the callback socket.io builds for it, nothing at all, or
+ * — from a client that sent one argument too many — some other value. Handlers
+ * that must always answer route it through here and get a no-op when there is
+ * nothing callable to answer on. */
+type AckCallback = (response: unknown) => void;
+
+function toAck(ack: unknown): AckCallback {
+  if (typeof ack !== 'function') return () => {};
+  return response => {
+    ack(response);
+  };
+}
+
+export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
   io.on('connection', async socket => {
     console.log(`⚡ Client connected: ${socket.user?.username}`);
 
     const checkSocketRate = createSocketRateLimiter(30, 60_000);
-    const chatInFlight = new Set();
+    const chatInFlight = new Set<string>();
 
     // ── Per-user & per-board rooms for isolation ─────────────────────
     const userId = socket.user?.userId;
@@ -72,9 +123,10 @@ export function setupSocketHandlers(io, agentManager) {
       // caused by a transient DB failure would lock this socket out of every
       // board-scoped agent for its whole lifetime — probe the DB to tell a
       // genuinely board-less user apart from a blip, and retry once.
-      if (boards.length === 0 && getPool()) {
+      const pool = getPool();
+      if (boards.length === 0 && pool) {
         try {
-          await getPool().query('SELECT 1');
+          await pool.query('SELECT 1');
           boards = await getBoardsByUser(userId);
         } catch {
           console.error(
@@ -112,8 +164,9 @@ export function setupSocketHandlers(io, agentManager) {
       set.add(socket);
       console.log(`🖥️ Desktop bridge connected for user ${userId}`);
 
-      socket.on(WsEvents.BRIDGE_REGISTER, (data, ack) => {
-        const folders = Array.isArray(data?.folders) ? data.folders.map(String) : [];
+      socket.on(WsEvents.BRIDGE_REGISTER, (data: unknown, ack: unknown) => {
+        const rawFolders = fields(data).folders;
+        const folders = Array.isArray(rawFolders) ? rawFolders.map(String) : [];
         desktopBridgeInfo.set(userId, { folders, registeredAt: Date.now() });
         if (typeof ack === 'function') ack({ ok: true });
         // Notify the user's web UI that the desktop state changed.
@@ -128,7 +181,7 @@ export function setupSocketHandlers(io, agentManager) {
     await agentManager._enrichAllAgentsStats();
     socket.emit(WsEvents.AGENTS_LIST, agentManager.getAllForUser(userId, userRole, userBoardIds));
 
-    function canAccessAgent(agentId) {
+    function canAccessAgent(agentId: string): boolean {
       const agent = agentManager.agents.get(agentId);
       if (!agent) return false;
       if (!agent.boardId) return true;
@@ -162,9 +215,13 @@ export function setupSocketHandlers(io, agentManager) {
     // rejected (and why), or failed mid-flight. Previously rejected messages
     // were silently dropped, which is the root cause of "my message just
     // disappeared" bugs.
-    socket.on(WsEvents.REQ_CHAT, async (data, ack) => {
-      const safeAck = typeof ack === 'function' ? ack : () => {};
-      const { agentId, message, messageId, images } = data || {};
+    socket.on(WsEvents.REQ_CHAT, async (data: unknown, ack: unknown) => {
+      const safeAck = toAck(ack);
+      const payload = fields(data);
+      const agentId = str(payload.agentId);
+      const message = str(payload.message);
+      const messageId = str(payload.messageId);
+      const images = payload.images;
 
       if (!agentId || !message) {
         safeAck({ status: 'error', code: 'invalid', message: 'agentId and message are required' });
@@ -284,8 +341,8 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Broadcast to all agents (tmux) ────────────────────────────────
-    socket.on(WsEvents.REQ_BROADCAST, async data => {
-      const { message } = data || {};
+    socket.on(WsEvents.REQ_BROADCAST, async (data: unknown) => {
+      const message = str(fields(data).message);
       if (!message) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.ERROR, {
@@ -301,7 +358,7 @@ export function setupSocketHandlers(io, agentManager) {
         const visibleIds = new Set(visibleAgents.map(a => a.id));
         const results = await agentManager.broadcastMessage(
           message,
-          (agentId, chunk) => {
+          (agentId: string, chunk: string) => {
             if (!visibleIds.has(agentId)) return;
             const a = agentManager.agents.get(agentId);
             socket.emit(WsEvents.STREAM_CHUNK, { agentId, project: a?.project || null, chunk });
@@ -312,13 +369,16 @@ export function setupSocketHandlers(io, agentManager) {
 
         socket.emit(WsEvents.BROADCAST_COMPLETE, { results });
       } catch (err) {
-        socket.emit(WsEvents.BROADCAST_ERROR, { error: err.message });
+        socket.emit(WsEvents.BROADCAST_ERROR, { error: errorMessage(err) });
       }
     });
 
     // ── Handoff ───────────────────────────────────────────────────────
-    socket.on(WsEvents.REQ_HANDOFF, async data => {
-      const { fromId, toId, context } = data || {};
+    socket.on(WsEvents.REQ_HANDOFF, async (data: unknown) => {
+      const payload = fields(data);
+      const fromId = str(payload.fromId);
+      const toId = str(payload.toId);
+      const context = str(payload.context);
       if (!fromId || !toId || !context) return;
       if (!canAccessAgent(fromId) || !canAccessAgent(toId)) {
         socket.emit(WsEvents.HANDOFF_ERROR, { error: 'Access denied' });
@@ -335,7 +395,7 @@ export function setupSocketHandlers(io, agentManager) {
       try {
         ws.emit(WsEvents.STREAM_START, { agentId: toId, project: targetProject });
 
-        const response = await agentManager.handoff(fromId, toId, context, chunk => {
+        const response = await agentManager.handoff(fromId, toId, context, (chunk: string) => {
           ws.emit(WsEvents.STREAM_CHUNK, { agentId: toId, project: targetProject, chunk });
           ws.thinking(toId);
         });
@@ -344,8 +404,8 @@ export function setupSocketHandlers(io, agentManager) {
 
         socket.emit(WsEvents.HANDOFF_COMPLETE, { fromId, toId, response });
       } catch (err) {
-        ws.streamError(toId, err.message);
-        socket.emit(WsEvents.HANDOFF_ERROR, { error: err.message });
+        ws.streamError(toId, errorMessage(err));
+        socket.emit(WsEvents.HANDOFF_ERROR, { error: errorMessage(err) });
       }
     });
 
@@ -372,8 +432,8 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Get single agent detailed status ──────────────────────────────
-    socket.on(WsEvents.REQ_AGENT_STATUS, async data => {
-      const { agentId } = data || {};
+    socket.on(WsEvents.REQ_AGENT_STATUS, async (data: unknown) => {
+      const agentId = str(fields(data).agentId);
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
       const status = await agentManager.getAgentStatus(agentId);
@@ -383,8 +443,8 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Get agents by project ────────────────────────────────────────
-    socket.on(WsEvents.REQ_BY_PROJECT, async data => {
-      const { project } = data || {};
+    socket.on(WsEvents.REQ_BY_PROJECT, async (data: unknown) => {
+      const project = str(fields(data).project);
       if (!project) return;
       socket.emit(
         WsEvents.REQ_BY_PROJECT,
@@ -401,8 +461,8 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Stop agent ────────────────────────────────────────────────────
-    socket.on(WsEvents.REQ_STOP, data => {
-      const { agentId } = data || {};
+    socket.on(WsEvents.REQ_STOP, (data: unknown) => {
+      const agentId = str(fields(data).agentId);
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
@@ -414,8 +474,10 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Execute single task ─────────────────────────────────────────
-    socket.on(WsEvents.REQ_TASK_EXECUTE, async data => {
-      const { agentId, taskId } = data || {};
+    socket.on(WsEvents.REQ_TASK_EXECUTE, async (data: unknown) => {
+      const payload = fields(data);
+      const agentId = str(payload.agentId);
+      const taskId = str(payload.taskId);
       if (!agentId || !taskId) return;
       if (!canAccessAgent(agentId)) return;
 
@@ -425,8 +487,8 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Execute all pending tasks ─────────────────────────────────────
-    socket.on(WsEvents.REQ_TASK_EXECUTE_ALL, async data => {
-      const { agentId } = data || {};
+    socket.on(WsEvents.REQ_TASK_EXECUTE_ALL, async (data: unknown) => {
+      const agentId = str(fields(data).agentId);
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
@@ -434,8 +496,11 @@ export function setupSocketHandlers(io, agentManager) {
     });
 
     // ── Voice delegation (Realtime API function call relay) ──────────
-    socket.on(WsEvents.REQ_VOICE_DELEGATE, async data => {
-      const { agentId, targetAgentName, task } = data || {};
+    socket.on(WsEvents.REQ_VOICE_DELEGATE, async (data: unknown) => {
+      const payload = fields(data);
+      const agentId = str(payload.agentId);
+      const targetAgentName = str(payload.targetAgentName);
+      const task = str(payload.task);
       if (!agentId || !targetAgentName || !task) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
@@ -473,7 +538,7 @@ export function setupSocketHandlers(io, agentManager) {
         const response = await agentManager.sendMessage(
           targetAgent.id,
           `[TASK from ${leaderName}]: ${task}`,
-          chunk => {
+          (chunk: string) => {
             ws.streamChunk(targetAgent.id, chunk);
             ws.thinking(targetAgent.id);
           }
@@ -488,19 +553,22 @@ export function setupSocketHandlers(io, agentManager) {
           result: response,
         });
       } catch (err) {
-        console.error(`🎙️ [Voice Delegate] Error: ${err.message}`);
+        console.error(`🎙️ [Voice Delegate] Error: ${errorMessage(err)}`);
         socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
           agentId,
           targetAgentName,
-          error: err.message,
+          error: errorMessage(err),
           result: null,
         });
       }
     });
 
     // ── Voice ask (lightweight question to another agent) ────────────
-    socket.on(WsEvents.REQ_VOICE_ASK, async data => {
-      const { agentId, targetAgentName, question } = data || {};
+    socket.on(WsEvents.REQ_VOICE_ASK, async (data: unknown) => {
+      const payload = fields(data);
+      const agentId = str(payload.agentId);
+      const targetAgentName = str(payload.targetAgentName);
+      const question = str(payload.question);
       if (!agentId || !targetAgentName || !question) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.VOICE_ASK_RESULT, {
@@ -546,7 +614,7 @@ export function setupSocketHandlers(io, agentManager) {
         const answer = await agentManager.sendMessage(
           targetAgent.id,
           `[QUESTION from ${voiceName}]: ${question}\n\nPlease provide a concise, direct answer.`,
-          chunk => {
+          (chunk: string) => {
             ws.streamChunk(targetAgent.id, chunk);
           },
           1,
@@ -562,20 +630,22 @@ export function setupSocketHandlers(io, agentManager) {
           result: answer,
         });
       } catch (err) {
-        console.error(`🎙️ [Voice Ask] Error: ${err.message}`);
+        console.error(`🎙️ [Voice Ask] Error: ${errorMessage(err)}`);
         socket.emit(WsEvents.VOICE_ASK_RESULT, {
           agentId,
           targetAgentName,
-          error: err.message,
+          error: errorMessage(err),
           result: null,
         });
       }
     });
 
     // ── Voice management tools (quick sync operations) ────────────────
-    socket.on(WsEvents.REQ_VOICE_MANAGEMENT, async data => {
-      const { agentId, functionName, args: rawArgs } = data || {};
-      const args = rawArgs || {};
+    socket.on(WsEvents.REQ_VOICE_MANAGEMENT, async (data: unknown) => {
+      const payload = fields(data);
+      const agentId = str(payload.agentId);
+      const functionName = str(payload.functionName);
+      const args = fields(payload.args);
       if (!agentId || !functionName) return;
       if (!canAccessAgent(agentId)) {
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
@@ -599,7 +669,7 @@ export function setupSocketHandlers(io, agentManager) {
       }
 
       const userAgents = agentManager.getAllForUser(userId, userRole, userBoardIds);
-      const findAgent = name =>
+      const findAgent = (name: string | undefined) =>
         userAgents.find(
           a =>
             a.name.toLowerCase() === (name || '').toLowerCase() &&
@@ -750,7 +820,7 @@ export function setupSocketHandlers(io, agentManager) {
         } else {
           let target;
           if (entry.needsTarget) {
-            target = findAgent(args.agent_name);
+            target = findAgent(str(args.agent_name));
           }
           if (entry.needsTarget && !target) {
             result = `Agent "${args.agent_name}" not found`;
@@ -766,11 +836,11 @@ export function setupSocketHandlers(io, agentManager) {
           result,
         });
       } catch (err) {
-        console.error(`🎙️ [Voice Management] ${functionName} error: ${err.message}`);
+        console.error(`🎙️ [Voice Management] ${functionName} error: ${errorMessage(err)}`);
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
           agentId,
           functionName,
-          error: err.message,
+          error: errorMessage(err),
           result: null,
         });
       }

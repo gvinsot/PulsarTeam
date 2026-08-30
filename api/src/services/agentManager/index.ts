@@ -6,6 +6,8 @@ import {
   getTaskByIdPrefix,
 } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
+import type { Task } from '../database/tasks.js';
+import type { Agent } from '../database/agents.js';
 
 import { lifecycleMethods } from './lifecycle.js';
 import { chatMethods } from './chat.js';
@@ -14,6 +16,40 @@ import { parsingMethods } from './parsing.js';
 import { tasksMethods } from './tasks.js';
 import { workflowMethods } from './workflow.js';
 import { compactionMethods } from './compaction.js';
+
+/** One entry of a `getLastMessages` payload: a stored conversation message plus
+ * the position it holds in the agent's FULL history (not in the returned
+ * window), which is what lets a caller cite or truncate at it. */
+export interface LastMessageEntry {
+  index: number;
+  role: string;
+  content: string;
+  timestamp: string | null;
+  type: string | null;
+}
+
+/** What `getLastMessages` / `getLastMessagesByName` return: the tail of one
+ * agent's conversation, with the counts needed to place the window. */
+export interface LastMessages {
+  agentId: string;
+  agentName: string;
+  project: string | null;
+  status?: string;
+  totalMessages: number;
+  returned: number;
+  /** The clamped limit actually applied (1..50), not the one requested. */
+  limit: number;
+  messages: LastMessageEntry[];
+}
+
+/**
+ * Streaming sink for a fan-out call: every chunk is tagged with the agent that
+ * produced it, because several agents stream into the same socket at once.
+ */
+export type StreamCallback = (agentId: string, chunk: string) => void;
+
+/** Streaming sink for a single-agent call — chunks arrive in order, untagged. */
+export type HandoffCallback = (chunk: string) => void;
 
 // ─── Interface merging: declare all mixin methods on AgentManager ─────────────
 export interface AgentManager {
@@ -28,11 +64,15 @@ export interface AgentManager {
 
   // ── getters.ts ──
   getAll(): any[];
-  getAllForUser(userId: string, role?: string, userBoardIds?: Set<string>): any[];
-  _agentsForUser(userId: string, role?: string, userBoardIds?: Set<string>): any[];
+  // `userBoardIds` stays optional because the unscoped swarm-leader handlers
+  // (routes/lib/agentStatusHandlers.ts) have no board set to pass. Omitting it
+  // now CLOSES the filter — board-scoped agents are hidden unless `role` is
+  // 'admin' — so `role` must be passed for an admin caller to keep seeing them.
+  getAllForUser(userId: string, role?: string | null, userBoardIds?: Set<string>): any[];
+  _agentsForUser(userId: string, role?: string | null, userBoardIds?: Set<string>): any[];
   getById(id: string): any | null;
-  getLastMessages(agentId: string, limit?: number): any | null;
-  getLastMessagesByName(agentName: string, limit?: number): any | null;
+  getLastMessages(agentId: string, limit?: number): LastMessages | null;
+  getLastMessagesByName(agentName: string, limit?: number): LastMessages | null;
 
   // ── status.ts ──
   _tasksByAgentMap(): Promise<Map<string, any[]>>;
@@ -103,10 +143,15 @@ export interface AgentManager {
   // ── broadcast.ts ──
   broadcastMessage(
     message: string,
-    streamCallback: any,
+    streamCallback: StreamCallback | null,
     agentIdFilter?: Set<string> | null
   ): Promise<any[]>;
-  handoff(fromId: string, toId: string, context: string, streamCallback: any): Promise<any>;
+  handoff(
+    fromId: string,
+    toId: string,
+    context: string,
+    streamCallback?: HandoffCallback
+  ): Promise<any>;
 
   // ── actionLogs.ts ──
   addActionLog(
@@ -116,18 +161,29 @@ export interface AgentManager {
     errorDetail?: string | null
   ): Promise<any | null>;
   clearActionLogs(agentId: string): boolean;
+  // `creatorAgentId` is the task's owning agent, which is NULL for a
+  // board-level task (added unassigned via MCP). The implementation looks the
+  // agent up and returns early when it finds none, so null is accepted here
+  // rather than pushed back onto every caller as a narrowing problem.
+  // `startMsgIdx` / `startedAt` are undefined when a run fails before the
+  // execution window opened (executeRunAgent's catch path): the log entry is
+  // still written, with the whole history and no start timestamp.
   _saveExecutionLog(
-    creatorAgentId: string,
+    creatorAgentId: string | null,
     taskId: string,
     executorId: string,
-    startMsgIdx: number,
-    startedAt: string,
+    startMsgIdx: number | undefined,
+    startedAt: string | undefined,
     success?: boolean,
     actionMode?: string
   ): Promise<void>;
 
   // ── agentFeatures.ts ──
   addRagDocument(agentId: string, name: string, content: string): any | null;
+  // `unknown` rather than `any`: the RAG document shape has no type yet, and
+  // callers only test it for truthiness before sending it back as JSON.
+  addRagUrlDocument(agentId: string, name: string, url: string): Promise<unknown>;
+  refreshRagUrlDocument(agentId: string, docId: string): Promise<unknown>;
   deleteRagDocument(agentId: string, docId: string): boolean;
   assignSkill(agentId: string, skillId: string): string[] | null;
   removeSkill(agentId: string, skillId: string): boolean;
@@ -137,7 +193,9 @@ export interface AgentManager {
   clearHistory(agentId: string): Promise<boolean>;
   reloadContext(agentId: string): Promise<boolean>;
   restartRuntime(agentId: string): Promise<boolean>;
-  truncateHistory(agentId: string, afterIndex: number): any[] | null;
+  // `afterIndex` arrives straight from a route param, so a numeric string is
+  // just as valid as a number — the implementation parseInt()s it either way.
+  truncateHistory(agentId: string, afterIndex: number | string): any[] | null;
   _switchProjectContext(agent: any, oldProject: string | null, newProject: string | null): void;
   buildVoiceInstructions(agentId: string): Promise<string>;
 
@@ -150,12 +208,15 @@ export interface AgentManager {
     errMessage: string,
     finalStatus?: 'error' | 'idle'
   ): void;
+  // `streamCallback` is optional at the call sites that don't stream (REST
+  // POST /agents/:id/message), and the implementation tolerates it missing.
   sendMessage(
     id: string,
     userMessage: string,
-    streamCallback: any,
+    streamCallback?: HandoffCallback,
     delegationDepth?: number,
-    messageMeta?: any
+    messageMeta?: any,
+    images?: unknown[] | null
   ): Promise<any>;
   _cleanMarkdown(response: string): string;
   _buildSystemPrompt(agent: any, id: string, delegationDepth: number): Promise<string>;
@@ -194,7 +255,6 @@ export interface AgentManager {
     llmConfig: any,
     streamCallback: any,
     abortController: AbortController,
-    delegationDepth: number,
     activeTaskId?: string | null
   ): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }>;
   _processPostResponseActions(
@@ -224,10 +284,13 @@ export interface AgentManager {
   _listAvailableProjects(): Promise<string[]>;
 
   // ── tasks.ts ──
+  // `source` describes who created the task ({ type, name }); callers that have
+  // nothing to say about it omit it, and the implementation defaults the
+  // history entry to 'user'.
   addTask(
     agentId: string | null,
     text: string,
-    source: any,
+    source?: any,
     initialStatus?: string,
     options?: {
       boardId?: string;
@@ -244,21 +307,23 @@ export interface AgentManager {
     }
   ): Promise<any | null>;
   toggleTask(agentId: string, taskId: string): Promise<any | null>;
+  // Same as _saveExecutionLog: `agentId` is the task's owning agent and is
+  // null for a board-level task; the lookup no-ops in that case.
   setTaskStatus(
-    agentId: string,
+    agentId: string | null,
     taskId: string,
     status: string,
     options?: { skipAutoRefine?: boolean; by?: string | null }
   ): Promise<any | null>;
-  _editTaskField(
+  _editTaskField<K extends keyof Task>(
     agentId: string,
     taskId: string,
-    field: string,
-    value: any,
-    options?: { by?: string; applyExtra?: (task: any) => void }
-  ): Promise<any | null>;
-  updateTaskTitle(agentId: string, taskId: string, title: string): Promise<any | null>;
-  updateTaskText(agentId: string, taskId: string, text: string): Promise<any | null>;
+    field: K,
+    value: Task[K],
+    options?: { by?: string; applyExtra?: (task: Task) => void }
+  ): Promise<Task | null>;
+  updateTaskTitle(agentId: string | null, taskId: string, title: string): Promise<any | null>;
+  updateTaskText(agentId: string | null, taskId: string, text: string): Promise<any | null>;
   updateTaskRepo(
     agentId: string,
     taskId: string,
@@ -277,7 +342,7 @@ export interface AgentManager {
     storageProvider?: string | null
   ): Promise<any | null>;
   updateTaskType(
-    agentId: string,
+    agentId: string | null,
     taskId: string,
     taskType: string,
     by?: string
@@ -304,16 +369,18 @@ export interface AgentManager {
   executeTask(
     agentId: string,
     taskId: string,
-    streamCallback: any
+    streamCallback: HandoffCallback
   ): Promise<{ taskId: string; response: null }>;
-  executeAllTasks(agentId: string, streamCallback: any): Promise<any[]>;
+  executeAllTasks(agentId: string, streamCallback: HandoffCallback): Promise<any[]>;
   startTaskLoop(intervalMs?: number): void;
   _refreshWorkflowManagedStatuses(): void;
   stopTaskLoop(): void;
   _processRecurringTasks(): Promise<void>;
   _processNextPendingTasks(): void;
+  // `creatorAgentId` is the task's owning agent — null for a board-level task;
+  // the implementation only logs it.
   _waitForExecutionComplete(
-    creatorAgentId: string,
+    creatorAgentId: string | null,
     taskId: string,
     executorId: string,
     executorName: string,
@@ -325,6 +392,10 @@ export interface AgentManager {
   saveTaskDirectly(task: any): any;
   _enqueueAgentTask(agentId: string, taskFn: () => Promise<any>): Promise<any>;
   _resolveTaskRef(idOrPrefix: string): Promise<{ task: any; agentId: string | null } | null>;
+  /** Pops the auth error a CLI runner recorded for this task, if any. */
+  _consumeTaskAuthError(taskId: string): string | null;
+  /** Drops a stale stop signal so the next run isn't cancelled on arrival. */
+  _clearStopSignal(taskId: string): void;
 
   // ── workflow.ts ──
   _evaluateCondition(cond: any, task: any): boolean;
@@ -369,8 +440,31 @@ export interface ActiveStream {
   userMessageId: string | null;
 }
 
+/**
+ * The effective LLM settings for one agent: its named llm_configs row when it
+ * has one, otherwise the agent's own overrides. Both branches of
+ * `resolveLlmConfig` build exactly these keys, so consumers can rely on every
+ * one of them being present (empty string / null / false when unresolved)
+ * rather than testing for existence.
+ */
+export interface ResolvedLlmConfig {
+  provider: string;
+  model: string;
+  endpoint: string;
+  apiKey: string;
+  isReasoning: boolean;
+  temperature: number | null;
+  managesContext: boolean;
+  supportsImages: boolean;
+  maxTokens: number;
+  contextLength: number;
+  costPerInputToken: number | null;
+  costPerOutputToken: number | null;
+  configName: string | null;
+}
+
 export class AgentManager {
-  agents: Map<string, any>;
+  agents: Map<string, Agent>;
   abortControllers: Map<string, AbortController>;
   _taskQueues: Map<string, Promise<any>>;
   _chatLocks: Map<string, string>;
@@ -434,6 +528,7 @@ export class AgentManager {
       this._enrichAgentStats.bind(this)
     );
     this._conditionProcessing = new Map();
+    this._onEnterRetry = new Map();
     this._decideNoDecisionCounts = new Map();
     this.llmConfigs = new Map();
 
@@ -485,7 +580,7 @@ export class AgentManager {
     }
   }
 
-  resolveLlmConfig(agent: any) {
+  resolveLlmConfig(agent: Agent): ResolvedLlmConfig {
     if (agent.llmConfigId) {
       const config = this.llmConfigs.get(agent.llmConfigId);
       if (config) {
@@ -778,7 +873,7 @@ export class AgentManager {
     role: string | null,
     userBoardIds: Set<string>
   ): ActiveStream[] {
-    const accessible = this._agentsForUser(userId, role || undefined, userBoardIds);
+    const accessible = this._agentsForUser(userId, role, userBoardIds);
     const accessibleIds = new Set(accessible.map((a: any) => a.id));
     const out: ActiveStream[] = [];
     for (const [id, stream] of this._activeStreams) {

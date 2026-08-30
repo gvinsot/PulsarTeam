@@ -3,6 +3,7 @@ import { api } from '../api';
 import CredentialConnectWidget, {
   CredentialProviderConfig,
 } from './connect/CredentialConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * Jira connection widget — thin config over the shared CredentialConnectWidget.
@@ -62,7 +63,7 @@ export default function JiraConnect({
 }: {
   agentId?: string;
   boardId?: string;
-  onStatusChange?: (status: any) => void;
+  onStatusChange?: (status: ConnectStatus) => void;
 }) {
   return (
     <CredentialConnectWidget

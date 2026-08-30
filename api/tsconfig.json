@@ -14,40 +14,37 @@
     "declarationMap": true,
     "sourceMap": true,
 
-    // ── Strictness ratchet ────────────────────────────────────────────────
-    // `strict` stays off, but not as a blanket exemption: every flag it implies
-    // is listed below with its real cost, so the next step is a decision rather
-    // than an archaeology exercise. Counts are `npx tsc --noEmit --<flag>` on
-    // the tree as of the commit that added this block.
+    // ── Strict ────────────────────────────────────────────────────────────
+    // The ratchet is finished. `strict` covers all eight flags that used to be
+    // listed here one by one, so the list is gone rather than kept as a
+    // redundant restatement — and turning `strict` off to dodge a single error
+    // would now silently give up all eight at once. Don't.
     //
-    // Turn one on, fix its errors, delete its line from the "not yet" group.
-    // Never move a line back — `npm run lint` and the build are the gate.
-    "strict": false,
+    // What it cost, for whoever inherits the next migration: 136 catch clauses,
+    // 117 dead locals and unused parameters, 440 strictNullChecks errors and
+    // 744 noImplicitAny ones. Two lessons worth carrying forward.
+    //
+    // First, the headline count lies about the work. Almost none of the
+    // null-check errors were about nullity: `let x = null` and `const xs = []`
+    // widen to `any` without the flag, so they surface as "property does not
+    // exist on type 'never'". Two annotations carried 194 of that total on
+    // their own — `pool: Pool | null` in services/database/connection.ts, where
+    // the `if (!pool) return` guards were already written everywhere and simply
+    // never narrowed, and the `ToolCall` interface on parseToolCalls. Look for
+    // those before dividing the file list among people.
+    //
+    // Second, no `!` was used to close any of them, and none should be. A
+    // non-null assertion is precisely the lie these flags exist to prevent; one
+    // appearing here later is unpaid debt, not a fix. Same for `: any` on a
+    // parameter — `npm run lint` pins the explicit-any count, so that shortcut
+    // breaks the build rather than passing quietly.
+    "strict": true,
 
-    // Enabled: currently clean, so they are free and permanent.
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "noFallthroughCasesInSwitch": true,
-
-    // Enabled: 68 route handlers were fixed to satisfy this (the Express
-    // `if (bad) return res.status(400).json(...)` idiom became
-    // `if (bad) { res.status(400).json(...); return; }`).
+    // Not implied by `strict`, so still spelled out:
     "noImplicitReturns": true,
-
-    // Not yet — each is a standalone piece of work, ordered cheapest first:
-    //   "useUnknownInCatchVariables": 135 errors, all `err.message` on unknown.
-    //     Wants a shared `errorMessage(e: unknown): string` helper.
-    //   "noUnusedLocals": 27 errors.
-    //   "noUnusedParameters": 90 errors (mostly `_`-prefixable).
-    //   "strictNullChecks": 442 errors. The big one, and the one that would
-    //     actually catch bugs; also unlocks strictPropertyInitialization (1).
-    //   "noImplicitAny": 969 errors. Do it after strictNullChecks — a lot of
-    //     these disappear once the null-checked types propagate.
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noImplicitAny": false
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]

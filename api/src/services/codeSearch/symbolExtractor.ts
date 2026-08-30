@@ -36,16 +36,51 @@ const RESERVED_METHOD_NAMES = new Set([
   'try',
 ]);
 
-function toUnixNewlines(content) {
+/**
+ * A symbol located by one of the language extractors, before its `summary` is
+ * computed. `parentName` is only set for symbols nested inside a class.
+ */
+interface RawSymbol {
+  name: string;
+  qualifiedName: string;
+  kind: string;
+  signature: string;
+  startLine: number;
+  endLine: number;
+  source: string;
+  parentName?: string;
+}
+
+/** A `RawSymbol` once its doc/comment summary has been resolved. */
+export interface ExtractedSymbol extends RawSymbol {
+  summary: string;
+}
+
+/**
+ * A Python `class`/`def` header found during the first pass. `endLine` is a
+ * placeholder until the second pass back-fills it from the indentation of the
+ * following definition; nothing reads it before then.
+ */
+interface PythonDefinition {
+  index: number;
+  startLine: number;
+  indent: number;
+  name: string;
+  kind: string;
+  signature: string;
+  endLine: number;
+}
+
+function toUnixNewlines(content: string): string {
   return String(content).replace(/\r\n/g, '\n');
 }
 
-function countIndent(line) {
+function countIndent(line: string): number {
   const match = line.match(/^\s*/);
   return match ? match[0].replace(/\t/g, '    ').length : 0;
 }
 
-function countBraces(line) {
+function countBraces(line: string): { open: number; close: number } {
   let open = 0;
   let close = 0;
   let inSingle = false;
@@ -94,8 +129,8 @@ function countBraces(line) {
   return { open, close };
 }
 
-function extractLeadingComment(lines, startIndex, language) {
-  const collected = [];
+function extractLeadingComment(lines: string[], startIndex: number, language: string): string {
+  const collected: string[] = [];
 
   for (let index = startIndex - 1; index >= 0; index -= 1) {
     const raw = lines[index];
@@ -152,7 +187,7 @@ function extractLeadingComment(lines, startIndex, language) {
   return collected.filter(Boolean).join(' ').trim();
 }
 
-function extractPythonDocstring(lines, startLine, endLine) {
+function extractPythonDocstring(lines: string[], startLine: number, endLine: number): string {
   let index = startLine;
 
   while (index < Math.min(lines.length, endLine) && !lines[index].trim()) {
@@ -186,7 +221,7 @@ function extractPythonDocstring(lines, startLine, endLine) {
   return parts.filter(Boolean).join(' ').trim();
 }
 
-function findBlockEndJs(lines, startIndex) {
+function findBlockEndJs(lines: string[], startIndex: number): number {
   let depth = 0;
   let hasOpened = false;
   let scannedChars = 0;
@@ -215,7 +250,7 @@ function findBlockEndJs(lines, startIndex) {
   return Math.min(lines.length, startIndex + 1);
 }
 
-function findInnermostClass(classSymbols, lineNumber) {
+function findInnermostClass(classSymbols: RawSymbol[], lineNumber: number): RawSymbol | null {
   return (
     classSymbols
       .filter(symbol => lineNumber > symbol.startLine && lineNumber <= symbol.endLine)
@@ -225,23 +260,23 @@ function findInnermostClass(classSymbols, lineNumber) {
   );
 }
 
-function createSource(lines, startLine, endLine) {
+function createSource(lines: string[], startLine: number, endLine: number): string {
   return lines
     .slice(startLine - 1, endLine)
     .join('\n')
     .trimEnd();
 }
 
-function createSummary(lines, symbol, language) {
+function createSummary(lines: string[], symbol: RawSymbol, language: string): string {
   const docstring =
     language === 'python' ? extractPythonDocstring(lines, symbol.startLine, symbol.endLine) : '';
   const leading = extractLeadingComment(lines, symbol.startLine - 1, language);
   return docstring || leading || symbol.signature;
 }
 
-function extractJavaScriptSymbols(lines, language) {
-  const classSymbols = [];
-  const symbols = [];
+function extractJavaScriptSymbols(lines: string[], language: string): ExtractedSymbol[] {
+  const classSymbols: RawSymbol[] = [];
+  const symbols: RawSymbol[] = [];
 
   const pushSymbol = (
     index: number,
@@ -331,8 +366,8 @@ function extractJavaScriptSymbols(lines, language) {
   return allSymbols;
 }
 
-function extractPythonSymbols(lines) {
-  const definitions = [];
+function extractPythonSymbols(lines: string[]): ExtractedSymbol[] {
+  const definitions: PythonDefinition[] = [];
   const classRegex = /^\s*class\s+([A-Za-z_][\w]*)\s*(?:\([^)]*\))?\s*:/;
   const functionRegex = /^\s*def\s+([A-Za-z_][\w]*)\s*\(([^)]*)\)\s*:/;
 
@@ -347,6 +382,7 @@ function extractPythonSymbols(lines) {
         name: match[1],
         kind: 'class',
         signature: line.trim(),
+        endLine: 0,
       });
       continue;
     }
@@ -360,6 +396,7 @@ function extractPythonSymbols(lines) {
         name: match[1],
         kind: 'function',
         signature: line.trim(),
+        endLine: 0,
       });
     }
   }
@@ -385,7 +422,7 @@ function extractPythonSymbols(lines) {
     .map(definition => {
       let qualifiedName = definition.name;
       let kind = definition.kind;
-      let parentName = null;
+      let parentName: string | null = null;
 
       if (definition.kind === 'function') {
         const parentClass =
@@ -405,7 +442,7 @@ function extractPythonSymbols(lines) {
         }
       }
 
-      const symbol: any = {
+      const symbol: RawSymbol = {
         name: definition.name,
         qualifiedName,
         kind,
@@ -413,16 +450,15 @@ function extractPythonSymbols(lines) {
         startLine: definition.startLine,
         endLine: definition.endLine,
         source: createSource(lines, definition.startLine, definition.endLine),
+        ...(parentName ? { parentName } : {}),
       };
 
-      if (parentName) symbol.parentName = parentName;
-      symbol.summary = createSummary(lines, symbol, 'python');
-      return symbol;
+      return { ...symbol, summary: createSummary(lines, symbol, 'python') };
     })
     .sort((left, right) => left.startLine - right.startLine || left.kind.localeCompare(right.kind));
 }
 
-function extractGenericSymbols(lines, language) {
+function extractGenericSymbols(lines: string[], language: string): ExtractedSymbol[] {
   const patterns = [
     {
       kind: 'class',
@@ -435,7 +471,7 @@ function extractGenericSymbols(lines, language) {
     },
   ];
 
-  const symbols = [];
+  const symbols: ExtractedSymbol[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     for (const pattern of patterns) {
@@ -445,7 +481,7 @@ function extractGenericSymbols(lines, language) {
       const startLine = index + 1;
       const endLine = findBlockEndJs(lines, index);
 
-      const symbol: any = {
+      const symbol: RawSymbol = {
         name: match[1],
         qualifiedName: match[1],
         kind: pattern.kind,
@@ -454,8 +490,7 @@ function extractGenericSymbols(lines, language) {
         endLine,
         source: createSource(lines, startLine, endLine),
       };
-      symbol.summary = createSummary(lines, symbol, language);
-      symbols.push(symbol);
+      symbols.push({ ...symbol, summary: createSummary(lines, symbol, language) });
       break;
     }
   }
@@ -463,17 +498,20 @@ function extractGenericSymbols(lines, language) {
   return symbols;
 }
 
-function detectLanguage(filePath) {
+function detectLanguage(filePath: string): string {
   const extension = path.extname(filePath).toLowerCase();
   return LANGUAGE_BY_EXTENSION.get(extension) || 'text';
 }
 
-export function extractSymbolsFromContent(filePath, content) {
+export function extractSymbolsFromContent(
+  filePath: string,
+  content: string
+): { language: string; symbols: ExtractedSymbol[] } {
   const language = detectLanguage(filePath);
   const normalized = toUnixNewlines(content);
   const lines = normalized.split('\n');
 
-  let symbols = [];
+  let symbols: ExtractedSymbol[] = [];
   if (JS_LIKE_LANGUAGES.has(language)) {
     symbols = extractJavaScriptSymbols(lines, language);
   } else if (language === 'python') {

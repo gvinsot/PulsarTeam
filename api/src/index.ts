@@ -48,6 +48,7 @@ import { outlookRoutes } from './routes/outlook.js';
 import { createOutlookMcpHandler } from './services/outlookMcp.js';
 import { gmailRoutes } from './routes/gmail.js';
 import { createGmailMcpHandler } from './services/gmailMcp.js';
+import type { RunnerExecBridge } from './services/mcpAttachments.js';
 import { gdriveRoutes } from './routes/gdrive.js';
 import { googleOAuthRedirectRouter } from './routes/googleOAuth.js';
 import { createGdriveMcpHandler } from './services/gdriveMcp.js';
@@ -268,7 +269,7 @@ app.use('/api/codex-auth', authenticateToken, codexAuthRoutes());
 // Pass the executionManager as the runner bridge so the Gmail and Outlook
 // MCPs can read agent-side attachment paths (which live in the runner
 // container, not in the API container's filesystem).
-const execBridge = {
+const execBridge: RunnerExecBridge = {
   exec: (agentId, command, options) => executionManager.exec(agentId, command, options),
 };
 
@@ -309,7 +310,7 @@ app.all('/api/swarm/mcp', authenticateApiKey, (req, res) => swarmApiMcpHandler(r
 app.use('/api/swarm', authenticateApiKey, swarmApiRoutes(agentManager));
 
 // Public liveness probe — returns minimal info for health checks
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (_req, res) => {
   const dbConnected = isDatabaseConnected();
   res.json({
     status: 'ok',
@@ -318,10 +319,10 @@ app.get('/api/health', (req, res) => {
 });
 
 // Detailed status — requires authentication
-app.get('/api/health/details', authenticateToken, (req, res) => {
+app.get('/api/health/details', authenticateToken, (_req, res) => {
   const allAgents = Array.from(agentManager.agents.values());
   const enabled = allAgents.filter(a => a.enabled !== false);
-  const projectCounts = {};
+  const projectCounts: Record<string, number> = {};
   let unassigned = 0;
   for (const a of enabled) {
     if (a.project) {
@@ -387,7 +388,7 @@ io.use((socket, next) => {
   const claims = verifySessionToken(token);
   if (!claims) return next(new Error('Invalid token'));
 
-  (socket as any).user = claims;
+  socket.user = claims;
   next();
 });
 

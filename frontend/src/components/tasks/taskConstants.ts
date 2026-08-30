@@ -1,7 +1,33 @@
 import { Bug, Sparkles, Wrench, ArrowUpCircle, BookOpen, HelpCircle } from 'lucide-react';
+import type { TaskRecurrenceInput } from '../../api';
+import type {
+  BoardWorkflowColumn,
+  TaskPriority,
+  TaskRecurrence,
+  TaskSource,
+  WorkflowAction,
+  WorkflowTransition,
+} from '../../types';
 
 // ── Color mapping (hex → Tailwind classes) ──────────────────────────────────
 
+/** The Tailwind class set one column color resolves to. UI-LOCAL: no API
+ *  producer emits this — it is what COLOR_MAP stores per hex. */
+export interface ColumnColorClasses {
+  dot: string;
+  headerText: string;
+  headerTextLight: string;
+  countCls: string;
+  countClsLight: string;
+  dropRing: string;
+  headerActive: string;
+  statusDot: string;
+  statusText: string;
+}
+
+// `satisfies` rather than a `Record<string, …>` annotation: the checked shape is
+// the same, but the KEYS stay literal, so `ColumnColor` below is the real set of
+// styled hexes (the seven of AVAILABLE_COLORS) instead of `string`.
 export const COLOR_MAP = {
   '#a855f7': {
     dot: 'bg-purple-500',
@@ -80,15 +106,50 @@ export const COLOR_MAP = {
     statusDot: 'bg-slate-400',
     statusText: 'text-slate-300',
   },
-};
+} satisfies Record<string, ColumnColorClasses>;
 
-const DEFAULT_COLOR = COLOR_MAP['#6b7280'];
+/** A hex COLOR_MAP actually styles. `BoardWorkflowColumn.color` is a free string,
+ *  so this is the subset, not the field's type. */
+export type ColumnColor = keyof typeof COLOR_MAP;
 
-export function colorClasses(hex) {
-  return COLOR_MAP[hex] || DEFAULT_COLOR;
+const DEFAULT_COLOR: ColumnColorClasses = COLOR_MAP['#6b7280'];
+
+const isColumnColor = (hex: string): hex is ColumnColor =>
+  Object.prototype.hasOwnProperty.call(COLOR_MAP, hex);
+
+/** `hex` is a `BoardWorkflowColumn['color']`: optional on the wire and free-form
+ *  when present, hence the fallback rather than a lookup. */
+export function colorClasses(hex?: string): ColumnColorClasses {
+  return hex && isColumnColor(hex) ? COLOR_MAP[hex] : DEFAULT_COLOR;
 }
 
-export function buildColumns(workflowColumns) {
+/** One rendered kanban column: a workflow column resolved against COLOR_MAP.
+ *  UI-LOCAL — buildColumns is its only producer. */
+export interface BoardColumnView {
+  /** The workflow column id, i.e. the task status this column holds. */
+  id: string;
+  label: string;
+  /** Always exactly `[id]`; kept as an array because the board matches tasks
+   *  against a column's status LIST. */
+  statuses: string[];
+  dropStatus: string;
+  dot: string;
+  headerText: string;
+  headerTextLight: string;
+  countCls: string;
+  countClsLight: string;
+  dropRing: string;
+  headerActive: string;
+  /** The four display flags, defaulted here so consumers read a plain boolean —
+   *  they are `.passthrough()` extras on the wire and genuinely absent on
+   *  columns written before the workflow editor added them. */
+  showAgent: boolean;
+  showCreator: boolean;
+  showProject: boolean;
+  showTaskType: boolean;
+}
+
+export function buildColumns(workflowColumns: BoardWorkflowColumn[]): BoardColumnView[] {
   return workflowColumns.map(col => {
     const c = colorClasses(col.color);
     return {
@@ -111,7 +172,17 @@ export function buildColumns(workflowColumns) {
   });
 }
 
-export function buildStatusOptions(workflowColumns) {
+/** One entry of the status picker the task modals render. `value` is the column
+ *  id (BoardWorkflowColumn.id), which is exactly what `Task.status` stores;
+ *  `dot`/`text` are the Tailwind classes from COLOR_MAP. */
+export interface StatusOption {
+  value: string;
+  label: string;
+  dot: string;
+  text: string;
+}
+
+export function buildStatusOptions(workflowColumns: BoardWorkflowColumn[]): StatusOption[] {
   return workflowColumns.map(col => {
     const c = colorClasses(col.color);
     return { value: col.id, label: col.label, dot: c.statusDot, text: c.statusText };
@@ -120,7 +191,11 @@ export function buildStatusOptions(workflowColumns) {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-export function timeAgo(iso) {
+// The four helpers below all take an ISO 8601 timestamp that may be ABSENT
+// (`|| undefined` in rowToTask drops the key) or an explicit NULL (the socket
+// frames write one) — which is exactly why each opens on a falsiness guard.
+
+export function timeAgo(iso?: string | null): string {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
@@ -131,7 +206,7 @@ export function timeAgo(iso) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export function formatDate(iso) {
+export function formatDate(iso?: string | null): string | null {
   if (!iso) return null;
   return new Date(iso).toLocaleString(undefined, {
     year: 'numeric',
@@ -142,13 +217,25 @@ export function formatDate(iso) {
   });
 }
 
-export const SOURCE_META = {
+/** One provenance badge. UI-LOCAL. */
+export interface SourceMeta {
+  /** Both consumers pick the entry from a truthy `task.source` and then pass
+   *  `task.source` again at render time, where the narrowing no longer holds —
+   *  so the argument's type really is the field's own (optional AND nullable on
+   *  a socket frame), even though it is never absent at that call. */
+  label: (source?: TaskSource | null) => string;
+  cls: string;
+}
+
+/** Keyed on `TaskSource.type`, which is rule 2 (open) — hence the plain
+ *  `Record` and the `|| SOURCE_META.api` fallback both consumers apply. */
+export const SOURCE_META: Record<string, SourceMeta> = {
   user: {
     label: s => (s?.name ? s.name : 'User'),
     cls: 'text-blue-400 bg-blue-500/10 ring-blue-500/20',
   },
   agent: {
-    label: s => s.name || 'Agent',
+    label: s => s?.name || 'Agent',
     cls: 'text-purple-400 bg-purple-500/10 ring-purple-500/20',
   },
   api: { label: () => 'API', cls: 'text-slate-400 bg-slate-500/10 ring-slate-500/20' },
@@ -196,7 +283,17 @@ export const TASK_TYPES = [
   },
 ];
 
-export const TASK_TYPE_MAP = Object.fromEntries(TASK_TYPES.map(t => [t.value, t]));
+/** One TASK_TYPES row. Named so the lookup below has something to be a map OF. */
+export type TaskTypeOption = (typeof TASK_TYPES)[number];
+
+// The callback's return annotation is load-bearing: without it `[t.value, t]`
+// infers as `(string | TaskTypeOption)[]`, Object.fromEntries falls through to
+// its `any` overload, and the whole map (plus every read off it) goes untyped.
+// Spelling the pair as a TUPLE selects the real overload, which returns
+// `{ [k: string]: TaskTypeOption }`.
+export const TASK_TYPE_MAP = Object.fromEntries(
+  TASK_TYPES.map((t): [string, TaskTypeOption] => [t.value, t])
+);
 
 // ── Execution mode labels (history entries) ─────────────────────────────────
 
@@ -223,7 +320,11 @@ export const RECURRENCE_PERIODS = [
 // Recurrence payload sent to the API when recurrence is enabled. Call sites
 // keep their own disabled branch ({ enabled: false } on update vs undefined
 // on create) because the wire formats differ deliberately.
-export function buildRecurrence(period, customMinutes, retentionDays) {
+export function buildRecurrence(
+  period: string,
+  customMinutes: number,
+  retentionDays: number
+): TaskRecurrenceInput {
   return {
     enabled: true,
     period,
@@ -237,7 +338,7 @@ export function buildRecurrence(period, customMinutes, retentionDays) {
 
 // Display label for a stored recurrence (custom intervals are spelled out,
 // so the table's 'Custom interval' label is never shown).
-export function recurrenceLabel(rec) {
+export function recurrenceLabel(rec: TaskRecurrence): string {
   if (rec.period === 'custom') return `Every ${rec.intervalMinutes} min`;
   return RECURRENCE_PERIODS.find(p => p.value === rec.period)?.label || rec.period;
 }
@@ -275,11 +376,17 @@ export const PRIORITIES = [
   },
 ];
 
-export const PRIORITY_MAP = Object.fromEntries(PRIORITIES.map(p => [p.value, p]));
+/** One PRIORITIES row. */
+export type PriorityOption = (typeof PRIORITIES)[number];
+
+// Same tuple annotation as TASK_TYPE_MAP, for the same overload reason.
+export const PRIORITY_MAP = Object.fromEntries(
+  PRIORITIES.map((p): [string, PriorityOption] => [p.value, p])
+);
 
 // ── Sort helpers ─────────────────────────────────────────────────────────────
 
-export function isToday(iso) {
+export function isToday(iso?: string | null): boolean {
   if (!iso) return false;
   const d = new Date(iso);
   const now = new Date();
@@ -300,7 +407,22 @@ export const SORT_OPTIONS = [
   { value: 'priority_desc', label: 'Priority (low first)' },
 ];
 
-export function sortTasks(tasks, sortBy) {
+/**
+ * The four fields the comparators below read. Deliberately a structural minimum
+ * instead of `Task`: the board sorts `TaskSocketPayload`s, whose every key is
+ * optional AND nullable, and the sort must hand back the SAME element type it
+ * was given — hence the type parameter on sortTasks.
+ */
+export interface SortableTask {
+  position?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  priority?: TaskPriority | null;
+}
+
+/** `sortBy` is a SORT_OPTIONS value, plus the two legacy 'date_*' aliases the
+ *  switch still honours — no closed union, the value comes out of localStorage. */
+export function sortTasks<T extends SortableTask>(tasks: T[], sortBy: string): T[] {
   const sorted = [...tasks];
   switch (sortBy) {
     case 'manual':
@@ -328,11 +450,13 @@ export function sortTasks(tasks, sortBy) {
           new Date(a.updatedAt || a.createdAt || 0).getTime()
       );
     case 'priority_asc': {
-      const order = t => PRIORITY_MAP[t.priority]?.sortOrder ?? 99;
+      // `?? ''` only stands in for the absent key: PRIORITY_MAP has no ''
+      // entry, so an unset priority still falls through to the default below.
+      const order = (t: SortableTask) => PRIORITY_MAP[t.priority ?? '']?.sortOrder ?? 99;
       return sorted.sort((a, b) => order(a) - order(b));
     }
     case 'priority_desc': {
-      const order = t => PRIORITY_MAP[t.priority]?.sortOrder ?? -1;
+      const order = (t: SortableTask) => PRIORITY_MAP[t.priority ?? '']?.sortOrder ?? -1;
       return sorted.sort((a, b) => order(b) - order(a));
     }
     default:
@@ -370,7 +494,11 @@ export const ACTION_OPTIONS = [
   { value: 'change_status', label: 'Move to status' },
 ];
 
-export function createAction(key, cols) {
+/** `key` is an ACTION_OPTIONS value, but it arrives straight off a `<select>`,
+ *  so an unrecognised one is possible by type and is what the final fallback
+ *  answers. `_cols` is unused today and kept because both call sites pass the
+ *  board's columns. */
+export function createAction(key: string, _cols: BoardWorkflowColumn[]): WorkflowAction {
   if (key === 'assign_agent') return { type: 'assign_agent', role: '' };
   if (key === 'assign_agent_individual') return { type: 'assign_agent_individual', agentId: '' };
   if (key === 'run_agent:refine')
@@ -383,7 +511,7 @@ export function createAction(key, cols) {
   return { type: 'change_status', target: '' };
 }
 
-export function getActionKey(action) {
+export function getActionKey(action: WorkflowAction): string {
   // Legacy boards may still carry mode:'execute' (removed) — surface it as the
   // 'decide' option so the action stays editable instead of showing a blank
   // dropdown. Re-saving the board then persists it as decide.
@@ -392,7 +520,23 @@ export function getActionKey(action) {
   return action.type;
 }
 
-/** Filter valid transitions (must have new format with trigger + actions) */
-export function validTransition(t) {
-  return t && t.from && t.trigger && Array.isArray(t.actions);
+/**
+ * Filter valid transitions (must have new format with trigger + actions).
+ *
+ * The input is `unknown` because both call sites feed it JSON: a structural
+ * clone of `board.workflow.transitions` and the JSON textarea's parse output.
+ * `z.array(z.any()).max(200)` is all the API validates, so nothing about the
+ * element's shape is known before this guard runs — which is precisely what it
+ * is for. It is the narrowing to WorkflowTransition, hence the type predicate.
+ */
+export function validTransition(t: unknown): t is WorkflowTransition {
+  if (typeof t !== 'object' || t === null) return false;
+  return (
+    'from' in t &&
+    !!t.from &&
+    'trigger' in t &&
+    !!t.trigger &&
+    'actions' in t &&
+    Array.isArray(t.actions)
+  );
 }

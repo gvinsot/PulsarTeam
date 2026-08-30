@@ -10,6 +10,20 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { MODE_LABELS, timeAgo, formatDate } from './taskConstants';
+import type { TaskCommit, TaskHistoryEntry } from '../../types';
+
+interface TaskTimelineProps {
+  /** `Task.history` — always an array on a GET /tasks row, but the caller reads
+   *  it off a `task:updated` frame, where the key can be missing or null. */
+  history?: TaskHistoryEntry[] | null;
+  /** `Task.commits`, with the same frame caveat as `history`. */
+  commits?: TaskCommit[] | null;
+  createdAt?: string | null;
+  onOpenEntry: (entry: TaskHistoryEntry) => void;
+  /** A commit hash, or null for the "View all diffs" button. */
+  onOpenCommit: (hash: string | null) => void;
+  onRemoveCommit: (hash: string) => void | Promise<void>;
+}
 
 // Merged history + commit timeline extracted from TaskDetailModal.
 // `onOpenCommit` receives a commit hash, or null for the "View all diffs"
@@ -22,15 +36,17 @@ export default function TaskTimeline({
   onOpenEntry,
   onOpenCommit,
   onRemoveCommit,
-}) {
+}: TaskTimelineProps) {
+  // `as const` on the two discriminants: without it both widen to `string` and
+  // the `item.kind === 'commit'` test below stops narrowing the merged array.
   const historyItems = (history || []).map((h, i) => ({
-    kind: 'history',
+    kind: 'history' as const,
     at: h.at,
     h,
     key: `h-${i}`,
   }));
   const commitItems = (commits || []).map((c, i) => ({
-    kind: 'commit',
+    kind: 'commit' as const,
     at: c.date,
     c,
     key: `c-${c.hash || i}`,
@@ -47,7 +63,7 @@ export default function TaskTimeline({
           <Calendar className="w-3.5 h-3.5" />
           Created
         </div>
-        <span className="text-xs text-dark-300" title={formatDate(createdAt)}>
+        <span className="text-xs text-dark-300" title={formatDate(createdAt) ?? undefined}>
           {timeAgo(createdAt)}
         </span>
       </div>
@@ -59,7 +75,7 @@ export default function TaskTimeline({
         <div className="text-[10px] uppercase tracking-wider text-dark-500 font-semibold">
           History
         </div>
-        {commits?.length > 0 && (
+        {commits && commits.length > 0 && (
           <button
             onClick={() => onOpenCommit(null)}
             className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
@@ -105,7 +121,10 @@ export default function TaskTimeline({
                       <X className="w-3 h-3" />
                     </button>
                     {item.c.date && (
-                      <span className="text-[10px] text-dark-500" title={formatDate(item.c.date)}>
+                      <span
+                        className="text-[10px] text-dark-500"
+                        title={formatDate(item.c.date) ?? undefined}
+                      >
                         {timeAgo(item.c.date)}
                       </span>
                     )}
@@ -132,7 +151,7 @@ export default function TaskTimeline({
                           {item.h.success ? '✓' : '✗'}
                         </span>
                         <span className="text-dark-500 truncate">by {item.h.by}</span>
-                        {item.h.messages?.length > 0 && (
+                        {item.h.messages && item.h.messages.length > 0 && (
                           <span className="text-[10px] text-dark-500">
                             — {item.h.messages.length} msg{item.h.messages.length > 1 ? 's' : ''}
                           </span>
@@ -144,7 +163,10 @@ export default function TaskTimeline({
                         <span className="text-dark-200 font-medium">
                           edited{' '}
                           {item.h.field ||
-                            (item.h.fields ? item.h.fields.map(f => f.field).join(', ') : 'task')}
+                            // `fields` is a string[] of field NAMES (a copy of the
+                            // producer's `editedFields`, see TaskHistoryEntry.fields),
+                            // so the names themselves are all there is to show.
+                            (item.h.fields?.length ? item.h.fields.join(', ') : 'task')}
                         </span>
                         {item.h.by && (
                           <span className="text-dark-500 truncate">by {item.h.by}</span>
@@ -199,7 +221,7 @@ export default function TaskTimeline({
                   </div>
                   <span
                     className="text-[10px] text-dark-500 flex-shrink-0"
-                    title={formatDate(item.h.at)}
+                    title={formatDate(item.h.at) ?? undefined}
                   >
                     {timeAgo(item.h.at)}
                   </span>

@@ -1,5 +1,17 @@
-type Queryable = {
-  query: (sql: string, params?: any[]) => Promise<any>;
+import type { QueryResult, QueryResultRow } from 'pg';
+
+/**
+ * The minimal pg surface the schema/bootstrap helpers need. Structural rather
+ * than `Pool`, because the migration runner hands them a checked-out
+ * PoolClient inside a transaction, and the boards cleanup runs under both.
+ * Generic in the row shape so a caller that reads rows can name them instead
+ * of falling back to `any`.
+ */
+export type Queryable = {
+  query<R extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params?: unknown[]
+  ): Promise<QueryResult<R>>;
 };
 
 async function runStatements(db: Queryable, statements: string[]) {

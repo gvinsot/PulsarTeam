@@ -21,6 +21,7 @@ import { checkBoardAccess, authorizeBoardAccess } from '../middleware/authz.js';
 import { emitTaskUpdated } from '../services/taskMutations.js';
 import { validateBody } from '../lib/validate.js';
 import { normalizeWorkflowColumnIds, type ColumnRename } from '../services/workflow/columnIds.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 import { DEFAULT_BOARD_WORKFLOW, normalizeBoardName } from '../services/boardDefaults.js';
 import {
   createBoardSchema,
@@ -34,7 +35,7 @@ import {
 } from '../schemas/boards.js';
 
 async function applyColumnRenamesToBoardTasks(
-  agentManager,
+  agentManager: AgentManager,
   boardId: string,
   renames: ColumnRename[],
   by: string
@@ -78,7 +79,7 @@ async function applyColumnRenamesToBoardTasks(
   }
 }
 
-export function boardRoutes(agentManager) {
+export function boardRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   // GET / — list all boards for the current user (owned + shared)
@@ -103,12 +104,13 @@ export function boardRoutes(agentManager) {
       // DB query: tasks assigned to the agent (or its own unassigned tasks),
       // scoped to owners the caller can access — mirrors the old owner-keyed scan.
       const assigned = await getTasksByAssignee(targetAgentId);
-      const tasks = [];
-      for (const task of assigned) {
-        if (task.agentId && accessibleIds.has(task.agentId)) {
-          tasks.push({ ...task, _ownerId: task.agentId, _ownerName: nameById.get(task.agentId) });
-        }
-      }
+      const tasks = assigned
+        .filter(task => task.agentId && accessibleIds.has(task.agentId))
+        .map(task => ({
+          ...task,
+          _ownerId: task.agentId,
+          _ownerName: nameById.get(task.agentId),
+        }));
       res.json(tasks);
     })
   );
@@ -116,7 +118,7 @@ export function boardRoutes(agentManager) {
   // GET /users — list all users (for share autocomplete)
   router.get(
     '/users',
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (_req, res) => {
       const users = await getAllUsers();
       // Don't expose passwords — getAllUsers already only selects id, username, display_name, role
       res.json(users);
@@ -250,7 +252,8 @@ export function boardRoutes(agentManager) {
       const { board } = req.boardAccess;
       const { pluginId } = req.body;
 
-      const currentPlugins = Array.isArray(board.plugins) ? board.plugins : [];
+      // Board plugins are stored as a flat list of plugin ids.
+      const currentPlugins: string[] = Array.isArray(board.plugins) ? board.plugins : [];
       if (currentPlugins.includes(pluginId)) {
         return res.json(board); // already assigned
       }
@@ -268,7 +271,8 @@ export function boardRoutes(agentManager) {
       const { board } = req.boardAccess;
       const { pluginId } = req.body;
 
-      const currentPlugins = Array.isArray(board.plugins) ? board.plugins : [];
+      // Board plugins are stored as a flat list of plugin ids.
+      const currentPlugins: string[] = Array.isArray(board.plugins) ? board.plugins : [];
       const updated = await updateBoard(req.params.id, {
         plugins: currentPlugins.filter(id => id !== pluginId),
       });

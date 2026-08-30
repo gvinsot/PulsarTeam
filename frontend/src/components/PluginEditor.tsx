@@ -18,8 +18,10 @@ import {
   Info,
 } from 'lucide-react';
 import { api } from '../api';
+import { errorMessage } from '../utils/errors';
+import type { McpTestResult, PluginDraft, PluginMcpDraft } from '../types';
 
-function createEmptyMcp() {
+function createEmptyMcp(): PluginMcpDraft {
   return {
     id: undefined,
     name: '',
@@ -32,9 +34,9 @@ function createEmptyMcp() {
   };
 }
 
-function parseKeyValueText(text) {
+function parseKeyValueText(text: string) {
   const lines = text.split(/\r?\n/);
-  const obj = {};
+  const obj: Record<string, string> = {};
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -48,7 +50,9 @@ function parseKeyValueText(text) {
   return obj;
 }
 
-function stringifyKeyValue(obj) {
+// Plugin.userConfig is Record<string, unknown> — the editor round-trips it as
+// KEY=VALUE lines, so values are strings in practice but nothing enforces it.
+function stringifyKeyValue(obj: Record<string, unknown>) {
   return Object.entries(obj || {})
     .map(([k, v]) => `${k}=${v ?? ''}`)
     .join('\n');
@@ -65,8 +69,13 @@ function stringifyKeyValue(obj) {
  *                        card and the user can only set the OAuth/API-key credentials
  *                        needed to use the plugin. Use this when a user is enabling a
  *                        plugin they do not own (shared plugins, built-ins).
+ *
+ * It is generic over the caller's draft type rather than fixed to PluginDraft so
+ * that `onChange` can be a plain `setState`: the editor hands back exactly the
+ * shape it was given, which is what a `Dispatch<SetStateAction<TDraft>>` accepts.
+ * PluginDraft is the floor — every field this component reads or writes.
  */
-export default function PluginEditor({
+export default function PluginEditor<TDraft extends PluginDraft<PluginMcpDraft>>({
   value,
   onChange,
   onSubmit,
@@ -74,16 +83,28 @@ export default function PluginEditor({
   saving,
   submitLabel,
   mode,
+}: {
+  value: TDraft;
+  onChange: (next: TDraft) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  /** Falls back to a mode-dependent default when absent. */
+  submitLabel?: string;
+  /** Defaults to 'configure'. */
+  mode?: 'configure' | 'activate';
 }) {
   const resolvedMode = mode || 'configure';
   const isActivate = resolvedMode === 'activate';
   const effectiveSubmitLabel = submitLabel || (isActivate ? 'Activer le plugin' : 'Save Plugin');
 
-  const [expandedMcps, setExpandedMcps] = useState(
+  const [expandedMcps, setExpandedMcps] = useState<Set<number>>(
     () => new Set((value.mcps || []).map((_, i) => i))
   );
-  const [testResults, setTestResults] = useState({});
-  const [testing, setTesting] = useState({});
+  // Both keyed by PluginMcpEntry.id. A freshly added, never-saved MCP has no id
+  // yet (createEmptyMcp), so a lookup can legitimately miss.
+  const [testResults, setTestResults] = useState<Record<string, McpTestResult | undefined>>({});
+  const [testing, setTesting] = useState<Record<string, boolean>>({});
   // Keep the raw textarea text in local state so typed newlines survive;
   // only reset it when the config changes from outside (e.g. another plugin).
   const [userConfigText, setUserConfigText] = useState(() =>
@@ -96,25 +117,33 @@ export default function PluginEditor({
     );
   }, [value.userConfig]);
 
-  const update = patch => onChange({ ...value, ...patch });
+  // Object.assign rather than a spread literal: spreading a type parameter
+  // yields a type TypeScript will not accept back as TDraft, while
+  // `TDraft & Partial<…>` is assignable to TDraft. Same result at runtime — the
+  // drafts are plain data objects with no accessors.
+  const update = (patch: Partial<PluginDraft<PluginMcpDraft>>) =>
+    onChange(Object.assign({}, value, patch));
 
-  const testMcp = async mcp => {
-    if (!mcp.id) return;
-    setTesting(prev => ({ ...prev, [mcp.id]: true }));
-    setTestResults(prev => ({ ...prev, [mcp.id]: undefined }));
+  const testMcp = async (mcp: PluginMcpDraft) => {
+    // Read the id once: PluginMcpDraft.id is optional (a never-saved MCP has
+    // none) and the narrowing would not survive into the setState callbacks.
+    const mcpId = mcp.id;
+    if (!mcpId) return;
+    setTesting(prev => ({ ...prev, [mcpId]: true }));
+    setTestResults(prev => ({ ...prev, [mcpId]: undefined }));
     try {
       // Send the key only if it's a real value (not the masked placeholder)
       const key = mcp.apiKey && mcp.apiKey !== '••••••••' ? mcp.apiKey : undefined;
-      const result = await api.testMcpServer(mcp.id, key);
-      setTestResults(prev => ({ ...prev, [mcp.id]: result }));
+      const result = await api.testMcpServer(mcpId, key);
+      setTestResults(prev => ({ ...prev, [mcpId]: result }));
     } catch (err) {
-      setTestResults(prev => ({ ...prev, [mcp.id]: { success: false, error: err.message } }));
+      setTestResults(prev => ({ ...prev, [mcpId]: { success: false, error: errorMessage(err) } }));
     } finally {
-      setTesting(prev => ({ ...prev, [mcp.id]: false }));
+      setTesting(prev => ({ ...prev, [mcpId]: false }));
     }
   };
 
-  const updateMcp = (index, patch) => {
+  const updateMcp = (index: number, patch: Partial<PluginMcpDraft>) => {
     const mcps = [...(value.mcps || [])];
     mcps[index] = { ...mcps[index], ...patch };
     // If authMode changed to 'none', clear apiKey
@@ -124,7 +153,7 @@ export default function PluginEditor({
     update({ mcps });
   };
 
-  const removeMcp = index => {
+  const removeMcp = (index: number) => {
     const mcps = [...(value.mcps || [])];
     mcps.splice(index, 1);
     update({ mcps });
@@ -213,6 +242,7 @@ export default function PluginEditor({
             <div className="space-y-2">
               {authMcps.map(mcp => {
                 const index = mcps.indexOf(mcp);
+                const testResult = mcp.id ? testResults[mcp.id] : undefined;
                 return (
                   <div
                     key={mcp.id || index}
@@ -234,7 +264,7 @@ export default function PluginEditor({
                         className="p-1 text-dark-500 hover:text-amber-400 transition-colors disabled:opacity-30"
                         title="Tester la connexion"
                       >
-                        {testing[mcp.id] ? (
+                        {mcp.id && testing[mcp.id] ? (
                           <Loader className="w-3.5 h-3.5 animate-spin" />
                         ) : (
                           <Zap className="w-3.5 h-3.5" />
@@ -262,22 +292,22 @@ export default function PluginEditor({
                       />
                     </div>
 
-                    {testResults[mcp.id] && (
+                    {testResult && (
                       <div
                         className={`p-2 rounded text-[11px] border ${
-                          testResults[mcp.id].success
+                          testResult.success
                             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                             : 'bg-red-500/10 border-red-500/30 text-red-400'
                         }`}
                       >
                         <div className="flex items-center gap-1.5 font-medium">
-                          {testResults[mcp.id].success ? (
+                          {testResult.success ? (
                             <>
                               <CheckCircle className="w-3 h-3" /> Connexion réussie
                             </>
                           ) : (
                             <>
-                              <XCircle className="w-3 h-3" /> Échec — {testResults[mcp.id].error}
+                              <XCircle className="w-3 h-3" /> Échec — {testResult.error}
                             </>
                           )}
                         </div>
@@ -427,6 +457,7 @@ export default function PluginEditor({
           {(value.mcps || []).map((mcp, index) => {
             const expanded = expandedMcps.has(index);
             const authMode = mcp.authMode || (mcp.hasApiKey || mcp.apiKey ? 'bearer' : 'none');
+            const testResult = mcp.id ? testResults[mcp.id] : undefined;
             return (
               <div
                 key={mcp.id || index}
@@ -474,7 +505,7 @@ export default function PluginEditor({
                     className="p-1 text-dark-500 hover:text-amber-400 transition-colors disabled:opacity-30"
                     title="Tester la connexion MCP"
                   >
-                    {testing[mcp.id] ? (
+                    {mcp.id && testing[mcp.id] ? (
                       <Loader className="w-4 h-4 animate-spin" />
                     ) : (
                       <Zap className="w-4 h-4" />
@@ -615,19 +646,19 @@ export default function PluginEditor({
                     </div>
 
                     {/* Test result */}
-                    {testResults[mcp.id] && (
+                    {testResult && (
                       <div
                         className={`p-2.5 rounded-lg border text-xs ${
-                          testResults[mcp.id].success
+                          testResult.success
                             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                             : 'bg-red-500/10 border-red-500/30 text-red-400'
                         }`}
                       >
                         <div className="flex items-center gap-1.5 font-medium">
-                          {testResults[mcp.id].success ? (
+                          {testResult.success ? (
                             <>
                               <CheckCircle className="w-3.5 h-3.5" /> Connexion reussie —{' '}
-                              {testResults[mcp.id].toolCount} tool(s)
+                              {testResult.toolCount} tool(s)
                             </>
                           ) : (
                             <>
@@ -635,9 +666,9 @@ export default function PluginEditor({
                             </>
                           )}
                         </div>
-                        {testResults[mcp.id].success && testResults[mcp.id].tools?.length > 0 && (
+                        {testResult.success && (testResult.tools?.length ?? 0) > 0 && (
                           <div className="mt-1.5 text-[11px] text-dark-400 space-y-0.5">
-                            {testResults[mcp.id].tools.map(t => (
+                            {testResult.tools?.map(t => (
                               <div key={t.name} className="flex gap-2">
                                 <span className="text-dark-300 font-mono">{t.name}</span>
                                 {t.description && <span className="truncate">{t.description}</span>}
@@ -645,10 +676,8 @@ export default function PluginEditor({
                             ))}
                           </div>
                         )}
-                        {testResults[mcp.id].error && (
-                          <p className="mt-1 text-[11px] font-mono break-all">
-                            {testResults[mcp.id].error}
-                          </p>
+                        {testResult.error && (
+                          <p className="mt-1 text-[11px] font-mono break-all">{testResult.error}</p>
                         )}
                       </div>
                     )}

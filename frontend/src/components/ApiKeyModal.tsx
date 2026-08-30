@@ -1,10 +1,17 @@
 import { useState, useEffect } from 'react';
 import { X, Key, Copy, RefreshCw, Trash2, Eye, EyeOff, Shield } from 'lucide-react';
 import { api } from '../api';
+import type { ApiKeyInfo, ShowToastFn } from '../types';
 
-export default function ApiKeyModal({ onClose, showToast }) {
-  const [keyInfo, setKeyInfo] = useState(null);
-  const [newKey, setNewKey] = useState(null);
+interface ApiKeyModalProps {
+  onClose: () => void;
+  showToast?: ShowToastFn;
+}
+
+export default function ApiKeyModal({ onClose, showToast }: ApiKeyModalProps) {
+  const [keyInfo, setKeyInfo] = useState<ApiKeyInfo | null>(null);
+  /** The clear-text key, shown once right after a generate. */
+  const [newKey, setNewKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showKey, setShowKey] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -48,7 +55,7 @@ export default function ApiKeyModal({ onClose, showToast }) {
     }
   };
 
-  const handleCopy = async text => {
+  const handleCopy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);

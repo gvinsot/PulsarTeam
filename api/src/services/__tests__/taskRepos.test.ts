@@ -41,7 +41,9 @@ test('normalizeStoragePath trims, length-caps, and rejects empty/non-string', ()
   assert.equal(normalizeStoragePath(null), null);
   assert.equal(normalizeStoragePath(123), null);
   const long = 'a'.repeat(STORAGE_PATH_MAX + 50);
-  assert.equal(normalizeStoragePath(long).length, STORAGE_PATH_MAX);
+  const capped = normalizeStoragePath(long);
+  assert.ok(capped, 'an over-long path must be capped, not rejected');
+  assert.equal(capped.length, STORAGE_PATH_MAX);
 });
 
 // ── normalizeSecondaryRepos ──────────────────────────────────────────────────

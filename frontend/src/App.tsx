@@ -5,16 +5,41 @@ import { useAgentsSocket } from './hooks/useAgentsSocket';
 import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
 import { X, AlertCircle, CheckCircle, Info } from 'lucide-react';
+import type {
+  AgentTemplate,
+  AppUser,
+  ImpersonateResponse,
+  McpServer,
+  Plugin,
+  RepoPickerOption,
+  SessionPayload,
+  SessionUser,
+  Toast,
+  ToastType,
+} from './types';
 
 const LoginPage = lazy(() => import('./components/LoginPage'));
 const TermsPage = lazy(() => import('./components/TermsPage'));
 const PrivacyPage = lazy(() => import('./components/PrivacyPage'));
 const WelcomeTutorialModal = lazy(() => import('./components/WelcomeTutorialModal'));
 
+/**
+ * The common denominator of the three payloads toUser is fed: SessionUser (the
+ * nested `user` of GET /auth/verify), SessionPayload (password login, the three
+ * OAuth callbacks, /auth/stop-impersonation) and ImpersonateResponse.
+ *
+ * Both timestamps are OPTIONAL here because ImpersonateResponse carries neither
+ * — which is exactly why toUser coalesces them to null below. `impersonatedBy`
+ * is optional-never-null, as declared on SessionUser.
+ */
+type AuthPayload = Pick<SessionPayload, 'username' | 'role' | 'userId' | 'displayName'> &
+  Partial<Pick<SessionPayload, 'termsAcceptedAt' | 'tutorialCompletedAt'>> &
+  Pick<SessionUser, 'impersonatedBy'>;
+
 // Normalizes the user object from any auth payload (verify, OAuth callback,
 // password login, impersonation) — the field names are identical across all
 // backend responses. Absent fields normalize to null.
-const toUser = d => ({
+const toUser = (d: AuthPayload): AppUser => ({
   username: d.username,
   role: d.role,
   userId: d.userId,
@@ -25,25 +50,31 @@ const toUser = d => ({
 });
 
 // OAuth callback routes → token-exchange endpoints. Adding a login provider
-// is a one-line entry here (plus its api wrapper).
-const OAUTH_CALLBACKS = {
+// is a one-line entry here (plus its api wrapper). Keyed by `window.location
+// .pathname`, hence the string index signature rather than the three literals.
+const OAUTH_CALLBACKS: Record<
+  string,
+  ((code: string, redirectUri: string) => Promise<SessionPayload>) | undefined
+> = {
   '/auth/google/callback': api.googleCallback,
   '/auth/microsoft/callback': api.microsoftCallback,
   '/auth/github/callback': api.githubAuthCallback,
 };
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [dbUnavailable, setDbUnavailable] = useState(false);
-  const [templates, setTemplates] = useState([]);
-  const [projects, setProjects] = useState([]);
-  const [skills, setSkills] = useState([]);
-  const [mcpServers, setMcpServers] = useState([]);
-  const [toasts, setToasts] = useState([]);
+  const [templates, setTemplates] = useState<AgentTemplate[]>([]);
+  // NOT AvailableRepo[]: loadProjects re-maps the endpoint's rows into the
+  // client-normalised picker shape before storing them.
+  const [projects, setProjects] = useState<RepoPickerOption[]>([]);
+  const [skills, setSkills] = useState<Plugin[]>([]);
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([]);
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [oauthLoading, setOauthLoading] = useState(false);
 
-  const showToast = useCallback((message, type = 'error', duration = 5000) => {
+  const showToast = useCallback((message: string, type: ToastType = 'error', duration = 5000) => {
     const id = Date.now() + Math.random();
     let added = false;
     setToasts(prev => {
@@ -62,7 +93,7 @@ export default function App() {
     }
   }, []);
 
-  const dismissToast = useCallback(id => {
+  const dismissToast = useCallback((id: number) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
@@ -111,9 +142,15 @@ export default function App() {
       // resolves both fullName and the legacy short name, so existing
       // agents keep working.
       const repos = await api.getAvailableRepos();
-      const normalized = (repos || []).map(r => ({
+      const normalized: RepoPickerOption[] = (repos || []).map(r => ({
         // Canonical id used by the picker and stored as agent.project.
-        name: r.fullName || r.name,
+        // The `|| r.name` half is dead — neither available-repos route emits a
+        // `name` key — but it still widens the expression to `string | undefined`,
+        // so a final `|| ''` is needed to match RepoPickerOption.name. That
+        // fallback is unreachable: saveTask writes `repoFullName || null` and the
+        // route selects `WHERE repo_full_name IS NOT NULL`, so `fullName` is never
+        // the empty string here.
+        name: r.fullName || r.name || '',
         fullName: r.fullName,
         repoName: r.fullName ? r.fullName.split('/').pop() : r.name,
         provider: r.provider,
@@ -123,7 +160,7 @@ export default function App() {
       }));
       // De-duplicate by fullName in case the same repo is exposed by
       // multiple connections.
-      const seen = new Set();
+      const seen = new Set<string>();
       const deduped = normalized.filter(p => {
         if (seen.has(p.name)) return false;
         seen.add(p.name);
@@ -226,7 +263,7 @@ export default function App() {
   // Shared post-login sequence (OAuth callback + password login).
   // `awaitHealth` reproduces the OAuth path's behavior of resolving only
   // after the DB health probe returns; password login fires it and resolves.
-  const completeLogin = async (data, { awaitHealth = false } = {}) => {
+  const completeLogin = async (data: SessionPayload, { awaitHealth = false } = {}) => {
     // The session arrived as an HttpOnly cookie on this very response. All the
     // page keeps is the CSRF token that pairs with it.
     setCsrfToken(data.csrfToken);
@@ -263,7 +300,7 @@ export default function App() {
       });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleLogin = async (username, password) => {
+  const handleLogin = async (username: string, password: string) => {
     const data = await api.login(username, password);
     await completeLogin(data);
   };
@@ -304,7 +341,7 @@ export default function App() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleImpersonate = data => {
+  const handleImpersonate = (data: ImpersonateResponse) => {
     // The impersonated session replaced the cookie on this response; the admin's
     // own session is recoverable server-side (the token carries their id), so
     // nothing is stashed locally any more. Not completeLogin: impersonation

@@ -7,6 +7,7 @@ test('getLastMessages returns newest messages with original indexes', async () =
   const manager = new AgentManager(io, null, null, null);
   const created = await manager.create({ name: 'Tester', role: 'developer' });
   const raw = manager.agents.get(created.id);
+  assert.ok(raw, 'created agent should be registered in the manager');
 
   raw.conversationHistory = [
     { role: 'user', content: 'one' },
@@ -15,6 +16,7 @@ test('getLastMessages returns newest messages with original indexes', async () =
   ];
 
   const result = manager.getLastMessages(created.id, 2);
+  assert.ok(result, 'the agent exists, so the getter should not answer null');
 
   assert.equal(result.totalMessages, 3);
   assert.equal(result.returned, 2);
@@ -33,6 +35,7 @@ test('getLastMessagesByName is case-insensitive and clamps invalid limit', async
   const manager = new AgentManager(io, null, null, null);
   const created = await manager.create({ name: 'Reviewer', role: 'reviewer' });
   const raw = manager.agents.get(created.id);
+  assert.ok(raw, 'created agent should be registered in the manager');
 
   raw.conversationHistory = [
     { role: 'user', content: 'alpha' },
@@ -40,6 +43,7 @@ test('getLastMessagesByName is case-insensitive and clamps invalid limit', async
   ];
 
   const result = manager.getLastMessagesByName('reviewer', 0);
+  assert.ok(result, 'the agent exists, so the getter should not answer null');
   assert.equal(result.agentName, 'Reviewer');
   assert.equal(result.limit, 1);
   assert.deepEqual(

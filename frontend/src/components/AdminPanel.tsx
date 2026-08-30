@@ -4,6 +4,7 @@ import UsersTab from './admin/UsersTab';
 import SettingsTab from './admin/SettingsTab';
 import LlmConfigsTab from './admin/LlmConfigsTab';
 import BoardsTab from './admin/BoardsTab';
+import type { ImpersonateResponse, ShowToastFn } from '../types';
 
 const TABS = [
   { id: 'users', label: 'Users', icon: Users },
@@ -12,7 +13,13 @@ const TABS = [
   { id: 'boards', label: 'Boards', icon: LayoutGrid },
 ];
 
-export default function AdminPanel({ onClose, onImpersonate, showToast }) {
+interface AdminPanelProps {
+  onClose: () => void;
+  onImpersonate?: (data: ImpersonateResponse) => void;
+  showToast?: ShowToastFn;
+}
+
+export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminPanelProps) {
   const [activeTab, setActiveTab] = useState('users');
 
   return (

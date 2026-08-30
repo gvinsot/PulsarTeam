@@ -1,7 +1,9 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { z } from 'zod';
+import type { CodeIndexService } from '../services/codeIndexService.js';
 
 const booleanQuerySchema = z.union([z.boolean(), z.string()]).transform((value, ctx) => {
   if (typeof value === 'boolean') return value;
@@ -51,14 +53,14 @@ const searchSymbolsQuerySchema = searchQuerySchema.extend({
   kind: z.enum(['function', 'class', 'method']).optional(),
 });
 
-function handleValidationError(res, error) {
+function handleValidationError(res: express.Response, error: unknown) {
   if (error instanceof z.ZodError) {
     return res.status(400).json({ error: 'Validation failed', details: error.issues });
   }
   return null;
 }
 
-export function codeIndexRoutes(codeIndexService) {
+export function codeIndexRoutes(codeIndexService: CodeIndexService) {
   const router = express.Router();
 
   router.post('/index-folder', async (req, res) => {
@@ -73,16 +75,16 @@ export function codeIndexRoutes(codeIndexService) {
       res.status(201).json(result);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: errorMessage(error) });
     }
   });
 
-  router.get('/repos', async (req, res) => {
+  router.get('/repos', async (_req, res) => {
     try {
       const repos = await codeIndexService.listRepos();
       res.json(repos);
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: errorMessage(error) });
     }
   });
 
@@ -93,7 +95,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(repo);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(404).json({ error: error.message });
+      res.status(404).json({ error: errorMessage(error) });
     }
   });
 
@@ -104,7 +106,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(tree);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(404).json({ error: error.message });
+      res.status(404).json({ error: errorMessage(error) });
     }
   });
 
@@ -116,7 +118,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(outline);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(404).json({ error: error.message });
+      res.status(404).json({ error: errorMessage(error) });
     }
   });
 
@@ -131,7 +133,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(symbol);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(404).json({ error: error.message });
+      res.status(404).json({ error: errorMessage(error) });
     }
   });
 
@@ -143,7 +145,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(results);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: errorMessage(error) });
     }
   });
 
@@ -155,7 +157,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(results);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: errorMessage(error) });
     }
   });
 
@@ -167,7 +169,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(results);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: errorMessage(error) });
     }
   });
 
@@ -245,7 +247,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(result);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: errorMessage(error) });
     }
   });
 
@@ -256,7 +258,7 @@ export function codeIndexRoutes(codeIndexService) {
       res.json(result);
     } catch (error) {
       if (handleValidationError(res, error)) return;
-      res.status(400).json({ error: error.message });
+      res.status(400).json({ error: errorMessage(error) });
     }
   });
 

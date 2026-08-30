@@ -32,13 +32,38 @@ import {
   TASK_TYPE_MAP,
   buildRecurrence,
   recurrenceLabel,
-  timeAgo,
-  formatDate,
 } from './taskConstants';
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
 import TaskTimeline from './TaskTimeline';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
+import { errorMessage } from '../../utils/errors';
+import type { StatusOption } from './taskConstants';
+import type { Agent, Board, TaskHistoryEntry, TaskSocketPayload, TaskStatus } from '../../types';
+
+interface TaskDetailModalProps {
+  /** The modal is opened from a card, i.e. from the board's task state, which
+   *  holds `task:updated` frames as well as GET /tasks rows — so this is a
+   *  frame, not a `Task`. See the head of types/task.ts. */
+  task: TaskSocketPayload;
+  /** Used for the assignee picker and the "refine with AI" idle-agent list. */
+  agents: Agent[];
+  onClose: () => void;
+  /** The board's refreshAll; it takes an optional new task the modal never
+   *  passes, hence the zero-arity signature here. */
+  onRefresh: () => void;
+  onDelete: (task: TaskSocketPayload) => void | Promise<void>;
+  onStop?: (task: TaskSocketPayload) => void | Promise<void>;
+  onResume?: (task: TaskSocketPayload) => void;
+  onClearStopped?: (task: TaskSocketPayload) => void | Promise<void>;
+  /** The board's columns as status choices (buildStatusOptions). */
+  statusOptions: StatusOption[];
+  onNavigateToAgent?: (agentId: string) => void;
+  /** Every board the user can see — the "move to another board" picker. */
+  boards: Board[];
+  /** Falls back for the board picker when the task carries no boardId. */
+  activeBoardId: string | null;
+}
 
 export default function TaskDetailModal({
   task,
@@ -53,12 +78,15 @@ export default function TaskDetailModal({
   onNavigateToAgent,
   boards,
   activeBoardId,
-}) {
+}: TaskDetailModalProps) {
   const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState(task.text);
+  // `?? ''` on every read of `task.text` below: `Task.text` is `row.text || ''`
+  // on a GET /tasks row, but the key is genuinely absent on a `task:updated`
+  // frame — and these two feed controlled inputs, which need a string.
+  const [editText, setEditText] = useState(task.text ?? '');
   const [editTitle, setEditTitle] = useState(task.title || '');
   const [saving, setSaving] = useState(false);
-  const [mutationError, setMutationError] = useState(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [statusOpen, setStatusOpen] = useState(false);
   const [editingRecurrence, setEditingRecurrence] = useState(false);
   const [savingRecurrence, setSavingRecurrence] = useState(false);
@@ -71,16 +99,18 @@ export default function TaskDetailModal({
     task.recurrence?.historyRetentionDays || 0
   );
   const [editingBoard, setEditingBoard] = useState(false);
-  const [boardMoveTarget, setBoardMoveTarget] = useState(null);
+  // Id of the board the task is being moved to, while the confirm dialog is up.
+  const [boardMoveTarget, setBoardMoveTarget] = useState<string | null>(null);
   const [movingBoard, setMovingBoard] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const [refining, setRefining] = useState(false);
   const [showAllCommits, setShowAllCommits] = useState(false);
-  const [clickedCommitHash, setClickedCommitHash] = useState(null);
-  const [historyDetail, setHistoryDetail] = useState(null);
-  const statusRef = useRef(null);
-  const textareaRef = useRef(null);
-  const refineRef = useRef(null);
+  // null is the "View all diffs" entry point, which opens the overlay unanchored.
+  const [clickedCommitHash, setClickedCommitHash] = useState<string | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<TaskHistoryEntry | null>(null);
+  const statusRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const refineRef = useRef<HTMLDivElement | null>(null);
 
   // Repos via the board's GitHub plugin so the user can re-target the task,
   // storage roots via the board's OneDrive plugin
@@ -101,9 +131,11 @@ export default function TaskDetailModal({
 
   // Close dropdowns on outside click
   useEffect(() => {
-    const handler = e => {
-      if (statusRef.current && !statusRef.current.contains(e.target)) setStatusOpen(false);
-      if (refineRef.current && !refineRef.current.contains(e.target)) setRefineOpen(false);
+    const handler = (e: MouseEvent) => {
+      // An EventTarget is not necessarily a Node, and `contains` only takes one.
+      const target = e.target instanceof Node ? e.target : null;
+      if (statusRef.current && !statusRef.current.contains(target)) setStatusOpen(false);
+      if (refineRef.current && !refineRef.current.contains(target)) setRefineOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -111,11 +143,11 @@ export default function TaskDetailModal({
 
   // Close on Escape
   useEffect(() => {
-    const handler = e => {
+    const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         if (editing) {
           setEditing(false);
-          setEditText(task.text);
+          setEditText(task.text ?? '');
           setEditTitle(task.title || '');
         } else onClose();
       }
@@ -147,20 +179,20 @@ export default function TaskDetailModal({
       await onRefresh();
       setEditing(false);
     } catch (err) {
-      setMutationError(err?.message || 'Failed to save task');
+      setMutationError(errorMessage(err) || 'Failed to save task');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleStatusChange = async newStatus => {
+  const handleStatusChange = async (newStatus: TaskStatus) => {
     setStatusOpen(false);
     if (newStatus === task.status) return;
     try {
       await updateTaskById(task.id, { column: newStatus });
       onRefresh();
     } catch (err) {
-      console.error('[TasksBoard] Status change failed:', err.message);
+      console.error('[TasksBoard] Status change failed:', errorMessage(err));
     }
   };
 
@@ -168,7 +200,7 @@ export default function TaskDetailModal({
   // guard and refresh semantics (repo/storage await the refresh, type and
   // assignee fire it un-awaited — preserved deliberately). Errors are
   // surfaced via mutationError and rethrown so the row stays in edit mode.
-  const saveRepo = async newFullName => {
+  const saveRepo = async (newFullName: string | null) => {
     if ((newFullName || null) === (task.repoFullName || null)) return;
     setMutationError(null);
     try {
@@ -178,7 +210,7 @@ export default function TaskDetailModal({
       await updateTaskById(task.id, { repoFullName: newFullName || null, repoProvider: provider });
       await onRefresh();
     } catch (err) {
-      setMutationError(err?.message || 'Failed to change repo');
+      setMutationError(errorMessage(err) || 'Failed to change repo');
       throw err;
     }
   };
@@ -189,12 +221,12 @@ export default function TaskDetailModal({
       await updateTaskById(task.id, { secondaryRepos: next });
       await onRefresh();
     } catch (err) {
-      setMutationError(err?.message || 'Failed to change secondary repos');
+      setMutationError(errorMessage(err) || 'Failed to change secondary repos');
       throw err;
     }
   };
 
-  const saveStorage = async newPath => {
+  const saveStorage = async (newPath: string | null) => {
     if ((newPath || null) === (task.storagePath || null)) return;
     setMutationError(null);
     try {
@@ -204,12 +236,12 @@ export default function TaskDetailModal({
       await updateTaskById(task.id, { storagePath: newPath || null, storageProvider: provider });
       await onRefresh();
     } catch (err) {
-      setMutationError(err?.message || 'Failed to change storage');
+      setMutationError(errorMessage(err) || 'Failed to change storage');
       throw err;
     }
   };
 
-  const saveType = async newType => {
+  const saveType = async (newType: string | null) => {
     // Note: selecting None while the type is already empty still hits the
     // API (null !== '') — existing behavior, kept as-is.
     if (newType === (task.taskType || '')) return;
@@ -218,19 +250,19 @@ export default function TaskDetailModal({
       await updateTaskById(task.id, { taskType: newType || '' });
       onRefresh?.();
     } catch (err) {
-      setMutationError(err?.message || 'Failed to change type');
+      setMutationError(errorMessage(err) || 'Failed to change type');
       throw err;
     }
   };
 
-  const saveAssignee = async targetId => {
+  const saveAssignee = async (targetId: string | null) => {
     if (targetId === (task.assignee || '')) return;
     setMutationError(null);
     try {
       await updateTaskById(task.id, { agentId: targetId || null });
       onRefresh?.();
     } catch (err) {
-      setMutationError(err?.message || 'Failed to reassign task');
+      setMutationError(errorMessage(err) || 'Failed to reassign task');
       throw err;
     }
   };
@@ -246,7 +278,7 @@ export default function TaskDetailModal({
       await onRefresh();
       setEditingRecurrence(false);
     } catch (err) {
-      setMutationError(err?.message || 'Failed to update recurrence');
+      setMutationError(errorMessage(err) || 'Failed to update recurrence');
     } finally {
       setSavingRecurrence(false);
     }
@@ -478,8 +510,14 @@ export default function TaskDetailModal({
                                   setRefineOpen(false);
                                   setRefining(true);
                                   try {
+                                    // `agentId` is null for a board-level task
+                                    // (MCP add_task) and absent on a socket
+                                    // frame, while refineTask builds
+                                    // `/agents/${agentId}/tasks/…`. The request
+                                    // has always 404'd on those tasks; `?? ''`
+                                    // keeps that outcome rather than changing it.
                                     const result = await api.refineTask(
-                                      task.agentId,
+                                      task.agentId ?? '',
                                       task.id,
                                       a.id
                                     );
@@ -502,7 +540,7 @@ export default function TaskDetailModal({
                     </div>
                     <button
                       onClick={() => {
-                        setEditText(task.text);
+                        setEditText(task.text ?? '');
                         setEditTitle(task.title || '');
                         setEditing(true);
                       }}
@@ -538,7 +576,7 @@ export default function TaskDetailModal({
                     <button
                       onClick={() => {
                         setEditing(false);
-                        setEditText(task.text);
+                        setEditText(task.text ?? '');
                         setEditTitle(task.title || '');
                       }}
                       className="px-3 py-1.5 text-xs text-dark-400 hover:text-dark-200 bg-dark-800
@@ -562,7 +600,7 @@ export default function TaskDetailModal({
                   className={`text-sm leading-relaxed cursor-text
                   ${isError ? 'text-red-300' : 'text-dark-200'}`}
                   onClick={() => {
-                    setEditText(task.text);
+                    setEditText(task.text ?? '');
                     setEditTitle(task.title || '');
                     setEditing(true);
                   }}
@@ -715,7 +753,7 @@ export default function TaskDetailModal({
                           <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
                             {recurrenceLabel(task.recurrence)}
                           </span>
-                          {task.recurrence.historyRetentionDays > 0 && (
+                          {(task.recurrence.historyRetentionDays ?? 0) > 0 && (
                             <span
                               className="text-[10px] px-2 py-0.5 rounded-full font-medium ring-1 bg-dark-700/40 text-dark-300 ring-dark-600"
                               title="History/commits older than this are dropped at each reset"
@@ -1044,7 +1082,7 @@ export default function TaskDetailModal({
                           }
                           setBoardMoveTarget(targetId);
                         }}
-                        disabled={task.actionRunning}
+                        disabled={!!task.actionRunning}
                         className="px-2 py-0.5 w-40 bg-dark-800 border border-indigo-500/50 rounded text-xs text-dark-200
                         focus:outline-none focus:border-indigo-500 transition-colors"
                       >
@@ -1101,7 +1139,10 @@ export default function TaskDetailModal({
                   setShowAllCommits(true);
                 }}
                 onRemoveCommit={async hash => {
-                  await api.removeTaskCommit(task.agentId, task.id, hash);
+                  // Same nullable `agentId` as the refine call above: the route
+                  // is agent-scoped, so unlinking a commit already 404s on a
+                  // board-level task. Preserved, not repaired.
+                  await api.removeTaskCommit(task.agentId ?? '', task.id, hash);
                   onRefresh();
                 }}
               />
@@ -1133,7 +1174,7 @@ export default function TaskDetailModal({
       </div>
 
       {/* All commits diff overlay */}
-      {showAllCommits && task.commits?.length > 0 && (
+      {showAllCommits && task.commits && task.commits.length > 0 && (
         <AllCommitsDiffModal
           taskId={task.id}
           commits={task.commits}
@@ -1142,8 +1183,8 @@ export default function TaskDetailModal({
             setShowAllCommits(false);
             setClickedCommitHash(null);
           }}
-          agentId={task.agentId}
-          project={task.project}
+          agentId={task.agentId ?? null}
+          project={task.project ?? null}
         />
       )}
 

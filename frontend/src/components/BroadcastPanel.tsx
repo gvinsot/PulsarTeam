@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import type { ComponentType, ReactNode } from 'react';
+import type { Socket } from 'socket.io-client';
 import {
   X,
   Globe,
@@ -25,6 +27,62 @@ import { api } from '../api';
 import { WsEvents } from '../socketEvents';
 import PluginEditor from './PluginEditor';
 import { getCategoryClass } from './plugins/pluginShared';
+import type {
+  Agent,
+  AppUser,
+  McpAuthMode,
+  McpServer,
+  McpServerStatus,
+  McpTool,
+  Plugin,
+  PluginDraft,
+} from '../types';
+
+/**
+ * One entry of the `results` array carried by the BROADCAST_COMPLETE frame.
+ * Produced by api/src/services/agentManager/broadcast.ts:25-32 and relayed
+ * verbatim by api/src/ws/socketHandler.ts:315. The types module declares no
+ * socket-payload type for it, so it is described here.
+ */
+interface BroadcastResult {
+  agentId: string;
+  /** `agent.name` — Agent declares it optional, loadFromDatabase never backfills it. */
+  agentName?: string;
+  /** The agent's reply; explicitly null on the failure branch. */
+  response: string | null;
+  /** `err.message` on the failure branch; explicitly null on success. */
+  error: string | null;
+}
+
+/**
+ * UI-LOCAL. One row of the MCP Explorer, which merges two producers with
+ * different key sets:
+ *  - the standalone registry entries (McpServer: status/tools/error, NO authMode);
+ *  - the plugin-embedded ones (PluginMcpEntry: authMode/hasApiKey, NO status,
+ *    tools or error — the merge borrows those from the matching standalone
+ *    server, or falls back to 'disconnected' / []).
+ * Keys only one of the two branches supplies are optional here.
+ */
+interface McpExplorerEntry {
+  id: string;
+  name: string;
+  url: string;
+  description: string;
+  icon: string;
+  hasApiKey: boolean;
+  status: McpServerStatus;
+  tools: McpTool[];
+  source: 'standalone' | 'plugin';
+  /** null on the standalone branch. */
+  pluginName: string | null;
+  /** 'plugin' branch only. */
+  pluginIcon?: string;
+  /** McpServer branch only — PluginMcpEntry carries no error key. */
+  error?: string | null;
+  /** PluginMcpEntry branch only — McpServer carries no authMode key, which is why
+   *  the auth block below never renders for a standalone server. */
+  authMode?: McpAuthMode;
+}
 
 const TABS = [
   { id: 'broadcast', label: 'Global', icon: Globe },
@@ -41,15 +99,28 @@ function ConfirmButton({
   confirmLabel = 'Are you sure?',
   className,
   confirmClassName,
+}: {
+  onConfirm: () => void;
+  disabled?: boolean;
+  icon: ComponentType<{ className?: string }>;
+  label: ReactNode;
+  confirmLabel?: ReactNode;
+  className?: string;
+  confirmClassName?: string;
 }) {
   const [confirming, setConfirming] = useState(false);
-  const timerRef = useRef(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => () => clearTimeout(timerRef.current), []);
+  useEffect(() => {
+    // `clearTimeout(null)` is already a no-op, so the guard is behaviour-neutral.
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   const handleClick = () => {
     if (confirming) {
-      clearTimeout(timerRef.current);
+      if (timerRef.current) clearTimeout(timerRef.current);
       setConfirming(false);
       onConfirm();
     } else {
@@ -92,11 +163,23 @@ export default function BroadcastPanel({
   onClose,
   onRefresh,
   user,
+}: {
+  agents: Agent[];
+  /** The API and DB call these "skills"; the entity is Plugin. */
+  skills?: Plugin[];
+  mcpServers?: McpServer[];
+  socket: Socket | null;
+  onClose: () => void;
+  onRefresh?: () => void;
+  /** App.tsx's toUser() output. The `|| user?.id` fallback below reads a key
+   *  AppUser has never carried (toUser drops it), so it is declared as
+   *  always-absent rather than deleted — this is a typing pass. */
+  user?: (AppUser & { id?: never }) | null;
 }) {
   const isAdmin = user?.role === 'admin';
   const currentUserId = user?.userId || user?.id || null;
   // Plugin is editable by its owner, or by an admin for built-ins.
-  const canManagePlugin = p => {
+  const canManagePlugin = (p: Plugin | null | undefined) => {
     if (!p) return false;
     if (isAdmin) return true;
     if (p.builtin && !p.ownerId) return false;
@@ -105,14 +188,14 @@ export default function BroadcastPanel({
   const [tab, setTab] = useState('broadcast');
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
-  const [responses, setResponses] = useState([]);
+  const [responses, setResponses] = useState<BroadcastResult[]>([]);
 
   // Plugin sub-tab: 'list' or 'mcp-explorer'
   const [pluginSubTab, setPluginSubTab] = useState('list');
 
   // Plugin state
-  const [editingPlugin, setEditingPlugin] = useState(null);
-  const [editForm, setEditForm] = useState({
+  const [editingPlugin, setEditingPlugin] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<PluginDraft>({
     name: '',
     description: '',
     category: '',
@@ -125,7 +208,7 @@ export default function BroadcastPanel({
     builtin: false,
   });
   const [showCreate, setShowCreate] = useState(false);
-  const [newPlugin, setNewPlugin] = useState({
+  const [newPlugin, setNewPlugin] = useState<PluginDraft>({
     name: '',
     description: '',
     category: 'coding',
@@ -137,10 +220,10 @@ export default function BroadcastPanel({
   });
 
   // MCP Explorer state
-  const [expandedMcpExplorer, setExpandedMcpExplorer] = useState(new Set());
-  const [connectingMcp, setConnectingMcp] = useState(null);
+  const [expandedMcpExplorer, setExpandedMcpExplorer] = useState<Set<string>>(new Set());
+  const [connectingMcp, setConnectingMcp] = useState<string | null>(null);
 
-  const responsesRef = useRef(null);
+  const responsesRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (responses.length > 0 && responsesRef.current) {
@@ -151,19 +234,19 @@ export default function BroadcastPanel({
   useEffect(() => {
     if (!socket) return undefined;
 
-    const handleComplete = data => {
+    const handleComplete = (data: { results?: BroadcastResult[] }) => {
       setResponses(data.results || []);
       setSending(false);
     };
 
-    const handleError = data => {
+    const handleError = (data: { error?: string }) => {
       console.error('Global error:', data.error);
       setSending(false);
     };
 
     // Rate-limit rejections arrive as a generic error event, and a dropped
     // connection loses the completion event entirely — both must unstick the UI.
-    const handleGenericError = data => {
+    const handleGenericError = (data?: { error?: string; message?: string }) => {
       console.error('Global error:', data?.error || data?.message);
       setSending(false);
     };
@@ -196,7 +279,7 @@ export default function BroadcastPanel({
 
   // ── Plugin handlers ─────────────────────────────────────────────────
 
-  const startEdit = plugin => {
+  const startEdit = (plugin: Plugin) => {
     setEditingPlugin(plugin.id);
     setEditForm({
       name: plugin.name,
@@ -257,7 +340,7 @@ export default function BroadcastPanel({
     }
   };
 
-  const handleDelete = async pluginId => {
+  const handleDelete = async (pluginId: string) => {
     try {
       await api.deletePlugin(pluginId);
       if (editingPlugin === pluginId) setEditingPlugin(null);
@@ -290,7 +373,7 @@ export default function BroadcastPanel({
 
   // ── MCP Explorer handlers ──────────────────────────────────────────
 
-  const handleConnectMcp = async id => {
+  const handleConnectMcp = async (id: string) => {
     setConnectingMcp(id);
     try {
       await api.connectMcpServer(id);
@@ -302,7 +385,7 @@ export default function BroadcastPanel({
     }
   };
 
-  const toggleMcpExpanded = id => {
+  const toggleMcpExpanded = (id: string) => {
     setExpandedMcpExplorer(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -313,8 +396,8 @@ export default function BroadcastPanel({
 
   // Collect all MCPs: standalone servers + embedded in plugins
   const allMcps = (() => {
-    const result = [];
-    const seenIds = new Set();
+    const result: McpExplorerEntry[] = [];
+    const seenIds = new Set<string>();
 
     // Standalone MCP servers
     for (const server of mcpServers) {
@@ -455,7 +538,11 @@ export default function BroadcastPanel({
                             <p className="text-xs text-red-400">{r.error}</p>
                           ) : (
                             <div className="markdown-content text-xs text-dark-300">
-                              <ReactMarkdown>{cleanToolSyntax(r.response)}</ReactMarkdown>
+                              {/* `response` is null only on the error branch, which
+                                  this else-branch excludes; cleanToolSyntax already
+                                  returned its falsy input unchanged, and '' and null
+                                  render the same. */}
+                              <ReactMarkdown>{cleanToolSyntax(r.response || '')}</ReactMarkdown>
                             </div>
                           )}
                         </div>
@@ -547,7 +634,7 @@ export default function BroadcastPanel({
                     const myPlugins = skills.filter(p => canManagePlugin(p));
                     const sharedPlugins = skills.filter(p => !canManagePlugin(p));
 
-                    const renderPluginRow = (plugin, opts) => {
+                    const renderPluginRow = (plugin: Plugin, opts?: { mine?: boolean }) => {
                       const mine = opts?.mine ?? false;
                       return (
                         <div

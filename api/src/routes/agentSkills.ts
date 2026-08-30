@@ -29,7 +29,7 @@ export function agentSkillRoutes() {
   // List all agent skills
   router.get(
     '/',
-    asyncHandler(async (req, res) => {
+    asyncHandler(async (_req, res) => {
       const skills = await getAllAgentSkills();
       res.json(skills);
     })

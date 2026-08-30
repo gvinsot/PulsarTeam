@@ -1,4 +1,5 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
@@ -20,6 +21,7 @@ import {
   isDatabaseConnected,
 } from '../services/database.js';
 import { provisionNewUser } from '../services/userProvisioning.js';
+import type { UserRow } from '../services/database/users.js';
 import { readSecret } from '../secrets.js';
 import { getMicrosoftOAuthConfig } from '../services/microsoftOAuthConfig.js';
 import { getGoogleOAuthConfig } from '../services/googleOAuthConfig.js';
@@ -30,7 +32,7 @@ import {
   oauthUrlQuerySchema,
   impersonateParamsSchema,
 } from '../schemas/auth.js';
-import { authenticateToken } from '../middleware/auth.js';
+import { authenticateToken, sessionUser } from '../middleware/auth.js';
 import {
   clearSessionCookie,
   resolveSessionToken,
@@ -42,7 +44,7 @@ import {
 const router = express.Router();
 
 // Rate limiting for login — max 5 attempts per IP per 15 minutes
-const loginAttempts = new Map(); // ip -> { count, resetAt }
+const loginAttempts = new Map<string, { count: number; resetAt: number }>(); // ip -> { count, resetAt }
 const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -55,7 +57,7 @@ const loginAttemptsCleanupInterval = setInterval(() => {
 }, LOGIN_WINDOW_MS);
 loginAttemptsCleanupInterval.unref?.();
 
-function checkLoginRateLimit(ip) {
+function checkLoginRateLimit(ip: string) {
   const now = Date.now();
   const entry = loginAttempts.get(ip);
   if (!entry || now > entry.resetAt) {
@@ -107,6 +109,17 @@ function resolveLoginRedirectUri(frontendUri?: string): string {
 }
 
 /**
+ * The columns `sendLoginResponse` echoes back. Picked from `UserRow` rather
+ * than restated so the two follow the table together, and narrowed to six
+ * fields because the OAuth find-or-create path builds its user from provider
+ * helpers that each RETURN their own column list.
+ */
+type LoginResponseUser = Pick<
+  UserRow,
+  'id' | 'username' | 'role' | 'display_name' | 'terms_accepted_at' | 'tutorial_completed_at'
+>;
+
+/**
  * Mint a 24h session for `user`, install it as an HttpOnly cookie and write the
  * standard login response.
  *
@@ -121,7 +134,11 @@ function resolveLoginRedirectUri(frontendUri?: string): string {
  * avatarUrl undefined — res.json drops undefined-valued keys, so the password
  * login payload keeps its original shape (no avatarUrl key).
  */
-function sendLoginResponse(res, user, extra: { avatarUrl?: string | null } = {}) {
+function sendLoginResponse(
+  res: express.Response,
+  user: LoginResponseUser,
+  extra: { avatarUrl?: string | null } = {}
+) {
   const { token, csrfToken } = signSessionToken({
     userId: user.id,
     username: user.username,
@@ -239,7 +256,7 @@ export async function ensureAdminSeeded() {
       console.log(`Admin user seeded: ${adminUsername}`);
     }
   } catch (err) {
-    console.error('Failed to seed admin user:', err.message);
+    console.error('Failed to seed admin user:', errorMessage(err));
   }
 }
 
@@ -285,7 +302,7 @@ router.post('/login', validateBody(loginSchema), async (req, res) => {
 
     sendLoginResponse(res, user);
   } catch (err) {
-    console.error('Login error:', err.message);
+    console.error('Login error:', errorMessage(err));
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -347,7 +364,10 @@ router.post('/logout', (_req, res) => {
 });
 
 // Impersonate user (admin only) — authenticateToken applied inline
-router.post(
+// The route's params type is passed explicitly (the express typings ask for
+// it): without it `P` is inferred from the middleware as the loose
+// `ParamsDictionary`, whose values are `string | string[]`.
+router.post<{ userId: string }>(
   '/impersonate/:userId',
   authenticateToken,
   validateParams(impersonateParamsSchema),
@@ -385,7 +405,7 @@ router.post(
         impersonatedBy: adminUser.username,
       });
     } catch (err) {
-      console.error('Impersonate error:', err.message);
+      console.error('Impersonate error:', errorMessage(err));
       res.status(500).json({ error: 'Internal server error' });
     }
   }
@@ -419,7 +439,7 @@ router.post('/stop-impersonation', authenticateToken, async (req, res) => {
 
     sendLoginResponse(res, admin);
   } catch (err) {
-    console.error('Stop impersonation error:', err.message);
+    console.error('Stop impersonation error:', errorMessage(err));
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -818,30 +838,34 @@ for (const spec of LOGIN_PROVIDERS) {
 // ── Terms & onboarding ─────────────────────────────────────────────────────
 // Record terms acceptance for the current user. Required: a valid JWT.
 router.post('/accept-terms', authenticateToken, async (req, res) => {
+  const user = sessionUser(req, res);
+  if (!user) return;
   try {
-    const row = await acceptTerms(req.user.userId);
+    const row = await acceptTerms(user.userId);
     if (!row) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
     res.json({ termsAcceptedAt: row.terms_accepted_at });
   } catch (err) {
-    console.error('Accept terms error:', err.message);
+    console.error('Accept terms error:', errorMessage(err));
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Record tutorial completion for the current user.
 router.post('/complete-tutorial', authenticateToken, async (req, res) => {
+  const user = sessionUser(req, res);
+  if (!user) return;
   try {
-    const row = await completeTutorial(req.user.userId);
+    const row = await completeTutorial(user.userId);
     if (!row) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
     res.json({ tutorialCompletedAt: row.tutorial_completed_at });
   } catch (err) {
-    console.error('Complete tutorial error:', err.message);
+    console.error('Complete tutorial error:', errorMessage(err));
     res.status(500).json({ error: 'Internal server error' });
   }
 });

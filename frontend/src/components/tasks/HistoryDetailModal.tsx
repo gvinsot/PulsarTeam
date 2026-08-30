@@ -21,6 +21,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { formatDate, timeAgo, MODE_LABELS } from './taskConstants';
+import type { Agent, TaskExecutionMessage, TaskHistoryEntry } from '../../types';
 
 const MODE_COLORS: Record<string, string> = {
   execute: 'text-blue-300',
@@ -94,7 +95,7 @@ function DiffBlock({ label, oldVal, newVal }: { label: string; oldVal?: string; 
   );
 }
 
-function renderEntryIcon(entry: any) {
+function renderEntryIcon(entry: TaskHistoryEntry) {
   if (entry.type === 'execution') return <MessageSquare className="w-5 h-5 text-blue-400" />;
   if (entry.type === 'edit') return <Edit3 className="w-5 h-5 text-amber-400" />;
   if (entry.type === 'reassign') return <User className="w-5 h-5 text-indigo-400" />;
@@ -104,7 +105,7 @@ function renderEntryIcon(entry: any) {
   return <ArrowRight className="w-5 h-5 text-dark-400" />;
 }
 
-function renderEntryTitle(entry: any) {
+function renderEntryTitle(entry: TaskHistoryEntry) {
   if (entry.type === 'execution') {
     const modeKey = entry.mode || 'execute';
     const modeLabel = MODE_LABELS[modeKey] || 'Execution';
@@ -224,7 +225,7 @@ function ToolResultsBlock({ toolResults }: { toolResults: any[] }) {
   );
 }
 
-function ExecutionConversation({ messages }: { messages: any[] }) {
+function ExecutionConversation({ messages }: { messages?: TaskExecutionMessage[] }) {
   if (!messages || messages.length === 0) {
     return <div className="text-xs text-dark-500 italic">No conversation recorded.</div>;
   }
@@ -339,8 +340,8 @@ export default function HistoryDetailModal({
   agents,
   onClose,
 }: {
-  entry: any;
-  agents?: any[];
+  entry: TaskHistoryEntry;
+  agents?: Agent[];
   onClose: () => void;
 }) {
   const modalRef = useRef<HTMLDivElement>(null);
@@ -405,7 +406,7 @@ export default function HistoryDetailModal({
           <div className="flex flex-wrap items-center gap-3 text-xs text-dark-400">
             <div className="flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5" />
-              <span title={formatDate(entry.at)}>{timeAgo(entry.at)}</span>
+              <span title={formatDate(entry.at) ?? undefined}>{timeAgo(entry.at)}</span>
               {formatDate(entry.at) && (
                 <span className="text-dark-500">({formatDate(entry.at)})</span>
               )}
@@ -447,8 +448,10 @@ export default function HistoryDetailModal({
             <div className="flex items-center gap-4 p-2.5 rounded-lg bg-dark-800/60 border border-dark-700">
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-dark-400">Mode</span>
-                <span className={`font-medium ${MODE_COLORS[entry.mode] || 'text-dark-200'}`}>
-                  {MODE_LABELS[entry.mode] || entry.mode || 'execute'}
+                <span
+                  className={`font-medium ${(entry.mode && MODE_COLORS[entry.mode]) || 'text-dark-200'}`}
+                >
+                  {(entry.mode && MODE_LABELS[entry.mode]) || entry.mode || 'execute'}
                 </span>
               </div>
               <div className="w-px h-4 bg-dark-700" />
@@ -475,40 +478,59 @@ export default function HistoryDetailModal({
           )}
 
           {/* Status transition (non-execution) */}
-          {(entry.from || entry.status) && !isExecution && entry.type !== 'edit' && (
-            <div className="flex items-center gap-3 p-3 rounded-lg bg-dark-800/60 border border-dark-700">
-              {entry.from && (
-                <>
-                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-dark-700 text-dark-300 ring-1 ring-dark-600">
-                    {entry.from}
+          {(entry.from || entry.status) &&
+            !isExecution &&
+            (entry.type !== 'edit' || !!entry.from) && (
+              <div className="flex items-center gap-3 p-3 rounded-lg bg-dark-800/60 border border-dark-700">
+                {entry.from && (
+                  <>
+                    <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-dark-700 text-dark-300 ring-1 ring-dark-600">
+                      {entry.from}
+                    </span>
+                    <ArrowRight className="w-4 h-4 text-dark-500" />
+                  </>
+                )}
+                {entry.status && (
+                  <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-500/30">
+                    {entry.status}
                   </span>
-                  <ArrowRight className="w-4 h-4 text-dark-500" />
-                </>
-              )}
-              {entry.status && (
-                <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-500/30">
-                  {entry.status}
-                </span>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
 
           {/* Edit: show old/new values */}
           {entry.type === 'edit' && (
             <>
-              {entry.fields ? (
-                entry.fields.map((f: any, i: number) => (
-                  <DiffBlock
-                    key={i}
-                    label={FIELD_LABELS[f.field] || f.field}
-                    oldVal={
-                      typeof f.oldValue === 'string' ? f.oldValue : JSON.stringify(f.oldValue)
-                    }
-                    newVal={
-                      typeof f.newValue === 'string' ? f.newValue : JSON.stringify(f.newValue)
-                    }
-                  />
-                ))
+              {entry.fields?.length ? (
+                // A multi-field 'edit' entry (PUT /tasks/:id, via
+                // api/src/services/taskMutations.ts) records only the NAMES of the fields
+                // that changed, so no diff can be rendered for them. List the names instead
+                // of feeding empty values to DiffBlock, which would claim they were emptied.
+                //
+                // Status is the exception: a column move is an 'edit' entry carrying
+                // `fields: ['status']` AND the real transition (`from` = old status,
+                // `status` = new one, taskMutations.ts:212-219), which the block above now
+                // renders. Only the remaining fields are value-less.
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold text-dark-400 uppercase tracking-wide">
+                    Fields changed
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {entry.fields.map(name => (
+                      <span
+                        key={name}
+                        className="px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30"
+                      >
+                        {FIELD_LABELS[name] || name}
+                      </span>
+                    ))}
+                  </div>
+                  {entry.fields.some(name => name !== 'status') && (
+                    <div className="text-xs text-dark-500 italic">
+                      Before/after values were not recorded for these fields.
+                    </div>
+                  )}
+                </div>
               ) : entry.field ? (
                 <DiffBlock
                   label={FIELD_LABELS[entry.field] || entry.field}

@@ -8,10 +8,11 @@ import { getReposForBoard } from './database/boardRepos.js';
 import { resolveWorkflowStatus } from './workflow/columnIds.js';
 import { normalizeRepoFullName, normalizeStoragePath } from './taskRepos.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
+import type { AgentManager } from './agentManager/index.js';
 
 /** Resolve an agent by UUID (agent_id) or case-insensitive name (agent_name). */
 function findAgent(
-  agentManager,
+  agentManager: AgentManager,
   { agent_id, agent_name }: { agent_id?: string; agent_name?: string }
 ) {
   if (agent_id) return agentManager.agents.get(agent_id) ?? null;
@@ -57,8 +58,8 @@ function resolveBoardStatus(
  * returned agent, not the one they resolved from the input parameters.
  */
 async function locateTask(
-  agentManager,
-  { agent_id, agent_name, task_id }: { agent_id?: string; agent_name?: string; task_id: string }
+  agentManager: AgentManager,
+  { task_id }: { agent_id?: string; agent_name?: string; task_id: string }
 ): Promise<{ task: any; agent: any; boardLevel: boolean }> {
   // DB-first resolution by full id OR unique prefix (the short-id form agents
   // pass), regardless of owner — the DB is the single source of truth.
@@ -79,7 +80,7 @@ async function locateTask(
  * tasks. Returns the mutated task.
  */
 async function applyBoardLevelUpdate(
-  agentManager,
+  agentManager: AgentManager,
   task: any,
   {
     repoUpdate,
@@ -168,7 +169,7 @@ async function applyBoardLevelUpdate(
  * the execute wait/commit auto-detection look at it.
  */
 export async function applyTaskUpdate(
-  agentManager,
+  agentManager: AgentManager,
   {
     agent_id,
     agent_name,
@@ -384,7 +385,10 @@ export async function applyTaskUpdate(
  * assignment, etc.) works on it. The mutation tools (update_task/search_tasks)
  * take an explicit task_id and resolve the owning agent from the task itself.
  */
-export function createSwarmApiMcpServer(agentManager, callerAgentId: string | null = null) {
+export function createSwarmApiMcpServer(
+  agentManager: AgentManager,
+  callerAgentId: string | null = null
+) {
   const server = new McpServer({
     name: 'Swarm API',
     version: '1.0.0',
@@ -822,7 +826,7 @@ export function createSwarmApiMcpServer(agentManager, callerAgentId: string | nu
  * call-site compatibility, but the task tools no longer depend on it — each
  * resolves the owning agent from the explicit task_id. boardId is ignored.
  */
-export function createSwarmApiMcpHandler(agentManager) {
+export function createSwarmApiMcpHandler(agentManager: AgentManager) {
   return createMcpHttpHandler('Swarm API', ({ agentId }) =>
     createSwarmApiMcpServer(agentManager, agentId)
   );

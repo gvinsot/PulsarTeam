@@ -1,4 +1,6 @@
 import { getPool } from './connection.js';
+import { errorMessage } from '../../lib/errors.js';
+import type { normalizeSecondaryRepos } from '../taskRepos.js';
 
 // SELECT clause + joins shared by every task read query.
 // Hydrates `project` (name, derived from board.project_id) so `rowToTask`
@@ -51,8 +53,121 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
 });
 const TASK_COLUMNS = new Set<string>(Object.values(TASK_COLUMN_BY_FIELD));
 
+// ─── Task shapes ────────────────────────────────────────────────────────────
+// `TaskRow` describes what the pg driver actually hands back for TASK_SELECT —
+// not what the DDL suggests. Three driver behaviours matter and are the reason
+// several columns are typed the way they are (see baseSchema.ts, CREATE TABLE
+// tasks):
+//   • JSONB columns (source, recurrence, commits, history, secondary_repos)
+//     arrive already deserialized, so they are typed as their parsed shape.
+//   • TIMESTAMPTZ columns arrive as `Date` objects, never as strings.
+//   • `position` is a BIGINT, which pg returns as a string to avoid precision
+//     loss — hence the parseInt in the mapper.
+// Everything a consumer should use is derived from here: `Task` is
+// ReturnType<typeof rowToTask>, so it cannot drift from the mapper.
+
+/** A commit linked to a task by the git reconcile / @run_command sweep. */
+export interface TaskCommit {
+  hash: string;
+  message?: string;
+  date?: string;
+  /** Set once the runner has pushed the commit; absent until then. */
+  pushed?: boolean;
+}
+
+/** One append-only audit entry in `task.history`. Entries share a small core
+ * (when / who / which status) and carry per-event extras, so extra keys are
+ * allowed rather than enumerated. */
+export interface TaskHistoryEntry {
+  at?: string;
+  by?: string;
+  status?: string;
+  from?: string;
+  type?: string;
+  field?: string;
+  oldValue?: unknown;
+  newValue?: unknown;
+  [key: string]: unknown;
+}
+
+/** Where the task came from (user, MCP client, integration, ...). */
+export interface TaskSource {
+  type?: string;
+  name?: string;
+  [key: string]: unknown;
+}
+
+/** Recurring-task settings, written by addTask / setTaskRecurrence. */
+export interface TaskRecurrence {
+  enabled?: boolean;
+  period?: string;
+  intervalMinutes?: number;
+  originalStatus?: string;
+  historyRetentionDays?: number | null;
+  lastResetAt?: string;
+  [key: string]: unknown;
+}
+
+/** Derived from the single normalizer so the two cannot diverge. */
+export type TaskSecondaryRepo = ReturnType<typeof normalizeSecondaryRepos>[number];
+
+/** A `TASK_SELECT` row: every `tasks` column plus the two project aliases. */
+export interface TaskRow {
+  id: string;
+  agent_id: string | null;
+  text: string;
+  title: string | null;
+  status: string;
+  board_id: string | null;
+  assignee: string | null;
+  task_type: string | null;
+  priority: string | null;
+  due_date: Date | null;
+  source: TaskSource | null;
+  recurrence: TaskRecurrence | null;
+  commits: TaskCommit[] | null;
+  history: TaskHistoryEntry[] | null;
+  error: string | null;
+  error_from_status: string | null;
+  execution_status: string | null;
+  completed_action_idx: number | null;
+  action_running: boolean | null;
+  action_running_agent_id: string | null;
+  action_running_mode: string | null;
+  pending_on_enter: string | null;
+  is_manual: boolean | null;
+  /** BIGINT — pg returns it as a string. */
+  position: string;
+  environment: string;
+  repo_provider: string | null;
+  repo_full_name: string | null;
+  secondary_repos: TaskSecondaryRepo[] | null;
+  storage_provider: string | null;
+  storage_path: string | null;
+  deleted_at: Date | null;
+  deleted_by: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+  completed_at: Date | null;
+  started_at: Date | null;
+  /** Alias from the LEFT JOIN on projects — null for a board-less task. */
+  _project_id: string | null;
+  _project_name: string | null;
+}
+
+/**
+ * Normalize a timestamp column to an ISO string. The pg driver hands back a
+ * `Date`, but a task object round-tripped through JSON carries an ISO string
+ * already — which is exactly what the `row.x?.toISOString?.() || row.x` chain
+ * this replaces handled, with the same null passthrough.
+ */
+function toIso(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return typeof value === 'string' ? value : value.toISOString();
+}
+
 /** Convert a DB row to the in-memory task object format */
-export function rowToTask(row) {
+export function rowToTask(row: TaskRow) {
   return {
     id: row.id,
     agentId: row.agent_id,
@@ -81,11 +196,11 @@ export function rowToTask(row) {
     commits: row.commits || [],
     history: row.history || [],
     error: row.error || undefined,
-    createdAt: row.created_at?.toISOString?.() || row.created_at,
-    updatedAt: row.updated_at?.toISOString?.() || row.updated_at,
-    completedAt: row.completed_at?.toISOString?.() || row.completed_at || undefined,
-    startedAt: row.started_at?.toISOString?.() || row.started_at || undefined,
-    deletedAt: row.deleted_at?.toISOString?.() || row.deleted_at || undefined,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+    completedAt: toIso(row.completed_at) || undefined,
+    startedAt: toIso(row.started_at) || undefined,
+    deletedAt: toIso(row.deleted_at) || undefined,
     deletedBy: row.deleted_by || undefined,
     executionStatus: row.execution_status || undefined,
     completedActionIdx: row.completed_action_idx != null ? row.completed_action_idx : undefined,
@@ -100,6 +215,44 @@ export function rowToTask(row) {
   };
 }
 
+/** Exactly what the mapper builds — the starting point for `Task` below. */
+type MappedTask = ReturnType<typeof rowToTask>;
+
+/**
+ * Fields that callers clear in place on a task object between two saves, by
+ * assigning `null` or by `delete`-ing them (workflow chain bookkeeping, the
+ * board-level running flags, ...). The mapper always emits them — as `undefined`
+ * when empty — but a type saying "always present, never null" would reject that
+ * clearing, so `Task` relaxes exactly these to optional + nullable.
+ */
+type ClearedInPlace =
+  | 'startedAt'
+  | 'completedAt'
+  | 'actionRunningAgentId'
+  | 'actionRunningMode'
+  | 'completedActionIdx'
+  | '_pendingOnEnter'
+  | 'executionStatus'
+  | 'errorFromStatus'
+  | 'error'
+  | 'taskType';
+
+/**
+ * The in-memory task object, derived from the one mapper that produces it.
+ * Deriving instead of restating means the type follows `rowToTask` for free:
+ * add a field to the mapper and every `Task`-annotated site sees it.
+ */
+export type Task = Omit<MappedTask, ClearedInPlace> & {
+  [K in ClearedInPlace]?: MappedTask[K] | null;
+};
+
+/**
+ * What the write path accepts. Every field `_doSaveTask` reads is optional
+ * except the primary key, because callers routinely persist a spread of a
+ * partially-built task (`{ ...task, agentId }`).
+ */
+export type TaskWriteInput = Partial<Task> & Pick<Task, 'id'>;
+
 /**
  * Run a TASK_SELECT query with the given trailing clause + params, mapping rows
  * to task objects. On a no-pool/error condition returns [] (matching the per-
@@ -108,26 +261,30 @@ export function rowToTask(row) {
  */
 async function queryTasks(
   clause: string,
-  params: any[] = [],
+  params: unknown[] = [],
   errorPrefix = 'Failed to load tasks:'
-): Promise<any[]> {
+): Promise<Task[]> {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const result = await pool.query(`${TASK_SELECT} ${clause}`, params);
+    const result = await pool.query<TaskRow>(`${TASK_SELECT} ${clause}`, params);
     return result.rows.map(rowToTask);
-  } catch (err: any) {
-    console.error(errorPrefix, err.message);
+  } catch (err) {
+    console.error(errorPrefix, errorMessage(err));
     return [];
   }
 }
 
 /** Single-row variant of queryTasks: returns the first task or null. */
-async function queryOneTask(clause: string, params: any[], errorPrefix: string): Promise<any> {
+async function queryOneTask(
+  clause: string,
+  params: unknown[],
+  errorPrefix: string
+): Promise<Task | null> {
   return (await queryTasks(clause, params, errorPrefix))[0] ?? null;
 }
 
-export async function getTasksByAgent(agentId) {
+export async function getTasksByAgent(agentId: string) {
   return queryTasks(
     'WHERE t.agent_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at',
     [agentId],
@@ -149,15 +306,17 @@ export async function getAllTaskIds(): Promise<string[]> {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const result = await pool.query('SELECT id FROM tasks WHERE deleted_at IS NULL');
-    return result.rows.map((r: any) => r.id);
-  } catch (err: any) {
-    console.error('Failed to load task ids:', err.message);
+    const result = await pool.query<{ id: string }>(
+      'SELECT id FROM tasks WHERE deleted_at IS NULL'
+    );
+    return result.rows.map(r => r.id);
+  } catch (err) {
+    console.error('Failed to load task ids:', errorMessage(err));
     return [];
   }
 }
 
-export async function getTaskById(taskId) {
+export async function getTaskById(taskId: string) {
   return queryOneTask('WHERE t.id = $1 AND t.deleted_at IS NULL', [taskId], 'Failed to get task:');
 }
 
@@ -173,7 +332,7 @@ export async function getTaskById(taskId) {
  * and unlike it resolves tasks regardless of owner (including `agent_id = NULL`
  * board-level tasks).
  */
-export async function getTaskByIdPrefix(idOrPrefix) {
+export async function getTaskByIdPrefix(idOrPrefix: string | null | undefined) {
   if (!idOrPrefix) return null;
   // Exact-id fast path (uses the PK index).
   const exact = await getTaskById(idOrPrefix);
@@ -191,7 +350,7 @@ export async function getTaskByIdPrefix(idOrPrefix) {
 // fire-and-forget calls cannot overtake each other at the DB level.
 const _taskWriteQueue = new Map(); // taskId -> Promise
 
-export async function saveTaskToDb(task) {
+export async function saveTaskToDb(task: TaskWriteInput) {
   const pool = getPool();
   if (!pool) return;
 
@@ -216,9 +375,13 @@ export async function saveTaskToDb(task) {
   return chained;
 }
 
-async function _doSaveTask(task) {
+async function _doSaveTask(task: TaskWriteInput) {
   const pool = getPool();
   try {
+    // saveTaskToDb (the only caller) already returned early when there was no
+    // pool; re-check here so a pool torn down between queueing and execution
+    // surfaces as a real error instead of a TypeError.
+    if (!pool) throw new Error('Database not connected');
     await pool.query(
       `INSERT INTO tasks (id, agent_id, text, title, status, repo_provider, repo_full_name,
                           storage_provider, storage_path, board_id, assignee,
@@ -274,13 +437,13 @@ async function _doSaveTask(task) {
         JSON.stringify(Array.isArray(task.secondaryRepos) ? task.secondaryRepos : []),
       ]
     );
-  } catch (err: any) {
-    console.error(`Failed to save task ${task.id}:`, err.message);
+  } catch (err) {
+    console.error(`Failed to save task ${task.id}:`, errorMessage(err));
     throw err;
   }
 }
 
-export async function deleteTaskFromDb(taskId, deletedBy = null) {
+export async function deleteTaskFromDb(taskId: string, deletedBy: string | null = null) {
   const pool = getPool();
   if (!pool) return false;
   try {
@@ -288,26 +451,26 @@ export async function deleteTaskFromDb(taskId, deletedBy = null) {
       'UPDATE tasks SET deleted_at = NOW(), deleted_by = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
       [taskId, deletedBy]
     );
-    return result.rowCount > 0;
+    return (result.rowCount ?? 0) > 0;
   } catch (err) {
-    console.error('Failed to soft-delete task:', err.message);
+    console.error('Failed to soft-delete task:', errorMessage(err));
     return false;
   }
 }
 
-export async function hardDeleteTaskFromDb(taskId) {
+export async function hardDeleteTaskFromDb(taskId: string) {
   const pool = getPool();
   if (!pool) return false;
   try {
     const result = await pool.query('DELETE FROM tasks WHERE id = $1', [taskId]);
-    return result.rowCount > 0;
+    return (result.rowCount ?? 0) > 0;
   } catch (err) {
-    console.error('Failed to hard-delete task:', err.message);
+    console.error('Failed to hard-delete task:', errorMessage(err));
     return false;
   }
 }
 
-export async function restoreTaskFromDb(taskId) {
+export async function restoreTaskFromDb(taskId: string) {
   const pool = getPool();
   if (!pool) return null;
   try {
@@ -319,7 +482,7 @@ export async function restoreTaskFromDb(taskId) {
     const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1`, [taskId]);
     return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
   } catch (err) {
-    console.error('Failed to restore task:', err.message);
+    console.error('Failed to restore task:', errorMessage(err));
     return null;
   }
 }
@@ -332,7 +495,7 @@ export async function getDeletedTasks() {
   );
 }
 
-export async function getDeletedTaskById(taskId) {
+export async function getDeletedTaskById(taskId: string) {
   return queryOneTask(
     'WHERE t.id = $1 AND t.deleted_at IS NOT NULL',
     [taskId],
@@ -340,7 +503,7 @@ export async function getDeletedTaskById(taskId) {
   );
 }
 
-export async function deleteTasksByAgent(agentId) {
+export async function deleteTasksByAgent(agentId: string) {
   const pool = getPool();
   if (!pool) return;
   try {
@@ -349,7 +512,7 @@ export async function deleteTasksByAgent(agentId) {
       [agentId]
     );
   } catch (err) {
-    console.error('Failed to soft-delete tasks for agent:', err.message);
+    console.error('Failed to soft-delete tasks for agent:', errorMessage(err));
   }
 }
 
@@ -364,7 +527,7 @@ export async function getTasksForResume(environment?: string | null) {
   const pool = getPool();
   if (!pool) return [];
   try {
-    const params: any[] = [];
+    const params: unknown[] = [];
     let envFilter = '';
     if (environment) {
       params.push(environment);
@@ -396,7 +559,7 @@ export async function getTasksForResume(environment?: string | null) {
       _agentEnabled: row.agent_data?.enabled !== false,
     }));
   } catch (err) {
-    console.error('Failed to get tasks for resume:', err.message);
+    console.error('Failed to get tasks for resume:', errorMessage(err));
     return [];
   }
 }
@@ -418,7 +581,7 @@ export async function getTasksForResume(environment?: string | null) {
  * deleted_at IS NULL AND board_id IS NOT NULL) — see schema.ts.
  */
 export async function getActiveWorkflowTasks(environment?: string | null) {
-  const params: any[] = [];
+  const params: unknown[] = [];
   let envFilter = '';
   if (environment) {
     params.push(environment);
@@ -448,7 +611,7 @@ export async function getActiveWorkflowTasks(environment?: string | null) {
  * the action_running signal is still present.
  */
 export async function getInterruptedChainTasks(environment?: string | null) {
-  const params: any[] = [];
+  const params: unknown[] = [];
   let envFilter = '';
   if (environment) {
     params.push(environment);
@@ -469,7 +632,7 @@ export async function getInterruptedChainTasks(environment?: string | null) {
 /**
  * Clear execution flags for all tasks involving a given agent (as assignee or owner).
  */
-export async function clearTaskExecutionFlags(agentId) {
+export async function clearTaskExecutionFlags(agentId: string) {
   const pool = getPool();
   if (!pool) return;
   try {
@@ -492,14 +655,14 @@ export async function clearTaskExecutionFlags(agentId) {
       [agentId]
     );
   } catch (err) {
-    console.error('Failed to clear task execution flags:', err.message);
+    console.error('Failed to clear task execution flags:', errorMessage(err));
   }
 }
 
 /**
  * Update only the execution_status of a task (lightweight update for watching/stopped transitions).
  */
-export async function updateTaskExecutionStatus(taskId, executionStatus) {
+export async function updateTaskExecutionStatus(taskId: string, executionStatus: string | null) {
   const pool = getPool();
   if (!pool) return;
   try {
@@ -508,14 +671,14 @@ export async function updateTaskExecutionStatus(taskId, executionStatus) {
       executionStatus || null,
     ]);
   } catch (err) {
-    console.error('Failed to update task execution status:', err.message);
+    console.error('Failed to update task execution status:', errorMessage(err));
   }
 }
 
 /**
  * Clear action_running flags for tasks assigned to a specific agent.
  */
-export async function clearActionRunningForAgent(agentId) {
+export async function clearActionRunningForAgent(agentId: string) {
   const pool = getPool();
   if (!pool) return;
   try {
@@ -531,7 +694,7 @@ export async function clearActionRunningForAgent(agentId) {
       [agentId]
     );
   } catch (err) {
-    console.error('Failed to clear action_running for agent:', err.message);
+    console.error('Failed to clear action_running for agent:', errorMessage(err));
   }
 }
 
@@ -549,7 +712,7 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
   const pool = getPool();
   if (!pool) return 0;
   try {
-    const params: any[] = [];
+    const params: unknown[] = [];
     let envFilter = '';
     if (environment) {
       params.push(environment);
@@ -569,7 +732,7 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
     );
     return result.rowCount || 0;
   } catch (err) {
-    console.error('Failed to clear stale action_running flags:', err.message);
+    console.error('Failed to clear stale action_running flags:', errorMessage(err));
     return 0;
   }
 }
@@ -579,7 +742,7 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
 /**
  * Get active tasks (not done/backlog/error) for a given agent (as owner).
  */
-export async function getActiveTasksByAgent(agentId) {
+export async function getActiveTasksByAgent(agentId: string) {
   return queryTasks(
     `WHERE t.agent_id = $1 AND t.status NOT IN ('done','backlog','error') AND t.deleted_at IS NULL ORDER BY t.created_at`,
     [agentId],
@@ -590,7 +753,7 @@ export async function getActiveTasksByAgent(agentId) {
 /**
  * Get all tasks for a board.
  */
-export async function getTasksByBoard(boardId) {
+export async function getTasksByBoard(boardId: string) {
   return queryTasks(
     'WHERE t.board_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at',
     [boardId],
@@ -602,7 +765,7 @@ export async function getTasksByBoard(boardId) {
  * Find the board that has the most tasks for a given project name.
  * Resolved through boards.project_id → projects.name. Returns the board_id or null.
  */
-export async function getBoardWithMostTasksForProject(projectName) {
+export async function getBoardWithMostTasksForProject(projectName: string) {
   const pool = getPool();
   if (!pool || !projectName) return null;
   try {
@@ -619,7 +782,7 @@ export async function getBoardWithMostTasksForProject(projectName) {
     );
     return result.rows.length > 0 ? result.rows[0].board_id : null;
   } catch (err) {
-    console.error('Failed to get board with most tasks for project:', err.message);
+    console.error('Failed to get board with most tasks for project:', errorMessage(err));
     return null;
   }
 }
@@ -631,7 +794,7 @@ export async function getBoardWithMostTasksForProject(projectName) {
  * authoritative "this agent is working this task right now" signal. Returns the
  * most-recently-started match, or null.
  */
-export async function getTaskByActionRunningAgent(agentId) {
+export async function getTaskByActionRunningAgent(agentId: string) {
   return queryOneTask(
     `WHERE t.action_running_agent_id = $1 AND t.action_running IS TRUE AND t.deleted_at IS NULL
        ORDER BY t.started_at DESC NULLS LAST LIMIT 1`,
@@ -643,7 +806,7 @@ export async function getTaskByActionRunningAgent(agentId) {
 /**
  * Get all tasks assigned to an agent (either as assignee or as owner when no assignee).
  */
-export async function getTasksByAssignee(agentId) {
+export async function getTasksByAssignee(agentId: string) {
   return queryTasks(
     `WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1)) AND t.deleted_at IS NULL ORDER BY t.created_at`,
     [agentId],
@@ -655,7 +818,7 @@ export async function getTasksByAssignee(agentId) {
  * Find the first active task (with startedAt) for a given executor agent.
  * Checks both assignee and owner. Returns null if none found.
  */
-export async function getActiveTaskForExecutor(agentId) {
+export async function getActiveTaskForExecutor(agentId: string) {
   return queryOneTask(
     `WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1))
          AND t.status NOT IN ('done','backlog','error')
@@ -671,7 +834,7 @@ export async function getActiveTaskForExecutor(agentId) {
  * Check if an agent has any active task (optionally excluding one task).
  * Returns true/false. Replaces the in-memory agentHasActiveTask cross-agent scan.
  */
-export async function hasActiveTask(agentId, excludeTaskId = null) {
+export async function hasActiveTask(agentId: string, excludeTaskId: string | null = null) {
   const pool = getPool();
   if (!pool) return false;
   try {
@@ -691,7 +854,7 @@ export async function hasActiveTask(agentId, excludeTaskId = null) {
     );
     return result.rows.length > 0;
   } catch (err) {
-    console.error('Failed to check active task:', err.message);
+    console.error('Failed to check active task:', errorMessage(err));
     return false;
   }
 }
@@ -699,7 +862,10 @@ export async function hasActiveTask(agentId, excludeTaskId = null) {
 /**
  * Count active tasks for an agent (for load-balancing).
  */
-export async function countActiveTasksForAgent(agentId, excludeTaskId = null) {
+export async function countActiveTasksForAgent(
+  agentId: string,
+  excludeTaskId: string | null = null
+) {
   const pool = getPool();
   if (!pool) return 0;
   try {
@@ -718,7 +884,7 @@ export async function countActiveTasksForAgent(agentId, excludeTaskId = null) {
     );
     return result.rows[0]?.count || 0;
   } catch (err) {
-    console.error('Failed to count active tasks:', err.message);
+    console.error('Failed to count active tasks:', errorMessage(err));
     return 0;
   }
 }
@@ -767,7 +933,7 @@ export async function searchTasks(
   if (!pool) return { total: 0, returned: 0, tasks: [] };
   try {
     const conditions: string[] = [];
-    const params: any[] = [];
+    const params: unknown[] = [];
     let idx = 1;
 
     if (!opts.includeDeleted) conditions.push('t.deleted_at IS NULL');
@@ -847,7 +1013,7 @@ export async function searchTasks(
     const tasks = result.rows.map(rowToTask);
     return { total, returned: tasks.length, tasks };
   } catch (err) {
-    console.error('Failed to search tasks:', err.message);
+    console.error('Failed to search tasks:', errorMessage(err));
     return { total: 0, returned: 0, tasks: [] };
   }
 }
@@ -856,9 +1022,12 @@ export async function searchTasks(
  * Get tasks filtered by status and/or board.
  * Both parameters are optional — pass null to skip a filter.
  */
-export async function getTasksByStatusAndBoard(status = null, boardId = null) {
+export async function getTasksByStatusAndBoard(
+  status: string | null = null,
+  boardId: string | null = null
+) {
   const conditions = ['t.deleted_at IS NULL'];
-  const params = [];
+  const params: string[] = [];
   let idx = 1;
   if (status) {
     conditions.push(`t.status = $${idx}`);
@@ -880,11 +1049,13 @@ export async function getTasksByStatusAndBoard(status = null, boardId = null) {
 /**
  * Update specific fields of a task. Returns the updated task.
  */
-export async function updateTaskFields(taskId, fields) {
+export async function updateTaskFields(taskId: string, fields: Record<string, unknown>) {
   const pool = getPool();
   if (!pool) return null;
-  const sets = [];
-  const values = [taskId];
+  const sets: string[] = [];
+  // Heterogeneous on purpose: $1 is the id, the rest are whatever the caller
+  // set — strings, numbers, Dates, or JSON.stringify'd objects (see below).
+  const values: unknown[] = [taskId];
   let paramIdx = 2;
   for (const [key, value] of Object.entries(fields)) {
     // Resolve the writable column: a known camelCase field maps to its snake_case
@@ -921,7 +1092,7 @@ export async function updateTaskFields(taskId, fields) {
     const result = await pool.query(`${TASK_SELECT} WHERE t.id = $1`, [taskId]);
     return result.rows.length > 0 ? rowToTask(result.rows[0]) : null;
   } catch (err) {
-    console.error('Failed to update task fields:', err.message);
+    console.error('Failed to update task fields:', errorMessage(err));
     return null;
   }
 }

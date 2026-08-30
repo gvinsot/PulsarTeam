@@ -27,17 +27,27 @@ import {
   tryAcquireTaskLock,
   releaseTaskLock,
 } from '../database.js';
-import { persistThenEmit } from '../taskMutations.js';
+import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
 import { executeAction, recordReassign } from './actionExecutor.js';
+import type { ActionContext, ActionResult } from './actionExecutor.js';
 import { markTaskError } from './taskErrors.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
+import { errorMessage } from '../../lib/errors.js';
 import {
   isValidTransition,
   evaluateAllConditions,
   getMatchingTransitions,
-  columnExists,
   Trigger,
 } from './taskStateMachine.js';
+import type {
+  BoardWorkflow,
+  WorkflowAction,
+  WorkflowConfig,
+  WorkflowTransition,
+} from './taskStateMachine.js';
+import type { Agent } from '../database/agents.js';
+import type { AgentManager } from '../agentManager/index.js';
+import type { Task } from '../database/tasks.js';
 import {
   findAgentForAssignment,
   hasLockForTask,
@@ -61,7 +71,7 @@ const ON_ENTER_RETRY_MAX_MS = 2_000;
  * the stale copy back would revert those mutations — so bookkeeping must apply to
  * the current row. Returns null if the task was deleted mid-chain.
  */
-async function _chainTask(agentManager, task) {
+async function _chainTask(_agentManager: AgentManager, task: Task) {
   return getTaskById(task.id);
 }
 
@@ -84,7 +94,11 @@ let _startupReArmDone = false;
  * @param {Object} agentManager  - the AgentManager instance
  * @param {Object} [options]     - { by: string }
  */
-export async function processColumnEntry(task, agentManager, { by = null } = {}) {
+export async function processColumnEntry(
+  task: Task,
+  agentManager: AgentManager,
+  { by = null }: { by?: string | null } = {}
+) {
   const io = agentManager.io;
 
   console.log(
@@ -135,15 +149,18 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
   const enteredStatus = task.status;
 
   try {
-    let workflow;
+    let workflow: WorkflowConfig;
     try {
       workflow = await getWorkflowForBoard(task.boardId);
     } catch (err) {
-      console.error(`[WorkflowEngine] Failed to load workflow:`, err.message);
+      console.error(`[WorkflowEngine] Failed to load workflow:`, errorMessage(err));
       return;
     }
 
-    const ownerId = workflow.userId || agentManager.agents.get(task.agentId)?.ownerId || null;
+    const ownerId =
+      workflow.userId ||
+      (task.agentId ? agentManager.agents.get(task.agentId)?.ownerId : null) ||
+      null;
 
     // Auto-assign by column role
     await _autoAssignByColumn(task, workflow, agentManager, ownerId, io);
@@ -237,7 +254,7 @@ export async function processColumnEntry(task, agentManager, { by = null } = {})
 /**
  * Evict stale condition processing locks that no longer guard a live chain.
  */
-function _evictStaleConditionLocks(agentManager) {
+function _evictStaleConditionLocks(agentManager: AgentManager) {
   const LOCK_TTL_MS = 2 * 60 * 1000;
   if (!agentManager._conditionProcessing) return;
   const now = Date.now();
@@ -261,7 +278,7 @@ function _evictStaleConditionLocks(agentManager) {
  * its timestamp on every attempt; anything older than the TTL is abandoned
  * (worst case for a false positive: the 200ms-2s backoff resets to 200ms).
  */
-function _sweepOnEnterRetryState(agentManager) {
+function _sweepOnEnterRetryState(agentManager: AgentManager) {
   if (!agentManager._onEnterRetry) return;
   const RETRY_TTL_MS = 15 * 60 * 1000;
   const now = Date.now();
@@ -273,21 +290,30 @@ function _sweepOnEnterRetryState(agentManager) {
 }
 
 /**
+ * The board → transitions / workflow lookups built once per recheck tick.
+ *
+ * The key is `string | null` rather than `string` because only the WRITES are
+ * board ids: the reads pass `task.boardId`, which is null for a task attached
+ * to no board. Such a lookup simply misses — exactly as it always has.
+ */
+interface BoardTransitionMaps {
+  transMap: Map<string | null, WorkflowTransition[]>;
+  workflowMap: Map<string | null, WorkflowConfig>;
+}
+
+/**
  * Load the board → transitions map for transitions that are condition-based or
  * on_enter. Returns empty maps (so the caller early-returns) if the load fails.
  */
-async function _loadRelevantBoardTransitions(): Promise<{
-  transMap: Map<any, any>;
-  workflowMap: Map<any, any>;
-}> {
-  const transMap = new Map();
-  const workflowMap = new Map();
+async function _loadRelevantBoardTransitions(): Promise<BoardTransitionMaps> {
+  const transMap: BoardTransitionMaps['transMap'] = new Map();
+  const workflowMap: BoardTransitionMaps['workflowMap'] = new Map();
 
-  let boardWorkflows;
+  let boardWorkflows: BoardWorkflow[];
   try {
     boardWorkflows = await getAllBoardWorkflows();
   } catch (err) {
-    console.error(`[WorkflowEngine] Failed to load board workflows:`, err.message);
+    console.error(`[WorkflowEngine] Failed to load board workflows:`, errorMessage(err));
     return { transMap, workflowMap };
   }
 
@@ -317,7 +343,7 @@ async function _loadRelevantBoardTransitions(): Promise<{
  * action was skipped and never resumed). Chains that completed cleanly reset all
  * markers, so they are not re-run.
  */
-export async function reArmInterruptedChains(agentManager, ownEnv) {
+export async function reArmInterruptedChains(agentManager: AgentManager, ownEnv: string) {
   if (_startupReArmDone) return;
   _startupReArmDone = true;
   // DB query (the single source of truth). MUST run BEFORE clearAllStaleActionRunning
@@ -357,7 +383,7 @@ export async function reArmInterruptedChains(agentManager, ownEnv) {
  * so a run_agent chain can't double-execute across replicas before its durable
  * action_running flag (which getActiveWorkflowTasks excludes) is set.
  */
-function _dispatchUnderLock(taskId, run) {
+function _dispatchUnderLock(taskId: string, run: () => Promise<unknown>) {
   return (async () => {
     const locked = await tryAcquireTaskLock(taskId);
     if (!locked) {
@@ -383,7 +409,14 @@ function _dispatchUnderLock(taskId, run) {
  * `agentId`/`agent` are null for board-level tasks (agent_id = NULL) — keep every
  * use of `agent` optional-chained.
  */
-function _recheckTask(task, agentId, agent, boards, agentManager, ownEnv) {
+function _recheckTask(
+  task: Task,
+  agentId: string | null,
+  agent: Agent | null,
+  boards: BoardTransitionMaps,
+  agentManager: AgentManager,
+  ownEnv: string
+) {
   const io = agentManager.io;
   const { transMap: boardTransMap, workflowMap: boardWorkflowMap } = boards;
 
@@ -532,7 +565,7 @@ const STALE_RECONCILE_INTERVAL_MS = 60_000; // run the sweep at most once a minu
 // bypasses this gate and heals immediately.
 const STALE_ACTION_MIN_AGE_MS = 20 * 60 * 1000;
 
-export async function reconcileStaleActionRunning(agentManager, ownEnv) {
+export async function reconcileStaleActionRunning(agentManager: AgentManager, ownEnv: string) {
   const now = Date.now();
   let candidates;
   try {
@@ -566,7 +599,7 @@ export async function reconcileStaleActionRunning(agentManager, ownEnv) {
       if (hasLockForTask(`${fresh.agentId}:${fresh.id}:`)) continue;
       const strandedAgent = fresh.actionRunningAgentId;
       const strandedMode = fresh.actionRunningMode;
-      await updateTaskFields(fresh.id, {
+      const updated = await updateTaskFields(fresh.id, {
         actionRunning: false,
         actionRunningAgentId: null,
         actionRunningMode: null,
@@ -577,6 +610,17 @@ export async function reconcileStaleActionRunning(agentManager, ownEnv) {
       console.warn(
         `[WorkflowEngine] Reconciled stale action_running: task="${fresh.id}" status="${fresh.status}" (was agent=${strandedAgent || '?'} mode=${strandedMode || '?'}) — cleared + re-armed on_enter`
       );
+      // Tell the connected boards the card is no longer running — without this the
+      // healed task keeps its "busy / undraggable" spinner until a page reload, since
+      // nothing else emits for it (the run that set the flag is long gone).
+      // emitTaskUpdated, NOT persistThenEmit: the row above is already committed and
+      // persistThenEmit would write it a second time. Emit the row RETURNED by the
+      // write (cleared flags, current status), never the pre-write `fresh`, whose
+      // actionRunning is still true. A null return means nothing was written, so
+      // there is nothing to announce.
+      if (updated) {
+        emitTaskUpdated(agentManager, updated, { emitAgent: false, stampUpdatedAt: true });
+      }
     } catch (err: any) {
       console.error(
         `[WorkflowEngine] stale action_running reconcile failed for task="${task.id}":`,
@@ -595,7 +639,7 @@ export async function reconcileStaleActionRunning(agentManager, ownEnv) {
  *
  * @param {Object} agentManager
  */
-export async function recheckPendingTransitions(agentManager) {
+export async function recheckPendingTransitions(agentManager: AgentManager) {
   _evictStaleConditionLocks(agentManager);
   _sweepOnEnterRetryState(agentManager);
 
@@ -621,7 +665,10 @@ export async function recheckPendingTransitions(agentManager) {
   const dbTasks = await getActiveWorkflowTasks(ownEnv);
   for (const dbTask of dbTasks) {
     const agentId = dbTask.agentId || null;
-    const agent = agentId ? agentManager.agents.get(agentId) : null;
+    // `?? null` only normalizes the "unknown id" miss: Map.get answers
+    // undefined where the rest of this path speaks null, and _recheckTask
+    // treats the two identically.
+    const agent = agentId ? (agentManager.agents.get(agentId) ?? null) : null;
     _recheckTask(dbTask, agentId, agent, boards, agentManager, ownEnv);
   }
 }
@@ -638,10 +685,10 @@ export async function recheckPendingTransitions(agentManager) {
  * @returns {{ skipped: boolean }} — whether an action in the chain was skipped
  */
 async function _executeActionChain(
-  actions,
-  task,
-  { agentManager, io, ownerId, workflow, originalStatus }
-) {
+  actions: WorkflowAction[],
+  task: Task,
+  { agentManager, io, ownerId, workflow, originalStatus }: ActionContext
+): Promise<{ skipped: boolean }> {
   // Resume from last completed action ONLY if this is a retry for the same column.
   // _pendingOnEnter is set by the skipped-action path and tracks the status we were
   // retrying. If it doesn't match the current status, the saved index belongs to a
@@ -682,7 +729,12 @@ async function _executeActionChain(
   for (let i = startIdx; i < actions.length; i++) {
     const action = actions[i];
 
-    const result = await executeAction(action, task, { agentManager, io, ownerId, workflow });
+    const result: ActionResult = await executeAction(action, task, {
+      agentManager,
+      io,
+      ownerId,
+      workflow,
+    });
 
     if (result.error) {
       // Action failed with an error — mark task as error and stop chain.
@@ -791,7 +843,13 @@ async function _executeActionChain(
 /**
  * Auto-assign a task to an agent based on the column's autoAssignRole config.
  */
-async function _autoAssignByColumn(task, workflow, agentManager, ownerId, io) {
+async function _autoAssignByColumn(
+  task: Task,
+  workflow: WorkflowConfig,
+  agentManager: AgentManager,
+  ownerId: string | null,
+  _io: AgentManager['io']
+) {
   const currentColumn = workflow.columns?.find(c => c.id === task.status);
   const colIndex = workflow.columns?.findIndex(c => c.id === task.status) ?? -1;
   const isFirstOrLast = colIndex === 0 || colIndex === (workflow.columns?.length || 0) - 1;

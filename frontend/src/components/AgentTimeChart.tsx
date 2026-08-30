@@ -15,6 +15,8 @@ import { Line } from 'react-chartjs-2';
 import { api } from '../api';
 import { Clock, Users, TrendingUp, RefreshCw } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
+import type { ReactNode } from 'react';
+import type { AgentTimeSeries } from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -45,7 +47,7 @@ const AGENT_COLORS = [
   '#fb923c',
 ];
 
-function formatDuration(ms) {
+function formatDuration(ms: number) {
   if (!ms || ms <= 0) return '0m';
   const minutes = Math.floor(ms / 60000);
   if (minutes < 60) return `${minutes}m`;
@@ -57,23 +59,32 @@ function formatDuration(ms) {
   return `${days}d ${remainHours}h`;
 }
 
-function getChartColors(theme) {
+function getChartColors(theme: string) {
   if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
   return { legend: '#94a3b8', tick: '#64748b', grid: '#1e293b' };
 }
 
-export default function AgentTimeChart({ projectName, days = 30 }) {
+export default function AgentTimeChart({
+  projectName,
+  days = 30,
+}: {
+  /** The project NAME (not id) — the stats routes key on it. */
+  projectName: string;
+  days?: number;
+}) {
   // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
   const { theme } = useTheme() as { theme: string };
   const cc = getChartColors(theme);
-  const [data, setData] = useState(null);
+  const [data, setData] = useState<AgentTimeSeries | null>(null);
   const [loading, setLoading] = useState(true);
-  const cacheRef = useRef({});
+  // Per-mount memo of the agent-time payload, keyed `${projectName}:${days}`.
+  const cacheRef = useRef<Record<string, { data: AgentTimeSeries; ts: number }>>({});
 
   const loadData = useCallback(async () => {
     const cacheKey = `${projectName}:${days}`;
-    if (cacheRef.current[cacheKey] && Date.now() - cacheRef.current[cacheKey].ts < 60000) {
-      setData(cacheRef.current[cacheKey].data);
+    const cached = cacheRef.current[cacheKey];
+    if (cached && Date.now() - cached.ts < 60000) {
+      setData(cached.data);
       setLoading(false);
       return;
     }
@@ -144,11 +155,14 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
       tooltip: {
         callbacks: {
           label: ctx => {
-            const mins = ctx.parsed.y;
+            // chart.js types the parsed value as nullable; `null * 60000` is 0,
+            // which is what formatDuration already renders as '0m'.
+            const mins = ctx.parsed.y ?? 0;
             return `${ctx.dataset.label}: ${formatDuration(mins * 60000)}`;
           },
           footer: items => {
-            const total = items.reduce((sum, i) => sum + i.parsed.y, 0);
+            // Same nullable parsed value; `sum + null` is `sum + 0` in JS.
+            const total = items.reduce((sum, i) => sum + (i.parsed.y ?? 0), 0);
             return `Total: ${formatDuration(total * 60000)}`;
           },
         },
@@ -223,7 +237,7 @@ export default function AgentTimeChart({ projectName, days = 30 }) {
   );
 }
 
-function MiniStat({ icon, label, value }) {
+function MiniStat({ icon, label, value }: { icon: ReactNode; label: ReactNode; value: ReactNode }) {
   return (
     <div className="bg-dark-700/50 rounded-lg px-3 py-2">
       <div className="text-xs text-dark-400 flex items-center gap-1 mb-0.5">

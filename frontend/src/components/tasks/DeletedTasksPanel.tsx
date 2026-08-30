@@ -5,14 +5,23 @@ import {
   restoreTask as restoreTaskApi,
   hardDeleteTask as hardDeleteTaskApi,
 } from '../../api';
+import { errorMessage } from '../../utils/errors';
+import type { Task } from '../../types';
 
 const PAGE_SIZE = 20;
 
-export default function DeletedTasksPanel({ onClose, onRestored }) {
-  const [deletedTasks, setDeletedTasks] = useState([]);
+interface DeletedTasksPanelProps {
+  onClose: () => void;
+  /** Fired after a restore succeeded so the board reloads its tasks. */
+  onRestored: () => void;
+}
+
+export default function DeletedTasksPanel({ onClose, onRestored }: DeletedTasksPanelProps) {
+  const [deletedTasks, setDeletedTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [confirmDelete, setConfirmDelete] = useState(null);
-  const [actionLoading, setActionLoading] = useState(null);
+  // Both hold the id of the task whose delete is being confirmed / acted on.
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [page, setPage] = useState(1);
 
   const totalPages = Math.max(1, Math.ceil(deletedTasks.length / PAGE_SIZE));
@@ -33,7 +42,7 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
         const tasks = await getDeletedTasks();
         if (!cancelled) setDeletedTasks(tasks);
       } catch (err) {
-        console.error('Failed to load deleted tasks:', err.message);
+        console.error('Failed to load deleted tasks:', errorMessage(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -44,27 +53,27 @@ export default function DeletedTasksPanel({ onClose, onRestored }) {
     };
   }, []);
 
-  const handleRestore = async taskId => {
+  const handleRestore = async (taskId: string) => {
     setActionLoading(taskId);
     try {
       await restoreTaskApi(taskId);
       setDeletedTasks(prev => prev.filter(t => t.id !== taskId));
       onRestored();
     } catch (err) {
-      console.error('Failed to restore task:', err.message);
+      console.error('Failed to restore task:', errorMessage(err));
     } finally {
       setActionLoading(null);
     }
   };
 
-  const handleHardDelete = async taskId => {
+  const handleHardDelete = async (taskId: string) => {
     setActionLoading(taskId);
     try {
       await hardDeleteTaskApi(taskId);
       setDeletedTasks(prev => prev.filter(t => t.id !== taskId));
       setConfirmDelete(null);
     } catch (err) {
-      console.error('Failed to permanently delete task:', err.message);
+      console.error('Failed to permanently delete task:', errorMessage(err));
     } finally {
       setActionLoading(null);
     }

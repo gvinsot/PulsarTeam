@@ -13,11 +13,11 @@ export function normalizeText(value = '') {
     .trim();
 }
 
-function tokenizeForEmbedding(value = '') {
+function tokenizeForEmbedding(value = ''): string[] {
   const normalized = normalizeText(value).slice(0, 8000);
   if (!normalized) return [];
 
-  const tokens = [];
+  const tokens: string[] = [];
   const matches = normalized.match(TOKEN_REGEX) || [];
   for (const token of matches.slice(0, 256)) {
     tokens.push(token);
@@ -49,7 +49,10 @@ function tokenizeForEmbedding(value = '') {
   return tokens;
 }
 
-function hashToken(token, dimension) {
+function hashToken(
+  token: string,
+  dimension: number
+): { index: number; sign: number; weight: number } {
   const digest = crypto.createHash('sha1').update(token).digest();
   const index = digest.readUInt32BE(0) % dimension;
   const sign = (digest[4] & 1) === 0 ? 1 : -1;
@@ -57,7 +60,7 @@ function hashToken(token, dimension) {
   return { index, sign, weight };
 }
 
-function normalizeVector(vector) {
+function normalizeVector(vector: number[]): number[] {
   let norm = 0;
   for (const value of vector) {
     norm += value * value;
@@ -68,8 +71,8 @@ function normalizeVector(vector) {
   return vector.map(value => Number((value * scale).toFixed(8)));
 }
 
-export function createHashedEmbedding(value = '', dimension = EMBEDDING_DIMENSION) {
-  const vector = new Array(dimension).fill(0);
+export function createHashedEmbedding(value = '', dimension = EMBEDDING_DIMENSION): number[] {
+  const vector: number[] = new Array(dimension).fill(0);
   for (const token of tokenizeForEmbedding(value)) {
     const { index, sign, weight } = hashToken(token, dimension);
     vector[index] += sign * weight;
@@ -77,7 +80,7 @@ export function createHashedEmbedding(value = '', dimension = EMBEDDING_DIMENSIO
   return normalizeVector(vector);
 }
 
-export function cosineSimilarity(left = [], right = []) {
+export function cosineSimilarity(left: number[] = [], right: number[] = []): number {
   const len = left.length;
   if (!len || !right.length || len !== right.length) return 0;
 

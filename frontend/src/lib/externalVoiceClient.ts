@@ -15,6 +15,8 @@
 // Both helpers are exposed as small classes so the React components only
 // wire up callbacks and start/stop.
 
+import { errorMessage } from '../utils/errors';
+
 // Silence-detection tuning (browser-side VAD). Exported so the external-voice
 // tab uses the same thresholds as SttSession.
 export const SILENCE_MS = 900; // Trailing silence required to end an utterance.
@@ -177,8 +179,8 @@ export class SttSession {
           this.cb.onStateChange?.('idle');
         }
       };
-    } catch (err: any) {
-      this.cb.onError?.(err?.message || 'Could not start microphone');
+    } catch (err) {
+      this.cb.onError?.(errorMessage(err) || 'Could not start microphone');
       this.cleanup();
       this.cb.onStateChange?.('idle');
       throw err;

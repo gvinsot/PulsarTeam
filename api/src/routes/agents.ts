@@ -1,4 +1,5 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { getWorkflowForBoard } from '../services/configManager.js';
 import {
@@ -12,6 +13,7 @@ import { isValidRepoFullName } from '../services/taskRepos.js';
 import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { checkBoardAccess } from '../middleware/authz.js';
+import { sessionUser } from '../middleware/auth.js';
 import { detectEnvironment } from '../lib/environment.js';
 import { getUserBoardIdSet as getUserBoardIds } from '../lib/boardAccess.js';
 import { getMemTask } from './tasks.js';
@@ -26,9 +28,16 @@ import {
   byProjectHandler,
   projectSummaryHandler,
 } from './lib/agentStatusHandlers.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 
 // Mask sensitive fields before sending agent data to the client
-function sanitizeAgent(agent) {
+/**
+ * Agent records reach this as the untyped rows `agentManager` keeps; only
+ * `apiKey` is read by name, so that is the only field the parameter names.
+ */
+function sanitizeAgent(
+  agent: ({ apiKey?: string | null } & Record<string, unknown>) | null | undefined
+) {
   if (!agent) return agent;
   const { apiKey, ...safe } = agent;
   if (apiKey) {
@@ -37,32 +46,48 @@ function sanitizeAgent(agent) {
   return safe;
 }
 
-export function agentRoutes(agentManager) {
+export function agentRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   // Board-based access guard: users can access agents on their boards or
   // unscoped agents. 'read' is permissive; 'edit' is the stricter guard for
   // mutating endpoints so that read-only shares cannot modify agents/tasks.
-  const agentAccess = (level: 'read' | 'edit') => async (req, res, next) => {
-    const agent = agentManager.agents.get(req.params.id);
-    if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    if (req.user.role === 'admin') return next();
-    // Agents without a board are accessible to everyone (legacy)
-    if (!agent.boardId) return next();
-    const access = await checkBoardAccess(agent.boardId, req.user.userId, req.user.role, level);
-    if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
-    next();
-  };
+  const agentAccess =
+    (level: 'read' | 'edit') =>
+    async (
+      // Mounted only on ':id' routes, so the param is declared here instead of
+      // falling back to express's ParamsDictionary, whose values widen to
+      // `string | string[]`.
+      req: express.Request<{ id: string }>,
+      res: express.Response,
+      next: express.NextFunction
+    ): Promise<express.Response | void> => {
+      const agent = agentManager.agents.get(req.params.id);
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      // Same claims `req.user` carried before this signature was typed: the
+      // router is mounted behind authenticateToken, so the 401 below is
+      // unreachable in practice.
+      const user = sessionUser(req, res);
+      if (!user) return;
+      if (user.role === 'admin') return next();
+      // Agents without a board are accessible to everyone (legacy)
+      if (!agent.boardId) return next();
+      const access = await checkBoardAccess(agent.boardId, user.userId, user.role, level);
+      if (!access.ok) return res.status(access.status || 403).json({ error: access.error });
+      next();
+    };
   const requireAgentAccess = agentAccess('read');
   const requireAgentEditAccess = agentAccess('edit');
 
   // List agents (filtered by board access — each user sees agents on their boards + unscoped)
   router.get('/', async (req, res) => {
-    const userBoardIds = await getUserBoardIds(req.user.userId);
+    const user = sessionUser(req, res);
+    if (!user) return;
+    const userBoardIds = await getUserBoardIds(user.userId);
     // Refresh cached task counts + token totals so the agents view shows
     // accurate tasks-in-progress and lifetime tokens on the initial HTTP load.
     await agentManager._enrichAllAgentsStats();
-    const agents = agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds);
+    const agents = agentManager.getAllForUser(user.userId, user.role, userBoardIds);
     res.json(agents.map(sanitizeAgent));
   });
 
@@ -73,20 +98,22 @@ export function agentRoutes(agentManager) {
   // Get lightweight status for ALL enabled agents (includes project + currentTask)
   // Much lighter than GET / which returns full agent data with conversation history
   // Optional query param: ?project=ProjectName to filter by project
-  router.get('/statuses', statusesHandler(agentManager, true));
+  router.get('/statuses', asyncHandler(statusesHandler(agentManager, true)));
 
   // Get agents working on a specific project
-  router.get('/by-project/:project', byProjectHandler(agentManager, true));
+  router.get('/by-project/:project', asyncHandler(byProjectHandler(agentManager, true)));
 
   // Get project summary: all projects with their agent counts and assignments
-  router.get('/project-summary', projectSummaryHandler(agentManager, true));
+  router.get('/project-summary', asyncHandler(projectSummaryHandler(agentManager, true)));
 
   // Get comprehensive swarm status with project assignments
-  router.get('/swarm-status', swarmStatusHandler(agentManager, true));
+  router.get('/swarm-status', asyncHandler(swarmStatusHandler(agentManager, true)));
 
   // ── Admin: reset instructions for all agents of a role to default template ──
   router.post('/reset-instructions/:role', async (req, res) => {
-    if (req.user.role !== 'admin') {
+    const user = sessionUser(req, res);
+    if (!user) return;
+    if (user.role !== 'admin') {
       res.status(403).json({ error: 'Admin only' });
       return;
     }
@@ -100,17 +127,21 @@ export function agentRoutes(agentManager) {
   });
 
   // Get single agent detailed status (lightweight, includes project + currentTask)
-  router.get('/:id/status', requireAgentAccess, (req, res) => {
-    const status = agentManager.getAgentStatus(req.params.id);
-    if (!status) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    res.json(status);
-  });
+  router.get(
+    '/:id/status',
+    requireAgentAccess,
+    asyncHandler(async (req: express.Request<{ id: string }>, res: express.Response) => {
+      const status = await agentManager.getAgentStatus(req.params.id);
+      if (!status) {
+        res.status(404).json({ error: 'Agent not found' });
+        return;
+      }
+      res.json(status);
+    })
+  );
 
   // Get single agent
-  router.get('/:id', requireAgentAccess, (req, res) => {
+  router.get<{ id: string }>('/:id', requireAgentAccess, (req, res) => {
     const agent = agentManager.getById(req.params.id);
     if (!agent) {
       res.status(404).json({ error: 'Agent not found' });
@@ -175,8 +206,10 @@ export function agentRoutes(agentManager) {
   );
 
   // Delete agent (basic users cannot delete, ownership enforced by middleware)
-  router.delete('/:id', requireAgentEditAccess, async (req, res) => {
-    if (req.user.role === 'basic') {
+  router.delete<{ id: string }>('/:id', requireAgentEditAccess, async (req, res) => {
+    const user = sessionUser(req, res);
+    if (!user) return;
+    if (user.role === 'basic') {
       res.status(403).json({ error: 'Basic users cannot delete agents' });
       return;
     }
@@ -205,15 +238,25 @@ export function agentRoutes(agentManager) {
   );
 
   // Get conversation history
-  router.get('/:id/history', requireAgentAccess, (req, res) => {
+  router.get<{ id: string }>('/:id/history', requireAgentAccess, (req, res) => {
     const agent = agentManager.agents.get(req.params.id);
+    // Unreachable: requireAgentAccess has already 404'd on a missing agent.
+    // Spelled out because that guard lives in a separate middleware the
+    // compiler cannot follow, and the sibling routes answer the same way.
+    if (!agent) {
+      res.status(404).json({ error: 'Agent not found' });
+      return;
+    }
     res.json(agent.conversationHistory);
   });
 
   // Reload conversation history from the database. Useful in multi-replica
   // deployments where another replica may have advanced the conversation
   // beyond what this replica has in memory.
-  router.post('/:id/history/reload', requireAgentAccess, async (req, res) => {
+  // Params type passed explicitly so `req.params.id` stays a `string`: the
+  // typed `requireAgentAccess` otherwise pins `P` to express's loose
+  // `ParamsDictionary`, whose values are `string | string[]`.
+  router.post<{ id: string }>('/:id/history/reload', requireAgentAccess, async (req, res) => {
     const agent = agentManager.agents.get(req.params.id);
     if (!agent) {
       res.status(404).json({ error: 'Agent not found' });
@@ -240,7 +283,7 @@ export function agentRoutes(agentManager) {
   });
 
   // Stop agent
-  router.post('/:id/stop', requireAgentEditAccess, (req, res) => {
+  router.post<{ id: string }>('/:id/stop', requireAgentEditAccess, (req, res) => {
     const stopped = agentManager.stopAgent(req.params.id);
     if (stopped === false) {
       res.status(404).json({ error: 'Agent not found' });
@@ -250,7 +293,7 @@ export function agentRoutes(agentManager) {
   });
 
   // Clear conversation history
-  router.delete('/:id/history', requireAgentEditAccess, async (req, res) => {
+  router.delete<{ id: string }>('/:id/history', requireAgentEditAccess, async (req, res) => {
     const success = await agentManager.clearHistory(req.params.id);
     if (!success) {
       res.status(404).json({ error: 'Agent not found' });
@@ -264,7 +307,7 @@ export function agentRoutes(agentManager) {
   // counters, runner sessions, MCP connections, file tree) plus the global
   // LLM config cache, so any pending config change is picked up on the
   // next message.
-  router.post('/:id/reload-context', requireAgentEditAccess, async (req, res) => {
+  router.post<{ id: string }>('/:id/reload-context', requireAgentEditAccess, async (req, res) => {
     const success = await agentManager.reloadContext(req.params.id);
     if (!success) {
       res.status(404).json({ error: 'Agent not found' });
@@ -277,7 +320,7 @@ export function agentRoutes(agentManager) {
   // clients, file tree) and refreshes config caches WITHOUT erasing the
   // conversation or the runner session UUIDs, so the agent resumes exactly
   // where it left off with any pending config change applied.
-  router.post('/:id/restart', requireAgentEditAccess, async (req, res) => {
+  router.post<{ id: string }>('/:id/restart', requireAgentEditAccess, async (req, res) => {
     const success = await agentManager.restartRuntime(req.params.id);
     if (!success) {
       res.status(404).json({ error: 'Agent not found' });
@@ -287,17 +330,21 @@ export function agentRoutes(agentManager) {
   });
 
   // Truncate conversation history after a specific message index
-  router.delete('/:id/history/after/:index', requireAgentEditAccess, (req, res) => {
-    const result = agentManager.truncateHistory(req.params.id, req.params.index);
-    if (result === null) {
-      res.status(404).json({ error: 'Agent not found or invalid index' });
-      return;
+  router.delete<{ id: string; index: string }>(
+    '/:id/history/after/:index',
+    requireAgentEditAccess,
+    (req, res) => {
+      const result = agentManager.truncateHistory(req.params.id, req.params.index);
+      if (result === null) {
+        res.status(404).json({ error: 'Agent not found or invalid index' });
+        return;
+      }
+      res.json(result);
     }
-    res.json(result);
-  });
+  );
 
   // Clear action logs
-  router.delete('/:id/action-logs', requireAgentEditAccess, (req, res) => {
+  router.delete<{ id: string }>('/:id/action-logs', requireAgentEditAccess, (req, res) => {
     const success = agentManager.clearActionLogs(req.params.id);
     if (!success) {
       res.status(404).json({ error: 'Agent not found' });
@@ -333,7 +380,9 @@ export function agentRoutes(agentManager) {
 
       const userBoardIds = await getUserBoardIds(req.user.userId);
       const visibleIds = new Set(
-        agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds).map(a => a.id)
+        agentManager
+          .getAllForUser(req.user.userId, req.user.role, userBoardIds)
+          .map((a: { id: string }) => a.id)
       );
       const results = await agentManager.broadcastMessage(message, null, visibleIds);
       res.json({ results });
@@ -351,7 +400,9 @@ export function agentRoutes(agentManager) {
       }
       const userBoardIds = await getUserBoardIds(req.user.userId);
       const visibleIds = new Set(
-        agentManager.getAllForUser(req.user.userId, req.user.role, userBoardIds).map(a => a.id)
+        agentManager
+          .getAllForUser(req.user.userId, req.user.role, userBoardIds)
+          .map((a: { id: string }) => a.id)
       );
       const updated = await agentManager.updateAllProjects(project, visibleIds);
       res.json({ success: true, count: updated.length });
@@ -411,7 +462,7 @@ export function agentRoutes(agentManager) {
       if (!resolvedStatus && resolvedBoardId) {
         try {
           const wf = await getWorkflowForBoard(resolvedBoardId);
-          if (wf?.columns?.length > 0) {
+          if (wf?.columns && wf.columns.length > 0) {
             resolvedStatus = wf.columns[0].id;
           }
         } catch {
@@ -597,13 +648,13 @@ export function agentRoutes(agentManager) {
         }
         res.json(task);
       } catch (err) {
-        console.error(`[Route] Error updating task ${req.params.taskId}:`, err.message);
+        console.error(`[Route] Error updating task ${req.params.taskId}:`, errorMessage(err));
         try {
           await agentManager.setTaskStatus(req.params.id, req.params.taskId, 'error', {
             skipAutoRefine: true,
             by: 'system',
           });
-          await updateTaskFields(req.params.taskId, { error: err.message });
+          await updateTaskFields(req.params.taskId, { error: errorMessage(err) });
         } catch (_) {
           /* best effort */
         }
@@ -612,7 +663,7 @@ export function agentRoutes(agentManager) {
     })
   );
 
-  router.delete('/:id/tasks', requireAgentEditAccess, (req, res) => {
+  router.delete<{ id: string }>('/:id/tasks', requireAgentEditAccess, (req, res) => {
     const success = agentManager.clearTasks(req.params.id);
     if (!success) {
       res.status(404).json({ error: 'Agent not found' });
@@ -621,107 +672,130 @@ export function agentRoutes(agentManager) {
     res.json({ success: true });
   });
 
-  router.delete('/:id/tasks/:taskId', requireAgentEditAccess, async (req, res) => {
-    const agent = agentManager.agents.get(req.params.id);
-    const taskToDelete = await getMemTask(agentManager, req.params.id, req.params.taskId);
-    // Block deletion of tasks being executed — user must stop the agent first
-    if (
-      taskToDelete?.startedAt &&
-      agentManager._isActiveTaskStatus(taskToDelete.status) &&
-      agent?.status === 'busy'
-    ) {
-      res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
-      return;
-    }
-    const success = await agentManager.deleteTask(req.params.id, req.params.taskId);
-    if (!success) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  router.post('/:id/tasks/:taskId/transfer', requireAgentEditAccess, async (req, res) => {
-    const { targetAgentId } = req.body;
-    if (!targetAgentId) {
-      res.status(400).json({ error: 'targetAgentId required' });
-      return;
-    }
-    // Verify the requesting user also has access to the target agent — otherwise a user
-    // could push tasks into agents on boards they don't own.
-    if (req.user.role !== 'admin') {
-      const target = agentManager.agents.get(targetAgentId);
-      if (!target) {
-        res.status(404).json({ error: 'Target agent not found' });
+  // Params type passed explicitly — see the note on /:id/history/reload above.
+  router.delete<{ id: string; taskId: string }>(
+    '/:id/tasks/:taskId',
+    requireAgentEditAccess,
+    async (req, res) => {
+      const agent = agentManager.agents.get(req.params.id);
+      const taskToDelete = await getMemTask(agentManager, req.params.id, req.params.taskId);
+      // Block deletion of tasks being executed — user must stop the agent first
+      if (
+        taskToDelete?.startedAt &&
+        agentManager._isActiveTaskStatus(taskToDelete.status) &&
+        agent?.status === 'busy'
+      ) {
+        res.status(409).json({ error: 'Task is being executed. Stop the agent first.' });
         return;
       }
-      if (target.boardId) {
-        const userBoardIds = await getUserBoardIds(req.user.userId);
-        if (!userBoardIds.has(target.boardId)) {
-          res.status(403).json({ error: 'Access denied to target agent' });
+      const success = await agentManager.deleteTask(req.params.id, req.params.taskId);
+      if (!success) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      res.json({ success: true });
+    }
+  );
+
+  router.post<{ id: string; taskId: string }>(
+    '/:id/tasks/:taskId/transfer',
+    requireAgentEditAccess,
+    async (req, res) => {
+      const user = sessionUser(req, res);
+      if (!user) return;
+      const { targetAgentId } = req.body;
+      if (!targetAgentId) {
+        res.status(400).json({ error: 'targetAgentId required' });
+        return;
+      }
+      // Verify the requesting user also has access to the target agent — otherwise a user
+      // could push tasks into agents on boards they don't own.
+      if (user.role !== 'admin') {
+        const target = agentManager.agents.get(targetAgentId);
+        if (!target) {
+          res.status(404).json({ error: 'Target agent not found' });
           return;
         }
+        if (target.boardId) {
+          const userBoardIds = await getUserBoardIds(user.userId);
+          if (!userBoardIds.has(target.boardId)) {
+            res.status(403).json({ error: 'Access denied to target agent' });
+            return;
+          }
+        }
       }
+      const task = await agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
+      if (!task) {
+        res.status(404).json({ error: 'Agent or task not found' });
+        return;
+      }
+      res.status(201).json(task);
     }
-    const task = await agentManager.transferTask(req.params.id, req.params.taskId, targetAgentId);
-    if (!task) {
-      res.status(404).json({ error: 'Agent or task not found' });
-      return;
-    }
-    res.status(201).json(task);
-  });
+  );
 
-  router.patch('/:id/tasks/:taskId/assignee', requireAgentEditAccess, async (req, res) => {
-    const { assigneeId } = req.body;
-    // assigneeId can be null to unassign
-    if (assigneeId && !agentManager.agents.get(assigneeId)) {
-      res.status(404).json({ error: 'Assignee agent not found' });
-      return;
+  router.patch<{ id: string; taskId: string }>(
+    '/:id/tasks/:taskId/assignee',
+    requireAgentEditAccess,
+    async (req, res) => {
+      const { assigneeId } = req.body;
+      // assigneeId can be null to unassign
+      if (assigneeId && !agentManager.agents.get(assigneeId)) {
+        res.status(404).json({ error: 'Assignee agent not found' });
+        return;
+      }
+      const task = await agentManager.setTaskAssignee(
+        req.params.id,
+        req.params.taskId,
+        assigneeId || null
+      );
+      if (!task) {
+        res.status(404).json({ error: 'Agent or task not found' });
+        return;
+      }
+      res.json(task);
     }
-    const task = await agentManager.setTaskAssignee(
-      req.params.id,
-      req.params.taskId,
-      assigneeId || null
-    );
-    if (!task) {
-      res.status(404).json({ error: 'Agent or task not found' });
-      return;
-    }
-    res.json(task);
-  });
+  );
 
   // ── Task commit association ────────────────────────────────────────
-  router.post('/:id/tasks/:taskId/commits', requireAgentEditAccess, async (req, res) => {
-    const { hash, message } = req.body;
-    if (!hash) {
-      res.status(400).json({ error: 'Commit hash required' });
-      return;
+  router.post<{ id: string; taskId: string }>(
+    '/:id/tasks/:taskId/commits',
+    requireAgentEditAccess,
+    async (req, res) => {
+      const { hash, message } = req.body;
+      if (!hash) {
+        res.status(400).json({ error: 'Commit hash required' });
+        return;
+      }
+      const task = await agentManager.addTaskCommit(
+        req.params.id,
+        req.params.taskId,
+        hash,
+        message || ''
+      );
+      if (!task) {
+        res.status(404).json({ error: 'Agent or task not found' });
+        return;
+      }
+      res.status(201).json(task);
     }
-    const task = await agentManager.addTaskCommit(
-      req.params.id,
-      req.params.taskId,
-      hash,
-      message || ''
-    );
-    if (!task) {
-      res.status(404).json({ error: 'Agent or task not found' });
-      return;
-    }
-    res.status(201).json(task);
-  });
+  );
 
-  router.delete('/:id/tasks/:taskId/commits/:hash', requireAgentEditAccess, async (req, res) => {
-    const task = await agentManager.removeTaskCommit(
-      req.params.id,
-      req.params.taskId,
-      req.params.hash
-    );
-    if (!task) {
-      res.status(404).json({ error: 'Not found' });
-      return;
+  router.delete<{ id: string; taskId: string; hash: string }>(
+    '/:id/tasks/:taskId/commits/:hash',
+    requireAgentEditAccess,
+    async (req, res) => {
+      const task = await agentManager.removeTaskCommit(
+        req.params.id,
+        req.params.taskId,
+        req.params.hash
+      );
+      if (!task) {
+        res.status(404).json({ error: 'Not found' });
+        return;
+      }
+      res.json(task);
     }
-    res.json(task);
-  });
+  );
 
   // ── On-demand AI refinement (synchronous — waits for result) ────────
   router.post(
@@ -766,7 +840,7 @@ export function agentRoutes(agentManager) {
   );
 
   // ── RAG Document endpoints ─────────────────────────────────────────
-  router.post('/:id/rag', requireAgentEditAccess, (req, res) => {
+  router.post<{ id: string }>('/:id/rag', requireAgentEditAccess, (req, res) => {
     const { name, content } = req.body;
     if (!name || !content) {
       res.status(400).json({ error: 'Name and content required' });
@@ -780,7 +854,7 @@ export function agentRoutes(agentManager) {
     res.status(201).json(doc);
   });
 
-  router.post('/:id/rag/url', requireAgentEditAccess, async (req, res) => {
+  router.post<{ id: string }>('/:id/rag/url', requireAgentEditAccess, async (req, res) => {
     try {
       const { name, url } = req.body;
       if (!name || !url) {
@@ -806,30 +880,38 @@ export function agentRoutes(agentManager) {
     }
   });
 
-  router.post('/:id/rag/:docId/refresh', requireAgentEditAccess, async (req, res) => {
-    try {
-      const doc = await agentManager.refreshRagUrlDocument(req.params.id, req.params.docId);
-      if (!doc) {
-        res.status(404).json({ error: 'URL document not found' });
+  router.post<{ id: string; docId: string }>(
+    '/:id/rag/:docId/refresh',
+    requireAgentEditAccess,
+    async (req, res) => {
+      try {
+        const doc = await agentManager.refreshRagUrlDocument(req.params.id, req.params.docId);
+        if (!doc) {
+          res.status(404).json({ error: 'URL document not found' });
+          return;
+        }
+        res.json(doc);
+      } catch (err: any) {
+        res.status(502).json({ error: `Failed to refresh: ${err.message}` });
+      }
+    }
+  );
+
+  router.delete<{ id: string; docId: string }>(
+    '/:id/rag/:docId',
+    requireAgentEditAccess,
+    (req, res) => {
+      const success = agentManager.deleteRagDocument(req.params.id, req.params.docId);
+      if (!success) {
+        res.status(404).json({ error: 'Not found' });
         return;
       }
-      res.json(doc);
-    } catch (err: any) {
-      res.status(502).json({ error: `Failed to refresh: ${err.message}` });
+      res.json({ success: true });
     }
-  });
-
-  router.delete('/:id/rag/:docId', requireAgentEditAccess, (req, res) => {
-    const success = agentManager.deleteRagDocument(req.params.id, req.params.docId);
-    if (!success) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  );
 
   // ── Plugin (skill) assignment endpoints ──────────────────────────
-  const pluginAssignHandler = (req, res) => {
+  const pluginAssignHandler = (req: express.Request<{ id: string }>, res: express.Response) => {
     const pluginId = req.body.skillId || req.body.pluginId;
     if (!pluginId) {
       res.status(400).json({ error: 'pluginId required' });
@@ -842,8 +924,20 @@ export function agentRoutes(agentManager) {
     }
     res.json({ success: true, plugins: result });
   };
-  const pluginRemoveHandler = (req, res) => {
+  // Mounted on both '/:id/plugins/:pluginId' and '/:id/skills/:skillId', hence
+  // the two optional params — the body reads whichever one the route supplied.
+  const pluginRemoveHandler = (
+    req: express.Request<{ id: string; skillId?: string; pluginId?: string }>,
+    res: express.Response
+  ) => {
     const pluginId = req.params.skillId || req.params.pluginId;
+    // Unreachable: each mount supplies one of the two params. Answering 404 is
+    // what the missing-plugin path below already does, so the response for this
+    // branch is the same one it produced when the value was implicitly `any`.
+    if (!pluginId) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
     const success = agentManager.removeSkill(req.params.id, pluginId);
     if (!success) {
       res.status(404).json({ error: 'Not found' });
@@ -859,36 +953,44 @@ export function agentRoutes(agentManager) {
   // ── Task History & Stats ──────────────────────────────────────────────────────
 
   router.get('/tasks/stats', async (req, res) => {
-    const { project } = req.query;
-    const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
+    const user = sessionUser(req, res);
+    if (!user) return;
+    const { project } = req.query as { project?: string };
+    const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
     const stats = await agentManager.getTaskStats(project || null, userBoardIds);
     res.json(stats);
   });
 
   router.get('/tasks/stats/timeseries', async (req, res) => {
-    const { project, days } = req.query;
-    const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
-    const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
+    const user = sessionUser(req, res);
+    if (!user) return;
+    const { project, days } = req.query as { project?: string; days?: string };
+    const d = Math.min(Math.max(parseInt(days ?? '') || 30, 1), 365);
+    const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
     const timeseries = await agentManager.getTaskTimeSeries(project || null, d, userBoardIds);
     res.json(timeseries);
   });
 
   router.get('/tasks/stats/agent-time', async (req, res) => {
-    const { project, days } = req.query;
-    const d = Math.min(Math.max(parseInt(days as string) || 30, 1), 365);
-    const userBoardIds = req.user.role === 'admin' ? null : await getUserBoardIds(req.user.userId);
+    const user = sessionUser(req, res);
+    if (!user) return;
+    const { project, days } = req.query as { project?: string; days?: string };
+    const d = Math.min(Math.max(parseInt(days ?? '') || 30, 1), 365);
+    const userBoardIds = user.role === 'admin' ? null : await getUserBoardIds(user.userId);
     const agentTime = await agentManager.getAgentTimeSeries(project || null, d, userBoardIds);
     res.json(agentTime);
   });
 
   router.get('/tasks/:id/history', async (req, res) => {
+    const user = sessionUser(req, res);
+    if (!user) return;
     const task = await agentManager.getTask(req.params.id);
     if (!task) {
       res.status(404).json({ error: 'Not found' });
       return;
     }
-    if (req.user.role !== 'admin') {
-      const userBoardIds = await getUserBoardIds(req.user.userId);
+    if (user.role !== 'admin') {
+      const userBoardIds = await getUserBoardIds(user.userId);
       if (task.boardId && !userBoardIds.has(task.boardId)) {
         res.status(403).json({ error: 'Access denied' });
         return;
@@ -898,30 +1000,6 @@ export function agentRoutes(agentManager) {
   });
 
   router.delete('/:id/skills/:skillId', requireAgentEditAccess, pluginRemoveHandler);
-
-  // ── MCP server assignment endpoints (backward compat) ───────────
-  router.post('/:id/mcp-servers', requireAgentEditAccess, (req, res) => {
-    const { serverId } = req.body;
-    if (!serverId) {
-      res.status(400).json({ error: 'serverId required' });
-      return;
-    }
-    const result = agentManager.assignMcpServer(req.params.id, serverId);
-    if (result === null) {
-      res.status(404).json({ error: 'Agent not found' });
-      return;
-    }
-    res.json({ success: true, mcpServers: result });
-  });
-
-  router.delete('/:id/mcp-servers/:serverId', requireAgentEditAccess, (req, res) => {
-    const success = agentManager.removeMcpServer(req.params.id, req.params.serverId);
-    if (!success) {
-      res.status(404).json({ error: 'Not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
 
   return router;
 }

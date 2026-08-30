@@ -1,4 +1,6 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 
 export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe';
 
@@ -103,7 +105,7 @@ export function buildRealtimeSessionConfig({
   };
 }
 
-export function realtimeRoutes(agentManager) {
+export function realtimeRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   router.post('/token', async (req, res) => {
@@ -172,7 +174,9 @@ export function realtimeRoutes(agentManager) {
       });
     } catch (err) {
       console.error('Failed to create realtime token:', err);
-      return res.status(500).json({ error: err.message || 'Failed to create realtime token' });
+      return res
+        .status(500)
+        .json({ error: errorMessage(err) || 'Failed to create realtime token' });
     }
   });
 

@@ -12,6 +12,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
+import type { TooltipItem } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
 import { api } from '../api';
 import {
@@ -26,8 +27,10 @@ import {
   TrendingUp,
   RefreshCw,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import AgentTimeChart from './AgentTimeChart';
+import type { ProjectTaskStats, ProjectTimeSeries } from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -41,12 +44,21 @@ ChartJS.register(
   Filler
 );
 
-function getChartColors(theme) {
+function getChartColors(theme: string) {
   if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
   return { legend: '#94a3b8', tick: '#64748b', grid: '#1e293b' };
 }
 
-const TYPE_META = {
+interface TaskTypeMeta {
+  label: string;
+  icon: LucideIcon;
+  color: string;
+}
+
+// Keyed on ProjectTaskStats.byType, whose keys are the free-text task.taskType
+// (or the literal 'untyped'), so the index is `string` and every lookup at the
+// call site already falls back.
+const TYPE_META: Record<string, TaskTypeMeta | undefined> = {
   bug: { label: 'Bugs', icon: Bug, color: 'text-red-400' },
   feature: { label: 'Features', icon: Sparkles, color: 'text-emerald-400' },
   technical: { label: 'Technical', icon: Wrench, color: 'text-blue-400' },
@@ -56,7 +68,7 @@ const TYPE_META = {
   untyped: { label: 'Untyped', icon: Layers, color: 'text-dark-400' },
 };
 
-function formatDuration(ms) {
+function formatDuration(ms: number) {
   if (!ms || ms <= 0) return '—';
   const seconds = Math.floor(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -70,22 +82,7 @@ function formatDuration(ms) {
   return `${days}d ${remainHours}h`;
 }
 
-// Shape of GET /api/agents/tasks/stats (see api/src/services/agentManager/taskStats.ts)
-interface DurationStats {
-  avg: number;
-  median: number;
-  count: number;
-}
-interface ProjectTaskStats {
-  total: number;
-  byType: Record<string, number>;
-  byStatus: Record<string, number>;
-  resolution: DurationStats;
-  resolutionByType: Record<string, DurationStats>;
-  avgStateDurations: Record<string, DurationStats>;
-}
-
-export default function ProjectStats({ projectName }) {
+export default function ProjectStats({ projectName }: { projectName: string }) {
   const { theme } = useTheme() as { theme: string };
   const cc = getChartColors(theme);
   const chartOpts = {
@@ -108,7 +105,7 @@ export default function ProjectStats({ projectName }) {
     },
   };
   const [stats, setStats] = useState<ProjectTaskStats | null>(null);
-  const [timeseries, setTimeseries] = useState(null);
+  const [timeseries, setTimeseries] = useState<ProjectTimeSeries | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
 
@@ -144,7 +141,7 @@ export default function ProjectStats({ projectName }) {
 
   if (!stats || !timeseries) return null;
 
-  const formatLabel = d => d?.slice(5) || '';
+  const formatLabel = (d: string) => d?.slice(5) || '';
 
   // Created vs Resolved chart
   const createdResolvedData = {
@@ -195,8 +192,15 @@ export default function ProjectStats({ projectName }) {
       ...chartOpts.plugins,
       tooltip: {
         callbacks: {
-          label: ctx =>
-            `${ctx.dataset.label}: ${ctx.parsed.y}h (${ctx.raw > 0 ? formatDuration(ctx.raw * 3600000) : '—'})`,
+          // chart.js types `raw` as unknown; this dataset feeds it hours as
+          // numbers, and a non-number reads as 0 — the same '—' the previous
+          // `undefined > 0` branch produced.
+          label: (ctx: TooltipItem<'line'>) => {
+            const hours = typeof ctx.raw === 'number' ? ctx.raw : 0;
+            return `${ctx.dataset.label}: ${ctx.parsed.y}h (${
+              hours > 0 ? formatDuration(hours * 3600000) : '—'
+            })`;
+          },
         },
       },
     },

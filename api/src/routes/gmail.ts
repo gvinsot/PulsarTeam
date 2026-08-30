@@ -58,7 +58,10 @@ const gmailSpec: OAuthProviderSpec<GoogleOAuthConfig> = {
 
 const refreshGmailToken = makeRefresh(gmailSpec);
 
-export async function getGmailAccessTokenForAgent(agentId, boardId = null) {
+export async function getGmailAccessTokenForAgent(
+  agentId: string | null,
+  boardId: string | null = null
+) {
   return resolveAccessToken('gmail', agentId, boardId, refreshGmailToken);
 }
 

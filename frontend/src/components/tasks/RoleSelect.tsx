@@ -1,9 +1,22 @@
-import { AUTO_ROLE, buildRoleOptions } from './workflowRoles';
+import { AUTO_ROLE, buildRoleOptions, type RoleAgent } from './workflowRoles';
 
 // Role dropdown shared by the workflow editor and the instructions modal.
 // It always receives the *unfiltered* agent list plus the edited board id:
 // roles backed by an agent on this board come first, roles that only exist on
 // other boards stay reachable in a second group.
+
+interface RoleSelectProps {
+  /** Stored role, AUTO_ROLE, or absent when the action/condition has none. */
+  value?: string;
+  onChange: (role: string) => void;
+  agents?: RoleAgent[];
+  /** The edited board, or null before a board is selected — a board id is a
+   *  UUID string or null (boards.id, api/src/services/database/baseSchema.ts). */
+  boardId?: string | null;
+  className?: string;
+  allowAuto?: boolean;
+  emptyLabel?: string;
+}
 
 export default function RoleSelect({
   value,
@@ -13,7 +26,7 @@ export default function RoleSelect({
   className = '',
   allowAuto = true,
   emptyLabel = 'Role...',
-}) {
+}: RoleSelectProps) {
   const { boardRoles, otherRoles } = buildRoleOptions(agents, boardId, value);
 
   return (

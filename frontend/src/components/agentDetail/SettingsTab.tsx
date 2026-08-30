@@ -1,22 +1,82 @@
 import { useState, useEffect } from 'react';
 import { Save, Trash2, RotateCw, Power, Users } from 'lucide-react';
 import { api } from '../../api';
+import type { AgentWriteInput } from '../../api';
 import CodexAuthSection from './CodexAuthSection';
+import type {
+  Agent,
+  AgentRunner,
+  AppUser,
+  BoardListItem,
+  LlmConfig,
+  RepoPickerOption,
+  UserRole,
+} from '../../types';
 
 // Runners that pick their model inside the terminal (Claude Code plan / Codex
 // plan), not from Settings. The LLM selector is hidden for them and any
 // per-agent llmConfigId is cleared.
 const MODEL_IN_TERMINAL_RUNNERS = new Set(['claudecode', 'codex']);
 
+// The exact option set the runner <select> below renders; '' is the "Auto"
+// entry. 'coder' is part of AgentRunner but is deliberately not offered here.
+// A <select>'s value is typed `string` by React, so this list is what turns it
+// back into SettingsForm['runner'] without an assertion.
+const RUNNER_SELECT_VALUES = [
+  '',
+  'sandbox',
+  'claudecode',
+  'openclaw',
+  'hermes',
+  'opencode',
+  'aider',
+  'codex',
+] as const;
+
+function isRunnerSelectValue(value: string): value is (typeof RUNNER_SELECT_VALUES)[number] {
+  return RUNNER_SELECT_VALUES.some(option => option === value);
+}
+
+/**
+ * The editable copy of the agent held while the tab is open. It mirrors Agent's
+ * own optionality (name/role/description/icon/color are optional there because
+ * loadFromDatabase never re-defaults them) and keeps the two cost fields in the
+ * '' = "unset" form the save path converts back to null.
+ */
+interface SettingsForm {
+  name?: string;
+  role?: string;
+  description?: string;
+  llmConfigId: string;
+  icon?: string;
+  color?: string;
+  project: string;
+  enabled: boolean;
+  costPerInputToken: number | '';
+  costPerOutputToken: number | '';
+  boardId: string;
+  /** '' is the "Auto" option, resolved to a concrete runner on save. */
+  runner: AgentRunner | '';
+  ttsEnabled: boolean;
+}
+
 export default function SettingsTab({
   agent,
-  projects,
+  projects: _projects,
   currentProject,
   onRefresh,
-  userRole,
+  userRole: _userRole,
   currentUser,
+}: {
+  agent: Agent;
+  /** App normalises the repo list client-side before it gets here. */
+  projects?: RepoPickerOption[];
+  currentProject?: string;
+  onRefresh: () => void;
+  userRole?: UserRole;
+  currentUser?: AppUser | null;
 }) {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<SettingsForm>({
     name: agent.name,
     role: agent.role,
     description: agent.description,
@@ -36,8 +96,8 @@ export default function SettingsTab({
   const [deleting, setDeleting] = useState(false);
   const [batching, setBatching] = useState(false);
   const [batchSize, setBatchSize] = useState(2);
-  const [llmConfigs, setLlmConfigs] = useState([]);
-  const [boards, setBoards] = useState([]);
+  const [llmConfigs, setLlmConfigs] = useState<LlmConfig[]>([]);
+  const [boards, setBoards] = useState<BoardListItem[]>([]);
   const [ttsAvailable, setTtsAvailable] = useState(false);
 
   useEffect(() => {
@@ -85,7 +145,7 @@ export default function SettingsTab({
 
   // Auto-select a runner based on the LLM config provider.
   // Mirrors the "Auto" option in the runner dropdown.
-  const resolveAutoRunner = llmConfigId => {
+  const resolveAutoRunner = (llmConfigId: string): AgentRunner => {
     const sel = llmConfigs.find(c => c.id === llmConfigId);
     const provider = (sel?.provider || '').toLowerCase();
     if (provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid')
@@ -98,7 +158,7 @@ export default function SettingsTab({
   // only drives Anthropic models and Codex only OpenAI models; other runners
   // accept any provider. An empty llmConfigId ("Default LLM") is always allowed
   // because the runner falls back to its built-in credentials.
-  const isLlmAllowedForRunner = (llmConfigId, runner) => {
+  const isLlmAllowedForRunner = (llmConfigId: string, runner: string) => {
     if (!llmConfigId) return true;
     const sel = llmConfigs.find(c => c.id === llmConfigId);
     const provider = (sel?.provider || '').toLowerCase();
@@ -114,18 +174,29 @@ export default function SettingsTab({
   const handleSave = async () => {
     setSaving(true);
     try {
-      const payload = { ...form };
-      payload.costPerInputToken =
-        payload.costPerInputToken !== '' ? parseFloat(payload.costPerInputToken) || null : null;
-      payload.costPerOutputToken =
-        payload.costPerOutputToken !== '' ? parseFloat(payload.costPerOutputToken) || null : null;
-      payload.llmConfigId = payload.llmConfigId || null;
-      payload.boardId = payload.boardId || null;
-      // "Auto" resolves to a concrete runner so the backend (which rejects null/empty) accepts it.
-      payload.runner = payload.runner || resolveAutoRunner(payload.llmConfigId);
+      // Built in one literal rather than mutated in place: the wire shape
+      // (AgentWriteInput) admits nulls where the form holds '' sentinels, so the
+      // two cannot share a variable once they are typed. The values are the same
+      // ones the previous mutations produced, in the same order — including
+      // resolveAutoRunner seeing the empty/absent llmConfigId, which it looks up
+      // and misses either way. `String()` is what parseFloat already did to a
+      // numeric cost internally.
+      const payload: AgentWriteInput = {
+        ...form,
+        costPerInputToken:
+          form.costPerInputToken !== '' ? parseFloat(String(form.costPerInputToken)) || null : null,
+        costPerOutputToken:
+          form.costPerOutputToken !== ''
+            ? parseFloat(String(form.costPerOutputToken)) || null
+            : null,
+        llmConfigId: form.llmConfigId || null,
+        boardId: form.boardId || null,
+        // "Auto" resolves to a concrete runner so the backend (which rejects null/empty) accepts it.
+        runner: form.runner || resolveAutoRunner(form.llmConfigId),
+      };
       // Claude Code / Codex choose their model in the terminal — never persist a
       // per-agent LLM config for them, even if one lingered from a prior runner.
-      if (MODEL_IN_TERMINAL_RUNNERS.has(payload.runner)) {
+      if (payload.runner && MODEL_IN_TERMINAL_RUNNERS.has(payload.runner)) {
         payload.llmConfigId = null;
       }
       await api.updateAgent(agent.id, payload);
@@ -172,7 +243,12 @@ export default function SettingsTab({
     }
   };
 
-  const updateField = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
+  const updateField = <K extends keyof SettingsForm>(key: K, value: SettingsForm[K]) =>
+    setForm(prev => {
+      const next: SettingsForm = { ...prev };
+      next[key] = value;
+      return next;
+    });
 
   return (
     <div className="p-4 space-y-4">
@@ -294,7 +370,7 @@ export default function SettingsTab({
             value={form.runner}
             onChange={e => {
               const nextRunner = e.target.value;
-              updateField('runner', nextRunner);
+              if (isRunnerSelectValue(nextRunner)) updateField('runner', nextRunner);
               // Claude Code / Codex pick their model in the terminal, so clear
               // any per-agent LLM config when switching to them. Other runners
               // only clear on a provider mismatch (kept for safety).
@@ -527,15 +603,21 @@ export default function SettingsTab({
           <div>
             <p className="text-dark-500">Created</p>
             <p className="font-mono text-dark-200 text-[10px]">
-              {new Date(agent.createdAt).toLocaleDateString()}
+              {/* Agent.createdAt is optional on the wire; `?? NaN` keeps the
+                  existing 'Invalid Date' output for an agent that has none,
+                  which is exactly what `new Date(undefined)` already rendered. */}
+              {new Date(agent.createdAt ?? NaN).toLocaleDateString()}
             </p>
           </div>
         </div>
       </div>
 
       {(form.runner === 'codex' || resolveAutoRunner(form.llmConfigId) === 'codex') && (
+        // AppUser carries no `id` (App.tsx:17 builds it with `userId` only), so the
+        // `currentUser?.id ||` term this expression used to start with was always
+        // undefined; it is dropped rather than typed into existence.
         <CodexAuthSection
-          ownerId={agent.ownerId || currentUser?.id || currentUser?.userId}
+          ownerId={agent.ownerId || currentUser?.userId}
           currentUser={currentUser}
         />
       )}

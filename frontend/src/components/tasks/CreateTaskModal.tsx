@@ -1,9 +1,31 @@
 import { useState, useRef, useEffect } from 'react';
+import type { FormEvent } from 'react';
 import { Plus, X, GitBranch, Cloud, Repeat, Layers, Hand } from 'lucide-react';
 import { api } from '../../api';
 import { TASK_TYPES, buildRecurrence } from './taskConstants';
+import type { StatusOption } from './taskConstants';
 import RecurrenceFields from './RecurrenceFields';
 import { useBoardRepos, useBoardStorages } from '../../hooks/useBoardResources';
+import { errorMessage } from '../../utils/errors';
+import type { Agent, TaskCreatedEvent } from '../../types';
+
+interface CreateTaskModalProps {
+  agents: Agent[];
+  onClose: () => void;
+  /** Receives the 201 body (a `TaskCreatedEvent`, NOT a full `Task`) so the
+   *  parent can insert the row optimistically. */
+  onCreated: (task: TaskCreatedEvent) => void | Promise<void>;
+  statusOptions: StatusOption[];
+  /** Column the "+" was pressed on; null when the header button was used. */
+  defaultStatus?: string | null;
+  /** A board id is a UUID string, or null before a board is selected. */
+  boardId?: string | null;
+  /** Read-only project label; null when neither a task nor the board names one. */
+  projectName?: string | null;
+  /** Last repo / storage used on this board, or null when there is none. */
+  defaultRepoFullName?: string | null;
+  defaultStoragePath?: string | null;
+}
 
 export default function CreateTaskModal({
   agents,
@@ -15,7 +37,7 @@ export default function CreateTaskModal({
   projectName,
   defaultRepoFullName = null,
   defaultStoragePath = null,
-}) {
+}: CreateTaskModalProps) {
   // Allow all columns as creation statuses (don't exclude the last one —
   // custom columns added after "Done" would be wrongly hidden by slice(0, -1))
   const CREATE_STATUSES = statusOptions;
@@ -34,8 +56,8 @@ export default function CreateTaskModal({
   // than N days at each reset.
   const [historyRetentionDays, setHistoryRetentionDays] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
-  const textareaRef = useRef(null);
+  const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Repos accessible via the board's GitHub plugin — task targets one of them
   const { repos: availableRepos, error: repoLoadError } = useBoardRepos(boardId);
@@ -78,14 +100,14 @@ export default function CreateTaskModal({
   }, []);
 
   useEffect(() => {
-    const handler = e => {
+    const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const handleSubmit = async e => {
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = text.trim();
     if (!trimmed || !defaultAgentId) return;
@@ -100,7 +122,11 @@ export default function CreateTaskModal({
         : 'onedrive';
       const created = await api.addTask(defaultAgentId, trimmed, {
         status,
-        boardId,
+        // Same `|| undefined` normalisation as `repoFullName` below: api.addTask
+        // spreads the key only when truthy (`...(boardId && { boardId })`,
+        // api.ts:665), so a null board and an absent one already produced the
+        // very same request body.
+        boardId: boardId || undefined,
         repoFullName: repoFullName || undefined,
         repoProvider: 'github',
         secondaryRepos:
@@ -120,7 +146,7 @@ export default function CreateTaskModal({
       onClose();
     } catch (err) {
       // Keep the modal open so the (possibly long) description isn't lost.
-      setError(err?.message || 'Failed to create task');
+      setError(errorMessage(err) || 'Failed to create task');
     } finally {
       setSaving(false);
     }

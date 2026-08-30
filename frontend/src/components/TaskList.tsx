@@ -1,13 +1,18 @@
-import React from 'react';
+import type { Task, TaskSource, TaskStatus } from '../types';
 
-const SOURCE_META = {
+interface SourceMetaEntry {
+  color: string;
+  label: (name: string) => string;
+}
+
+const SOURCE_META: Record<string, SourceMetaEntry> = {
   agent: { color: '#a855f7', label: name => `Agent: ${name}` },
   user: { color: '#3b82f6', label: name => name || 'User' },
   api: { color: '#6b7280', label: () => 'API' },
   mcp: { color: '#f97316', label: () => 'MCP' },
 };
 
-function SourceBadge({ source }) {
+function SourceBadge({ source }: { source: TaskSource | null | undefined }) {
   if (!source) return null;
   const meta = SOURCE_META[source.type] || { color: '#6b7280', label: () => source.type };
   const label = meta.label(source.name || '');
@@ -30,13 +35,13 @@ function SourceBadge({ source }) {
   );
 }
 
-const STATUS_META = {
+const STATUS_META: Record<string, { label: string; color: string }> = {
   backlog: { label: 'Backlog', color: '#a855f7' },
   error: { label: 'Error', color: '#ef4444' },
   done: { label: 'Completed', color: '#22c55e' },
 };
 
-function StatusBadge({ status }) {
+function StatusBadge({ status }: { status: TaskStatus }) {
   const meta = STATUS_META[status] || { label: status || 'Unknown', color: '#6b7280' };
   return (
     <span
@@ -68,13 +73,21 @@ function StatusBadge({ status }) {
   );
 }
 
+interface TaskListProps {
+  tasks?: Task[];
+  onToggleTask: (taskId: string) => void;
+  onDeleteTask: (taskId: string) => void;
+  onExecuteTask: (taskId: string) => void;
+  onExecuteAllTasks: () => void;
+}
+
 export default function TaskList({
   tasks = [],
   onToggleTask,
   onDeleteTask,
   onExecuteTask,
   onExecuteAllTasks,
-}) {
+}: TaskListProps) {
   const openCount = tasks.filter(t => t.status !== 'done').length;
 
   return (

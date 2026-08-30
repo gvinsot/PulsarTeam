@@ -2,13 +2,21 @@ import { useState, useEffect, useCallback } from 'react';
 import { Cpu, Plus, Trash2, Edit3 } from 'lucide-react';
 import { api } from '../../api';
 import LlmConfigModal from '../LlmConfigModal';
+import { errorMessage } from '../../utils/errors';
+import type { LlmConfig, LlmConfigDraft, ShowToastFn } from '../../types';
+
+interface LlmConfigsTabProps {
+  active: boolean;
+  showToast?: ShowToastFn;
+}
 
 // `active` flips true when the LLM Models tab is selected; each activation
 // re-fetches the LLM configs.
-export default function LlmConfigsTab({ active, showToast }) {
-  const [llmConfigs, setLlmConfigs] = useState([]);
+export default function LlmConfigsTab({ active, showToast }: LlmConfigsTabProps) {
+  const [llmConfigs, setLlmConfigs] = useState<LlmConfig[]>([]);
   const [llmLoading, setLlmLoading] = useState(false);
-  const [llmForm, setLlmForm] = useState(null); // null = closed, {} = new, {id} = editing
+  // null = closed, {} = new, {id} = editing
+  const [llmForm, setLlmForm] = useState<LlmConfigDraft | null>(null);
   const [llmSaving, setLlmSaving] = useState(false);
 
   const loadLlmConfigs = useCallback(async () => {
@@ -17,7 +25,7 @@ export default function LlmConfigsTab({ active, showToast }) {
       const data = await api.getLlmConfigs();
       setLlmConfigs(data);
     } catch (err) {
-      showToast?.(`Failed to load LLM configs: ${err.message}`, 'error');
+      showToast?.(`Failed to load LLM configs: ${errorMessage(err)}`, 'error');
     } finally {
       setLlmLoading(false);
     }
@@ -27,7 +35,7 @@ export default function LlmConfigsTab({ active, showToast }) {
     if (active) loadLlmConfigs();
   }, [active, loadLlmConfigs]);
 
-  const handleSaveLlmConfig = async formData => {
+  const handleSaveLlmConfig = async (formData: LlmConfigDraft) => {
     try {
       setLlmSaving(true);
       if (formData.id) {
@@ -39,13 +47,13 @@ export default function LlmConfigsTab({ active, showToast }) {
       showToast?.(formData.id ? 'LLM config updated' : 'LLM config created', 'success');
       loadLlmConfigs();
     } catch (err) {
-      showToast?.(`Failed to save LLM config: ${err.message}`, 'error');
+      showToast?.(`Failed to save LLM config: ${errorMessage(err)}`, 'error');
     } finally {
       setLlmSaving(false);
     }
   };
 
-  const handleDeleteLlmConfig = async config => {
+  const handleDeleteLlmConfig = async (config: LlmConfig) => {
     if (
       !confirm(
         `Delete LLM config "${config.name}"? Agents using it will fall back to legacy settings.`
@@ -57,7 +65,7 @@ export default function LlmConfigsTab({ active, showToast }) {
       showToast?.('LLM config deleted', 'success');
       loadLlmConfigs();
     } catch (err) {
-      showToast?.(`Failed to delete: ${err.message}`, 'error');
+      showToast?.(`Failed to delete: ${errorMessage(err)}`, 'error');
     }
   };
 

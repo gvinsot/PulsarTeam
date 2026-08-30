@@ -1,7 +1,54 @@
 import { useState, useEffect } from 'react';
 import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api';
+import type { AgentBatchCreated, AgentCreated } from '../api';
 import { isRealtimeLlm } from '../utils/llmConfig';
+import type { Agent, AgentTemplate, BoardListItem, LlmConfig, RepoPickerOption } from '../types';
+
+/**
+ * Same predicate the create handler already ran inline, lifted so it narrows the
+ * two-armed 201 body. The optional chain is kept: a null body used to fall to the
+ * single-agent arm and must keep doing so.
+ */
+function isBatchCreated(result: AgentCreated): result is AgentBatchCreated {
+  return !!result?.batch && Array.isArray(result.agents);
+}
+
+/**
+ * UI-LOCAL. The custom-agent form's own state — flat, all-fields-present, and
+ * spread into the createAgent payload at submit time (where the empty strings
+ * become nulls). Not an Agent: `isBatch`/`batchSize` never leave this component.
+ */
+interface AddAgentForm {
+  name: string;
+  role: string;
+  description: string;
+  instructions: string;
+  llmConfigId: string;
+  runner: string;
+  icon: string;
+  color: string;
+  project: string;
+  boardId: string;
+  isLeader: boolean;
+  isVoice: boolean;
+  voice: string;
+  /** 'realtime' (OpenAI) or 'external' (STT/LLM/TTS). */
+  voiceMode: string;
+  ttsVoiceId: string;
+  isBatch: boolean;
+  batchSize: number;
+}
+
+interface AddAgentModalProps {
+  templates: AgentTemplate[];
+  /** App re-maps available-repos into this normalised client shape; it is NOT an
+   *  AvailableRepo, and `name` — the <option> key below — only exists here. */
+  projects: RepoPickerOption[];
+  initialBoardId?: string;
+  onClose: () => void;
+  onCreated: (agent: Agent) => void;
+}
 
 export default function AddAgentModal({
   templates,
@@ -9,13 +56,13 @@ export default function AddAgentModal({
   initialBoardId = '',
   onClose,
   onCreated,
-}) {
+}: AddAgentModalProps) {
   const [step, setStep] = useState('choose'); // choose | template | custom
-  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<AgentTemplate | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [llmConfigs, setLlmConfigs] = useState([]);
-  const [boards, setBoards] = useState([]);
-  const [form, setForm] = useState({
+  const [llmConfigs, setLlmConfigs] = useState<LlmConfig[]>([]);
+  const [boards, setBoards] = useState<BoardListItem[]>([]);
+  const [form, setForm] = useState<AddAgentForm>({
     name: '',
     role: '',
     description: '',
@@ -63,7 +110,7 @@ export default function AddAgentModal({
       t.description.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const applyTemplate = template => {
+  const applyTemplate = (template: AgentTemplate) => {
     setForm(prev => ({
       ...prev,
       name: template.name,
@@ -103,7 +150,7 @@ export default function AddAgentModal({
       });
       // Backend returns { batch: true, agents: [...] } for batch creates;
       // pass the first agent up so the UI can focus it.
-      const agent = result?.batch && Array.isArray(result.agents) ? result.agents[0] : result;
+      const agent = isBatchCreated(result) ? result.agents[0] : result;
       onCreated(agent);
     } catch (err) {
       console.error(err);
@@ -112,7 +159,8 @@ export default function AddAgentModal({
     }
   };
 
-  const updateField = (key, value) => setForm(prev => ({ ...prev, [key]: value }));
+  const updateField = <K extends keyof AddAgentForm>(key: K, value: AddAgentForm[K]) =>
+    setForm(prev => ({ ...prev, [key]: value }));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">

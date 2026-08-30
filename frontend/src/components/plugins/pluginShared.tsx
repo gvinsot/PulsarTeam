@@ -1,4 +1,7 @@
+import type { ComponentType, ReactNode } from 'react';
 import { X } from 'lucide-react';
+import type { ConnectWidgetProps } from '../connect/useConnectStatus';
+import type { Plugin } from '../../types';
 import OneDriveConnect from '../OneDriveConnect';
 import OutlookConnect from '../OutlookConnect';
 import GmailConnect from '../GmailConnect';
@@ -11,9 +14,9 @@ import S3Connect from '../S3Connect';
 import LocalFolderConnect from '../LocalFolderConnect';
 
 // Map MCP server IDs to their dedicated OAuth/API-key connector widget.
-// Returning null means the MCP doesn't need an interactive connector here
-// (it's wired via global env vars or doesn't expose a setup UI).
-export const MCP_CONNECTOR_MAP: Record<string, any> = {
+// An id missing from this map means the MCP doesn't need an interactive
+// connector here (it's wired via global env vars or has no setup UI).
+export const MCP_CONNECTOR_MAP: Record<string, ComponentType<ConnectWidgetProps>> = {
   'mcp-onedrive': OneDriveConnect,
   'mcp-gmail': GmailConnect,
   'mcp-outlook': OutlookConnect,
@@ -26,7 +29,7 @@ export const MCP_CONNECTOR_MAP: Record<string, any> = {
   'mcp-local-folder': LocalFolderConnect,
 };
 
-export function getPluginMcpIds(plugin: any): string[] {
+export function getPluginMcpIds(plugin: Plugin): string[] {
   const ids = new Set<string>();
   for (const m of plugin.mcps || []) {
     if (m?.id) ids.add(m.id);
@@ -37,7 +40,10 @@ export function getPluginMcpIds(plugin: any): string[] {
   return Array.from(ids);
 }
 
-const categoryColors = {
+// Plugin.category is RULE 3 free text (the route only caps its length), so the
+// lookup is keyed on `string` with a fallback rather than on a closed union —
+// the shipped value 'cloud', for one, has no entry here and lands on 'general'.
+const categoryColors: Record<string, string> = {
   coding: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
   devops: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
   writing: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
@@ -46,10 +52,20 @@ const categoryColors = {
   general: 'bg-dark-500/20 text-dark-300 border-dark-500/30',
 };
 
-export const getCategoryClass = cat => categoryColors[cat] || categoryColors.general;
+export const getCategoryClass = (cat: string) => categoryColors[cat] || categoryColors.general;
 
 // Category filter pill row shared by the agent + board plugin surfaces.
-export function CategoryFilterPills({ categories, value, onChange }) {
+// `categories` is the plugins' distinct categories with the synthetic 'all'
+// entry prepended by both callers, so it is plain `string[]`.
+export function CategoryFilterPills({
+  categories,
+  value,
+  onChange,
+}: {
+  categories: string[];
+  value: string;
+  onChange: (next: string) => void;
+}) {
   return (
     <div className="flex flex-wrap gap-1.5 mb-3">
       {categories.map(cat => (
@@ -80,11 +96,11 @@ export function AssignedPluginCard({
   onRemove,
   connectorProps,
 }: {
-  plugin: any;
-  badges?: any;
-  extraActions?: any;
+  plugin: Plugin;
+  badges?: ReactNode;
+  extraActions?: ReactNode;
   onRemove: () => void;
-  connectorProps: Record<string, any>;
+  connectorProps: ConnectWidgetProps;
 }) {
   const pluginMcps = (plugin.mcps || []).filter(m => m.id);
   const connectorMcpIds = getPluginMcpIds(plugin).filter(id => MCP_CONNECTOR_MAP[id]);
@@ -140,11 +156,11 @@ export function AvailablePluginRow({
   onAdd,
   addLabel = 'Add',
 }: {
-  plugin: any;
-  beforeMcpBadges?: any;
-  afterMcpBadges?: any;
+  plugin: Plugin;
+  beforeMcpBadges?: ReactNode;
+  afterMcpBadges?: ReactNode;
   onAdd: () => void;
-  addLabel?: any;
+  addLabel?: ReactNode;
 }) {
   return (
     <div className="flex items-center gap-3 p-3 bg-dark-800/30 rounded-lg border border-dark-700/30 hover:border-dark-600 transition-colors group">

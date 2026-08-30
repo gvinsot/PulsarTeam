@@ -1,6 +1,7 @@
 import { createBoard, getAgentsByBoard, getBoardsByUser } from './database.js';
 import { AGENT_TEMPLATES } from '../data/templates.js';
 import { NEW_USER_BOARD_WORKFLOW, PERSONAL_BOARD_NAME } from './boardDefaults.js';
+import { errorMessage } from '../lib/errors.js';
 
 let _agentManager: any = null;
 
@@ -56,6 +57,6 @@ export async function provisionNewUser(userId: string): Promise<void> {
       }
     }
   } catch (err) {
-    console.error(`Failed to provision new user ${userId}:`, err.message);
+    console.error(`Failed to provision new user ${userId}:`, errorMessage(err));
   }
 }

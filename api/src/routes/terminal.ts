@@ -360,7 +360,7 @@ function wireProxy(
     }
   });
   runnerWs.on('close', (code, reason) => closeBoth(code, reason?.toString() || ''));
-  runnerWs.on('error', err => {
+  runnerWs.on('error', _err => {
     // We can't surface the underlying error to a browser WS, so just close.
     // (The runner logs the real reason on its side.)
     closeBoth(1011, 'runner error');

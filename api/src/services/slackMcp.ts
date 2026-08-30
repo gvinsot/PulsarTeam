@@ -6,6 +6,61 @@ import { createMcpHttpHandler } from './mcpHttpHandler.js';
 
 const SLACK_BASE = 'https://slack.com/api';
 
+// The Slack Web API payload fields this file reads back. slackApi hands over raw
+// parsed JSON (it only checks the `ok` envelope flag), so these describe what is
+// consumed, not what is verified.
+
+interface SlackChannel {
+  id: string;
+  name: string;
+  is_private?: boolean;
+  num_members?: number;
+  topic?: { value?: string };
+}
+
+interface SlackMessage {
+  ts?: string;
+  user?: string;
+  bot_id?: string;
+  text?: string;
+  thread_ts?: string;
+  reply_count?: number;
+}
+
+interface SlackUser {
+  id: string;
+  name: string;
+  deleted?: boolean;
+  is_bot?: boolean;
+  is_admin?: boolean;
+  profile?: { display_name?: string; real_name?: string; status_text?: string };
+}
+
+interface SlackSearchMatch {
+  ts?: string;
+  user?: string;
+  username?: string;
+  text?: string;
+  channel?: { name?: string };
+}
+
+interface SlackChannelsResponse {
+  channels?: SlackChannel[];
+}
+
+interface SlackMessagesResponse {
+  messages?: SlackMessage[];
+}
+
+interface SlackUsersResponse {
+  members?: SlackUser[];
+}
+
+/** search.messages always carries `messages` on a successful response; the `?.` below is belt-and-braces. */
+interface SlackSearchResponse {
+  messages: { matches?: SlackSearchMatch[]; total?: number };
+}
+
 /**
  * Slack methods that are read-only and must be issued as GET even when they
  * carry parameters. Other methods with params go out as POST with a JSON body;
@@ -74,7 +129,7 @@ async function slackApi(
 /**
  * Format a Slack message for display.
  */
-function formatMessage(msg: any) {
+function formatMessage(msg: SlackMessage) {
   const ts = msg.ts ? new Date(parseFloat(msg.ts) * 1000).toISOString() : '';
   const user = msg.user || msg.bot_id || 'unknown';
   const text = msg.text || '';
@@ -88,7 +143,7 @@ function formatMessage(msg: any) {
  * Create the Slack MCP server with all tools registered.
  * @param agentId - When provided, tools use agent-specific tokens.
  */
-export function createSlackMcpServer(agentId = null, boardId = null) {
+export function createSlackMcpServer(agentId: string | null = null, boardId: string | null = null) {
   const server = new McpServer({
     name: 'Slack',
     version: '1.0.0',
@@ -111,7 +166,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
         .describe('Max channels to return (default 100, max 200)'),
     },
     async ({ types, limit }) => {
-      const data = await slackApi('conversations.list', agentId, boardId, {
+      const data: SlackChannelsResponse = await slackApi('conversations.list', agentId, boardId, {
         types: types || 'public_channel',
         limit: Math.min(limit || 100, 200),
         exclude_archived: true,
@@ -149,10 +204,15 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
     },
     async ({ channel, limit }) => {
       const count = Math.min(limit || 20, 100);
-      const data = await slackApi('conversations.history', agentId, boardId, {
-        channel,
-        limit: count,
-      });
+      const data: SlackMessagesResponse = await slackApi(
+        'conversations.history',
+        agentId,
+        boardId,
+        {
+          channel,
+          limit: count,
+        }
+      );
 
       const messages = (data.messages || []).map(formatMessage);
       if (messages.length === 0) {
@@ -181,11 +241,16 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
     },
     async ({ channel, thread_ts, limit }) => {
       const count = Math.min(limit || 50, 200);
-      const data = await slackApi('conversations.replies', agentId, boardId, {
-        channel,
-        ts: thread_ts,
-        limit: count,
-      });
+      const data: SlackMessagesResponse = await slackApi(
+        'conversations.replies',
+        agentId,
+        boardId,
+        {
+          channel,
+          ts: thread_ts,
+          limit: count,
+        }
+      );
 
       const messages = (data.messages || []).map(formatMessage);
       const summary = messages
@@ -259,7 +324,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
       limit: z.number().optional().default(100).describe('Max users to return (default 100)'),
     },
     async ({ limit }) => {
-      const data = await slackApi('users.list', agentId, boardId, {
+      const data: SlackUsersResponse = await slackApi('users.list', agentId, boardId, {
         limit: Math.min(limit || 100, 200),
       });
 
@@ -297,7 +362,7 @@ export function createSlackMcpServer(agentId = null, boardId = null) {
       // search.messages requires a user token, but we try with bot token
       // If it fails, we'll provide a clear error
       try {
-        const data = await slackApi('search.messages', agentId, boardId, {
+        const data: SlackSearchResponse = await slackApi('search.messages', agentId, boardId, {
           query,
           count: Math.min(count || 20, 100),
           sort: 'timestamp',

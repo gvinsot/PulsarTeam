@@ -5,6 +5,87 @@ import { getJwtSecret } from '../middleware/auth.js';
 import { getAllMcpServers, saveMcpServer, deleteMcpServerFromDb } from './database.js';
 import { BUILTIN_MCP_SERVERS, INTERNAL_MCP_SERVERS } from '../data/mcpServers.js';
 import { MCPClient } from './mcpClient.js';
+import { errorMessage } from '../lib/errors.js';
+import type { SkillManager } from './skillManager.js';
+
+/** One MCP tool advertised to an agent, flattened across every server it can reach. */
+interface AgentMcpTool {
+  serverName: string;
+  serverId: string;
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+/** A configured MCP server the agent cannot currently use, with the reason why. */
+interface UnavailableMcpServer {
+  serverId: string;
+  serverName: string;
+  status: string;
+  reason: string;
+}
+
+/** One built-in definition, derived from the single source of truth in data/mcpServers. */
+type McpServerDefinition = (typeof BUILTIN_MCP_SERVERS)[number];
+
+/** A tool as stored on a server entry after discovery. */
+interface McpToolDescriptor {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}
+
+/**
+ * A registered MCP server as the manager keeps it: the built-in/DB definition
+ * plus the live connection state written back onto the same object.
+ */
+export interface McpServerEntry {
+  id: string;
+  name: string;
+  url: string;
+  apiKey?: string;
+  enabled?: boolean;
+  status?: string;
+  error?: string | null;
+  tools?: McpToolDescriptor[];
+  // The row is unvalidated JSONB carrying more than the manager reads
+  // (description, icon, authMode, ...); those stay `unknown` until narrowed.
+  [key: string]: unknown;
+}
+
+/** The mutable fields accepted when creating or updating a server. */
+interface McpServerInput {
+  name?: string;
+  url?: string;
+  description?: string;
+  icon?: string;
+  apiKey?: string;
+  enabled?: boolean;
+}
+
+/** Per-agent MCP credentials, keyed by server id. */
+type AgentMcpAuthMap = Record<string, { apiKey?: string } | undefined>;
+
+/** One MCP entry as written into a CLI runner's native config file. */
+interface ClaudeMcpEntry {
+  type: string;
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/**
+ * The agent fields this manager reads. The agent record is unvalidated JSONB and
+ * its full shape lives in agentManager, so only what is consumed here is declared.
+ */
+interface McpConfigAgent {
+  id: string;
+  boardId?: string | null;
+  mcpAuth?: AgentMcpAuthMap;
+  mcpServers?: string[];
+  mcpServersExplicit?: string[];
+  pluginMcpServers?: string[];
+  skills?: string[];
+}
 
 function extractMcpResult(content: any[]) {
   const textParts = content.filter((c: any) => c.type === 'text').map((c: any) => c.text);
@@ -28,7 +109,7 @@ export function resolveInternalMcpConfig(
     jwtSecret?: string | null;
     expiresIn?: SignOptions['expiresIn'];
   } = {}
-) {
+): { url: string; headers: Record<string, string> } {
   const def = INTERNAL_MCP_SERVERS.get(serverUrl);
   if (!def) {
     return { url: serverUrl, headers: {} };
@@ -85,9 +166,9 @@ function slugMcpName(value: string): string {
 }
 
 export class MCPManager {
-  servers: Map<string, any>;
-  clients: Map<string, any>;
-  agentClients: Map<string, any>;
+  servers: Map<string, McpServerEntry>;
+  clients: Map<string, MCPClient>;
+  agentClients: Map<string, MCPClient>;
   _inflightConnects: Map<string, Promise<any>>;
 
   constructor() {
@@ -119,7 +200,7 @@ export class MCPManager {
     cacheKey: string,
     server: any,
     extraHeaders: Record<string, string>
-  ): Promise<any> {
+  ): Promise<MCPClient> {
     return this._dedupedConnect(cacheKey, async () => {
       console.log(
         `🔌 [MCP] Creating per-agent connection key=${cacheKey.slice(0, 8)}… server="${server.name}"`
@@ -135,7 +216,7 @@ export class MCPManager {
 
   // ── Lifecycle ───────────────────────────────────────────────────────
 
-  async ensureBuiltinServerRegistered(identifier) {
+  async ensureBuiltinServerRegistered(identifier: string): Promise<McpServerEntry | null> {
     const existingById = this.servers.get(identifier);
     if (existingById) return existingById;
 
@@ -181,7 +262,7 @@ export class MCPManager {
     }
   }
 
-  async seedDefaults(defaults) {
+  async seedDefaults(defaults: McpServerDefinition[]) {
     let seeded = 0;
     let updated = 0;
 
@@ -199,7 +280,10 @@ export class MCPManager {
         await saveMcpServer(entry);
         seeded++;
       } else if (def.builtin) {
-        const existing = this.servers.get(def.id);
+        // The enclosing `if (!this.servers.has(def.id))` already proved the entry
+        // is there; `?? {}` states that without an assertion and builds the same
+        // object from the defaults below if it ever were not.
+        const existing: Partial<McpServerEntry> = this.servers.get(def.id) ?? {};
         const entry = {
           ...existing,
           id: def.id,
@@ -261,7 +345,7 @@ export class MCPManager {
     for (const [id] of this.clients) {
       await this.disconnect(id);
     }
-    for (const [key, client] of this.agentClients) {
+    for (const [, client] of this.agentClients) {
       await client.close().catch(() => {});
     }
     this.agentClients.clear();
@@ -280,14 +364,14 @@ export class MCPManager {
     return servers;
   }
 
-  getById(id) {
+  getById(id: string) {
     return (
       this.servers.get(id) ||
       (findBuiltinMcpServer(id) ? createBuiltinServerEntry(findBuiltinMcpServer(id)) : null)
     );
   }
 
-  async create(config) {
+  async create(config: McpServerInput) {
     // Validate MCP server URL — must be a valid http(s) or sse URL
     if (config.url) {
       try {
@@ -303,7 +387,7 @@ export class MCPManager {
           throw new Error('MCP server URL points to cloud metadata service — blocked for security');
         }
       } catch (err) {
-        if (err.message.includes('Invalid URL')) {
+        if (errorMessage(err).includes('Invalid URL')) {
           throw new Error(`Invalid MCP server URL: ${config.url}`);
         }
         throw err;
@@ -337,19 +421,23 @@ export class MCPManager {
     return server;
   }
 
-  async update(id, updates) {
+  async update(id: string, updates: McpServerInput) {
     const server = this.servers.get(id);
     if (!server) return null;
 
-    const allowed = ['name', 'url', 'description', 'icon', 'enabled', 'apiKey'];
     const urlChanged = updates.url !== undefined && updates.url !== server.url;
     const apiKeyChanged = updates.apiKey !== undefined && updates.apiKey !== server.apiKey;
 
-    for (const key of allowed) {
-      if (updates[key] !== undefined) {
-        server[key] = updates[key];
-      }
-    }
+    // Written out per field rather than looped over an `allowed` list: for a
+    // union-typed `key`, `server[key]` is a `never` write position, and the
+    // loop's only job was to skip the undefined ones. Same six fields, same
+    // order, same skip.
+    if (updates.name !== undefined) server.name = updates.name;
+    if (updates.url !== undefined) server.url = updates.url;
+    if (updates.description !== undefined) server.description = updates.description;
+    if (updates.icon !== undefined) server.icon = updates.icon;
+    if (updates.enabled !== undefined) server.enabled = updates.enabled;
+    if (updates.apiKey !== undefined) server.apiKey = updates.apiKey;
     server.updatedAt = new Date().toISOString();
     await saveMcpServer(server);
 
@@ -364,7 +452,7 @@ export class MCPManager {
     return server;
   }
 
-  async delete(id) {
+  async delete(id: string) {
     const server = this.servers.get(id);
     if (!server) return false;
 
@@ -376,12 +464,12 @@ export class MCPManager {
 
   // ── Connection Management ───────────────────────────────────────────
 
-  connect(id) {
+  connect(id: string) {
     return this._dedupedConnect(`global:${id}`, () => this._connectServer(id));
   }
 
-  async _connectServer(id) {
-    let server = this.servers.get(id);
+  async _connectServer(id: string) {
+    let server: McpServerEntry | null | undefined = this.servers.get(id);
     if (!server) {
       server = await this.ensureBuiltinServerRegistered(id);
     }
@@ -427,15 +515,15 @@ export class MCPManager {
       return server;
     } catch (err) {
       server.status = 'error';
-      server.error = err.message;
+      server.error = errorMessage(err);
       server.tools = [];
       await saveMcpServer(server);
-      console.error(`❌ [MCP] "${server.name}" connection failed: ${err.message}`);
+      console.error(`❌ [MCP] "${server.name}" connection failed: ${errorMessage(err)}`);
       throw err;
     }
   }
 
-  async disconnect(id) {
+  async disconnect(id: string) {
     const client = this.clients.get(id);
     if (client) {
       await client.close();
@@ -506,7 +594,7 @@ export class MCPManager {
     }
   }
 
-  async callTool(serverId, toolName, args = {}) {
+  async callTool(serverId: string, toolName: string, args: Record<string, unknown> = {}) {
     let client = this.clients.get(serverId);
     const server = this.servers.get(serverId);
     if (!server) throw new Error(`MCP server not connected: ${serverId}`);
@@ -538,15 +626,15 @@ export class MCPManager {
             return this._shape(await retryClient.callTool(toolName, args));
           }
         } catch (retryErr) {
-          throw new Error(`MCP call failed after reconnect: ${retryErr.message}`);
+          throw new Error(`MCP call failed after reconnect: ${errorMessage(retryErr)}`);
         }
       }
       throw err;
     }
   }
 
-  async callToolByName(serverName, toolName, args = {}) {
-    let server = Array.from(this.servers.values()).find(
+  async callToolByName(serverName: string, toolName: string, args: Record<string, unknown> = {}) {
+    let server: McpServerEntry | null | undefined = Array.from(this.servers.values()).find(
       s => s.name.toLowerCase() === serverName.toLowerCase()
     );
 
@@ -569,7 +657,7 @@ export class MCPManager {
         await this.connect(server.id);
       } catch (err) {
         throw new Error(
-          `MCP server "${server.name}" is not connected and reconnect failed: ${err.message}`
+          `MCP server "${server.name}" is not connected and reconnect failed: ${errorMessage(err)}`
         );
       }
     }
@@ -582,14 +670,14 @@ export class MCPManager {
    * Falls back to the global connection when no agent-specific auth exists.
    */
   async callToolByNameForAgent(
-    serverName,
-    toolName,
-    args = {},
-    agentId = null,
-    agentMcpAuth = {},
-    boardId = null
+    serverName: string,
+    toolName: string,
+    args: Record<string, unknown> = {},
+    agentId: string | null = null,
+    agentMcpAuth: AgentMcpAuthMap = {},
+    boardId: string | null = null
   ) {
-    let server = Array.from(this.servers.values()).find(
+    let server: McpServerEntry | null | undefined = Array.from(this.servers.values()).find(
       s => s.name.toLowerCase() === serverName.toLowerCase()
     );
     if (!server) server = await this.ensureBuiltinServerRegistered(serverName);
@@ -622,7 +710,7 @@ export class MCPManager {
         await this.connect(server.id);
       } catch (err) {
         throw new Error(
-          `MCP server "${server.name}" is not connected and reconnect failed: ${err.message}`
+          `MCP server "${server.name}" is not connected and reconnect failed: ${errorMessage(err)}`
         );
       }
     }
@@ -633,7 +721,13 @@ export class MCPManager {
    * Call a tool using an agent-specific connection with custom auth.
    * Manages a per-agent client cache keyed by "agentId:serverId".
    */
-  async _callToolWithAgentAuth(server, toolName, args, agentId, apiKey) {
+  async _callToolWithAgentAuth(
+    server: McpServerEntry,
+    toolName: string,
+    args: Record<string, unknown>,
+    agentId: string,
+    apiKey: string
+  ) {
     return this._callAgentClient(
       `${agentId}:${server.id}`,
       server,
@@ -649,14 +743,19 @@ export class MCPManager {
    * Used for servers like OneDrive that need to know which agent is calling
    * to resolve agent-specific tokens, without requiring an API key.
    */
-  async _callToolWithAgentContext(server, toolName, args, agentId, boardId = null) {
+  async _callToolWithAgentContext(
+    server: McpServerEntry,
+    toolName: string,
+    args: Record<string, unknown>,
+    agentId: string,
+    boardId: string | null = null
+  ) {
+    const headers: Record<string, string> = { 'X-Agent-Id': agentId };
+    if (boardId) headers['X-Board-Id'] = boardId;
     return this._callAgentClient(
       `${agentId}:${server.id}${boardId ? `:${boardId}` : ''}`,
       server,
-      {
-        'X-Agent-Id': agentId,
-        ...(boardId ? { 'X-Board-Id': boardId } : {}),
-      },
+      headers,
       toolName,
       args,
       'Agent context session expired'
@@ -666,7 +765,7 @@ export class MCPManager {
   /**
    * Disconnect all per-agent MCP connections for a specific agent (e.g. on agent delete).
    */
-  async disconnectAgent(agentId) {
+  async disconnectAgent(agentId: string) {
     const prefix = `${agentId}:`;
     for (const [key, client] of this.agentClients) {
       if (key.startsWith(prefix)) {
@@ -678,13 +777,18 @@ export class MCPManager {
 
   // ── Agent Integration ───────────────────────────────────────────────
 
-  async getToolsForAgent(mcpServerIds, agentId = null, agentMcpAuth = {}) {
-    const tools = [];
-    const unavailable = [];
+  async getToolsForAgent(
+    mcpServerIds: string[],
+    agentId: string | null = null,
+    agentMcpAuth: AgentMcpAuthMap = {}
+  ) {
+    const tools: AgentMcpTool[] = [];
+    const unavailable: UnavailableMcpServer[] = [];
 
-    const reconnectPromises = [];
+    // Every entry is a promise whose rejection is already swallowed by a .catch below.
+    const reconnectPromises: Promise<unknown>[] = [];
     for (const serverId of mcpServerIds) {
-      let server = this.servers.get(serverId);
+      let server: McpServerEntry | null | undefined = this.servers.get(serverId);
       if (!server) {
         server = await this.ensureBuiltinServerRegistered(serverId);
       }
@@ -761,14 +865,14 @@ export class MCPManager {
   }
 
   getClaudeMcpConfigForAgent(
-    agent,
-    skillManager = null,
+    agent: McpConfigAgent | null | undefined,
+    skillManager: SkillManager | null = null,
     opts: { forceServerIds?: string[]; exclusive?: boolean } = {}
   ) {
     if (!agent) return { mcpServers: {}, serverIds: [] };
 
-    const entries = new Map();
-    const addEntry = (serverId, authOverride = null) => {
+    const entries = new Map<string, { name: string; config: ClaudeMcpEntry }>();
+    const addEntry = (serverId: string, authOverride: { apiKey?: string } | null = null) => {
       if (!serverId || entries.has(serverId)) return;
       const server = this.getById(serverId);
       if (!server || server.enabled === false || !server.url) return;
@@ -821,7 +925,7 @@ export class MCPManager {
     // are reached dynamically through the gateway (list_mcps / call_mcp_tool)
     // rather than frozen into the native config at spawn.
     if (opts.exclusive) {
-      const mcpServers = {};
+      const mcpServers: Record<string, ClaudeMcpEntry> = {};
       for (const entry of entries.values()) {
         mcpServers[entry.name] = entry.config;
       }
@@ -851,7 +955,7 @@ export class MCPManager {
       }
     }
 
-    const mcpServers = {};
+    const mcpServers: Record<string, ClaudeMcpEntry> = {};
     for (const entry of entries.values()) {
       mcpServers[entry.name] = entry.config;
     }
@@ -862,7 +966,7 @@ export class MCPManager {
    * Discover tools using a per-agent connection, then store them on the server entry
    * (so they appear in the agent prompt) without changing the global connection.
    */
-  async _discoverToolsWithAgentAuth(server, agentId, apiKey) {
+  async _discoverToolsWithAgentAuth(server: McpServerEntry, agentId: string, apiKey: string) {
     const cacheKey = `${agentId}:${server.id}`;
     const cached = this.agentClients.get(cacheKey);
     if (cached && cached.isConnected) return;

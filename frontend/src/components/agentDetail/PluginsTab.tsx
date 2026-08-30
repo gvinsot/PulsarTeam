@@ -7,25 +7,41 @@ import {
   AvailablePluginRow,
   CategoryFilterPills,
 } from '../plugins/pluginShared';
+import { errorMessage } from '../../utils/errors';
+import type { Agent, Plugin, PluginDraft, PluginMcpEntry } from '../../types';
 
 // True if the plugin has at least one MCP that needs a bearer token AND no
 // per-MCP key is already stored (the user is expected to provide their own).
-function pluginNeedsCredentials(plugin: any): boolean {
-  return (plugin.mcps || []).some((m: any) => {
+function pluginNeedsCredentials(plugin: Plugin): boolean {
+  return (plugin.mcps || []).some((m: PluginMcpEntry) => {
     const auth = m.authMode || (m.hasApiKey || m.apiKey ? 'bearer' : 'none');
     return auth === 'bearer' && !m.hasApiKey;
   });
 }
 
-export default function PluginsTab({ agent, plugins, onRefresh }) {
+export default function PluginsTab({
+  agent,
+  plugins,
+  onRefresh,
+}: {
+  agent: Agent;
+  plugins: Plugin[];
+  onRefresh: () => void;
+}) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   // Surfaced when an assign/remove API call fails — otherwise the click
   // silently does nothing and the user believes the plugin was attached.
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Activation modal state: the plugin being activated and the editable form.
-  const [activatingPlugin, setActivatingPlugin] = useState<any | null>(null);
-  const [activationForm, setActivationForm] = useState<any>(null);
+  const [activatingPlugin, setActivatingPlugin] = useState<Plugin | null>(null);
+  // The editable subset of a Plugin the activation modal round-trips. Only
+  // userConfig and mcps are actually sent back (see confirmActivation); the rest
+  // is there because PluginEditor renders the whole plugin. The rows are seeded
+  // straight off the wire, so the default PluginDraft instantiation (MCP rows
+  // still PluginMcpEntry-shaped) is the right one; api.updatePlugin accepts the
+  // wider PluginMcpDraft, so a key the user types here posts back intact.
+  const [activationForm, setActivationForm] = useState<PluginDraft | null>(null);
   const [activationSaving, setActivationSaving] = useState(false);
   const [activationError, setActivationError] = useState<string | null>(null);
 
@@ -39,7 +55,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
       ? availablePlugins
       : availablePlugins.filter(s => s.category === categoryFilter);
 
-  const startActivation = plugin => {
+  const startActivation = (plugin: Plugin) => {
     setActivationError(null);
     setActivatingPlugin(plugin);
     setActivationForm({
@@ -49,7 +65,7 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
       icon: plugin.icon || '🔧',
       instructions: plugin.instructions || '',
       userConfig: plugin.userConfig || {},
-      mcps: Array.isArray(plugin.mcps) ? plugin.mcps.map((m: any) => ({ ...m })) : [],
+      mcps: Array.isArray(plugin.mcps) ? plugin.mcps.map(m => ({ ...m })) : [],
       shared: !!plugin.shared,
     });
   };
@@ -60,7 +76,10 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
   };
 
   const confirmActivation = async () => {
-    if (!activatingPlugin) return;
+    // activationForm is set in the same call as activatingPlugin and the modal
+    // that reaches this handler only renders when both are set, so the added
+    // half of the guard is unreachable.
+    if (!activatingPlugin || !activationForm) return;
     setActivationSaving(true);
     setActivationError(null);
     try {
@@ -76,13 +95,13 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
       onRefresh();
     } catch (err) {
       console.error('Failed to activate plugin:', err);
-      setActivationError(err?.message || "Échec de l'activation du plugin");
+      setActivationError(errorMessage(err) || "Échec de l'activation du plugin");
     } finally {
       setActivationSaving(false);
     }
   };
 
-  const handleAssign = async plugin => {
+  const handleAssign = async (plugin: Plugin) => {
     // If the plugin needs credentials we don't yet have, open the activation modal.
     if (pluginNeedsCredentials(plugin)) {
       startActivation(plugin);
@@ -95,18 +114,18 @@ export default function PluginsTab({ agent, plugins, onRefresh }) {
       onRefresh();
     } catch (err) {
       console.error('Failed to assign plugin:', err);
-      setActionError(err?.message || "Échec de l'ajout du plugin");
+      setActionError(errorMessage(err) || "Échec de l'ajout du plugin");
     }
   };
 
-  const handleRemove = async pluginId => {
+  const handleRemove = async (pluginId: string) => {
     setActionError(null);
     try {
       await api.removePlugin(agent.id, pluginId);
       onRefresh();
     } catch (err) {
       console.error('Failed to remove plugin:', err);
-      setActionError(err?.message || 'Échec du retrait du plugin');
+      setActionError(errorMessage(err) || 'Échec du retrait du plugin');
     }
   };
 

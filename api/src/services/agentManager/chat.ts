@@ -4,7 +4,6 @@ import { createProvider } from '../llmProviders.js';
 import { isCliRunner } from '../runners.js';
 import {
   saveAgent,
-  saveTaskToDb,
   getBoardById,
   getTasksByAgent,
   getTasksByAssignee,
@@ -16,7 +15,6 @@ import { TOOL_DEFINITIONS } from '../agentTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
-import { AgentManager } from './index.js';
 import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
 import {
   agentRosterLines,
@@ -26,12 +24,11 @@ import {
   relevantTasksSection,
   byRecency,
   RECENT_TASKS_LIMIT,
-  TASK_TEXT_MAX_CHARS,
 } from './promptSections.js';
 
 const MAX_DELEGATION_DEPTH = 5;
 
-/** @this {AgentManager} */
+/** @this {import('./index.js').AgentManager} */
 export const chatMethods = {
   /** Success/idle teardown for a chat turn: set status, drop the abort
    * controller, and release the top-level chat lock. Order matters — setStatus
@@ -259,7 +256,6 @@ export const chatMethods = {
         llmConfig,
         streamCallback,
         abortController,
-        delegationDepth,
         activeTaskId
       );
       fullResponse = streamResult.fullResponse;
@@ -1223,6 +1219,11 @@ export const chatMethods = {
     return { text, thinking, finishReason, outputTokens };
   },
 
+  /** Stream one turn to completion, auto-continuing while the provider stops on
+   * finish_reason=length. "Continue" here means continuation of a truncated
+   * response — never delegation: no branch reaches sendMessage or an @ask, so
+   * this takes no delegationDepth. The MAX_DELEGATION_DEPTH guard lives where
+   * delegation actually happens, in _processPostResponseActions. */
   async _streamAndContinue(
     this: any,
     agent: any,
@@ -1231,7 +1232,6 @@ export const chatMethods = {
     llmConfig: any,
     streamCallback: any,
     abortController: AbortController,
-    delegationDepth: number,
     activeTaskId: string | null = null
   ): Promise<{
     fullResponse: string;

@@ -1,4 +1,22 @@
 import { RECURRENCE_PERIODS } from './taskConstants';
+import type { TaskRecurrencePeriod } from '../../types';
+
+interface RecurrenceFieldsProps {
+  /** One of RECURRENCE_PERIODS' values; the select is keyed on it. */
+  period: TaskRecurrencePeriod;
+  /** Receives the raw `<select>` value, i.e. a RECURRENCE_PERIODS entry. */
+  onPeriodChange: (period: TaskRecurrencePeriod) => void;
+  /** Minutes between two resets. Only editable while `period === 'custom'`. */
+  customInterval: number;
+  onCustomIntervalChange: (minutes: number) => void;
+  /** Days of history kept at each reset; 0 means "keep everything". */
+  retentionDays: number;
+  onRetentionDaysChange: (days: number) => void;
+  /** Tailwind focus-border class — the two callers use different accents. */
+  focusClass?: string;
+  /** Extra wrapper class; CreateTaskModal uses it to keep its mt-3 spacing. */
+  rowClass?: string;
+}
 
 // Shared recurrence editor fields — period select, custom-minutes input,
 // purge-after-days input — used by TaskDetailModal (teal accent) and
@@ -13,7 +31,7 @@ export default function RecurrenceFields({
   onRetentionDaysChange,
   focusClass = 'focus:border-indigo-500',
   rowClass = '',
-}) {
+}: RecurrenceFieldsProps) {
   const fieldClass = `px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none ${focusClass} transition-colors`;
   return (
     <>

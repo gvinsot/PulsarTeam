@@ -1,7 +1,12 @@
+import type { NextFunction, Request, Response } from 'express';
 import { readSecret } from '../secrets.js';
 import { constantTimeEquals } from '../lib/crypto.js';
 
-export function authenticateCoderApiKey(req, res, next) {
+export function authenticateCoderApiKey(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Response | void {
   const headerKey = req.headers['x-api-key'];
   const authHeader = req.headers.authorization;
   const bearer =

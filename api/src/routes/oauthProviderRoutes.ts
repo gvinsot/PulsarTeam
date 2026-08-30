@@ -65,6 +65,10 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
     const config = spec.getConfig();
     if (!config) throw new Error(spec.refreshNotConfiguredError);
     if (!record.refreshToken) throw new Error('No refresh token available');
+    // `refreshTokenUrl` is declared optional because non-refresh-capable specs
+    // omit it; every spec that reaches makeRefresh defines one.
+    const refreshTokenUrl = spec.refreshTokenUrl;
+    if (!refreshTokenUrl) throw new Error(`${spec.label}: token refresh is not supported`);
 
     const body = new URLSearchParams({
       client_id: config.clientId,
@@ -73,7 +77,7 @@ export function makeRefresh<TConfig extends { clientId: string; clientSecret: st
       grant_type: 'refresh_token',
     });
 
-    const response = await fetch(spec.refreshTokenUrl(record, config), {
+    const response = await fetch(refreshTokenUrl(record, config), {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),

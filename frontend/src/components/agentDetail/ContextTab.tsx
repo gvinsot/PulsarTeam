@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import type { ChangeEvent } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
   Plus,
@@ -15,6 +16,9 @@ import {
 } from 'lucide-react';
 import { api } from '../../api';
 import { WsEvents } from '../../socketEvents';
+import { errorMessage } from '../../utils/errors';
+import type { Socket } from 'socket.io-client';
+import type { Agent } from '../../types';
 
 function estimateTokens(text: string): number {
   if (!text) return 0;
@@ -25,7 +29,45 @@ function estimateTokens(text: string): number {
 // declaring the request lost.
 const HANDOFF_TIMEOUT_MS = 5 * 60 * 1000;
 
-export default function ContextTab({ agent, agents, socket, onRefresh }) {
+/**
+ * Outcome banner of one handoff attempt, from either the socket or the REST path.
+ * Flat rather than a `success: true | false` union because the renderer branches
+ * on `result.success` inside a JSX ternary, which only narrows a discriminated
+ * union once strictNullChecks is on — and the baseline check runs without it.
+ */
+type HandoffResult = { success: boolean; response?: string; error?: string };
+
+/**
+ * Payload of the HANDOFF_COMPLETE socket frame
+ * (api/src/ws/socketHandler.ts:347 — `{ fromId, toId, response }`).
+ *
+ * `response` is `unknown` for the same reason api.ts types the REST handoff body
+ * that way: agentManager.handoff returns `{ ...sendMessage(), fileTransfer }`
+ * (broadcast.ts:73-76), an OBJECT, not the reply text.
+ */
+interface HandoffCompletePayload {
+  fromId: string;
+  toId: string;
+  response: unknown;
+}
+
+/** Payload of the HANDOFF_ERROR socket frame (socketHandler.ts:326 and :350).
+ *  It carries no fromId/toId, which is why onError below cannot filter on them. */
+interface HandoffErrorPayload {
+  error: string;
+}
+
+export default function ContextTab({
+  agent,
+  agents,
+  socket,
+  onRefresh,
+}: {
+  agent: Agent;
+  agents: Agent[];
+  socket: Socket | null;
+  onRefresh: () => void;
+}) {
   // RAG state
   const [showAdd, setShowAdd] = useState(false);
   const [showAddUrl, setShowAddUrl] = useState(false);
@@ -64,10 +106,10 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
   const [targetId, setTargetId] = useState('');
   const [context, setContext] = useState('');
   const [sending, setSending] = useState(false);
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState<HandoffResult | null>(null);
   // Detaches the in-flight handoff's socket listeners + timeout, so they
   // don't leak (and fire setState) after unmount or consume a later handoff.
-  const handoffCleanupRef = useRef(null);
+  const handoffCleanupRef = useRef<(() => void) | null>(null);
   useEffect(
     () => () => {
       handoffCleanupRef.current?.();
@@ -91,7 +133,11 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
     }, 0);
     const historyTokens = estimateTokens('x'.repeat(historyChars));
 
-    const systemPromptEstimate = estimateTokens('x'.repeat(agent.systemPrompt?.length || 0));
+    // REAL BUG, deliberately left at 0: no API producer ever writes a
+    // `systemPrompt` key onto an agent (the system text is `agent.instructions`),
+    // so this read has always been undefined and this stat has always shown 0.
+    // Pointing it at `instructions` would change what the panel displays.
+    const systemPromptEstimate = estimateTokens('');
 
     const urlCount = docs.filter(d => d.type === 'url').length;
 
@@ -106,7 +152,7 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
       systemPromptTokens: systemPromptEstimate,
       totalTokens: docsTokens + historyTokens + systemPromptEstimate,
     };
-  }, [agent.ragDocuments, agent.conversationHistory, agent.systemPrompt]);
+  }, [agent.ragDocuments, agent.conversationHistory]);
 
   // --- RAG handlers ---
   const handleAdd = async () => {
@@ -128,8 +174,8 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
       setDocUrl('');
       setShowAddUrl(false);
       onRefresh();
-    } catch (err: any) {
-      setUrlError(err.message || 'Failed to fetch URL');
+    } catch (err) {
+      setUrlError(errorMessage(err) || 'Failed to fetch URL');
     } finally {
       setUrlLoading(false);
     }
@@ -140,20 +186,20 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
     try {
       await api.refreshRagDoc(agent.id, docId);
       onRefresh();
-    } catch (err: any) {
-      alert(`Refresh failed: ${err.message}`);
+    } catch (err) {
+      alert(`Refresh failed: ${errorMessage(err)}`);
     } finally {
       setRefreshingDocId(null);
     }
   };
 
-  const handleDelete = async docId => {
+  const handleDelete = async (docId: string) => {
     if (!confirm('Remove this document?')) return;
     await api.deleteRagDoc(agent.id, docId);
     onRefresh();
   };
 
-  const handleFileUpload = e => {
+  const handleFileUpload = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
@@ -176,21 +222,27 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
         handoffCleanupRef.current?.();
         const fromId = agent.id;
         const toId = targetId;
-        let timer = null;
+        let timer: number | null = null;
         const cleanup = () => {
           socket.off(WsEvents.HANDOFF_COMPLETE, onComplete);
           socket.off(WsEvents.HANDOFF_ERROR, onError);
           if (timer) clearTimeout(timer);
           handoffCleanupRef.current = null;
         };
-        const onComplete = data => {
+        const onComplete = (data: HandoffCompletePayload) => {
           // Ignore completions belonging to a different handoff request.
           if (data?.fromId && data?.toId && (data.fromId !== fromId || data.toId !== toId)) return;
           cleanup();
-          setResult({ success: true, response: data?.response });
+          // Same REAL BUG as the REST branch below: the server sends
+          // agentManager.handoff's whole return object, not the reply text. Only
+          // a string can reach ReactMarkdown, so anything else is dropped.
+          setResult({
+            success: true,
+            response: typeof data?.response === 'string' ? data.response : undefined,
+          });
           setSending(false);
         };
-        const onError = data => {
+        const onError = (data: HandoffErrorPayload) => {
           cleanup();
           setResult({ success: false, error: data?.error || 'Handoff failed' });
           setSending(false);
@@ -208,11 +260,19 @@ export default function ContextTab({ agent, agents, socket, onRefresh }) {
         socket.emit(WsEvents.REQ_HANDOFF, { fromId, toId, context: context.trim() });
       } else {
         const res = await api.handoff(agent.id, targetId, context.trim());
-        setResult({ success: true, response: res.response });
+        // REAL BUG: the route JSON-encodes agentManager.handoff's whole return
+        // object (api/src/routes/agents.ts:327-328), so `response` is an object,
+        // not the reply text — which is why api.ts types it `unknown`. Only a
+        // string can reach ReactMarkdown; anything else is dropped rather than
+        // handed over. Socket-less path only.
+        setResult({
+          success: true,
+          response: typeof res.response === 'string' ? res.response : undefined,
+        });
         setSending(false);
       }
-    } catch (err: any) {
-      setResult({ success: false, error: err.message });
+    } catch (err) {
+      setResult({ success: false, error: errorMessage(err) });
       setSending(false);
     }
   };

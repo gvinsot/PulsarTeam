@@ -1,6 +1,7 @@
 import { HardDrive, XCircle } from 'lucide-react';
 import { api } from '../api';
 import OAuthConnectWidget, { OAuthProviderConfig } from './connect/OAuthConnectWidget';
+import type { ConnectStatus } from './connect/useConnectStatus';
 
 /**
  * Google Drive OAuth connection widget — thin config over the shared OAuthConnectWidget.
@@ -34,7 +35,15 @@ const GDRIVE_CONFIG: OAuthProviderConfig = {
   },
 };
 
-export default function GoogleDriveConnect({ agentId, boardId, onStatusChange }) {
+export default function GoogleDriveConnect({
+  agentId,
+  boardId,
+  onStatusChange,
+}: {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: (status: ConnectStatus) => void;
+}) {
   return (
     <OAuthConnectWidget
       config={GDRIVE_CONFIG}

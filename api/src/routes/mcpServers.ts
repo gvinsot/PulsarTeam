@@ -1,7 +1,9 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
+import type { MCPManager } from '../services/mcpManager.js';
 
 // Schema for creating an MCP server
 const createMcpServerSchema = z.object({
@@ -17,19 +19,19 @@ const createMcpServerSchema = z.object({
 const updateMcpServerSchema = createMcpServerSchema.partial();
 
 /** Mask apiKey so the full value isn't exposed to the client. */
-function sanitize(server) {
+function sanitize(server: Record<string, unknown> | null | undefined) {
   if (!server) return server;
-  const copy = { ...server };
+  const copy: Record<string, unknown> = { ...server };
   copy.hasApiKey = !!copy.apiKey;
   copy.apiKey = copy.apiKey ? '••••••••' : '';
   return copy;
 }
 
-export function mcpServerRoutes(mcpManager) {
+export function mcpServerRoutes(mcpManager: MCPManager) {
   const router = express.Router();
 
   // List all MCP servers (with tools & status)
-  router.get('/', (req, res) => {
+  router.get('/', (_req, res) => {
     res.json(mcpManager.getAll().map(sanitize));
   });
 
@@ -116,8 +118,13 @@ export function mcpServerRoutes(mcpManager) {
       }
       const internalConfig = resolveInternalMcpConfig(server.url);
       const connectUrl = internalConfig.url;
-      if (Object.keys(internalConfig.headers).length > 0) {
-        connectOpts.headers = { ...(connectOpts.headers || {}), ...internalConfig.headers };
+      // `resolveInternalMcpConfig` answers `{}` for an external URL and a signed
+      // `{ Authorization }` bearer for an internal one — read that one header by
+      // name rather than spreading the union, whose empty branch types
+      // `Authorization` as `undefined` and so is not a Record<string, string>.
+      const { Authorization: internalAuth } = internalConfig.headers;
+      if (internalAuth) {
+        connectOpts.headers = { ...(connectOpts.headers || {}), Authorization: internalAuth };
       }
 
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -148,7 +155,7 @@ export function mcpServerRoutes(mcpManager) {
         await client.close().catch(() => {});
       }
     } catch (err) {
-      res.status(200).json({ success: false, error: err.message });
+      res.status(200).json({ success: false, error: errorMessage(err) });
     }
   });
 

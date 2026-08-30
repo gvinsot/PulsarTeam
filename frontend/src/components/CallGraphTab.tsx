@@ -12,19 +12,8 @@ import {
 import mermaid from 'mermaid';
 import { api } from '../api';
 import { sanitizeSvg } from '../lib/sanitizeSvg';
-
-type Direction = 'ui-to-service' | 'service-to-ui';
-
-interface GraphResult {
-  direction: Direction;
-  nodes: Array<{ id: string; label: string; layer: string; file?: string }>;
-  edges: Array<{ from: string; to: string }>;
-  mermaid: string;
-  stats?: { filesScanned: number; uiFiles: number; serviceFiles: number; truncated: boolean };
-  llm?: { provider: string; model: string } | null;
-  fetchedAt?: string;
-  ref?: string;
-}
+import { errorMessage } from '../utils/errors';
+import type { CodeGraphDirection, CodeGraphResponse } from '../types';
 
 let mermaidInited = false;
 function initMermaid() {
@@ -52,8 +41,8 @@ export default function CallGraphTab({
   repo: string;
   boardId: string;
 }) {
-  const [direction, setDirection] = useState<Direction>('ui-to-service');
-  const [data, setData] = useState<GraphResult | null>(null);
+  const [direction, setDirection] = useState<CodeGraphDirection>('ui-to-service');
+  const [data, setData] = useState<CodeGraphResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -73,8 +62,8 @@ export default function CallGraphTab({
       try {
         const result = await api.analyzeCodeGraph(owner, repo, boardId, { direction, refresh });
         setData(result);
-      } catch (err: any) {
-        setError(err.message || 'Analysis failed');
+      } catch (err) {
+        setError(errorMessage(err) || 'Analysis failed');
       } finally {
         setLoading(false);
       }
@@ -95,8 +84,8 @@ export default function CallGraphTab({
         const id = `cg_${Math.random().toString(36).slice(2)}`;
         const { svg } = await mermaid.render(id, data.mermaid);
         if (!cancelled) setSvg(sanitizeSvg(svg));
-      } catch (err: any) {
-        if (!cancelled) setError(`Diagram render failed: ${err.message}`);
+      } catch (err) {
+        if (!cancelled) setError(`Diagram render failed: ${errorMessage(err)}`);
       }
     })();
     return () => {

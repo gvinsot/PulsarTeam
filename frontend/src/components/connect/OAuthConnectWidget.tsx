@@ -1,6 +1,32 @@
 import { useState, useEffect, useRef, ReactNode } from 'react';
 import { ExternalLink, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useConnectStatus, ConnectStatus } from './useConnectStatus';
+import type { SuccessAck } from '../../api';
+import { errorMessage } from '../../utils/errors';
+
+/**
+ * Extra flags for the auth-url call. Only OneDrive has one: `consumer` adds
+ * `?consumer=1`, which forces the Microsoft *consumers* endpoint (api.ts:771).
+ * Every other provider's `authUrl` simply takes fewer parameters.
+ */
+export interface OAuthAuthUrlOptions {
+  consumer?: boolean;
+}
+
+/**
+ * Proves a `MessageEvent.data` is an object before its fields are read.
+ *
+ * The OAuth result page posts `{ type, success, error, ...extraData }`
+ * (api/src/routes/oauthHelper.ts:48), but ANY window may postMessage to this
+ * one, so the frame is narrowed at runtime instead of being trusted: `data` is
+ * genuinely `unknown` until proven otherwise. Non-object frames (the dev
+ * server's HMR strings, for one) fall out at the `type` check exactly as they
+ * did when `event.data?.type` was read off an implicit `any`.
+ */
+function isMessageFrame(data: unknown): data is Record<string, unknown> {
+  return typeof data === 'object' && data !== null;
+}
 
 /**
  * Generic OAuth connection widget shared by the provider connect components
@@ -11,11 +37,11 @@ import { useConnectStatus, ConnectStatus } from './useConnectStatus';
 export interface OAuthProviderConfig {
   name: string;
   /** Icon shown on the connected/disconnected card. */
-  Icon: any;
+  Icon: LucideIcon;
   /** Icon shown in the status-error and not-configured states. */
-  IconOff: any;
+  IconOff: LucideIcon;
   /** Icon shown on the Disconnect button. */
-  IconDisconnect: any;
+  IconDisconnect: LucideIcon;
   /** window.open() target name for the OAuth popup. */
   popupName: string;
   /** postMessage `type` emitted by the server-rendered oauth-redirect page. */
@@ -33,13 +59,17 @@ export interface OAuthProviderConfig {
   connectHint: (agentId?: string) => string;
   /** Extra actions rendered next to the connect button (e.g. OneDrive 'personal'). */
   extraConnectActions?: (props: {
-    connect: (opts?: any) => void;
+    connect: (opts?: OAuthAuthUrlOptions) => void;
     connecting: boolean;
   }) => ReactNode;
   api: {
     getStatus: (agentId?: string, boardId?: string) => Promise<ConnectStatus>;
-    getAuthUrl: (agentId?: string, boardId?: string, opts?: any) => Promise<{ authUrl: string }>;
-    disconnect: (agentId?: string, boardId?: string) => Promise<any>;
+    getAuthUrl: (
+      agentId?: string,
+      boardId?: string,
+      opts?: OAuthAuthUrlOptions
+    ) => Promise<{ authUrl: string }>;
+    disconnect: (agentId?: string, boardId?: string) => Promise<SuccessAck>;
   };
 }
 
@@ -64,25 +94,33 @@ export default function OAuthConnectWidget({
   );
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const pollRef = useRef(null);
-  useEffect(() => () => clearInterval(pollRef.current), []);
+  // window.setInterval id (DOM lib: a number), or null when no poll is armed.
+  const pollRef = useRef<number | null>(null);
+  // `?? undefined` only so the null case type-checks: clearInterval(null) and
+  // clearInterval(undefined) are both no-ops.
+  useEffect(() => () => clearInterval(pollRef.current ?? undefined), []);
 
   // Listen for OAuth callback messages from the popup window
   useEffect(() => {
-    const handleMessage = async event => {
-      if (event.data?.type !== config.messageType) return;
+    const handleMessage = async (event: MessageEvent<unknown>) => {
+      const data = event.data;
+      if (!isMessageFrame(data) || data.type !== config.messageType) return;
       // Shared-client dispatchers (e.g. the unified Microsoft OAuth redirect)
       // include a `service` field so each widget only reacts to its own callback.
-      if (config.service && event.data.service !== config.service) return;
-      if (!('success' in event.data)) return;
+      if (config.service && data.service !== config.service) return;
+      if (!('success' in data)) return;
       setConnecting(true);
       setError(null);
-      if (event.data.success) {
+      if (data.success) {
         await fetchStatus();
       } else {
-        setError(event.data.error || 'OAuth failed');
+        // The producer writes `error: error || null`, so the only values that
+        // reach here are a non-empty string or null — both of which the old
+        // `data.error || 'OAuth failed'` resolved identically. The typeof guard
+        // is what lets `setError` keep its `string` parameter.
+        setError(typeof data.error === 'string' && data.error ? data.error : 'OAuth failed');
       }
       setConnecting(false);
     };
@@ -91,7 +129,7 @@ export default function OAuthConnectWidget({
     return () => window.removeEventListener('message', handleMessage);
   }, [fetchStatus, config.messageType, config.service]);
 
-  const handleConnect = async (opts?: any) => {
+  const handleConnect = async (opts?: OAuthAuthUrlOptions) => {
     setError(null);
     setConnecting(true);
     try {
@@ -121,16 +159,16 @@ export default function OAuthConnectWidget({
 
       // Poll only for popup closure detection
       // The server-rendered oauth-redirect page reports the result via postMessage
-      clearInterval(pollRef.current);
+      clearInterval(pollRef.current ?? undefined);
       pollRef.current = setInterval(() => {
         if (popup.closed) {
-          clearInterval(pollRef.current);
+          clearInterval(pollRef.current ?? undefined);
           pollRef.current = null;
           setConnecting(false);
         }
       }, 500);
     } catch (err) {
-      setError(err.message);
+      setError(errorMessage(err));
       setConnecting(false);
     }
   };
@@ -141,7 +179,7 @@ export default function OAuthConnectWidget({
       await config.api.disconnect(agentId || undefined, boardId || undefined);
       await fetchStatus();
     } catch (err) {
-      setError(err.message);
+      setError(errorMessage(err));
     } finally {
       setDisconnecting(false);
     }

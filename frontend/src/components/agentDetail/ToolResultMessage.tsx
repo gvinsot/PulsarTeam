@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, AlertCircle, Terminal } from 'lucide-react';
+import type { ConversationMessage, MessageToolResult } from '../../types';
 
 // ─── Rich Tool Output (git diff/show/log/status rendering) ─────────────────
-function isGitOutput(tool, args, output) {
+function isGitOutput(tool: string, args: string[], output: string) {
   const cmd = (args || []).join(' ').toLowerCase();
   if (tool === 'run_command' && /^git\s/.test(cmd)) return true;
   // Detect git-like output by content heuristics
@@ -16,7 +17,7 @@ function isGitOutput(tool, args, output) {
   return false;
 }
 
-function classifyGitLine(line) {
+function classifyGitLine(line: string) {
   if (line.startsWith('commit ') && /^commit [0-9a-f]{7,40}/.test(line)) return 'commit';
   if (line.startsWith('Author:') || line.startsWith('Date:') || line.startsWith('Merge:'))
     return 'meta';
@@ -49,7 +50,17 @@ const gitLineStyles = {
   plain: 'text-dark-400',
 };
 
-function RichToolOutput({ output, success, tool, args }) {
+function RichToolOutput({
+  output,
+  success,
+  tool,
+  args,
+}: {
+  output: string;
+  success: boolean;
+  tool: string;
+  args: string[];
+}) {
   const text =
     typeof output === 'string'
       ? output.slice(0, 5000)
@@ -95,7 +106,7 @@ function RichToolOutput({ output, success, tool, args }) {
 }
 
 // ─── Error Report Item (from @report_error) ────────────────────────────────
-function ErrorReportItem({ result }) {
+function ErrorReportItem({ result }: { result: MessageToolResult }) {
   const description = (result.args || [])[0] || result.result || 'Unknown error';
   return (
     <div className="text-xs flex items-start gap-2 p-2 rounded bg-orange-500/5 border border-orange-500/20">
@@ -108,7 +119,7 @@ function ErrorReportItem({ result }) {
   );
 }
 
-function ToolResultItem({ result }) {
+function ToolResultItem({ result }: { result: MessageToolResult }) {
   const [showOutput, setShowOutput] = useState(!result.success); // auto-expand errors
   const argSummary = (result.args || [])
     .map(a => (typeof a === 'string' && a.length > 60 ? a.slice(0, 60) + '...' : a))
@@ -168,7 +179,7 @@ function ToolResultItem({ result }) {
 }
 
 // ─── Tool Result Collapsible Message ───────────────────────────────────────
-export default function ToolResultMessage({ message }) {
+export default function ToolResultMessage({ message }: { message: ConversationMessage }) {
   const results = message.toolResults || [];
   const successCount = results.filter(r => r.success && !r.isErrorReport).length;
   const errorCount = results.filter(r => !r.success).length;

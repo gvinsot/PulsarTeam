@@ -1,5 +1,6 @@
 import express from 'express';
 import { recordTokenUsage, getPool } from '../services/database.js';
+import type { AgentManager } from '../services/agentManager/index.js';
 
 /**
  * Internal endpoint that the runner-service uses to report token usage
@@ -13,7 +14,7 @@ import { recordTokenUsage, getPool } from '../services/database.js';
  *
  * Auth is handled by authenticateCoderApiKey in index.ts.
  */
-export function internalTokenUsageRoutes(agentManager) {
+export function internalTokenUsageRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   router.post('/agents/:agentId', async (req, res) => {

@@ -1,16 +1,40 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, Edit3, Save, LayoutGrid, GripVertical, Bot, ListTodo } from 'lucide-react';
 import { api } from '../../api';
+import { errorMessage } from '../../utils/errors';
+import type {
+  AdminBoardListItem,
+  BoardWorkflowColumn,
+  ShowToastFn,
+  WorkflowTransition,
+} from '../../types';
+
+interface BoardsTabProps {
+  active: boolean;
+  showToast?: ShowToastFn;
+}
+
+// The board being created or edited, as the form holds it: the two halves of a
+// BoardWorkflow plus the board name.
+interface BoardFormState {
+  name: string;
+  columns: BoardWorkflowColumn[];
+  transitions: WorkflowTransition[];
+}
 
 // `active` flips true when the Boards tab is selected; each activation
 // re-fetches the boards and their agent/task counts.
-export default function BoardsTab({ active, showToast }) {
-  const [boardsList, setBoardsList] = useState([]);
+export default function BoardsTab({ active, showToast }: BoardsTabProps) {
+  const [boardsList, setBoardsList] = useState<AdminBoardListItem[]>([]);
   const [boardsLoading, setBoardsLoading] = useState(false);
-  const [boardsAgentCounts, setBoardsAgentCounts] = useState({});
-  const [boardsTaskCounts, setBoardsTaskCounts] = useState({});
-  const [boardEditingId, setBoardEditingId] = useState(null);
-  const [boardForm, setBoardForm] = useState({ name: '', columns: [], transitions: [] });
+  const [boardsAgentCounts, setBoardsAgentCounts] = useState<Record<string, number>>({});
+  const [boardsTaskCounts, setBoardsTaskCounts] = useState<Record<string, number>>({});
+  const [boardEditingId, setBoardEditingId] = useState<string | null>(null);
+  const [boardForm, setBoardForm] = useState<BoardFormState>({
+    name: '',
+    columns: [],
+    transitions: [],
+  });
   const [boardCreating, setBoardCreating] = useState(false);
   const [boardSaving, setBoardSaving] = useState(false);
 
@@ -24,21 +48,21 @@ export default function BoardsTab({ active, showToast }) {
       ]);
       setBoardsList(boards);
       // Count agents per board
-      const agentCounts = {};
+      const agentCounts: Record<string, number> = {};
       (agents || []).forEach(a => {
         const bid = a.boardId || '__none__';
         agentCounts[bid] = (agentCounts[bid] || 0) + 1;
       });
       setBoardsAgentCounts(agentCounts);
       // Count tasks per board
-      const taskCounts = {};
+      const taskCounts: Record<string, number> = {};
       (tasks || []).forEach(t => {
         const bid = t.boardId || '__none__';
         taskCounts[bid] = (taskCounts[bid] || 0) + 1;
       });
       setBoardsTaskCounts(taskCounts);
     } catch (err) {
-      showToast?.(`Failed to load boards: ${err.message}`, 'error');
+      showToast?.(`Failed to load boards: ${errorMessage(err)}`, 'error');
     } finally {
       setBoardsLoading(false);
     }
@@ -78,7 +102,7 @@ export default function BoardsTab({ active, showToast }) {
     });
   };
 
-  const startBoardEdit = board => {
+  const startBoardEdit = (board: AdminBoardListItem) => {
     setBoardEditingId(board.id);
     setBoardCreating(false);
     const cols = board.workflow?.columns || [];
@@ -108,13 +132,13 @@ export default function BoardsTab({ active, showToast }) {
       cancelBoardEdit();
       loadBoards();
     } catch (err) {
-      showToast?.(`Failed to save board: ${err.message}`, 'error');
+      showToast?.(`Failed to save board: ${errorMessage(err)}`, 'error');
     } finally {
       setBoardSaving(false);
     }
   };
 
-  const handleDeleteBoard = async board => {
+  const handleDeleteBoard = async (board: AdminBoardListItem) => {
     if (
       !confirm(
         `Delete board "${board.name}"? All tasks in this board will be lost. This cannot be undone.`
@@ -126,7 +150,7 @@ export default function BoardsTab({ active, showToast }) {
       showToast?.('Board deleted', 'success');
       loadBoards();
     } catch (err) {
-      showToast?.(`Failed to delete: ${err.message}`, 'error');
+      showToast?.(`Failed to delete: ${errorMessage(err)}`, 'error');
     }
   };
 
@@ -138,14 +162,14 @@ export default function BoardsTab({ active, showToast }) {
     }));
   };
 
-  const updateBoardColumn = (idx, field, value) => {
+  const updateBoardColumn = (idx: number, field: 'id' | 'label' | 'color', value: string) => {
     setBoardForm(f => ({
       ...f,
       columns: f.columns.map((c, i) => (i === idx ? { ...c, [field]: value } : c)),
     }));
   };
 
-  const removeBoardColumn = idx => {
+  const removeBoardColumn = (idx: number) => {
     setBoardForm(f => ({ ...f, columns: f.columns.filter((_, i) => i !== idx) }));
   };
 

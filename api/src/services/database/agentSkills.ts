@@ -1,7 +1,27 @@
 import { getPool } from './connection.js';
 import { createJsonDocStore } from './jsonDocStore.js';
+import { errorMessage } from '../../lib/errors.js';
 
-const store = createJsonDocStore('agent_skills', {
+/**
+ * One row of the `agent_skills` document table — a reusable instruction block
+ * agents can be taught, optionally bound to MCP servers. Unvalidated JSONB, so
+ * only `id` is required and the index signature carries the rest.
+ */
+export interface AgentSkill {
+  id: string;
+  name?: string;
+  description?: string;
+  category?: string;
+  instructions?: string;
+  mcpServerIds?: string[];
+  createdBy?: string;
+  lastUpdatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+const store = createJsonDocStore<AgentSkill>('agent_skills', {
   orderBy: 'updated_at DESC',
   label: 'agent skill',
   labelPlural: 'agent skills',
@@ -12,7 +32,7 @@ export const getAgentSkillById = store.getById;
 export const saveAgentSkill = store.save;
 export const deleteAgentSkillFromDb = store.remove;
 
-export async function searchAgentSkills(query) {
+export async function searchAgentSkills(query: string) {
   const pool = getPool();
   if (!pool) return [];
   try {
@@ -42,7 +62,7 @@ export async function searchAgentSkills(query) {
     );
     return result.rows.map(row => row.data);
   } catch (err) {
-    console.error('Failed to search agent skills:', err.message);
+    console.error('Failed to search agent skills:', errorMessage(err));
     return [];
   }
 }

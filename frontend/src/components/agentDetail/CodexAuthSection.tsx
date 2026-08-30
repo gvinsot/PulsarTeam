@@ -1,10 +1,14 @@
 import { useState, useEffect } from 'react';
 import { KeyRound, Upload, X, Check, AlertTriangle, Trash2 } from 'lucide-react';
 import { api } from '../../api';
+import { errorMessage } from '../../utils/errors';
+import type { AppUser } from '../../types';
 
 interface CodexAuthSectionProps {
   ownerId?: string;
-  currentUser?: any;
+  /** Accepted but unused — kept so the call site keeps documenting the owner
+   *  the section is rendered for. */
+  currentUser?: AppUser | null;
 }
 
 interface CodexAuthStatus {
@@ -14,7 +18,10 @@ interface CodexAuthStatus {
   updatedAt?: number | null;
 }
 
-export default function CodexAuthSection({ ownerId, currentUser }: CodexAuthSectionProps) {
+export default function CodexAuthSection({
+  ownerId,
+  currentUser: _currentUser,
+}: CodexAuthSectionProps) {
   const [status, setStatus] = useState<CodexAuthStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -39,6 +46,9 @@ export default function CodexAuthSection({ ownerId, currentUser }: CodexAuthSect
   }, [ownerId]);
 
   const handleFile = async (file: File) => {
+    // Unreachable: the whole section early-returns below when ownerId is unset,
+    // so the upload modal that calls this can never be mounted without one.
+    if (!ownerId) return;
     setUploadError(null);
     if (!file.name.endsWith('.json')) {
       setUploadError('Expected a .json file');
@@ -51,7 +61,9 @@ export default function CodexAuthSection({ ownerId, currentUser }: CodexAuthSect
     setUploading(true);
     try {
       const text = await file.text();
-      let parsed: any;
+      // Genuinely free-form: the user's auth.json. The route validates the shape
+      // (api/src/routes/codexAuth.ts:47-56), so nothing here needs to read it.
+      let parsed: unknown;
       try {
         parsed = JSON.parse(text);
       } catch {
@@ -62,8 +74,8 @@ export default function CodexAuthSection({ ownerId, currentUser }: CodexAuthSect
       await api.uploadCodexAuth(ownerId, parsed);
       setShowModal(false);
       await refresh();
-    } catch (err: any) {
-      setUploadError(err?.message || 'Upload failed');
+    } catch (err) {
+      setUploadError(errorMessage(err) || 'Upload failed');
     } finally {
       setUploading(false);
     }

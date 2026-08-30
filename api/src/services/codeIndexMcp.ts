@@ -3,8 +3,58 @@ import path from 'path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import type { CodeIndexService } from './codeIndexService.js';
 
-async function pathExists(targetPath) {
+/**
+ * The repo-header fields rendered below. Two different results reach them:
+ * `indexFolder` and `listRepos` hand over the stored header, where
+ * `filesWithoutSymbols` is a count, while `getRepoSummary` replaces that same key
+ * with the list of paths. Both are only interpolated into text here.
+ */
+interface RenderedRepo {
+  id: string;
+  name: string;
+  rootPath: string;
+  indexedAt: string;
+  filesIndexed: number;
+  symbolsIndexed: number;
+  filesWithoutSymbols: number | string[];
+  vectorBackend: string;
+}
+
+/** A node of the tree `CodeIndexService.getFileTree` builds; only directories carry children. */
+interface RenderedTreeNode {
+  name: string;
+  type: 'file' | 'directory';
+  children?: RenderedTreeNode[];
+}
+
+/** The outline entries `CodeIndexService.getFileOutline` returns for one file. */
+interface RenderedOutlineSymbol {
+  kind: string;
+  qualifiedName: string;
+  startLine: number;
+  endLine: number;
+}
+
+interface RenderedOutline {
+  file: { path: string; language: string };
+  symbols: RenderedOutlineSymbol[];
+}
+
+/**
+ * One hit of the three searches. `score` and `vectorScore` are folded in from the
+ * per-search `scores` bag rather than fixed on the hit, so neither is guaranteed.
+ */
+interface RenderedSearchHit {
+  kind: string;
+  qualifiedName: string;
+  filePath: string;
+  score?: number;
+  vectorScore?: number;
+}
+
+async function pathExists(targetPath: string) {
   try {
     await fs.access(targetPath);
     return true;
@@ -28,11 +78,11 @@ async function detectWorkspaceRoot() {
   return cwd;
 }
 
-function formatJson(value) {
+function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
-function formatRepoSummary(repo) {
+function formatRepoSummary(repo: RenderedRepo) {
   return [
     `Repo indexed: ${repo.name}`,
     `Repo ID: ${repo.id}`,
@@ -45,7 +95,7 @@ function formatRepoSummary(repo) {
   ].join('\\n');
 }
 
-function renderTree(node, depth = 0) {
+function renderTree(node: RenderedTreeNode, depth = 0): string {
   const prefix = depth === 0 ? '' : '  '.repeat(depth - 1) + '└─ ';
   const icon = node.type === 'directory' ? '📁' : '📄';
   const current = `${prefix}${icon} ${node.name || '.'}`;
@@ -54,7 +104,7 @@ function renderTree(node, depth = 0) {
   return [current, ...node.children.flatMap(child => renderTree(child, depth + 1))].join('\\n');
 }
 
-function summarizeOutline(outline) {
+function summarizeOutline(outline: RenderedOutline) {
   if (!outline.symbols?.length) {
     return `File: ${outline.file.path}\\nNo symbols detected.`;
   }
@@ -66,7 +116,7 @@ function summarizeOutline(outline) {
   return `File: ${outline.file.path}\\nLanguage: ${outline.file.language}\\n\\n${lines.join('\\n')}`;
 }
 
-function summarizeSearchResults(results) {
+function summarizeSearchResults(results: RenderedSearchHit[]) {
   if (!results.length) return 'No results found.';
   return results
     .map((result, index) => {
@@ -76,7 +126,7 @@ function summarizeSearchResults(results) {
     .join('\\n');
 }
 
-export function createCodeIndexMcpServer(codeIndexService) {
+export function createCodeIndexMcpServer(codeIndexService: CodeIndexService) {
   const server = new McpServer({
     name: 'Code Index',
     version: '1.0.0',
@@ -399,6 +449,6 @@ export function createCodeIndexMcpServer(codeIndexService) {
   return server;
 }
 
-export function createCodeIndexMcpHandler(codeIndexService) {
+export function createCodeIndexMcpHandler(codeIndexService: CodeIndexService) {
   return createMcpHttpHandler('Code Index', () => createCodeIndexMcpServer(codeIndexService));
 }

@@ -6,13 +6,34 @@ import { createMcpHttpHandler } from './mcpHttpHandler.js';
 import { createProviderFetch, readBodyCapped } from './providerFetch.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+
+/**
+ * The Microsoft Graph driveItem fields this file reads back. graphFetch hands
+ * over raw parsed JSON, so this describes what is consumed, not what is verified.
+ */
+interface GraphDriveItem {
+  id: string;
+  name: string;
+  size?: number;
+  lastModifiedDateTime?: string;
+  webUrl?: string;
+  folder?: { childCount?: number };
+  file?: { mimeType?: string };
+  parentReference?: { path?: string };
+  '@microsoft.graph.downloadUrl'?: string;
+}
+
+/** A Graph collection response: the listed items live under `value`. */
+interface GraphItemCollection {
+  value?: GraphDriveItem[];
+}
 const MAX_READ_BYTES = 5 * 1024 * 1024;
 
 /**
  * Encode a OneDrive path for use in Graph API URLs.
  * Encodes each segment individually to preserve '/' separators.
  */
-function encodePath(path) {
+function encodePath(path: string) {
   const clean = path.startsWith('/') ? path.slice(1) : path;
   return clean
     .split('/')
@@ -36,7 +57,7 @@ const graphFetch = createProviderFetch({
 /**
  * Format file/folder items for display.
  */
-function formatItem(item) {
+function formatItem(item: GraphDriveItem) {
   const isFolder = !!item.folder;
   const size = item.size ? `${(item.size / 1024).toFixed(1)} KB` : '';
   const modified = item.lastModifiedDateTime
@@ -62,7 +83,10 @@ function formatItem(item) {
  * Create the OneDrive MCP server with all tools registered.
  * @param {string|null} agentId - When provided, tools use agent-specific tokens.
  */
-export function createOneDriveMcpServer(agentId = null, boardId = null) {
+export function createOneDriveMcpServer(
+  agentId: string | null = null,
+  boardId: string | null = null
+) {
   const server = new McpServer({
     name: 'OneDrive',
     version: '1.0.0',
@@ -93,7 +117,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
         endpoint = `/me/drive/root:/${encodePath(path)}:/children?$top=${limit}&$orderby=name`;
       }
 
-      const data = await graphFetch(endpoint, agentId, boardId);
+      const data: GraphItemCollection = await graphFetch(endpoint, agentId, boardId);
       const items = (data.value || []).map(formatItem);
 
       const summary = items
@@ -122,7 +146,7 @@ export function createOneDriveMcpServer(agentId = null, boardId = null) {
       const limit = Math.min(top || 25, 100);
       const endpoint = `/me/drive/root/search(q='${encodeURIComponent(query)}')?$top=${limit}`;
 
-      const data = await graphFetch(endpoint, agentId, boardId);
+      const data: GraphItemCollection = await graphFetch(endpoint, agentId, boardId);
       const items = (data.value || []).map(formatItem);
 
       const summary = items

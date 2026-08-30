@@ -17,31 +17,32 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
 
-    // ── Strictness ratchet ────────────────────────────────────────────────
-    // Same contract as api/tsconfig.json: `strict` is off, but every flag it
-    // implies is listed with its measured cost so the next step is a decision.
-    // Counts are `npx tsc --noEmit --<flag>` as of the commit that added this.
-    // Turn one on, fix its errors, move its line up. Never move a line back.
-    "strict": false,
+    // ── Strict ────────────────────────────────────────────────────────────
+    // The ratchet is finished; `strict` covers all eight flags that were listed
+    // here one by one. Turning it off to dodge a single error gives up all
+    // eight at once.
+    //
+    // The frontend's hard part was strictNullChecks, and it was not a nullity
+    // problem: 651 of its 817 errors were `useState(null)` / `useState([])`
+    // with no type argument, across 128 sites, with no domain vocabulary to
+    // type them from — src/api.ts returned `Promise<any>` from every one of its
+    // ~150 methods. So the order was: map the real wire shapes off the API
+    // producers, write src/types from that, make the api client generic so
+    // every consumer inherits its type, then adopt. Typing the client RAISED
+    // the error count before it fell, which is the flag working: a real return
+    // type exposes every unguarded dereference downstream of it.
+    //
+    // No `!` was used, and none should be — a non-null assertion is the lie
+    // these flags exist to prevent. Same for `: any`: `npm run lint` pins the
+    // explicit-any count, so that shortcut breaks the build rather than passing
+    // quietly.
+    "strict": true,
 
-    // Enabled: clean today.
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "noImplicitThis": true,
-    "alwaysStrict": true,
-    "noFallthroughCasesInSwitch": true,
-
-    // Enabled: 12 useEffect callbacks now `return undefined` on their early
-    // path instead of falling off the end next to a cleanup return.
+    // Not implied by `strict`, so still spelled out:
     "noImplicitReturns": true,
-
-    // Not yet, cheapest first:
-    //   "useUnknownInCatchVariables": 62 errors (`err.message` on unknown).
-    //   "strictNullChecks": 797 errors.
-    //   "noImplicitAny": 1283 errors — do it after strictNullChecks.
-    "noUnusedLocals": false,
-    "noUnusedParameters": false,
-    "noImplicitAny": false
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
   },
   "include": ["src"],
   // Unit tests run on node's built-in runner (npm test) and import node: builtins,

@@ -1,7 +1,8 @@
 import { io } from 'socket.io-client';
+import type { Socket } from 'socket.io-client';
 import { WsEvents } from './socketEvents';
 
-let socket = null;
+let socket: Socket | null = null;
 
 /**
  * Open (or reuse) the realtime socket.
@@ -13,7 +14,7 @@ let socket = null;
  * bridge — and validates the handshake's `Origin` either way, which is the
  * socket's CSRF defence (a WebSocket handshake cannot carry a custom header).
  */
-export function connectSocket() {
+export function connectSocket(): Socket {
   // Return the existing socket if it's connected or still connecting. Identity
   // no longer changes under us: a re-login replaces the cookie, and the caller
   // recycles the socket explicitly via disconnectSocket().
@@ -67,11 +68,11 @@ export function connectSocket() {
   return sock;
 }
 
-export function getSocket() {
+export function getSocket(): Socket | null {
   return socket;
 }
 
-export function disconnectSocket() {
+export function disconnectSocket(): void {
   if (socket) {
     socket.disconnect();
     socket = null;

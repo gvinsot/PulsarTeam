@@ -1,9 +1,36 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { errorMessage } from '../../utils/errors';
 
+/**
+ * The status object every connect widget renders. Mirrors `IntegrationStatus`
+ * (api.ts) on the one key the two producer families disagree about:
+ *
+ *  - OAuth providers (onedrive, gmail, outlook, gdrive, slack, github) always
+ *    emit `configured` — api/src/routes/oauthProviderRoutes.ts:137.
+ *  - CREDENTIAL providers (jira, wordpress, s3) emit NO `configured` key at all —
+ *    api/src/routes/lib/credentialConnector.ts:93-108.
+ *
+ * So `configured` is `boolean | undefined`, not `boolean`. Its only reader is
+ * OAuthConnectWidget.tsx:189 (`if (!status.configured)`), which is on the OAuth
+ * half and tests it by truthiness, so absent and `false` already render alike.
+ */
 export interface ConnectStatus {
-  configured: boolean;
+  /** ABSENT on jira / wordpress / s3. */
+  configured: boolean | undefined;
   connected: boolean;
   [key: string]: any;
+}
+
+/**
+ * The props every connector widget accepts. A widget is scoped to an agent OR a
+ * board and reports the status it fetched back to its parent. Declared here, next
+ * to ConnectStatus, so MCP_CONNECTOR_MAP can be typed without importing a
+ * component module back into the widgets.
+ */
+export interface ConnectWidgetProps {
+  agentId?: string;
+  boardId?: string;
+  onStatusChange?: (status: ConnectStatus) => void;
 }
 
 /**
@@ -22,7 +49,7 @@ export function useConnectStatus(
 ) {
   const [status, setStatus] = useState<ConnectStatus>({ configured: false, connected: false });
   const [loading, setLoading] = useState(true);
-  const [statusError, setStatusError] = useState(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   const onStatusChangeRef = useRef(onStatusChange);
   useEffect(() => {
@@ -37,7 +64,7 @@ export function useConnectStatus(
       onStatusChangeRef.current?.(data);
     } catch (err) {
       console.error(`${name} status check failed:`, err);
-      setStatusError(err.message || 'Status check failed');
+      setStatusError(errorMessage(err) || 'Status check failed');
     } finally {
       setLoading(false);
     }

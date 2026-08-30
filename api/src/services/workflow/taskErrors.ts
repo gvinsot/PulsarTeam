@@ -54,7 +54,14 @@ interface MarkTaskErrorOptions {
  *
  * @returns true if the task was mutated (so caller can persist)
  */
-export function markTaskError(task: any, message: string, opts: MarkTaskErrorOptions): boolean {
+// `message` is optional-by-value on purpose: the workflow chain forwards an
+// ActionResult.message, which is absent on results that carry no text — the
+// `|| 'Unknown error'` below has always been the handler for that.
+export function markTaskError(
+  task: any,
+  message: string | undefined,
+  opts: MarkTaskErrorOptions
+): boolean {
   if (!task) return false;
   const errMessage = message || 'Unknown error';
   const now = new Date().toISOString();

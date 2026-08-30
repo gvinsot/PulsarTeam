@@ -6,6 +6,7 @@ import { loadSettingsCache } from './settings.js';
 import { refreshTokenSummaryCache } from './tokenUsage.js';
 import { loadOAuthTokens } from './oauthTokens.js';
 import { readSecretOptional } from '../../secrets.js';
+import { errorMessage } from '../../lib/errors.js';
 
 const { Pool } = pg;
 
@@ -44,7 +45,10 @@ export async function initDatabase(retries = 5, delayMs = 3000) {
 
       return true;
     } catch (err) {
-      console.error(`❌ Database connection failed (attempt ${attempt}/${retries}):`, err.message);
+      console.error(
+        `❌ Database connection failed (attempt ${attempt}/${retries}):`,
+        errorMessage(err)
+      );
       setPool(null);
       setDatabaseConnected(false);
       if (pool) {

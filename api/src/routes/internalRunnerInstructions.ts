@@ -1,4 +1,5 @@
 import express from 'express';
+import type { AgentManager } from '../services/agentManager/index.js';
 
 /**
  * Internal endpoint consumed by CLI runners to materialize the agent's base
@@ -13,7 +14,7 @@ import express from 'express';
  *
  * Auth is handled by authenticateCoderApiKey in index.ts.
  */
-export function internalRunnerInstructionsRoutes(agentManager) {
+export function internalRunnerInstructionsRoutes(agentManager: AgentManager) {
   const router = express.Router();
 
   router.get('/agents/:agentId', async (req, res) => {

@@ -1,4 +1,5 @@
 import express from 'express';
+import { errorMessage } from '../lib/errors.js';
 import {
   storeOAuthToken,
   resolveAccessToken,
@@ -92,7 +93,10 @@ async function fetchWithRetry(
   throw lastErr;
 }
 
-export async function getGitHubAccessTokenForAgent(agentId, boardId = null) {
+export async function getGitHubAccessTokenForAgent(
+  agentId: string | null,
+  boardId: string | null = null
+) {
   // GitHub tokens don't expire
   return resolveAccessToken('github', agentId, boardId);
 }
@@ -187,7 +191,7 @@ export async function getGitHubCredentialsForAgent(
   return null;
 }
 
-async function handleOAuthRedirect(req, res) {
+async function handleOAuthRedirect(req: express.Request, res: express.Response) {
   const error = req.query.error as string | undefined;
   if (error) {
     const desc = req.query.error_description || error;
@@ -269,7 +273,7 @@ async function handleOAuthRedirect(req, res) {
         login = user.login;
       }
     } catch (err) {
-      console.warn('[GitHub] Could not fetch user profile:', err.message);
+      console.warn('[GitHub] Could not fetch user profile:', errorMessage(err));
     }
 
     const { scopeType, scopeId } = resolveScope(

@@ -42,14 +42,17 @@ export const toolsMethods = {
     let inProgressTask: any = null;
     // Track the owning agent of inProgressTask as we resolve it, so we don't
     // have to re-scan _tasks for the owner later (the previous includes() pass).
-    let ownerAgentId: string = agentId;
+    // Nullable because a board-level task carries `agent_id = NULL`: resolving
+    // one through getTaskByIdPrefix / getTaskByActionRunningAgent genuinely
+    // yields a null owner, which the reads below already have to survive.
+    let ownerAgentId: string | null = agentId;
 
     // If explicit taskId provided, look it up directly (DB, by id or unique prefix)
     if (explicitTaskId) {
       const found = await getTaskByIdPrefix(explicitTaskId);
       if (found) {
         inProgressTask = found;
-        ownerAgentId = (found as any).agentId;
+        ownerAgentId = found.agentId;
       }
       if (!inProgressTask) {
         console.warn(
@@ -61,9 +64,9 @@ export const toolsMethods = {
     // Auto-detect: Priority 1: Task actively running via this agent (set by processTransition)
     if (!inProgressTask) {
       const found = await getTaskByActionRunningAgent(agentId);
-      if (found && this._isActiveTaskStatus((found as any).status)) {
+      if (found && this._isActiveTaskStatus(found.status)) {
         inProgressTask = found;
-        ownerAgentId = (found as any).agentId;
+        ownerAgentId = found.agentId;
       }
     }
     // Auto-detect: Priority 2/3: Active task this agent executes (assignee, or its
@@ -448,7 +451,7 @@ export const toolsMethods = {
           console.log(`🛡️ ${hookResult.message}`);
         }
 
-        const result: any = await executeTool(
+        const result = await executeTool(
           call.tool,
           call.args,
           agent.project,
@@ -544,7 +547,9 @@ export const toolsMethods = {
             tool: call.tool,
             args: call.args,
             success: true,
-            preview: result.result.slice(0, 300),
+            // Optional chain, not an assertion: `result` is declared optional on
+            // ToolResult because the failure branch may omit it.
+            preview: result.result?.slice(0, 300),
           });
         } else {
           console.warn(

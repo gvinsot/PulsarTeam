@@ -166,7 +166,9 @@ describe('CodeIndexService', () => {
       query: 'JWT authentication middleware',
     });
     assert.ok(results.length > 0);
-    const allText = results.map(r => (r.name + ' ' + (r.summary || '')).toLowerCase()).join(' ');
+    const allText = results
+      .map(r => (r.qualifiedName + ' ' + (r.summary || '')).toLowerCase())
+      .join(' ');
     assert.ok(/auth|token|jwt/.test(allText), 'Should find auth-related symbols');
   });
 

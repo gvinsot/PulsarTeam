@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 // source of truth), and this suite runs pool-less, so back the task accessors
 // with an in-memory Map. Must be registered BEFORE importing AgentManager. ──
 import { makeTaskDbFake } from './helpers/taskDbFake.js';
+import type { TaskHistoryEntry, TaskSecondaryRepo } from '../database/tasks.js';
 const realDb = await import('../database.js');
 const { rows, exports: taskDbFake } = makeTaskDbFake();
 mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
@@ -72,7 +73,7 @@ function addTask(mgr: any, text: any, status: any, boardId = 'board-1', extra: a
 
 /** Create a task owned by a specific agent (seeded into the DB fake). */
 function addTaskToAgent(
-  mgr: any,
+  _mgr: any,
   agentId: any,
   text: any,
   status: any,
@@ -92,12 +93,13 @@ function addTaskToAgent(
   return task;
 }
 
-/** Get agent by name */
+/** Get agent by name. Every call site looks up an agent that setup() seeded, so a
+ * miss is a broken fixture rather than a case to handle: fail loudly and name it. */
 function getAgent(mgr: any, name: string) {
   for (const [id, a] of mgr.agents) {
     if ((a as any).name === name) return { id, agent: a as any };
   }
-  return null;
+  return assert.fail(`agent "${name}" should have been registered by setup()`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -261,7 +263,7 @@ test('_evaluateCondition: idle_agent_available', async () => {
     { name: 'Creator', role: 'manager' },
     { name: 'Dev', role: 'developer' },
   ]);
-  const { id: devId, agent: dev } = getAgent(mgr, 'Dev');
+  const { agent: dev } = getAgent(mgr, 'Dev');
   const { id: creatorId } = getAgent(mgr, 'Creator');
 
   const task = { agentId: creatorId };
@@ -345,7 +347,7 @@ test('agentHasActiveTask excludes specific task when excludeTaskId is provided',
     { name: 'Creator', role: 'manager' },
     { name: 'Titles', role: 'titles-manager' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
   const { id: titlesId } = getAgent(mgr, 'Titles');
 
   const taskId = 'task-chain-1';
@@ -366,7 +368,7 @@ test('agentHasActiveTask detects cross-agent assignments', async () => {
     { name: 'Creator', role: 'manager' },
     { name: 'Worker', role: 'developer' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
   const { id: workerId } = getAgent(mgr, 'Worker');
 
   assert.equal(await mgr.agentHasActiveTask(workerId), false);
@@ -381,7 +383,7 @@ test('agentHasActiveTask detects cross-agent assignments', async () => {
 
 test('agentHasActiveTask: own tasks count', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  const { id: devId, agent: dev } = getAgent(mgr, 'Dev');
+  const { id: devId } = getAgent(mgr, 'Dev');
 
   assert.equal(await mgr.agentHasActiveTask(devId), false);
 
@@ -397,7 +399,7 @@ test('agentHasActiveTask: multiple tasks, exclude only one', async () => {
     { name: 'Creator', role: 'manager' },
     { name: 'Dev', role: 'developer' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
   const { id: devId } = getAgent(mgr, 'Dev');
 
   seedTask(creatorId, { id: 't1', text: 'Task 1', status: 'code', assignee: devId });
@@ -902,7 +904,7 @@ test('cross-agent task assignment: worker detects task from creator todoList', a
     { name: 'Creator', role: 'manager' },
     { name: 'Worker', role: 'developer' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
   const { id: workerId } = getAgent(mgr, 'Worker');
 
   // Task on creator's list, assigned to worker
@@ -923,7 +925,7 @@ test('multiple agents with same role: load balancing by task count', async () =>
     { name: 'PM1', role: 'product-manager' },
     { name: 'PM2', role: 'product-manager' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
   const { id: pm1Id } = getAgent(mgr, 'PM1');
   const { id: pm2Id } = getAgent(mgr, 'PM2');
 
@@ -950,7 +952,7 @@ test('_pendingOnEnter retry: _recheckConditionalTransitions finds pending on_ent
     { name: 'Creator', role: 'manager' },
     { name: 'Dev', role: 'developer' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
 
   // Task stuck in refine with pendingOnEnter
   const task = addTaskToAgent(mgr, creatorId, 'Stuck task', 'refine', 'board-1', {
@@ -997,7 +999,7 @@ test('actionRunning flags track which agent is working on a task', async () => {
     { name: 'Creator', role: 'manager' },
     { name: 'Dev', role: 'developer' },
   ]);
-  const { id: creatorId, agent: creator } = getAgent(mgr, 'Creator');
+  const { id: creatorId } = getAgent(mgr, 'Creator');
   const { id: devId } = getAgent(mgr, 'Dev');
 
   const task = addTaskToAgent(mgr, creatorId, 'Action task', 'code', 'board-1');
@@ -1021,7 +1023,7 @@ test('actionRunning flags track which agent is working on a task', async () => {
 
 test('workflow-managed statuses prevent task loop from resuming tasks', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
-  const { task, agentId } = addTask(mgr, 'Managed task', 'refine', 'board-1', {
+  const { task } = addTask(mgr, 'Managed task', 'refine', 'board-1', {
     startedAt: new Date().toISOString(),
   });
 
@@ -1043,7 +1045,6 @@ test('workflow-managed statuses prevent task loop from resuming tasks', async ()
 test('addTask creates task with correct defaults', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
-  const agent = mgr.agents.get(agentId);
 
   const task = await mgr.addTask(agentId, 'New task', null, null, { skipAutoRefine: true });
   assert.ok(task);
@@ -1102,10 +1103,10 @@ test('addTask normalizes secondary repos (dedupe, exclude primary, drop invalid)
     ],
   });
   assert.deepEqual(
-    task.secondaryRepos.map(r => r.fullName),
+    task.secondaryRepos.map((r: TaskSecondaryRepo) => r.fullName),
     ['org/lib-a', 'org/lib-b']
   );
-  assert.ok(task.secondaryRepos.every(r => r.provider === 'github'));
+  assert.ok(task.secondaryRepos.every((r: TaskSecondaryRepo) => r.provider === 'github'));
 });
 
 test('addTask defaults secondaryRepos to []', async () => {
@@ -1127,10 +1128,12 @@ test('updateTaskSecondaryRepos replaces the set, excludes primary, records histo
     { fullName: 'org/y' },
   ]);
   assert.deepEqual(
-    updated.secondaryRepos.map(r => r.fullName),
+    updated.secondaryRepos.map((r: TaskSecondaryRepo) => r.fullName),
     ['org/x', 'org/y']
   );
-  assert.ok(updated.history.some(h => h.type === 'edit' && h.field === 'secondaryRepos'));
+  assert.ok(
+    updated.history.some((h: TaskHistoryEntry) => h.type === 'edit' && h.field === 'secondaryRepos')
+  );
 });
 
 test('updateTaskRepo drops the new primary from existing secondaries', async () => {
@@ -1142,7 +1145,7 @@ test('updateTaskRepo drops the new primary from existing secondaries', async () 
   const updated = await mgr.updateTaskRepo(agentId, task.id, 'org/lib');
   assert.equal(updated.repoFullName, 'org/lib');
   assert.deepEqual(
-    updated.secondaryRepos.map(r => r.fullName),
+    updated.secondaryRepos.map((r: TaskSecondaryRepo) => r.fullName),
     []
   );
 });
@@ -1165,7 +1168,7 @@ test('task history accumulates across multiple status transitions', async () => 
     `expected at least 3 history entries, got ${task.history.length}`
   );
 
-  const statuses = task.history.map(h => h.status);
+  const statuses = task.history.map((h: TaskHistoryEntry) => h.status);
   assert.ok(statuses.includes('refine'));
   assert.ok(statuses.includes('code'));
   assert.ok(statuses.includes('done'));
@@ -1186,7 +1189,7 @@ test('error → recovery → completion preserves full history', async () => {
   assert.equal(task.status, 'done');
   assert.ok(task.completedAt);
 
-  const fromFields = task.history.map(h => h.from).filter(Boolean);
+  const fromFields = task.history.map((h: TaskHistoryEntry) => h.from).filter(Boolean);
   assert.ok(fromFields.includes('code'), 'should record code→error transition');
   assert.ok(fromFields.includes('error'), 'should record error→code recovery');
 });

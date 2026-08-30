@@ -1,4 +1,7 @@
 import express from 'express';
+import type { AgentManager } from '../services/agentManager/index.js';
+import type { SkillManager } from '../services/skillManager.js';
+import type { MCPManager } from '../services/mcpManager.js';
 
 /**
  * Internal endpoint consumed by CLI runners to materialize the agent's plugin
@@ -6,7 +9,11 @@ import express from 'express';
  *
  * Auth is handled by authenticateCoderApiKey in index.ts.
  */
-export function internalRunnerMcpRoutes(agentManager, skillManager, mcpManager) {
+export function internalRunnerMcpRoutes(
+  agentManager: AgentManager,
+  skillManager: SkillManager,
+  mcpManager: MCPManager
+) {
   const router = express.Router();
 
   router.get('/agents/:agentId', async (req, res) => {
