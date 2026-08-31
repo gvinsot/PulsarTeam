@@ -31,6 +31,7 @@ import {
 import { emitTaskUpdated, persistThenEmit } from '../taskMutations.js';
 import { applyTaskUpdate } from '../swarmApiMcp.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
+import { isValidRepoFullName } from '../taskRepos.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { isCliRunner } from '../runners.js';
 import { errorMessage } from '../../lib/errors.js';
@@ -350,7 +351,7 @@ async function executeAssignAgent(
     (agentId: any) => tasksByAgent.get(agentId) || [],
     task.id,
     task.boardId || null,
-    task.repoFullName || task.project || null
+    task.repoFullName || null
   ) as any;
 
   if (!agent) {
@@ -627,11 +628,13 @@ async function _ensureAgentOnTaskRepo(
   { agentManager, mode, agentId: _agentId }: EnsureRepoContext
 ): Promise<{ ok: true } | { ok: false; result: ActionResult }> {
   // Auto-switch agent to the task's repo if needed.
-  // Tasks carry two related fields: `repoFullName` ("owner/repo", set on
-  // creation/by GitHub sync) and `project` (set/edited via the task UI). We
-  // honor whichever is present so the agent ends up working on the same repo
-  // the task is about — not whatever it happened to be on last.
-  const taskRepo = task.repoFullName || task.project || null;
+  // ONLY `repoFullName` ("owner/repo", set on creation, by GitHub sync or via
+  // the task UI) designates a repo. `task.project` is NOT one: rowToTask
+  // hydrates it from `projects.name` through the board, so it is a human label
+  // ("Pulsar"). Using it as a fallback made every repo-less task on a named
+  // project try to switch to a repo that has no clone URL, and then fail the
+  // verify below. No repo on the task → keep the agent on its own repo.
+  const taskRepo = isValidRepoFullName(task.repoFullName) ? task.repoFullName : null;
   // Secondary repos are cloned alongside the primary. Push the keep-set to the
   // execution layer FIRST so every subsequent ensure (even the frequent
   // primary-only ones from tool batches) preserves them instead of pruning.
@@ -665,16 +668,18 @@ async function _ensureAgentOnTaskRepo(
       if (gitUrl) {
         gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
         await agentManager.executionManager.switchProject(agent.id, taskRepo, gitUrl, gitCreds);
+        // 3. Verify execution environment matches. Only meaningful after an
+        //    actual switch attempt — checking it when no switch was made turns
+        //    "we could not build a clone URL" into a hard task failure.
+        const envProject = agentManager.executionManager.getProject(agent.id);
+        if (envProject && envProject !== taskRepo) {
+          throw new Error(
+            `Execution environment is on "${envProject}" but task requires "${taskRepo}"`
+          );
+        }
       } else {
         console.warn(
           `[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`
-        );
-      }
-      // 3. Verify execution environment matches
-      const envProject = agentManager.executionManager.getProject(agent.id);
-      if (envProject && envProject !== taskRepo) {
-        throw new Error(
-          `Execution environment is on "${envProject}" but task requires "${taskRepo}"`
         );
       }
     }
@@ -770,7 +775,7 @@ async function executeRunAgent(
     ownerId,
     (agentId: any) => tasksByAgent.get(agentId) || [],
     task.boardId || null,
-    task.repoFullName || task.project || null
+    task.repoFullName || null
   ) as any;
 
   if (!agent) {
