@@ -21,7 +21,10 @@ import { asyncHandler } from '../lib/asyncHandler.js';
  */
 const SCOPE_TYPE = 'agent';
 // Allowlist the runners that use this so we don't store arbitrary blobs.
-const ALLOWED_RUNNERS = new Set(['hermes']);
+// - hermes:      ~/.hermes/{config.yaml,.env}
+// - claude-code: ~/.claude/settings.json (the model `/model` saves as the
+//                default for new sessions, plus effort / theme)
+const ALLOWED_RUNNERS = new Set(['hermes', 'claude-code']);
 
 export function internalRunnerConfigsRoutes() {
   const router = express.Router();

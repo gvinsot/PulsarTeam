@@ -48,7 +48,11 @@ CLIS = [
         "name": "claude-code",
         "binary": "claude",
         "cmd_prefix": ["claude"],
-        "required_flags": ["--model", "--effort"],
+        # No --model / --effort on purpose: Claude Code's model is chosen in the
+        # terminal (`/model` saves it to ~/.claude/settings.json, which the
+        # backend persists across restarts). A session-scoped --model flag beats
+        # that file, so pinning one here reverted the user's pick on every spawn.
+        "required_flags": [],
         "danger_flag": "--dangerously-skip-permissions",
     },
     {
