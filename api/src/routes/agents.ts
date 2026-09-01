@@ -1,7 +1,8 @@
 import express from 'express';
 import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
-import { getWorkflowForBoard } from '../services/configManager.js';
+import { getWorkflowForBoard, isAgentTypeEnabled } from '../services/configManager.js';
+import { AGENT_TYPE_LABELS, normalizeAgentType } from '../services/runners.js';
 import {
   getAllAgents,
   getAllBoards,
@@ -47,6 +48,18 @@ function sanitizeAgent(
     safe.apiKey = apiKey.length > 8 ? apiKey.slice(0, 4) + '...' + apiKey.slice(-4) : '••••';
   }
   return safe;
+}
+
+/**
+ * Reject a runner an admin has switched off in Admin Settings → Agent Types.
+ * Returns the error message, or null when the runner is allowed. An absent
+ * runner is the "Auto" choice and is never blocked here.
+ */
+async function disabledAgentTypeError(runner: unknown): Promise<string | null> {
+  const id = normalizeAgentType(runner);
+  if (!id) return null;
+  if (await isAgentTypeEnabled(id)) return null;
+  return `Agent type "${AGENT_TYPE_LABELS[id]}" is disabled by the administrator`;
 }
 
 export function agentRoutes(agentManager: AgentManager) {
@@ -260,6 +273,8 @@ export function agentRoutes(agentManager: AgentManager) {
         return res.status(403).json({ error: 'Basic users cannot create agents' });
       }
       const parsed: any = createAgentSchema.parse(req.body);
+      const createBlocked = await disabledAgentTypeError(parsed.runner);
+      if (createBlocked) return res.status(400).json({ error: createBlocked });
       // Agents are scoped to a board (not a user). The boardId comes from the request body.
       // We still set ownerId for backward compat / token tracking.
       parsed.ownerId = req.user.userId;
@@ -282,6 +297,16 @@ export function agentRoutes(agentManager: AgentManager) {
         return res.status(403).json({ error: 'Basic users cannot modify agents' });
       }
       const parsed = updateAgentSchema.parse(req.body);
+      // A disabled type only blocks a change TO it: agents already running on a
+      // type an admin has since switched off keep working and stay editable.
+      if (
+        parsed.runner &&
+        normalizeAgentType(parsed.runner) !==
+          normalizeAgentType(agentManager.getById(req.params.id)?.runner)
+      ) {
+        const updateBlocked = await disabledAgentTypeError(parsed.runner);
+        if (updateBlocked) return res.status(400).json({ error: updateBlocked });
+      }
       // Only admins can change ownership
       if ('ownerId' in parsed && req.user.role !== 'admin') {
         delete parsed.ownerId;

@@ -148,11 +148,71 @@ from auth_error_detect import (
 # assistant's own streamed markdown (blockquotes) and would falsely read as
 # "ready" while the CLI is still working. The caret + the input-box hint text
 # only appear when the CLI has returned to an idle prompt.
+#
+# Matching is case-insensitive, so every hint/busy marker below is stored
+# lowercased.
 _INPUT_READY_HINTS = (
     "▌",                # ▌ the "type a message" caret (idle input box)
-    "Type / for commands",
-    "Try \"",
+    "type / for commands",
+    "try \"",
 )
+
+
+@dataclass(frozen=True)
+class _ReadyRecipe:
+    """How to recognise "this CLI is back at its input box" on screen.
+
+    `hints` are sentinels that must be present. `busy` are sentinels that veto
+    a match even when a hint is present — they mark a screen that renders the
+    input box but cannot accept a prompt (mid-response, or a modal on top).
+
+    A recipe WITH busy markers is evaluated one repaint frame at a time (see
+    wait_until_input_ready): a hint and its vetoing busy marker share the same
+    frame, so accumulating bytes across frames would let a stale idle frame
+    out-vote the current busy one.
+    """
+    hints: tuple[str, ...]
+    busy: tuple[str, ...] = ()
+
+
+_DEFAULT_READY_RECIPE = _ReadyRecipe(hints=_INPUT_READY_HINTS)
+
+# Per-CLI overrides, keyed like _INTERRUPT_RECIPES on the executable name.
+#
+# opencode renders NONE of the default hints: its caret is ┃ (U+2503, not ▌),
+# its placeholder is `Ask anything... "…"` and its command hint is
+# `ctrl+p commands`. Verified against opencode 1.17.12 and 1.18.25 — the
+# footer's `ctrl+p commands` is the one sentinel present on every screen
+# (cold start, idle-after-turn and mid-response), which is why it is paired
+# with busy markers instead of used alone:
+#   • `esc interrupt` — only rendered while a turn is streaming.
+#   • `update available` — the self-update modal's title, shown whenever the
+#     installed opencode is behind the latest npm release; it steals focus and
+#     would swallow the prompt. Its body ("Would you like to update now?") is
+#     wrapped mid-sentence by the modal, so the single-line title is the only
+#     dependable marker. The OpenCode backend disables auto-update so it should
+#     never appear, but an agent HOME provisioned by an older runner can.
+_READY_RECIPES: dict[str, _ReadyRecipe] = {
+    "opencode": _ReadyRecipe(
+        hints=("ctrl+p commands",),
+        busy=("esc interrupt", "update available"),
+    ),
+}
+
+
+def _ready_recipe(cmd: list[str]) -> _ReadyRecipe:
+    executable = os.path.basename(cmd[0]).lower() if cmd else ""
+    return _READY_RECIPES.get(executable, _DEFAULT_READY_RECIPE)
+
+
+def screen_is_input_ready(screen: str, recipe: _ReadyRecipe) -> bool:
+    """Classify one ANSI-stripped, lowercased TUI frame as input-ready.
+
+    Split out of wait_until_input_ready so the recipes can be checked against
+    recorded frames of the real CLIs without spawning one."""
+    if any(marker in screen for marker in recipe.busy):
+        return False
+    return any(hint in screen for hint in recipe.hints)
 
 
 def _strip_ansi(text: str) -> str:
@@ -817,7 +877,14 @@ class PtySession:
         would otherwise signal "ready" while the CLI is mid-turn and let
         back-to-back workflow prompts interleave. An idle (quiescent) TUI
         emits no new bytes on its own — the tmux repaint below re-emits the
-        current screen so a genuinely idle prompt is still seen immediately."""
+        current screen so a genuinely idle prompt is still seen immediately.
+
+        A CLI whose recipe carries busy markers (opencode) renders its
+        input-box hint even mid-response, so for those the scan is re-based on
+        every iteration: each pass repaints and looks at that one frame, where
+        the hint and its vetoing busy marker appear together."""
+        recipe = _ready_recipe(self.cmd)
+        per_frame = bool(recipe.busy)
         start_total = self._auto_answer_total
         # Ask tmux to repaint the authoritative current screen (no-op without
         # tmux): an idle input box re-renders its caret as fresh bytes.
@@ -826,6 +893,12 @@ class PtySession:
         while time.monotonic() < deadline:
             if self._closed or not self.is_alive():
                 return False
+            if per_frame:
+                # Re-base on the bytes of the frame we are about to request, so
+                # a stale idle frame can't out-vote the current busy one.
+                start_total = self._auto_answer_total
+                await self.request_repaint()
+                await asyncio.sleep(0.2)
             fed_since = self._auto_answer_total - start_total
             if fed_since > 0:
                 # Slice by bytes-fed (the buffer is trimmed, so offsets shift),
@@ -834,10 +907,11 @@ class PtySession:
                 window = min(len(self._auto_answer_buf), fed_since + 32)
                 tail = _strip_ansi(
                     self._auto_answer_buf[-window:].decode("utf-8", errors="replace")
-                )[-4096:]
-                if any(h in tail for h in _INPUT_READY_HINTS):
+                )[-4096:].lower()
+                if screen_is_input_ready(tail, recipe):
                     return True
-            await asyncio.sleep(0.2)
+            if not per_frame:
+                await asyncio.sleep(0.2)
         return False
 
     async def _read_loop(self) -> None:

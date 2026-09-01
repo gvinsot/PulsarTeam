@@ -31,3 +31,43 @@ export const SELF_COMPLETING_RUNNERS = new Set<string>(
 export function isCliRunner(agent: any): boolean {
   return CLI_RUNNERS.has(String(agent?.runner || '').toLowerCase());
 }
+
+// ─── Agent types (runners offered in the UI) ─────────────────────────────────
+//
+// The runner ids a user can actually pick when creating or editing an agent.
+// This is CLI_RUNNER_IDS minus the deprecated 'coder' alias, plus 'sandbox'
+// (the in-process Pulsar runtime, which is not a PTY runner). Admin Settings →
+// Agent Types toggles these on and off globally; see `disabledAgentTypes` in
+// configManager.
+export const AGENT_TYPE_IDS = [
+  'sandbox',
+  'claudecode',
+  'opencode',
+  'hermes',
+  'openclaw',
+  'codex',
+  'aider',
+] as const;
+export type AgentTypeId = (typeof AGENT_TYPE_IDS)[number];
+
+export const AGENT_TYPE_LABELS: Record<AgentTypeId, string> = {
+  sandbox: 'Pulsar Sandbox',
+  claudecode: 'Claude Code CLI',
+  opencode: 'Opencode CLI',
+  hermes: 'Hermes CLI',
+  openclaw: 'OpenClaw CLI',
+  codex: 'OpenAI Codex CLI',
+  aider: 'Aider CLI',
+};
+
+/**
+ * Fold a stored runner value onto the agent-type id it is toggled by, so an
+ * agent still carrying the legacy 'coder' alias is governed by the Claude Code
+ * switch. Returns '' for an empty/unknown runner ("Auto"), which no toggle
+ * covers.
+ */
+export function normalizeAgentType(runner: unknown): AgentTypeId | '' {
+  const id = String(runner || '').toLowerCase();
+  const mapped = id === 'coder' ? 'claudecode' : id;
+  return (AGENT_TYPE_IDS as readonly string[]).includes(mapped) ? (mapped as AgentTypeId) : '';
+}

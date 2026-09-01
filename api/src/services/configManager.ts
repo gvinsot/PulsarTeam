@@ -1,5 +1,6 @@
 import { getPool, getAllBoards, getBoardById } from './database.js';
 import { errorMessage } from '../lib/errors.js';
+import { AGENT_TYPE_IDS, normalizeAgentType, type AgentTypeId } from './runners.js';
 import type {
   BoardWorkflow,
   WorkflowConfig,
@@ -32,6 +33,11 @@ const DEFAULTS = {
   ttsApiKey: '',
   // Default TTS voice / mode for external voice agents
   ttsVoiceId: '',
+  // Comma-separated agent-type ids (see AGENT_TYPE_IDS) that are switched OFF
+  // for every user in Admin Settings → Agent Types. Stored as the DISABLED set
+  // rather than the enabled one so a runner added by a later release is
+  // available by default instead of silently missing.
+  disabledAgentTypes: '',
 };
 
 /**
@@ -113,6 +119,44 @@ export async function getReminderConfig() {
     cooldownMs: Math.max(0, cooldownMinutes) * 60 * 1000,
     cooldownMinutes: Math.max(0, cooldownMinutes),
   };
+}
+
+// ── Agent types (globally enabled/disabled runners) ───────────────────────────
+
+/**
+ * Split the stored `disabledAgentTypes` CSV into the set of agent-type ids that
+ * are switched off. Unknown ids are dropped so a runner removed from
+ * AGENT_TYPE_IDS by a later release stops disabling anything, and 'coder' folds
+ * onto 'claudecode' like everywhere else.
+ */
+export function parseDisabledAgentTypes(raw: string | undefined): Set<AgentTypeId> {
+  const disabled = new Set<AgentTypeId>();
+  for (const part of String(raw || '').split(',')) {
+    const id = normalizeAgentType(part.trim());
+    if (id) disabled.add(id);
+  }
+  return disabled;
+}
+
+/** Serialise back to the stored CSV form, in AGENT_TYPE_IDS order. */
+export function serializeDisabledAgentTypes(disabled: Iterable<string>): string {
+  const set = parseDisabledAgentTypes([...disabled].join(','));
+  return AGENT_TYPE_IDS.filter(id => set.has(id)).join(',');
+}
+
+export async function getDisabledAgentTypes(): Promise<Set<AgentTypeId>> {
+  const settings = await getSettings();
+  return parseDisabledAgentTypes(settings.disabledAgentTypes);
+}
+
+/**
+ * Whether an agent may run on `runner`. An empty/unknown runner is the "Auto"
+ * choice, which no toggle covers — it is always allowed and resolved elsewhere.
+ */
+export async function isAgentTypeEnabled(runner: unknown): Promise<boolean> {
+  const id = normalizeAgentType(runner);
+  if (!id) return true;
+  return !(await getDisabledAgentTypes()).has(id);
 }
 
 // ── Workflow configuration (database-backed) ──────────────────────────────────

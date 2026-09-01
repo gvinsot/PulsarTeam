@@ -3,6 +3,8 @@ import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucid
 import { api } from '../api';
 import type { AgentBatchCreated, AgentCreated } from '../api';
 import { isRealtimeLlm } from '../utils/llmConfig';
+import { useEnabledAgentTypes } from '../hooks/useEnabledAgentTypes';
+import { AGENT_TYPE_OPTION_LABELS, AGENT_TYPE_SELECT_ORDER } from '../utils/agentTypes';
 import type { Agent, AgentTemplate, BoardListItem, LlmConfig, RepoPickerOption } from '../types';
 
 /**
@@ -82,6 +84,23 @@ export default function AddAgentModal({
     batchSize: 2,
   });
   const [creating, setCreating] = useState(false);
+  const {
+    enabledAgentTypes,
+    isAgentTypeEnabled,
+    loaded: agentTypesLoaded,
+  } = useEnabledAgentTypes();
+
+  // The default runner ('opencode') may itself be one an admin switched off, and
+  // a disabled runner is rejected on create — so once the toggles are known, move
+  // the form onto an available type ('' = Auto when none is left).
+  useEffect(() => {
+    if (!agentTypesLoaded) return;
+    setForm(prev =>
+      !prev.runner || isAgentTypeEnabled(prev.runner)
+        ? prev
+        : { ...prev, runner: enabledAgentTypes[0] || '' }
+    );
+  }, [agentTypesLoaded, enabledAgentTypes, isAgentTypeEnabled]);
 
   useEffect(() => {
     api
@@ -587,13 +606,11 @@ export default function AddAgentModal({
                     className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
                   >
                     <option value="">Auto (based on LLM config)</option>
-                    <option value="sandbox">Pulsar Agent (sandbox)</option>
-                    <option value="claudecode">Claude Code Agent</option>
-                    <option value="openclaw">OpenClaw Agent</option>
-                    <option value="hermes">Hermes Agent</option>
-                    <option value="opencode">OpenCode Agent</option>
-                    <option value="aider">Aider Agent</option>
-                    <option value="codex">OpenAI Codex Agent</option>
+                    {AGENT_TYPE_SELECT_ORDER.filter(isAgentTypeEnabled).map(id => (
+                      <option key={id} value={id}>
+                        {AGENT_TYPE_OPTION_LABELS[id]}
+                      </option>
+                    ))}
                   </select>
                   <p className="text-[11px] text-dark-500 mt-1">
                     Default is OpenCode. "Auto" picks a runner from the LLM provider.

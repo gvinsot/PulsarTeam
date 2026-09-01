@@ -487,6 +487,10 @@ export interface Settings {
   /** Same masking as sttApiKey. */
   ttsApiKey: string;
   ttsVoiceId: string;
+  /** Comma-separated agent-type ids switched OFF for every user in Admin
+   *  Settings → Agent Types. '' = every type available. Stored as the disabled
+   *  set so a runner added later is available by default. */
+  disabledAgentTypes: string;
 }
 
 /**

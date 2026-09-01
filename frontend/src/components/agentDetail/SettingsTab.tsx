@@ -3,6 +3,12 @@ import { Save, Trash2, RotateCw, Power, Users } from 'lucide-react';
 import { api } from '../../api';
 import type { AgentWriteInput } from '../../api';
 import CodexAuthSection from './CodexAuthSection';
+import { useEnabledAgentTypes } from '../../hooks/useEnabledAgentTypes';
+import {
+  AGENT_TYPE_OPTION_LABELS,
+  AGENT_TYPE_SELECT_ORDER,
+  normalizeAgentType,
+} from '../../utils/agentTypes';
 import type {
   Agent,
   AgentRunner,
@@ -99,6 +105,15 @@ export default function SettingsTab({
   const [llmConfigs, setLlmConfigs] = useState<LlmConfig[]>([]);
   const [boards, setBoards] = useState<BoardListItem[]>([]);
   const [ttsAvailable, setTtsAvailable] = useState(false);
+  const { isAgentTypeEnabled } = useEnabledAgentTypes();
+
+  // The runner <select> lists the agent types an admin has left enabled, plus
+  // the one this agent already runs on when that has since been switched off —
+  // otherwise the select would render blank and silently re-point the agent on
+  // the next save. The API accepts an unchanged runner for the same reason.
+  const runnerOptions = AGENT_TYPE_SELECT_ORDER.filter(
+    id => isAgentTypeEnabled(id) || normalizeAgentType(agent.runner) === id
+  );
 
   useEffect(() => {
     api
@@ -148,10 +163,18 @@ export default function SettingsTab({
   const resolveAutoRunner = (llmConfigId: string): AgentRunner => {
     const sel = llmConfigs.find(c => c.id === llmConfigId);
     const provider = (sel?.provider || '').toLowerCase();
-    if (provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid')
-      return 'claudecode';
-    if (provider === 'openai') return 'codex';
-    return 'sandbox';
+    const byProvider: AgentRunner =
+      provider === 'anthropic' || provider === 'claude' || provider === 'claude-paid'
+        ? 'claudecode'
+        : provider === 'openai'
+          ? 'codex'
+          : 'sandbox';
+    // "Auto" is resolved client-side on save, so it must not land on a type an
+    // admin switched off — the API would reject the save. Fall back to the
+    // first runner still on offer (runnerOptions is never empty in practice:
+    // it keeps the agent's current runner even when disabled).
+    if (isAgentTypeEnabled(byProvider)) return byProvider;
+    return runnerOptions[0] || byProvider;
   };
 
   // Whether a given LLM config may be paired with a given runner. Claude Code
@@ -384,13 +407,11 @@ export default function SettingsTab({
             className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
           >
             <option value="">Auto (based on LLM config)</option>
-            <option value="sandbox">Pulsar Agent (sandbox)</option>
-            <option value="claudecode">Claude Code Agent</option>
-            <option value="openclaw">OpenClaw Agent</option>
-            <option value="hermes">Hermes Agent</option>
-            <option value="opencode">OpenCode Agent</option>
-            <option value="aider">Aider Agent</option>
-            <option value="codex">OpenAI Codex Agent</option>
+            {runnerOptions.map(id => (
+              <option key={id} value={id}>
+                {AGENT_TYPE_OPTION_LABELS[id]}
+              </option>
+            ))}
           </select>
           <p className="text-[11px] text-dark-500 mt-1">
             Choose the container runtime for this agent first, then pick a compatible model below.

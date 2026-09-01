@@ -181,8 +181,15 @@ def _merge_opencode_config(
     clear_model: bool = False,
     permission_override: Optional[Any] = None,
     clear_permission: bool = False,
+    disable_autoupdate: bool = False,
 ) -> Optional[str]:
-    if not managed and not clear_model and permission_override is None and not clear_permission:
+    if (
+        not managed
+        and not clear_model
+        and permission_override is None
+        and not clear_permission
+        and not disable_autoupdate
+    ):
         return existing_raw
     try:
         existing = json.loads(existing_raw) if existing_raw else {}
@@ -196,11 +203,14 @@ def _merge_opencode_config(
         and not managed
         and permission_override is None
         and not clear_permission
+        and not disable_autoupdate
         and "model" not in existing
     ):
         return existing_raw
 
     merged = {**existing}
+    if disable_autoupdate:
+        merged["autoupdate"] = False
     if managed:
         merged["$schema"] = managed.get("$schema", existing.get("$schema"))
     if clear_model:
@@ -330,6 +340,14 @@ class OpenCodeBackend(CliBackend):
         # Skip LLM env-var injection (agent_id=None) — all provider config is
         # delivered via the config file written below, not via env vars.
         env = super()._agent_env(agent_user, None)
+        # The runner image pins whatever opencode-ai npm resolved at build time,
+        # so any image older than the latest release makes the TUI open on a
+        # focus-stealing "A new release vX is available. Would you like to
+        # update now?" modal that swallows the first injected prompt (and a
+        # self-update inside a read-only-ish container is not what we want
+        # anyway). Belt and braces: the env var covers the spawns where the
+        # config file could not be written (no HOME / unwritable dir).
+        env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
         llm_config = self._get_llm_config(agent_id)
         model = _resolve_opencode_model(llm_config)
         managed = _opencode_provider_config(llm_config, model)
@@ -376,6 +394,7 @@ class OpenCodeBackend(CliBackend):
             clear_model=not model,
             permission_override=permission_override,
             clear_permission=clear_permission,
+            disable_autoupdate=True,
         )
         if merged and merged != existing_json:
             # When the spawn keeps its parent UID (root via runAsRoot), don't

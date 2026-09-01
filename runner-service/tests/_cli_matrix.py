@@ -108,17 +108,26 @@ async def _no_agent_user(agent_id, owner_id=None):
     return None
 
 
-def build_recipe(name, tmp_path, monkeypatch, uid=None):
+_UNSET = object()
+
+
+def build_recipe(name, tmp_path, monkeypatch, uid=None, llm=_UNSET, agent_id=None):
     """Return the `prepare_interactive` recipe for backend `name`.
 
     `uid` controls the per-agent UID the CLI subprocess would drop to: `None`
     means runAsRoot (the parent's UID). Claude's launch command depends on this
     (it drops `--dangerously-skip-permissions` when it would run as root), so
     the Claude-specific tests pass a non-root UID explicitly.
+
+    `llm` overrides the per-agent LLM config `_BACKENDS` pins for this backend;
+    pass None to build the "Default LLM" recipe (no `--model`, the CLI picks its
+    own default). `agent_id` overrides the derived id so a caller can keep the
+    HOME it provisioned addressable after the call.
     """
-    mod_name, cls_name, llm = _BACKENDS[name]
+    mod_name, cls_name, default_llm = _BACKENDS[name]
+    llm = default_llm if llm is _UNSET else llm
     module = importlib.import_module(mod_name)
-    agent_id = f"agent-{name}"
+    agent_id = agent_id or f"agent-{name}"
     _agent_users[agent_id] = {"home": str(tmp_path), "uid": uid, "gid": uid}
     try:
         if name == "claude-code":

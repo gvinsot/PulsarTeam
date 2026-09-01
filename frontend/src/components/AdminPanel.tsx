@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { X, Users, Crown, Settings, Cpu, LayoutGrid, UserX } from 'lucide-react';
+import { X, Users, Crown, Settings, Cpu, LayoutGrid, UserX, Bot } from 'lucide-react';
 import UsersTab from './admin/UsersTab';
 import SettingsTab from './admin/SettingsTab';
 import LlmConfigsTab from './admin/LlmConfigsTab';
+import AgentTypesTab from './admin/AgentTypesTab';
 import BoardsTab from './admin/BoardsTab';
 import OrphanAgentsTab from './admin/OrphanAgentsTab';
 import type { ImpersonateResponse, ShowToastFn } from '../types';
@@ -11,6 +12,7 @@ const TABS = [
   { id: 'users', label: 'Users', icon: Users },
   { id: 'settings', label: 'Settings', icon: Settings },
   { id: 'llm', label: 'LLM Models', icon: Cpu },
+  { id: 'agentTypes', label: 'Agent Types', icon: Bot },
   { id: 'boards', label: 'Boards', icon: LayoutGrid },
   { id: 'orphans', label: 'Orphan Agents', icon: UserX },
 ];
@@ -76,6 +78,9 @@ export default function AdminPanel({ onClose, onImpersonate, showToast }: AdminP
           </div>
           <div className={activeTab === 'llm' ? 'space-y-6' : 'hidden'}>
             <LlmConfigsTab active={activeTab === 'llm'} showToast={showToast} />
+          </div>
+          <div className={activeTab === 'agentTypes' ? 'space-y-6' : 'hidden'}>
+            <AgentTypesTab active={activeTab === 'agentTypes'} showToast={showToast} />
           </div>
           <div className={activeTab === 'boards' ? 'space-y-6' : 'hidden'}>
             <BoardsTab active={activeTab === 'boards'} showToast={showToast} />
