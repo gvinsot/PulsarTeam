@@ -17,9 +17,10 @@ from typing import AsyncIterator, Optional
 from config import (
     RUNNER_MODEL, CLI_CWD, TIMEOUT, PROJECTS_DIR, VERBOSE, logger,
 )
-from agent_user import get_agent_project_dir, ensure_agent_user
+from agent_user import get_agent_project_dir, ensure_agent_user, resolve_agent_home
 from .base import RunnerBackend
 from .claude_token_store import get_subprocess_kwargs, run_blocking
+from .runner_config_store import PersistedConfigMixin
 from .runner_llm_config import fetch_agent_llm_config
 from usage_reporter import report_usage
 
@@ -106,7 +107,7 @@ def resolve_model_spec(llm_config: Optional[dict], provider_map: Optional[dict] 
     return model
 
 
-class CliBackend(RunnerBackend):
+class CliBackend(PersistedConfigMixin, RunnerBackend):
     """Base class for CLI-driven runners.
 
     Override `cli_command`, `pass_prompt_via_stdin`, and `_build_command`
@@ -535,6 +536,10 @@ class CliBackend(RunnerBackend):
         # Off-loop: these helpers do blocking team-api fetches. Resolving the
         # env next also warms the per-agent LLM config cache for the
         # _interactive_cmd / _cli_model hooks below.
+        # Restore the user's own CLI config (model picked in the terminal, …)
+        # BEFORE the MCP/instruction writers, so their managed blocks merge on
+        # top of the restored file instead of into a blank one.
+        await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
         self._post_configure_interactive(agent_user, effective_user, agent_id)
@@ -551,6 +556,9 @@ class CliBackend(RunnerBackend):
             "env": env,
             "preexec_fn": kwargs.get("preexec_fn"),
         }
+        # Config persistence first, so a backend with bespoke watcher needs can
+        # still override the hooks from _interactive_extras.
+        recipe.update(self._config_persistence_extras(agent_id, effective_user))
         recipe.update(self._interactive_extras(agent_id, owner_id, agent_user, effective_user))
         return recipe
 
@@ -573,6 +581,10 @@ class CliBackend(RunnerBackend):
         # Materialize MCP tools into the CLI's native config BEFORE building the
         # command (some backends, e.g. hermes, branch their argv on whether MCP
         # is present). Off-loop: these helpers do blocking team-api fetches.
+        # Restore the user's own CLI config (model picked in the terminal, …)
+        # BEFORE the MCP/instruction writers, so their managed blocks merge on
+        # top of the restored file instead of into a blank one.
+        await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         # Materialize the agent's base instructions into the CLI's native global
         # instructions file (CLAUDE.md / AGENTS.md) so they're in context even
@@ -659,6 +671,10 @@ class CliBackend(RunnerBackend):
         effective_user = self._resolve_effective_user(agent_id, agent_user)
         # See run_sync: write MCP config + base instructions before building
         # argv, and resolve everything that hits team-api off-loop.
+        # Restore the user's own CLI config (model picked in the terminal, …)
+        # BEFORE the MCP/instruction writers, so their managed blocks merge on
+        # top of the restored file instead of into a blank one.
+        await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
         env = await run_blocking(self._agent_env, effective_user, agent_id)

@@ -299,6 +299,13 @@ class OpenCodeBackend(CliBackend):
     pass_prompt_via_stdin = False  # opencode takes the message as positional arg
     supports_interactive_terminal = True
 
+    # The model a user picks in the TUI (`/models`) is NOT written to
+    # config.json — opencode records it in its own state dir as
+    # {"recent":[{"providerID":…,"modelID":…}], "favorite":…, "variant":…}
+    # (verified on 1.17.12 / 1.18.25). config.json is ours to regenerate, this
+    # file is the user's, so this is the one to carry across restarts.
+    persisted_config_files = (".local/state/opencode/model.json",)
+
     def _configure_mcp(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
         # Writes the `mcp` block into ~/.config/opencode/config.json. Runs
         # before _agent_env (which rewrites the same file) — _merge_opencode_config

@@ -70,7 +70,7 @@ from .codex_oauth import (
 )
 from agent_user import ensure_agent_user
 from .claude_token_store import get_subprocess_kwargs, run_blocking
-from .runner_mcp_config import configure_codex_mcp
+from .runner_mcp_config import configure_codex_mcp, strip_codex_managed_block
 from .runner_instructions_config import configure_codex_instructions
 
 
@@ -101,6 +101,11 @@ class CodexBackend(CliBackend):
     supports_token_set = True      # accepts a full auth.json blob via /auth/token
     supports_interactive_terminal = True  # `codex` (no `exec` subcommand) is a real TUI
 
+    # config.toml is where codex saves the model the user picks with `/model`,
+    # plus their project trust decisions. auth.json is NOT listed — it has its
+    # own owner-scoped store and creds watcher.
+    persisted_config_files = (".codex/config.toml",)
+
     def __init__(self):
         super().__init__()
         # Per-run token counts keyed by the JSONL submission id (the top-level
@@ -108,6 +113,15 @@ class CodexBackend(CliBackend):
         # backend instance is a process-wide singleton serving every agent, so
         # unkeyed state would cross-contaminate concurrent streams.
         self._pending_tokens: dict[str, dict] = {}
+
+    def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
+        """Persist config.toml without our managed MCP block: configure_codex_mcp
+        rewrites it at every spawn and it embeds a short-lived gateway token, so
+        saving it would only archive a stale credential."""
+        if name != "config.toml":
+            return raw
+        stripped = strip_codex_managed_block(raw).strip()
+        return stripped + "\n" if stripped else None
 
     def _configure_mcp(self, agent_user, agent_id) -> None:
         # Writes [mcp_servers.*] tables into ~/.codex/config.toml. NOTE: HTTP
@@ -136,7 +150,10 @@ class CodexBackend(CliBackend):
 
         agent_user = await ensure_agent_user(agent_id, owner_id=owner_id) if agent_id else None
         effective_user = self._resolve_effective_user(agent_id, agent_user)
-        # Off-loop: both helpers do blocking team-api fetches.
+        # Off-loop: these helpers do blocking team-api fetches. The restore runs
+        # first so the MCP block below merges into the user's own config.toml
+        # (their `/model` pick) rather than into a blank file.
+        await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         await run_blocking(self._configure_mcp, effective_user, agent_id)
         await run_blocking(self._configure_instructions, effective_user, agent_id)
 
@@ -191,7 +208,7 @@ class CodexBackend(CliBackend):
 
         creds_watch_path = auth_file_path(captured_user) if captured_user else os.path.expanduser("~/.codex/auth.json")
 
-        return {
+        recipe = {
             "cmd": cmd,
             "cwd": cwd,
             "env": env,
@@ -200,6 +217,10 @@ class CodexBackend(CliBackend):
             "creds_on_change": _persist_blob,
             "creds_dedup_key": _creds_dedup_key,
         }
+        # This prepare_interactive doesn't go through the CliBackend template,
+        # so the config-persistence watcher has to be wired in explicitly.
+        recipe.update(self._config_persistence_extras(agent_id, effective_user))
+        return recipe
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 

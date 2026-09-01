@@ -20,11 +20,25 @@ import { asyncHandler } from '../lib/asyncHandler.js';
  * Auth: shared CODER_API_KEY (authenticateCoderApiKey in index.ts).
  */
 const SCOPE_TYPE = 'agent';
-// Allowlist the runners that use this so we don't store arbitrary blobs.
+// Allowlist the runners that use this so we don't store arbitrary blobs. Each
+// entry is the file(s) holding what the user picked inside that CLI's terminal
+// — above all their model, which a stateless restart would otherwise reset:
 // - hermes:      ~/.hermes/{config.yaml,.env}
-// - claude-code: ~/.claude/settings.json (the model `/model` saves as the
-//                default for new sessions, plus effort / theme)
-const ALLOWED_RUNNERS = new Set(['hermes', 'claude-code']);
+// - claude-code: ~/.claude/settings.json (what `/model` saves as the default
+//                for new sessions, plus effort / theme)
+// - opencode:    ~/.local/state/opencode/model.json (the TUI's model picker)
+// - codex:       ~/.codex/config.toml (`/model` + project trust)
+// - openclaw:    ~/.openclaw/openclaw.json
+// - aider:       ~/.aider.conf.yml (hand-written; aider has no in-chat "save
+//                my model" flow)
+const ALLOWED_RUNNERS = new Set([
+  'hermes',
+  'claude-code',
+  'opencode',
+  'codex',
+  'openclaw',
+  'aider',
+]);
 
 export function internalRunnerConfigsRoutes() {
   const router = express.Router();

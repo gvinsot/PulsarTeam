@@ -179,6 +179,30 @@ class OpenClawBackend(CliBackend):
     pass_prompt_via_stdin = False
     supports_interactive_terminal = True
 
+    # openclaw.json is where the CLI saves what the user configures in the
+    # terminal (model/provider, preferences). exec-approvals.json is NOT listed:
+    # configure_openclaw_permissions owns it end to end.
+    persisted_config_files = (".openclaw/openclaw.json",)
+
+    def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
+        """Drop the keys the runner rewrites at every spawn:
+          • `mcp`   — configure_openclaw_mcp, and it carries a short-lived
+                      gateway token we must not archive;
+          • `tools` — configure_openclaw_permissions (tools.exec.mode), which
+                      must follow the agent's CURRENT permissions, not a copy
+                      taken before they were tightened.
+        """
+        if name != "openclaw.json":
+            return raw
+        try:
+            data = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        user_owned = {k: v for k, v in data.items() if k not in ("mcp", "tools")}
+        return json.dumps(user_owned, indent=2) if user_owned else None
+
     def _configure_mcp(self, agent_user, agent_id) -> None:
         # Writes mcp.servers into ~/.openclaw/openclaw.json (schema verified
         # against openclaw 2026.5.27) — see configure_openclaw_mcp.

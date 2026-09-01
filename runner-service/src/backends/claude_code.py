@@ -43,7 +43,7 @@ from .claude_oauth import (
     token_http_request,
 )
 from .claude_interactive import run_interactive
-from .runner_config_store import fetch_runner_config, save_runner_config
+from .runner_config_store import PersistedConfigMixin
 from .runner_mcp_config import configure_claude_mcp, claude_mcp_config_path
 from auth_error_detect import (
     AUTH_ERROR_RE as _AUTH_ERROR_RE,
@@ -59,35 +59,14 @@ from .runner_instructions_config import configure_claude_instructions
 # picks inside the terminal — `/model` writes `"model": "opus"` ("saved as your
 # default for new sessions"), `/effort` and `/theme` likewise. The runner is
 # stateless (`/app/data` is not volumed, see devops/docker-compose.swarm.yml),
-# so without persistence that choice dies with the container. We save the file
-# to team-api on change and restore it before every spawn — same mechanism as
-# hermes' ~/.hermes config (runner_config_store + PtySession's files watcher).
+# so without persistence that choice dies with the container. Restoring and
+# saving it is PersistedConfigMixin's job — the same mechanism every CLI runner
+# uses (see runner_config_store).
 _CLAUDE_SETTINGS_FILE = "settings.json"
-
-# Keys inside settings.json that the RUNNER owns, not the user:
-# _apply_permissions_to_settings rebuilds them from the agent's team-api
-# permissions at every spawn and only ever ADDS rules, so persisting them would
-# make a revoked deny rule immortal. Stripped on save; rebuilt on restore.
-_CLAUDE_MANAGED_SETTINGS_KEYS = ("permissions",)
 
 
 def claude_settings_path(home: str) -> str:
     return os.path.join(home, ".claude", _CLAUDE_SETTINGS_FILE)
-
-
-def _strip_managed_settings(raw: str) -> Optional[str]:
-    """Drop the runner-managed keys from a settings.json blob before it is
-    persisted. Returns None when there is nothing user-owned left to save."""
-    try:
-        data = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    user_owned = {k: v for k, v in data.items() if k not in _CLAUDE_MANAGED_SETTINGS_KEYS}
-    if not user_owned:
-        return None
-    return json.dumps(user_owned, indent=2)
 
 
 # Sentinel printed by the Claude CLI on stdout (as plain text, NOT a stream-json
@@ -143,15 +122,39 @@ def _cwd_path_diagnostic(proc_cwd: str) -> str:
     return " | ".join(parts)
 
 
-class ClaudeCodeBackend(RunnerBackend):
+class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
     name = "claude-code"
     supports_agent = True
     supports_oauth_login = True
     supports_token_set = True
     supports_interactive_terminal = True
 
+    # Restored before every spawn and saved back on in-terminal changes (see
+    # PersistedConfigMixin). `.claude.json` is deliberately NOT listed: it holds
+    # machine-scoped onboarding state and feature-flag caches, not user choices,
+    # and seed_onboarding_state already recreates the flags that matter.
+    persisted_config_files = (".claude/settings.json",)
+
     def __init__(self):
         self._permissions: dict[str, dict] = {}
+
+    def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
+        """Persist settings.json without `permissions`.
+
+        That key is the RUNNER's: _apply_permissions_to_settings rebuilds it
+        from the agent's team-api permissions at every spawn and only ever ADDS
+        rules, so persisting it would make a revoked deny rule immortal.
+        """
+        if name != _CLAUDE_SETTINGS_FILE:
+            return raw
+        try:
+            data = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        user_owned = {k: v for k, v in data.items() if k != "permissions"}
+        return json.dumps(user_owned, indent=2) if user_owned else None
 
     # ── Interactive terminal recipe ───────────────────────────────────────
 
@@ -243,34 +246,7 @@ class ClaudeCodeBackend(RunnerBackend):
         def _creds_dedup_key(creds: dict) -> Optional[str]:
             return ((creds or {}).get("claudeAiOauth") or {}).get("accessToken")
 
-        # Live-sync of the settings the user changes inside the TUI (`/model`,
-        # `/effort`, `/theme`): persisted to team-api so the next stateless
-        # spawn restores them (see _restore_settings). Same PtySession N-file
-        # watcher hermes uses for ~/.hermes.
-        # Deliberately keyed on the PER-AGENT home, not the `home` above (which
-        # falls back to /root in runAsRoot mode). _restore_settings skips that
-        # mode too, so save and restore stay symmetric — and a shared /root
-        # settings.json must never be persisted under one agent's id.
-        agent_home = (effective_user or {}).get("home")
-        settings_path = claude_settings_path(agent_home) if agent_home else None
-        captured_agent_id = agent_id
-
-        def _persist_settings(files: dict) -> None:
-            raw = (files or {}).get(_CLAUDE_SETTINGS_FILE)
-            if not raw:
-                return
-            user_owned = _strip_managed_settings(raw)
-            if not user_owned:
-                return
-            # Raise on failure so the watcher does NOT advance its signature
-            # and retries the sync on the next poll tick.
-            if not save_runner_config(
-                "claude-code", captured_agent_id, {_CLAUDE_SETTINGS_FILE: user_owned}
-            ):
-                raise RuntimeError(f"save_runner_config failed for agent {captured_agent_id}")
-
-        watch_settings = bool(settings_path and agent_id)
-        return {
+        recipe = {
             "cmd": cmd,
             "cwd": proc_cwd,
             "env": env,
@@ -280,9 +256,13 @@ class ClaudeCodeBackend(RunnerBackend):
             "creds_watch_path": creds_watch_path,
             "creds_on_change": _persist_creds,
             "creds_dedup_key": _creds_dedup_key,
-            "files_watch_paths": [settings_path] if watch_settings else None,
-            "files_on_change": _persist_settings if watch_settings else None,
         }
+        # Live-sync of what the user changes inside the TUI (`/model`,
+        # `/effort`, `/theme`): saved to team-api so the next stateless spawn
+        # restores it. Keyed on the PER-AGENT home (effective_user), not the
+        # `home` above, which falls back to /root in runAsRoot mode.
+        recipe.update(self._config_persistence_extras(agent_id, effective_user))
+        return recipe
 
     async def interactive_preflight_auth(self, agent_id, owner_id=None) -> Optional[str]:
         """Fail a terminal task injection fast when there is genuinely no
@@ -393,50 +373,6 @@ class ClaudeCodeBackend(RunnerBackend):
                 )
             return None
         return agent_user
-
-    def _restore_settings(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
-        """Restore `~/.claude/settings.json` from team-api before spawning, so
-        the model the user picked with `/model` survives a stateless restart.
-
-        Mirrors HermesBackend._restore_config: skipped while a terminal session
-        is live, because the user may have just changed the model inside the
-        PTY and the fetch below is cached (15 s) — writing stale content back
-        would be persisted again by the session's own live-sync.
-        """
-        if not agent_id or not agent_user:
-            return
-        try:
-            from pty_session import get_session
-            if get_session(agent_id) is not None:
-                return
-        except ImportError:
-            pass
-        files = fetch_runner_config("claude-code", agent_id)
-        content = (files or {}).get(_CLAUDE_SETTINGS_FILE)
-        if not content:
-            return
-        home = agent_user.get("home")
-        if not home:
-            return
-        path = claude_settings_path(home)
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-        except OSError as e:
-            logger.warning(f"[Claude Config] failed to restore {path}: {e}")
-            return
-        uid = agent_user.get("uid")
-        gid = agent_user.get("gid", uid)
-        if uid is not None:
-            try:
-                os.chown(path, uid, gid)
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
-        logger.info(
-            f"[Claude Config] restored settings.json for agent {agent_id[:12]}"
-        )
 
     def _apply_permissions_to_settings(
         self, agent_user: Optional[dict], permissions: Optional[dict],
@@ -756,7 +692,7 @@ class ClaudeCodeBackend(RunnerBackend):
         # Restore the user's own settings.json (model / effort / theme) BEFORE
         # the permission writer below, so its deny/allow rules merge on top of
         # the restored file instead of being written into a blank one.
-        await run_blocking(self._restore_settings, effective_user, agent_id)
+        await run_blocking(self._restore_persisted_config, effective_user, agent_id)
         # Translate permissions (network / filesystem / execution.shell) into
         # native Claude Code deny rules in the per-agent settings.json. Done
         # at every spawn so toggles take effect on the next message without

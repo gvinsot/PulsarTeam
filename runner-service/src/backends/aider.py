@@ -81,6 +81,14 @@ class AiderBackend(CliBackend):
     pass_prompt_via_stdin = False  # aider takes the message via --message
     supports_interactive_terminal = True
 
+    # Aider has no "save this model as my default" flow — its model is the
+    # per-spawn --model flag, and in-chat /model lasts one session. The one
+    # thing a user CAN make stick is a hand-written ~/.aider.conf.yml (aider
+    # reads it from the home dir; it never writes it), so that is what we carry
+    # across restarts. Absent for most agents: the mixin no-ops on a file that
+    # does not exist.
+    persisted_config_files = (".aider.conf.yml",)
+
     def _configure_instructions(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
         # Writes the agent's base instructions into ~/.aider/AGENTS.md so we can
         # feed them to aider as a read-only context file (--read).

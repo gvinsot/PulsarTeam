@@ -19,6 +19,7 @@ from typing import Optional
 import httpx
 from swarm_secrets import read as read_secret
 
+from agent_user import resolve_agent_home
 from config import logger
 
 _API_BASE = os.getenv("SWARM_API_BASE_URL", "http://team-api:3001").rstrip("/")
@@ -113,3 +114,133 @@ def save_runner_config(runner: str, agent_id: str, files: dict) -> bool:
             time.sleep(_SAVE_BACKOFF[attempt])
     logger.warning(f"[Runner Config] failed to save {runner}:{agent_id} after {_SAVE_MAX_ATTEMPTS} attempts: {last_err}")
     return False
+
+
+class PersistedConfigMixin:
+    """Give a backend "the config the user set in the terminal survives a
+    restart" for the cost of one class attribute.
+
+    Runners are stateless: `/app/data` is not volumed, so the agent HOME — and
+    with it whatever the user chose inside the TUI, above all their model — is
+    gone on the next boot. Backends list the files that hold those choices in
+    `persisted_config_files`; this mixin restores them before every spawn and
+    hands `prepare_interactive` the PtySession watcher hooks that save them back
+    whenever the terminal changes them.
+
+    Two rules for what belongs in the list:
+      • only files the CLI writes on the USER's behalf — never one the runner
+        regenerates wholesale each spawn (opencode's config.json, openclaw's
+        exec-approvals.json), which would just fight itself;
+      • strip any runner-managed content via `_sanitize_persisted_config`, so a
+        revoked permission or a stale MCP token can't be resurrected from the
+        saved copy.
+
+    The stored key is the file's BASENAME — that is what PtySession's watcher
+    reports — so a backend's paths must have distinct basenames.
+    """
+
+    # Paths relative to the agent HOME.
+    persisted_config_files: tuple[str, ...] = ()
+
+    def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
+        """Strip runner-managed content from `raw` before it is persisted.
+        `name` is the file's basename. Return None to skip saving it entirely.
+        Default: persist verbatim."""
+        return raw
+
+    def _persisted_config_paths(
+        self, agent_user: Optional[dict], agent_id: Optional[str],
+    ) -> list:
+        if not self.persisted_config_files or not agent_id:
+            return []
+        home, _, _ = resolve_agent_home(agent_user, agent_id)
+        if not home:
+            return []
+        return [os.path.join(home, rel) for rel in self.persisted_config_files]
+
+    def _restore_persisted_config(
+        self, agent_user: Optional[dict], agent_id: Optional[str],
+    ) -> None:
+        """Write the agent's saved config files back into its HOME.
+
+        Runs on every spawn — interactive AND headless — so a stateless restart
+        cannot silently reset the model the user chose in the terminal.
+
+        Skipped while a terminal session is live: the user may have just changed
+        the model inside the PTY, and fetch_runner_config is cached for 15 s, so
+        restoring here could overwrite the fresh file with stale content — which
+        the session's own live-sync would then persist back as the truth.
+        """
+        if not agent_id or not self.persisted_config_files:
+            return
+        try:
+            from pty_session import get_session
+            if get_session(agent_id) is not None:
+                return
+        except ImportError:
+            pass
+        files = fetch_runner_config(self.name, agent_id)
+        if not files:
+            return
+        home, uid, gid = resolve_agent_home(agent_user, agent_id)
+        if not home:
+            return
+        written = []
+        for rel in self.persisted_config_files:
+            content = files.get(os.path.basename(rel))
+            if not content:
+                continue
+            path = os.path.join(home, rel)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except OSError as e:
+                logger.warning(f"[{self.name} Config] failed to restore {path}: {e}")
+                continue
+            if uid is not None:
+                eff_gid = gid if gid is not None else uid
+                for target in (os.path.dirname(path), path):
+                    try:
+                        os.chown(target, uid, eff_gid)
+                    except OSError:
+                        pass
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+            written.append(os.path.basename(rel))
+        if written:
+            logger.info(
+                f"[{self.name} Config] restored {', '.join(written)} "
+                f"for agent {agent_id[:12]}"
+            )
+
+    def _config_persistence_extras(
+        self, agent_id: Optional[str], agent_user: Optional[dict],
+    ) -> dict:
+        """The PtySession watcher hooks that persist `persisted_config_files`
+        to team-api whenever the terminal changes them. Merge into the recipe
+        returned by `prepare_interactive`."""
+        paths = self._persisted_config_paths(agent_user, agent_id)
+        if not paths:
+            return {}
+        runner = self.name
+        captured_agent_id = agent_id
+
+        def _persist(files: dict) -> None:
+            clean = {}
+            for name, raw in (files or {}).items():
+                sanitized = self._sanitize_persisted_config(name, raw)
+                if sanitized:
+                    clean[name] = sanitized
+            if not clean:
+                return
+            # Raise on failure so the watcher does NOT advance its signature and
+            # retries the sync on the next poll tick.
+            if not save_runner_config(runner, captured_agent_id, clean):
+                raise RuntimeError(
+                    f"save_runner_config failed for {runner} agent {captured_agent_id}"
+                )
+
+        return {"files_watch_paths": paths, "files_on_change": _persist}

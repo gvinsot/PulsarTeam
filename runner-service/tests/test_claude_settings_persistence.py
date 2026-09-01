@@ -33,12 +33,8 @@ os.environ.setdefault("RUNNER_TYPE", "claude-code")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from _cli_matrix import build_recipe  # noqa: E402
-import backends.claude_code as claude_code  # noqa: E402
-from backends.claude_code import (  # noqa: E402
-    ClaudeCodeBackend,
-    _strip_managed_settings,
-    claude_settings_path,
-)
+import backends.runner_config_store as config_store  # noqa: E402
+from backends.claude_code import ClaudeCodeBackend, claude_settings_path  # noqa: E402
 
 SETTINGS_FILE = "settings.json"
 
@@ -83,11 +79,11 @@ def test_recipe_watches_settings_for_live_sync(tmp_path, monkeypatch):
 def test_restore_writes_the_persisted_settings(tmp_path, monkeypatch):
     saved = json.dumps({"model": "opus", "theme": "dark"})
     monkeypatch.setattr(
-        claude_code, "fetch_runner_config",
+        config_store, "fetch_runner_config",
         lambda runner, agent_id: {SETTINGS_FILE: saved} if runner == "claude-code" else None,
     )
 
-    ClaudeCodeBackend()._restore_settings(_agent_user(tmp_path, uid=None), "agent-1")
+    ClaudeCodeBackend()._restore_persisted_config(_agent_user(tmp_path, uid=None), "agent-1")
 
     restored = json.loads(Path(claude_settings_path(str(tmp_path))).read_text())
     assert restored["model"] == "opus"
@@ -101,12 +97,12 @@ def test_restore_does_not_clobber_a_live_terminal_session(tmp_path, monkeypatch)
 
     _write_settings(tmp_path, {"model": "fable"})
     monkeypatch.setattr(
-        claude_code, "fetch_runner_config",
+        config_store, "fetch_runner_config",
         lambda runner, agent_id: {SETTINGS_FILE: json.dumps({"model": "stale"})},
     )
     monkeypatch.setattr(pty_session, "get_session", lambda agent_id: object())
 
-    ClaudeCodeBackend()._restore_settings(_agent_user(tmp_path, uid=None), "agent-1")
+    ClaudeCodeBackend()._restore_persisted_config(_agent_user(tmp_path, uid=None), "agent-1")
 
     on_disk = json.loads(Path(claude_settings_path(str(tmp_path))).read_text())
     assert on_disk["model"] == "fable"
@@ -139,14 +135,15 @@ def test_managed_permissions_are_not_persisted():
         "permissions": {"deny": ["Bash"]},
     })
 
-    kept = json.loads(_strip_managed_settings(raw))
+    kept = json.loads(ClaudeCodeBackend()._sanitize_persisted_config(SETTINGS_FILE, raw))
 
     assert kept == {"model": "opus", "theme": "dark"}
 
 
 def test_strip_returns_none_when_nothing_user_owned_is_left():
-    assert _strip_managed_settings(json.dumps({"permissions": {"deny": ["Bash"]}})) is None
-    assert _strip_managed_settings("not json") is None
+    sanitize = ClaudeCodeBackend()._sanitize_persisted_config
+    assert sanitize(SETTINGS_FILE, json.dumps({"permissions": {"deny": ["Bash"]}})) is None
+    assert sanitize(SETTINGS_FILE, "not json") is None
 
 
 def test_live_sync_saves_only_user_owned_keys(tmp_path, monkeypatch):
@@ -159,7 +156,7 @@ def test_live_sync_saves_only_user_owned_keys(tmp_path, monkeypatch):
         captured["files"] = files
         return True
 
-    monkeypatch.setattr(claude_code, "save_runner_config", _fake_save)
+    monkeypatch.setattr(config_store, "save_runner_config", _fake_save)
 
     recipe["files_on_change"]({SETTINGS_FILE: json.dumps({
         "model": "opus",
@@ -174,7 +171,7 @@ def test_live_sync_raises_when_the_save_fails(tmp_path, monkeypatch):
     """PtySession's watcher keys its retry on this raising — a swallowed failure
     would mark the config synced and silently drop the user's change."""
     recipe = build_recipe("claude-code", tmp_path, monkeypatch, uid=20001)
-    monkeypatch.setattr(claude_code, "save_runner_config", lambda *a, **k: False)
+    monkeypatch.setattr(config_store, "save_runner_config", lambda *a, **k: False)
 
     with pytest.raises(RuntimeError):
         recipe["files_on_change"]({SETTINGS_FILE: json.dumps({"model": "opus"})})

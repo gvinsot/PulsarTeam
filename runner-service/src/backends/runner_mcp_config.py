@@ -247,6 +247,16 @@ _CODEX_MARK_END = "# <<< pulsarteam-managed-mcp <<<"
 _BARE_TOML_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def strip_codex_managed_block(text: str) -> str:
+    """Return `~/.codex/config.toml` without our managed MCP block.
+
+    Used before persisting the file across restarts: the block is rewritten at
+    every spawn and carries a short-lived gateway token, so saving it would
+    just archive a stale credential. Everything else in the file is the user's
+    (their `/model` pick, project trust, …)."""
+    return _strip_managed_block(text or "", _CODEX_MARK_START, _CODEX_MARK_END)
+
+
 def _fetch_servers_or_none(agent_id: Optional[str]) -> Optional[dict]:
     """Return the agent's canonical MCP server map, or None to mean
     "leave the existing config untouched" (team-api unreachable / 404).
