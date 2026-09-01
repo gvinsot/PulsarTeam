@@ -338,6 +338,20 @@ export const chatMethods = {
       saveAgent(agent);
 
       const responseForParsing = this._cleanMarkdown(fullResponse);
+      // A run that produced tokens but no parseable text is a silent dead end:
+      // no text means no tool call, and the workflow only ever reports it as
+      // "produced no decision" — with no trace of what the model actually
+      // returned. Two ways to land here, and the counts tell them apart:
+      // everything went to the thinking channel (raw=0, thinking>0), or the
+      // model opened a <think> it never closed and _cleanMarkdown's
+      // unterminated branch dropped the rest (raw>0, parsed=0).
+      if (!responseForParsing && (fullResponse.length > 0 || streamResult.thinkingBuffer.length > 0)) {
+        console.warn(
+          `⚠️  [Chat] "${agent.name}": response is empty after cleanup — ` +
+            `raw=${fullResponse.length} chars, thinking=${streamResult.thinkingBuffer.length} chars` +
+            (fullResponse ? ` | raw head: ${JSON.stringify(fullResponse.slice(0, 200))}` : '')
+        );
+      }
       postProcessingStarted = true;
       const actionResult = await this._processPostResponseActions(
         agent,

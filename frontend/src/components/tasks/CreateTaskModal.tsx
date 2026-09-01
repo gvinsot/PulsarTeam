@@ -220,6 +220,13 @@ export default function CreateTaskModal({
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-700 rounded-lg text-sm text-dark-200 focus:outline-none focus:border-indigo-500 transition-colors"
               >
                 <option value="">No specific repo</option>
+                {/* The remembered repo may no longer be listed by the board's
+                    GitHub plugin (access revoked, repo renamed). It is still
+                    the selected value and would be submitted as such, so give
+                    it an option rather than letting the select render blank. */}
+                {repoFullName && !availableRepos.some(r => r.fullName === repoFullName) && (
+                  <option value={repoFullName}>{repoFullName} (not listed on this board)</option>
+                )}
                 {availableRepos.map(r => (
                   <option key={r.fullName} value={r.fullName}>
                     [{r.provider}] {r.fullName}
