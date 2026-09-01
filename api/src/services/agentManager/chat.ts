@@ -1401,8 +1401,16 @@ export const chatMethods = {
     const isTopLevel = delegationDepth === 0 && !messageMeta;
 
     const isNudge = messageMeta?.type === 'nudge';
+    // Deliberately verb-agnostic. This used to be an allow-list of verbs
+    // (start|begin|proceed|now|first|go ahead) that missed the vocabulary a
+    // decide-mode agent actually uses — "Let me move it to the next column",
+    // "I'll update the task" — so a plan-only reply sailed through un-nudged
+    // and the whole action was reported as "produced no decision". Matching
+    // the first-person intent phrase alone is enough: the caller already
+    // gates on a short response in which NO tool call was parsed, and in
+    // that state a nudge is the right move whatever verb follows.
     const intentPatterns =
-      /^[\s\S]{0,200}\b(i('ll| will| am going to|'m going to) (start|begin|proceed|now|first)|let me (start|begin|proceed|first|now|go ahead)|let's (start|begin|proceed)|je vais (commencer|d'abord|maintenant)|commençons par|je m'en occupe)\b/i;
+      /^[\s\S]{0,200}\b(i(?:'ll|'m going to| will| am going to)|let me|let us|let's|je vais|je m'en occupe|commençons|nous allons)\b/i;
     const looksLikePurePlan = responseForParsing.length < 500;
 
     // Process tool calls
