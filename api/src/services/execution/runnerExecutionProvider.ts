@@ -9,6 +9,7 @@
 
 import { ExecutionProvider, GitCredentials } from './executionProvider.js';
 import { readSecret } from '../../secrets.js';
+import { errorMessage } from '../../lib/errors.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 
 interface SecondaryRepo {
@@ -137,7 +138,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
       (GitCredentials & { login?: string | null }) | null;
     if (!effective || !effective.token) return;
     try {
-      const res = await fetch(`${this.baseUrl}/credentials/git`, {
+      const res = await this._fetch(`${this.baseUrl}/credentials/git`, {
         method: 'POST',
         headers: this._headers(agentId),
         body: JSON.stringify({
@@ -257,7 +258,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
         };
       }
       if (secondaryPayload.length > 0) body.secondary_repos = secondaryPayload;
-      const res = await fetch(`${this.baseUrl}/projects/ensure`, {
+      const res = await this._fetch(`${this.baseUrl}/projects/ensure`, {
         method: 'POST',
         headers: this._headers(agentId),
         body: JSON.stringify(body),
@@ -326,7 +327,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   async closeTerminalSession(agentId: string): Promise<boolean> {
-    const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
+    const res = await this._fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
       method: 'DELETE',
       headers: this._headers(agentId),
       signal: AbortSignal.timeout(5000),
@@ -343,7 +344,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   async interruptTerminalSession(agentId: string): Promise<boolean> {
-    const res = await fetch(
+    const res = await this._fetch(
       `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/interrupt`,
       {
         method: 'POST',
@@ -370,7 +371,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
    */
   async getTerminalSession(agentId: string): Promise<any | null> {
     try {
-      const res = await fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
+      const res = await this._fetch(`${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}`, {
         method: 'GET',
         headers: this._headers(agentId),
         signal: AbortSignal.timeout(5000),
@@ -389,7 +390,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     options: { submit?: boolean } = {}
   ): Promise<boolean> {
     if (!input) return false;
-    const res = await fetch(
+    const res = await this._fetch(
       `${this.baseUrl}/terminal/sessions/${encodeURIComponent(agentId)}/input`,
       {
         method: 'POST',
@@ -536,6 +537,31 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   }
 
   /**
+   * fetch() that names the runner service when the call never reaches it.
+   *
+   * A transport failure (DNS, refused connection, reset socket, timeout) says
+   * nothing on its own: undici's message is the bare "fetch failed", and the
+   * board showed it verbatim as `[System Error] Workflow action "decide"
+   * failed ...: fetch failed` — no service, no endpoint, no reason. Rethrow
+   * with all three, keeping the original on `cause`.
+   *
+   * HTTP-level failures are deliberately untouched: a non-2xx response is
+   * returned as-is, and each caller formats its own (status, body) message.
+   */
+  async _fetch(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      const endpoint = url.startsWith(this.baseUrl) ? url.slice(this.baseUrl.length) : url;
+      const method = (init.method || 'GET').toUpperCase();
+      throw new Error(
+        `runner-service ${this.baseUrl} unreachable (${method} ${endpoint}): ${errorMessage(err)}`,
+        { cause: err }
+      );
+    }
+  }
+
+  /**
    * Execute a shell command on the runner-service via /exec-shell.
    */
   async _execShell(
@@ -548,7 +574,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     if (typeof maxOutput === 'number' && Number.isFinite(maxOutput) && maxOutput > 0) {
       body.max_output = Math.floor(maxOutput);
     }
-    const res = await fetch(`${this.baseUrl}/exec-shell`, {
+    const res = await this._fetch(`${this.baseUrl}/exec-shell`, {
       method: 'POST',
       headers: this._headers(agentId),
       body: JSON.stringify(body),
