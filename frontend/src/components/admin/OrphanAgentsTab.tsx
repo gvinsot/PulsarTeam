@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Bot, RefreshCw, UserCheck, UserX } from 'lucide-react';
+import { Bot, RefreshCw, Trash2, UserCheck, UserX } from 'lucide-react';
 import { api } from '../../api';
 import { errorMessage } from '../../utils/errors';
 import type { OrphanAgent, ShowToastFn, User } from '../../types';
@@ -75,6 +75,7 @@ export default function OrphanAgentsTab({ active, showToast }: OrphanAgentsTabPr
   // agent id → the user id picked in that row's select, kept across re-fetches.
   const [selection, setSelection] = useState<Record<string, string>>({});
   const [assigningId, setAssigningId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -129,6 +130,41 @@ export default function OrphanAgentsTab({ active, showToast }: OrphanAgentsTabPr
     }
   };
 
+  /**
+   * The other way off this list: an orphan nobody wants back.
+   *
+   * Deletes ONE agent — `agentManager.delete` takes a single id and does not
+   * cascade to batch siblings the way reassignment does, so a batch has to be
+   * cleared row by row. Goes through the same `DELETE /agents/:id` every other
+   * surface uses, which tears down the sandbox and MCP connections before
+   * dropping the row; an admin already passes its guard (checkAgentAccess
+   * returns early on `role === 'admin'`, which is what makes an ownerless agent
+   * reachable at all).
+   *
+   * The confirmation names the agent AND its id: an orphan often has no name,
+   * and then the label IS the id — the id line is what tells two of them apart.
+   */
+  const handleDelete = async (agent: OrphanAgent) => {
+    const label = agentLabel(agent);
+    const named = agent.name ? `"${agent.name}" (${agent.id})` : agent.id;
+    if (!confirm(`Delete agent ${named}? This cannot be undone.`)) return;
+    try {
+      setDeletingId(agent.id);
+      await api.deleteAgent(agent.id);
+      showToast?.(`${label} deleted`, 'success');
+      setSelection(prev => {
+        const next = { ...prev };
+        delete next[agent.id];
+        return next;
+      });
+      await load();
+    } catch (err) {
+      showToast?.(`Failed to delete agent: ${errorMessage(err)}`, 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <>
       <div className="flex items-center justify-between">
@@ -176,13 +212,17 @@ export default function OrphanAgentsTab({ active, showToast }: OrphanAgentsTabPr
         <div className="space-y-2">
           {users.length === 0 && (
             <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-400">
-              No users to assign these agents to. Create one in the Users tab first.
+              No users to assign these agents to. Create one in the Users tab first — or delete the
+              agents you no longer want.
             </div>
           )}
           {orphans.map(agent => {
             const reason = orphanReason(agent);
             const created = formatCreatedAt(agent.createdAt);
-            const busy = assigningId === agent.id;
+            // One flag for both actions: while either is in flight the whole
+            // row is inert, so an admin can't fire a delete under a reassign.
+            const busy = assigningId === agent.id || deletingId === agent.id;
+            const deleting = deletingId === agent.id;
             return (
               <div
                 key={agent.id}
@@ -231,7 +271,23 @@ export default function OrphanAgentsTab({ active, showToast }: OrphanAgentsTabPr
                       className="flex items-center gap-1 px-3 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                     >
                       <UserCheck className="w-3.5 h-3.5" />
-                      {busy ? 'Assigning...' : 'Assign'}
+                      {assigningId === agent.id ? 'Assigning...' : 'Assign'}
+                    </button>
+                    {/* Separated from Assign by a divider: the two buttons sit
+                        next to each other and only one of them is reversible. */}
+                    <div className="w-px h-6 bg-dark-700" aria-hidden="true" />
+                    <button
+                      onClick={() => handleDelete(agent)}
+                      disabled={busy}
+                      className="p-2 text-dark-400 hover:text-red-400 hover:bg-dark-700 rounded-lg transition-colors disabled:opacity-50 disabled:hover:text-dark-400 disabled:hover:bg-transparent"
+                      title={`Delete ${agentLabel(agent)}`}
+                      aria-label={`Delete ${agentLabel(agent)}`}
+                    >
+                      {deleting ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -248,7 +304,8 @@ export default function OrphanAgentsTab({ active, showToast }: OrphanAgentsTabPr
           of the test: a board-scoped agent is still reachable through its board, but its owner is
           what carries the OAuth credentials and the token accounting, so it needs a new one just as
           much. An agent with no board and no owner is hidden from every non-admin, and reassigning
-          here is what makes it visible and usable again.
+          here is what makes it visible and usable again. Deleting is the other way off this list,
+          one agent at a time, for the ones nobody should get back — it is permanent.
         </p>
       </div>
     </>
