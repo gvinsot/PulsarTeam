@@ -138,6 +138,16 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
     def __init__(self):
         self._permissions: dict[str, dict] = {}
 
+    def _resolve_cwd(self, agent_id: Optional[str]) -> str:
+        """The directory the CLI is spawned in: the agent's cloned project when
+        one is ready, else the generic CLI cwd. Shared by _build_cmd and the
+        trust seed in _prepare_spawn so both agree on which directory Claude
+        Code is being asked to trust."""
+        agent_project_dir = get_agent_project_dir(agent_id) if agent_id else None
+        if agent_project_dir and os.path.isdir(agent_project_dir):
+            return agent_project_dir
+        return CLI_CWD
+
     def _sanitize_persisted_config(self, name: str, raw: str) -> Optional[str]:
         """Persist settings.json without `permissions`.
 
@@ -575,11 +585,8 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
                 if tool:
                     cmd.extend(["--allowedTools", tool])
 
-        agent_project_dir = get_agent_project_dir(agent_id) if agent_id else None
-        if agent_project_dir and os.path.isdir(agent_project_dir):
-            cwd = agent_project_dir
-        else:
-            cwd = CLI_CWD
+        cwd = self._resolve_cwd(agent_id)
+        if cwd == CLI_CWD:
             if agent_id:
                 logger.warning(
                     f"[Cwd] No project dir resolved for agent {agent_id[:12]} — "
@@ -702,7 +709,10 @@ class ClaudeCodeBackend(PersistedConfigMixin, RunnerBackend):
         # skips its first-run theme picker / login-method picker / OAuth
         # flow — none of which the PTY driver can satisfy. The CLI normally
         # writes these flags after a successful interactive OAuth login.
-        seed_onboarding_state(effective_user)
+        # Passing the spawn cwd also pre-accepts that directory's trust dialog,
+        # so the "Quick safety check" screen never renders (its accept option is
+        # NOT the highlighted default, and a mis-aimed Enter exits the CLI).
+        seed_onboarding_state(effective_user, project_dir=self._resolve_cwd(agent_id))
         # Seed `.claude/.credentials.json` as defense in depth alongside the
         # env-var token injection.
         await run_blocking(seed_credentials_file, effective_user)

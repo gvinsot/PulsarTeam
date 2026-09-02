@@ -32,6 +32,7 @@ import {
   byProjectHandler,
   projectSummaryHandler,
 } from './lib/agentStatusHandlers.js';
+import { parseAgentProjection } from '../services/agentManager/projection.js';
 import type { AgentManager } from '../services/agentManager/index.js';
 
 // Mask sensitive fields before sending agent data to the client
@@ -85,7 +86,8 @@ export function agentRoutes(agentManager: AgentManager) {
       // Refresh cached task counts + token totals so the agents view shows
       // accurate tasks-in-progress and lifetime tokens on the initial HTTP load.
       await agentManager._enrichAllAgentsStats();
-      const agents = agentManager.getAllForUser(user.userId, user.role, userBoardIds);
+      const projection = parseAgentProjection(req.query as Record<string, unknown>, 'list');
+      const agents = agentManager.getAllForUser(user.userId, user.role, userBoardIds, projection);
       res.json(agents.map(sanitizeAgent));
     })
   );
@@ -94,8 +96,8 @@ export function agentRoutes(agentManager: AgentManager) {
   // sees only agents on their boards (+ unscoped). See leaderTools.ts for the
   // deliberately unscoped swarm-leader variants.
 
-  // Get lightweight status for ALL enabled agents (includes project + currentTask)
-  // Much lighter than GET / which returns full agent data with conversation history
+  // Get status-only data for ALL enabled agents (includes project + currentTask)
+  // GET / is also lightweight by default; use view=detail/include when full agent blobs are needed.
   // Optional query param: ?project=ProjectName to filter by project
   router.get('/statuses', asyncHandler(statusesHandler(agentManager, true)));
 
@@ -257,7 +259,8 @@ export function agentRoutes(agentManager: AgentManager) {
 
   // Get single agent
   router.get<{ id: string }>('/:id', requireAgentAccess, (req, res) => {
-    const agent = agentManager.getById(req.params.id);
+    const projection = parseAgentProjection(req.query as Record<string, unknown>, 'detail');
+    const agent = agentManager.getById(req.params.id, projection);
     if (!agent) {
       res.status(404).json({ error: 'Agent not found' });
       return;

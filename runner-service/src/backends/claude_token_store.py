@@ -508,7 +508,7 @@ def resolve_token(agent_user: dict) -> Optional[str]:
     return load_agent_token(agent_user)
 
 
-def seed_onboarding_state(agent_user: dict) -> bool:
+def seed_onboarding_state(agent_user: dict, project_dir: Optional[str] = None) -> bool:
     """Pre-populate `~/.claude.json` with the flags the Claude Code CLI 2.1+
     normally writes after a successful first-run OAuth login. Without these
     flags the TUI shows its onboarding sequence (theme picker → "Select
@@ -520,6 +520,18 @@ def seed_onboarding_state(agent_user: dict) -> bool:
                                         picker + OAuth flow
       - hasAvailableSubscription=true → confirms the subscription tier
                                         without re-validating
+      - projects[<project_dir>].hasTrustDialogAccepted=true
+                                      → skips the "Quick safety check: Is this
+                                        a project you created or one you
+                                        trust?" screen for the directory we are
+                                        about to spawn in.
+
+    The trust seed is the reliable fix for that dialog. Auto-answering it means
+    driving an arrow menu whose option ORDER moves between CLI versions — 2.1.258
+    highlights "No, exit", so a mis-aimed Enter exits the CLI at startup. The
+    keystroke path stays as a safety net (see startup_prompts.trust_answer_keys);
+    this makes sure it is normally never needed. Mirrors what the codex backend
+    writes as `[projects."…"] trust_level = "trusted"`.
 
     Idempotent.
     """
@@ -541,6 +553,18 @@ def seed_onboarding_state(agent_user: dict) -> bool:
     if not data.get("hasAvailableSubscription"):
         data["hasAvailableSubscription"] = True
         changed = True
+    if project_dir:
+        projects = data.get("projects")
+        if not isinstance(projects, dict):
+            projects = {}
+            data["projects"] = projects
+        entry = projects.get(project_dir)
+        if not isinstance(entry, dict):
+            entry = {}
+            projects[project_dir] = entry
+        if not entry.get("hasTrustDialogAccepted"):
+            entry["hasTrustDialogAccepted"] = True
+            changed = True
     if not changed:
         return True
     try:

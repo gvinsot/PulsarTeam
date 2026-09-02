@@ -61,8 +61,10 @@ import type {
   Task,
   TaskCreatedEvent,
   TaskExecutionStatus,
+  TaskHistoryEntry,
   TaskPriority,
   TaskRecurrencePeriod,
+  TaskSocketPayload,
   TaskStatus,
   TaskType,
   TermsAcceptedResponse,
@@ -217,6 +219,8 @@ export type AgentWriteInput = Partial<Omit<Agent, 'mcpAuth' | 'credentials'>> & 
   /** POST /agents only: > 1 switches the response to the batch envelope. */
   batchSize?: number;
 };
+
+export type ProjectionParams = Record<string, string>;
 
 /** POST /api/agents with `batchSize > 1`, and every POST /api/agents/:id/batch. */
 export interface AgentBatchCreated {
@@ -552,14 +556,25 @@ export const api = {
   githubAuthUrl: githubLogin.url,
   githubAuthCallback: githubLogin.callback,
 
-  // Agents
-  getAgents: () => get<Agent[]>('/agents'),
+  // Agents. The list view omits heavy per-agent blobs; pass view:'detail',
+  // fields or include when a caller deliberately needs a wider projection.
+  getAgents: (params: ProjectionParams = {}) => {
+    const qs = new URLSearchParams({ view: 'list', ...params }).toString();
+    return get<Agent[]>(`/agents?${qs}`);
+  },
+
+  getAgent: (id: string, params: ProjectionParams = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return get<Agent>(`/agents/${id}${qs ? '?' + qs : ''}`);
+  },
 
   // Tasks (direct from tasks table)
-  getAllTasks: (params: Record<string, string> = {}) => {
-    const qs = new URLSearchParams(params).toString();
-    return get<Task[]>(`/tasks${qs ? '?' + qs : ''}`);
+  getAllTasks: (params: ProjectionParams = {}) => {
+    const qs = new URLSearchParams({ view: 'list', ...params }).toString();
+    return get<TaskSocketPayload[]>(`/tasks?${qs}`);
   },
+
+  getTaskHistory: (taskId: string) => get<TaskHistoryEntry[]>(`/tasks/${taskId}/history`),
 
   getProjectStats: (days = 30) => get<ProjectStatsResponse>(`/tasks/project-stats?days=${days}`),
 

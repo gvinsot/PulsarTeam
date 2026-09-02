@@ -5,6 +5,7 @@ import { WsEvents } from './events.js';
 import type { AgentManager } from '../services/agentManager/index.js';
 import type { SessionClaims } from '../middleware/session.js';
 import { canSeeAgent } from '../lib/agentAccess.js';
+import { defaultAgentListProjection } from '../services/agentManager/projection.js';
 
 // ── Socket identity ──────────────────────────────────────────────────
 // index.ts installs an `io.use` guard that verifies the session token and
@@ -176,11 +177,15 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
     }
 
     const ws = agentManager.wsEmitter;
+    const agentListProjection = defaultAgentListProjection();
 
     // Refresh cached task counts + token totals so the initial agents-view
     // snapshot is accurate (tasks-in-progress and lifetime tokens per agent).
     await agentManager._enrichAllAgentsStats();
-    socket.emit(WsEvents.AGENTS_LIST, agentManager.getAllForUser(userId, userRole, userBoardIds));
+    socket.emit(
+      WsEvents.AGENTS_LIST,
+      agentManager.getAllForUser(userId, userRole, userBoardIds, agentListProjection)
+    );
 
     // Same rule as every HTTP surface — see lib/agentAccess.ts. This was the
     // third `if (!agent.boardId) return true` fail-open: the HTTP side was
@@ -416,7 +421,10 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
     // ── Ping agent status ─────────────────────────────────────────────
     socket.on(WsEvents.REQ_REFRESH, async () => {
       await agentManager._enrichAllAgentsStats();
-      socket.emit(WsEvents.AGENTS_LIST, agentManager.getAllForUser(userId, userRole, userBoardIds));
+      socket.emit(
+        WsEvents.AGENTS_LIST,
+        agentManager.getAllForUser(userId, userRole, userBoardIds, agentListProjection)
+      );
     });
 
     // ── Get swarm status with project assignments ─────────────────────

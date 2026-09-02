@@ -6,6 +6,7 @@ import {
   getTaskByIdPrefix,
 } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
+import { projectObject, type FieldProjection } from '../../lib/projection.js';
 import type { Task } from '../database/tasks.js';
 import type { Agent } from '../database/agents.js';
 
@@ -16,6 +17,7 @@ import { parsingMethods } from './parsing.js';
 import { tasksMethods } from './tasks.js';
 import { workflowMethods } from './workflow.js';
 import { compactionMethods } from './compaction.js';
+import { defaultAgentListProjection } from './projection.js';
 
 /** One entry of a `getLastMessages` payload: a stored conversation message plus
  * the position it holds in the agent's FULL history (not in the returned
@@ -63,14 +65,19 @@ export interface AgentManager {
   updateAllProjects(project: string | null, agentIdFilter?: Set<string> | null): Promise<any[]>;
 
   // ── getters.ts ──
-  getAll(): any[];
+  getAll(projection?: FieldProjection | null): any[];
   // `userBoardIds` stays optional because the unscoped swarm-leader handlers
   // (routes/lib/agentStatusHandlers.ts) have no board set to pass. Omitting it
   // now CLOSES the filter — board-scoped agents are hidden unless `role` is
   // 'admin' — so `role` must be passed for an admin caller to keep seeing them.
-  getAllForUser(userId: string, role?: string | null, userBoardIds?: Set<string>): any[];
+  getAllForUser(
+    userId: string,
+    role?: string | null,
+    userBoardIds?: Set<string>,
+    projection?: FieldProjection | null
+  ): any[];
   _agentsForUser(userId: string, role?: string | null, userBoardIds?: Set<string>): any[];
-  getById(id: string): any | null;
+  getById(id: string, projection?: FieldProjection | null): any | null;
   getLastMessages(agentId: string, limit?: number): LastMessages | null;
   getLastMessagesByName(agentName: string, limit?: number): LastMessages | null;
 
@@ -524,7 +531,7 @@ export class AgentManager {
     this.wsEmitter = new WsEmitter(
       io,
       this.agents,
-      this._sanitize.bind(this),
+      this._sanitizeForList.bind(this),
       this._enrichAgentStats.bind(this)
     );
     this._conditionProcessing = new Map();
@@ -794,6 +801,15 @@ export class AgentManager {
       }
     }
     return sanitized;
+  }
+
+  _projectSanitizedAgent(agent: any, projection: FieldProjection | null | undefined) {
+    const sanitized = this._sanitize(agent);
+    return projection ? projectObject(sanitized, projection, ['id']) : sanitized;
+  }
+
+  _sanitizeForList(agent: any) {
+    return this._projectSanitizedAgent(agent, defaultAgentListProjection());
   }
 
   _emit(event: string, data: any) {

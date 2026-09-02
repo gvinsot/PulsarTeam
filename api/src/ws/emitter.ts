@@ -1,4 +1,6 @@
 import { WsEvents } from './events.js';
+import { projectObject } from '../lib/projection.js';
+import { defaultTaskListProjection } from '../services/taskProjection.js';
 
 /**
  * Centralized WebSocket emitter — every real-time event goes through here.
@@ -9,6 +11,7 @@ export class WsEmitter {
   private agents: Map<string, any>;
   private _updateTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private _updatePending: Map<string, boolean> = new Map();
+  private taskListProjection = defaultTaskListProjection();
   private sanitize: (agent: any) => any;
   private enrich?: (agentId: string) => Promise<void>;
 
@@ -47,7 +50,18 @@ export class WsEmitter {
       return;
     }
 
-    if ((event === WsEvents.AGENT_CREATED || event === WsEvents.AGENT_DELETED) && data?.boardId) {
+    if (event === WsEvents.AGENT_CREATED && data?.id) {
+      const agent = this.agents.get(data.id);
+      const payload = agent ? this.sanitize(agent) : this.sanitize(data);
+      if (payload?.boardId) {
+        this.io.to(`board:${payload.boardId}`).emit(event, payload);
+        return;
+      }
+      this._emitScoped(event, payload);
+      return;
+    }
+
+    if (event === WsEvents.AGENT_DELETED && data?.boardId) {
       this.io.to(`board:${data.boardId}`).emit(event, data);
       return;
     }
@@ -66,6 +80,12 @@ export class WsEmitter {
    * task up is not the board's primary agent. The task carries its own board,
    * so route by that first. */
   private _emitScoped(event: string, data: any) {
+    if (event === WsEvents.TASK_UPDATED && data?.task) {
+      data = {
+        ...data,
+        task: projectObject(data.task, this.taskListProjection, ['id', 'boardId', 'agentId']),
+      };
+    }
     const agentId = data?.id || data?.agentId;
     const agentBoardId = agentId ? this.agents.get(agentId)?.boardId : undefined;
     const boardId = data?.task?.boardId || data?.boardId || agentBoardId;

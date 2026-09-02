@@ -4,8 +4,10 @@ import { canSeeAgent } from '../../lib/agentAccess.js';
 
 /** @this {import('./index.js').AgentManager} */
 export const gettersMethods = {
-  getAll(this: any): any[] {
-    return Array.from(this.agents.values()).map((a: any) => this._sanitize(a));
+  getAll(this: any, projection = null): any[] {
+    return Array.from(this.agents.values()).map((a: any) =>
+      this._projectSanitizedAgent(a, projection)
+    );
   },
 
   /**
@@ -18,9 +20,12 @@ export const gettersMethods = {
     this: any,
     userId: string,
     role: string | null | undefined,
-    userBoardIds?: Set<string>
+    userBoardIds?: Set<string>,
+    projection = null
   ): any[] {
-    return this._agentsForUser(userId, role, userBoardIds).map((a: any) => this._sanitize(a));
+    return this._agentsForUser(userId, role, userBoardIds).map((a: any) =>
+      this._projectSanitizedAgent(a, projection)
+    );
   },
 
   /**
@@ -50,10 +55,10 @@ export const gettersMethods = {
     );
   },
 
-  getById(this: any, id: string): any {
+  getById(this: any, id: string, projection = null): any {
     const agent = this.agents.get(id);
     if (!agent) return null;
-    return this._sanitize(agent);
+    return this._projectSanitizedAgent(agent, projection);
   },
 
   getLastMessages(this: any, agentId: string, limit: number = 1): any {

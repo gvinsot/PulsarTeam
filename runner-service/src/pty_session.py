@@ -122,6 +122,12 @@ _ANSI_RE = re.compile(
     r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
 )
 _AUTO_ANSWER_COOLDOWN_S = 1.0
+# Whitespace squeeze used by screen_is_input_ready (see there).
+_WS_RE = re.compile(r"\s+")
+# How many times a screen-derived recipe may re-send its keystrokes before we
+# stop and leave the dialog to the user. Each retry re-reads the screen, so a
+# handful is enough to ride out the CLI not yet listening on stdin.
+_AUTO_ANSWER_MAX_ATTEMPTS = 12
 
 # Auth-failure sentinels the Claude Code (and other) CLIs print when their
 # token/key is missing, expired, or rejected. The shared PTY broker is a
@@ -192,11 +198,26 @@ _DEFAULT_READY_RECIPE = _ReadyRecipe(hints=_INPUT_READY_HINTS)
 #     wrapped mid-sentence by the modal, so the single-line title is the only
 #     dependable marker. The OpenCode backend disables auto-update so it should
 #     never appear, but an agent HOME provisioned by an older runner can.
+# Claude Code renders none of the default hints either: its caret is ❯ (not ▌),
+# and `Try "…"` only shows on a cold start — the example prompts are gone once
+# the box has been used, and absent entirely when the CLI is logged out. Its one
+# stable sentinel is the status footer, verified on 2.1.258:
+#     cold start / idle  ⏸ manual mode on · ? for shortcuts · ← for agents
+#     mid-response       ⏸ manual mode on · esc to interrupt · ← for agents
+# so `? for shortcuts` marks "ready" and its mid-response replacement is the
+# busy veto (kept explicit even though the two never co-occur today).
+_CLAUDE_READY_RECIPE = _ReadyRecipe(
+    hints=("? for shortcuts",),
+    busy=("esc to interrupt",),
+)
+
 _READY_RECIPES: dict[str, _ReadyRecipe] = {
     "opencode": _ReadyRecipe(
         hints=("ctrl+p commands",),
         busy=("esc interrupt", "update available"),
     ),
+    "claude": _CLAUDE_READY_RECIPE,
+    "claude-code": _CLAUDE_READY_RECIPE,
 }
 
 
@@ -208,11 +229,23 @@ def _ready_recipe(cmd: list[str]) -> _ReadyRecipe:
 def screen_is_input_ready(screen: str, recipe: _ReadyRecipe) -> bool:
     """Classify one ANSI-stripped, lowercased TUI frame as input-ready.
 
+    Matching is whitespace-insensitive. These TUIs lay their chrome out with
+    absolute cursor positions, so `_strip_ansi` over the raw PTY stream can
+    collapse a footer to `?forshortcuts·←foragents` — a sentinel written the
+    way a human sees it would silently never match. Comparing the squeezed
+    forms too costs one regex and removes that whole class of near-miss.
+
     Split out of wait_until_input_ready so the recipes can be checked against
-    recorded frames of the real CLIs without spawning one."""
-    if any(marker in screen for marker in recipe.busy):
+    recorded frames of the real CLIs without spawning one.
+    """
+    squeezed = _WS_RE.sub("", screen)
+
+    def present(sentinel: str) -> bool:
+        return sentinel in screen or _WS_RE.sub("", sentinel) in squeezed
+
+    if any(present(marker) for marker in recipe.busy):
         return False
-    return any(hint in screen for hint in recipe.hints)
+    return any(present(hint) for hint in recipe.hints)
 
 
 def _strip_ansi(text: str) -> str:
@@ -409,6 +442,9 @@ class PtySession:
     # headless sessions whose CLI is still mid-task.
     _last_output_at: float = 0.0
     _auto_answered: set[str] = field(default_factory=set)
+    # Per-prompt retry counter for the screen-derived recipes (see
+    # _maybe_auto_answer_startup_prompt).
+    _auto_answer_attempts: dict = field(default_factory=dict)
     _last_auto_answer_at: float = 0.0
     _creds_watcher: Optional[_FileWatcher] = None
     _creds_sync_task: Optional[asyncio.Task] = None
@@ -978,6 +1014,31 @@ class PtySession:
         except OSError as e:
             logger.debug(f"[Terminal] auto-answer write failed for {self.agent_id}: {e}")
 
+    def _rendered_screen(self) -> str:
+        """The CLI's screen as a terminal emulator would show it.
+
+        `_strip_ansi` concatenates every repaint, so it can present a STALE
+        frame — Claude Code paints its trust dialog more than once, and picking
+        a row off an old frame is exactly how a confirm lands on the wrong
+        option. Replaying the bytes through pyte collapses the repaints into
+        what is actually on screen. Only the screen-derived recipes call this
+        (at most once per dialog), never the hot path. Returns "" when pyte is
+        unavailable so callers can fall back to the stripped tail.
+        """
+        try:
+            import pyte
+        except ImportError:  # pragma: no cover - pyte is a hard dependency
+            return ""
+        try:
+            screen = pyte.Screen(self.cols, self.rows)
+            pyte.Stream(screen).feed(
+                bytes(self._auto_answer_buf).decode("utf-8", errors="replace")
+            )
+            return "\n".join(screen.display)
+        except Exception as e:
+            logger.debug(f"[Terminal] screen render failed for {self.agent_id}: {e}")
+            return ""
+
     def _maybe_auto_answer_startup_prompt(self, data: bytes = b"") -> None:
         """Dismiss known CLI startup confirmations in the shared terminal.
 
@@ -1005,12 +1066,51 @@ class PtySession:
         for prompt in STARTUP_PROMPTS:  # table order = match priority
             if prompt.key in self._auto_answered or not prompt.pattern.search(tail):
                 continue
+            keys = (
+                prompt.keys(self._rendered_screen() or tail)
+                if callable(prompt.keys)
+                else prompt.keys
+            )
+            if not keys:
+                # The recipe could not read this screen (e.g. the trust dialog
+                # rendered without a selection marker yet). Send NOTHING and
+                # leave the prompt unanswered so a later frame can retry —
+                # confirming an unidentified row is how a bare Enter used to
+                # land on "No, exit" and kill the CLI.
+                logger.debug(
+                    f"[Terminal] {prompt.description} prompt matched for agent "
+                    f"{self.agent_id} but the screen was unreadable — retrying"
+                )
+                continue
             logger.info(
                 f"[Terminal] Auto-answer {prompt.description} prompt for agent "
                 f"{self.agent_id}: {prompt.keys_label}"
             )
-            self._send_prompt_keys(prompt.keys)
-            self._auto_answered.add(prompt.key)
+            self._send_prompt_keys(keys)
+            if callable(prompt.keys):
+                # Screen-derived recipes are RETRYABLE, and must be: the dialog
+                # paints before the CLI starts reading stdin, so the first
+                # attempt is regularly swallowed (measured: keys sent at ~2 s do
+                # nothing, the same keys at ~8 s move the selection). Marking it
+                # answered there left the dialog up forever.
+                #
+                # Retrying is safe precisely because the keys come from the
+                # CURRENT screen: once the dialog is gone the recipe finds no
+                # accept row and returns nothing, and if only the move landed
+                # the next pass sees the marker already on the accept row and
+                # just confirms. Give up after a bounded number of tries so a
+                # screen we keep misreading can't loop forever.
+                attempts = self._auto_answer_attempts.get(prompt.key, 0) + 1
+                self._auto_answer_attempts[prompt.key] = attempts
+                if attempts >= _AUTO_ANSWER_MAX_ATTEMPTS:
+                    logger.warning(
+                        f"[Terminal] {prompt.description} prompt for agent "
+                        f"{self.agent_id} did not clear after {attempts} attempts "
+                        f"— leaving it to the user"
+                    )
+                    self._auto_answered.add(prompt.key)
+            else:
+                self._auto_answered.add(prompt.key)
             # Stamped once at fire time — a deferred Enter (PAUSE recipes)
             # must NOT re-stamp the cooldown.
             self._last_auto_answer_at = time.monotonic()

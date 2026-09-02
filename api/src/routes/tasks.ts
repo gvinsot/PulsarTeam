@@ -15,6 +15,8 @@ import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../se
 import { enrichAssignee, emitTaskUpdated, applyTaskMove } from '../services/taskMutations.js';
 import { normalizeSecondaryRepos, isValidRepoFullName } from '../services/taskRepos.js';
 import { validateBody } from '../lib/validate.js';
+import { projectObject, projectionIncludesField, type FieldProjection } from '../lib/projection.js';
+import { parseTaskProjection } from '../services/taskProjection.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { isCliRunner } from '../services/runners.js';
 import { reorderTasksSchema, updateTaskSchema, bulkMoveSchema } from '../schemas/tasks.js';
@@ -52,6 +54,57 @@ type EditableTask = Omit<Task, 'title' | 'text' | 'taskType' | 'priority' | 'due
 };
 
 const router = Router();
+
+const TASK_ROW_COLUMNS = [
+  'id',
+  'agent_id',
+  'text',
+  'title',
+  'status',
+  'board_id',
+  'assignee',
+  'task_type',
+  'priority',
+  'due_date',
+  'source',
+  'recurrence',
+  'commits',
+  'history',
+  'error',
+  'error_from_status',
+  'execution_status',
+  'completed_action_idx',
+  'action_running',
+  'action_running_agent_id',
+  'action_running_mode',
+  'pending_on_enter',
+  'is_manual',
+  'position',
+  'environment',
+  'repo_provider',
+  'repo_full_name',
+  'secondary_repos',
+  'storage_provider',
+  'storage_path',
+  'deleted_at',
+  'deleted_by',
+  'created_at',
+  'updated_at',
+  'completed_at',
+  'started_at',
+] as const;
+
+function taskSelectColumns(projection: FieldProjection): string {
+  return TASK_ROW_COLUMNS.map(column => {
+    if (column === 'history' && !projectionIncludesField(projection, 'history')) {
+      return 'NULL::jsonb AS history';
+    }
+    if (column === 'commits' && !projectionIncludesField(projection, 'commits')) {
+      return 'NULL::jsonb AS commits';
+    }
+    return `t.${column}`;
+  }).join(',\n           ');
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -304,10 +357,11 @@ router.get(
     if (!pool) return res.json([]);
 
     const { board_id, agent_id, status, project, repo_full_name } = req.query;
+    const projection = parseTaskProjection(req.query as Record<string, unknown>, 'list');
     // JOIN-based query: project name is derived from boards.project_id.
     // Repo + storage live directly on the task row.
     let query = `
-    SELECT t.*,
+    SELECT ${taskSelectColumns(projection)},
            p.id   AS _project_id,
            p.name AS _project_name
     FROM tasks t
@@ -356,7 +410,7 @@ router.get(
       const agent = mgr.agents.get(task.agentId);
       task.agentName = agent?.name || null;
       enrichAssignee(mgr, task);
-      return task;
+      return projectObject(task, projection, ['id']);
     });
 
     res.json(tasks);

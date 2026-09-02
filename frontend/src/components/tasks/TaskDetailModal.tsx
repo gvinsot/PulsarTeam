@@ -108,6 +108,9 @@ export default function TaskDetailModal({
   // null is the "View all diffs" entry point, which opens the overlay unanchored.
   const [clickedCommitHash, setClickedCommitHash] = useState<string | null>(null);
   const [historyDetail, setHistoryDetail] = useState<TaskHistoryEntry | null>(null);
+  const [taskHistory, setTaskHistory] = useState<TaskHistoryEntry[] | null>(
+    Array.isArray(task.history) ? task.history : null
+  );
   const statusRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const refineRef = useRef<HTMLDivElement | null>(null);
@@ -128,6 +131,25 @@ export default function TaskDetailModal({
       textareaRef.current.setSelectionRange(editText.length, editText.length);
     }
   }, [editing]);
+
+  useEffect(() => {
+    setTaskHistory(Array.isArray(task.history) ? task.history : null);
+  }, [task.id, task.history]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getTaskHistory(task.id)
+      .then(history => {
+        if (!cancelled) setTaskHistory(Array.isArray(history) ? history : []);
+      })
+      .catch(err => {
+        if (!cancelled) console.error('Failed to load task history:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, task.updatedAt]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -320,6 +342,7 @@ export default function TaskDetailModal({
   const isError = task.status === 'error';
   const isStopped = task.executionStatus === 'stopped';
   const sourceMeta = task.source ? SOURCE_META[task.source.type] || SOURCE_META.api : null;
+  const timelineHistory = taskHistory ?? [];
 
   const handleStop = async () => {
     if (!onStop) return;
@@ -1130,7 +1153,7 @@ export default function TaskDetailModal({
 
               {/* Transition history (with commits interleaved chronologically) */}
               <TaskTimeline
-                history={task.history}
+                history={timelineHistory}
                 commits={task.commits}
                 createdAt={task.createdAt}
                 onOpenEntry={setHistoryDetail}

@@ -55,7 +55,7 @@ from config import (
 )
 from backends.fallback_llm_resolver import resolve_fallback_llm
 from backends.claude_token_store import run_blocking
-from startup_prompts import BYPASS_PERMS_RE, build_trust_re
+from startup_prompts import BYPASS_PERMS_RE, PAUSE, build_trust_re, trust_answer_keys
 
 
 # Fixed PTY size for the Claude Code TUI. Wider than typical terminals so
@@ -224,6 +224,9 @@ _NUMBERED_RE = re.compile(r"^\s*[❯>]?\s*\d+[\.\)]\s*\S", re.MULTILINE)
 # on purpose: this trust branch preempts the numbered-choice / arrow-selector
 # / fallback-LLM branches below, so widening it would change behavior here.
 _TRUST_RE = build_trust_re()
+# How many times we re-send the trust keystrokes before giving up. Each try
+# re-reads the screen, so a handful rides out the CLI not yet on stdin.
+_TRUST_MAX_ATTEMPTS = 12
 # Bypass-permissions warning: shown when the CLI is started with
 # `--dangerously-skip-permissions`. Two numbered options where the DEFAULT
 # (option 1) is "No, exit" — picking the default would terminate the CLI.
@@ -517,6 +520,9 @@ def _drive_pty_blocking(
     # text and we never see it again. Tracking by name means we can dispense
     # with the offset bump for these and just consult the whole buffer.
     resolved_screens: set[str] = set()
+    # Retry budget for the trust screen (see the trust branch below); a
+    # one-element list so the nested resolver can mutate it.
+    trust_attempts = [0]
     STREAM_THROTTLE_S = 0.15  # avoid hammering on every single byte arrival
     # Whitespace-stripped, lowercased prefix of the user prompt — used to
     # recognize and skip the TUI's prompt echo in the raw stream fallback.
@@ -679,16 +685,50 @@ def _drive_pty_blocking(
             stream_raw_offset = len(raw_buf)
             return answer
         if "trust" not in resolved_screens and _TRUST_RE.search(full_tail):
-            # Send a bare Enter (no "1" prefix): option 1 ("Yes, I trust
-            # this folder") is already highlighted by default with `❯`, so
-            # Enter alone confirms. Sending "1\r" risked the trailing `\r`
-            # spilling into the NEXT screen.
-            logger.info(f"[Interactive] Trust-folder prompt → Enter (prompt_sent={prompt_sent})")
-            _ship_keystroke("")
-            resolved_screens.add("trust")
-            last_auto_answer_at = time.monotonic()
-            stream_raw_offset = len(raw_buf)
-            return "1"
+            # The accepting option is NOT reliably the highlighted one: 2.1.258
+            # renders "❯ No, exit" first, so the bare Enter this used to send
+            # confirmed "No, exit" and the CLI exited at startup. Derive the
+            # move from the screen instead (trust_answer_keys); an empty recipe
+            # means "unreadable" — send nothing and let a later frame retry,
+            # rather than confirming a row we haven't identified.
+            # Read the CURRENT screen, not the concatenated stream: the
+            # dialog repaints, and choosing a row off a stale frame is how
+            # a confirm lands on the wrong option.
+            keys = trust_answer_keys("\n".join(screen.display)) or trust_answer_keys(full_tail)
+            if not keys:
+                logger.debug("[Interactive] Trust-folder prompt unreadable — retrying")
+            else:
+                logger.info(
+                    f"[Interactive] Trust-folder prompt → “Yes, I trust this folder” "
+                    f"({len(keys)} key(s)) (prompt_sent={prompt_sent})"
+                )
+                for item in keys:
+                    if item is PAUSE:
+                        # Critical: let the TUI repaint its selection before the
+                        # confirming Enter lands (same as the bypass branch).
+                        _human_pause(0.12)
+                        continue
+                    try:
+                        os.write(master_fd, item)
+                    except OSError:
+                        pass
+                # RETRYABLE on purpose (unlike the other one-shot screens): the
+                # dialog paints before the CLI starts reading stdin, so an early
+                # attempt is regularly swallowed. Safe to repeat because the keys
+                # come from the CURRENT screen — once the dialog is gone the
+                # recipe finds no accept row and sends nothing, and if only the
+                # move landed the next pass just confirms. Give up after a
+                # bounded number of tries and leave the dialog to the user.
+                trust_attempts[0] += 1
+                if trust_attempts[0] >= _TRUST_MAX_ATTEMPTS:
+                    logger.warning(
+                        "[Interactive] Trust-folder prompt did not clear after "
+                        f"{trust_attempts[0]} attempts — leaving it"
+                    )
+                    resolved_screens.add("trust")
+                last_auto_answer_at = time.monotonic()
+                stream_raw_offset = len(raw_buf)
+                return "1"
         if "bypass" not in resolved_screens and _BYPASS_PERMS_RE.search(full_tail):
             # `--dangerously-skip-permissions` warning. Option 1 is "No, exit"
             # (the highlighted default) and option 2 is "Yes, I accept". We

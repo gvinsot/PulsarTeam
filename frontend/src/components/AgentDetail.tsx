@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   X,
   MessageSquare,
@@ -106,7 +106,7 @@ interface AgentDetailProps {
 }
 
 export default function AgentDetail({
-  agent,
+  agent: liveAgent,
   agents,
   projects,
   skills,
@@ -122,6 +122,16 @@ export default function AgentDetail({
   currentUser,
   showToast,
 }: AgentDetailProps) {
+  const [fullAgent, setFullAgent] = useState<Agent | null>(null);
+  const agent = useMemo(() => {
+    if (!fullAgent || fullAgent.id !== liveAgent.id) return liveAgent;
+    return {
+      ...liveAgent,
+      conversationHistory: fullAgent.conversationHistory,
+      projectContexts: fullAgent.projectContexts,
+      ragDocuments: fullAgent.ragDocuments,
+    };
+  }, [liveAgent, fullAgent]);
   const [activeTab, setActiveTab] = useState('chat');
   // `runner` is null for "Auto" agents; Set.has(null) was already false, the
   // guard only makes that visible to the type checker.
@@ -154,6 +164,33 @@ export default function AgentDetail({
   const [autoScroll, setAutoScroll] = useState(true);
   const [currentProject, setCurrentProject] = useState(agent?.project || '');
   const [projectSaving, setProjectSaving] = useState(false);
+  const hadStreamRef = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFullAgent(null);
+    setHistory([]);
+    api
+      .getAgent(liveAgent.id)
+      .then(fresh => {
+        if (!cancelled) setFullAgent(fresh);
+      })
+      .catch(err => {
+        if (!cancelled) console.error('Failed to load agent details:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [liveAgent.id]);
+
+  const loadAgentHistory = useCallback(async () => {
+    const fresh = await api.getHistory(liveAgent.id);
+    const nextHistory = Array.isArray(fresh) ? fresh : [];
+    setHistory(nextHistory);
+    setFullAgent(prev =>
+      prev && prev.id === liveAgent.id ? { ...prev, conversationHistory: nextHistory } : prev
+    );
+  }, [liveAgent.id]);
 
   // Repo list sourced from the agent's board GitHub plugin OAuth — same list
   // as CreateTaskModal uses, so the chat picker isn't artificially restricted
@@ -216,13 +253,25 @@ export default function AgentDetail({
   // waiting animation up until it clears.
   const switching = projectSaving || agent?.projectSwitching === true;
 
-  // Sync history from agent object (pushed via socket) instead of fetching from API.
-  // This eliminates the flash between stream end and API response.
+  // Sync history when the full detail payload is hydrated or refreshed.
   useEffect(() => {
     if (agent?.conversationHistory) {
       setHistory(agent.conversationHistory);
     }
   }, [agent?.id, agent?.conversationHistory?.length]);
+
+  useEffect(() => {
+    const isStreaming = streamBuffer !== undefined;
+    if (isStreaming) {
+      hadStreamRef.current = true;
+      return;
+    }
+    if (!hadStreamRef.current || agent.status === 'busy') return;
+    hadStreamRef.current = false;
+    loadAgentHistory().catch(err => {
+      console.error('Failed to refresh conversation history:', err);
+    });
+  }, [agent.status, loadAgentHistory, streamBuffer]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -341,6 +390,9 @@ export default function AgentDetail({
     if (!confirm('Clear all conversation history?')) return;
     await api.clearHistory(agent.id);
     setHistory([]);
+    setFullAgent(prev =>
+      prev && prev.id === agent.id ? { ...prev, conversationHistory: [] } : prev
+    );
     onRefresh();
   };
 
@@ -348,6 +400,9 @@ export default function AgentDetail({
     try {
       const fresh = await api.reloadHistory(agent.id);
       setHistory(Array.isArray(fresh) ? fresh : []);
+      setFullAgent(prev =>
+        prev && prev.id === agent.id ? { ...prev, conversationHistory: fresh } : prev
+      );
       onRefresh?.();
     } catch (err) {
       console.error('Failed to reload conversation from DB:', err);
@@ -358,6 +413,9 @@ export default function AgentDetail({
     if (!confirm('Restart from this message? Everything after it will be deleted.')) return;
     const newHistory = await api.truncateHistory(agent.id, afterIndex);
     setHistory(newHistory);
+    setFullAgent(prev =>
+      prev && prev.id === agent.id ? { ...prev, conversationHistory: newHistory } : prev
+    );
     onRefresh();
   };
 
