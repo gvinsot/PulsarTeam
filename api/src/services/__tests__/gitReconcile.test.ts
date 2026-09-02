@@ -169,3 +169,85 @@ test('reconcileTaskCommits upgrades the pushed flag once the runner pushed', asy
   assert.equal(linked.length, 1);
   assert.equal(linked[0].pushed, true);
 });
+
+// ── The committer filter ────────────────────────────────────────────────────
+// `baseline..HEAD` answers "what is new in this clone", which is NOT the same
+// as "what did the agent write": ensureProject fetch/resets the clone on every
+// chat and every terminal attach, and the runner pulls too, so commits that
+// merely ARRIVED sit in the range. Observed in prod: a task whose text was
+// literally "test task, do nothing" was credited with five commits its human
+// owner had pushed from his own machine the day before.
+
+const AGENT_EMAIL = 'agent@pulsarteam.local';
+const HUMAN_HASH = 'd'.repeat(40);
+
+test('detection asks only for the commits this clone committed', async () => {
+  const { env, calls } = makeExecEnv([
+    { match: /git config user\.email/, stdout: `${AGENT_EMAIL}\n` },
+    // The fake answers the FILTERED query only, the way git would: a range
+    // holding nothing but pulled human commits comes back empty.
+    { match: /git log .*\.\.HEAD.*--committer=/, stdout: '' },
+    { match: /git log .*\.\.HEAD/, stdout: `${HUMAN_HASH} someone else's work\n` },
+    { match: /--branches --not --remotes/, stdout: '' },
+  ]);
+
+  const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
+
+  assert.deepEqual(commits, [], 'pulled commits must not be credited to the run');
+  const rangeCall = calls.find(c => c.includes(`${BASELINE}..HEAD`));
+  assert.ok(
+    rangeCall?.includes(`--committer='${AGENT_EMAIL}'`),
+    `the range query must be scoped to the clone's identity, got: ${rangeCall}`
+  );
+});
+
+test('the time-window fallback is scoped to the same identity', async () => {
+  const { env, calls } = makeExecEnv([
+    { match: /git config user\.email/, stdout: `${AGENT_EMAIL}\n` },
+    { match: /git log .*--since/, stdout: `${HASH_A} feat: windowed\n` },
+    { match: /--branches --not --remotes/, stdout: '' },
+  ]);
+
+  await detectCommitsSinceBaseline(env, 'agent-1', {
+    startedAt: new Date(Date.now() - 60000).toISOString(),
+  });
+
+  const windowCall = calls.find(c => c.includes('--since'));
+  assert.ok(windowCall?.includes(`--committer='${AGENT_EMAIL}'`), windowCall);
+});
+
+test('an unknown identity links everything rather than nothing', async () => {
+  // A clone with no user.email must keep the old, over-linking behaviour:
+  // filtering on an empty identity would match nothing and silently lose every
+  // agent commit — a worse failure than the one being fixed.
+  for (const stdout of ['', 'fatal: not in a git directory\n']) {
+    const { env, calls } = makeExecEnv([
+      { match: /git config user\.email/, stdout },
+      { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n` },
+      { match: /--branches --not --remotes/, stdout: '' },
+    ]);
+
+    const commits = await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
+
+    assert.equal(commits.length, 1);
+    assert.ok(
+      !calls.find(c => c.includes(`${BASELINE}..HEAD`))?.includes('--committer'),
+      'no identity → no filter'
+    );
+  }
+});
+
+test('a hostile identity is treated as unknown, never spliced into the command', async () => {
+  const { env, calls } = makeExecEnv([
+    { match: /git config user\.email/, stdout: `x'; rm -rf /; echo '\n` },
+    { match: /git log .*\.\.HEAD/, stdout: `${HASH_A} feat: first\n` },
+    { match: /--branches --not --remotes/, stdout: '' },
+  ]);
+
+  await detectCommitsSinceBaseline(env, 'agent-1', { baselineHead: BASELINE });
+
+  assert.ok(
+    calls.every(c => !c.includes('rm -rf')),
+    'a quote-bearing identity must be rejected, not quoted'
+  );
+});

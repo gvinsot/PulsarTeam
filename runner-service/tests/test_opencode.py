@@ -8,7 +8,12 @@ os.environ["RUNNER_TYPE"] = "opencode"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agent_user import _agent_users
-from backends.opencode import OpenCodeBackend, _merge_opencode_config, _resolve_opencode_model
+from backends.opencode import (
+    OpenCodeBackend,
+    _merge_opencode_config,
+    _OPENCODE_XDG_DIRS,
+    _resolve_opencode_model,
+)
 
 
 def test_default_llm_does_not_pass_model_override():
@@ -67,6 +72,50 @@ def test_default_llm_removes_previous_pin_from_agent_config(tmp_path):
     assert "model" not in config
     assert config["permission"] == {"edit": "allow", "bash": "allow", "webfetch": "allow"}
     assert config["mcp"] == {"github": {"type": "local"}}
+
+
+def test_agent_env_prepares_opencode_xdg_runtime_dirs(tmp_path):
+    agent_id = "agent-xdg-runtime"
+    _agent_users[agent_id] = {"home": str(tmp_path), "uid": None, "gid": None}
+
+    try:
+        env = OpenCodeBackend()._agent_env(None, agent_id)
+    finally:
+        _agent_users.pop(agent_id, None)
+
+    assert env["HOME"] == str(tmp_path)
+    assert env["XDG_CONFIG_HOME"] == str(tmp_path / ".config")
+    assert env["XDG_DATA_HOME"] == str(tmp_path / ".local" / "share")
+    assert env["XDG_STATE_HOME"] == str(tmp_path / ".local" / "state")
+    assert env["XDG_CACHE_HOME"] == str(tmp_path / ".cache")
+    for rel in _OPENCODE_XDG_DIRS:
+        assert (tmp_path / rel).is_dir()
+
+
+def test_pre_interactive_chowns_opencode_xdg_runtime_chain(tmp_path, monkeypatch):
+    agent_id = "agent-xdg-owned"
+    uid = 32123
+    gid = 32124
+    calls = []
+    _agent_users[agent_id] = {"home": str(tmp_path), "uid": uid, "gid": gid}
+
+    def fake_chown(path, target_uid, target_gid):
+        calls.append((path, target_uid, target_gid))
+
+    monkeypatch.setattr(os, "chown", fake_chown, raising=False)
+
+    try:
+        OpenCodeBackend()._pre_interactive(None, None, agent_id)
+    finally:
+        _agent_users.pop(agent_id, None)
+
+    chowned_paths = {
+        path
+        for path, target_uid, target_gid in calls
+        if target_uid == uid and target_gid == gid
+    }
+    for rel in _OPENCODE_XDG_DIRS:
+        assert str(tmp_path / rel) in chowned_paths
 
 
 def test_dangerous_permissions_write_allow_config_and_env(tmp_path):

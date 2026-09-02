@@ -9,7 +9,9 @@
 //
 //   1. snapshotGitBaseline()        — capture HEAD when a workflow action starts.
 //   2. detectCommitsSinceBaseline() — list exactly the commits created during
-//      the run (baseline..HEAD), each with a pushed/unpushed flag derived from
+//      the run (baseline..HEAD, restricted to the clone's own committer
+//      identity so commits that merely ARRIVED via fetch/pull are not credited
+//      to the task), each with a pushed/unpushed flag derived from
 //      `git log --branches --not --remotes` (robust for new branches, where
 //      @{u} does not exist yet).
 //   3. reconcileTaskCommits()       — link them to the task via addTaskCommit
@@ -104,6 +106,48 @@ export async function snapshotGitBaseline(
 }
 
 /**
+ * The slice of `executionManager` these helpers actually use. Declared
+ * structurally so the real manager (and the test fakes) satisfy it without a
+ * cast, and so the exported helpers don't widen the file's `any` count.
+ */
+export interface GitExecEnv {
+  exec?: (
+    agentId: string,
+    command: string,
+    opts?: { timeout?: number }
+  ) => Promise<{ stdout?: string; stderr?: string }>;
+}
+
+/** Single-quote a value for the shell command string these helpers build. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * The identity this clone commits as — `git config user.email`, which
+ * ensure_agent_project writes from GIT_USER_NAME/GIT_USER_EMAIL
+ * (agent@pulsarteam.local by default).
+ *
+ * This is what separates "the agent committed" from "the commit merely arrived
+ * in the clone": see the note on the committer filter in
+ * detectCommitsSinceBaseline. Returns null when the clone has no identity
+ * configured, which callers must read as "cannot filter" — never as "match
+ * nothing", or a misconfigured clone would stop linking its own commits.
+ */
+export async function cloneCommitterEmail(
+  executionManager: GitExecEnv,
+  agentId: string
+): Promise<string | null> {
+  const output = await _execGit(executionManager, agentId, 'git config user.email', 5000);
+  if (!output) return null;
+  const email = output.split('\n')[0].trim();
+  // Anything with whitespace or a quote is not an identity we will splice into
+  // a command line; treat it as unknown rather than try to sanitise it.
+  if (!email || /[\s'"`$\\]/.test(email) || /^fatal:/i.test(email)) return null;
+  return email;
+}
+
+/**
  * List the commits created during a run, terminal-independently.
  * Prefers the exact rev-range `baselineHead..HEAD`; falls back to a
  * `--since=startedAt` window when no baseline was captured OR when the
@@ -113,6 +157,28 @@ export async function snapshotGitBaseline(
  *
  * A range that succeeds but returns empty still means "no new commits"
  * and does NOT widen to the time window (no over-linking).
+ *
+ * ── Why the committer filter ──────────────────────────────────────────────
+ * `baseline..HEAD` answers "what is new in this clone", NOT "what did the
+ * agent write". HEAD also moves when commits merely ARRIVE — ensureProject
+ * fetch/resets the clone on every chat and on every terminal attach, and the
+ * runner itself pulls. Everything that lands that way sits in the range and
+ * was, until this filter, linked to whatever task happened to be running:
+ * observed in prod on a task whose text was literally "test task, do nothing",
+ * credited with five commits its human owner had pushed from his own machine
+ * the day before.
+ *
+ * Topology cannot tell the two apart (a pulled commit is not reachable from
+ * the OLD remote tip either), but identity can: a runner clone commits as
+ * `git config user.email` — agent@pulsarteam.local by default — while a human
+ * pushes under their own address. So the range is asked for that committer
+ * only. `--committer` is a substring match, and the value is the clone's own
+ * configuration, so this stays correct when an agent runs under a distinct
+ * address (claude6@pulsarteam.local and friends exist in real history).
+ *
+ * When the clone has no identity we do NOT filter: an unfiltered range
+ * over-links, which is a visible annoyance, while filtering on an empty
+ * identity would link nothing at all and silently lose every agent commit.
  */
 export async function detectCommitsSinceBaseline(
   executionManager: any,
@@ -121,14 +187,33 @@ export async function detectCommitsSinceBaseline(
 ): Promise<DetectedCommit[]> {
   if (typeof executionManager?.exec !== 'function') return [];
 
+  // Anchors first: with neither a baseline nor a start time there is nothing to
+  // query, and we must not spend a runner round-trip resolving an identity we
+  // would never use.
+  const hasBaseline = !!baselineHead && /^[a-f0-9]{7,40}$/.test(baselineHead);
+  const hasWindow = !!startedAt && !isNaN(new Date(startedAt).getTime());
+  if (!hasBaseline && !hasWindow) return [];
+
+  // Restrict every query below to the identity this clone commits as, so a
+  // commit that merely arrived through a fetch/pull is not credited to the run
+  // (see the note above). Empty when unknown — then nothing is filtered.
+  const committer = await cloneCommitterEmail(executionManager, agentId);
+  const committerFilter = committer ? ` --committer=${shellQuote(committer)}` : '';
+  if (!committer) {
+    console.warn(
+      `⚠️  [git-reconcile] No git user.email in agent ${agentId}'s clone — linking every commit ` +
+        `in the range, including any pulled from the remote`
+    );
+  }
+
   // Attempt the exact rev-range if we have a valid baseline.
   let rangeOutput: string | null = null;
   let rangeFailed = false;
-  if (baselineHead && /^[a-f0-9]{7,40}$/.test(baselineHead)) {
+  if (hasBaseline) {
     rangeOutput = await _execGit(
       executionManager,
       agentId,
-      `git log --format="%H %s" ${baselineHead}..HEAD`
+      `git log --format="%H %s" ${baselineHead}..HEAD${committerFilter}`
     );
     // If the range query returned output, check if it's a real result or a fatal
     if (rangeOutput && /^fatal:/im.test(rangeOutput)) {
@@ -139,11 +224,11 @@ export async function detectCommitsSinceBaseline(
 
   // If range failed or no baseline, fall back to time window.
   if (rangeOutput === null || rangeFailed) {
-    if (startedAt && !isNaN(new Date(startedAt).getTime())) {
+    if (hasWindow) {
       rangeOutput = await _execGit(
         executionManager,
         agentId,
-        `git log --format="%H %s" --since="${new Date(startedAt).toISOString()}" -30`
+        `git log --format="%H %s" --since="${new Date(startedAt).toISOString()}" -30${committerFilter}`
       );
     } else {
       return [];

@@ -39,6 +39,18 @@ logger = logging.getLogger("runner_service")
 
 _PULSAR_PERMISSION_SIDECAR = ".pulsar-managed-permission.json"
 
+_OPENCODE_XDG_DIRS = (
+    ".config",
+    os.path.join(".config", "opencode"),
+    ".local",
+    os.path.join(".local", "share"),
+    os.path.join(".local", "share", "opencode"),
+    os.path.join(".local", "state"),
+    os.path.join(".local", "state", "opencode"),
+    ".cache",
+    os.path.join(".cache", "opencode"),
+)
+
 # OpenCode's `permission` config (and the OPENCODE_PERMISSION env var) is a
 # record {tool: "ask"|"allow"|"deny"} — NOT a bare string. Passing the string
 # "allow" makes opencode's zod schema iterate the string's characters and fail
@@ -316,30 +328,39 @@ class OpenCodeBackend(CliBackend):
         # Writes the agent's base instructions into ~/.config/opencode/AGENTS.md.
         configure_opencode_instructions(agent_user, agent_id)
 
-    def _ensure_config_dir(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
-        """Guarantee `$HOME/.config/opencode` exists and is owned by the agent
-        UID before spawning opencode.
+    def _ensure_runtime_dirs(self, agent_user: Optional[dict], agent_id: Optional[str]) -> None:
+        """Guarantee opencode's per-agent XDG dirs are owned by the agent UID
+        before spawning opencode.
 
-        opencode (running as the dropped agent UID) creates this directory on
-        startup. If an earlier step created the intermediate `.config` as root
-        (mode 0700), the agent UID can't traverse/write it and opencode dies
-        with `mkdir .config/opencode EACCES`. Pre-creating the chain and handing
-        it to the agent UID makes the spawn robust regardless of whether any
-        MCP/instructions/provider config was written this round."""
+        opencode/Bun creates `.config/opencode`, `.local/share/opencode` and
+        `.local/state/opencode` on startup. If an earlier root-side restore
+        created any intermediate parent (notably `.local`) without handing it
+        back, the dropped agent UID dies with `mkdir ... EACCES`. Pre-creating
+        and chowning the whole chain makes both interactive and headless spawns
+        robust regardless of which config writers ran this round."""
         home_dir, uid, gid = resolve_agent_home(agent_user, agent_id)
         if not home_dir:
             return
-        config_dir = os.path.join(home_dir, ".config", "opencode")
+        dirs = [os.path.join(home_dir, rel) for rel in _OPENCODE_XDG_DIRS]
         try:
-            os.makedirs(config_dir, mode=0o700, exist_ok=True)
+            for path in dirs:
+                os.makedirs(path, mode=0o700, exist_ok=True)
         except OSError as exc:
-            logger.warning("[OpenCode] could not create %s: %s", config_dir, exc)
+            logger.warning(
+                "[OpenCode] could not create runtime directories under %s: %s",
+                home_dir,
+                exc,
+            )
             return
         if uid is not None:
             eff_gid = gid if gid is not None else uid
-            for path in (os.path.join(home_dir, ".config"), config_dir):
+            for path in dirs:
                 try:
                     os.chown(path, uid, eff_gid)
+                except OSError:
+                    pass
+                try:
+                    os.chmod(path, 0o700)
                 except OSError:
                     pass
 
@@ -375,6 +396,11 @@ class OpenCodeBackend(CliBackend):
             if self._dangerous_skip_permissions(agent_id):
                 env["OPENCODE_PERMISSION"] = json.dumps(_OPENCODE_ALLOW_ALL_PERMISSION)
             return env
+        self._ensure_runtime_dirs(agent_user, agent_id)
+        env["XDG_CONFIG_HOME"] = os.path.join(home_dir, ".config")
+        env["XDG_DATA_HOME"] = os.path.join(home_dir, ".local", "share")
+        env["XDG_STATE_HOME"] = os.path.join(home_dir, ".local", "state")
+        env["XDG_CACHE_HOME"] = os.path.join(home_dir, ".cache")
         config_dir = os.path.join(home_dir, ".config", "opencode")
         cfg_path = os.path.join(config_dir, "config.json")
         # Merge on top of any existing config file content so we don't clobber
@@ -431,7 +457,7 @@ class OpenCodeBackend(CliBackend):
     # ── Interactive terminal hooks (see CliBackend.prepare_interactive) ──
 
     def _pre_interactive(self, agent_user, effective_user, agent_id) -> None:
-        self._ensure_config_dir(agent_user, agent_id)
+        self._ensure_runtime_dirs(agent_user, agent_id)
 
     def _interactive_cmd(self, agent_id, permissions):
         llm_config = self._get_llm_config(agent_id)

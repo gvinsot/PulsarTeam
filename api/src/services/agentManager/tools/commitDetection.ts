@@ -2,6 +2,8 @@
 // Pure functions that inspect a run_command tool result to detect git commit
 // hashes. Extracted verbatim from _processToolCalls' host module.
 
+import { cloneCommitterEmail, shellQuote } from './gitReconcile.js';
+
 /** Check if a command string represents a git operation that creates or moves commits */
 export function _isGitMutatingCmd(rawCmd: string): boolean {
   if (!rawCmd.includes('git')) return false;
@@ -141,18 +143,34 @@ export async function _detectCommitHashes(
 
   // ── Fallback: query HEAD from execution environment ──
   // Covers: new branch pushes, unusual output formats, merge commits, etc.
+  //
+  // `_isGitMutatingCmd` matches `pull` too, and a fast-forwarding pull prints
+  // "Fast-forward", which `_isGitSuccess` accepts — so without the committer
+  // check below this fallback would credit the task with whatever tip the pull
+  // brought in, i.e. somebody else's commit. The committer is read off the
+  // commit itself (%ce) rather than asked of git as a filter: `git log -1
+  // --committer=x` would walk BACK to that author's last commit instead of
+  // saying "HEAD isn't theirs".
   if (commits.length === 0 && executionManager?.hasEnvironment(agentId) && _isGitSuccess(output)) {
     try {
-      const headResult = await executionManager.exec(agentId, 'git log --format="%H %s" -1', {
+      const headResult = await executionManager.exec(agentId, 'git log --format="%H %ce %s" -1', {
         timeout: 10000,
       });
       const headOutput = ((headResult.stdout || '') + (headResult.stderr || '')).trim();
-      const headMatch = headOutput.match(/^([a-f0-9]{40})\s+(.*)/);
+      const headMatch = headOutput.match(/^([a-f0-9]{40})\s+(\S+)\s*(.*)/);
       if (headMatch) {
-        _addCommit(headMatch[1], headMatch[2]);
-        console.log(
-          `🔗 [Commit] Fallback: captured HEAD ${headMatch[1].slice(0, 7)} via git log (cmd="${rawCmd.slice(0, 60)}")`
-        );
+        const committer = await cloneCommitterEmail(executionManager, agentId);
+        if (committer && headMatch[2] !== committer) {
+          console.log(
+            `🔗 [Commit] Fallback: HEAD ${headMatch[1].slice(0, 7)} was committed by ${headMatch[2]}, ` +
+              `not this clone (${committer}) — not linking (cmd="${rawCmd.slice(0, 60)}")`
+          );
+        } else {
+          _addCommit(headMatch[1], headMatch[3]);
+          console.log(
+            `🔗 [Commit] Fallback: captured HEAD ${headMatch[1].slice(0, 7)} via git log (cmd="${rawCmd.slice(0, 60)}")`
+          );
+        }
       }
     } catch (e: any) {
       console.warn(`⚠️  [Commit] Fallback git log failed: ${e.message}`);
@@ -164,9 +182,17 @@ export async function _detectCommitHashes(
     // If we detected a push range, fetch ALL commits in that range
     if (pushOldHash && pushNewHash && commits.length <= 2) {
       try {
+        // Restricted to the clone's own committer identity, for the same reason
+        // the reconcile sweep is (see gitReconcile.detectCommitsSinceBaseline):
+        // an agent that pulls before pushing has other people's commits sitting
+        // inside its own push range, and crediting those to the task is exactly
+        // the "commits that have nothing to do with it" report. Unknown identity
+        // → no filter, same trade-off as there.
+        const committer = await cloneCommitterEmail(executionManager, agentId);
+        const committerFilter = committer ? ` --committer=${shellQuote(committer)}` : '';
         const rangeResult = await executionManager.exec(
           agentId,
-          `git log --format="%H %s" ${pushOldHash}..${pushNewHash}`,
+          `git log --format="%H %s" ${pushOldHash}..${pushNewHash}${committerFilter}`,
           { timeout: 10000 }
         );
         const rangeOutput = ((rangeResult.stdout || '') + (rangeResult.stderr || '')).trim();
