@@ -697,7 +697,12 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
         trigger: 'on_enter',
         conditions: [],
         actions: [
-          { type: 'run_agent', mode: 'decide', role: 'assistant', instructions: 'do the work' },
+          {
+            type: 'run_agent',
+            mode: 'decide',
+            role: 'assistant',
+            instructions: 'Move to next column',
+          },
         ],
       },
     ],
@@ -709,7 +714,9 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
 
     // The decide agent moves the task to "review" DURING its run — like a real
     // agent advancing the card via update_task/change_status.
-    mgr.sendMessage = async (aid: any) => {
+    let decidePrompt = '';
+    mgr.sendMessage = async (aid: any, message: string) => {
+      decidePrompt = message;
       await mgr.setTaskStatus(agentId, task.id, 'review', { by: 'agent' });
       const a = mgr.agents.get(aid);
       if (a) a.status = 'idle';
@@ -736,6 +743,11 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
     await new Promise(r => setTimeout(r, 40)); // let any trailing finally emit flush
 
     assert.equal(taskRows.get(task.id)?.status, 'review', 'DB ended at review');
+    assert.ok(decidePrompt.includes('Decision contract:'), 'decide prompt has tool contract');
+    assert.ok(
+      decidePrompt.includes(`@update_task(${task.id}, review, Moved to review)`),
+      'next-column prompt gives exact update_task call'
+    );
     // The bug: the finally re-emits the captured (work) status, bouncing the card
     // back. After the move to review, no emit may carry the stale "work" again.
     const afterMove = emitted.slice(emitted.indexOf('review'));

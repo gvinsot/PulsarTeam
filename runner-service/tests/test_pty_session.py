@@ -89,6 +89,32 @@ def test_auto_answers_codex_update_prompt_once(monkeypatch):
     assert written == [b"2\r"]
 
 
+def test_auto_answers_codex_trust_directory_prompt(monkeypatch):
+    session = PtySession(agent_id="agent-a", cmd=["codex"], cwd="/tmp", env={})
+    session.master_fd = 1
+    written = []
+
+    monkeypatch.setattr(session, "_write_keystroke", lambda data: written.append(data))
+
+    session._maybe_auto_answer_startup_prompt(
+        b"""
+        You are in /app/data/agents/agent_x/projects/gvinsot/PulsarTeam
+
+        Do you trust the contents of this directory?
+        Working with untrusted contents comes with higher risk of prompt injection.
+        Trusting the directory allows project-local config, hooks, and exec policies to load.
+
+        \xe2\x80\xba 1. Yes, continue
+          2. No, quit
+
+        Press enter to continue
+        """
+    )
+
+    assert written == [b"\r"]
+    assert "trust" in session._auto_answered
+
+
 def test_set_auth_error_latches_once():
     session = PtySession(agent_id="agent-a", cmd=["claude"], cwd="/tmp", env={})
 

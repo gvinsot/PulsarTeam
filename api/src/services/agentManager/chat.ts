@@ -28,6 +28,47 @@ import {
 
 const MAX_DELEGATION_DEPTH = 5;
 
+function workflowMetaValue(messageMeta: any, key: string) {
+  const workflowKey = `workflow${key[0].toUpperCase()}${key.slice(1)}`;
+  return messageMeta?.[key] ?? messageMeta?.[workflowKey];
+}
+
+function workflowCarryMeta(messageMeta: any) {
+  const mode = workflowMetaValue(messageMeta, 'mode');
+  if (!mode) return {};
+  return {
+    workflowMode: mode,
+    workflowTaskId: workflowMetaValue(messageMeta, 'taskId'),
+    workflowCurrentStatus: workflowMetaValue(messageMeta, 'currentStatus'),
+    workflowValidStatuses: workflowMetaValue(messageMeta, 'validStatuses'),
+    workflowNextStatus: workflowMetaValue(messageMeta, 'nextStatus'),
+    workflowInstructions: workflowMetaValue(messageMeta, 'instructions'),
+  };
+}
+
+function buildWorkflowDecideNudge(messageMeta: any) {
+  const taskId = workflowMetaValue(messageMeta, 'taskId') || '<taskId>';
+  const currentStatus = workflowMetaValue(messageMeta, 'currentStatus');
+  const nextStatus = workflowMetaValue(messageMeta, 'nextStatus');
+  const instructions = String(workflowMetaValue(messageMeta, 'instructions') || '');
+  const validStatuses = workflowMetaValue(messageMeta, 'validStatuses');
+  const wantsNextColumn = /\bnext\s+column\b|\bcolonne\s+suivante\b/i.test(instructions);
+  const validLine =
+    Array.isArray(validStatuses) && validStatuses.length
+      ? `\nValid statuses: ${validStatuses.join(', ')}`
+      : '';
+  const nextLine =
+    wantsNextColumn && currentStatus && nextStatus
+      ? `\nThe next column after "${currentStatus}" is "${nextStatus}".`
+      : '';
+  const exampleStatus = wantsNextColumn && nextStatus ? nextStatus : '<target-status>';
+
+  return `[SYSTEM] This workflow decide action is not complete because you answered without a task-update tool call. Do not explain or restate your plan. Call @update_task on its own line now.${validLine}${nextLine}
+
+Use this exact format:
+@update_task(${taskId}, ${exampleStatus}, Moved to ${exampleStatus})`;
+}
+
 /** @this {import('./index.js').AgentManager} */
 export const chatMethods = {
   /** Success/idle teardown for a chat turn: set status, drop the abort
@@ -1401,6 +1442,8 @@ export const chatMethods = {
     const isTopLevel = delegationDepth === 0 && !messageMeta;
 
     const isNudge = messageMeta?.type === 'nudge';
+    const workflowMode = workflowMetaValue(messageMeta, 'mode');
+    const isWorkflowDecide = workflowMode === 'decide';
     // Deliberately verb-agnostic. This used to be an allow-list of verbs
     // (start|begin|proceed|now|first|go ahead) that missed the vocabulary a
     // decide-mode agent actually uses — "Let me move it to the next column",
@@ -1468,6 +1511,9 @@ export const chatMethods = {
         } else if (hasRealErrors) {
           continuationPrompt =
             '\nSome tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
+        } else if (isWorkflowDecide) {
+          continuationPrompt =
+            '\nYou are still inside a workflow decide action. The action is not complete until you call @update_task(taskId, targetStatus, summary). Do not re-list tasks or explain the target; call @update_task now.';
         } else if (hasSuccessfulCommit) {
           continuationPrompt =
             '\nYour code has been committed and pushed. Now call @update_task(taskId, <final column>, summary) to move the task to its final column and signal that your task is done.';
@@ -1482,6 +1528,7 @@ export const chatMethods = {
           delegationDepth,
           {
             type: 'tool-result',
+            ...workflowCarryMeta(messageMeta),
             toolResults: nonTerminal.map((r: any) => ({
               tool: r.tool,
               args: r.args,
@@ -1498,6 +1545,24 @@ export const chatMethods = {
       }
 
       const hasTools = agent.project || agent.mcpServers?.length > 0 || agent.skills?.length > 0;
+      if (
+        isWorkflowDecide &&
+        !isNudge &&
+        looksLikePurePlan &&
+        responseForParsing.trim().length > 0
+      ) {
+        console.log(
+          `🔄 [Nudge] Agent "${agent.name}" answered workflow decide without @update_task — nudging`
+        );
+        const nudgeResponse = await this.sendMessage(
+          id,
+          buildWorkflowDecideNudge(messageMeta),
+          streamCallback,
+          delegationDepth,
+          { type: 'nudge', ...workflowCarryMeta(messageMeta) }
+        );
+        return { earlyReturn: nudgeResponse };
+      }
       if (hasTools && !isNudge && looksLikePurePlan && responseForParsing.length > 20) {
         if (intentPatterns.test(responseForParsing)) {
           console.log(

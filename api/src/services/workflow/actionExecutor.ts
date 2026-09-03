@@ -194,7 +194,45 @@ function buildRefinePrompt(task: Task, instructions: string) {
   return `Refine the following task:\n\nTask: ${task.text}\n${task.project ? `Project: ${task.project}\n` : ''}\n${instructions}\n\nReply ONLY with the improved task description.`;
 }
 
-function buildInstructionsPrompt(task: Task, instructions: string, columns: WorkflowColumn[]) {
+function nextColumnAfter(status: string, columns: WorkflowColumn[]) {
+  const curIdx = columns.findIndex(c => c.id === status);
+  if (curIdx === -1 || curIdx >= columns.length - 1) return null;
+  return columns[curIdx + 1];
+}
+
+function buildDecisionToolContract(
+  task: Task,
+  instructions: string,
+  columns: WorkflowColumn[],
+  nativeTaskTool: boolean
+) {
+  const nextColumn = nextColumnAfter(task.status, columns);
+  const mentionsNextColumn = /\bnext\s+column\b|\bcolonne\s+suivante\b/i.test(instructions);
+  const listTasksTool = nativeTaskTool ? 'list_tasks' : '@list_tasks';
+  const targetHint =
+    mentionsNextColumn && nextColumn
+      ? `\nThe next column after "${task.status}" is "${nextColumn.id}".`
+      : '';
+  const exampleStatus = mentionsNextColumn && nextColumn ? nextColumn.id : '<target-status>';
+  const example = nativeTaskTool
+    ? `update_task({ "task_id": "${task.id}", "status": "${exampleStatus}", "comment": "Moved to ${exampleStatus}" })`
+    : `@update_task(${task.id}, ${exampleStatus}, Moved to ${exampleStatus})`;
+
+  return `
+Decision contract:
+- You MUST make the workflow decision by calling the task-update tool; a prose-only answer does not move the task and will be treated as no decision.
+- The exact task ID is already provided above. Do not call ${listTasksTool} just to find this task.
+- If the requested action is only to move the card or "do nothing", do not read files, write files, or commit. Move the task directly.
+- Use this format on its own line:
+${example}${targetHint}`;
+}
+
+function buildInstructionsPrompt(
+  task: Task,
+  instructions: string,
+  columns: WorkflowColumn[],
+  { nativeTaskTool = false }: { nativeTaskTool?: boolean } = {}
+) {
   const columnList = columns?.length
     ? `\nValid statuses (column IDs): ${columns.map(c => c.id).join(', ')}`
     : '';
@@ -206,7 +244,8 @@ Task title: ${task.text}
 Current status: ${task.status}${columnList}
 ${task.error ? `Previous error: ${task.error}\n` : ''}${commits}
 Instructions:
-${instructions}`;
+${instructions}
+${buildDecisionToolContract(task, instructions, columns, nativeTaskTool)}`;
 }
 
 /**
@@ -1225,7 +1264,9 @@ async function _runDecideMode(
     return { executed: false, skipped: true, reason: 'no-instructions' };
   }
 
-  const prompt = buildInstructionsPrompt(task, instructions, columns);
+  const prompt = buildInstructionsPrompt(task, instructions, columns, {
+    nativeTaskTool: isCliRunner(agent),
+  });
   console.log(`[ActionExecutor] decide: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
   // Snapshot task state so we can detect whether the agent actually made a
@@ -1265,7 +1306,15 @@ async function _runDecideMode(
     );
   } else {
     await _withAgentStream(agentManager, agent.id, async () => {
-      const workflowMeta = { type: 'workflow-action', mode: 'decide', taskId: task.id };
+      const workflowMeta = {
+        type: 'workflow-action',
+        mode: 'decide',
+        taskId: task.id,
+        currentStatus: task.status,
+        validStatuses: columns.map(c => c.id),
+        nextStatus: nextColumnAfter(task.status, columns)?.id || null,
+        instructions,
+      };
       await agentManager.sendMessage(
         agent.id,
         prompt,

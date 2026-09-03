@@ -62,7 +62,10 @@ def build_trust_re(extra_alternatives: tuple = ()) -> re.Pattern:
 # would just move the bug to the next reordering, so the keystrokes are derived
 # from the screen instead: find the accept line, find the selection marker, and
 # walk from one to the other.
-_TRUST_ACCEPT_RE = re.compile(r"yes,?\s*i\s*trust\s*this\s*folder", re.IGNORECASE)
+_TRUST_ACCEPT_RE = re.compile(
+    r"(yes,?\s*i\s*trust\s*this\s*folder|yes,?\s*continue)",
+    re.IGNORECASE,
+)
 # Markers Claude Code has used for the highlighted row. A bare ">" is
 # deliberately absent: it appears in the assistant's own markdown. These are the
 # UTF-8 glyphs; the CLI falls back to ASCII ones only without a UTF-8 locale,
@@ -168,7 +171,8 @@ STARTUP_PROMPTS: tuple[StartupPrompt, ...] = (
         description="opencode update",
         keys_label="Left+Enter",
     ),
-    # Trust folder. The accepting option is NOT reliably the highlighted one
+    # Trust folder / directory. The accepting option is NOT reliably the
+    # highlighted one
     # (2.1.258 highlights "No, exit"), so the move is computed from the screen
     # — see trust_answer_keys.
     StartupPrompt(
@@ -178,7 +182,7 @@ STARTUP_PROMPTS: tuple[StartupPrompt, ...] = (
         ),
         keys=trust_answer_keys,
         description="trust-folder",
-        keys_label="move to “Yes, I trust this folder”+Enter",
+        keys_label="move to trust/continue accept option+Enter",
     ),
     # On the bypass-permissions warning, option 1 is "No, exit" and option 2
     # is "Yes, I accept". Move down once, then confirm after a render tick.

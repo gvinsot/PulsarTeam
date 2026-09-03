@@ -1009,21 +1009,30 @@ export function parseToolCalls(response: string): ToolCall[] {
           const third = rest.slice(secondComma + 1).trim();
           args = [sanitizeArg(first), sanitizeArg(second), third];
         } else {
-          args = [sanitizeArg(first), sanitizeArg(rest), '{}'];
+          args = [
+            sanitizeArg(first),
+            sanitizeArg(rest),
+            toolName === 'update_task' ? '' : '{}',
+          ];
         }
       } else if (trimmedMcp.startsWith('{')) {
         // Model passed a single JSON object instead of positional args — try to extract fields
         try {
           const parsed = JSON.parse(trimmedMcp);
-          const srv = parsed.server || parsed.serverName || parsed.server_name || '';
-          const tl = parsed.tool || parsed.toolName || parsed.tool_name || '';
-          const tArgs = parsed.arguments || parsed.args || parsed.parameters || {};
-          args = [srv, tl, JSON.stringify(tArgs)];
+          if (toolName === 'update_task') {
+            const fromJson = TOOL_SPECS.update_task.fromJson;
+            args = fromJson ? fromJson(parsed) : ['', '', '', ''];
+          } else {
+            const srv = parsed.server || parsed.serverName || parsed.server_name || '';
+            const tl = parsed.tool || parsed.toolName || parsed.tool_name || '';
+            const tArgs = parsed.arguments || parsed.args || parsed.parameters || {};
+            args = [srv, tl, JSON.stringify(tArgs)];
+          }
         } catch {
           args = ['', '', trimmedMcp];
         }
       } else {
-        args = [sanitizeArg(trimmedMcp), '', '{}'];
+        args = [sanitizeArg(trimmedMcp), '', toolName === 'update_task' ? '' : '{}'];
       }
     } else {
       const commaIdx = _findTopLevelComma(argsString);

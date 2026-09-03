@@ -79,6 +79,22 @@ test('regression: unbalanced-paren emoticon in a comment uses the last-paren fal
   assert.equal(calls[0].args[2], 'all good :(');
 });
 
+test('update_task with only task and status is parsed as move-only', () => {
+  const calls = parseToolCalls('@update_task(abc-123, done)');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tool, 'update_task');
+  assert.deepEqual(calls[0].args, ['abc-123', 'done', '']);
+});
+
+test('update_task @-syntax accepts a single JSON object', () => {
+  const calls = parseToolCalls(
+    '@update_task({"task_id":"abc-123","status":"done","comment":"Moved forward"})'
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tool, 'update_task');
+  assert.deepEqual(calls[0].args, ['abc-123', 'done', 'Moved forward', '']);
+});
+
 test('a well-formed call followed by an unterminated write both parse', () => {
   const resp = [
     '@read_file(src/a.js)',
