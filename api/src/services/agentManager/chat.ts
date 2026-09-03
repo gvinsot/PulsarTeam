@@ -386,7 +386,10 @@ export const chatMethods = {
       // everything went to the thinking channel (raw=0, thinking>0), or the
       // model opened a <think> it never closed and _cleanMarkdown's
       // unterminated branch dropped the rest (raw>0, parsed=0).
-      if (!responseForParsing && (fullResponse.length > 0 || streamResult.thinkingBuffer.length > 0)) {
+      if (
+        !responseForParsing &&
+        (fullResponse.length > 0 || streamResult.thinkingBuffer.length > 0)
+      ) {
         console.warn(
           `⚠️  [Chat] "${agent.name}": response is empty after cleanup — ` +
             `raw=${fullResponse.length} chars, thinking=${streamResult.thinkingBuffer.length} chars` +
@@ -801,7 +804,8 @@ export const chatMethods = {
     systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
     systemContent += `\n\nIMPORTANT CONTINUATION RULE: When you receive a message starting with "[TOOL RESULTS", these are the results of tools YOU previously called. Do NOT restart your reasoning from scratch. Do NOT re-call the same tools. Analyze the results and proceed to the NEXT step of your plan.`;
 
-    if (agent.provider === 'ollama') {
+    const textToolOnlyProvider = this.resolveLlmConfig(agent).provider;
+    if (agent.provider === 'ollama' || textToolOnlyProvider === 'vllm') {
       systemContent += `\n\nCRITICAL: You must NEVER use built-in function calls or native tool calls (such as repo_browser, code_sandbox, or any tool_call syntax). Always respond in plain text only. When you need to interact with code, use ONLY the @read_file, @write_file, @list_dir, @search_files, @run_command text commands described above.`;
     }
 

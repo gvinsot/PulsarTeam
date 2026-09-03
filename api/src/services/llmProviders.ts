@@ -75,6 +75,15 @@ interface StreamDone {
   runnerSessionId?: string;
 }
 
+interface NativeToolCallBuffer {
+  id?: string;
+  type?: string;
+  function: {
+    name?: string;
+    arguments: string;
+  };
+}
+
 function defaultMapDone(usage: any): StreamDone {
   return {
     usage: {
@@ -84,12 +93,74 @@ function defaultMapDone(usage: any): StreamDone {
   };
 }
 
+function applyNativeToolCallDelta(buffers: NativeToolCallBuffer[], deltas: any[]): void {
+  for (const delta of deltas) {
+    const index = typeof delta?.index === 'number' ? delta.index : buffers.length;
+    const current =
+      buffers[index] ||
+      (buffers[index] = {
+        function: { arguments: '' },
+      });
+    if (typeof delta.id === 'string') current.id = delta.id;
+    if (typeof delta.type === 'string') current.type = delta.type;
+    if (delta.function && typeof delta.function === 'object') {
+      if (typeof delta.function.name === 'string') current.function.name = delta.function.name;
+      if (typeof delta.function.arguments === 'string') {
+        current.function.arguments += delta.function.arguments;
+      }
+    }
+  }
+}
+
+function nativeToolCallsToText(toolCalls: NativeToolCallBuffer[]): string {
+  const blocks = toolCalls
+    .filter(call => call.function.name)
+    .map(call => {
+      let args: unknown = {};
+      const rawArgs = call.function.arguments || '{}';
+      try {
+        args = JSON.parse(rawArgs);
+      } catch {
+        args = {};
+      }
+      return `<tool_call>\n${JSON.stringify({
+        name: call.function.name,
+        arguments: args,
+      })}\n</tool_call>`;
+    });
+  return blocks.length > 0 ? `\n${blocks.join('\n')}\n` : '';
+}
+
+function messageNativeToolCallsToText(toolCalls: any): string {
+  if (!Array.isArray(toolCalls)) return '';
+  return nativeToolCallsToText(
+    toolCalls.map(call => ({
+      id: typeof call?.id === 'string' ? call.id : undefined,
+      type: typeof call?.type === 'string' ? call.type : undefined,
+      function: {
+        name: typeof call?.function?.name === 'string' ? call.function.name : undefined,
+        arguments: typeof call?.function?.arguments === 'string' ? call.function.arguments : '{}',
+      },
+    }))
+  );
+}
+
 async function* consumeOpenAIStream(
   stream: AsyncIterable<any>,
   signal: AbortSignal | undefined,
   mapDone: (usage: any) => StreamDone = defaultMapDone
 ): AsyncGenerator<any> {
   let finishReason: string | null = null;
+  const nativeToolCalls: NativeToolCallBuffer[] = [];
+  let nativeToolCallsFlushed = false;
+  const flushNativeToolCalls = function* (): Generator<any> {
+    if (nativeToolCallsFlushed || nativeToolCalls.length === 0) return;
+    const text = nativeToolCallsToText(nativeToolCalls);
+    if (text) {
+      yield { type: 'text', text };
+    }
+    nativeToolCallsFlushed = true;
+  };
   for await (const chunk of stream) {
     if (signal?.aborted) throw new Error('Agent stopped by user');
     const choice = chunk.choices?.[0];
@@ -97,13 +168,21 @@ async function* consumeOpenAIStream(
       yield { type: 'text', text: choice.delta.content };
     }
     // Reasoning models: emit thinking tokens separately
-    if (choice?.delta?.reasoning_content) {
-      yield { type: 'thinking', text: choice.delta.reasoning_content };
+    const reasoningText = choice?.delta?.reasoning_content || choice?.delta?.reasoning;
+    if (reasoningText) {
+      yield { type: 'thinking', text: reasoningText };
+    }
+    if (Array.isArray(choice?.delta?.tool_calls)) {
+      applyNativeToolCallDelta(nativeToolCalls, choice.delta.tool_calls);
     }
     if (choice?.finish_reason) {
       finishReason = choice.finish_reason;
+      if (finishReason === 'tool_calls') {
+        yield* flushNativeToolCalls();
+      }
     }
     if (chunk.usage) {
+      yield* flushNativeToolCalls();
       const { usage, runnerSessionId } = mapDone(chunk.usage);
       const doneEvent: any = { type: 'done', finishReason: finishReason || 'stop', usage };
       if (typeof runnerSessionId === 'string' && runnerSessionId) {
@@ -892,12 +971,21 @@ export class VLLMProvider {
     this.client = new OpenAI(clientOpts);
   }
 
+  protected _plainTextToolProtocolParams(): any {
+    // Pulsar's sandbox runner uses its own @tool text protocol. Some
+    // OpenAI-compatible local servers (notably vLLM with Qwen tool parsing)
+    // can otherwise return native tool_calls with content=null, which the chat
+    // UI renders as a blank assistant turn.
+    return this.providerName === 'vllm' ? { tool_choice: 'none' } : {};
+  }
+
   async chat(messages: any[], options: any = {}): Promise<any> {
     const params: any = {
       model: this.model,
       messages: mapOpenAIMessages(messages),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
+      ...this._plainTextToolProtocolParams(),
     };
 
     const requestOpts: any = {};
@@ -918,7 +1006,9 @@ export class VLLMProvider {
     }
 
     return {
-      content: response.choices[0]?.message?.content || '',
+      content:
+        response.choices[0]?.message?.content ||
+        messageNativeToolCallsToText(response.choices[0]?.message?.tool_calls),
       model: this.model,
       provider: this.providerName,
       usage,
@@ -933,6 +1023,7 @@ export class VLLMProvider {
       max_tokens: options.maxTokens || 4096,
       stream: true,
       stream_options: { include_usage: true },
+      ...this._plainTextToolProtocolParams(),
     };
 
     const requestOpts: any = {};

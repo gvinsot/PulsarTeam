@@ -209,6 +209,7 @@ function buildDecisionToolContract(
   const nextColumn = nextColumnAfter(task.status, columns);
   const mentionsNextColumn = /\bnext\s+column\b|\bcolonne\s+suivante\b/i.test(instructions);
   const listTasksTool = nativeTaskTool ? 'list_tasks' : '@list_tasks';
+  const listMyTasksTool = nativeTaskTool ? 'list_my_tasks' : '@list_my_tasks';
   const targetHint =
     mentionsNextColumn && nextColumn
       ? `\nThe next column after "${task.status}" is "${nextColumn.id}".`
@@ -221,10 +222,13 @@ function buildDecisionToolContract(
   return `
 Decision contract:
 - You MUST make the workflow decision by calling the task-update tool; a prose-only answer does not move the task and will be treated as no decision.
-- The exact task ID is already provided above. Do not call ${listTasksTool} just to find this task.
+- The exact task ID is already provided above. Do not call ${listTasksTool} or ${listMyTasksTool} just to find this task.
 - If the requested action is only to move the card or "do nothing", do not read files, write files, or commit. Move the task directly.
 - Use this format on its own line:
-${example}${targetHint}`;
+
+${example}${targetHint}
+
+`;
 }
 
 function buildInstructionsPrompt(
@@ -240,9 +244,14 @@ function buildInstructionsPrompt(
   return `You have been assigned instructions for the following task.
 
 Task ID: ${task.id}
+
 Task title: ${task.text}
-Current status: ${task.status}${columnList}
+
+Current status: ${task.status}
+${columnList}
+
 ${task.error ? `Previous error: ${task.error}\n` : ''}${commits}
+
 Instructions:
 ${instructions}
 ${buildDecisionToolContract(task, instructions, columns, nativeTaskTool)}`;
