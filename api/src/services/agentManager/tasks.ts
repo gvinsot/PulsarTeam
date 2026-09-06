@@ -523,7 +523,7 @@ export const tasksMethods = {
     // We INTENTIONALLY do not require _isActiveTaskStatus here — if the flag is
     // still pointing at this agent, the action is in flight and the link is valid
     // even if the status briefly transitioned (e.g. to "error" via a rate-limit
-    // handler or to "done" via @update_task).
+    // handler or to "done" via update_task).
     const running = await getTaskByActionRunningAgent(agentId);
     if (running) {
       console.log(
@@ -665,7 +665,7 @@ export const tasksMethods = {
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     // Also emit the task itself so the kanban card shows the commit live —
     // commits linked by the terminal-independent reconcile have no other
-    // event to piggyback on (no @run_command result, no status move).
+    // event to piggyback on (no run_command result, no status move).
     emitTaskUpdated(
       this,
       { ...task, agentId: ownerAgentId },
@@ -1315,7 +1315,7 @@ export const tasksMethods = {
       await this._sendPromptStreamed(
         executorId,
         executor,
-        `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, call @update_task(taskId, <final column>, summary) to move it to its final column and finish it.`,
+        `[SYSTEM] You went idle without completing your task. Continue working on it now:\n"${taskText.slice(0, 500)}"\n\nUse your tools to complete the task. When done, use the native update_task tool with the task ID, final column, and summary.`,
         { label: 'Immediate retry' }
       );
       const retryResult = await this._pollTaskVerdict(taskId, taskText, startStatus);
@@ -1424,7 +1424,7 @@ export const tasksMethods = {
           `🔔 [Execution] Reminding "${executorName}" to complete task (attempt ${reminded}/${MAX_REMINDERS})`
         );
 
-        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST call @update_task(taskId, <final column>, summary of what was done) — moving it to its final column with a summary signals completion.\n\nIf you have already finished all the work, call @update_task now to move the task to its final column with a summary of what was accomplished.`;
+        const reminderPrompt = `[SYSTEM REMINDER] You have an active task that is not yet complete:\n"${taskText.slice(0, 300)}"\n\nPlease finish your work on this task. When you are done, you MUST use the native update_task tool with the task ID, final column, and summary. Moving it to the final column with a summary signals completion.\n\nIf you have already finished all the work, use update_task now to move the task to its final column with a summary of what was accomplished.`;
         await this._sendPromptStreamed(executorId, currentExecutor, reminderPrompt, {
           terminalDriven,
           label: 'Reminder',
@@ -1648,7 +1648,7 @@ export const tasksMethods = {
           msg.role === 'user' && typeof msg.content === 'string' && msg.content.includes(taskPrefix)
       );
       const messageToSend = alreadySent
-        ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, call @update_task(taskId, <final column>, summary of what was done) to move it to its final column and finish it.`
+        ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
         : task.text;
 
       // CLI runners always resume through their interactive PTY (not headless

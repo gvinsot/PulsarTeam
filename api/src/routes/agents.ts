@@ -14,7 +14,6 @@ import {
   getAgentById,
 } from '../services/database.js';
 import { isValidRepoFullName } from '../services/taskRepos.js';
-import { stripToolCalls } from '../services/workflow/index.js';
 import { setTaskSignal } from '../services/agentManager/tasks.js';
 import { requireRole, sessionUser } from '../middleware/auth.js';
 import { agentAccessMiddleware, type AgentAccessLevel } from '../lib/agentAccess.js';
@@ -981,7 +980,7 @@ export function agentRoutes(agentManager: AgentManager) {
 
       const prompt = `Refine the following task description. Make it clearer, more actionable, and add acceptance criteria if missing.\n\nTask: ${task.text}\n\nReply ONLY with the improved description (no preamble, no explanation).`;
       const result = await agentManager.sendMessage(refineAgentId, prompt, () => {});
-      const refined = stripToolCalls((result?.content || result || '').trim());
+      const refined = (result?.content || result || '').trim();
       if (refined) {
         await agentManager.updateTaskText(req.params.id, req.params.taskId, refined);
       }

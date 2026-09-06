@@ -745,8 +745,8 @@ test('run_agent finally emits the current column, not the stale pre-run one', as
     assert.equal(taskRows.get(task.id)?.status, 'review', 'DB ended at review');
     assert.ok(decidePrompt.includes('Decision contract:'), 'decide prompt has tool contract');
     assert.ok(
-      decidePrompt.includes(`@update_task(${task.id}, review, Moved to review)`),
-      'next-column prompt gives exact update_task call'
+      decidePrompt.includes(`"task_id": "${task.id}", "status": "review"`),
+      'next-column prompt gives native update_task arguments'
     );
     // The bug: the finally re-emits the captured (work) status, bouncing the card
     // back. After the move to review, no emit may carry the stale "work" again.

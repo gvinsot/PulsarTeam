@@ -11,7 +11,6 @@ const { rows, exports: taskDbFake } = makeTaskDbFake();
 mock.module('../database.js', { namedExports: { ...realDb, ...taskDbFake } });
 
 const { AgentManager } = await import('../agentManager.js');
-const { stripToolCalls } = await import('../workflow/index.js');
 const { setTaskSignal, getTaskSignal } = await import('../agentManager/tasks.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -853,46 +852,6 @@ test('updateTaskTitle returns null for invalid ids', async () => {
   const [agentId] = mgr.agents.keys();
   assert.equal(await mgr.updateTaskTitle('fake', 'fake', 'title'), null);
   assert.equal(await mgr.updateTaskTitle(agentId, 'fake', 'title'), null);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 14. stripToolCalls
-// ═══════════════════════════════════════════════════════════════════════════════
-
-test('stripToolCalls removes @tool() calls', () => {
-  const input = 'I will read the file.\n@read_file(src/index.js)\nDone.';
-  const result = stripToolCalls(input);
-  // Removing the tool call leaves a blank line, which gets collapsed to \n\n
-  assert.equal(result, 'I will read the file.\n\nDone.');
-});
-
-test('stripToolCalls removes <tool_call> blocks', () => {
-  const input = 'Hello\n<tool_call>\n{"name":"read_file"}\n</tool_call>\nWorld';
-  const result = stripToolCalls(input);
-  assert.equal(result, 'Hello\n\nWorld');
-});
-
-test('stripToolCalls handles nested parentheses', () => {
-  const input = 'Test @run_command(echo "hello (world)") end';
-  const result = stripToolCalls(input);
-  assert.equal(result, 'Test  end');
-});
-
-test('stripToolCalls handles multiple tool calls', () => {
-  const input = '@list_dir(.)\n@read_file(package.json)\nSummary of findings.';
-  const result = stripToolCalls(input);
-  assert.equal(result, 'Summary of findings.');
-});
-
-test('stripToolCalls returns empty/null input unchanged', () => {
-  assert.equal(stripToolCalls(null), null);
-  assert.equal(stripToolCalls(undefined), undefined);
-  assert.equal(stripToolCalls(''), '');
-});
-
-test('stripToolCalls leaves non-tool text intact', () => {
-  const input = 'This is a normal response with no tools.';
-  assert.equal(stripToolCalls(input), input);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

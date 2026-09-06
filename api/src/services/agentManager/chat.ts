@@ -11,7 +11,7 @@ import {
   getTaskByActionRunningAgent,
   updateTaskFields,
 } from '../database.js';
-import { TOOL_DEFINITIONS } from '../agentTools.js';
+import { NATIVE_TOOL_DEFINITIONS, type NativeToolCall } from '../nativeTools.js';
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
@@ -26,47 +26,13 @@ import {
   RECENT_TASKS_LIMIT,
 } from './promptSections.js';
 
-const MAX_DELEGATION_DEPTH = 5;
-
-function workflowMetaValue(messageMeta: any, key: string) {
-  const workflowKey = `workflow${key[0].toUpperCase()}${key.slice(1)}`;
-  return messageMeta?.[key] ?? messageMeta?.[workflowKey];
-}
-
-function workflowCarryMeta(messageMeta: any) {
-  const mode = workflowMetaValue(messageMeta, 'mode');
-  if (!mode) return {};
-  return {
-    workflowMode: mode,
-    workflowTaskId: workflowMetaValue(messageMeta, 'taskId'),
-    workflowCurrentStatus: workflowMetaValue(messageMeta, 'currentStatus'),
-    workflowValidStatuses: workflowMetaValue(messageMeta, 'validStatuses'),
-    workflowNextStatus: workflowMetaValue(messageMeta, 'nextStatus'),
-    workflowInstructions: workflowMetaValue(messageMeta, 'instructions'),
-  };
-}
-
-function buildWorkflowDecideNudge(messageMeta: any) {
-  const taskId = workflowMetaValue(messageMeta, 'taskId') || '<taskId>';
-  const currentStatus = workflowMetaValue(messageMeta, 'currentStatus');
-  const nextStatus = workflowMetaValue(messageMeta, 'nextStatus');
-  const instructions = String(workflowMetaValue(messageMeta, 'instructions') || '');
-  const validStatuses = workflowMetaValue(messageMeta, 'validStatuses');
-  const wantsNextColumn = /\bnext\s+column\b|\bcolonne\s+suivante\b/i.test(instructions);
-  const validLine =
-    Array.isArray(validStatuses) && validStatuses.length
-      ? `\nValid statuses: ${validStatuses.join(', ')}`
-      : '';
-  const nextLine =
-    wantsNextColumn && currentStatus && nextStatus
-      ? `\nThe next column after "${currentStatus}" is "${nextStatus}".`
-      : '';
-  const exampleStatus = wantsNextColumn && nextStatus ? nextStatus : '<target-status>';
-
-  return `[SYSTEM] This workflow decide action is not complete because you answered without a task-update tool call. Do not explain or restate your plan. Call @update_task on its own line now.${validLine}${nextLine}
-
-Use this exact format:
-@update_task(${taskId}, ${exampleStatus}, Moved to ${exampleStatus})`;
+/** Render a tool-only turn as short assistant text. Used as the history content
+ * when the model called tools and wrote no prose — an empty assistant message
+ * is both invisible in the UI and rejected by Anthropic on replay. Falls back to
+ * a fixed label so the result is never the empty string. */
+function summarizeToolTrace(trace: any[]): string {
+  const names = [...new Set(trace.map(t => t?.name).filter(Boolean))];
+  return names.length > 0 ? `(used tools: ${names.join(', ')})` : '(no response)';
 }
 
 /** @this {import('./index.js').AgentManager} */
@@ -232,11 +198,12 @@ export const chatMethods = {
     const systemContent = await this._buildSystemPrompt(agent, id, delegationDepth);
     messages.push({ role: 'system', content: systemContent });
 
+    const modelUserMessage = userMessage;
     const { managesContext, isTaskExecution, activeTaskId } = await this._assembleMessages(
       agent,
       messages,
       systemContent,
-      userMessage,
+      modelUserMessage,
       delegationDepth,
       messageMeta,
       streamCallback,
@@ -245,7 +212,7 @@ export const chatMethods = {
 
     const historyEntry: any = {
       role: 'user',
-      content: userMessage,
+      content: modelUserMessage,
       timestamp: new Date().toISOString(),
     };
     if (messageMeta) {
@@ -290,7 +257,7 @@ export const chatMethods = {
 
     try {
       const llmConfig = this.resolveLlmConfig(agent);
-      const streamResult = await this._streamAndContinue(
+      let streamResult = await this._streamAndContinue(
         agent,
         id,
         messages,
@@ -301,11 +268,100 @@ export const chatMethods = {
       );
       fullResponse = streamResult.fullResponse;
 
+      // A direct chat provider now speaks the native function-calling loop:
+      // assistant tool_calls followed by role: tool results. CLI runners keep
+      // their own MCP/native loop and therefore receive no local tool schemas.
+      const nativeToolTrace: any[] = [];
+      // One round = one assistant turn that asked for tools. A real coding task
+      // (explore → edit → build → commit → update_task) routinely needs dozens,
+      // so this is a runaway guard, not a step budget. Hitting it ENDS the turn
+      // instead of throwing: the work already done is kept, and the task loop's
+      // reminder brings the agent back. Throwing here marked the agent in error
+      // and stranded the task mid-flight.
+      const MAX_NATIVE_TOOL_ROUNDS = 40;
+      let nativeToolRound = 0;
+      while (!isCliRunner(agent) && streamResult.toolCalls.length > 0) {
+        nativeToolRound++;
+        if (nativeToolRound > MAX_NATIVE_TOOL_ROUNDS) {
+          console.warn(
+            `⚠️ [Tools] "${agent.name}": native tool loop hit ${MAX_NATIVE_TOOL_ROUNDS} rounds — ending turn`
+          );
+          if (streamCallback) {
+            streamCallback(`\n⚠️ *Tool budget reached (${MAX_NATIVE_TOOL_ROUNDS} rounds).*\n`);
+          }
+          break;
+        }
+        postProcessingStarted = true;
+
+        messages.push({
+          role: 'assistant',
+          content: streamResult.fullResponse,
+          toolCalls: streamResult.toolCalls,
+        });
+
+        const toolResults = await this._processToolCalls(
+          id,
+          streamResult.toolCalls,
+          streamCallback,
+          delegationDepth
+        );
+        const resultsByCallId = new Map<string, any>(
+          toolResults.map((result: any) => [result.toolCallId, result])
+        );
+        nativeToolTrace.push(
+          ...streamResult.toolCalls.map((call: NativeToolCall) => ({
+            id: call.id,
+            name: call.name,
+            arguments: call.arguments,
+            result: resultsByCallId.get(call.id),
+          }))
+        );
+
+        const hasTerminal = toolResults.some((result: any) => result.isTerminal);
+        if (hasTerminal) break;
+
+        for (const call of streamResult.toolCalls) {
+          const result = resultsByCallId.get(call.id) || {
+            success: false,
+            error: `No result returned for native tool call ${call.name}.`,
+          };
+          messages.push({
+            role: 'tool',
+            toolCallId: call.id,
+            toolError: !result.success,
+            content: JSON.stringify({
+              success: Boolean(result.success),
+              result: result.result || null,
+              error: result.success ? null : result.error || 'Tool execution failed.',
+            }),
+          });
+        }
+
+        streamResult = await this._streamAndContinue(
+          agent,
+          id,
+          messages,
+          llmConfig,
+          streamCallback,
+          abortController,
+          activeTaskId
+        );
+        fullResponse += streamResult.fullResponse;
+      }
+
+      // With native function calling a whole turn can be tool calls and nothing
+      // else — the model emits tool_use blocks with no prose, and the loop above
+      // breaks on the terminal tool (update_task) before any text arrives. The
+      // history entry would then be `content: ''`, which is (a) an empty bubble
+      // in the UI and (b) fatal on the NEXT turn: _assembleMessages replays the
+      // history verbatim and Anthropic rejects a message with empty content, so
+      // every later turn 400s. Persist what the turn actually did instead.
       const assistantEntry: any = {
         role: 'assistant',
-        content: fullResponse,
+        content: fullResponse || summarizeToolTrace(nativeToolTrace),
         timestamp: new Date().toISOString(),
       };
+      if (nativeToolTrace.length > 0) assistantEntry.nativeToolTrace = nativeToolTrace;
       if (streamResult.durationMs > 0) assistantEntry.durationMs = streamResult.durationMs;
       if (streamResult.outputTokens > 0) assistantEntry.outputTokens = streamResult.outputTokens;
       agent.conversationHistory.push(assistantEntry);
@@ -400,11 +456,8 @@ export const chatMethods = {
       const actionResult = await this._processPostResponseActions(
         agent,
         id,
-        responseForParsing,
         fullResponse,
-        streamCallback,
-        delegationDepth,
-        messageMeta
+        delegationDepth
       );
       if (actionResult.earlyReturn !== null) {
         this.setStatus(id, 'idle');
@@ -512,11 +565,6 @@ export const chatMethods = {
       // ── Transient stream error → retry with backoff ──
       const isUserStop = err.message === 'Agent stopped by user';
       const isAuthError = err.status === 401 || err.status === 403;
-      const hasPartialToolCalls =
-        fullResponse &&
-        /@(read_file|write_file|list_dir|search_files|run_command|append_file|mcp_call|report_error|update_task|search_skill|create_skill|update_skill|delete_skill)\b/i.test(
-          fullResponse
-        );
       const isTransient =
         !isUserStop &&
         !isAuthError &&
@@ -528,7 +576,6 @@ export const chatMethods = {
       if (
         isTransient &&
         !postProcessingStarted &&
-        !hasPartialToolCalls &&
         retryCount < MAX_STREAM_RETRIES &&
         !abortController.signal.aborted
       ) {
@@ -573,13 +620,9 @@ export const chatMethods = {
           throw retryErr;
         }
       }
-      if (
-        isTransient &&
-        (postProcessingStarted || hasPartialToolCalls) &&
-        retryCount < MAX_STREAM_RETRIES
-      ) {
+      if (isTransient && postProcessingStarted && retryCount < MAX_STREAM_RETRIES) {
         console.log(
-          `🛡️ [Stream Retry] "${agent.name}": skipping retry — ${postProcessingStarted ? 'post-processing already started' : 'partial response contains tool calls'}`
+          `🛡️ [Stream Retry] "${agent.name}": skipping retry — native tool execution already started`
         );
         this.addActionLog(
           id,
@@ -612,7 +655,7 @@ export const chatMethods = {
       const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
 
       if (availableAgents.length > 0) {
-        systemContent += `\n\n--- Available Swarm Agents ---\nUse the Swarm API MCP tools to manage agents and assign tasks.\n${availableAgents.join('\n')}\n\nTo add a task to a board (any agent watching the board can pick it up), use:\n@mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "task description", "project": "ProjectName"})\nUse @mcp_call(Swarm API, list_boards, {}) first to discover board IDs.\n\nTo check agent status:\n@mcp_call(Swarm API, get_agent_status, {"agent_name": "AgentName"})\n\nTo list all agents:\n@mcp_call(Swarm API, list_agents, {})\n\nIMPORTANT: Agents may report errors using @report_error(). Additionally, the system automatically reports infrastructure-level errors (LLM crashes, connection failures, timeouts, auth issues) — you will see these as [System Error] notifications. When you check agent status and see errors, analyze the problem and decide whether to retry the task, reassign it to another agent, provide additional guidance, or escalate to the user.`;
+        systemContent += `\n\n--- Available Swarm Agents ---\nUse the Swarm API MCP tools to manage agents and assign tasks.\n${availableAgents.join('\n')}\n\nUse mcp_call with server "Swarm API", the desired tool name, and JSON arguments. Call list_boards before creating a task so you have a real board ID. When creating a task, pass board_id, task, and project.\n\nAgents may use report_error for blocking problems. Infrastructure errors (LLM crashes, connection failures, timeouts, authentication) appear as [System Error] notifications. When you check an agent with an error, decide whether to retry, reassign, provide guidance, or escalate to the user.`;
       } else {
         systemContent += `\n\n--- Available Swarm Agents ---\nNo other agents are currently available in the swarm. You will need to complete tasks yourself or ask the user to create specialist agents.`;
       }
@@ -683,7 +726,7 @@ export const chatMethods = {
         .map((a: any) => `- ${a.name} (${a.role})${a.project ? ` [project: ${a.project}]` : ''}`);
       if (askableAgents.length > 0) {
         systemContent += `\n\n--- Agents You Can Ask ---\n`;
-        systemContent += `Use @ask(AgentName, "question") for quick questions.\n`;
+        systemContent += `Use the ask_agent tool for quick questions.\n`;
         systemContent += askableAgents.join('\n');
       }
     }
@@ -698,16 +741,13 @@ export const chatMethods = {
       if (mcpTools.length > 0) {
         systemContent += '\n\n--- MCP Tools ---\n';
         systemContent +=
-          'These are NOT shell commands. Do NOT use @run_command or any bash tool to call them.\n';
-        systemContent +=
-          'Call them using ONLY the @mcp_call(server, tool, {"arg": "value"}) syntax — this is the ONLY valid way.\n';
+          'These are not shell commands. Invoke them with the native mcp_call tool.\n';
         systemContent +=
           'IMPORTANT: Replace <type> placeholders with ACTUAL values. Do NOT copy the type descriptions.\n';
-        systemContent +=
-          'Example: @mcp_call(MyServer, my_tool, {"name": "my-actual-value", "count": 5})\n\n';
+        systemContent += 'Pass server, tool, and arguments as JSON fields to mcp_call.\n\n';
         for (const t of mcpTools) {
           const schema = simplifyMcpSchema(t.inputSchema);
-          systemContent += `@mcp_call(${t.serverName}, ${t.name}, ${schema}) — ${t.description || ''}\n`;
+          systemContent += `${t.serverName}.${t.name}(${schema}) - ${t.description || ''}\n`;
         }
       }
       if (mcpUnavailable.length > 0) {
@@ -726,7 +766,7 @@ export const chatMethods = {
     // ranked by a combined semantic + recency score against the latest
     // user message. Each task is text-truncated and stripped of commit
     // history to keep the prompt small. Older / overflow tasks remain
-    // reachable via @mcp_call(Swarm API, get_agent_tasks, …) on demand.
+    // reachable through the native mcp_call tool on demand.
     //
     // Without this bound, agents that had accumulated many tasks shipped
     // 100+ KB / 30k tokens to Anthropic on every turn, which added minutes
@@ -783,31 +823,27 @@ export const chatMethods = {
       activeTasks.length,
       (s: string) => this._isActiveTaskStatus(s),
       (overflow: number) =>
-        `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — ` +
-        `use @mcp_call(Swarm API, get_agent_tasks, {"agent_name": "${agent.name}"}) to see all)\n`
+        `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted - ` +
+        `use mcp_call on Swarm API with get_agent_tasks and agent_name "${agent.name}" to see all)\n`
     );
 
     if (agent.project) {
       const fileTree = this.executionManager?.getFileTree(id);
-      let projectCtx = `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nYour current working directory is already the project root.\nAll file paths are relative to this root (e.g. @read_file(src/index.js), NOT @read_file(/projects/${agent.project}/src/index.js)).\nDo NOT use absolute paths or /projects/ prefixes — they will not work.`;
+      let projectCtx = `\n\n--- PROJECT CONTEXT ---\nYou are working on project: ${agent.project}\nYour current working directory is already the project root.\nAll file paths passed to native file tools are relative to this root (for example src/index.js, never /projects/${agent.project}/src/index.js). Do not use absolute paths or /projects/ prefixes.`;
       if (fileTree) {
-        projectCtx += `\n\n--- PROJECT ROOT ---\n${fileTree}\n--- END ---\nUse @list_dir to explore subdirectories.`;
+        projectCtx += `\n\n--- PROJECT ROOT ---\n${fileTree}\n--- END ---\nUse list_dir to explore subdirectories.`;
       } else {
-        projectCtx += `\nUse @list_dir(.) to explore the project structure.`;
+        projectCtx += `\nUse list_dir with path "." to explore the project structure.`;
       }
       systemContent += projectCtx;
     } else {
-      systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is assigned yet. Use @list_dir(.) to discover available projects. IMPORTANT: You MUST navigate into a project folder before working. Always prefix paths with the project name (e.g. @read_file(my-project/src/index.js), @list_dir(my-project/src)). Do NOT create or modify files at the workspace root — always work inside a project directory.`;
+      systemContent += `\n\n--- PROJECT CONTEXT ---\nNo specific project is assigned yet. Use list_dir with path "." to discover available projects. You must navigate into a project folder before working. Pass paths prefixed with the project name, such as my-project/src/index.js. Do not create or modify files at the workspace root.`;
     }
     systemContent += `\nIMPORTANT: Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.`;
-    systemContent += `\n${TOOL_DEFINITIONS}`;
-    systemContent += `\nAlways use these tools to read, analyze, and modify code. Do not just discuss - take action!`;
-    systemContent += `\n\nIMPORTANT CONTINUATION RULE: When you receive a message starting with "[TOOL RESULTS", these are the results of tools YOU previously called. Do NOT restart your reasoning from scratch. Do NOT re-call the same tools. Analyze the results and proceed to the NEXT step of your plan.`;
-
-    const textToolOnlyProvider = this.resolveLlmConfig(agent).provider;
-    if (agent.provider === 'ollama' || textToolOnlyProvider === 'vllm') {
-      systemContent += `\n\nCRITICAL: You must NEVER use built-in function calls or native tool calls (such as repo_browser, code_sandbox, or any tool_call syntax). Always respond in plain text only. When you need to interact with code, use ONLY the @read_file, @write_file, @list_dir, @search_files, @run_command text commands described above.`;
-    }
+    systemContent +=
+      '\n\n--- Tool Use ---\nUse the native tools supplied with this request for every action. Tool calls and their results are structured messages; never write tool syntax in chat text. Work one step at a time, use real argument values, and continue from each tool result.';
+    systemContent +=
+      '\nAlways use tools to read, analyze, and modify code. Do not just discuss - take action!';
 
     const pluginCount = (agent.skills || []).length;
     const resolvedCount =
@@ -830,13 +866,10 @@ export const chatMethods = {
   },
 
   // Build the agent's base instructions for a CLI runner (claudecode, codex,
-  // opencode, openclaw, hermes). Unlike _buildSystemPrompt — which targets the
-  // in-house chat text-tool protocol — this is a "complet sans protocole chat"
-  // variant: identity, collaboration context, reference docs, plugin
-  // instructions, credentials, relevant tasks and project context, but WITHOUT
-  // the text-protocol surface (@mcp_call / @ask / @read_file… / TOOL_DEFINITIONS
-  // / [TOOL RESULTS] continuation rule). CLI runners use their own native tools
-  // and real MCP, so injecting the @-syntax would be wrong/confusing.
+  // opencode, openclaw, hermes). Unlike _buildSystemPrompt, this is a
+  // runner-focused variant: identity, collaboration context, reference docs,
+  // plugin instructions, credentials, relevant tasks and project context.
+  // CLI runners use their own native tools and real MCP.
   //
   // The runner-service fetches this via /api/internal/runner-instructions and
   // writes it into each CLI's native global instructions file (CLAUDE.md /
@@ -859,12 +892,12 @@ export const chatMethods = {
       `You have a single MCP server, the Pulsar Gateway, which is always available:\n` +
       `- ALWAYS start by calling \`list_mcps\` to discover the MCP servers and tools currently available to you. More can be attached to you or your board at any time, so do not assume — list them.\n` +
       `- To run any tool a server exposes, call \`call_mcp_tool({ server, tool, args })\` with the names and argument schema reported by list_mcps.\n` +
-      `- To move YOUR current task between board columns (e.g. to "In Review" or "Done") and/or mark it finished, call \`update_task({ status, comment })\` — it auto-detects your active task, no task_id needed.\n` +
-      `- To finish a task: after committing and pushing, move it to its final column with a summary, e.g. \`update_task({ status: "Done", comment: "what you did" })\`. There is no separate completion tool.`;
+      `- To move YOUR current task between board columns (e.g. to "In Review" or "Done") and/or mark it finished, use the native update_task tool. It auto-detects your active task when task_id is omitted.\n` +
+      `- To finish a task: after committing and pushing, move it to its final column with a summary through native update_task. There is no separate completion tool.`;
 
     // Swarm-leader collaboration context — describe the real MCP tools, not the
-    // chat @mcp_call syntax. The Swarm API MCP server is assigned to the agent
-    // separately (mcpManager) so the CLI sees those tools natively.
+    // direct-chat MCP dispatch. The Swarm API MCP server is assigned to the
+    // agent separately (mcpManager) so the CLI sees those tools natively.
     if (agent.isLeader) {
       const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
       out += `\n\n--- Swarm Leadership ---\nYou lead a swarm of agents. The Swarm API server (run \`list_mcps\` to see it) exposes list_boards, add_task, list_agents and get_agent_status — invoke them via \`call_mcp_tool({ server: "Swarm API", tool, args })\` to assign work and monitor progress. When adding a task, always specify the project so the agent works in the correct directory.`;
@@ -914,7 +947,7 @@ export const chatMethods = {
         `(${overflow} other active task${overflow > 1 ? 's' : ''} omitted — use the Swarm API MCP tools to list them all)\n`
     );
 
-    // Project context — real paths, no @-syntax (the CLI works in a real cwd).
+    // Project context — the CLI works in a real cwd.
     if (agent.project) {
       out += `\n\n--- Project Context ---\nYou are working on project: ${agent.project}\nYour current working directory IS the project root; use ordinary relative paths.`;
     } else {
@@ -1184,12 +1217,14 @@ export const chatMethods = {
       maxTokens: number;
       llmConfig: any;
       isContinuation: boolean;
+      tools: any[];
     }
   ): Promise<{
     text: string;
     thinking: string;
     finishReason: string | null;
     outputTokens: number;
+    toolCalls: NativeToolCall[];
   }> {
     const {
       agent,
@@ -1204,11 +1239,13 @@ export const chatMethods = {
       maxTokens,
       llmConfig,
       isContinuation,
+      tools,
     } = ctx;
     let text = '';
     let thinking = '';
     let finishReason: string | null = null;
     let outputTokens = 0;
+    let toolCalls: NativeToolCall[] = [];
 
     for await (const chunk of provider.chatStream(messages, {
       temperature: llmConfig.temperature,
@@ -1218,6 +1255,7 @@ export const chatMethods = {
       signal: abortController.signal,
       taskId: activeTaskId || undefined,
       runnerSessionId,
+      tools,
     })) {
       if (abortController.signal.aborted) {
         throw new Error('Agent stopped by user');
@@ -1241,6 +1279,9 @@ export const chatMethods = {
       if (chunk.type === 'text') {
         text += chunk.text;
         if (!useCliRunner && streamCallback) streamCallback(chunk.text);
+      }
+      if (chunk.type === 'tool_calls') {
+        toolCalls = chunk.toolCalls || [];
       }
       if (chunk.type === 'done') {
         if (chunk.usage) {
@@ -1275,14 +1316,12 @@ export const chatMethods = {
       }
     }
 
-    return { text, thinking, finishReason, outputTokens };
+    return { text, thinking, finishReason, outputTokens, toolCalls };
   },
 
   /** Stream one turn to completion, auto-continuing while the provider stops on
    * finish_reason=length. "Continue" here means continuation of a truncated
-   * response — never delegation: no branch reaches sendMessage or an @ask, so
-   * this takes no delegationDepth. The MAX_DELEGATION_DEPTH guard lives where
-   * delegation actually happens, in _processPostResponseActions. */
+   * response, never cross-agent delegation. */
   async _streamAndContinue(
     this: any,
     agent: any,
@@ -1298,6 +1337,7 @@ export const chatMethods = {
     finishReason: string | null;
     outputTokens: number;
     durationMs: number;
+    toolCalls: NativeToolCall[];
   }> {
     // When the agent is bound to a CLI runner (opencode, openclaw, hermes,
     // codex, claudecode), route the chat call through the runner-service so
@@ -1334,6 +1374,7 @@ export const chatMethods = {
     let thinkingBuffer = '';
     let finishReason: string | null = null;
     let totalOutputTokens = 0;
+    let toolCalls: NativeToolCall[] = [];
     // CLI runners have a real terminal surface. Their upstream "thinking"
     // deltas are console activity mirrored to xterm by the runner-service,
     // so the chat history must not reflow them as markdown/text.
@@ -1369,11 +1410,13 @@ export const chatMethods = {
       maxTokens: safeMaxTokens,
       llmConfig,
       isContinuation: false,
+      tools: useCliRunner ? [] : NATIVE_TOOL_DEFINITIONS,
     });
     fullResponse += first.text;
     thinkingBuffer += first.thinking;
     totalOutputTokens += first.outputTokens;
     finishReason = first.finishReason;
+    toolCalls = first.toolCalls;
 
     // ── Auto-continuation ──
     const MAX_CONTINUATIONS = 3;
@@ -1409,11 +1452,13 @@ export const chatMethods = {
         maxTokens: contMaxTokens,
         llmConfig,
         isContinuation: true,
+        tools: useCliRunner ? [] : NATIVE_TOOL_DEFINITIONS,
       });
       fullResponse += cont.text;
       thinkingBuffer += cont.thinking;
       totalOutputTokens += cont.outputTokens;
       finishReason = cont.finishReason;
+      toolCalls = cont.toolCalls;
       messages.pop();
       messages.pop();
     }
@@ -1430,6 +1475,7 @@ export const chatMethods = {
       finishReason,
       outputTokens: totalOutputTokens,
       durationMs: Date.now() - responseStartedAt,
+      toolCalls,
     };
   },
 
@@ -1437,259 +1483,10 @@ export const chatMethods = {
     this: any,
     agent: any,
     id: string,
-    responseForParsing: string,
     fullResponse: string,
-    streamCallback: any,
-    delegationDepth: number,
-    messageMeta: any
+    delegationDepth: number
   ): Promise<{ earlyReturn?: any }> {
-    const isTopLevel = delegationDepth === 0 && !messageMeta;
-
-    const isNudge = messageMeta?.type === 'nudge';
-    const workflowMode = workflowMetaValue(messageMeta, 'mode');
-    const isWorkflowDecide = workflowMode === 'decide';
-    // Deliberately verb-agnostic. This used to be an allow-list of verbs
-    // (start|begin|proceed|now|first|go ahead) that missed the vocabulary a
-    // decide-mode agent actually uses — "Let me move it to the next column",
-    // "I'll update the task" — so a plan-only reply sailed through un-nudged
-    // and the whole action was reported as "produced no decision". Matching
-    // the first-person intent phrase alone is enough: the caller already
-    // gates on a short response in which NO tool call was parsed, and in
-    // that state a nudge is the right move whatever verb follows.
-    const intentPatterns =
-      /^[\s\S]{0,200}\b(i(?:'ll|'m going to| will| am going to)|let me|let us|let's|je vais|je m'en occupe|commençons|nous allons)\b/i;
-    const looksLikePurePlan = responseForParsing.length < 500;
-
-    // Process tool calls
-    {
-      const toolResults = await this._processToolCalls(
-        id,
-        responseForParsing,
-        streamCallback,
-        delegationDepth
-      );
-      if (toolResults.length > 0) {
-        const hasTerminal = toolResults.some((r: any) => r.isTerminal);
-        const nonTerminal = toolResults.filter((r: any) => !r.isTerminal);
-        // If any tool signaled terminal (e.g. a completing @update_task), stop
-        // the continuation loop even if there were other non-terminal results
-        // (e.g. run_command). Those tools already executed; sending their
-        // output back to the LLM only causes it to loop and re-call the same
-        // terminal tool repeatedly.
-        if (hasTerminal || nonTerminal.length === 0) {
-          return {};
-        }
-        const resultsSummary = nonTerminal
-          .map((r: any) => {
-            if (r.isErrorReport) {
-              return `--- ⚠️ ERROR REPORT ---\n${r.args[0] || r.result}`;
-            }
-            if (!r.success) {
-              const parts = [`ERROR: ${r.error}`];
-              if (r.result) parts.push(`OUTPUT:\n${r.result}`);
-              return `--- ${r.tool}(${r.args.join(', ')}) ---\n${parts.join('\n')}`;
-            }
-            return `--- ${r.tool}(${r.args.join(', ')}) ---\n${r.result}`;
-          })
-          .join('\n\n');
-
-        const hasErrorReports = nonTerminal.some((r: any) => r.isErrorReport);
-        const hasRealErrors = nonTerminal.some((r: any) => !r.success && !r.isErrorReport);
-        const hasSuccessfulCommit = nonTerminal.some(
-          (r: any) =>
-            r.tool === 'run_command' &&
-            r.success &&
-            (r.args[0] || '').toLowerCase().includes('git push')
-        );
-        let continuationPrompt =
-          '\nThese are the results of the tools YOU just called. Continue your work based on these results. Do NOT re-explain your plan or re-call the same tools — use the output above and proceed to the next step.';
-        // Remind the LLM of the original task/user message to prevent it from
-        // losing context across multiple tool-result iterations.
-        const originalTask = agent.currentTask || '';
-        if (originalTask) {
-          continuationPrompt += `\nReminder — your current task: "${originalTask}"`;
-        }
-        if (hasErrorReports) {
-          continuationPrompt =
-            '\nYou reported an error. The error has been escalated to the manager. Summarize what you attempted and what went wrong so the manager can help.';
-        } else if (hasRealErrors) {
-          continuationPrompt =
-            '\nSome tools encountered errors. Try to resolve the issues, use alternative approaches, or use @report_error(description) to escalate the problem to the manager if you cannot resolve it.';
-        } else if (isWorkflowDecide) {
-          continuationPrompt =
-            '\nYou are still inside a workflow decide action. The action is not complete until you call @update_task(taskId, targetStatus, summary). Do not re-list tasks or explain the target; call @update_task now.';
-        } else if (hasSuccessfulCommit) {
-          continuationPrompt =
-            '\nYour code has been committed and pushed. Now call @update_task(taskId, <final column>, summary) to move the task to its final column and signal that your task is done.';
-        }
-
-        const toolImages = nonTerminal.flatMap((r: any) => r.images || []);
-
-        const continuedResponse = await this.sendMessage(
-          id,
-          `[TOOL RESULTS — DO NOT RESTART YOUR REASONING]\n${resultsSummary}\n\n${continuationPrompt}`,
-          streamCallback,
-          delegationDepth,
-          {
-            type: 'tool-result',
-            ...workflowCarryMeta(messageMeta),
-            toolResults: nonTerminal.map((r: any) => ({
-              tool: r.tool,
-              args: r.args,
-              success: r.success,
-              result: r.result || undefined,
-              error: r.success ? undefined : r.error,
-              isErrorReport: r.isErrorReport || false,
-              images: r.images || undefined,
-            })),
-          },
-          toolImages.length > 0 ? toolImages : null
-        );
-        return { earlyReturn: continuedResponse };
-      }
-
-      const hasTools = agent.project || agent.mcpServers?.length > 0 || agent.skills?.length > 0;
-      if (
-        isWorkflowDecide &&
-        !isNudge &&
-        looksLikePurePlan &&
-        responseForParsing.trim().length > 0
-      ) {
-        console.log(
-          `🔄 [Nudge] Agent "${agent.name}" answered workflow decide without @update_task — nudging`
-        );
-        const nudgeResponse = await this.sendMessage(
-          id,
-          buildWorkflowDecideNudge(messageMeta),
-          streamCallback,
-          delegationDepth,
-          { type: 'nudge', ...workflowCarryMeta(messageMeta) }
-        );
-        return { earlyReturn: nudgeResponse };
-      }
-      if (hasTools && !isNudge && looksLikePurePlan && responseForParsing.length > 20) {
-        if (intentPatterns.test(responseForParsing)) {
-          console.log(
-            `🔄 [Nudge] Agent "${agent.name}" described intent but used no tools — nudging`
-          );
-          const nudgeMessage =
-            agent.project || agent.skills?.length > 0
-              ? '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use @read_file, @write_file, @list_dir, @search_files, or @run_command to accomplish your task. Do NOT explain what you will do — just do it.'
-              : '[SYSTEM] You described what you plan to do but did not use any tools. Stop describing and START ACTING NOW. Use your available @mcp_call tools to accomplish your task. Do NOT explain what you will do — just do it.';
-          const nudgeResponse = await this.sendMessage(
-            id,
-            nudgeMessage,
-            streamCallback,
-            delegationDepth,
-            { type: 'nudge' }
-          );
-          return { earlyReturn: nudgeResponse };
-        }
-      }
-    }
-
-    // ── Process @ask commands ────────
-    {
-      const agentHasDirectAccess = (agent.skills || []).includes('skill-agents-direct-access');
-      if (agentHasDirectAccess && delegationDepth < MAX_DELEGATION_DEPTH) {
-        const askCommands = this._parseAskCommands(responseForParsing);
-
-        if (askCommands.length > 0) {
-          const askResults: any[] = [];
-
-          for (const askCmd of askCommands) {
-            const targetAgent = Array.from(this.agents.values()).find(
-              (a: any) =>
-                a.name.toLowerCase() === askCmd.agentName.toLowerCase() &&
-                a.id !== id &&
-                a.enabled !== false
-            );
-
-            if (!targetAgent) {
-              console.log(`⚠️  [Ask] Agent "${askCmd.agentName}" not found or disabled`);
-              askResults.push({
-                agentName: askCmd.agentName,
-                answer: null,
-                error: `Agent "${askCmd.agentName}" not found or disabled in swarm`,
-              });
-              continue;
-            }
-
-            if ((targetAgent as any).status === 'busy') {
-              console.log(`⚠️  [Ask] Agent "${askCmd.agentName}" is busy`);
-              askResults.push({
-                agentName: askCmd.agentName,
-                answer: null,
-                error: `Agent "${askCmd.agentName}" is currently busy. Try again later.`,
-              });
-              continue;
-            }
-
-            console.log(
-              `💬 [Ask] ${agent.name} → ${(targetAgent as any).name}: "${askCmd.question.slice(0, 80)}"`
-            );
-
-            this._emit('agent:ask', {
-              from: { id, name: agent.name },
-              to: { id: (targetAgent as any).id, name: (targetAgent as any).name },
-              question: askCmd.question,
-            });
-
-            this._emit('agent:stream:start', { agentId: (targetAgent as any).id });
-
-            try {
-              const answer = await this.sendMessage(
-                (targetAgent as any).id,
-                `[QUESTION from ${agent.name}]: ${askCmd.question}\n\nPlease provide a concise, direct answer.`,
-                (chunk: any) => {
-                  this._emit('agent:stream:chunk', { agentId: (targetAgent as any).id, chunk });
-                },
-                delegationDepth + 1,
-                { type: 'ask-question', fromAgent: agent.name }
-              );
-
-              this._emit('agent:stream:end', { agentId: (targetAgent as any).id });
-              this._emit('agent:updated', this._sanitize(targetAgent));
-
-              askResults.push({ agentName: (targetAgent as any).name, answer, error: null });
-            } catch (err: any) {
-              this._emit('agent:stream:end', { agentId: (targetAgent as any).id });
-              console.error(`💬 [Ask] Error from ${(targetAgent as any).name}: ${err.message}`);
-              askResults.push({
-                agentName: (targetAgent as any).name,
-                answer: null,
-                error: err.message,
-              });
-            }
-          }
-
-          const answersSummary = askResults
-            .map(r => {
-              if (r.error) return `--- ⚠️ ERROR asking ${r.agentName} ---\n${r.error}`;
-              return `--- Answer from ${r.agentName} ---\n${r.answer}`;
-            })
-            .join('\n\n');
-
-          if (streamCallback) streamCallback(`\n\n--- Received answers, continuing ---\n\n`);
-
-          const continuedResponse = await this.sendMessage(
-            id,
-            `[ASK RESULTS]\n${answersSummary}\n\nContinue with your task based on these answers.`,
-            streamCallback,
-            delegationDepth,
-            {
-              type: 'ask-result',
-              askResults: askResults.map(r => ({
-                agentName: r.agentName,
-                answer: r.answer,
-                error: r.error,
-              })),
-            }
-          );
-          return { earlyReturn: continuedResponse };
-        }
-      }
-    }
+    const isTopLevel = delegationDepth === 0;
 
     // ── Rate limit detection ──
     const rateLimitInfo = this._parseRateLimitReset(fullResponse);

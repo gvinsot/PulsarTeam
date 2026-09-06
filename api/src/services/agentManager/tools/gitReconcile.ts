@@ -1,6 +1,6 @@
 // ─── Terminal-independent git commit/push reconcile ─────────────────────────
 // CLI runners (claude code, aider, codex, …) run `git commit` / `git push`
-// inside their own interactive PTY: nothing flows through the @run_command
+// inside their own interactive PTY: nothing flows through the run_command
 // tool, so the real-time detector in commitDetection.ts never sees it — and
 // the CLI's TUI often doesn't render output the terminal-side parsers could
 // catch anyway. The only reliable source of truth is the repo itself. These

@@ -321,25 +321,25 @@ export const compactionMethods = {
       for (const m of toSummarize) {
         const content = m.content || '';
         if (m.role === 'assistant') {
-          const reads = content.match(/@read_file\(([^)]{1,120})\)/g);
-          if (reads)
-            reads.forEach((r: string) => {
-              const match = r.match(/@read_file\(([^,)]+)/);
-              if (match) filesRead.add(match[1].trim().replace(/^["']|["']$/g, ''));
-            });
-          const writes = content.match(/@write_file\(([^,]{1,120})/g);
-          if (writes)
-            writes.forEach((w: string) => {
-              const match = w.match(/@write_file\(([^,]+)/);
-              if (match) filesWritten.add(match[1].trim().replace(/^["']|["']$/g, ''));
-            });
-          const cmds = content.match(/@run_command\(([^)]{1,200})\)/g);
-          if (cmds)
-            commandsRun.push(...cmds.slice(0, 3).map((c: string) => c.slice(13, -1).slice(0, 80)));
-          const otherTools = content.match(
-            /@(?:search_files|list_dir|append_file|mcp_call)\([^)]{0,80}\)/g
-          );
-          if (otherTools) toolCalls.push(...otherTools.slice(0, 5));
+          const nativeToolTrace = Array.isArray((m as any).nativeToolTrace)
+            ? (m as any).nativeToolTrace
+            : [];
+          for (const trace of nativeToolTrace) {
+            const args = trace?.arguments || {};
+            if (trace?.name === 'read_file' && args.path) filesRead.add(String(args.path));
+            if ((trace?.name === 'write_file' || trace?.name === 'append_file') && args.path) {
+              filesWritten.add(String(args.path));
+            }
+            if (trace?.name === 'run_command' && args.command) {
+              commandsRun.push(String(args.command).slice(0, 80));
+            }
+            if (
+              trace?.name &&
+              !['read_file', 'write_file', 'append_file', 'run_command'].includes(trace.name)
+            ) {
+              toolCalls.push(trace.name);
+            }
+          }
         } else if (m.role === 'user') {
           if (
             content.includes('Error') ||

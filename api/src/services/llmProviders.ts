@@ -4,6 +4,7 @@ import { claudeRateLimiter } from './rateLimiter.js';
 import { readSecret } from '../secrets.js';
 import { runnerServiceUrl, resolveRunnerService } from './execution/runnerRegistry.js';
 import { isCliRunner } from './runners.js';
+import { toAnthropicTools, type NativeToolCall } from './nativeTools.js';
 
 // Helper: returns { temperature } object if temperature is set, or empty object to omit it
 function tempParam(options: { temperature?: number | null }): { temperature?: number } {
@@ -56,9 +57,77 @@ function buildOpenAIContent(text: string, images?: ChatImage[]): any {
  * models' system→developer) map roles themselves and don't use this helper.
  */
 function mapOpenAIMessages(messages: any[]): any[] {
-  return messages.map(m => ({
-    role: m.role,
-    content: buildOpenAIContent(m.content, m.images),
+  return messages.map(m => {
+    if (m.role === 'tool') {
+      return {
+        role: 'tool',
+        tool_call_id: m.toolCallId,
+        content: m.content,
+      };
+    }
+
+    const message: any = {
+      role: m.role,
+      content: buildOpenAIContent(m.content || '', m.images),
+    };
+    if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+      message.tool_calls = m.toolCalls.map((call: NativeToolCall) => ({
+        id: call.id,
+        type: 'function',
+        function: {
+          name: call.name,
+          arguments: JSON.stringify(call.arguments),
+        },
+      }));
+      if (!m.content) message.content = null;
+    }
+    return message;
+  });
+}
+
+function mapResponsesInput(messages: any[]): any[] {
+  return messages
+    .filter(m => m.role !== 'system')
+    .flatMap(m => {
+      if (m.role === 'tool') {
+        return [{ type: 'function_call_output', call_id: m.toolCallId, output: m.content }];
+      }
+      if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+        const text = m.content ? [{ role: 'assistant', content: m.content }] : [];
+        return [
+          ...text,
+          ...m.toolCalls.map((call: NativeToolCall) => ({
+            type: 'function_call',
+            call_id: call.id,
+            name: call.name,
+            arguments: JSON.stringify(call.arguments),
+          })),
+        ];
+      }
+      return [{ role: m.role, content: buildOpenAIContent(m.content || '', m.images) }];
+    });
+}
+
+function responseToolCalls(response: any): NativeToolCall[] {
+  if (!Array.isArray(response?.output)) return [];
+  return response.output
+    .filter((item: any) => item?.type === 'function_call')
+    .map((item: any, index: number) => {
+      const parsed = parseNativeArguments(item.arguments || '{}');
+      return {
+        id: item.call_id || item.id || `call_${index}`,
+        name: item.name,
+        ...parsed,
+      };
+    });
+}
+
+function toResponsesTools(tools: any[]): any[] {
+  return tools.map(({ function: fn }) => ({
+    type: 'function',
+    name: fn.name,
+    description: fn.description,
+    parameters: fn.parameters,
   }));
 }
 
@@ -112,28 +181,34 @@ function applyNativeToolCallDelta(buffers: NativeToolCallBuffer[], deltas: any[]
   }
 }
 
-function nativeToolCallsToText(toolCalls: NativeToolCallBuffer[]): string {
-  const blocks = toolCalls
-    .filter(call => call.function.name)
-    .map(call => {
-      let args: unknown = {};
-      const rawArgs = call.function.arguments || '{}';
-      try {
-        args = JSON.parse(rawArgs);
-      } catch {
-        args = {};
-      }
-      return `<tool_call>\n${JSON.stringify({
-        name: call.function.name,
-        arguments: args,
-      })}\n</tool_call>`;
-    });
-  return blocks.length > 0 ? `\n${blocks.join('\n')}\n` : '';
+function parseNativeArguments(raw: string): { arguments: Record<string, unknown>; error?: string } {
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { arguments: parsed };
+    }
+    return { arguments: {}, error: 'Tool arguments must be a JSON object.' };
+  } catch {
+    return { arguments: {}, error: `Invalid JSON tool arguments: ${raw.slice(0, 300)}` };
+  }
 }
 
-function messageNativeToolCallsToText(toolCalls: any): string {
-  if (!Array.isArray(toolCalls)) return '';
-  return nativeToolCallsToText(
+function nativeToolCallsFromBuffers(toolCalls: NativeToolCallBuffer[]): NativeToolCall[] {
+  return toolCalls
+    .filter(call => call.function.name)
+    .map((call, index) => {
+      const parsed = parseNativeArguments(call.function.arguments || '{}');
+      return {
+        id: call.id || `call_${index}`,
+        name: call.function.name!,
+        ...parsed,
+      };
+    });
+}
+
+function messageNativeToolCalls(toolCalls: any): NativeToolCall[] {
+  if (!Array.isArray(toolCalls)) return [];
+  return nativeToolCallsFromBuffers(
     toolCalls.map(call => ({
       id: typeof call?.id === 'string' ? call.id : undefined,
       type: typeof call?.type === 'string' ? call.type : undefined,
@@ -155,9 +230,9 @@ async function* consumeOpenAIStream(
   let nativeToolCallsFlushed = false;
   const flushNativeToolCalls = function* (): Generator<any> {
     if (nativeToolCallsFlushed || nativeToolCalls.length === 0) return;
-    const text = nativeToolCallsToText(nativeToolCalls);
-    if (text) {
-      yield { type: 'text', text };
+    const toolCalls = nativeToolCallsFromBuffers(nativeToolCalls);
+    if (toolCalls.length > 0) {
+      yield { type: 'tool_calls', toolCalls };
     }
     nativeToolCallsFlushed = true;
   };
@@ -191,6 +266,7 @@ async function* consumeOpenAIStream(
       yield doneEvent;
     }
   }
+  yield* flushNativeToolCalls();
 }
 
 // ─── Ollama Provider ────────────────────────────────────────────────────────
@@ -265,10 +341,6 @@ export class OllamaProvider {
     this._pulling = null;
   }
 
-  // Use Ollama's OpenAI-compatible endpoint to leverage tool_choice: "none"
-  // which prevents models from generating tool calls that the harmony parser
-  // would intercept and block.
-
   /**
    * Pull the model from Ollama if it's not already available locally.
    * Called automatically on 404 errors.
@@ -309,7 +381,9 @@ export class OllamaProvider {
       ...tempParam(options),
       max_tokens: options.maxTokens ?? 4096,
       stream,
-      tool_choice: 'none',
+      ...(Array.isArray(options.tools) && options.tools.length > 0
+        ? { tools: options.tools, tool_choice: 'auto' }
+        : {}),
       // Pass num_ctx via Ollama-specific extension
       options: { num_ctx: options.contextLength || 8192 },
     };
@@ -350,6 +424,7 @@ export class OllamaProvider {
     const choice = data.choices?.[0];
     return {
       content: choice?.message?.content || '',
+      toolCalls: messageNativeToolCalls(choice?.message?.tool_calls),
       model: this.model,
       provider: 'ollama',
       usage: {
@@ -369,6 +444,14 @@ export class OllamaProvider {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let finishReason: string | null = null;
+    const nativeToolCalls: NativeToolCallBuffer[] = [];
+    let nativeToolCallsFlushed = false;
+    const flushNativeToolCalls = function* (): Generator<any> {
+      if (nativeToolCallsFlushed || nativeToolCalls.length === 0) return;
+      const toolCalls = nativeToolCallsFromBuffers(nativeToolCalls);
+      if (toolCalls.length > 0) yield { type: 'tool_calls', toolCalls };
+      nativeToolCallsFlushed = true;
+    };
 
     // Per-chunk idle timeout: if no data arrives for OLLAMA_STREAM_IDLE_TIMEOUT_MS,
     // we consider the stream dead.  The timer resets on every chunk received.
@@ -410,6 +493,7 @@ export class OllamaProvider {
           if (!trimmed || !trimmed.startsWith('data: ')) continue;
           const payload = trimmed.slice(6);
           if (payload === '[DONE]') {
+            yield* flushNativeToolCalls();
             yield {
               type: 'done',
               finishReason: finishReason || 'stop',
@@ -430,9 +514,13 @@ export class OllamaProvider {
             if (choice?.delta?.reasoning_content) {
               yield { type: 'thinking', text: choice.delta.reasoning_content };
             }
+            if (Array.isArray(choice?.delta?.tool_calls)) {
+              applyNativeToolCallDelta(nativeToolCalls, choice.delta.tool_calls);
+            }
             // Capture finish_reason (last chunk usually has it)
             if (choice?.finish_reason) {
               finishReason = choice.finish_reason;
+              if (finishReason === 'tool_calls') yield* flushNativeToolCalls();
             }
             // Ollama may include usage in the last chunk
             if (data.usage) {
@@ -444,6 +532,7 @@ export class OllamaProvider {
           }
         }
       }
+      yield* flushNativeToolCalls();
     } finally {
       clearIdleTimer();
     }
@@ -471,14 +560,52 @@ export class ClaudeProvider {
     this.rateLimiter = claudeRateLimiter;
   }
 
+  _mapMessages(messages: any[]): any[] {
+    return messages
+      .filter(m => m.role !== 'system')
+      // Anthropic rejects a message whose content is empty ("all messages must
+      // have non-empty content"), which a tool-only assistant turn produces.
+      // One such row in the replayed history 400s every subsequent turn, so
+      // drop it here — _sanitizeMessages below re-establishes alternation.
+      .filter(m => m.content || m.images?.length > 0 || m.toolCalls?.length > 0)
+      .map(m => {
+        if (m.role === 'tool') {
+          return {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: m.toolCallId,
+                content: m.content,
+                ...(m.toolError ? { is_error: true } : {}),
+              },
+            ],
+          };
+        }
+
+        if (m.role === 'assistant' && Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
+          const content = buildClaudeContent(m.content || '', m.images);
+          const blocks = Array.isArray(content)
+            ? content
+            : content
+              ? [{ type: 'text', text: content }]
+              : [];
+          for (const call of m.toolCalls as NativeToolCall[]) {
+            blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: call.arguments });
+          }
+          return { role: 'assistant', content: blocks };
+        }
+
+        return {
+          role: m.role === 'user' ? 'user' : 'assistant',
+          content: buildClaudeContent(m.content || '', m.images),
+        };
+      });
+  }
+
   async chat(messages: any[], options: any = {}): Promise<any> {
     const systemMsg = messages.find(m => m.role === 'system');
-    const chatMessages = messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: buildClaudeContent(m.content, m.images),
-      }));
+    const chatMessages = this._mapMessages(messages);
 
     // Ensure messages alternate correctly
     const sanitized = this._sanitizeMessages(chatMessages);
@@ -490,11 +617,20 @@ export class ClaudeProvider {
       messages: sanitized,
     };
     if (systemMsg) params.system = systemMsg.content;
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = toAnthropicTools(options.tools);
+    }
 
     const response = await this.rateLimiter.schedule(() => this.client.messages.create(params));
 
     return {
-      content: response.content.map((c: any) => c.text).join(''),
+      content: response.content
+        .filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text)
+        .join(''),
+      toolCalls: response.content
+        .filter((c: any) => c.type === 'tool_use')
+        .map((c: any) => ({ id: c.id, name: c.name, arguments: c.input || {} })),
       model: this.model,
       provider: 'claude',
       usage: {
@@ -506,12 +642,7 @@ export class ClaudeProvider {
 
   async *chatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const systemMsg = messages.find(m => m.role === 'system');
-    const chatMessages = messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'user' ? 'user' : 'assistant',
-        content: buildClaudeContent(m.content, m.images),
-      }));
+    const chatMessages = this._mapMessages(messages);
 
     const sanitized = this._sanitizeMessages(chatMessages);
 
@@ -523,6 +654,9 @@ export class ClaudeProvider {
       stream: true,
     };
     if (systemMsg) params.system = systemMsg.content;
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = toAnthropicTools(options.tools);
+    }
 
     const streamOpts: any = {};
     if (options.signal) streamOpts.signal = options.signal;
@@ -544,6 +678,10 @@ export class ClaudeProvider {
     }
 
     const finalMessage = await stream.finalMessage();
+    const toolCalls = finalMessage.content
+      .filter((c: any) => c.type === 'tool_use')
+      .map((c: any) => ({ id: c.id, name: c.name, arguments: c.input || {} }));
+    if (toolCalls.length > 0) yield { type: 'tool_calls', toolCalls };
     yield {
       type: 'done',
       finishReason: finalMessage.stop_reason === 'max_tokens' ? 'length' : 'stop',
@@ -582,7 +720,21 @@ export class ClaudeProvider {
         if (msg.images?.length > 0) {
           prev.images = [...(prev.images || []), ...msg.images];
         }
-        prev.content += '\\n' + msg.content;
+        if (Array.isArray(prev.content) || Array.isArray(msg.content)) {
+          const previousBlocks = Array.isArray(prev.content)
+            ? prev.content
+            : prev.content
+              ? [{ type: 'text', text: prev.content }]
+              : [];
+          const nextBlocks = Array.isArray(msg.content)
+            ? msg.content
+            : msg.content
+              ? [{ type: 'text', text: msg.content }]
+              : [];
+          prev.content = [...previousBlocks, ...nextBlocks];
+        } else {
+          prev.content += '\\n' + msg.content;
+        }
       } else {
         result.push({ ...msg });
         lastRole = msg.role;
@@ -640,9 +792,9 @@ export class OpenAIProvider {
 
   _mapMessages(messages: any[], options: any = {}): any[] {
     const reasoning = this._isReasoning(options);
-    return messages.map(m => ({
+    return mapOpenAIMessages(messages).map(m => ({
+      ...m,
       role: reasoning && m.role === 'system' ? 'developer' : m.role,
-      content: buildOpenAIContent(m.content, m.images),
     }));
   }
 
@@ -671,6 +823,10 @@ export class OpenAIProvider {
       messages: this._mapMessages(messages, options),
       max_completion_tokens: options.maxTokens || 4096,
     };
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = options.tools;
+      params.tool_choice = 'auto';
+    }
     if (!reasoning && options.temperature != null) {
       params.temperature = options.temperature;
     }
@@ -679,6 +835,7 @@ export class OpenAIProvider {
 
     return {
       content: response.choices[0]?.message?.content || '',
+      toolCalls: messageNativeToolCalls(response.choices[0]?.message?.tool_calls),
       model: this.model,
       provider: 'openai',
       usage: {
@@ -690,7 +847,7 @@ export class OpenAIProvider {
 
   async _responsesChat(messages: any[], options: any = {}): Promise<any> {
     const systemMsg = messages.find((m: any) => m.role === 'system');
-    const input = mapOpenAIMessages(messages.filter((m: any) => m.role !== 'system'));
+    const input = mapResponsesInput(messages);
 
     const params: any = {
       model: this.model,
@@ -700,6 +857,9 @@ export class OpenAIProvider {
     if (systemMsg) {
       params.instructions = systemMsg.content;
     }
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = toResponsesTools(options.tools);
+    }
     if (!this._isReasoning(options)) {
       if (options.temperature != null) params.temperature = options.temperature;
     }
@@ -708,6 +868,7 @@ export class OpenAIProvider {
 
     return {
       content: response.output_text || '',
+      toolCalls: responseToolCalls(response),
       model: this.model,
       provider: 'openai',
       usage: {
@@ -783,6 +944,10 @@ export class OpenAIProvider {
       stream: true,
       stream_options: { include_usage: true },
     };
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = options.tools;
+      params.tool_choice = 'auto';
+    }
     if (!reasoning) {
       if (options.temperature != null) params.temperature = options.temperature;
     }
@@ -797,7 +962,7 @@ export class OpenAIProvider {
 
   async *_responsesChatStream(messages: any[], options: any = {}): AsyncGenerator<any> {
     const systemMsg = messages.find((m: any) => m.role === 'system');
-    const input = mapOpenAIMessages(messages.filter((m: any) => m.role !== 'system'));
+    const input = mapResponsesInput(messages);
 
     const params: any = {
       model: this.model,
@@ -807,6 +972,9 @@ export class OpenAIProvider {
     };
     if (systemMsg) {
       params.instructions = systemMsg.content;
+    }
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = toResponsesTools(options.tools);
     }
     if (!this._isReasoning(options)) {
       if (options.temperature != null) params.temperature = options.temperature;
@@ -827,7 +995,10 @@ export class OpenAIProvider {
         yield { type: 'thinking', text: (event as any).delta };
       }
       if ((event as any).type === 'response.completed') {
-        const status = (event as any).response?.status;
+        const response = (event as any).response;
+        const toolCalls = responseToolCalls(response);
+        if (toolCalls.length > 0) yield { type: 'tool_calls', toolCalls };
+        const status = response?.status;
         yield {
           type: 'done',
           finishReason: status === 'incomplete' ? 'length' : 'stop',
@@ -971,22 +1142,17 @@ export class VLLMProvider {
     this.client = new OpenAI(clientOpts);
   }
 
-  protected _plainTextToolProtocolParams(): any {
-    // Pulsar's sandbox runner uses its own @tool text protocol. Some
-    // OpenAI-compatible local servers (notably vLLM with Qwen tool parsing)
-    // can otherwise return native tool_calls with content=null, which the chat
-    // UI renders as a blank assistant turn.
-    return this.providerName === 'vllm' ? { tool_choice: 'none' } : {};
-  }
-
   async chat(messages: any[], options: any = {}): Promise<any> {
     const params: any = {
       model: this.model,
       messages: mapOpenAIMessages(messages),
       ...tempParam(options),
       max_tokens: options.maxTokens || 4096,
-      ...this._plainTextToolProtocolParams(),
     };
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = options.tools;
+      params.tool_choice = 'auto';
+    }
 
     const requestOpts: any = {};
     if (options.taskId) requestOpts.headers = { 'X-Task-Id': options.taskId };
@@ -1006,9 +1172,8 @@ export class VLLMProvider {
     }
 
     return {
-      content:
-        response.choices[0]?.message?.content ||
-        messageNativeToolCallsToText(response.choices[0]?.message?.tool_calls),
+      content: response.choices[0]?.message?.content || '',
+      toolCalls: messageNativeToolCalls(response.choices[0]?.message?.tool_calls),
       model: this.model,
       provider: this.providerName,
       usage,
@@ -1023,8 +1188,11 @@ export class VLLMProvider {
       max_tokens: options.maxTokens || 4096,
       stream: true,
       stream_options: { include_usage: true },
-      ...this._plainTextToolProtocolParams(),
     };
+    if (Array.isArray(options.tools) && options.tools.length > 0) {
+      params.tools = options.tools;
+      params.tool_choice = 'auto';
+    }
 
     const requestOpts: any = {};
     if (options.signal) requestOpts.signal = options.signal;

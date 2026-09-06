@@ -4,7 +4,6 @@
  * Usage:
  *   import { processColumnEntry, recheckPendingTransitions } from '../workflow/index.js';
  *   import { isActiveStatus, getWorkflowManagedStatuses } from '../workflow/index.js';
- *   import { stripToolCalls } from '../workflow/index.js';
  */
 
 // State machine — pure logic, no I/O
@@ -37,7 +36,7 @@ export {
 } from './agentSelector.js';
 
 // Action execution
-export { executeAction, stripToolCalls } from './actionExecutor.js';
+export { executeAction } from './actionExecutor.js';
 
 // Error helpers — guarantee tasks stay visible on the board after a failure
 export { markTaskError, isUserStopError } from './taskErrors.js';

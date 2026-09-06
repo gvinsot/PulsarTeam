@@ -200,24 +200,17 @@ function nextColumnAfter(status: string, columns: WorkflowColumn[]) {
   return columns[curIdx + 1];
 }
 
-function buildDecisionToolContract(
-  task: Task,
-  instructions: string,
-  columns: WorkflowColumn[],
-  nativeTaskTool: boolean
-) {
+function buildDecisionToolContract(task: Task, instructions: string, columns: WorkflowColumn[]) {
   const nextColumn = nextColumnAfter(task.status, columns);
   const mentionsNextColumn = /\bnext\s+column\b|\bcolonne\s+suivante\b/i.test(instructions);
-  const listTasksTool = nativeTaskTool ? 'list_tasks' : '@list_tasks';
-  const listMyTasksTool = nativeTaskTool ? 'list_my_tasks' : '@list_my_tasks';
+  const listTasksTool = 'list_tasks';
+  const listMyTasksTool = 'list_my_tasks';
   const targetHint =
     mentionsNextColumn && nextColumn
       ? `\nThe next column after "${task.status}" is "${nextColumn.id}".`
       : '';
   const exampleStatus = mentionsNextColumn && nextColumn ? nextColumn.id : '<target-status>';
-  const example = nativeTaskTool
-    ? `update_task({ "task_id": "${task.id}", "status": "${exampleStatus}", "comment": "Moved to ${exampleStatus}" })`
-    : `@update_task(${task.id}, ${exampleStatus}, Moved to ${exampleStatus})`;
+  const example = `update_task with { "task_id": "${task.id}", "status": "${exampleStatus}", "comment": "Moved to ${exampleStatus}" }`;
 
   return `
 Decision contract:
@@ -231,12 +224,7 @@ ${example}${targetHint}
 `;
 }
 
-function buildInstructionsPrompt(
-  task: Task,
-  instructions: string,
-  columns: WorkflowColumn[],
-  { nativeTaskTool = false }: { nativeTaskTool?: boolean } = {}
-) {
+function buildInstructionsPrompt(task: Task, instructions: string, columns: WorkflowColumn[]) {
   const columnList = columns?.length
     ? `\nValid statuses (column IDs): ${columns.map(c => c.id).join(', ')}`
     : '';
@@ -254,59 +242,7 @@ ${task.error ? `Previous error: ${task.error}\n` : ''}${commits}
 
 Instructions:
 ${instructions}
-${buildDecisionToolContract(task, instructions, columns, nativeTaskTool)}`;
-}
-
-/**
- * Strip tool calls (@tool(...) and <tool_call> blocks) from an LLM response
- * so that only the descriptive text remains.
- */
-export function stripToolCalls(text: string | null | undefined) {
-  if (!text) return text;
-  let cleaned = text.replace(/<tool_call>\s*[\s\S]*?\s*<\/tool_call>/gi, '');
-  const TOOL_NAMES = [
-    'read_file',
-    'write_file',
-    'append_file',
-    'list_dir',
-    'search_files',
-    'run_command',
-    'report_error',
-    'mcp_call',
-    'update_task',
-    'list_my_tasks',
-    'list_projects',
-    'check_status',
-    'get_action_status',
-    'build_stack',
-    'test_stack',
-    'deploy_stack',
-    'list_stacks',
-    'list_containers',
-    'list_computers',
-    'search_logs',
-    'get_log_metadata',
-  ];
-  const toolPattern = new RegExp(`@(${TOOL_NAMES.join('|')})\\s*\\(`, 'gi');
-  const removals: Array<{ start: number; end: number }> = [];
-  let match;
-  while ((match = toolPattern.exec(cleaned)) !== null) {
-    const start = match.index;
-    const argsStart = start + match[0].length;
-    let depth = 1;
-    let i = argsStart;
-    while (i < cleaned.length && depth > 0) {
-      if (cleaned[i] === '(') depth++;
-      else if (cleaned[i] === ')') depth--;
-      i++;
-    }
-    if (depth === 0) removals.push({ start, end: i });
-  }
-  for (let r = removals.length - 1; r >= 0; r--) {
-    cleaned = cleaned.slice(0, removals[r].start) + cleaned.slice(removals[r].end);
-  }
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();
-  return cleaned;
+${buildDecisionToolContract(task, instructions, columns)}`;
 }
 
 // ── Result types ────────────────────────────────────────────────────────────
@@ -879,7 +815,8 @@ async function executeRunAgent(
     // Snapshot the repo HEAD before a decide run (the only mode that executes
     // code). The finally below diffs baseline..HEAD to link every commit made
     // during the run — the only detection that works for CLI runners, whose
-    // git activity happens inside their PTY and never reaches the @run_command
+    // git activity happens inside their PTY and never reaches the direct
+    // command tool path.
     // parser (and often isn't even rendered by the CLI's TUI).
     if (mode === AgentMode.DECIDE) {
       gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
@@ -1244,10 +1181,7 @@ async function _runRefineMode(
       'refine'
     );
 
-    if (response) {
-      const cleaned = stripToolCalls(response);
-      if (cleaned) agentManager.updateTaskText(task.agentId, task.id, cleaned);
-    }
+    if (response) agentManager.updateTaskText(task.agentId, task.id, response);
   });
 
   return { executed: true };
@@ -1273,15 +1207,13 @@ async function _runDecideMode(
     return { executed: false, skipped: true, reason: 'no-instructions' };
   }
 
-  const prompt = buildInstructionsPrompt(task, instructions, columns, {
-    nativeTaskTool: isCliRunner(agent),
-  });
+  const prompt = buildInstructionsPrompt(task, instructions, columns);
   console.log(`[ActionExecutor] decide: "${task.text?.slice(0, 60)}" via ${agent.name}`);
 
   // Snapshot task state so we can detect whether the agent actually made a
   // decision (moved the task to a new status, or appended details). Detection
-  // is by task mutation — which works whether the agent used the @update_task
-  // text tool (LLM-chat agents) or the update_task MCP tool (CLI runners).
+  // is by task mutation, whether the agent used a direct native tool or the
+  // update_task MCP tool exposed to a CLI runner.
   const beforeTask = await _liveTaskSnapshot(agentManager, task);
   const beforeStatus = beforeTask?.status ?? task.status;
   const beforeTextLen = (beforeTask?.text || '').length;
@@ -1362,7 +1294,7 @@ async function _runDecideMode(
       agentManager._decideNoDecisionCounts.delete(task.id);
       const why = isCliRunner(agent)
         ? `Agent "${agent.name}" (CLI runner) produced no decision after ${attempts} attempts. It likely has no tool to update the task — assign the Swarm API MCP (update_task) to this agent.`
-        : `Agent "${agent.name}" produced no @update_task call after ${attempts} attempts.`;
+        : `Agent "${agent.name}" produced no update_task call after ${attempts} attempts.`;
       console.error(`[ActionExecutor] decide: ${why} — failing task="${task.id}"`);
       // Throw so executeRunAgent's catch marks the task error (visible on the
       // board, with the message) and stops the retry loop.

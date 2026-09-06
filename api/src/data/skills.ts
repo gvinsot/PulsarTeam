@@ -10,34 +10,34 @@ export const BUILTIN_SKILLS = [
     instructions: `You can monitor the Docker Swarm cluster using the PulsarCD Read MCP tools (read-only).
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(PulsarCD Read, tool_name, {"param": "value"}) syntax shown there.
+Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
 
 ## AVAILABLE TOOLS
 
-@mcp_call(PulsarCD Read, list_stacks, {})
+the native mcp_call tool (server: PulsarCD Read; tool: list_stacks; arguments: {})
   — List all available stacks (GitHub starred repos).
 
-@mcp_call(PulsarCD Read, list_containers, {"host": "optional", "status": "optional"})
+the native mcp_call tool (server: PulsarCD Read; tool: list_containers; arguments: {"host": "optional", "status": "optional"})
   — List containers and their state. Filter by host or status.
 
-@mcp_call(PulsarCD Read, list_computers, {})
+the native mcp_call tool (server: PulsarCD Read; tool: list_computers; arguments: {})
   — List all monitored hosts/machines.
 
-@mcp_call(PulsarCD Read, get_log_metadata, {})
+the native mcp_call tool (server: PulsarCD Read; tool: get_log_metadata; arguments: {})
   — Discover available services, containers, hosts, and log levels.
 
-@mcp_call(PulsarCD Read, search_logs, {"query": "error", "last_hours": 24})
+the native mcp_call tool (server: PulsarCD Read; tool: search_logs; arguments: {"query": "error", "last_hours": 24})
   — Search collected logs. Supports filters: query, github_project, compose_services, hosts, containers, levels, http_status_min, http_status_max, last_hours, start_time, end_time, opensearch_query, size.
 
-@mcp_call(PulsarCD Read, get_action_status, {"action_id": "ACTION_ID"})
+the native mcp_call tool (server: PulsarCD Read; tool: get_action_status; arguments: {"action_id": "ACTION_ID"})
   — Check the status of a build/deploy action.
 
 ## MONITORING WORKFLOW
-1. Use @mcp_call(PulsarCD Read, list_stacks, {}) to see all deployed projects
-2. Use @mcp_call(PulsarCD Read, list_containers, {}) to check running containers
-3. Use @mcp_call(PulsarCD Read, search_logs, {"query": "error", "last_hours": 24}) to investigate issues
-4. Use @mcp_call(PulsarCD Read, list_computers, {}) to check node availability
-5. Use @mcp_call(PulsarCD Read, get_log_metadata, {}) to discover available log sources before searching`,
+1. Use the native mcp_call tool (server: PulsarCD Read; tool: list_stacks; arguments: {}) to see all deployed projects
+2. Use the native mcp_call tool (server: PulsarCD Read; tool: list_containers; arguments: {}) to check running containers
+3. Use the native mcp_call tool (server: PulsarCD Read; tool: search_logs; arguments: {"query": "error", "last_hours": 24}) to investigate issues
+4. Use the native mcp_call tool (server: PulsarCD Read; tool: list_computers; arguments: {}) to check node availability
+5. Use the native mcp_call tool (server: PulsarCD Read; tool: get_log_metadata; arguments: {}) to discover available log sources before searching`,
   },
   {
     id: 'skill-swarm-actions',
@@ -50,33 +50,33 @@ Call them using the @mcp_call(PulsarCD Read, tool_name, {"param": "value"}) synt
     instructions: `You can build, test, and deploy projects on the Docker Swarm cluster using PulsarCD Actions MCP tools.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(ServerName, tool_name, {"param": "value"}) syntax shown there.
+Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
 
 ## BUILD & DEPLOY TOOLS (PulsarCD Actions)
 
-@mcp_call(PulsarCD Actions, build_stack, {"repo_name": "my-app", "ssh_url": "git@github.com:org/my-app.git", "version": "1.2.0", "branch": "main"})
+the native mcp_call tool (server: PulsarCD Actions; tool: build_stack; arguments: {"repo_name": "my-app", "ssh_url": "git@github.com:org/my-app.git", "version": "1.2.0", "branch": "main"})
   — Build a Docker image from a GitHub repo. Optional: branch, commit.
 
-@mcp_call(PulsarCD Actions, test_stack, {"repo_name": "my-app", "ssh_url": "git@github.com:org/my-app.git", "branch": "main"})
+the native mcp_call tool (server: PulsarCD Actions; tool: test_stack; arguments: {"repo_name": "my-app", "ssh_url": "git@github.com:org/my-app.git", "branch": "main"})
   — Run tests for a stack (docker-compose.swarm.yml test target). Optional: branch, tag, commit.
 
-@mcp_call(PulsarCD Actions, deploy_stack, {"repo_name": "my-app", "ssh_url": "git@github.com:org/my-app.git", "version": "1.2.0"})
+the native mcp_call tool (server: PulsarCD Actions; tool: deploy_stack; arguments: {"repo_name": "my-app", "ssh_url": "git@github.com:org/my-app.git", "version": "1.2.0"})
   — Deploy a stack on Docker Swarm. Optional: tag.
 
 All three tools return an action_id. Use get_action_status on the Read server to track progress.
 
 ## MONITORING TOOLS (PulsarCD Read)
 
-@mcp_call(PulsarCD Read, get_action_status, {"action_id": "ACTION_ID"})
+the native mcp_call tool (server: PulsarCD Read; tool: get_action_status; arguments: {"action_id": "ACTION_ID"})
   — Check the status of a build/test/deploy action.
 
-@mcp_call(PulsarCD Read, list_stacks, {})
+the native mcp_call tool (server: PulsarCD Read; tool: list_stacks; arguments: {})
   — List all available stacks.
 
-@mcp_call(PulsarCD Read, list_containers, {})
+the native mcp_call tool (server: PulsarCD Read; tool: list_containers; arguments: {})
   — List containers and their state.
 
-@mcp_call(PulsarCD Read, search_logs, {"query": "error", "last_hours": 1})
+the native mcp_call tool (server: PulsarCD Read; tool: search_logs; arguments: {"query": "error", "last_hours": 1})
   — Search logs to investigate issues after deployment.
 
 ## DEPLOYMENT WORKFLOW
@@ -87,18 +87,18 @@ FIRST TIME SETUP — If the project has no devops/ folder yet:
    - Commit and push: use cli
 
 BUILD:
-   1. Call @mcp_call(PulsarCD Actions, build_stack, {...}) with repo_name, ssh_url, and version
-   2. Track progress: @mcp_call(PulsarCD Read, get_action_status, {"action_id": "ACTION_ID"})
+   1. Call the native mcp_call tool (server: PulsarCD Actions; tool: build_stack; arguments: {...}) with repo_name, ssh_url, and version
+   2. Track progress: the native mcp_call tool (server: PulsarCD Read; tool: get_action_status; arguments: {"action_id": "ACTION_ID"})
    3. Fix any build errors before proceeding
 
 TEST:
-   1. Call @mcp_call(PulsarCD Actions, test_stack, {...}) with repo_name and ssh_url
-   2. Track progress: @mcp_call(PulsarCD Read, get_action_status, {"action_id": "ACTION_ID"})
+   1. Call the native mcp_call tool (server: PulsarCD Actions; tool: test_stack; arguments: {...}) with repo_name and ssh_url
+   2. Track progress: the native mcp_call tool (server: PulsarCD Read; tool: get_action_status; arguments: {"action_id": "ACTION_ID"})
 
 DEPLOY:
-   1. Call @mcp_call(PulsarCD Actions, deploy_stack, {...}) with repo_name, ssh_url, and version
-   2. Track progress: @mcp_call(PulsarCD Read, get_action_status, {"action_id": "ACTION_ID"})
-   3. Verify: @mcp_call(PulsarCD Read, list_containers, {}) to check services are running
+   1. Call the native mcp_call tool (server: PulsarCD Actions; tool: deploy_stack; arguments: {...}) with repo_name, ssh_url, and version
+   2. Track progress: the native mcp_call tool (server: PulsarCD Read; tool: get_action_status; arguments: {"action_id": "ACTION_ID"})
+   3. Verify: the native mcp_call tool (server: PulsarCD Read; tool: list_containers; arguments: {}) to check services are running
 
 ## IMPORTANT
 - Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.
@@ -111,86 +111,40 @@ DEPLOY:
     category: 'general',
     icon: '🔧',
     builtin: true,
-    instructions: `## TOOLS — USE THEM, DON'T JUST TALK
-- @read_file(path) — examine existing code
-- @list_dir(path) — explore code structure
-- @list_projects() — list available projects (GitHub repos)
-- @write_file(path, """content""") — create or update files
-- @search_files(pattern, query) — find relevant code
-- @run_command(command) — run tests, builds, git commands, etc.
+    instructions: `## NATIVE TOOLS
+Use the structured tools supplied with the request for every action. Never write tool syntax in chat text.
 
-DOCUMENT CONVERSION — pandoc is installed. Before reading large non-text documents, convert them to markdown first:
-  @run_command(pandoc document.docx -t markdown -o document.md)
-  Supported formats: .docx, .pptx, .xlsx, .odt, .ods, .odp, .epub, .rst, .tex, .latex, .html, .rtf, .csv, .tsv, .json, .xml
-  After conversion, use @read_file(document.md) to read the content.
-  For spreadsheets (.xlsx, .ods, .csv), the output will be markdown tables.
+- read_file: path, optional start_line and end_line. Examine existing code before changing it.
+- list_dir: path. Explore the project structure first.
+- list_projects: list the available projects.
+- write_file: path and complete content. Follow the existing style.
+- search_files: query and optional pattern. Find relevant code before editing.
+- run_command: command. Run builds, tests, and Git commands.
+- list_my_tasks: list assigned tasks and their statuses.
+- update_task: task_id, status, comment, and optional commits. Move the task to its final workflow column with a complete summary when the work is done.
 
-- @list_my_tasks() — list your assigned tasks with their status and ID
-- @update_task(taskId, status, comment, commits) — move a task between columns AND/OR finish it. status is any workflow column ID (or error). Pass a comment to record a summary AND mark the task finished (this is how you complete a task — there is no separate completion tool). commits is optional (format: hash:msg, hash:msg — must be already pushed). To finish: @update_task(taskId, <final column>, <summary>).
-- Use @run_command to execute git commands and any shell commands
+DOCUMENT CONVERSION
+Pandoc is installed. Before reading a large non-text document, use run_command with a Pandoc conversion command, then read the generated Markdown file. Supported formats include .docx, .pptx, .xlsx, .odt, .ods, .odp, .epub, .rst, .tex, .latex, .html, .rtf, .csv, .tsv, .json, and .xml.
 
-GIT WORKFLOW — use @run_command for all git operations:
-  @run_command(git add -A)
-  @run_command(git commit -m "your message (by YourAgentName)")
-  @run_command(git push)
-  If push fails due to remote changes:
-  @run_command(git pull --rebase)
-  @run_command(git push)
-  IMPORTANT: Always include your agent name in the commit message. Format: "message (by YourName)".
-  Commits from git commands are automatically detected and linked to your current active task.
+GIT WORKFLOW
+Use run_command for Git operations. Commit and push completed work, including the agent name in the commit message. If a push is rejected because of remote changes, rebase before retrying. Commits are linked to the active task automatically.
 
-WORKFLOW:
-1. Always start by exploring the project structure with @list_dir(.)
-2. Study existing files and code conventions BEFORE writing anything — match naming, formatting, patterns, and folder organization already in use
-3. Read existing files before modifying them with @read_file(path)
-4. Write changes with @write_file(path, """content""") — follow the existing code style
-5. Verify your changes by reading the file back
-6. Run tests or builds with @run_command(npm test) or similar
-7. Use @search_files(*.js, keyword) to find relevant code across the project
+WORKFLOW
+1. Explore the structure and study existing conventions.
+2. Read affected files before modifying them.
+3. Make each change with write_file.
+4. Read back changes and run the relevant tests or builds.
+5. Commit and push the verified work.
+6. Use update_task to move the assigned task to its final column and record a useful summary.
 
-IMPORTANT:
-- Each tool call MUST be on its own line
-- Do NOT add decorative text before tool calls — just call the tool directly
-- NEVER stop yourself — keep working until the task is fully complete
-- When executing an assigned task, you MUST finish it by calling @update_task(taskId, <final column>, summary) when done — moving it to its final column WITH a summary. The system will not consider your task finished until you move it out of the working column. The system WILL send you reminders if you forget.
-- COMPLETION SEQUENCE: Always follow this order: 1) commit and push with @run_command (git add, git commit, git push), 2) @update_task(taskId, <final column>, summary) to move the task to its final column and signal completion.
-- Your workspace is EPHEMERAL. Always commit and push after completing changes to preserve your work.
+CRITICAL RULES
+- Work one step at a time and wait for each tool result.
+- Do not claim a file changed unless write_file completed successfully.
+- Keep working until the task is genuinely complete.
+- For a question task, research first, then put the full answer in update_task.comment while moving it to the final column.
 
-EXECUTION RULES — follow these steps strictly, one at a time:
-1. EXPLORE: Use @list_dir and @read_file to understand the codebase structure and find the relevant files.
-2. PLAN: Identify what files need to be created or modified.
-3. IMPLEMENT: Use @write_file to create or modify each file. Call @write_file for EVERY file you want to change — the system does NOT auto-generate code.
-4. VERIFY: Use @read_file to confirm your changes are correct.
-5. COMMIT: Use @run_command with git commands to commit and push: git add -A, git commit -m "message (by YourName)", git push.
-6. COMPLETE: Call @update_task(taskId, <final column>, summary) to move the task to its final column and signal you are done.
-
-CRITICAL RULES:
-- You MUST call @write_file BEFORE committing. Without @write_file, there are NO changes to commit.
-- Call tools ONE STEP AT A TIME. Wait for each tool result before calling the next tool.
-- Do NOT batch multiple unrelated tools in a single response.
-- Do NOT finish the task (@update_task with a summary) in the same response as @read_file — finish reading first, then write, then commit, then complete.
-
-HANDLING TASKS THAT ASK A QUESTION:
-Some tasks are not work to execute but questions to answer (e.g. "What is the status of X?", "How does Y work?", "Which approach should we use for Z?", any task ending with "?"). When you detect that the task is asking you a question rather than asking you to do work:
-1. Research the answer (read code, search files, check logs, etc.).
-2. Write the answer back onto the task AND finish it in a single @update_task call — put the full answer in the comment parameter (it is appended onto the task so the requester reads it directly in the kanban) and move the task to its final column:
-   @update_task(taskId, <final column>, """
-   ## Answer
-   <your detailed answer here, with citations like file_path:line_number when relevant>
-   """)
-The comment you pass to @update_task is what records the answer ON the task and marks it finished — so put the FULL answer there, not a one-line summary.
-
-The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(Code Index, tool_name, {"param": "value"}) syntax.
-
-RECOMMENDED WORKFLOW:
-1. BEFORE any search, call @mcp_call(Code Index, list_repos, {}) to check if your current project is already indexed.
-2. If the current project appears in the list, reuse its repoId — do NOT re-index.
-3. If the current project is NOT in the list, index it first:
-   - @mcp_call(Code Index, index_folder, {"path": "/projects/YOUR_PROJECT_NAME", "repoName": "YOUR_PROJECT_NAME"})
-   - Use the project name from the PROJECT CONTEXT section of your prompt.
-4. Search symbols or semantics first, then fetch outlines/source for the best matches.
-5. Fall back to normal file tools when you need to edit files.`,
+CODE INDEX
+When the Code Index MCP server is available, use native mcp_call with server "Code Index". Start with its list_repos tool, reuse an existing repo ID when possible, and otherwise index the current project before searching symbols or semantic matches.`,
   },
   {
     id: 'skill-delegation',
@@ -203,27 +157,27 @@ RECOMMENDED WORKFLOW:
     instructions: `You can manage agents and delegate work using the Swarm API MCP tools.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax shown there.
+Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
 
 ## AVAILABLE TOOLS
 
-@mcp_call(Swarm API, list_agents, {})
+the native mcp_call tool (server: Swarm API; tool: list_agents; arguments: {})
   — List all agents with their status, role, project, current task, and open task count.
   Optional filters: {"project": "MyApp"} or {"status": "idle"}.
 
-@mcp_call(Swarm API, get_agent_status, {"agent_name": "Developer"})
+the native mcp_call tool (server: Swarm API; tool: get_agent_status; arguments: {"agent_name": "Developer"})
   — Get detailed status for a specific agent: current task, full task list, metrics.
   Use agent_name or agent_id.
 
-@mcp_call(Swarm API, list_boards, {})
+the native mcp_call tool (server: Swarm API; tool: list_boards; arguments: {})
   — List all task boards with their workflow columns. Use this to discover board IDs before adding tasks.
 
-@mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "Implement password reset in src/auth/"})
+the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Implement password reset in src/auth/"})
   — Add a task to a board. board_id is REQUIRED — use list_boards first.
   Tasks are always created unassigned on the board; any agent watching the board can pick them up.
   Optional: project, status (workflow column), repo_full_name, storage_path.
 
-@mcp_call(Swarm API, search_tasks, {"query": "password reset", "only_completed": true, "limit": 20})
+the native mcp_call tool (server: Swarm API; tool: search_tasks; arguments: {"query": "password reset", "only_completed": true, "limit": 20})
   — Search the task history with optional free-text query and filters.
   Optional filters: agent_id, agent_name, project, board_id, status, repo_full_name,
     created_after / created_before, completed_after / completed_before (ISO timestamps),
@@ -234,15 +188,15 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
 ## DELEGATION WORKFLOW
 
 1. First, check available agents:
-   @mcp_call(Swarm API, list_agents, {"status": "idle"})
+   the native mcp_call tool (server: Swarm API; tool: list_agents; arguments: {"status": "idle"})
 
 2. Add tasks to a board (always pass board_id). Tasks are created unassigned and any agent watching the board can pick them up:
-   @mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "Read src/auth/ and implement password reset", "project": "MyApp"})
-   @mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "Write unit tests for the user service", "project": "MyApp"})
-   @mcp_call(Swarm API, add_task, {"board_id": "<UUID>", "task": "Investigate flaky test in src/checkout/", "project": "MyApp"})
+   the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Read src/auth/ and implement password reset", "project": "MyApp"})
+   the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Write unit tests for the user service", "project": "MyApp"})
+   the native mcp_call tool (server: Swarm API; tool: add_task; arguments: {"board_id": "<UUID>", "task": "Investigate flaky test in src/checkout/", "project": "MyApp"})
 
 3. Monitor progress:
-   @mcp_call(Swarm API, get_agent_status, {"agent_name": "Developer"})
+   the native mcp_call tool (server: Swarm API; tool: get_agent_status; arguments: {"agent_name": "Developer"})
 
 ## IMPORTANT
 - Tasks are executed asynchronously — agents pick them up from their queue and work autonomously.
@@ -260,7 +214,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-onedrive'],
     instructions:
-      'You can interact with Microsoft OneDrive files using the OneDrive MCP tools.\\n\\n## AVAILABLE TOOLS\\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\\nCall them using the @mcp_call(ServerName, tool_name, {"param": "value"}) syntax shown there.\\n\\n## OneDrive MCP Tools Reference\\n\\n@mcp_call(OneDrive, list_files, {"path": "/", "top": 50})\\n  — List files and folders at a given path. Use "/" for the root directory.\\n\\n@mcp_call(OneDrive, search_files, {"query": "keyword", "top": 25})\\n  — Search for files by name or content across the entire OneDrive.\\n\\n@mcp_call(OneDrive, read_file, {"path": "/Documents/notes.txt"})\\n  — Read the text content of a file. Works best with text-based files (txt, json, md, csv, etc.).\\n\\n@mcp_call(OneDrive, get_file_info, {"path": "/Documents/report.pdf"})\\n  — Get detailed metadata about a file or folder (size, type, modified date, web URL).\\n\\n@mcp_call(OneDrive, create_folder, {"parentPath": "/", "name": "NewFolder"})\\n  — Create a new folder. parentPath is where to create it.\\n\\n@mcp_call(OneDrive, upload_file, {"path": "/Documents/file.txt", "content": "Hello World"})\\n  — Upload or create a text file (up to 4MB).\\n\\n@mcp_call(OneDrive, delete_item, {"path": "/Documents/old-file.txt"})\\n  — Delete a file or folder (moves to recycle bin).\\n\\n@mcp_call(OneDrive, get_share_link, {"path": "/Documents/report.pdf", "type": "view"})\\n  — Create a sharing link. type can be "view" (read-only) or "edit" (read-write).\\n\\n@mcp_call(OneDrive, get_drive_info, {})\\n  — Get OneDrive storage info (space used, remaining, owner).\\n\\n## USAGE GUIDELINES\\n- Always start by listing the root directory to orient yourself: @mcp_call(OneDrive, list_files, {"path": "/"})\\n- Use search_files to find specific files when you don\'t know the exact path\\n- Use get_file_info to check file details before reading large files\\n- Paths use forward slashes and start from the root: /Documents/subfolder/file.txt\\n- When the user asks about "my files" or "my documents", start by listing the root\\n- For binary files (images, PDFs), provide the web URL or share link instead of reading content\\n- Be cautious with delete_item — always confirm with the user before deleting',
+      'You can interact with Microsoft OneDrive files using the OneDrive MCP tools.\\n\\n## AVAILABLE TOOLS\\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\\n\\n## OneDrive MCP Tools Reference\\n\\nthe native mcp_call tool (server: OneDrive; tool: list_files; arguments: {"path": "/", "top": 50})\\n  — List files and folders at a given path. Use "/" for the root directory.\\n\\nthe native mcp_call tool (server: OneDrive; tool: search_files; arguments: {"query": "keyword", "top": 25})\\n  — Search for files by name or content across the entire OneDrive.\\n\\nthe native mcp_call tool (server: OneDrive; tool: read_file; arguments: {"path": "/Documents/notes.txt"})\\n  — Read the text content of a file. Works best with text-based files (txt, json, md, csv, etc.).\\n\\nthe native mcp_call tool (server: OneDrive; tool: get_file_info; arguments: {"path": "/Documents/report.pdf"})\\n  — Get detailed metadata about a file or folder (size, type, modified date, web URL).\\n\\nthe native mcp_call tool (server: OneDrive; tool: create_folder; arguments: {"parentPath": "/", "name": "NewFolder"})\\n  — Create a new folder. parentPath is where to create it.\\n\\nthe native mcp_call tool (server: OneDrive; tool: upload_file; arguments: {"path": "/Documents/file.txt", "content": "Hello World"})\\n  — Upload or create a text file (up to 4MB).\\n\\nthe native mcp_call tool (server: OneDrive; tool: delete_item; arguments: {"path": "/Documents/old-file.txt"})\\n  — Delete a file or folder (moves to recycle bin).\\n\\nthe native mcp_call tool (server: OneDrive; tool: get_share_link; arguments: {"path": "/Documents/report.pdf", "type": "view"})\\n  — Create a sharing link. type can be "view" (read-only) or "edit" (read-write).\\n\\nthe native mcp_call tool (server: OneDrive; tool: get_drive_info; arguments: {})\\n  — Get OneDrive storage info (space used, remaining, owner).\\n\\n## USAGE GUIDELINES\\n- Always start by listing the root directory to orient yourself: the native mcp_call tool (server: OneDrive; tool: list_files; arguments: {"path": "/"})\\n- Use search_files to find specific files when you don\'t know the exact path\\n- Use get_file_info to check file details before reading large files\\n- Paths use forward slashes and start from the root: /Documents/subfolder/file.txt\\n- When the user asks about "my files" or "my documents", start by listing the root\\n- For binary files (images, PDFs), provide the web URL or share link instead of reading content\\n- Be cautious with delete_item — always confirm with the user before deleting',
   },
   {
     id: 'skill-gdrive',
@@ -272,7 +226,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-gdrive'],
     instructions:
-      'You can interact with Google Drive using the GoogleDrive MCP tools.\n\n## AVAILABLE TOOLS\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nCall them using the @mcp_call(GoogleDrive, tool_name, {"param": "value"}) syntax shown there.\n\n## GoogleDrive MCP Tools Reference\n\n@mcp_call(GoogleDrive, get_drive_info, {})\n  — Get the connected account email and storage quota.\n\n@mcp_call(GoogleDrive, list_files, {"path": "/", "pageSize": 50})\n  — List items in a folder. Use "/" for root, or pass a path like "/Documents". Alternative: pass "folderId".\n\n@mcp_call(GoogleDrive, search_files, {"query": "report", "pageSize": 25})\n  — Search by name or content. Plain strings match name/full text. You can also use Drive query syntax: "mimeType = \'application/pdf\'", "name contains \'budget\'", "modifiedTime > \'2024-01-01\'".\n\n@mcp_call(GoogleDrive, get_file_info, {"path": "/Documents/report.pdf"})\n  — Get detailed metadata (size, MIME, owners, sharing, web link). Accepts "path" or "fileId".\n\n@mcp_call(GoogleDrive, read_file, {"path": "/Documents/notes.txt"})\n  — Read file content. Google Docs/Sheets/Slides are exported automatically to plain text or CSV. Binary files are returned base64-encoded. Optional: "fileId", "maxBytes".\n\n@mcp_call(GoogleDrive, create_folder, {"name": "NewFolder", "parentPath": "/"})\n  — Create a folder. Alternative: pass "parentId".\n\n@mcp_call(GoogleDrive, upload_file, {"name": "hello.txt", "content": "Hello", "parentPath": "/"})\n  — Upload a new file. For binary uploads pass "encoding": "base64". Optional: "mimeType", "parentId".\n\n@mcp_call(GoogleDrive, delete_item, {"path": "/Documents/old.txt"})\n  — Move a file or folder to trash. Pass "permanent": true to delete permanently. Accepts "fileId" too.\n\n@mcp_call(GoogleDrive, get_share_link, {"path": "/Documents/report.pdf", "type": "view"})\n  — Create/retrieve a sharing link. type can be "view" or "edit". Pass "anyoneWithLink": false to skip creating a public permission and just return the existing web link.\n\n## USAGE GUIDELINES\n- Start with @mcp_call(GoogleDrive, list_files, {"path": "/"}) to orient yourself.\n- Paths use forward slashes from the root: /Folder/Subfolder/file.ext\n- Path resolution is name-based — if multiple items share a name in the same folder, use the fileId instead.\n- For Google-native formats (Docs, Sheets, Slides), read_file returns plain text/CSV. Use get_share_link if the user needs to view the document.\n- Be cautious with delete_item — confirm with the user before deleting, and use "permanent": true only when explicitly requested.',
+      'You can interact with Google Drive using the GoogleDrive MCP tools.\n\n## AVAILABLE TOOLS\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\n\n## GoogleDrive MCP Tools Reference\n\nthe native mcp_call tool (server: GoogleDrive; tool: get_drive_info; arguments: {})\n  — Get the connected account email and storage quota.\n\nthe native mcp_call tool (server: GoogleDrive; tool: list_files; arguments: {"path": "/", "pageSize": 50})\n  — List items in a folder. Use "/" for root, or pass a path like "/Documents". Alternative: pass "folderId".\n\nthe native mcp_call tool (server: GoogleDrive; tool: search_files; arguments: {"query": "report", "pageSize": 25})\n  — Search by name or content. Plain strings match name/full text. You can also use Drive query syntax: "mimeType = \'application/pdf\'", "name contains \'budget\'", "modifiedTime > \'2024-01-01\'".\n\nthe native mcp_call tool (server: GoogleDrive; tool: get_file_info; arguments: {"path": "/Documents/report.pdf"})\n  — Get detailed metadata (size, MIME, owners, sharing, web link). Accepts "path" or "fileId".\n\nthe native mcp_call tool (server: GoogleDrive; tool: read_file; arguments: {"path": "/Documents/notes.txt"})\n  — Read file content. Google Docs/Sheets/Slides are exported automatically to plain text or CSV. Binary files are returned base64-encoded. Optional: "fileId", "maxBytes".\n\nthe native mcp_call tool (server: GoogleDrive; tool: create_folder; arguments: {"name": "NewFolder", "parentPath": "/"})\n  — Create a folder. Alternative: pass "parentId".\n\nthe native mcp_call tool (server: GoogleDrive; tool: upload_file; arguments: {"name": "hello.txt", "content": "Hello", "parentPath": "/"})\n  — Upload a new file. For binary uploads pass "encoding": "base64". Optional: "mimeType", "parentId".\n\nthe native mcp_call tool (server: GoogleDrive; tool: delete_item; arguments: {"path": "/Documents/old.txt"})\n  — Move a file or folder to trash. Pass "permanent": true to delete permanently. Accepts "fileId" too.\n\nthe native mcp_call tool (server: GoogleDrive; tool: get_share_link; arguments: {"path": "/Documents/report.pdf", "type": "view"})\n  — Create/retrieve a sharing link. type can be "view" or "edit". Pass "anyoneWithLink": false to skip creating a public permission and just return the existing web link.\n\n## USAGE GUIDELINES\n- Start with the native mcp_call tool (server: GoogleDrive; tool: list_files; arguments: {"path": "/"}) to orient yourself.\n- Paths use forward slashes from the root: /Folder/Subfolder/file.ext\n- Path resolution is name-based — if multiple items share a name in the same folder, use the fileId instead.\n- For Google-native formats (Docs, Sheets, Slides), read_file returns plain text/CSV. Use get_share_link if the user needs to view the document.\n- Be cautious with delete_item — confirm with the user before deleting, and use "permanent": true only when explicitly requested.',
   },
   {
     id: 'skill-gmail',
@@ -284,7 +238,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-gmail'],
     instructions:
-      'You can interact with Gmail using the Gmail MCP tools.\n\n## AVAILABLE TOOLS\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nCall them using the @mcp_call(ServerName, tool_name, {"param": "value"}) syntax shown there.\n\n## Gmail MCP Tools Reference\n\n@mcp_call(Gmail, get_profile, {})\n  — Get the connected Gmail account profile (email address, total messages).\n\n@mcp_call(Gmail, list_emails, {"maxResults": 20, "labelIds": "INBOX"})\n  — List recent emails. Optional: query (Gmail search syntax), labelIds (INBOX, SENT, STARRED, UNREAD, DRAFT).\n\n@mcp_call(Gmail, search_emails, {"query": "from:alice subject:report", "maxResults": 20})\n  — Search emails using Gmail search syntax. Supports all Gmail operators: from:, to:, subject:, has:, is:, after:, before:, etc.\n\n@mcp_call(Gmail, read_email, {"messageId": "MESSAGE_ID"})\n  — Read the full content of a specific email (headers, body, attachments info).\n\n@mcp_call(Gmail, send_email, {"to": "bob@example.com", "subject": "Hello", "body": "Message content"})\n  — Send a new email. Optional: cc, bcc, attachments.\n  Attach files by passing attachments: [{"filename": "report.pdf", "mimeType": "application/pdf", "content": "<base64>"}].\n  The content field must be standard base64-encoded file data.\n\n@mcp_call(Gmail, reply_to_email, {"messageId": "MESSAGE_ID", "body": "Reply content"})\n  — Reply to an existing email, maintaining the thread. Optional: replyAll (default: false), attachments (same format as send_email).\n\n@mcp_call(Gmail, create_draft, {"to": "bob@example.com", "subject": "Draft", "body": "Content"})\n  — Create a draft email without sending it. Optional: cc, bcc, attachments (same format as send_email).\n\n@mcp_call(Gmail, download_attachment, {"messageId": "MSG_ID", "attachmentId": "ATTACH_ID", "filename": "file.pdf"})\n  — Download an attachment from an email. Returns the file content as base64. Get the attachmentId from read_email.\n\n@mcp_call(Gmail, list_labels, {})\n  — List all Gmail labels (folders/categories).\n\n@mcp_call(Gmail, modify_labels, {"messageId": "MSG_ID", "addLabelIds": "STARRED", "removeLabelIds": "UNREAD"})\n  — Add or remove labels. Use to mark read/unread, star/unstar, archive, etc.\n  Common: remove UNREAD to mark as read, remove INBOX to archive, add STARRED to star.\n\n@mcp_call(Gmail, trash_email, {"messageId": "MESSAGE_ID"})\n  — Move an email to the trash.\n\n@mcp_call(Gmail, get_thread, {"threadId": "THREAD_ID"})\n  — Get all messages in a conversation thread.\n\n## USAGE GUIDELINES\n- Always start by checking the profile: @mcp_call(Gmail, get_profile, {})\n- Use search_emails with Gmail search syntax for powerful filtering\n- When asked to read emails, first list_emails then read_email for specific ones\n- For conversations, use get_thread to see the full email chain\n- Always confirm with the user before sending emails\n- Be cautious with trash_email — confirm before deleting\n- Use modify_labels to organize: mark as read, star, archive, etc.',
+      'You can interact with Gmail using the Gmail MCP tools.\n\n## AVAILABLE TOOLS\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\n\n## Gmail MCP Tools Reference\n\nthe native mcp_call tool (server: Gmail; tool: get_profile; arguments: {})\n  — Get the connected Gmail account profile (email address, total messages).\n\nthe native mcp_call tool (server: Gmail; tool: list_emails; arguments: {"maxResults": 20, "labelIds": "INBOX"})\n  — List recent emails. Optional: query (Gmail search syntax), labelIds (INBOX, SENT, STARRED, UNREAD, DRAFT).\n\nthe native mcp_call tool (server: Gmail; tool: search_emails; arguments: {"query": "from:alice subject:report", "maxResults": 20})\n  — Search emails using Gmail search syntax. Supports all Gmail operators: from:, to:, subject:, has:, is:, after:, before:, etc.\n\nthe native mcp_call tool (server: Gmail; tool: read_email; arguments: {"messageId": "MESSAGE_ID"})\n  — Read the full content of a specific email (headers, body, attachments info).\n\nthe native mcp_call tool (server: Gmail; tool: send_email; arguments: {"to": "bob@example.com", "subject": "Hello", "body": "Message content"})\n  — Send a new email. Optional: cc, bcc, attachments.\n  Attach files by passing attachments: [{"filename": "report.pdf", "mimeType": "application/pdf", "content": "<base64>"}].\n  The content field must be standard base64-encoded file data.\n\nthe native mcp_call tool (server: Gmail; tool: reply_to_email; arguments: {"messageId": "MESSAGE_ID", "body": "Reply content"})\n  — Reply to an existing email, maintaining the thread. Optional: replyAll (default: false), attachments (same format as send_email).\n\nthe native mcp_call tool (server: Gmail; tool: create_draft; arguments: {"to": "bob@example.com", "subject": "Draft", "body": "Content"})\n  — Create a draft email without sending it. Optional: cc, bcc, attachments (same format as send_email).\n\nthe native mcp_call tool (server: Gmail; tool: download_attachment; arguments: {"messageId": "MSG_ID", "attachmentId": "ATTACH_ID", "filename": "file.pdf"})\n  — Download an attachment from an email. Returns the file content as base64. Get the attachmentId from read_email.\n\nthe native mcp_call tool (server: Gmail; tool: list_labels; arguments: {})\n  — List all Gmail labels (folders/categories).\n\nthe native mcp_call tool (server: Gmail; tool: modify_labels; arguments: {"messageId": "MSG_ID", "addLabelIds": "STARRED", "removeLabelIds": "UNREAD"})\n  — Add or remove labels. Use to mark read/unread, star/unstar, archive, etc.\n  Common: remove UNREAD to mark as read, remove INBOX to archive, add STARRED to star.\n\nthe native mcp_call tool (server: Gmail; tool: trash_email; arguments: {"messageId": "MESSAGE_ID"})\n  — Move an email to the trash.\n\nthe native mcp_call tool (server: Gmail; tool: get_thread; arguments: {"threadId": "THREAD_ID"})\n  — Get all messages in a conversation thread.\n\n## USAGE GUIDELINES\n- Always start by checking the profile: the native mcp_call tool (server: Gmail; tool: get_profile; arguments: {})\n- Use search_emails with Gmail search syntax for powerful filtering\n- When asked to read emails, first list_emails then read_email for specific ones\n- For conversations, use get_thread to see the full email chain\n- Always confirm with the user before sending emails\n- Be cautious with trash_email — confirm before deleting\n- Use modify_labels to organize: mark as read, star, archive, etc.',
   },
   {
     id: 'skill-agents-direct-access',
@@ -294,7 +248,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     icon: '💬',
     builtin: true,
     instructions:
-      'You can ask questions directly to other agents in the swarm.\\n\\n## DIRECT QUESTIONS\\n@ask(AgentName, "your question here")\\n\\nUse this for quick answers — no task is created on the target agent.\\nThe target agent will receive your question and respond concisely.\\nTheir answer will be provided back to you inline.\\n\\nWHEN TO USE @ask vs @delegate:\\n- @ask: quick questions ("What framework is used?", "Did the tests pass?")\\n- @delegate (leaders only): full tasks requiring work\\n\\nExamples:\\n@ask(Developer, "What testing framework is configured in this project?")\\n@ask(Security Analyst, "Are there known vulnerabilities in express 4.21?")\\n@ask(QA Engineer, "Did the last test run pass?")\\n\\nRULES:\\n- One @ask per question\\n- Keep questions concise and specific\\n- The target agent will give a brief answer — this is not for delegating work',
+      'You can ask questions directly to other agents in the swarm.\\n\\n## DIRECT QUESTIONS\\nUse the native ask_agent tool with agent_name and question fields.\\n\\nUse this for quick answers — no task is created on the target agent.\\nThe target agent will receive your question and respond concisely.\\nTheir answer will be provided back to you inline.\\n\\nWHEN TO USE ask_agent:\\n- Quick questions ("What framework is used?", "Did the tests pass?")\\n- Full tasks requiring work should be created through the task-management tools.\\n\\nRULES:\\n- One question per call\\n- Keep questions concise and specific\\n- The target agent will give a brief answer — this is not for delegating work',
     mcpServerIds: [],
     createdAt: '2024-03-01T00:00:00.000Z',
     updatedAt: '2024-03-01T00:00:00.000Z',
@@ -309,7 +263,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-code-index'],
     instructions:
-      'You can use the internal Code Index plugin to explore codebases faster than raw grep alone.\\n\\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\\nCall them using the @mcp_call(Code Index, tool_name, {"param": "value"}) syntax.\\n\\nRECOMMENDED WORKFLOW:\\n1. BEFORE any search, call @mcp_call(Code Index, list_repos, {}) to check if your current project is already indexed.\\n2. If the current project appears in the list, reuse its repoId — do NOT re-index.\\n3. If the current project is NOT in the list, index it first:\\n   - @mcp_call(Code Index, index_folder, {"path": "/projects/YOUR_PROJECT_NAME", "repoName": "YOUR_PROJECT_NAME"})\\n   - Use the project name from the PROJECT CONTEXT section of your prompt.\\n4. Search symbols or semantics first, then fetch outlines/source for the best matches.\\n5. Fall back to normal file tools when you need to edit files.\\n\\nMOST USEFUL TOOLS:\\n- @mcp_call(Code Index, list_repos, {})\\n  List all indexed repositories and their repoIds. ALWAYS call this first.\\n- @mcp_call(Code Index, index_folder, {"path": "/projects/MyProject", "repoName": "MyProject"})\\n  Index a project folder. Use the project name from your PROJECT CONTEXT.\\n- @mcp_call(Code Index, index_workspace, {"subpath": "server/src", "repoName": "server-src"})\\n  Index the current application workspace or a subfolder under it.\\n- @mcp_call(Code Index, search_symbols, {"repoId": "...", "query": "authenticateToken", "topK": 5})\\n  Find classes, functions, and methods by lexical match.\\n- @mcp_call(Code Index, search_semantic, {"repoId": "...", "query": "JWT auth middleware", "topK": 5})\\n  Find relevant code by meaning.\\n- @mcp_call(Code Index, get_file_outline, {"repoId": "...", "filePath": "src/middleware/auth.js"})\\n  Inspect all symbols in a file.\\n- @mcp_call(Code Index, get_symbol, {"repoId": "...", "symbolId": "...", "verify": true, "contextLines": 2})\\n  Retrieve a symbol\'s source and metadata.\\n\\nPATH GUIDANCE:\\n- index_folder with "/projects/PROJECT_NAME" is the preferred way to index a project.\\n- index_workspace resolves paths under the backend workspace root.\\n- For monorepos, you can index subfolders like "server/src", "client/src".\\n\\nUSE CASES:\\n- Quickly understand a large codebase before editing\\n- Locate auth, routing, service, and data-access logic\\n- Find all methods on a class\\n- Search conceptually ("rate limiting", "token verification", "file upload flow")\\n- Inspect exact source for a symbol before making changes',
+      'You can use the internal Code Index plugin to explore codebases faster than raw grep alone.\\n\\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\\n\\nRECOMMENDED WORKFLOW:\\n1. BEFORE any search, call the native mcp_call tool (server: Code Index; tool: list_repos; arguments: {}) to check if your current project is already indexed.\\n2. If the current project appears in the list, reuse its repoId — do NOT re-index.\\n3. If the current project is NOT in the list, index it first:\\n   - the native mcp_call tool (server: Code Index; tool: index_folder; arguments: {"path": "/projects/YOUR_PROJECT_NAME", "repoName": "YOUR_PROJECT_NAME"})\\n   - Use the project name from the PROJECT CONTEXT section of your prompt.\\n4. Search symbols or semantics first, then fetch outlines/source for the best matches.\\n5. Fall back to normal file tools when you need to edit files.\\n\\nMOST USEFUL TOOLS:\\n- the native mcp_call tool (server: Code Index; tool: list_repos; arguments: {})\\n  List all indexed repositories and their repoIds. ALWAYS call this first.\\n- the native mcp_call tool (server: Code Index; tool: index_folder; arguments: {"path": "/projects/MyProject", "repoName": "MyProject"})\\n  Index a project folder. Use the project name from your PROJECT CONTEXT.\\n- the native mcp_call tool (server: Code Index; tool: index_workspace; arguments: {"subpath": "server/src", "repoName": "server-src"})\\n  Index the current application workspace or a subfolder under it.\\n- the native mcp_call tool (server: Code Index; tool: search_symbols; arguments: {"repoId": "...", "query": "authenticateToken", "topK": 5})\\n  Find classes, functions, and methods by lexical match.\\n- the native mcp_call tool (server: Code Index; tool: search_semantic; arguments: {"repoId": "...", "query": "JWT auth middleware", "topK": 5})\\n  Find relevant code by meaning.\\n- the native mcp_call tool (server: Code Index; tool: get_file_outline; arguments: {"repoId": "...", "filePath": "src/middleware/auth.js"})\\n  Inspect all symbols in a file.\\n- the native mcp_call tool (server: Code Index; tool: get_symbol; arguments: {"repoId": "...", "symbolId": "...", "verify": true, "contextLines": 2})\\n  Retrieve a symbol\'s source and metadata.\\n\\nPATH GUIDANCE:\\n- index_folder with "/projects/PROJECT_NAME" is the preferred way to index a project.\\n- index_workspace resolves paths under the backend workspace root.\\n- For monorepos, you can index subfolders like "server/src", "client/src".\\n\\nUSE CASES:\\n- Quickly understand a large codebase before editing\\n- Locate auth, routing, service, and data-access logic\\n- Find all methods on a class\\n- Search conceptually ("rate limiting", "token verification", "file upload flow")\\n- Inspect exact source for a symbol before making changes',
   },
   {
     id: 'skill-slack',
@@ -321,7 +275,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-slack'],
     instructions:
-      'You can interact with Slack using the Slack MCP tools.\\n\\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\\nCall them using the @mcp_call(Slack, tool_name, {"param": "value"}) syntax shown there.\\n\\n## Slack MCP Tools Reference\\n\\n@mcp_call(Slack, list_channels, {"types": "public_channel", "limit": 100})\\n  — List channels the bot has access to. types: public_channel, private_channel, mpim, im.\\n\\n@mcp_call(Slack, read_channel, {"channel": "C01234ABCDE", "limit": 20})\\n  — Read recent messages from a channel. Returns messages with timestamps and users.\\n\\n@mcp_call(Slack, read_thread, {"channel": "C01234ABCDE", "thread_ts": "1234567890.123456", "limit": 50})\\n  — Read all replies in a message thread.\\n\\n@mcp_call(Slack, send_message, {"channel": "C01234ABCDE", "text": "Hello!"})\\n  — Send a message to a channel or user. Supports Slack mrkdwn formatting.\\n  Optional: thread_ts (to reply in a thread).\\n\\n@mcp_call(Slack, reply_to_message, {"channel": "C01234ABCDE", "thread_ts": "1234567890.123456", "text": "Reply content"})\\n  — Reply to a specific message in a thread.\\n\\n@mcp_call(Slack, list_users, {"limit": 100})\\n  — List workspace members with display names, status, and IDs.\\n\\n@mcp_call(Slack, search_messages, {"query": "keyword", "count": 20})\\n  — Search messages across the workspace. Supports Slack search operators: in:#channel, from:@user.\\n  Note: requires search:read scope, may not be available with all bot tokens.\\n\\n@mcp_call(Slack, get_channel_info, {"channel": "C01234ABCDE"})\\n  — Get detailed info about a channel (topic, purpose, member count, etc.).\\n\\n@mcp_call(Slack, add_reaction, {"channel": "C01234ABCDE", "timestamp": "1234567890.123456", "name": "thumbsup"})\\n  — Add an emoji reaction to a message. Use emoji name without colons.\\n\\n@mcp_call(Slack, open_dm, {"user": "U01234ABCDE"})\\n  — Open a DM channel with a user. Returns the DM channel ID for sending messages.\\n\\n## USAGE GUIDELINES\\n- Always start by listing channels: @mcp_call(Slack, list_channels, {})\\n- Use channel IDs (not names) for all operations\\n- When asked to read a channel, use list_channels first to find the ID, then read_channel\\n- For DMs, first open_dm to get the channel ID, then send_message\\n- Always confirm with the user before sending messages\\n- Use add_reaction to acknowledge messages without cluttering the channel\\n- Use threads (reply_to_message) to keep conversations organized',
+      'You can interact with Slack using the Slack MCP tools.\\n\\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\\n\\n## Slack MCP Tools Reference\\n\\nthe native mcp_call tool (server: Slack; tool: list_channels; arguments: {"types": "public_channel", "limit": 100})\\n  — List channels the bot has access to. types: public_channel, private_channel, mpim, im.\\n\\nthe native mcp_call tool (server: Slack; tool: read_channel; arguments: {"channel": "C01234ABCDE", "limit": 20})\\n  — Read recent messages from a channel. Returns messages with timestamps and users.\\n\\nthe native mcp_call tool (server: Slack; tool: read_thread; arguments: {"channel": "C01234ABCDE", "thread_ts": "1234567890.123456", "limit": 50})\\n  — Read all replies in a message thread.\\n\\nthe native mcp_call tool (server: Slack; tool: send_message; arguments: {"channel": "C01234ABCDE", "text": "Hello!"})\\n  — Send a message to a channel or user. Supports Slack mrkdwn formatting.\\n  Optional: thread_ts (to reply in a thread).\\n\\nthe native mcp_call tool (server: Slack; tool: reply_to_message; arguments: {"channel": "C01234ABCDE", "thread_ts": "1234567890.123456", "text": "Reply content"})\\n  — Reply to a specific message in a thread.\\n\\nthe native mcp_call tool (server: Slack; tool: list_users; arguments: {"limit": 100})\\n  — List workspace members with display names, status, and IDs.\\n\\nthe native mcp_call tool (server: Slack; tool: search_messages; arguments: {"query": "keyword", "count": 20})\\n  — Search messages across the workspace. Supports Slack search operators: in:#channel, from:@user.\\n  Note: requires search:read scope, may not be available with all bot tokens.\\n\\nthe native mcp_call tool (server: Slack; tool: get_channel_info; arguments: {"channel": "C01234ABCDE"})\\n  — Get detailed info about a channel (topic, purpose, member count, etc.).\\n\\nthe native mcp_call tool (server: Slack; tool: add_reaction; arguments: {"channel": "C01234ABCDE", "timestamp": "1234567890.123456", "name": "thumbsup"})\\n  — Add an emoji reaction to a message. Use emoji name without colons.\\n\\nthe native mcp_call tool (server: Slack; tool: open_dm; arguments: {"user": "U01234ABCDE"})\\n  — Open a DM channel with a user. Returns the DM channel ID for sending messages.\\n\\n## USAGE GUIDELINES\\n- Always start by listing channels: the native mcp_call tool (server: Slack; tool: list_channels; arguments: {})\\n- Use channel IDs (not names) for all operations\\n- When asked to read a channel, use list_channels first to find the ID, then read_channel\\n- For DMs, first open_dm to get the channel ID, then send_message\\n- Always confirm with the user before sending messages\\n- Use add_reaction to acknowledge messages without cluttering the channel\\n- Use threads (reply_to_message) to keep conversations organized',
   },
   {
     id: 'skill-jira',
@@ -333,7 +287,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-jira'],
     instructions:
-      'You can interact with Jira using the Jira MCP tools.\n\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nCall them using the @mcp_call(Jira, tool_name, {"param": "value"}) syntax shown there.\n\n## Jira MCP Tools Reference\n\n@mcp_call(Jira, get_myself, {})\n  — Get the authenticated Jira user profile.\n\n@mcp_call(Jira, list_projects, {})\n  — List all accessible Jira projects.\n\n@mcp_call(Jira, search_issues, {"jql": "project = PROJ AND status = \'In Progress\'", "maxResults": 20})\n  — Search issues using JQL. Supports all JQL operators.\n\n@mcp_call(Jira, get_issue, {"issueKey": "PROJ-123"})\n  — Get full issue details (description, comments, attachments, subtasks).\n\n@mcp_call(Jira, create_issue, {"projectKey": "PROJ", "summary": "New task", "description": "Details", "issueType": "Task"})\n  — Create a new issue. issueType: Task, Bug, Story, Epic, Sub-task.\n\n@mcp_call(Jira, update_issue, {"issueKey": "PROJ-123", "summary": "Updated title"})\n  — Update issue fields (summary, description, priority, assignee, labels).\n\n@mcp_call(Jira, add_comment, {"issueKey": "PROJ-123", "comment": "My comment"})\n  — Add a comment to an issue.\n\n@mcp_call(Jira, transition_issue, {"issueKey": "PROJ-123"})\n  — List available transitions. Add transitionId to execute one.\n  Example: @mcp_call(Jira, transition_issue, {"issueKey": "PROJ-123", "transitionId": "31"})\n\n@mcp_call(Jira, list_boards, {})\n  — List all Jira boards (Scrum/Kanban).\n\n@mcp_call(Jira, get_board_columns, {"boardId": 1})\n  — Get board columns/statuses.\n\n@mcp_call(Jira, get_sprint, {"boardId": 1})\n  — Get active sprint with issues.\n\n@mcp_call(Jira, assign_issue, {"issueKey": "PROJ-123", "accountId": "abc123"})\n  — Assign or unassign an issue.\n\n## USAGE GUIDELINES\n- Start by listing projects: @mcp_call(Jira, list_projects, {})\n- Use JQL for powerful searches: status, assignee, labels, sprint, dates\n- Before transitioning, call transition_issue without transitionId to see options\n- Always confirm with the user before creating issues or modifying data\n- Use get_issue to read full details before making updates',
+      'You can interact with Jira using the Jira MCP tools.\n\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\n\n## Jira MCP Tools Reference\n\nthe native mcp_call tool (server: Jira; tool: get_myself; arguments: {})\n  — Get the authenticated Jira user profile.\n\nthe native mcp_call tool (server: Jira; tool: list_projects; arguments: {})\n  — List all accessible Jira projects.\n\nthe native mcp_call tool (server: Jira; tool: search_issues; arguments: {"jql": "project = PROJ AND status = \'In Progress\'", "maxResults": 20})\n  — Search issues using JQL. Supports all JQL operators.\n\nthe native mcp_call tool (server: Jira; tool: get_issue; arguments: {"issueKey": "PROJ-123"})\n  — Get full issue details (description, comments, attachments, subtasks).\n\nthe native mcp_call tool (server: Jira; tool: create_issue; arguments: {"projectKey": "PROJ", "summary": "New task", "description": "Details", "issueType": "Task"})\n  — Create a new issue. issueType: Task, Bug, Story, Epic, Sub-task.\n\nthe native mcp_call tool (server: Jira; tool: update_issue; arguments: {"issueKey": "PROJ-123", "summary": "Updated title"})\n  — Update issue fields (summary, description, priority, assignee, labels).\n\nthe native mcp_call tool (server: Jira; tool: add_comment; arguments: {"issueKey": "PROJ-123", "comment": "My comment"})\n  — Add a comment to an issue.\n\nthe native mcp_call tool (server: Jira; tool: transition_issue; arguments: {"issueKey": "PROJ-123"})\n  — List available transitions. Add transitionId to execute one.\n  Example: the native mcp_call tool (server: Jira; tool: transition_issue; arguments: {"issueKey": "PROJ-123", "transitionId": "31"})\n\nthe native mcp_call tool (server: Jira; tool: list_boards; arguments: {})\n  — List all Jira boards (Scrum/Kanban).\n\nthe native mcp_call tool (server: Jira; tool: get_board_columns; arguments: {"boardId": 1})\n  — Get board columns/statuses.\n\nthe native mcp_call tool (server: Jira; tool: get_sprint; arguments: {"boardId": 1})\n  — Get active sprint with issues.\n\nthe native mcp_call tool (server: Jira; tool: assign_issue; arguments: {"issueKey": "PROJ-123", "accountId": "abc123"})\n  — Assign or unassign an issue.\n\n## USAGE GUIDELINES\n- Start by listing projects: the native mcp_call tool (server: Jira; tool: list_projects; arguments: {})\n- Use JQL for powerful searches: status, assignee, labels, sprint, dates\n- Before transitioning, call transition_issue without transitionId to see options\n- Always confirm with the user before creating issues or modifying data\n- Use get_issue to read full details before making updates',
   },
   {
     id: 'skill-github',
@@ -345,7 +299,7 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     builtin: true,
     mcpServerIds: ['mcp-github'],
     instructions:
-      'You can interact with GitHub using the GitHub MCP tools.\n\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nCall them using the @mcp_call(GitHub, tool_name, {"param": "value"}) syntax shown there.\n\n## GitHub MCP Tools Reference\n\n@mcp_call(GitHub, get_authenticated_user, {})\n  — Get the authenticated GitHub user profile.\n\n@mcp_call(GitHub, list_repos, {"type": "all", "sort": "updated", "per_page": 30})\n  — List repositories accessible to the authenticated user.\n\n@mcp_call(GitHub, get_repo, {"owner": "octocat", "repo": "hello-world"})\n  — Get detailed info about a specific repository.\n\n@mcp_call(GitHub, list_issues, {"owner": "octocat", "repo": "hello-world", "state": "open"})\n  — List issues. Filter by state, labels, assignee.\n\n@mcp_call(GitHub, get_issue, {"owner": "octocat", "repo": "hello-world", "issue_number": 1})\n  — Get full issue details with comments.\n\n@mcp_call(GitHub, create_issue, {"owner": "octocat", "repo": "hello-world", "title": "Bug report", "body": "Details"})\n  — Create a new issue.\n\n@mcp_call(GitHub, update_issue, {"owner": "octocat", "repo": "hello-world", "issue_number": 1, "state": "closed"})\n  — Update an issue (title, body, state, labels, assignees).\n\n@mcp_call(GitHub, add_issue_comment, {"owner": "octocat", "repo": "hello-world", "issue_number": 1, "body": "Comment"})\n  — Add a comment to an issue or PR.\n\n@mcp_call(GitHub, list_pull_requests, {"owner": "octocat", "repo": "hello-world", "state": "open"})\n  — List pull requests.\n\n@mcp_call(GitHub, get_pull_request, {"owner": "octocat", "repo": "hello-world", "pull_number": 1})\n  — Get full PR details with review status.\n\n@mcp_call(GitHub, create_pull_request, {"owner": "octocat", "repo": "hello-world", "title": "Feature", "head": "feature-branch", "base": "main"})\n  — Create a new pull request.\n\n@mcp_call(GitHub, list_branches, {"owner": "octocat", "repo": "hello-world"})\n  — List branches in a repository.\n\n@mcp_call(GitHub, get_file_content, {"owner": "octocat", "repo": "hello-world", "path": "README.md"})\n  — Get file or directory content.\n\n@mcp_call(GitHub, search_code, {"query": "repo:octocat/hello-world function main"})\n  — Search for code across repos.\n\n@mcp_call(GitHub, list_commits, {"owner": "octocat", "repo": "hello-world", "per_page": 10})\n  — List recent commits.\n\n@mcp_call(GitHub, list_workflows, {"owner": "octocat", "repo": "hello-world"})\n  — List GitHub Actions workflows.\n\n@mcp_call(GitHub, list_workflow_runs, {"owner": "octocat", "repo": "hello-world", "per_page": 5})\n  — List recent CI/CD workflow runs.\n\n## USAGE GUIDELINES\n- Start by listing repos: @mcp_call(GitHub, list_repos, {})\n- Use search_code for finding code across repositories\n- Check workflow runs to monitor CI/CD status\n- Always confirm with the user before creating issues, PRs, or modifying data',
+      'You can interact with GitHub using the GitHub MCP tools.\n\nThe MCP tools are listed in the "--- MCP Tools ---" section of your prompt.\nUse the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.\n\n## GitHub MCP Tools Reference\n\nthe native mcp_call tool (server: GitHub; tool: get_authenticated_user; arguments: {})\n  — Get the authenticated GitHub user profile.\n\nthe native mcp_call tool (server: GitHub; tool: list_repos; arguments: {"type": "all", "sort": "updated", "per_page": 30})\n  — List repositories accessible to the authenticated user.\n\nthe native mcp_call tool (server: GitHub; tool: get_repo; arguments: {"owner": "octocat", "repo": "hello-world"})\n  — Get detailed info about a specific repository.\n\nthe native mcp_call tool (server: GitHub; tool: list_issues; arguments: {"owner": "octocat", "repo": "hello-world", "state": "open"})\n  — List issues. Filter by state, labels, assignee.\n\nthe native mcp_call tool (server: GitHub; tool: get_issue; arguments: {"owner": "octocat", "repo": "hello-world", "issue_number": 1})\n  — Get full issue details with comments.\n\nthe native mcp_call tool (server: GitHub; tool: create_issue; arguments: {"owner": "octocat", "repo": "hello-world", "title": "Bug report", "body": "Details"})\n  — Create a new issue.\n\nthe native mcp_call tool (server: GitHub; tool: update_issue; arguments: {"owner": "octocat", "repo": "hello-world", "issue_number": 1, "state": "closed"})\n  — Update an issue (title, body, state, labels, assignees).\n\nthe native mcp_call tool (server: GitHub; tool: add_issue_comment; arguments: {"owner": "octocat", "repo": "hello-world", "issue_number": 1, "body": "Comment"})\n  — Add a comment to an issue or PR.\n\nthe native mcp_call tool (server: GitHub; tool: list_pull_requests; arguments: {"owner": "octocat", "repo": "hello-world", "state": "open"})\n  — List pull requests.\n\nthe native mcp_call tool (server: GitHub; tool: get_pull_request; arguments: {"owner": "octocat", "repo": "hello-world", "pull_number": 1})\n  — Get full PR details with review status.\n\nthe native mcp_call tool (server: GitHub; tool: create_pull_request; arguments: {"owner": "octocat", "repo": "hello-world", "title": "Feature", "head": "feature-branch", "base": "main"})\n  — Create a new pull request.\n\nthe native mcp_call tool (server: GitHub; tool: list_branches; arguments: {"owner": "octocat", "repo": "hello-world"})\n  — List branches in a repository.\n\nthe native mcp_call tool (server: GitHub; tool: get_file_content; arguments: {"owner": "octocat", "repo": "hello-world", "path": "README.md"})\n  — Get file or directory content.\n\nthe native mcp_call tool (server: GitHub; tool: search_code; arguments: {"query": "repo:octocat/hello-world function main"})\n  — Search for code across repos.\n\nthe native mcp_call tool (server: GitHub; tool: list_commits; arguments: {"owner": "octocat", "repo": "hello-world", "per_page": 10})\n  — List recent commits.\n\nthe native mcp_call tool (server: GitHub; tool: list_workflows; arguments: {"owner": "octocat", "repo": "hello-world"})\n  — List GitHub Actions workflows.\n\nthe native mcp_call tool (server: GitHub; tool: list_workflow_runs; arguments: {"owner": "octocat", "repo": "hello-world", "per_page": 5})\n  — List recent CI/CD workflow runs.\n\n## USAGE GUIDELINES\n- Start by listing repos: the native mcp_call tool (server: GitHub; tool: list_repos; arguments: {})\n- Use search_code for finding code across repositories\n- Check workflow runs to monitor CI/CD status\n- Always confirm with the user before creating issues, PRs, or modifying data',
   },
   {
     id: 'skill-web-browser',
@@ -358,33 +312,33 @@ Call them using the @mcp_call(Swarm API, tool_name, {"param": "value"}) syntax s
     instructions: `You can browse the internet using the Web Browser MCP tools.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(Web Browser, tool_name, {"param": "value"}) syntax shown there.
+Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
 
 ## AVAILABLE TOOLS
 
-@mcp_call(Web Browser, search_web, {"query": "best practices docker swarm 2026"})
+the native mcp_call tool (server: Web Browser; tool: search_web; arguments: {"query": "best practices docker swarm 2026"})
   — Search the web (DuckDuckGo) and get the results page as clean Markdown. Use this first to discover relevant URLs.
 
-@mcp_call(Web Browser, crawl, {"url": "https://example.com/article"})
+the native mcp_call tool (server: Web Browser; tool: crawl; arguments: {"url": "https://example.com/article"})
   — Crawl a single page and return its main content as clean Markdown (boilerplate, nav, footer, ads filtered out).
   Optional: word_count_threshold (default 10) to control how aggressively short blocks are dropped.
 
-@mcp_call(Web Browser, crawl_many, {"urls": ["https://a.com", "https://b.com"]})
+the native mcp_call tool (server: Web Browser; tool: crawl_many; arguments: {"urls": ["https://a.com", "https://b.com"]})
   — Crawl several pages in parallel. Use this when you need to compare or aggregate sources.
 
-@mcp_call(Web Browser, get_links, {"url": "https://example.com"})
+the native mcp_call tool (server: Web Browser; tool: get_links; arguments: {"url": "https://example.com"})
   — List all hyperlinks on a page (internal and external), filtered to ignore nav/footer noise.
 
-@mcp_call(Web Browser, extract, {"url": "https://example.com/products", "instruction": "Extract product name and price for each item"})
+the native mcp_call tool (server: Web Browser; tool: extract; arguments: {"url": "https://example.com/products", "instruction": "Extract product name and price for each item"})
   — Use the configured LLM to extract structured information from a page.
   Optional: schema_json — provide a JSON schema string to force structured JSON output.
 
 ## RECOMMENDED WORKFLOW
 
-1. Start with @mcp_call(Web Browser, search_web, {"query": "..."}) to find candidate URLs.
-2. Pick 1–3 promising URLs from the search results, then @mcp_call(Web Browser, crawl, ...) (or crawl_many) to read their content.
-3. Use @mcp_call(Web Browser, extract, ...) only when you need structured data (tables, product lists, etc.) — for prose, plain crawl + your own reading is faster.
-4. Use @mcp_call(Web Browser, get_links, ...) when you need to follow references from a starting page.
+1. Start with the native mcp_call tool (server: Web Browser; tool: search_web; arguments: {"query": "..."}) to find candidate URLs.
+2. Pick 1–3 promising URLs from the search results, then the native mcp_call tool (server: Web Browser; tool: crawl; arguments: ...) (or crawl_many) to read their content.
+3. Use the native mcp_call tool (server: Web Browser; tool: extract; arguments: ...) only when you need structured data (tables, product lists, etc.) — for prose, plain crawl + your own reading is faster.
+4. Use the native mcp_call tool (server: Web Browser; tool: get_links; arguments: ...) when you need to follow references from a starting page.
 
 ## IMPORTANT
 - Always cite the source URL when returning information you got from the web.
@@ -404,39 +358,39 @@ Call them using the @mcp_call(Web Browser, tool_name, {"param": "value"}) syntax
     instructions: `You can interact with Amazon S3 using the AWS S3 MCP tools.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(AWS S3, tool_name, {"param": "value"}) syntax shown there.
+Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
 
 ## AWS S3 MCP Tools Reference
 
-@mcp_call(AWS S3, list_buckets, {})
+the native mcp_call tool (server: AWS S3; tool: list_buckets; arguments: {})
   — List all S3 buckets in the account.
 
-@mcp_call(AWS S3, list_objects, {"bucket": "my-bucket", "prefix": "data/", "max_keys": 100})
+the native mcp_call tool (server: AWS S3; tool: list_objects; arguments: {"bucket": "my-bucket", "prefix": "data/", "max_keys": 100})
   — List objects in a bucket. Filter by prefix, paginate with continuation_token.
 
-@mcp_call(AWS S3, get_object, {"bucket": "my-bucket", "key": "data/report.json"})
+the native mcp_call tool (server: AWS S3; tool: get_object; arguments: {"bucket": "my-bucket", "key": "data/report.json"})
   — Read the content of an object (text files). For large/binary files, use get_presigned_url.
 
-@mcp_call(AWS S3, put_object, {"bucket": "my-bucket", "key": "data/output.json", "content": "{}", "content_type": "application/json"})
+the native mcp_call tool (server: AWS S3; tool: put_object; arguments: {"bucket": "my-bucket", "key": "data/output.json", "content": "{}", "content_type": "application/json"})
   — Upload text content to an object. Creates or overwrites.
 
-@mcp_call(AWS S3, delete_object, {"bucket": "my-bucket", "key": "data/old-file.txt"})
+the native mcp_call tool (server: AWS S3; tool: delete_object; arguments: {"bucket": "my-bucket", "key": "data/old-file.txt"})
   — Delete an object from a bucket.
 
-@mcp_call(AWS S3, copy_object, {"source_bucket": "src-bucket", "source_key": "file.txt", "dest_bucket": "dst-bucket", "dest_key": "copy.txt"})
+the native mcp_call tool (server: AWS S3; tool: copy_object; arguments: {"source_bucket": "src-bucket", "source_key": "file.txt", "dest_bucket": "dst-bucket", "dest_key": "copy.txt"})
   — Copy an object within or between buckets.
 
-@mcp_call(AWS S3, get_object_info, {"bucket": "my-bucket", "key": "data/file.pdf"})
+the native mcp_call tool (server: AWS S3; tool: get_object_info; arguments: {"bucket": "my-bucket", "key": "data/file.pdf"})
   — Get metadata about an object (size, type, last modified) without downloading.
 
-@mcp_call(AWS S3, get_presigned_url, {"bucket": "my-bucket", "key": "data/large-file.zip", "operation": "get", "expires_in": 3600})
+the native mcp_call tool (server: AWS S3; tool: get_presigned_url; arguments: {"bucket": "my-bucket", "key": "data/large-file.zip", "operation": "get", "expires_in": 3600})
   — Generate a presigned URL for download ("get") or upload ("put"). Default 1 hour.
 
-@mcp_call(AWS S3, create_bucket, {"bucket": "new-bucket-name", "region": "eu-west-1"})
+the native mcp_call tool (server: AWS S3; tool: create_bucket; arguments: {"bucket": "new-bucket-name", "region": "eu-west-1"})
   — Create a new S3 bucket.
 
 ## USAGE GUIDELINES
-- Start by listing buckets: @mcp_call(AWS S3, list_buckets, {})
+- Start by listing buckets: the native mcp_call tool (server: AWS S3; tool: list_buckets; arguments: {})
 - Use list_objects with prefix to browse bucket contents like a file system
 - Use get_object for text files, get_presigned_url for binary/large files
 - Always confirm with the user before deleting objects or creating buckets
@@ -456,26 +410,26 @@ Call them using the @mcp_call(AWS S3, tool_name, {"param": "value"}) syntax show
     instructions: `You have access to a shared skill library where you can learn, store, and retrieve reusable knowledge.
 
 The MCP tools are listed in the "--- MCP Tools ---" section of your prompt.
-Call them using the @mcp_call(Auto Learn, tool_name, {"param": "value"}) syntax shown there.
+Use the native mcp_call tool. Set its server, tool, and arguments fields from the MCP tool reference below.
 
 ## AVAILABLE TOOLS
 
-@mcp_call(Auto Learn, list_skills, {})
+the native mcp_call tool (server: Auto Learn; tool: list_skills; arguments: {})
   — List all skills in the shared library.
 
-@mcp_call(Auto Learn, search_skills, {"query": "deployment"})
+the native mcp_call tool (server: Auto Learn; tool: search_skills; arguments: {"query": "deployment"})
   — Search for existing skills by keyword. Matches name, description, category, and instructions.
 
-@mcp_call(Auto Learn, get_skill, {"skill_id": "agent-skill-..."})
+the native mcp_call tool (server: Auto Learn; tool: get_skill; arguments: {"skill_id": "agent-skill-..."})
   — Get the full details and instructions of a specific skill.
 
-@mcp_call(Auto Learn, create_skill, {"name": "Fix CORS Issues", "description": "Step-by-step guide to diagnose and fix CORS errors", "category": "coding", "instructions": "..."})
+the native mcp_call tool (server: Auto Learn; tool: create_skill; arguments: {"name": "Fix CORS Issues", "description": "Step-by-step guide to diagnose and fix CORS errors", "category": "coding", "instructions": "..."})
   — Create a new skill with detailed instructions. Categories: coding, devops, writing, security, analysis, general.
 
-@mcp_call(Auto Learn, update_skill, {"skill_id": "agent-skill-...", "instructions": "Updated instructions..."})
+the native mcp_call tool (server: Auto Learn; tool: update_skill; arguments: {"skill_id": "agent-skill-...", "instructions": "Updated instructions..."})
   — Update an existing skill (name, description, category, or instructions).
 
-@mcp_call(Auto Learn, delete_skill, {"skill_id": "agent-skill-..."})
+the native mcp_call tool (server: Auto Learn; tool: delete_skill; arguments: {"skill_id": "agent-skill-..."})
   — Delete a skill from the library.
 
 ## WHEN TO USE

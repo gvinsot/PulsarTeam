@@ -9,6 +9,7 @@ import { WsEmitter } from '../../ws/emitter.js';
 import { projectObject, type FieldProjection } from '../../lib/projection.js';
 import type { Task } from '../database/tasks.js';
 import type { Agent } from '../database/agents.js';
+import type { NativeToolCall } from '../nativeTools.js';
 
 import { lifecycleMethods } from './lifecycle.js';
 import { chatMethods } from './chat.js';
@@ -253,8 +254,15 @@ export interface AgentManager {
       maxTokens: number;
       llmConfig: any;
       isContinuation: boolean;
+      tools: any[];
     }
-  ): Promise<{ text: string; thinking: string; finishReason: string | null; outputTokens: number }>;
+  ): Promise<{
+    text: string;
+    thinking: string;
+    finishReason: string | null;
+    outputTokens: number;
+    toolCalls: NativeToolCall[];
+  }>;
   _streamAndContinue(
     agent: any,
     id: string,
@@ -263,15 +271,19 @@ export interface AgentManager {
     streamCallback: any,
     abortController: AbortController,
     activeTaskId?: string | null
-  ): Promise<{ fullResponse: string; thinkingBuffer: string; finishReason: string | null }>;
+  ): Promise<{
+    fullResponse: string;
+    thinkingBuffer: string;
+    finishReason: string | null;
+    outputTokens: number;
+    durationMs: number;
+    toolCalls: NativeToolCall[];
+  }>;
   _processPostResponseActions(
     agent: any,
     id: string,
-    responseForParsing: string,
     fullResponse: string,
-    streamCallback: any,
-    delegationDepth: number,
-    messageMeta: any
+    delegationDepth: number
   ): Promise<{ earlyReturn?: any }>;
 
   // ── tools.ts ──
@@ -281,13 +293,12 @@ export interface AgentManager {
   ): Promise<{ success: boolean; result: string; isTerminal?: boolean; taskId?: string }>;
   _processToolCalls(
     agentId: string,
-    response: string,
+    nativeToolCalls: NativeToolCall[],
     streamCallback: any,
     depth?: number
   ): Promise<any[]>;
 
   // ── parsing.ts ──
-  _parseAskCommands(text: string): Array<{ agentName: string; question: string }>;
   _listAvailableProjects(): Promise<string[]>;
 
   // ── tasks.ts ──

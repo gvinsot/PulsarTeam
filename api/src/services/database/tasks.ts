@@ -66,7 +66,7 @@ const TASK_COLUMNS = new Set<string>(Object.values(TASK_COLUMN_BY_FIELD));
 // Everything a consumer should use is derived from here: `Task` is
 // ReturnType<typeof rowToTask>, so it cannot drift from the mapper.
 
-/** A commit linked to a task by the git reconcile / @run_command sweep. */
+/** A commit linked to a task by the git reconcile / run_command sweep. */
 export interface TaskCommit {
   hash: string;
   message?: string;
