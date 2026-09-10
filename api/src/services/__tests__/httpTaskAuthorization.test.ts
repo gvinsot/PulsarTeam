@@ -216,3 +216,45 @@ test('missing board and authorization database failures fail closed', async () =
   assert.equal(deleteTask.mock.callCount(), 0);
   assert.equal(rows.get('task')?.deletedAt, undefined);
 });
+
+test('ownerless agent cannot stop, resume, inspect commits or bulk-move a foreign task', async () => {
+  const task = seedTask('bob-board', 'legacy-agent');
+  Object.assign(task, { executionStatus: 'stopped', actionRunning: true });
+  const original = structuredClone(task);
+  await assertDenied(await harness().post('/task/stop'));
+  await assertDenied(await harness().patch('/task/clear-stopped'));
+  await assertDenied(await harness().get('/task/commits/abcdef0/diff'));
+  assert.deepEqual(rows.get('task'), original);
+  assert.equal(manager._emit.mock.callCount(), 0);
+
+  // bulk-move validates UUIDs and destination access before checking each source task.
+  const taskId = '11111111-1111-4111-8111-111111111111';
+  const boardId = '22222222-2222-4222-8222-222222222222';
+  boards.set(boardId, { id: boardId, user_id: 'alice' });
+  rows.delete('task');
+  task.id = taskId;
+  rows.set(taskId, task);
+  const beforeMove = structuredClone(task);
+  const response = await harness().post('/bulk-move', { taskIds: [taskId], boardId });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    moved: [],
+    failed: [{ taskId, error: 'Access denied' }],
+  });
+  assert.deepEqual(rows.get(taskId), beforeMove);
+  // The batch summary contains no task data and reports zero moves.
+  assert.deepEqual(
+    manager._emit.mock.calls.map(call => call.arguments),
+    [['task:bulk-moved', { boardId, boardName: null, column: 'todo', count: 0, movedBy: 'alice' }]]
+  );
+});
+
+test('revoked board share is checked again even when the caller owns the agent', async () => {
+  const original = structuredClone(seedTask('bob-board', 'alice-agent'));
+  shares.set('bob-board:alice', { permission: 'edit' });
+  assert.equal((await harness().get('/task/history')).status, 200);
+  shares.clear();
+  await assertDenied(await harness().get('/task/history'));
+  await assertDenied(await harness().del('/task'));
+  assert.deepEqual(rows.get('task'), original);
+});
