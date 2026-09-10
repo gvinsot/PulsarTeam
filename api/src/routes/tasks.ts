@@ -3,6 +3,7 @@ import { errorMessage } from '../lib/errors.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
 import { requireRole } from '../middleware/auth.js';
 import { checkBoardAccess } from '../middleware/authz.js';
+import { checkAgentAccess, isInternalServiceSession } from '../lib/agentAccess.js';
 import {
   getPool,
   getBoardById,
@@ -108,20 +109,44 @@ function taskSelectColumns(projection: FieldProjection): string {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Check if the authenticated user has access to a task (via agent ownership OR board access) */
+/**
+ * Can the authenticated user act on this task?
+ *
+ * Same rule, in the same order, as `requireTaskExecutionAccess`
+ * (services/agentManager/tasks.ts) on the websocket side and as
+ * `checkAgentAccess` (lib/agentAccess.ts) — one policy, three call surfaces:
+ *   1. Task on a board → that board decides, at 'edit'. The task's `agentId`
+ *      never overrides it: a task living on another tenant's board is that
+ *      tenant's, whoever the executing agent belongs to.
+ *   2. Board-less task → its OWNING agent decides, via `checkAgentAccess`, so an
+ *      agent whose `owner_id` is NULL (created before the column existed, or
+ *      dropped back to NULL by the `ON DELETE SET NULL` in
+ *      services/database/baseSchema.ts) is admin-only instead of readable and
+ *      writable by every authenticated user.
+ *   3. Neither board nor agent → admin only, like the socket path. Orphaned rows
+ *      are no longer left open "so they stay deletable".
+ *
+ * Fail-closed throughout: a missing board, a revoked share or a DB error all
+ * end in a denial, never in a grant.
+ */
 async function requireTaskAccess(mgr: AgentManager, task: Task, user: SessionClaims) {
-  if (user.role === 'admin') return true;
-  const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
-  // Agent owner always has access (covers agent-scoped tasks).
-  if (agent && (!agent.ownerId || agent.ownerId === user.userId)) return true;
-  // Board edit access (covers unassigned/board-only tasks and shared boards).
+  if (!user) return false;
+  // Admin (and the API's own internal service session, which carries no
+  // userId) short-circuit exactly as they do in checkAgentAccess.
+  if (user.role === 'admin' || isInternalServiceSession(user)) return true;
+  if (!user.userId) return false;
+
+  // 1. Board-scoped task: the board decides, at the mutating level.
   if (task.boardId) {
     const access = await checkBoardAccess(task.boardId, user.userId, user.role, 'edit');
-    if (access.ok) return true;
+    return access.ok;
   }
-  // Orphaned task with no agent and no board to gate on — allow so it stays deletable.
-  if (!agent && !task.boardId) return true;
-  return false;
+
+  // 2/3. Board-less task: its actual owning agent decides; no agent → admin
+  // only, and admin already returned above.
+  const agent = task.agentId ? mgr.agents.get(task.agentId) : null;
+  if (!agent) return false;
+  return (await checkAgentAccess(agent, user, 'edit')).ok;
 }
 
 /** Log an audit event for task operations */

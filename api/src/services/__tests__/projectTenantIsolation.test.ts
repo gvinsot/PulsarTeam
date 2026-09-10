@@ -27,6 +27,10 @@ mock.module('../database.js', {
     getLlmConfig: async () => null,
     rowToTask: (row: any) => row,
     getOAuthToken: () => null,
+    // lib/agentAccess.ts (pulled in by routes/tasks.ts for the task guard)
+    // imports this at module load, so the fake must provide it even though the
+    // isolation tests never reach an agent-scoped decision.
+    getAgentById: async () => null,
     getTaskById: async () => null,
     updateTaskExecutionStatus: async () => {},
     saveTaskToDb: async () => {},
@@ -64,6 +68,9 @@ mock.module('../database.js', {
 mock.module('../../middleware/auth.js', {
   namedExports: {
     requireRole: () => (_req: any, _res: any, next: any) => next(),
+    // Imported by lib/agentAccess.ts at module load (routes/tasks.ts now routes
+    // its task guard through it); unused by these tests.
+    sessionUser: (req: any) => req.user || null,
   },
 });
 
