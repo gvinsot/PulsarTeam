@@ -32,6 +32,7 @@ import {
 import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
 import { snapshotGitBaseline, reconcileTaskCommits } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
+import { ensureAgentWorkspace, resolveAgentGitCredentials } from '../execution/agentWorkspace.js';
 import type { Task } from '../database/tasks.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
@@ -59,22 +60,11 @@ async function requireTaskExecutionAccess(
   if (!(await checkAgentAccess(owner, user, 'edit')).ok) throw new Error('Access denied');
 }
 
-/** Credential record returned by the lazily-imported GitHub route helper. */
-type GitHubCredentials = Awaited<
-  ReturnType<typeof import('../../routes/github.js').getGitHubCredentialsForAgent>
->;
-
 async function bindAgentRunner(manager: any, agent: any): Promise<void> {
   if (!manager.executionManager?.bindAgent || !agent?.id) return;
   const llmConfig = manager.resolveLlmConfig?.(agent) || {};
   const providerType = agent.runner || (llmConfig.managesContext ? 'claudecode' : 'sandbox');
-  let gitCreds: GitHubCredentials = null;
-  try {
-    const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
-    gitCreds = await getGitHubCredentialsForAgent(agent.id, agent.boardId || null);
-  } catch {
-    gitCreds = null;
-  }
+  const gitCreds = await resolveAgentGitCredentials(agent);
   manager.executionManager.bindAgent(agent.id, providerType, {
     ownerId: agent.ownerId || null,
     gitCredentials: gitCreds,
@@ -1636,45 +1626,35 @@ export const tasksMethods = {
       // are secondaries to (re)clone.
       const taskRepo = task.repoFullName || null;
       const secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos, taskRepo);
-      this.executionManager?.setSecondaryRepos?.(executorId, secondaryRepos);
-      const needsPrimarySwitch = !!taskRepo && taskRepo !== executor.project;
-      const needsSecondaryEnsure = secondaryRepos.length > 0;
-      if (taskRepo && (needsPrimarySwitch || needsSecondaryEnsure)) {
-        if (needsPrimarySwitch) {
-          console.log(
-            `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
-          );
-        }
-        if (this.executionManager) {
-          try {
-            const gitUrl =
-              task.repoHtmlUrl || (taskRepo ? `https://github.com/${taskRepo}.git` : null);
-            if (gitUrl) {
-              const { getGitHubCredentialsForAgent } = await import('../../routes/github.js');
-              const gitCreds = await getGitHubCredentialsForAgent(
-                executorId,
-                executor.boardId || null
-              );
-              await this.executionManager.switchProject(executorId, taskRepo, gitUrl, gitCreds);
-            }
-            const envProject = this.executionManager.getProject(executorId);
-            if (envProject && envProject !== taskRepo) {
-              throw new Error(
-                `Execution environment is on "${envProject}" but task requires "${taskRepo}"`
-              );
-            }
-          } catch (switchErr: any) {
-            console.error(
-              `🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`
+      // Runs on EVERY execution, including when the executor is already recorded
+      // as being on the task's repo: `executor.project` is API-side state that
+      // outlives the runner container, so that case is exactly the one where a
+      // recycled runner has no clone and no ~/.git-credentials, and every push
+      // fails with "could not read Username". The ensure is idempotent and
+      // TTL-debounced — see services/execution/agentWorkspace.ts.
+      if (this.executionManager) {
+        try {
+          const gitCreds = await resolveAgentGitCredentials(executor);
+          const { switched } = await ensureAgentWorkspace(this.executionManager, executor, {
+            repo: taskRepo,
+            repoHtmlUrl: task.repoHtmlUrl,
+            secondaryRepos,
+            gitCredentials: gitCreds,
+          });
+          if (switched) {
+            console.log(
+              `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
             );
-            throw switchErr;
+            this._switchProjectContext?.(executor, executor.project, taskRepo);
           }
+        } catch (switchErr: any) {
+          console.error(
+            `🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`
+          );
+          throw switchErr;
         }
-        if (needsPrimarySwitch && this._switchProjectContext) {
-          this._switchProjectContext(executor, executor.project, taskRepo);
-        }
-        executor.project = taskRepo;
       }
+      if (taskRepo) executor.project = taskRepo;
 
       clearTaskSignal(task.id, 'completed');
       clearTaskSignal(task.id, 'comment');

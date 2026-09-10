@@ -136,10 +136,13 @@ export const chatMethods = {
       currentTask: agent.currentTask || null,
     });
 
-    if (this.executionManager && agent.project) {
+    // Not gated on `agent.project`: an agent with no repo pinned still needs its
+    // token in ~/.git-credentials, or the first thing it clones or pushes on its
+    // own initiative dies with "could not read Username for 'https://github.com'".
+    if (this.executionManager) {
       // Verify execution environment matches agent's assigned project
-      const envProject = this.executionManager.getProject(id);
-      if (envProject && envProject !== agent.project) {
+      const envProject = agent.project ? this.executionManager.getProject(id) : null;
+      if (agent.project && envProject && envProject !== agent.project) {
         console.warn(
           `⚠️  [Chat] Project mismatch detected for "${agent.name}": agent.project="${agent.project}" but execution env has "${envProject}". Re-syncing execution environment.`
         );
@@ -172,7 +175,7 @@ export const chatMethods = {
           llmConfig: llmConfigForRunner,
         });
 
-        const gitUrl = buildRepoCloneUrl(agent.project);
+        const gitUrl = agent.project ? buildRepoCloneUrl(agent.project) : null;
         if (gitUrl) {
           // ensureProject must run on every chat — not just when the API-side
           // file tree is empty. If the runner-service container was restarted
@@ -186,9 +189,10 @@ export const chatMethods = {
             await this.executionManager.refreshFileTree(id);
           }
         } else if (gitCreds?.token && this.executionManager.installGitCredentials) {
-          // No project → no ensureProject call would carry the token. Ship
-          // it explicitly so ~/.git-credentials and GITHUB_TOKEN are wired
-          // up for any tooling the LLM spawns.
+          // No project (or a project label that is not an "owner/repo") → no
+          // ensureProject call would carry the token. Ship it explicitly so
+          // ~/.git-credentials and GITHUB_TOKEN are wired up for any tooling
+          // the LLM spawns.
           await this.executionManager.installGitCredentials(id, gitCreds);
         }
       } catch (err: any) {
