@@ -8,12 +8,14 @@ OpenAPI-compatible client) can discover and call them automatically.
 import os
 import json
 import asyncio
+import ipaddress
 import logging
+import socket
 from contextlib import asynccontextmanager
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from crawl4ai import (
@@ -89,7 +91,103 @@ async def _reset_crawler(crawler: AsyncWebCrawler) -> None:
     logger.warning("AsyncWebCrawler discarded after browser failure; will relaunch")
 
 
-async def _arun_with_recovery(url: str, config: CrawlerRunConfig):
+# ---------------------------------------------------------------------------
+# SSRF guard
+# ---------------------------------------------------------------------------
+#
+# This container sits on the `backend` overlay, next to team-api and postgres,
+# and the URLs it is asked to fetch are chosen by LLM agents — which means they
+# are chosen by whatever those agents last read (a README, a ticket, a page).
+# Without this, `crawl("http://team-api:3001/…")` is a request to an internal
+# service made from inside the perimeter, with its answer handed back to the
+# agent as clean Markdown.
+#
+# team-api runs the same check before calling us (api/src/lib/ssrfGuard.ts), so
+# a direct internal target never gets this far. This copy exists for what that
+# one structurally cannot see: the redirects the browser follows on its own, and
+# any future caller that reaches this service without going through team-api.
+
+
+def _is_private_addr(addr: str) -> bool:
+    """True for anything the crawler must not reach: loopback, RFC1918/ULA,
+    link-local (169.254.169.254 cloud metadata included), CGNAT, multicast and
+    reserved. Unparseable input reads as private — fail closed."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return True
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        # CGNAT (100.64.0.0/10) is not covered by is_private.
+        or (ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"))
+    )
+
+
+async def _assert_public_url(url: str) -> None:
+    """Raise HTTPException(403) unless `url` is http(s) on a host that resolves
+    exclusively to public addresses.
+
+    Every returned record is checked, not just the first: a name answering with
+    one public and one private address would otherwise pass and be connected to
+    the private one.
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=403, detail="Only http(s) URLs are allowed")
+    host = parsed.hostname
+    if not host:
+        raise HTTPException(status_code=400, detail="URL missing host")
+
+    # Off the event loop: getaddrinfo blocks, and this runs on every crawl.
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(host, parsed.port or 0, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise HTTPException(status_code=403, detail="URL host could not be resolved")
+    if not infos:
+        raise HTTPException(status_code=403, detail="URL host could not be resolved")
+    for info in infos:
+        if _is_private_addr(info[4][0]):
+            logger.warning("🛡️ Refused private target: %s", url)
+            raise HTTPException(
+                status_code=403, detail="URL resolves to a private address"
+            )
+
+
+async def _drop_if_redirected_inward(result):
+    """Discard a crawl whose FINAL url is private.
+
+    The entry guard validates the URL we are given; the browser then follows
+    redirects itself, so a public URL answering `302 → http://team-api:3001`
+    lands on an internal page anyway. We cannot stop that request from being
+    made from here, but we can refuse to hand the answer back — which is what
+    turns it from a data leak into a blind request.
+    """
+    final_url = getattr(result, "url", None)
+    if not final_url:
+        return result
+    try:
+        await _assert_public_url(final_url)
+    except HTTPException:
+        logger.warning("🛡️ Discarded content after inward redirect to: %s", final_url)
+        raise HTTPException(
+            status_code=403,
+            detail="Redirected to a private address; content withheld",
+        )
+    return result
+
+
+async def _arun_bare(url: str, config: CrawlerRunConfig):
     crawler = await get_crawler()
     try:
         result = await crawler.arun(url=url, config=config)
@@ -106,7 +204,15 @@ async def _arun_with_recovery(url: str, config: CrawlerRunConfig):
     return result
 
 
-async def _arun_many_with_recovery(urls: list[str], config: CrawlerRunConfig):
+async def _arun_with_recovery(url: str, config: CrawlerRunConfig):
+    # Guard on the way in (the URL we were handed) and on the way out (where the
+    # browser actually ended up after redirects). Both are needed — see
+    # _drop_if_redirected_inward.
+    await _assert_public_url(url)
+    return await _drop_if_redirected_inward(await _arun_bare(url, config))
+
+
+async def _arun_many_bare(urls: list[str], config: CrawlerRunConfig):
     crawler = await get_crawler()
     try:
         results = await crawler.arun_many(urls=urls, config=config)
@@ -124,6 +230,22 @@ async def _arun_many_with_recovery(urls: list[str], config: CrawlerRunConfig):
         crawler = await get_crawler()
         return await crawler.arun_many(urls=urls, config=config)
     return results
+
+
+async def _arun_many_with_recovery(urls: list[str], config: CrawlerRunConfig):
+    for url in urls:
+        await _assert_public_url(url)
+    results = await _arun_many_bare(urls, config)
+    # A batch is judged per page: one entry redirected inward is dropped from
+    # the batch rather than failing the whole call, since the other pages were
+    # legitimately fetched. The caller reports it as a per-page error.
+    kept = []
+    for r in results:
+        try:
+            kept.append(await _drop_if_redirected_inward(r))
+        except HTTPException:
+            continue
+    return kept
 
 
 def create_clean_markdown_generator(

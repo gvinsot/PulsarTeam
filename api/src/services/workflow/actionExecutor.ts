@@ -1,3 +1,4 @@
+import { waitForProjectSwitch } from '../agentManager/crud.js';
 /**
  * ActionExecutor — executes individual workflow actions.
  *
@@ -611,6 +612,7 @@ async function _ensureAgentOnTaskRepo(
   actualTask: Task | null,
   { agentManager, mode, agentId: _agentId }: EnsureRepoContext
 ): Promise<{ ok: true } | { ok: false; result: ActionResult }> {
+  await waitForProjectSwitch(agent);
   // Auto-switch agent to the task's repo if needed.
   // ONLY `repoFullName` ("owner/repo", set on creation, by GitHub sync or via
   // the task UI) designates a repo. `task.project` is NOT one: rowToTask
@@ -639,11 +641,6 @@ async function _ensureAgentOnTaskRepo(
   // clone fails with a GitHub auth error.
   let gitCreds: any = null;
   try {
-    // 1. Switch conversation context (saves/restores history) — only on a real
-    //    primary change; a secondary-only re-ensure keeps the current context.
-    if (needsPrimarySwitch && agentManager._switchProjectContext) {
-      agentManager._switchProjectContext(agent, agent.project, taskRepo);
-    }
     // 2. Switch execution environment (coder-service / sandbox). switchProject
     //    forces a re-ensure (TTL reset) so secondaries are (re)cloned even when
     //    the primary is unchanged.
@@ -666,6 +663,9 @@ async function _ensureAgentOnTaskRepo(
           `[ActionExecutor] No git URL for repo "${taskRepo}" — execution env may not match`
         );
       }
+    }
+    if (needsPrimarySwitch && agentManager._switchProjectContext) {
+      agentManager._switchProjectContext(agent, agent.project, taskRepo);
     }
     if (taskRepo) agent.project = taskRepo;
     return { ok: true };

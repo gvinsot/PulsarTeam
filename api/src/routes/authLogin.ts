@@ -41,6 +41,7 @@ import {
   verifySessionToken,
 } from '../middleware/session.js';
 import { asyncHandler } from '../lib/asyncHandler.js';
+import { createOAuthStateStore } from './oauthState.js';
 
 const router = express.Router();
 
@@ -169,7 +170,7 @@ function sendLoginResponse(
  * `loginUsername` is the local username key: the email for Google/Microsoft, but
  * for GitHub a computed value (profile email OR `<login>@users.noreply.github.com`).
  */
-async function findOrCreateOAuthUser(opts: {
+export async function findOrCreateOAuthUser(opts: {
   getByProviderId: (id: string) => Promise<any>;
   linkProviderId: (userId: string, id: string, avatarUrl: string | null) => Promise<any>;
   createUser: (
@@ -183,13 +184,39 @@ async function findOrCreateOAuthUser(opts: {
   loginUsername: string;
   displayName: string;
   avatarUrl: string | null;
+  /** See LoginProfile.emailVerified. Absent is treated as unverified. */
+  emailVerified?: boolean;
+  /** Provider label, for the error message when linking is refused. */
+  label: string;
 }): Promise<any> {
   let user = await opts.getByProviderId(opts.providerId);
   if (user) return user;
 
-  // Check if a user with this username/email already exists (link accounts)
+  // A local account already carries this address. Adopting it means handing
+  // over that account — every board, every stored credential — to whoever just
+  // authenticated. That is only defensible when the provider actually verified
+  // the address: otherwise anyone who can type a victim's email into a provider
+  // that does not check it (a fresh Azure tenant, an unverified GitHub address)
+  // takes the account.
+  //
+  // Refusing is a dead end for the user, not a silent one: they are told to
+  // sign in the way that account was created and link the provider afterwards.
+  // Creating a second account under the same username is not an option either —
+  // the username is the unique key.
   const existingUser = await getUserByUsername(opts.loginUsername);
   if (existingUser) {
+    if (!opts.emailVerified) {
+      console.warn(
+        `[Auth] Refused to link ${opts.label} identity ${opts.providerId} to existing user ` +
+          `"${opts.loginUsername}": provider did not verify the address.`
+      );
+      throw new LoginError(
+        403,
+        `An account already exists for ${opts.loginUsername}. ${opts.label} did not verify ` +
+          `this address, so it cannot be linked automatically — sign in with your existing ` +
+          `method, then link ${opts.label} from your account settings.`
+      );
+    }
     await opts.linkProviderId(existingUser.id, opts.providerId, opts.avatarUrl);
     return getUserById(existingUser.id);
   }
@@ -468,6 +495,47 @@ interface LoginProfile {
   loginUsername: string;
   displayName: string;
   avatarUrl: string | null;
+  /**
+   * Whether the provider asserts it verified `loginUsername` as an address the
+   * person actually controls. `false` (or unknown) means the value is a
+   * self-declared string — see findOrCreateOAuthUser, which refuses to link an
+   * existing local account on one of those.
+   */
+  emailVerified: boolean;
+}
+
+// ── Login CSRF: the `state` parameter ────────────────────────────────────────
+//
+// The consent URLs below used to carry no `state`, which left the login flow
+// open to the classic login-CSRF: an attacker completes consent with their own
+// provider account, hands the victim the resulting `?code=…` callback URL, and
+// the victim's browser silently exchanges it — landing them, logged in, inside
+// the ATTACKER's account, where everything they then do is readable by its
+// owner. The plugin OAuth flows have carried a signed state since
+// routes/oauthState.ts was written; only the login flows were missed.
+//
+// Two checks, because neither is sufficient alone:
+//
+//   • Server side (here): the state is HMAC-signed, TTL-bounded and
+//     single-use, so it cannot be forged, edited or replayed, and it is bound
+//     to the provider + redirect_uri it was minted for.
+//   • Browser side (frontend/src/App.tsx): the SPA compares the state the
+//     provider echoed back against the one it stashed in sessionStorage when
+//     it opened the flow. This is the half that actually defeats login CSRF —
+//     GET /auth/:provider/url is public, so an attacker can mint a perfectly
+//     valid state of their own; what they cannot do is put it in the victim's
+//     sessionStorage.
+//
+// One store per provider so a state minted for GitHub never verifies under
+// Google's consume (the domain feeds the HKDF info parameter).
+const loginStateStores = new Map<string, ReturnType<typeof createOAuthStateStore>>();
+function loginStates(provider: string) {
+  let store = loginStateStores.get(provider);
+  if (!store) {
+    store = createOAuthStateStore<{ provider: string; redirectUri: string }>(`login:${provider}`);
+    loginStateStores.set(provider, store);
+  }
+  return store;
 }
 
 /**
@@ -475,7 +543,7 @@ interface LoginProfile {
  * profile, …). Carries the exact HTTP status + message each provider used to
  * return inline, so the shared handleCallback preserves every wire response.
  */
-class LoginError extends Error {
+export class LoginError extends Error {
   status: number;
   constructor(status: number, message: string) {
     super(message);
@@ -499,7 +567,7 @@ interface LoginProviderSpec<TConfig = any> {
   /** clientId reported by GET /status (may be non-null even when not configured — GitHub). */
   statusClientId(): string | null;
   /** Builds the provider consent URL for GET /url (scopes/endpoint/extras live here). */
-  buildAuthUrl(config: TConfig, redirectUri: string): string;
+  buildAuthUrl(config: TConfig, redirectUri: string, state: string): string;
   /** Exchanges the authorization code for an access token. Throws LoginError on failure. */
   exchangeToken(code: string, redirectUri: string, config: TConfig): Promise<string>;
   /** Fetches the provider profile and maps it to a LoginProfile. Throws LoginError on failure. */
@@ -524,7 +592,7 @@ const googleSpec: LoginProviderSpec = {
   label: 'Google',
   getConfig: () => getGoogleOAuthConfig(),
   statusClientId: () => getGoogleOAuthConfig()?.clientId || null,
-  buildAuthUrl(cfg, redirectUri) {
+  buildAuthUrl(cfg, redirectUri, state) {
     const params = new URLSearchParams({
       client_id: cfg.clientId,
       redirect_uri: redirectUri,
@@ -532,6 +600,7 @@ const googleSpec: LoginProviderSpec = {
       scope: 'openid email profile',
       access_type: 'offline',
       prompt: 'select_account',
+      state,
     });
     return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
   },
@@ -568,12 +637,27 @@ const googleSpec: LoginProviderSpec = {
       loginUsername: profile.email,
       displayName: profile.name || profile.email,
       avatarUrl: profile.picture || null,
+      // The v2 userinfo response has carried `verified_email` all along; it was
+      // simply never read. Without it, "signed in with Google" said nothing
+      // about whether this person controls the address, which is precisely what
+      // findOrCreateOAuthUser was treating it as proof of.
+      emailVerified: profile.verified_email === true,
     };
   },
   getByProviderId: getUserByGoogleId,
   linkProviderId: linkGoogleId,
   createUser: createGoogleUser,
 };
+
+/**
+ * True when MICROSOFT_TENANT_ID names one specific Azure directory rather than
+ * one of the multi-tenant endpoints. `common`, `organizations` and `consumers`
+ * all accept sign-ins from directories this deployment does not control.
+ */
+export function isSingleTenant(tenantId: string | undefined | null): boolean {
+  const t = (tenantId || 'common').trim().toLowerCase();
+  return t !== '' && t !== 'common' && t !== 'organizations' && t !== 'consumers';
+}
 
 // ── Microsoft / Live.com ────────────────────────────────────────────────────
 // Shares getMicrosoftOAuthConfig() with the OneDrive and Outlook plugins — one
@@ -585,7 +669,7 @@ const microsoftSpec: LoginProviderSpec = {
   label: 'Microsoft',
   getConfig: () => getMicrosoftOAuthConfig(),
   statusClientId: () => getMicrosoftOAuthConfig()?.clientId || null,
-  buildAuthUrl(cfg, redirectUri) {
+  buildAuthUrl(cfg, redirectUri, state) {
     const params = new URLSearchParams({
       client_id: cfg.clientId,
       redirect_uri: redirectUri,
@@ -593,6 +677,7 @@ const microsoftSpec: LoginProviderSpec = {
       scope: 'openid email profile User.Read',
       response_mode: 'query',
       prompt: 'select_account',
+      state,
     });
     return `https://login.microsoftonline.com/${cfg.tenantId}/oauth2/v2.0/authorize?${params}`;
   },
@@ -648,6 +733,18 @@ const microsoftSpec: LoginProviderSpec = {
       loginUsername: email,
       displayName: profile.displayName || email,
       avatarUrl,
+      // "nOAuth" (Microsoft's own advisory): on the multi-tenant endpoints,
+      // `mail` / `userPrincipalName` are attributes a tenant administrator sets
+      // freely, on a tenant anyone can create. They are an identifier, never a
+      // proof of control — so treating a matching address as "this is that
+      // person" hands any local account to whoever registers a tenant claiming
+      // its address. The immutable object id (`profile.id`, used as providerId
+      // above) is the identity; the address is decoration.
+      //
+      // Locked to one tenant, the directory IS the authority for its own
+      // addresses, so linking by email is sound again. That is the only case
+      // where we accept it.
+      emailVerified: isSingleTenant((getMicrosoftOAuthConfig() as any)?.tenantId),
     };
   },
   getByProviderId: getUserByMicrosoftId,
@@ -683,12 +780,13 @@ const githubSpec: LoginProviderSpec = {
   },
   // /status reports the configured client id even when login is disabled.
   statusClientId: () => process.env.GITHUB_OAUTH_CLIENT_ID || null,
-  buildAuthUrl(cfg, redirectUri) {
+  buildAuthUrl(cfg, redirectUri, state) {
     const params = new URLSearchParams({
       client_id: cfg.clientId,
       redirect_uri: redirectUri,
       scope: 'read:user user:email',
       allow_signup: 'true',
+      state,
     });
     return `https://github.com/login/oauth/authorize?${params}`;
   },
@@ -724,28 +822,36 @@ const githubSpec: LoginProviderSpec = {
       throw new LoginError(401, 'Failed to fetch GitHub profile');
     }
 
-    // GitHub may not expose the user's email on the profile (private setting).
-    // Fall back to /user/emails to find the primary verified address.
-    let email: string | null = profile.email || null;
-    if (!email) {
-      try {
-        const emailsRes = await fetch('https://api.github.com/user/emails', { headers: ghHeaders });
-        if (emailsRes.ok) {
-          const emails = await emailsRes.json();
-          if (Array.isArray(emails)) {
-            const primary =
-              emails.find((e: any) => e.primary && e.verified) ||
-              emails.find((e: any) => e.verified);
-            if (primary?.email) email = primary.email;
+    // /user/emails is the only GitHub endpoint that says whether an address was
+    // verified, so it is consulted FIRST rather than as a fallback. The profile
+    // email (`/user`.email) is only what the user chose to display publicly —
+    // it carries no verification flag of its own, and this function's caller
+    // decides whether to hand over an existing account based on that answer.
+    let email: string | null = null;
+    let emailVerified = false;
+    try {
+      const emailsRes = await fetch('https://api.github.com/user/emails', { headers: ghHeaders });
+      if (emailsRes.ok) {
+        const emails = await emailsRes.json();
+        if (Array.isArray(emails)) {
+          const primary =
+            emails.find((e: any) => e.primary && e.verified) || emails.find((e: any) => e.verified);
+          if (primary?.email) {
+            email = primary.email;
+            emailVerified = true;
           }
         }
-      } catch (err: any) {
-        console.warn('GitHub /user/emails fetch failed:', err.message);
       }
+    } catch (err: any) {
+      console.warn('GitHub /user/emails fetch failed:', err.message);
     }
 
-    // Last resort: use the github username as the local username so the
-    // account can still be created if the user has no verified email.
+    // No verified address (scope refused, endpoint down, or genuinely none):
+    // fall back to the public profile email, then to the noreply alias, so the
+    // account can still be created — but unverified, so it can only ever create
+    // a NEW local account, never adopt an existing one.
+    if (!email) email = profile.email || null;
+
     const username = email || (profile.login ? `${profile.login}@users.noreply.github.com` : null);
     if (!username) {
       throw new LoginError(401, 'Could not determine a username for this GitHub account');
@@ -757,6 +863,7 @@ const githubSpec: LoginProviderSpec = {
       loginUsername: username,
       displayName: profile.name || profile.login || username,
       avatarUrl: profile.avatar_url || null,
+      emailVerified,
     };
   },
   getByProviderId: getUserByGitHubId,
@@ -788,7 +895,17 @@ function handleUrl(spec: LoginProviderSpec) {
       return;
     }
 
-    res.json({ url: spec.buildAuthUrl(cfg, redirectUri), redirect_uri: redirectUri });
+    // Bound to the provider and the redirect_uri it was minted for, so a state
+    // issued for one flow cannot be replayed into another.
+    const state = loginStates(spec.provider).generate({ provider: spec.provider, redirectUri });
+
+    res.json({
+      url: spec.buildAuthUrl(cfg, redirectUri, state),
+      redirect_uri: redirectUri,
+      // The SPA stashes this and compares it to what the provider echoes back
+      // before calling /callback — see the login-CSRF note above.
+      state,
+    });
   };
 }
 
@@ -801,11 +918,27 @@ function handleCallback(spec: LoginProviderSpec) {
       return;
     }
 
-    const { code, redirect_uri } = req.body;
+    const { code, redirect_uri, state } = req.body;
 
     const canonicalRedirectUri = resolveLoginRedirectUri(redirect_uri);
     if (!canonicalRedirectUri) {
       res.status(400).json({ error: 'redirect_uri required' });
+      return;
+    }
+
+    // Consume before the code is exchanged: a state that does not verify means
+    // this callback was not started by us, and there is no reason to spend a
+    // token exchange finding that out. consume() is single-use, so a captured
+    // callback URL cannot be replayed.
+    const stateEntry = typeof state === 'string' ? loginStates(spec.provider).consume(state) : null;
+    if (!stateEntry) {
+      res
+        .status(400)
+        .json({ error: 'Invalid or expired OAuth state', code: 'OAUTH_STATE_INVALID' });
+      return;
+    }
+    if (stateEntry.provider !== spec.provider || stateEntry.redirectUri !== canonicalRedirectUri) {
+      res.status(400).json({ error: 'OAuth state does not match this request' });
       return;
     }
 
@@ -821,6 +954,8 @@ function handleCallback(spec: LoginProviderSpec) {
         loginUsername: profile.loginUsername,
         displayName: profile.displayName,
         avatarUrl: profile.avatarUrl,
+        emailVerified: profile.emailVerified,
+        label: spec.label,
       });
 
       sendLoginResponse(res, user, { avatarUrl: user.avatar_url || profile.avatarUrl });

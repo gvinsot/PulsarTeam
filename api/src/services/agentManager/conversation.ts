@@ -248,6 +248,8 @@ export const conversationMethods = {
     oldProject: string | null,
     newProject: string | null
   ): void {
+    if (oldProject === newProject) return;
+    agent.currentThinking = '';
     if (!agent.projectContexts) agent.projectContexts = {};
 
     if (oldProject) {

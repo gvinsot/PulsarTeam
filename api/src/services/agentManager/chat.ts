@@ -1,3 +1,4 @@
+import { waitForProjectSwitch } from './crud.js';
 // ─── Chat: sendMessage, _cleanMarkdown, _buildSystemPrompt, _assembleMessages,
 //     _streamAndContinue, _processPostResponseActions ──
 import { createProvider } from '../llmProviders.js';
@@ -84,6 +85,7 @@ export const chatMethods = {
     messageMeta: any = null,
     images: any[] | null = null
   ): Promise<any> {
+    await waitForProjectSwitch(this.agents.get(id));
     const isTopLevel = delegationDepth === 0 && !messageMeta;
     if (isTopLevel) {
       if (this._chatLocks.has(id)) {

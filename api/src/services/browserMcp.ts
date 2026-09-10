@@ -2,8 +2,29 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { text } from './mcpResponses.js';
 import { z } from 'zod';
 import { createMcpHttpHandler } from './mcpHttpHandler.js';
+import { assertPublicUrl } from '../lib/ssrfGuard.js';
 
 const BROWSER_SERVICE_URL = process.env.BROWSER_SERVICE_URL || 'http://mcp-browser:8000';
+
+/**
+ * Every URL below is chosen by an agent, and an agent's input is whatever it
+ * last read — a cloned README, a Jira comment, a page it crawled a moment ago.
+ * mcp-browser sits on the `backend` overlay next to team-api and postgres, so
+ * an unchecked `crawl("http://team-api:3001/…")` is a fetch from inside the
+ * perimeter with the crawler's own network position.
+ *
+ * The check happens twice on purpose: here, so a blocked target never leaves
+ * the API and the agent gets a clear refusal instead of a page; and again in
+ * mcp-browser itself (`_assert_public_url`), which is the only side that sees
+ * the redirects crawl4ai follows on its own.
+ */
+async function assertPublicTarget(url: string): Promise<void> {
+  try {
+    await assertPublicUrl(url);
+  } catch (err) {
+    throw new Error(`Refused to fetch ${url}: ${(err as Error).message}`);
+  }
+}
 
 async function browserRequest(path: string, body: any) {
   const url = `${BROWSER_SERVICE_URL}${path}`;
@@ -52,6 +73,7 @@ export function createBrowserMcpServer() {
         .describe('Minimum words per content block to keep (default 10)'),
     },
     async ({ url, word_count_threshold = 10 }) => {
+      await assertPublicTarget(url);
       const result = await browserRequest('/crawl', { url, word_count_threshold });
       const out = result?.content ?? result?.error ?? 'No content.';
       return text(out);
@@ -71,6 +93,10 @@ export function createBrowserMcpServer() {
         .describe('Minimum words per content block to keep (default 10)'),
     },
     async ({ urls, word_count_threshold = 10 }) => {
+      // All-or-nothing: one private target fails the batch rather than being
+      // dropped silently, so the agent cannot use a mixed list to probe which
+      // internal hosts exist by watching which entries come back empty.
+      for (const u of urls) await assertPublicTarget(u);
       const result = await browserRequest('/crawl_many', { urls, word_count_threshold });
       const pages = result?.pages ?? [];
       const out = pages.length
@@ -87,6 +113,7 @@ export function createBrowserMcpServer() {
       url: z.string().describe('The URL to extract links from'),
     },
     async ({ url }) => {
+      await assertPublicTarget(url);
       const result = await browserRequest('/get_links', { url });
       const out = result?.error ? result.error : JSON.stringify(result?.links ?? {}, null, 2);
       return text(out);
@@ -105,6 +132,7 @@ export function createBrowserMcpServer() {
         .describe('Optional JSON-schema string for structured output'),
     },
     async ({ url, instruction, schema_json = '' }) => {
+      await assertPublicTarget(url);
       const result = await browserRequest('/extract', { url, instruction, schema_json });
       const out = result?.content ?? result?.error ?? 'No content.';
       return text(out);

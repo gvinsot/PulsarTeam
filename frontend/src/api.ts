@@ -488,6 +488,16 @@ const oauthIntegration = (base: string) => ({
     get<{ authUrl: string }>(`/${base}/auth-url${abQuery(agentId, boardId)}`),
 });
 
+/**
+ * sessionStorage key holding the OAuth `state` for the login flow in flight.
+ *
+ * Shared by the two halves that must agree on it: LoginPage.tsx writes it when
+ * it opens the provider, App.tsx reads it back on the callback and refuses the
+ * exchange unless the provider echoed the same value. sessionStorage, not
+ * localStorage — the binding is meant to die with the tab that started it.
+ */
+export const OAUTH_STATE_KEY = 'oauth_login_state';
+
 // Login OAuth (sign-in providers) — public routes: status/url send no
 // headers at all, callback sends only Content-Type (no Authorization).
 const loginProvider = (base: string) => ({
@@ -496,10 +506,10 @@ const loginProvider = (base: string) => ({
     get<OAuthAuthUrlResponse>(`/auth/${base}/url?redirect_uri=${encodeURIComponent(redirectUri)}`, {
       auth: false,
     }),
-  callback: (code: string, redirectUri: string) =>
+  callback: (code: string, redirectUri: string, state: string) =>
     post<SessionPayload>(
       `/auth/${base}/callback`,
-      { code, redirect_uri: redirectUri },
+      { code, redirect_uri: redirectUri, state },
       {
         auth: false,
       }

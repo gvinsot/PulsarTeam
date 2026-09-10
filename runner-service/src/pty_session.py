@@ -590,8 +590,16 @@ class PtySession:
         self._tmux_session = name
         has = self._tmux_run(["has-session", "-t", name])
         if has.returncode == 0:
-            logger.info(f"[Terminal] Reattaching existing tmux session {name} for agent {self.agent_id}")
-            return
+            # The tmux server survives runner restarts. Its session may still
+            # belong to a previous repo even when the Python registry is empty.
+            path = self._tmux_run(["display-message", "-p", "-t", name, "#{session_path}"])
+            session_cwd = path.stdout.decode("utf-8", "replace").strip()
+            if path.returncode == 0 and session_cwd == self.cwd:
+                logger.info(f"[Terminal] Reattaching existing tmux session {name} for agent {self.agent_id}")
+                return
+            killed = self._tmux_run(["kill-session", "-t", name])
+            if killed.returncode != 0:
+                raise RuntimeError("Cannot close tmux session from previous project")
         # Keep a dead pane around instead of destroying the session the instant
         # the CLI exits. Without this, a CLI that fails on startup (opencode
         # printing a provider/auth/model error, then exiting) tears the whole
@@ -604,7 +612,7 @@ class PtySession:
         # inherits it even if the CLI exits in the same instant it is created.
         self._tmux_run(["set-option", "-g", "remain-on-exit", "on"])
         create = self._tmux_run(
-            ["new-session", "-d", "-s", name,
+            ["new-session", "-d", "-s", name, "-c", self.cwd,
              "-x", str(self.cols), "-y", str(self.rows), "--", *self.cmd],
             timeout=15.0,
         )
@@ -1560,7 +1568,8 @@ async def get_or_create_session(
     token hydration, etc.) in a callback avoids doing that work needlessly
     when the session already exists.
     """
-    async with _SESSION_LOCKS.setdefault(agent_id, asyncio.Lock()):
+    from agent_user import _get_project_lock
+    async with _get_project_lock(agent_id), _SESSION_LOCKS.setdefault(agent_id, asyncio.Lock()):
         existing = _SESSIONS.get(agent_id)
         if (
             existing is not None

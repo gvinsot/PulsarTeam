@@ -337,7 +337,7 @@ async def ensure_project(
 
     perms = _resolve_permissions(x_agent_id, x_agent_permissions)
     net_perms = perms.get("network") or {}
-    if net_perms.get("internetAccess", True) is False:
+    if request.project and net_perms.get("internetAccess", True) is False:
         raise HTTPException(
             status_code=403,
             detail="network.internetAccess is disabled — cannot clone/fetch remote repositories",

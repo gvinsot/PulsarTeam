@@ -62,11 +62,11 @@ class SecondaryRepo(BaseModel):
 
 
 class EnsureProjectRequest(BaseModel):
-    project: str
-    git_url: str
+    project: Optional[str] = None
+    git_url: Optional[str] = None
     git_credentials: Optional["GitCredentials"] = None
-    # Extra repos to clone next to the primary. The runner keeps them (excludes
-    # them from the stale-project prune); the primary stays the working dir.
+    # Extra repos to clone next to the primary. Working copies are preserved;
+    # the explicit primary selection determines the working directory.
     secondary_repos: list[SecondaryRepo] = []
 
 

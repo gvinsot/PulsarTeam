@@ -1,3 +1,4 @@
+import { waitForProjectSwitch } from './crud.js';
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -1584,6 +1585,7 @@ export const tasksMethods = {
     }
 
     try {
+      await waitForProjectSwitch(executor);
       // Repo selection drives the executor's project context. The task carries
       // a `repoFullName` (hydrated from board_repos via the JOIN); if it
       // differs from the executor's current repo we switch sandbox + history.
@@ -1601,9 +1603,6 @@ export const tasksMethods = {
           console.log(
             `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
           );
-          if (this._switchProjectContext) {
-            this._switchProjectContext(executor, executor.project, taskRepo);
-          }
         }
         if (this.executionManager) {
           try {
@@ -1630,6 +1629,9 @@ export const tasksMethods = {
             throw switchErr;
           }
         }
+        if (needsPrimarySwitch && this._switchProjectContext) {
+          this._switchProjectContext(executor, executor.project, taskRepo);
+        }
         executor.project = taskRepo;
       }
 
@@ -1643,10 +1645,16 @@ export const tasksMethods = {
       // text in its conversation history).  If so, send a continuation nudge
       // instead of the original message, which would cause a full reasoning reset.
       const taskPrefix = task.text.slice(0, 80);
-      const alreadySent = executor.conversationHistory.some(
-        (msg: any) =>
-          msg.role === 'user' && typeof msg.content === 'string' && msg.content.includes(taskPrefix)
-      );
+      // API history can survive a repo switch while the interactive CLI has
+      // restarted. Always send the complete task to CLI runners.
+      const alreadySent =
+        !isCliRunner(executor) &&
+        executor.conversationHistory.some(
+          (msg: any) =>
+            msg.role === 'user' &&
+            typeof msg.content === 'string' &&
+            msg.content.includes(taskPrefix)
+        );
       const messageToSend = alreadySent
         ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
         : task.text;

@@ -15,6 +15,43 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from pty_session import PtySession  # noqa: E402
 
 
+@pytest.mark.parametrize("old_cwd,replace", [("/repo/a", False), ("/repo/b", True)])
+def test_tmux_reattach_checks_project_after_runner_restart(monkeypatch, old_cwd, replace):
+    from subprocess import CompletedProcess
+    session = PtySession(agent_id="repo-test", cmd=["codex"], cwd="/repo/a", env={})
+    calls = []
+
+    def tmux(args, **kwargs):
+        calls.append(args)
+        return CompletedProcess(args, 0, stdout=old_cwd.encode(), stderr=b"")
+
+    monkeypatch.setattr(session, "_tmux_run", tmux)
+    session._ensure_tmux_session()
+    assert any(c[0] == "kill-session" for c in calls) == replace
+    assert any(c[0] == "new-session" for c in calls) == replace
+    if replace:
+        create = next(c for c in calls if c[0] == "new-session")
+        assert create[create.index("-c") + 1] == "/repo/a"
+
+
+@pytest.mark.asyncio
+async def test_terminal_creation_waits_for_project_transition(monkeypatch):
+    import pty_session
+    from agent_user import _get_project_lock
+    from unittest.mock import AsyncMock
+
+    agent_id = "transition-test"
+    factory = AsyncMock(return_value={"cmd": ["codex"], "cwd": "/repo/b", "env": {}})
+    monkeypatch.setattr(PtySession, "start", AsyncMock())
+    monkeypatch.setattr(pty_session, "_SESSIONS", {})
+    async with _get_project_lock(agent_id):
+        pending = asyncio.create_task(pty_session.get_or_create_session(agent_id, factory))
+        await asyncio.sleep(0)
+        factory.assert_not_awaited()
+    session = await pending
+    assert session.cwd == "/repo/b"
+
+
 @pytest.mark.asyncio
 async def test_auto_answers_opencode_update_prompt(monkeypatch):
     session = PtySession(agent_id="agent-a", cmd=["opencode"], cwd="/tmp", env={})
@@ -112,7 +149,10 @@ def test_auto_answers_codex_trust_directory_prompt(monkeypatch):
     )
 
     assert written == [b"\r"]
-    assert "trust" in session._auto_answered
+    # Trust dialogs can render before the CLI reads stdin. The screen-derived
+    # recipe must remain retryable if the first Enter was swallowed.
+    assert "trust" not in session._auto_answered
+    assert session._auto_answer_attempts["trust"] == 1
 
 
 def test_set_auth_error_latches_once():

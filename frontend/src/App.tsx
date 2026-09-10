@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { disconnectSocket, getSocket } from './socket';
-import { api, setCsrfToken } from './api';
+import { api, setCsrfToken, OAUTH_STATE_KEY } from './api';
 import { useAgentsSocket } from './hooks/useAgentsSocket';
 import Dashboard from './components/Dashboard';
 import { VoiceSessionProvider } from './contexts/VoiceSessionContext';
@@ -54,7 +54,7 @@ const toUser = (d: AuthPayload): AppUser => ({
 // .pathname`, hence the string index signature rather than the three literals.
 const OAUTH_CALLBACKS: Record<
   string,
-  ((code: string, redirectUri: string) => Promise<SessionPayload>) | undefined
+  ((code: string, redirectUri: string, state: string) => Promise<SessionPayload>) | undefined
 > = {
   '/auth/google/callback': api.googleCallback,
   '/auth/microsoft/callback': api.microsoftCallback,
@@ -282,13 +282,32 @@ export default function App() {
     const exchange = OAUTH_CALLBACKS[path];
     if (!code || !exchange) return;
 
-    setOauthLoading(true);
+    // Login-CSRF check, and the reason it lives here rather than on the server:
+    // an attacker can obtain a perfectly valid `state` of their own (the /url
+    // route is public) and mail us a callback URL from a flow THEY consented
+    // to — landing this browser inside their account. What they cannot do is
+    // write into this tab's sessionStorage. So a callback whose state does not
+    // match the one we stashed when we opened the provider is not ours, and is
+    // refused before the code is ever exchanged.
+    const returnedState = params.get('state');
+    const expectedState = sessionStorage.getItem(OAUTH_STATE_KEY);
+    sessionStorage.removeItem(OAUTH_STATE_KEY);
+
     const redirectUri =
       sessionStorage.getItem('oauth_redirect_uri') || `${window.location.origin}${path}`;
     sessionStorage.removeItem('oauth_redirect_uri');
     window.history.replaceState({}, '', '/');
 
-    exchange(code, redirectUri)
+    if (!returnedState || !expectedState || returnedState !== expectedState) {
+      console.error('OAuth login refused: state mismatch (login CSRF or expired flow)');
+      showToast('Sign-in could not be verified. Please start again.', 'error');
+      setLoading(false);
+      return;
+    }
+
+    setOauthLoading(true);
+
+    exchange(code, redirectUri, returnedState)
       .then(data => completeLogin(data, { awaitHealth: true }))
       .catch(err => {
         console.error('OAuth login failed:', err);

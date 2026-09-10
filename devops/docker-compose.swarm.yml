@@ -232,6 +232,8 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     image: registry.methodinfo.fr/claudecode-service:latest
     networks:
       backend:
@@ -243,7 +245,7 @@ services:
       - LOG_LEVEL=info
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-8}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-80}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-80}
       - VERBOSE=${CODER_VERBOSE:-false}
@@ -255,7 +257,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-http://swarm-manager:8000/ai/mcp}
       - PYTHONUNBUFFERED=1
@@ -325,6 +326,8 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     networks:
       backend:
         aliases:
@@ -373,6 +376,8 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     networks:
       backend:
         aliases:
@@ -385,7 +390,7 @@ services:
       - RUNNER_TYPE=openclaw
       - TZ=Europe/Paris
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
+      - RUNNER_MODEL=${OPENCLAW_MODEL:-}
       - PORT=8000
       - HOST=0.0.0.0
       - CODER_API_KEY=${CODER_API_KEY:?CODER_API_KEY must be set in the deployment environment}
@@ -443,6 +448,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
         OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-1}
     networks:
@@ -513,6 +519,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         AIDER_CLI_VERSION: ${AIDER_CLI_VERSION:-latest}
         AIDER_CLI_CACHE_BUST: ${AIDER_CLI_CACHE_BUST:-1}
     networks:
@@ -542,7 +549,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
@@ -592,6 +598,7 @@ services:
       context: ..
       dockerfile: runner-service/Dockerfile
       args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-latest}
         CODEX_CLI_CACHE_BUST: ${CODEX_CLI_CACHE_BUST:-1}
     networks:
@@ -602,7 +609,7 @@ services:
       - RUNNER_TYPE=codex
       - TZ=Europe/Paris
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${CODEX_MODEL:-gpt-5-codex}
+      - RUNNER_MODEL=${CODEX_MODEL:-}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
@@ -616,7 +623,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:
@@ -665,6 +671,8 @@ services:
     build:
       context: ..
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     networks:
       backend:
         aliases:
@@ -677,7 +685,7 @@ services:
       - RUNNER_TYPE=hermes
       - TZ=Europe/Paris
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-8}
+      - RUNNER_MODEL=${HERMES_MODEL:-}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
@@ -688,7 +696,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://team-api:3001
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in the deployment environment}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
     cap_drop:

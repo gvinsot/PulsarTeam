@@ -11,6 +11,34 @@ umask 0077
 # from /run/secrets/<NAME> via the secrets helper module. This keeps them out
 # of /proc/<pid>/environ and out of `docker inspect` output.
 
+# ─── Lock down /run/secrets ────────────────────────────────────────────────
+# Swarm mounts every secret 0444 root:root — world-readable INSIDE the
+# container. That is the wrong default here: this is the one container where
+# agent CLIs execute arbitrary, prompt-influenceable shell, and they do so
+# under dedicated non-root UIDs (see agent_user.py). At 0444 any agent could
+# simply `cat /run/secrets/ENCRYPTION_KEY` and walk off with the key that
+# protects every stored OAuth token.
+#
+# Only this entrypoint and the server it execs (both root) ever read these,
+# so 0400 root:root costs nothing and removes the whole class. The directory
+# itself is dropped to 0700 so an agent cannot even enumerate the names.
+#
+# Best-effort: a bind-mounted secrets dir may be read-only, in which case the
+# chmod fails and the container still starts — the deployment's own file mode
+# then governs. Failures are logged, never fatal (`set -e` is suspended).
+if [ -d /run/secrets ]; then
+    set +e
+    chmod 0700 /run/secrets 2>/dev/null || echo "WARNING: could not chmod /run/secrets (read-only mount?)"
+    for _secret in /run/secrets/*; do
+        [ -f "$_secret" ] || continue
+        chown root:root "$_secret" 2>/dev/null
+        chmod 0400 "$_secret" 2>/dev/null || echo "WARNING: could not chmod $_secret"
+    done
+    unset _secret
+    set -e
+    echo "Secrets: /run/secrets locked to root-only (0700 dir / 0400 files)"
+fi
+
 # ─── Filesystem prep (server runs as root, agents get dedicated UIDs at runtime) ─
 PUID=${PUID:-1000}
 PGID=${PGID:-1000}

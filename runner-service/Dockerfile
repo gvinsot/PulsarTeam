@@ -35,8 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMIUM_FLAGS="--no-sandbox --headless --disable-gpu --disable-dev-shm-usage"
 
-# Install Node.js 22 LTS (required by Claude Code CLI and several other runners)
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+# OpenClaw >=2026.9 requires Node >=24.16.0; all CLI runners share this runtime.
+# NodeSource 24.x supplies the current Node 24 LTS patch release.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -46,8 +47,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # A failed install does NOT abort the image build — the backend will
 # return a clear error from /health if its CLI is missing at runtime.
 
+# All CLIs below use upstream latest releases. Bump this shared key to refresh
+# every installer, including Claude/OpenClaw/Hermes, on cached image builds.
+ARG RUNNER_CLI_CACHE_BUST=2026-09-10
+
 # Claude Code CLI (Anthropic)
-RUN npm install -g @anthropic-ai/claude-code
+RUN echo "Agent CLI refresh key: ${RUNNER_CLI_CACHE_BUST}" \
+    && npm install -g @anthropic-ai/claude-code@latest
 
 # OpenCode CLI (https://opencode.ai)
 # Resolve npm's latest tag during the image build by default. Set
@@ -98,7 +104,7 @@ RUN (echo "Codex CLI refresh key: ${CODEX_CLI_CACHE_BUST}" \
         && chmod +x /usr/local/bin/codex)
 
 # OpenClaw CLI (https://openclaw.ai)
-RUN npm install -g openclaw \
+RUN npm install -g openclaw@latest \
     || (echo "WARN: openclaw npm install failed — installing stub" \
         && printf '#!/bin/sh\necho "openclaw-stub 0.0.0 (install failed)"\nexit 0\n' > /usr/local/bin/openclaw \
         && chmod +x /usr/local/bin/openclaw)

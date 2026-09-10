@@ -142,14 +142,16 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     environment:
       - RUNNER_TYPE=claude-code
       - TZ=${TZ:-Europe/Paris}
       - LOG_LEVEL=info
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - RUNNER_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
-      - CLAUDE_MODEL=${CLAUDE_MODEL:-claude-opus-4-7}
+      - RUNNER_MODEL=${CLAUDE_MODEL:-}
+      - CLAUDE_MODEL=${CLAUDE_MODEL:-}
       - RUNNER_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - CLAUDE_MAX_TURNS=${CLAUDE_MAX_TURNS:-50}
       - VERBOSE=${CODER_VERBOSE:-false}
@@ -160,7 +162,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
@@ -209,11 +210,13 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     environment:
       - RUNNER_TYPE=openclaw
       - TZ=${TZ:-Europe/Paris}
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${OPENCLAW_MODEL:-claude-opus-4-6}
+      - RUNNER_MODEL=${OPENCLAW_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TIMEOUT=600
       - PORT=8000
@@ -222,7 +225,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
@@ -266,6 +268,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         OPENCODE_CLI_VERSION: ${OPENCODE_CLI_VERSION:-latest}
         OPENCODE_CLI_CACHE_BUST: ${OPENCODE_CLI_CACHE_BUST:-1}
     environment:
@@ -279,7 +282,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
@@ -323,6 +325,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         AIDER_CLI_VERSION: ${AIDER_CLI_VERSION:-latest}
         AIDER_CLI_CACHE_BUST: ${AIDER_CLI_CACHE_BUST:-1}
     environment:
@@ -342,7 +345,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
@@ -386,6 +388,7 @@ services:
       context: .
       dockerfile: runner-service/Dockerfile
       args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
         CODEX_CLI_VERSION: ${CODEX_CLI_VERSION:-latest}
         CODEX_CLI_CACHE_BUST: ${CODEX_CLI_CACHE_BUST:-1}
     environment:
@@ -404,7 +407,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - MCP_ENDPOINT=${MCP_ENDPOINT:-}
       - PYTHONUNBUFFERED=1
@@ -445,11 +447,13 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     environment:
       - RUNNER_TYPE=hermes
       - TZ=${TZ:-Europe/Paris}
       - LOG_LEVEL=info
-      - RUNNER_MODEL=${HERMES_MODEL:-claude-opus-4-8}
+      - RUNNER_MODEL=${HERMES_MODEL:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TIMEOUT=600
       - PORT=8000
@@ -458,7 +462,6 @@ services:
       - PUID=${CODER_PUID:-1000}
       - PGID=${CODER_PGID:-1000}
       - SWARM_API_BASE_URL=http://api:3001
-      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-random-string}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       - PYTHONUNBUFFERED=1
     # Stateless runner — /app/data re-injected at spawn (see claudecode-service).
@@ -501,6 +504,8 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     environment:
       - RUNNER_TYPE=sandbox
       - TZ=${TZ:-Europe/Paris}
@@ -542,6 +547,8 @@ services:
     build:
       context: .
       dockerfile: runner-service/Dockerfile
+      args:
+        RUNNER_CLI_CACHE_BUST: ${RUNNER_CLI_CACHE_BUST:-2026-09-10}
     environment:
       - RUNNER_TYPE=mock
       - TZ=${TZ:-Europe/Paris}

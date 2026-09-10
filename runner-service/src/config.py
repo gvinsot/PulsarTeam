@@ -107,7 +107,7 @@ CLI_CWD = "/app"
 # --- Agent-specific constants -------------------------------------------------
 
 # Generic max-turns / model — each backend may interpret these differently.
-RUNNER_MODEL = os.getenv("RUNNER_MODEL", os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514"))
+RUNNER_MODEL = os.getenv("RUNNER_MODEL", os.getenv("CLAUDE_MODEL", ""))
 RUNNER_MAX_TURNS = int(os.getenv("RUNNER_MAX_TURNS", os.getenv("CLAUDE_MAX_TURNS", "50")))
 
 SYSTEM_PROMPT = os.getenv("RUNNER_SYSTEM_PROMPT", os.getenv("CLAUDE_SYSTEM_PROMPT", (

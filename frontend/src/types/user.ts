@@ -285,4 +285,8 @@ export interface OAuthAuthUrlResponse {
   /** snake_case, unlike everything else in this file. Always a non-empty string
    *  on a 200 — the empty case returns 400 first. */
   redirect_uri: string;
+  /** Signed, single-use OAuth `state`, already embedded in `url`. The SPA
+   *  stashes it and must present the same value back on the callback — see
+   *  OAUTH_STATE_KEY in api.ts. */
+  state: string;
 }

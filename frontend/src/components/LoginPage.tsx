@@ -20,7 +20,8 @@ import {
   Headphones,
   Send,
 } from 'lucide-react';
-import { api } from '../api';
+import { api, OAUTH_STATE_KEY } from '../api';
+import type { OAuthAuthUrlResponse } from '../types/user';
 import { useLanguage } from '../contexts/LanguageContext';
 import { errorMessage } from '../utils/errors';
 
@@ -719,47 +720,40 @@ export default function LoginPage({
     setGithubEnabled(false);
   }, []);
 
-  const handleGoogleLogin = async () => {
+  /**
+   * Start an OAuth login: stash what the callback will need, then leave.
+   *
+   * The `state` stash is the anti-login-CSRF half of the flow. On the way back,
+   * App.tsx compares the state the provider echoed in the URL against this
+   * value and refuses the exchange if they differ — which is what stops an
+   * attacker from mailing someone a `?code=…` callback URL from a session they
+   * opened themselves and having the victim's browser log into THEIR account.
+   * The server's HMAC check cannot substitute for it: /auth/:provider/url is
+   * public, so an attacker can mint a valid state; they just cannot write it
+   * into this browser's sessionStorage.
+   */
+  const beginOAuthLogin = async (
+    provider: 'google' | 'microsoft' | 'github',
+    authUrl: (redirectUri: string) => Promise<OAuthAuthUrlResponse>
+  ) => {
     setOauthBusy(true);
     try {
-      const redirectUri = `${window.location.origin}/auth/google/callback`;
-      const data = await api.googleAuthUrl(redirectUri);
+      const redirectUri = `${window.location.origin}/auth/${provider}/callback`;
+      const data = await authUrl(redirectUri);
       if (data.redirect_uri) {
         sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
       }
+      sessionStorage.setItem(OAUTH_STATE_KEY, data.state);
       window.location.href = data.url;
     } catch {
+      sessionStorage.removeItem(OAUTH_STATE_KEY);
       setOauthBusy(false);
     }
   };
 
-  const handleMicrosoftLogin = async () => {
-    setOauthBusy(true);
-    try {
-      const redirectUri = `${window.location.origin}/auth/microsoft/callback`;
-      const data = await api.microsoftAuthUrl(redirectUri);
-      if (data.redirect_uri) {
-        sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
-      }
-      window.location.href = data.url;
-    } catch {
-      setOauthBusy(false);
-    }
-  };
-
-  const handleGitHubLogin = async () => {
-    setOauthBusy(true);
-    try {
-      const redirectUri = `${window.location.origin}/auth/github/callback`;
-      const data = await api.githubAuthUrl(redirectUri);
-      if (data.redirect_uri) {
-        sessionStorage.setItem('oauth_redirect_uri', data.redirect_uri);
-      }
-      window.location.href = data.url;
-    } catch {
-      setOauthBusy(false);
-    }
-  };
+  const handleGoogleLogin = () => beginOAuthLogin('google', api.googleAuthUrl);
+  const handleMicrosoftLogin = () => beginOAuthLogin('microsoft', api.microsoftAuthUrl);
+  const handleGitHubLogin = () => beginOAuthLogin('github', api.githubAuthUrl);
 
   return (
     <div className="min-h-screen bg-dark-950 text-dark-200">

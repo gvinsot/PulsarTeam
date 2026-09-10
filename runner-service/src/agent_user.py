@@ -64,9 +64,9 @@ _agent_users: dict[str, dict] = {}
 _agent_projects: dict[str, dict] = {}
 # Per-agent locks serializing ensure_agent_project so two concurrent
 # /projects/ensure calls from the API don't race on the same working tree
-# (e.g. one rmtree + clone while another fetch+reset is running).
+# and terminal creation share the same project transition lock.
 _agent_project_locks: dict[str, asyncio.Lock] = {}
-# Skip the fetch+reset round-trip if we updated this (agent, project) less
+# Skip repeated preparation if we ensured this (agent, project) less
 # than this many seconds ago. The API also debounces, but this is a safety
 # net for any other caller and for races inside a single batch.
 _PROJECT_REFRESH_TTL_SECONDS = 30.0
@@ -285,6 +285,10 @@ def get_agent_project_dir(agent_id: str) -> Optional[str]:
         rel = os.path.relpath(primary_dir, projects_base)
         _agent_projects[agent_id] = {"project": rel, "path": primary_dir, "updated_at": 0.0}
         return primary_dir
+    # An explicit empty/missing primary is authoritative: never resurrect an
+    # archived checkout after detaching a project or losing the active tree.
+    if os.path.exists(os.path.join(projects_base, _PRIMARY_SENTINEL)):
+        return None
     # Scan up to 2 levels deep so `owner/repo` paths are found.
     for entry_name in os.listdir(projects_base):
         first_level = os.path.join(projects_base, entry_name)
@@ -719,49 +723,20 @@ async def _clone_or_update_one(
 ) -> str:
     """Materialize a single repo at `repo_dir`.
 
-    Fetch+reset when it already has a `.git` tree (best-effort — a transient
-    failure leaves the last checkout in place); otherwise clone fresh (fatal on
+    Reuse existing working trees unchanged; otherwise clone fresh (fatal on
     failure so the caller can fail the action). Credentials are assumed already
     installed in the agent HOME; the token is embedded only in the initial clone
     URL and then stripped from `.git/config`."""
     if os.path.isdir(os.path.join(repo_dir, ".git")):
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "fetch", "--all", cwd=repo_dir,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                await asyncio.wait_for(proc.communicate(), timeout=30)
-            except asyncio.TimeoutError:
-                proc.kill()
-                try:
-                    await proc.wait()
-                except Exception:
-                    pass
-                raise RuntimeError("git fetch --all timed out after 30s")
-            proc = await asyncio.create_subprocess_exec(
-                "git", "reset", "--hard", "origin/HEAD", cwd=repo_dir,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                await asyncio.wait_for(proc.communicate(), timeout=15)
-            except asyncio.TimeoutError:
-                proc.kill()
-                try:
-                    await proc.wait()
-                except Exception:
-                    pass
-                raise RuntimeError("git reset --hard origin/HEAD timed out after 15s")
-        except Exception as e:
-            logger.warning(f"[Project] Failed to update {repo_dir}: {type(e).__name__}: {e}")
-        finally:
-            await asyncio.to_thread(_chown_recursive, repo_dir, agent_uid, agent_gid)
+        # A working copy belongs to the agent: preparing its context must never
+        # reset its branch, index, uncommitted changes or local commits.
+        await asyncio.to_thread(_chown_recursive, repo_dir, agent_uid, agent_gid)
         return repo_dir
 
     # Clone path — fresh materialization.
     _ensure_project_parents(projects_base, repo_dir, agent_uid, agent_gid)
-    if os.path.exists(repo_dir):
-        await asyncio.to_thread(shutil.rmtree, repo_dir, ignore_errors=True)
+    if os.path.exists(repo_dir) and os.listdir(repo_dir):
+        raise RuntimeError(f"Refusing to replace non-empty workspace: {repo_dir}")
 
     ssh_cmd = "ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
     env = {**os.environ, "GIT_SSH_COMMAND": ssh_cmd, "GIT_TERMINAL_PROMPT": "0"}
@@ -811,18 +786,24 @@ async def _clone_or_update_one(
     return repo_dir
 
 
+async def _close_project_terminal(agent_id: str) -> None:
+    # Local import avoids coupling user provisioning to PTY initialization.
+    import pty_session
+    await pty_session.close_session(agent_id)
+
+
 async def ensure_agent_project(
     agent_id: str,
-    project: str,
-    git_url: str,
+    project: Optional[str],
+    git_url: Optional[str],
     git_credentials: Optional[dict] = None,
     secondary_repos: Optional[list] = None,
-) -> str:
+) -> Optional[str]:
     """Clone or update a project repo (plus any secondary repos) for an agent.
 
     Each agent gets its own clone at DATA_DIR/agents/<username>/projects/<project>.
     `secondary_repos` is a list of {full_name, git_url} cloned alongside the
-    primary and preserved by the prune; the primary stays the working dir.
+    primary; archived working copies are preserved, and the primary is cwd.
 
     When `git_credentials` is provided (typically resolved by the API from the
     GitHub plugin connected to the agent or its board), the token is installed
@@ -830,8 +811,8 @@ async def ensure_agent_project(
     `git push/pull` from the LLM agent works against every connected repo.
 
     Calls are serialized per `agent_id` via an asyncio.Lock so concurrent
-    requests can't race on the same working tree (rmtree + clone vs.
-    fetch + reset). A short TTL also short-circuits the fetch+reset round-trip
+    requests cannot race on the same working tree or terminal transition.
+    A short TTL also short-circuits repeated preparation
     when the previous successful ensure happened just a few seconds ago.
     """
     async with _get_project_lock(agent_id):
@@ -840,15 +821,18 @@ async def ensure_agent_project(
 
 async def _ensure_agent_project_locked(
     agent_id: str,
-    project: str,
-    git_url: str,
+    project: Optional[str],
+    git_url: Optional[str],
     git_credentials: Optional[dict] = None,
     secondary_repos: Optional[list] = None,
-) -> str:
+) -> Optional[str]:
     username = _sanitize_agent_id(agent_id)
     agent_data_dir = os.path.join(DATA_DIR, "agents", username)
     projects_base = os.path.join(agent_data_dir, "projects")
-    project_dir = os.path.join(projects_base, project)
+    project_dir = os.path.join(projects_base, project) if project else None
+    if project and not git_url:
+        raise ValueError("git_url is required when project is set")
+    previous_project_dir = get_agent_project_dir(agent_id)
     cached_user = _agent_users.get(agent_id)
     if not cached_user or cached_user.get("uid") is None or cached_user.get("gid") is None or not cached_user.get("home"):
         raise RuntimeError(
@@ -857,6 +841,14 @@ async def _ensure_agent_project_locked(
     agent_uid = cached_user["uid"]
     agent_gid = cached_user["gid"]
     home_dir = cached_user["home"]
+
+    if not project:
+        os.makedirs(projects_base, exist_ok=True)
+        if previous_project_dir is not None:
+            await _close_project_terminal(agent_id)
+        _write_primary_sentinel(projects_base, "", agent_uid, agent_gid)
+        _agent_projects.pop(agent_id, None)
+        return None
 
     # Resolve the secondary repo working dirs alongside the primary.
     secondary_repos = secondary_repos or []
@@ -900,15 +892,14 @@ async def _ensure_agent_project_locked(
     except OSError as e:
         logger.warning(f"[Project] chown {projects_base} -> uid={agent_uid} failed: {e}")
 
-    # Remove any repo tree NOT in the keep-set (primary + secondaries) left over
-    # from a previous assignment, so it can't leak into the cwd fallback in
-    # `get_agent_project_dir` or waste disk. Repos still in use are preserved.
-    keep_dirs = {project_dir, *(d for d, _ in secondary_dirs)}
-    await asyncio.to_thread(_prune_stale_project_dirs, projects_base, keep_dirs)
+    # Establish an authoritative selection before cloning: a failed first
+    # preparation must not let filesystem discovery select a partial checkout.
+    if not os.path.exists(os.path.join(projects_base, _PRIMARY_SENTINEL)):
+        previous = os.path.relpath(previous_project_dir, projects_base) if previous_project_dir else ""
+        _write_primary_sentinel(projects_base, previous, agent_uid, agent_gid)
 
-    # Materialize each repo: fetch+reset if present, else clone. Primary first
-    # (its clone failure is fatal - raises - so the caller can fail the action),
-    # then every secondary with the same fail-closed semantics.
+    # Keep previous working copies so returning to a repo preserves unfinished
+    # work. The primary sentinel, rather than deletion, selects the active repo.
     await _clone_or_update_one(projects_base, project_dir, git_url, git_credentials, agent_uid, agent_gid)
     for sec_dir, sec_url in secondary_dirs:
         await _clone_or_update_one(projects_base, sec_dir, sec_url, git_credentials, agent_uid, agent_gid)
@@ -916,6 +907,8 @@ async def _ensure_agent_project_locked(
     # Record the primary (sentinel + cache written LAST, pointing at the primary)
     # so `get_agent_project_dir` resolves the working dir deterministically even
     # with several `.git` trees under `projects/`.
+    if previous_project_dir != project_dir:
+        await _close_project_terminal(agent_id)
     _write_primary_sentinel(projects_base, project, agent_uid, agent_gid)
     _agent_projects[agent_id] = {"project": project, "path": project_dir, "updated_at": time.monotonic()}
     logger.info(

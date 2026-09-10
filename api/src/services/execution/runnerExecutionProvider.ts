@@ -40,9 +40,8 @@ interface RunnerOptions {
 
 /**
  * How long a successful /projects/ensure result is trusted before we re-issue
- * the call for the same (agent, project). The runner-service does its own
- * fetch+reset on every call, so spamming this endpoint at every tool batch is
- * wasteful and causes concurrent git operations on the same working tree.
+ * the call for the same (agent, project), avoiding repeated preparation and
+ * filesystem scans for every tool batch.
  */
 const ENSURE_PROJECT_TTL_MS = 60_000;
 
@@ -105,7 +104,7 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   /**
    * Set (or clear with null/empty) the agent's task-scoped secondary repos.
    * Held in-memory and forwarded to the runner on every /projects/ensure so the
-   * runner clones them alongside the primary and excludes them from its prune.
+   * runner clones them alongside the primary and preserves their working trees.
    */
   setSecondaryRepos(agentId: string, repos: SecondaryRepo[] | null): void {
     if (!agentId) return;
@@ -207,9 +206,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
   ): Promise<void> {
     if (gitCredentials !== null) this.setGitCredentials(agentId, gitCredentials);
 
-    if (!project || !gitUrl) {
-      this._agents.set(agentId, { project: null, ready: true });
-      return;
+    if (project && !gitUrl) {
+      throw new Error('A git URL is required to prepare a project');
     }
 
     // Resolve the task-scoped secondary repos to clone alongside the primary.
@@ -227,9 +225,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     const secondarySig = JSON.stringify(secondaryPayload.map(r => r.full_name).sort());
 
     // Debounce: if the same (agent, project, secondary set) was successfully
-    // ensured very recently, skip the HTTP round-trip. The runner-service caches
-    // the clone and re-runs git fetch+reset on every call, which is expensive
-    // when every tool batch from the LLM triggers ensureProject.
+    // ensured very recently, skip the HTTP round-trip. Existing working copies
+    // are preserved unchanged by the runner.
     const existing = this._agents.get(agentId);
     if (
       existing &&
@@ -299,9 +296,8 @@ export class RunnerExecutionProvider extends ExecutionProvider {
     const entry = this._agents.get(agentId);
     if (entry) entry.lastEnsuredAt = 0;
     await this.ensureProject(agentId, newProject, gitUrl);
-    // The runner is stateless — there's no per-agent session cache to reset.
-    // The CLI session UUID is owned by the API (agent.runnerSessions) and is
-    // cleared by _switchProjectContext when the project actually changes.
+    // The runner atomically invalidates its PTY when the primary cwd changes.
+    // Conversation history is switched by the caller after preparation succeeds.
   }
 
   async destroySandbox(agentId: string): Promise<void> {
