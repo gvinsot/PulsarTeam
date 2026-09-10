@@ -494,7 +494,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
       if (!canAccessAgent(agentId)) return;
 
       await streamTaskToSocket(agentId, onChunk =>
-        agentManager.executeTask(agentId, taskId, onChunk)
+        agentManager.executeTask(agentId, taskId, onChunk, socket.user)
       );
     });
 
@@ -504,7 +504,9 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
       if (!agentId) return;
       if (!canAccessAgent(agentId)) return;
 
-      await streamTaskToSocket(agentId, onChunk => agentManager.executeAllTasks(agentId, onChunk));
+      await streamTaskToSocket(agentId, onChunk =>
+        agentManager.executeAllTasks(agentId, onChunk, socket.user)
+      );
     });
 
     // ── Voice delegation (Realtime API function call relay) ──────────

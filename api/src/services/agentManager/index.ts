@@ -10,6 +10,7 @@ import { projectObject, type FieldProjection } from '../../lib/projection.js';
 import type { Task } from '../database/tasks.js';
 import type { Agent } from '../database/agents.js';
 import type { NativeToolCall } from '../nativeTools.js';
+import type { SessionClaims } from '../../middleware/session.js';
 
 import { lifecycleMethods } from './lifecycle.js';
 import { chatMethods } from './chat.js';
@@ -387,9 +388,14 @@ export interface AgentManager {
   executeTask(
     agentId: string,
     taskId: string,
-    streamCallback: HandoffCallback
+    streamCallback: HandoffCallback,
+    user: SessionClaims
   ): Promise<{ taskId: string; response: null }>;
-  executeAllTasks(agentId: string, streamCallback: HandoffCallback): Promise<any[]>;
+  executeAllTasks(
+    agentId: string,
+    streamCallback: HandoffCallback,
+    user: SessionClaims
+  ): Promise<any[]>;
   startTaskLoop(intervalMs?: number): void;
   _refreshWorkflowManagedStatuses(): void;
   stopTaskLoop(): void;

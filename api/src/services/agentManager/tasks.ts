@@ -35,6 +35,29 @@ import { normalizeSecondaryRepos } from '../taskRepos.js';
 import type { Task } from '../database/tasks.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
+import { checkBoardAccess } from '../../middleware/authz.js';
+import { checkAgentAccess, type AgentAccessSubject } from '../../lib/agentAccess.js';
+import type { SessionClaims } from '../../middleware/session.js';
+
+/** Task access is independent of the caller-selected execution agent. Resolve
+ * current edit permission before logging task content or changing any state. */
+async function requireTaskExecutionAccess(
+  agents: Map<string, AgentAccessSubject>,
+  task: Task,
+  user: SessionClaims
+): Promise<void> {
+  if (!user?.userId) throw new Error('Access denied');
+  if (task.boardId) {
+    const access = await checkBoardAccess(task.boardId, user.userId, user.role, 'edit');
+    if (!access.ok) throw new Error('Access denied');
+    return;
+  }
+  // Legacy board-less tasks are scoped to their actual owning agent, never
+  // to the agentId supplied by the client. Orphaned tasks are admin-only.
+  if (user.role === 'admin') return;
+  const owner = task.agentId ? agents.get(task.agentId) : undefined;
+  if (!(await checkAgentAccess(owner, user, 'edit')).ok) throw new Error('Access denied');
+}
 
 /** Credential record returned by the lazily-imported GitHub route helper. */
 type GitHubCredentials = Awaited<
@@ -800,12 +823,17 @@ export const tasksMethods = {
     this: any,
     agentId: string,
     taskId: string,
-    _streamCallback: any
+    _streamCallback: any,
+    user: SessionClaims
   ): Promise<any> {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
+    if (!user?.userId || !(await checkAgentAccess(agent, user, 'edit')).ok) {
+      throw new Error('Access denied');
+    }
     const task = await getTaskById(taskId);
     if (!task) throw new Error('Task not found');
+    await requireTaskExecutionAccess(this.agents, task, user);
     if (task.status === 'done') throw new Error('Task already completed');
 
     console.log(
@@ -866,14 +894,27 @@ export const tasksMethods = {
     return { taskId, response: null };
   },
 
-  async executeAllTasks(this: any, agentId: string, streamCallback: any): Promise<any[]> {
+  async executeAllTasks(
+    this: any,
+    agentId: string,
+    streamCallback: any,
+    user: SessionClaims
+  ): Promise<any[]> {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error('Agent not found');
+    if (!user?.userId || !(await checkAgentAccess(agent, user, 'edit')).ok) {
+      throw new Error('Access denied');
+    }
     const tasks = await getTasksByAgent(agentId);
     const executable = tasks.filter(
       (t: any) => t.status !== 'done' && !this._isActiveTaskStatus(t.status)
     );
     if (executable.length === 0) throw new Error('No executable tasks');
+
+    // Preflight the entire batch before emitting task IDs or running any task.
+    for (const task of executable) {
+      await requireTaskExecutionAccess(this.agents, task, user);
+    }
 
     console.log(`▶️  Executing ${executable.length} task(s) for ${agent.name}`);
     this._emit('agent:task:executeAll:start', { agentId, count: executable.length });
@@ -881,7 +922,7 @@ export const tasksMethods = {
     const results: any[] = [];
     for (const task of executable) {
       try {
-        const result = await this.executeTask(agentId, task.id, streamCallback);
+        const result = await this.executeTask(agentId, task.id, streamCallback, user);
         results.push({
           taskId: task.id,
           text: task.text,
