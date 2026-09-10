@@ -43,7 +43,24 @@ function normalizePath(pathArg: string): string {
   return p || '.';
 }
 
-// Blocked shell command patterns — prevent agents from escaping sandbox or exfiltrating data
+/**
+ * Accident guardrail for the `run_command` tool — NOT a security boundary.
+ *
+ * These patterns match the literal command string before any shell has expanded
+ * it, so they are bypassable by anyone who tries (`/bin/sh -c 'shutdow'"n"`,
+ * `eval "$(printf …)"`, a wrapper script, a Makefile target). They also only
+ * cover this tool: an agent CLI driven through the interactive PTY spawns its
+ * own processes and never reaches this function. The point is to stop a
+ * well-behaved model from *accidentally* rebooting the host or reformatting a
+ * disk mid-task — nothing more should be gated on it, and "the list missed X"
+ * is not a vulnerability.
+ *
+ * Real containment lives in the runner: a per-agent UID with a 0700 HOME
+ * (`runner-service/src/agent_user.py`), `cap_drop: ALL` +
+ * `no-new-privileges:true` in `docker-compose.yml`, environment sanitisation in
+ * `runner-service/src/command_security.py`, and the per-agent
+ * `execution.shellAccess` permission. See SECURITY.md.
+ */
 const BLOCKED_COMMAND_PATTERNS = [
   /\bshutdown\b/,
   /\breboot\b/,
@@ -77,12 +94,16 @@ const BLOCKED_COMMAND_PATTERNS = [
   /\bmknod\s/,
 ];
 
+/**
+ * Screen a command against the guardrail above. `null` means "no known footgun
+ * in the literal string", not "safe to run".
+ */
 function validateCommand(command: string): string | null {
   if (!command?.trim()) return 'Empty command';
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(command)) {
-      console.warn(`🛡️ [Security] Blocked command from agent: ${command.slice(0, 100)}`);
-      return 'Command blocked for security reasons';
+      console.warn(`🛡️ [Guardrail] Refused command from agent: ${command.slice(0, 100)}`);
+      return 'Command refused by the safety guardrail';
     }
   }
   return null;
@@ -438,7 +459,8 @@ function execFailure(err: unknown): {
 }
 
 async function toolRunCommand(provider: ExecutionProvider, agentId: string, command: string) {
-  // Security: validate command before execution
+  // Accident guardrail, not a boundary — the runner's UID/capability isolation is
+  // what actually contains this command. See BLOCKED_COMMAND_PATTERNS above.
   const blockReason = validateCommand(command);
   if (blockReason) {
     return { success: false, error: `🛡️ ${blockReason}` };

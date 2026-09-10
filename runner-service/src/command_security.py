@@ -1,8 +1,31 @@
 """
-Runner Service — Command security: blocklist, sanitization, and environment isolation.
+Runner Service — Command guardrail and environment isolation.
 
-Prevents agents from executing dangerous commands that could compromise the host,
-exfiltrate secrets, or escape their sandbox.
+Two very different things live in this module, and conflating them is a mistake:
+
+1. `validate_command()` — an ACCIDENT GUARDRAIL, not a security boundary.
+   It is a prefix/substring blocklist over a string that a shell will later
+   re-interpret, so it is trivially bypassable by design: `/bin/sh -c
+   'shutdow'"n"`, `$(printf '\\x73hutdown')`, `eval "$X"`, base64, a here-doc,
+   a wrapper script, a Makefile target… Worse, it only sees commands routed
+   through the HTTP tool surface (`/exec-shell`, `execute_shell`, and the API's
+   `run_command` tool). The interactive PTY (`pty_session.py`, the CLI backends)
+   spawns whatever the agent CLI decides to spawn and never passes through here.
+   So its value is exactly one thing: stopping a well-behaved agent from
+   *accidentally* rebooting the box or wiping a filesystem while it flails at a
+   task. Do not gate anything on it, do not extend it hoping it becomes a
+   sandbox, and do not treat "the blocklist missed X" as a vulnerability.
+
+2. `sanitize_env()` — a real control. Runner secrets never enter the child's
+   environment, so an agent subprocess cannot read `ANTHROPIC_API_KEY`,
+   `JWT_SECRET`, DB credentials, … out of its own `environ`.
+
+The actual containment for agent-run commands is elsewhere and is what should be
+strengthened when isolation needs to improve: a per-agent UID with a 0700 HOME
+(`agent_user.py`), the container's `cap_drop: ALL` + `no-new-privileges:true`
+policy in `docker-compose.yml`, and the per-agent `execution.shellAccess` /
+`filesystem.restrictedPaths` permissions enforced in `routes_api.py`. See the
+"Known limitations" section of SECURITY.md.
 """
 
 import re
@@ -10,7 +33,10 @@ import os
 from typing import Optional
 from config import logger
 
-# Commands that are completely blocked — these can damage the host or exfiltrate data
+# Commands a task should never need, and whose accidental use is expensive:
+# host lifecycle, disk formatting, firewall/user/service administration, packet
+# capture and listeners. Prefix/substring matched — see the module docstring for
+# why that is deliberately weak and must not be relied on as a boundary.
 BLOCKED_COMMANDS = [
     "shutdown", "reboot", "poweroff", "halt", "init",
     "mkfs", "fdisk", "mount", "umount",
@@ -26,7 +52,9 @@ BLOCKED_COMMANDS = [
     "tcpdump", "wireshark", "tshark",
 ]
 
-# Patterns that indicate dangerous intent — blocked regardless of command
+# Shapes that are almost never an honest mistake (reverse shells, secret
+# exfiltration, writes into system directories). Same caveat: a regex over a
+# string the shell has not expanded yet catches the literal form only.
 BLOCKED_PATTERNS = [
     re.compile(r"/proc/\d+/"),
     re.compile(r"/proc/self/"),
@@ -96,8 +124,11 @@ ENV_PATTERN_ALLOWLIST = [
 
 def validate_command(command: str) -> Optional[str]:
     """
-    Validate a shell command against security rules.
-    Returns None if the command is safe, or an error message if blocked.
+    Screen a shell command against the accident guardrail.
+
+    Returns None when nothing obviously destructive was spotted, or a message
+    explaining the refusal. A None result means "no known footgun in the literal
+    string" — NOT "this command is safe to run". See the module docstring.
     """
     if not command or not command.strip():
         return "Empty command"
@@ -107,22 +138,25 @@ def validate_command(command: str) -> Optional[str]:
     # Check blocked commands
     for blocked in BLOCKED_COMMANDS:
         if cmd_lower.startswith(blocked) or f"; {blocked}" in cmd_lower or f"&& {blocked}" in cmd_lower or f"| {blocked}" in cmd_lower:
-            logger.warning(f"🛡️ [Security] Blocked command: {command[:100]}")
-            return f"Command blocked for security: '{blocked.strip()}' is not allowed"
+            logger.warning(f"🛡️ [Guardrail] Refused command: {command[:100]}")
+            return f"Command refused by the safety guardrail: '{blocked.strip()}' is not allowed here"
 
     # Check blocked patterns
     for pattern in BLOCKED_PATTERNS:
         if pattern.search(command):
-            logger.warning(f"🛡️ [Security] Blocked pattern in command: {command[:100]}")
-            return f"Command blocked for security: contains a restricted pattern"
+            logger.warning(f"🛡️ [Guardrail] Refused pattern in command: {command[:100]}")
+            return "Command refused by the safety guardrail: contains a restricted pattern"
 
     return None
 
 
 def sanitize_env(env: dict, agent_user: Optional[dict] = None) -> dict:
     """
-    Filter environment variables to only pass safe ones to agent subprocesses.
-    Prevents leaking API keys, tokens, and other secrets.
+    Filter environment variables down to an allowlist before handing them to an
+    agent subprocess. Unlike `validate_command()` this is a real control: what is
+    not in the allowlist is not in the child's `environ` at all, so runner
+    secrets cannot be read back by anything the agent spawns — including through
+    the interactive PTY, which the command guardrail never sees.
     """
     safe_env = {}
 

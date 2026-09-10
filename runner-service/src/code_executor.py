@@ -96,7 +96,8 @@ def execute_shell(code: str) -> str:
     if len(code) > MAX_COMMAND_LENGTH:
         return f"[blocked] Command exceeds maximum length ({MAX_COMMAND_LENGTH} chars)"
 
-    # Validate command against security rules (blocklist + dangerous patterns).
+    # Accident guardrail (blocklist + dangerous patterns). Bypassable by design —
+    # see command_security.py; containment comes from the UID/capability sandbox.
     block_reason = validate_command(code)
     if block_reason:
         return f"[blocked] {block_reason}"

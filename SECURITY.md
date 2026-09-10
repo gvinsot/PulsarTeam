@@ -45,7 +45,9 @@ Out of scope: anything requiring the operator's own admin credentials (an admin
 is designed to be able to run code — that is the product); findings against a
 deployment that ignores the hardening in `docker-compose.yml`; missing headers
 on endpoints already behind an authenticated proxy; automated-scanner output
-with no demonstrated impact.
+with no demonstrated impact; bypasses of the command guardrail
+(`runner-service/src/command_security.py`) that stay inside the agent's own UID
+and capability set — that list is not a boundary, see below.
 
 ## Security model in place
 
@@ -65,6 +67,13 @@ for why, and do not remove it.
 writable paths. As of the image-hardening pass, `api`, `frontend`,
 `mcp-browser` and `office-service` also drop to an unprivileged UID _in the
 image_, so they stay unprivileged when deployed without this compose file.
+
+**Agent environment.** Agent subprocesses receive an allowlisted environment
+built by `command_security.sanitize_env()`, so runner secrets
+(`ANTHROPIC_API_KEY`, `JWT_SECRET`, DB credentials, …) are absent from their
+`environ` rather than merely discouraged. This applies to the interactive PTY
+too, since the backends build their launch environment through the same
+function.
 
 **Transport and headers.** HSTS, `X-Content-Type-Options`, `X-Frame-Options`,
 `Referrer-Policy` and a CSP are set in `api/src/index.ts`. Every outgoing cookie
@@ -132,3 +141,18 @@ that restate them without new impact will be closed as known.
 - **An agent with the Basic Tools plugin executes commands** in its workspace.
   That is the feature, not a vulnerability. The boundary that matters is the
   per-agent UID and the container's capability set.
+- **The command blocklist is a guardrail, not a boundary.**
+  `runner-service/src/command_security.py` (and its twin in
+  `api/src/services/agentTools.ts`) matches literal prefixes and regexes against
+  a command string that a shell has not expanded yet, so bypassing it is
+  trivial — `/bin/sh -c 'shutdow'"n"`, `eval "$(printf …)"`, a variable, a
+  wrapper script. It also covers only the HTTP tool surface (`run_command`,
+  `/exec-shell`, `execute_shell`); commands the agent CLI runs itself inside the
+  interactive PTY never pass through it, and screening a PTY byte stream is not
+  something we intend to attempt. Its job is to stop a well-behaved agent from
+  *accidentally* rebooting the host or reformatting a disk. Everything that
+  actually contains an agent — the per-agent UID with a `0700` HOME,
+  `cap_drop: ALL`, `no-new-privileges:true`, the allowlisted environment, and
+  the per-agent `execution.shellAccess` / `filesystem.restrictedPaths`
+  permissions — is enforced outside it. Extend the list when a new *accident*
+  shows up; do not gate a security property on it.

@@ -19,6 +19,14 @@ go to the same PTY. Lifecycle:
 This module is intentionally agnostic about WHICH CLI is running — the
 backend's `prepare_interactive()` returns the launch recipe and we just
 drive the PTY. Resize, scrollback bound, and broadcast are generic.
+
+Security note: keystrokes and the processes the CLI spawns do NOT pass through
+`command_security.validate_command()`, and adding a screen here would be
+security theatre — a PTY carries an interactive byte stream, not commands, and
+the CLI forks children we never see. Containment for everything running in this
+PTY is the per-agent UID (`agent_user.py`, 0700 HOME), the container's
+`cap_drop: ALL` + `no-new-privileges:true` policy, and the sanitised environment
+built by `command_security.sanitize_env()` in the backend's launch recipe.
 """
 from __future__ import annotations
 

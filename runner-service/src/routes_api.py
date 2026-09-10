@@ -448,7 +448,8 @@ async def exec_shell(
             error="🛡️ execution.shellAccess is disabled for this agent",
         )
 
-    # Security: validate command against blocklist
+    # Accident guardrail (not a boundary): the per-agent UID, cap_drop: ALL and
+    # sanitize_env() below are what actually contain this command.
     block_reason = validate_command(request.command)
     if block_reason:
         return ExecutionResponse(status="error", output="", error=f"🛡️ {block_reason}")
