@@ -1190,17 +1190,31 @@ export const api = {
 };
 
 // Budget
-export const fetchBudgetSummary = (days = 1) =>
-  get<BudgetSummaryResponse>(`/budget/summary?days=${days}`);
+//
+// Every read below takes the active project scope from the Dashboard header.
+// An empty/undefined `projectId` means "All Projects" and is left off the query
+// string entirely; the API treats a missing `projectId` as "no narrowing" and
+// 400s on a value that is not a UUID.
+const projectScopeParam = (projectId?: string | null) =>
+  projectId ? `&projectId=${encodeURIComponent(projectId)}` : '';
 
-export const fetchBudgetByAgent = (days = 30) =>
-  get<BudgetByAgentRow[]>(`/budget/by-agent?days=${days}`);
+export const fetchBudgetSummary = (days = 1, projectId?: string | null) =>
+  get<BudgetSummaryResponse>(`/budget/summary?days=${days}${projectScopeParam(projectId)}`);
 
-export const fetchBudgetTimeline = (days = 7, groupBy: BudgetTimelineGroupBy = 'day') =>
-  get<BudgetTimelinePoint[]>(`/budget/timeline?days=${days}&groupBy=${groupBy}`);
+export const fetchBudgetByAgent = (days = 30, projectId?: string | null) =>
+  get<BudgetByAgentRow[]>(`/budget/by-agent?days=${days}${projectScopeParam(projectId)}`);
 
-export const fetchBudgetDaily = (days = 30) =>
-  get<BudgetDailyPoint[]>(`/budget/daily?days=${days}`);
+export const fetchBudgetTimeline = (
+  days = 7,
+  groupBy: BudgetTimelineGroupBy = 'day',
+  projectId?: string | null
+) =>
+  get<BudgetTimelinePoint[]>(
+    `/budget/timeline?days=${days}&groupBy=${groupBy}${projectScopeParam(projectId)}`
+  );
+
+export const fetchBudgetDaily = (days = 30, projectId?: string | null) =>
+  get<BudgetDailyPoint[]>(`/budget/daily?days=${days}${projectScopeParam(projectId)}`);
 
 export const fetchBudgetConfig = () => get<BudgetConfig>('/budget/config');
 
@@ -1211,7 +1225,10 @@ export const fetchBudgetConfig = () => get<BudgetConfig>('/budget/config');
 export const updateBudgetConfig = (config: Partial<BudgetConfig>) =>
   put<BudgetConfigUpdateResponse>('/budget/config', config);
 
-export const fetchBudgetAlerts = () => get<BudgetAlertsResponse>('/budget/alerts');
+export const fetchBudgetAlerts = (projectId?: string | null) =>
+  get<BudgetAlertsResponse>(
+    projectId ? `/budget/alerts?projectId=${encodeURIComponent(projectId)}` : '/budget/alerts'
+  );
 
 export default api;
 

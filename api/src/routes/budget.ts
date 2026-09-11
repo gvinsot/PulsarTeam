@@ -88,12 +88,43 @@ function budgetUserId(req: { user: SessionClaims }) {
   return req.user.role === 'admin' ? null : req.user.userId;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve the optional `projectId` scope the web UI sends when a project is
+ * selected in the header: every figure on the Budget view is then restricted to
+ * the usage produced by that project's agents.
+ *
+ * Returns the validated id, `null` for "All Projects" (absent or empty -> no
+ * narrowing), or `undefined` after having ALREADY sent a 400 for a malformed
+ * value - the DAO casts the id to UUID, and a bad cast would otherwise surface
+ * as a 500 on a routine 30s poll. Per-user scoping (budgetUserId) still applies
+ * on top, so a project scope only ever narrows what the caller could see.
+ */
+function resolveProjectScope(
+  req: express.Request,
+  res: express.Response
+): string | null | undefined {
+  const raw = req.query.projectId;
+  if (typeof raw !== 'string' || raw === '') return null;
+  if (!UUID_RE.test(raw)) {
+    res.status(400).json({ error: 'Invalid projectId' });
+    return undefined;
+  }
+  return raw;
+}
+
 router.get(
   '/summary',
   asyncHandler(async (req, res) => {
     const days = parseInt(req.query.days as string) || 1;
     const uid = budgetUserId(req);
-    const summary = uid ? await getTokenUsageSummaryAsync(days, uid) : getTokenUsageSummary(days);
+    const projectId = resolveProjectScope(req, res);
+    if (projectId === undefined) return;
+    const summary =
+      uid || projectId
+        ? await getTokenUsageSummaryAsync(days, uid, projectId)
+        : getTokenUsageSummary(days);
     const budgetConfig = getSetting('budget_config') || { dailyBudget: 0, alertThreshold: 80 };
     res.json({ ...summary, budgetConfig });
   })
@@ -103,8 +134,10 @@ router.get(
   '/by-agent',
   asyncHandler(async (req, res) => {
     const days = parseInt(req.query.days as string) || 30;
+    const projectId = resolveProjectScope(req, res);
+    if (projectId === undefined) return;
     const [rows, nameMap] = await Promise.all([
-      getTokenUsageByAgent(days, budgetUserId(req)),
+      getTokenUsageByAgent(days, budgetUserId(req), projectId),
       buildProviderNameMap(),
     ]);
     res.json(enrichProviderNames(rows, nameMap));
@@ -116,7 +149,9 @@ router.get(
   asyncHandler(async (req, res) => {
     const days = parseInt(req.query.days as string) || 7;
     const groupBy = (req.query.groupBy as string) || 'day';
-    res.json(await getTokenUsageTimeline(days, groupBy, budgetUserId(req)));
+    const projectId = resolveProjectScope(req, res);
+    if (projectId === undefined) return;
+    res.json(await getTokenUsageTimeline(days, groupBy, budgetUserId(req), projectId));
   })
 );
 
@@ -124,7 +159,9 @@ router.get(
   '/daily',
   asyncHandler(async (req, res) => {
     const days = parseInt(req.query.days as string) || 30;
-    res.json(await getDailyTokenUsage(days, budgetUserId(req)));
+    const projectId = resolveProjectScope(req, res);
+    if (projectId === undefined) return;
+    res.json(await getDailyTokenUsage(days, budgetUserId(req), projectId));
   })
 );
 
@@ -159,7 +196,14 @@ router.get(
       ? storedConfig
       : { dailyBudget: 10.0, alertThreshold: 80 };
     const uid = budgetUserId(req);
-    const todaySummary = uid ? await getTokenUsageSummaryAsync(1, uid) : getTokenUsageSummary(1);
+    const projectId = resolveProjectScope(req, res);
+    if (projectId === undefined) return;
+    // Scoped to the selected project too: the alert compares today's spend to
+    // the budget, and the dashboard shows it next to project-scoped figures.
+    const todaySummary =
+      uid || projectId
+        ? await getTokenUsageSummaryAsync(1, uid, projectId)
+        : getTokenUsageSummary(1);
     const todayCost = todaySummary?.total_cost || 0;
     const alerts: { level: string; message: string }[] = [];
     if (config.dailyBudget > 0) {
@@ -175,7 +219,7 @@ router.get(
           message: `Approaching daily budget: $${todayCost.toFixed(4)} / $${config.dailyBudget.toFixed(2)} (${pct.toFixed(0)}%)`,
         });
     }
-    const byAgent = await getTokenUsageByAgent(1, uid);
+    const byAgent = await getTokenUsageByAgent(1, uid, projectId);
     res.json({ alerts, todayCost, dailyBudget: config.dailyBudget, byAgent });
   })
 );

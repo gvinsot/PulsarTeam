@@ -79,7 +79,23 @@ const COLORS = [
   '#a855f7',
 ];
 
-export default function BudgetDashboard({ agents: _agents = [] }: { agents?: Agent[] }) {
+/**
+ * `projectId` / `projectName` mirror the Dashboard header's project scope chip.
+ * An empty `projectId` is "All Projects": every figure below is then global (or
+ * user-wide for a non-admin). When a project IS selected, every budget read is
+ * narrowed server-side to the usage produced by that project's agents, so the
+ * cards, charts and the LLM table all describe the same scope as the rest of
+ * the app — see api/src/routes/budget.ts.
+ */
+export default function BudgetDashboard({
+  agents: _agents = [],
+  projectId = '',
+  projectName = '',
+}: {
+  agents?: Agent[];
+  projectId?: string;
+  projectName?: string;
+}) {
   // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
   const { theme } = useTheme() as { theme: string };
   const [summary, setSummary] = useState<BudgetSummaryView | null>(null);
@@ -109,12 +125,13 @@ export default function BudgetDashboard({ agents: _agents = [] }: { agents?: Age
     setLoading(true);
     try {
       const [s, a, t, d, c, al, settings] = await Promise.all([
-        fetchBudgetSummary(1),
-        fetchBudgetByAgent(timeRange),
-        fetchBudgetTimeline(timeRange, timeRange <= 2 ? 'hour' : 'day'),
-        fetchBudgetDaily(30),
+        fetchBudgetSummary(1, projectId),
+        fetchBudgetByAgent(timeRange, projectId),
+        fetchBudgetTimeline(timeRange, timeRange <= 2 ? 'hour' : 'day', projectId),
+        fetchBudgetDaily(30, projectId),
+        // The budget settings themselves are global, not per project.
         fetchBudgetConfig(),
-        fetchBudgetAlerts(),
+        fetchBudgetAlerts(projectId),
         api.getSettings(),
       ]);
       setSummary(s);
@@ -129,7 +146,8 @@ export default function BudgetDashboard({ agents: _agents = [] }: { agents?: Age
     } finally {
       setLoading(false);
     }
-  }, [timeRange]);
+    // Switching the header's project scope re-runs every read above.
+  }, [timeRange, projectId]);
 
   useEffect(() => {
     loadData();
@@ -274,7 +292,14 @@ export default function BudgetDashboard({ agents: _agents = [] }: { agents?: Age
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-dark-100">💰 Budget Dashboard</h1>
-          <p className="text-sm text-dark-400 mt-1">AI agent token usage & cost tracking</p>
+          <p className="text-sm text-dark-400 mt-1">
+            AI agent token usage &amp; cost tracking ·{' '}
+            {/* Name the scope the figures below are filtered to, so a
+                project-scoped total is never mistaken for the global one. */}
+            <span className="text-dark-300">
+              {projectId ? projectName || 'Selected project' : 'All projects'}
+            </span>
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <select

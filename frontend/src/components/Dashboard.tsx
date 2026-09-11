@@ -525,7 +525,11 @@ export default function Dashboard({
           {activeView === 'budget' && (
             <Suspense fallback={null}>
               <div className="flex-1 min-h-0 flex flex-col overflow-auto">
-                <BudgetDashboard agents={projectScopedAgents} />
+                <BudgetDashboard
+                  agents={projectScopedAgents}
+                  projectId={projectFilter}
+                  projectName={activeProject?.name || ''}
+                />
               </div>
             </Suspense>
           )}
