@@ -140,6 +140,66 @@ const MIGRATIONS: Migration[] = [
     'CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys (user_id)',
   ]),
 
+  // Recurring tasks stop being one row reset in place — which grew its history,
+  // its commits and its audit trail without bound and hijacked a run still in
+  // flight — and become a rule (is_template) that spawns one occurrence per due
+  // date. The existing recurring rows ARE the rules: flipping them keeps the
+  // user's configuration, and their accumulated history stays on the rule as the
+  // archive of everything that ran before the split. The runtime state is wiped
+  // in the same statement because a template must never look startable to the
+  // workflow engine (a rule whose originalStatus is a mid-workflow column would
+  // otherwise count as an active task for its agent).
+  sqlMigration('202609120001_recurring_task_templates', 'recurring rules become templates', [
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT FALSE',
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS template_id UUID',
+    'ALTER TABLE tasks ADD COLUMN IF NOT EXISTS occurrence_seq INTEGER',
+    // A recurring task that was NOT finished had a live card on the board. The
+    // flip below turns that card into the rule, so without this the board would
+    // lose it for up to a full period. Backdating the reference timestamp by one
+    // interval makes the scheduler's first tick spawn a replacement run within a
+    // minute. A rule whose card was already `done` is left on its real schedule —
+    // it had nothing visible to replace.
+    `UPDATE tasks
+        SET recurrence = jsonb_set(
+              recurrence,
+              '{lastResetAt}',
+              to_jsonb(to_char(
+                (NOW() - (
+                  CASE WHEN recurrence->>'intervalMinutes' ~ '^[0-9]{1,7}$'
+                       THEN (recurrence->>'intervalMinutes')::int ELSE 1440 END
+                  || ' minutes')::interval)
+                  AT TIME ZONE 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+              ))
+            )
+      WHERE recurrence IS NOT NULL
+        AND deleted_at IS NULL
+        AND status <> 'done'
+        AND (recurrence->>'enabled') IS DISTINCT FROM 'false'`,
+    `UPDATE tasks
+        SET is_template = TRUE,
+            status = COALESCE(NULLIF(recurrence->>'originalStatus', ''), 'backlog'),
+            assignee = NULL,
+            started_at = NULL,
+            completed_at = NULL,
+            execution_status = NULL,
+            completed_action_idx = NULL,
+            action_running = FALSE,
+            action_running_agent_id = NULL,
+            action_running_mode = NULL,
+            pending_on_enter = NULL,
+            error = NULL,
+            error_from_status = NULL
+      WHERE recurrence IS NOT NULL
+        AND deleted_at IS NULL
+        AND (recurrence->>'enabled') IS DISTINCT FROM 'false'`,
+    // recurrence IS NOT NULL ⇔ is_template from here on: a disabled leftover on
+    // a normal task would otherwise make the scheduler read a rule off a card.
+    'UPDATE tasks SET recurrence = NULL WHERE recurrence IS NOT NULL AND is_template = FALSE',
+    'CREATE INDEX IF NOT EXISTS idx_tasks_templates ON tasks(board_id) WHERE is_template AND deleted_at IS NULL',
+    'CREATE INDEX IF NOT EXISTS idx_tasks_occurrences ON tasks(template_id, created_at) WHERE template_id IS NOT NULL',
+  ]),
+
   {
     id: '202607010001_remove_legacy_default_boards',
     name: 'remove legacy Default boards',

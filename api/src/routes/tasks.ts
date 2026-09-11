@@ -10,7 +10,12 @@ import {
   rowToTask,
   getOAuthToken,
   getTaskById,
+  getTaskTemplates,
+  getTaskTemplateById,
+  getOccurrencesForTemplate,
+  countUnfinishedOccurrences,
 } from '../services/database.js';
+import { buildRecurrenceConfig, nextRunAt } from '../services/taskRecurrence.js';
 import { setTaskSignal, clearTaskSignal } from '../services/agentManager/tasks.js';
 import { updateTaskExecutionStatus, saveTaskToDb, updateTaskFields } from '../services/database.js';
 import { enrichAssignee, emitTaskUpdated, applyTaskMove } from '../services/taskMutations.js';
@@ -20,7 +25,12 @@ import { projectObject, projectionIncludesField, type FieldProjection } from '..
 import { parseTaskProjection } from '../services/taskProjection.js';
 import { getUserBoardIdSet } from '../lib/boardAccess.js';
 import { isCliRunner } from '../services/runners.js';
-import { reorderTasksSchema, updateTaskSchema, bulkMoveSchema } from '../schemas/tasks.js';
+import {
+  reorderTasksSchema,
+  updateTaskSchema,
+  updateTemplateSchema,
+  bulkMoveSchema,
+} from '../schemas/tasks.js';
 import type { UpdateTaskBody } from '../schemas/tasks.js';
 import type { z } from 'zod';
 import type { AgentManager } from '../services/agentManager/index.js';
@@ -80,6 +90,9 @@ const TASK_ROW_COLUMNS = [
   'action_running_mode',
   'pending_on_enter',
   'is_manual',
+  'is_template',
+  'template_id',
+  'occurrence_seq',
   'position',
   'environment',
   'repo_provider',
@@ -274,7 +287,6 @@ async function applyTaskFieldEdits(
     storageProvider,
     position,
   } = body;
-  const now = new Date().toISOString();
   const editedFields: string[] = [];
 
   if (title !== undefined && title !== task.title) {
@@ -320,20 +332,14 @@ async function applyTaskFieldEdits(
     editedFields.push('isManual');
   }
   if (recurrence !== undefined) {
-    const oldValue = task.recurrence || null;
-    if (recurrence && recurrence.enabled) {
-      task.recurrence = {
-        enabled: true,
-        period: recurrence.period || 'daily',
-        intervalMinutes: recurrence.intervalMinutes || 1440,
-        originalStatus: recurrence.originalStatus || oldValue?.originalStatus || 'backlog',
-        historyRetentionDays: recurrence.historyRetentionDays || null,
-        lastResetAt: oldValue?.lastResetAt || now,
-      };
-    } else {
-      task.recurrence = null;
-    }
-    if (JSON.stringify(oldValue) !== JSON.stringify(task.recurrence || null))
+    // Recurrence is not a field of this row: enabling it mints a RULE and
+    // adopts this task as its first run, disabling it deletes that rule.
+    // setTaskRecurrence mutates `task` (templateId / occurrenceSeq) so the
+    // caller's save writes the linkage instead of reverting it.
+    const wasRecurring = !!task.templateId || !!task.isTemplate;
+    await mgr.setTaskRecurrence(task, recurrence);
+    const isRecurring = !!task.templateId || !!task.isTemplate;
+    if (wasRecurring !== isRecurring || (recurrence && recurrence.enabled))
       editedFields.push('recurrence');
   }
   if (repoFullName !== undefined) {
@@ -392,7 +398,8 @@ router.get(
     FROM tasks t
     LEFT JOIN boards   b ON t.board_id = b.id
     LEFT JOIN projects p ON b.project_id = p.id
-    WHERE t.deleted_at IS NULL`;
+    WHERE t.deleted_at IS NULL
+      AND t.is_template IS NOT TRUE`;
     const params: any[] = [];
 
     // Scope to user's accessible boards (admins see all)
@@ -439,6 +446,164 @@ router.get(
     });
 
     res.json(tasks);
+  })
+);
+
+// ── Recurring rules ─────────────────────────────────────────────────────────
+//
+// A rule is a `tasks` row with `is_template`: it holds the schedule and the
+// description, never appears on a board and is never executed. These routes are
+// the only way to see or change one — every other task surface filters them out
+// (see NOT_TEMPLATE in services/database/tasks.ts).
+//
+// They are declared BEFORE `/:id` for the same reason `/reorder` is: Express
+// would otherwise read "templates" as a task id.
+
+/** Access to a rule is access to its board — the same rule as for its runs. */
+async function loadTemplateForRequest(
+  mgr: AgentManager,
+  templateId: string,
+  user: SessionClaims
+): Promise<{ ok: true; template: Task } | { ok: false; status: number; error: string }> {
+  const template = await getTaskTemplateById(templateId);
+  if (!template) return { ok: false, status: 404, error: 'Recurring rule not found' };
+  if (!(await requireTaskAccess(mgr, template, user)))
+    return { ok: false, status: 403, error: 'Access denied' };
+  return { ok: true, template };
+}
+
+/** A rule plus the two things the panel cannot compute client-side: when it
+ * next fires, and how many of its runs are still in flight. */
+async function describeTemplate(mgr: AgentManager, template: Task) {
+  const agent = template.agentId ? mgr.agents.get(template.agentId) : null;
+  const [occurrences, inFlight] = await Promise.all([
+    getOccurrencesForTemplate(template.id, 5),
+    countUnfinishedOccurrences(template.id),
+  ]);
+  const dueAt = nextRunAt(template.recurrence, template.createdAt);
+  return {
+    ...template,
+    agentName: agent?.name || null,
+    nextRunAt: dueAt ? new Date(dueAt).toISOString() : null,
+    unfinishedRuns: inFlight,
+    recentRuns: occurrences.map(o => ({
+      id: o.id,
+      occurrenceSeq: o.occurrenceSeq,
+      status: o.status,
+      createdAt: o.createdAt,
+      completedAt: o.completedAt || null,
+      error: o.error || null,
+    })),
+  };
+}
+
+// ── GET /tasks/templates — list recurring rules (optionally for one board) ──
+router.get(
+  '/templates',
+  asyncHandler(async (req, res) => {
+    const boardId = typeof req.query.board_id === 'string' ? req.query.board_id : null;
+    const mgr = req.app.get('agentManager');
+
+    if (boardId) {
+      if (req.user.role !== 'admin') {
+        const access = await checkBoardAccess(boardId, req.user.userId, req.user.role, 'read');
+        if (!access.ok) return res.status(access.status || 403).json({ error: 'Access denied' });
+      }
+      const templates = await getTaskTemplates(boardId);
+      return res.json(await Promise.all(templates.map(t => describeTemplate(mgr, t))));
+    }
+
+    const templates = await getTaskTemplates(null);
+    if (req.user.role === 'admin')
+      return res.json(await Promise.all(templates.map(t => describeTemplate(mgr, t))));
+
+    // Without a board filter, fall back to the boards the user can see.
+    const boardIds = await getUserBoardIdSet(req.user.userId);
+    if (boardIds.size === 0) return res.json([]);
+    const visible = templates.filter(t => t.boardId && boardIds.has(t.boardId));
+    res.json(await Promise.all(visible.map(t => describeTemplate(mgr, t))));
+  })
+);
+
+// ── GET /tasks/templates/:id/runs — the runs one rule has spawned ──────────
+router.get(
+  '/templates/:id/runs',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const loaded = await loadTemplateForRequest(mgr, req.params.id, req.user);
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 200);
+    res.json(await getOccurrencesForTemplate(loaded.template.id, limit));
+  })
+);
+
+// ── PUT /tasks/templates/:id — edit a rule (schedule and/or description) ────
+router.put(
+  '/templates/:id',
+  validateBody(updateTemplateSchema),
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const loaded = await loadTemplateForRequest(mgr, req.params.id, req.user);
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+    const template: EditableTask = loaded.template;
+    const { title, description, recurrence } = req.body;
+
+    if (title !== undefined) template.title = title;
+    if (description !== undefined) template.text = description || '';
+    if (recurrence !== undefined) {
+      if (recurrence && recurrence.enabled === false) {
+        // Same meaning as unchecking the box on a card: the rule goes away.
+        await mgr.deleteTask(template.agentId, template.id);
+        await auditLog('recurrence_delete', template.id, req.user.userId, req.user.username, {
+          taskTitle: template.title || template.text?.slice(0, 100),
+        });
+        return res.json({ ok: true, deleted: true });
+      }
+      template.recurrence = buildRecurrenceConfig(recurrence, { prev: template.recurrence });
+    }
+    await saveTaskToDb(template as Task);
+    await auditLog('recurrence_update', template.id, req.user.userId, req.user.username, {
+      intervalMinutes: template.recurrence?.intervalMinutes,
+      onOverlap: template.recurrence?.onOverlap,
+    });
+    res.json(await describeTemplate(mgr, template as Task));
+  })
+);
+
+// ── POST /tasks/templates/:id/run — start a run now ────────────────────────
+router.post(
+  '/templates/:id/run',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const loaded = await loadTemplateForRequest(mgr, req.params.id, req.user);
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+    // A manual run does NOT move the schedule: the user asked for one extra
+    // run, not for the next automatic one to be postponed.
+    const occurrence = await mgr._spawnOccurrence(loaded.template, {
+      by: req.user.username || 'user',
+      advanceClock: false,
+    });
+    if (!occurrence) return res.status(500).json({ error: 'Failed to start run' });
+    await auditLog('recurrence_run', loaded.template.id, req.user.userId, req.user.username, {
+      occurrenceId: occurrence.id,
+      occurrenceSeq: occurrence.occurrenceSeq,
+    });
+    res.json(occurrence);
+  })
+);
+
+// ── DELETE /tasks/templates/:id — stop a rule (its runs stay) ──────────────
+router.delete(
+  '/templates/:id',
+  asyncHandler(async (req, res) => {
+    const mgr = req.app.get('agentManager');
+    const loaded = await loadTemplateForRequest(mgr, req.params.id, req.user);
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.error });
+    await mgr.deleteTask(loaded.template.agentId, loaded.template.id);
+    await auditLog('recurrence_delete', loaded.template.id, req.user.userId, req.user.username, {
+      taskTitle: loaded.template.title || loaded.template.text?.slice(0, 100),
+    });
+    res.json({ ok: true });
   })
 );
 
@@ -887,7 +1052,7 @@ router.get(
       COUNT(*) FILTER (WHERE t.task_type = 'feature')::int AS features
     FROM projects p
     LEFT JOIN boards b ON b.project_id = p.id
-    LEFT JOIN tasks t ON t.board_id = b.id AND t.deleted_at IS NULL${boardFilter ? ' AND ' + boardFilter.slice(5) : ''}
+    LEFT JOIN tasks t ON t.board_id = b.id AND t.deleted_at IS NULL AND t.is_template IS NOT TRUE${boardFilter ? ' AND ' + boardFilter.slice(5) : ''}
     ${projectFilter}
     GROUP BY p.id, p.name
     ORDER BY p.name
@@ -909,7 +1074,7 @@ router.get(
         CURRENT_DATE,
         '1 day'::interval
       ) AS d(day)
-      WHERE t.deleted_at IS NULL AND b.project_id IS NOT NULL${boardFilter}
+      WHERE t.deleted_at IS NULL AND t.is_template IS NOT TRUE AND b.project_id IS NOT NULL${boardFilter}
         AND (t.created_at >= CURRENT_DATE - ($${daysParamIdx} || ' days')::interval
              OR t.completed_at >= CURRENT_DATE - ($${daysParamIdx} || ' days')::interval)
       GROUP BY b.project_id, d.day
@@ -970,17 +1135,20 @@ router.get(
     }
 
     const [totalResult, activeResult, deletedResult, recentDeletedResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) as count FROM tasks WHERE 1=1${boardFilter}`, params),
       pool.query(
-        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NULL${boardFilter}`,
+        `SELECT COUNT(*) as count FROM tasks WHERE is_template IS NOT TRUE${boardFilter}`,
         params
       ),
       pool.query(
-        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL${boardFilter}`,
+        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NULL AND is_template IS NOT TRUE${boardFilter}`,
         params
       ),
       pool.query(
-        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at >= NOW() - INTERVAL '30 days'${boardFilter}`,
+        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL AND is_template IS NOT TRUE${boardFilter}`,
+        params
+      ),
+      pool.query(
+        `SELECT COUNT(*) as count FROM tasks WHERE deleted_at IS NOT NULL AND is_template IS NOT TRUE AND deleted_at >= NOW() - INTERVAL '30 days'${boardFilter}`,
         params
       ),
     ]);

@@ -31,7 +31,6 @@ import {
   TASK_TYPES,
   TASK_TYPE_MAP,
   buildRecurrence,
-  recurrenceLabel,
 } from './taskConstants';
 import RecurrenceFields from './RecurrenceFields';
 import EditableSelectRow from './EditableSelectRow';
@@ -90,13 +89,20 @@ export default function TaskDetailModal({
   const [statusOpen, setStatusOpen] = useState(false);
   const [editingRecurrence, setEditingRecurrence] = useState(false);
   const [savingRecurrence, setSavingRecurrence] = useState(false);
-  const [recEnabled, setRecEnabled] = useState(!!task.recurrence?.enabled);
+  // A card never carries a recurrence config — the RULE does. `templateId` is
+  // what says this card is a run of one, and enabling recurrence here mints a
+  // rule from this card (which becomes its run #1).
+  const [recEnabled, setRecEnabled] = useState(!!task.templateId);
   const [recPeriod, setRecPeriod] = useState(task.recurrence?.period || 'daily');
   const [recCustomInterval, setRecCustomInterval] = useState(
     task.recurrence?.intervalMinutes || 60
   );
   const [recRetentionDays, setRecRetentionDays] = useState(
     task.recurrence?.historyRetentionDays || 0
+  );
+  const [recKeepLast, setRecKeepLast] = useState(task.recurrence?.keepLastOccurrences || 0);
+  const [recOverlap, setRecOverlap] = useState<'skip' | 'spawn'>(
+    task.recurrence?.onOverlap === 'spawn' ? 'spawn' : 'skip'
   );
   const [editingBoard, setEditingBoard] = useState(false);
   // Id of the board the task is being moved to, while the confirm dialog is up.
@@ -294,7 +300,7 @@ export default function TaskDetailModal({
     setMutationError(null);
     try {
       const recurrence = recEnabled
-        ? buildRecurrence(recPeriod, recCustomInterval, recRetentionDays)
+        ? buildRecurrence(recPeriod, recCustomInterval, recRetentionDays, recKeepLast, recOverlap)
         : { enabled: false };
       await updateTaskById(task.id, { recurrence });
       await onRefresh();
@@ -307,10 +313,12 @@ export default function TaskDetailModal({
   };
 
   const handleRecurrenceCancel = () => {
-    setRecEnabled(!!task.recurrence?.enabled);
+    setRecEnabled(!!task.templateId);
     setRecPeriod(task.recurrence?.period || 'daily');
     setRecCustomInterval(task.recurrence?.intervalMinutes || 60);
     setRecRetentionDays(task.recurrence?.historyRetentionDays || 0);
+    setRecKeepLast(task.recurrence?.keepLastOccurrences || 0);
+    setRecOverlap(task.recurrence?.onOverlap === 'spawn' ? 'spawn' : 'skip');
     setEditingRecurrence(false);
   };
 
@@ -771,29 +779,24 @@ export default function TaskDetailModal({
                     </div>
                   ) : (
                     <div className="flex items-center gap-1.5">
-                      {task.recurrence?.enabled ? (
-                        <>
-                          <span className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20">
-                            {recurrenceLabel(task.recurrence)}
-                          </span>
-                          {(task.recurrence.historyRetentionDays ?? 0) > 0 && (
-                            <span
-                              className="text-[10px] px-2 py-0.5 rounded-full font-medium ring-1 bg-dark-700/40 text-dark-300 ring-dark-600"
-                              title="History/commits older than this are dropped at each reset"
-                            >
-                              Purge {task.recurrence.historyRetentionDays}d
-                            </span>
-                          )}
-                        </>
+                      {task.templateId ? (
+                        <span
+                          className="text-xs px-2 py-0.5 rounded-full font-medium ring-1 bg-teal-500/10 text-teal-400 ring-teal-500/20"
+                          title="One run of a recurring rule — the rule itself lives under Recurring tasks"
+                        >
+                          Run #{task.occurrenceSeq ?? '?'}
+                        </span>
                       ) : (
                         <span className="text-xs text-dark-500 italic">None</span>
                       )}
                       <button
                         onClick={() => {
-                          setRecEnabled(!!task.recurrence?.enabled);
+                          setRecEnabled(!!task.templateId);
                           setRecPeriod(task.recurrence?.period || 'daily');
                           setRecCustomInterval(task.recurrence?.intervalMinutes || 60);
                           setRecRetentionDays(task.recurrence?.historyRetentionDays || 0);
+                          setRecKeepLast(task.recurrence?.keepLastOccurrences || 0);
+                          setRecOverlap(task.recurrence?.onOverlap === 'spawn' ? 'spawn' : 'skip');
                           setEditingRecurrence(true);
                         }}
                         className="p-0.5 rounded text-dark-500 hover:text-teal-400 hover:bg-dark-700 transition-colors"
@@ -817,6 +820,11 @@ export default function TaskDetailModal({
                         Enable recurrence
                       </span>
                     </label>
+                    <p className="text-[11px] text-dark-500 leading-relaxed">
+                      {task.templateId
+                        ? 'Edits the rule this card belongs to. Unticking stops the rule; the cards it already produced are kept.'
+                        : 'Creates a rule from this card, which becomes its first run. Later runs are new cards.'}
+                    </p>
                     {recEnabled && (
                       <RecurrenceFields
                         period={recPeriod}
@@ -825,6 +833,10 @@ export default function TaskDetailModal({
                         onCustomIntervalChange={setRecCustomInterval}
                         retentionDays={recRetentionDays}
                         onRetentionDaysChange={setRecRetentionDays}
+                        keepLast={recKeepLast}
+                        onKeepLastChange={setRecKeepLast}
+                        onOverlap={recOverlap}
+                        onOverlapChange={setRecOverlap}
                         focusClass="focus:border-teal-500"
                       />
                     )}

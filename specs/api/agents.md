@@ -103,11 +103,11 @@ These routes manage tasks **scoped to a specific agent**. The global `/api/tasks
 ### POST `/api/agents/:id/tasks`
 Create a task for the agent.
 - **Body**: `{ title?, text|description, status?, type?, priority?, boardId?, repoFullName?, storage?, recurrence?, isManual? }`.
-- **Response 201**: the created task.
+- **Response 201**: the created task — or, when `recurrence.enabled` is set, the FIRST RUN of the recurring rule that was created (the rule itself is not a card; see [tasks.md](tasks.md) §4).
 
 ### PATCH `/api/agents/:id/tasks/:taskId`
 Update fields of a task.
-- **Body**: any subset of `{ status, text, title, repoFullName, storage, recurrence, type, isManual }`.
+- **Body**: any subset of `{ status, text, title, repoFullName, storage, recurrence, type, isManual }`. `recurrence` creates/edits/deletes the recurring RULE behind the task, never a field on the task itself.
 - **Side effects**: if `status` changes, may stop the agent if it was running this task.
 
 ### DELETE `/api/agents/:id/tasks`

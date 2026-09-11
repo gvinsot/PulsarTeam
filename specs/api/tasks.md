@@ -10,6 +10,7 @@ Source: `api/src/routes/tasks.ts`. All routes require JWT. Per-agent task manage
 List tasks the caller can see. Scoped to boards the user owns or has been shared.
 - **Query**: any of `board_id`, `agent_id`, `status`, `project`, `repo_full_name`.
 - **Response 200**: `Task[]` with joined `agentName` and `assigneeName`.
+- **Never returns recurring rules** (`is_template`) — see §4.
 
 ### GET `/api/tasks/:id/history`
 Modification history of a task (each entry shows previous → next values, author, timestamp).
@@ -39,9 +40,10 @@ Bulk-reorder tasks in a column.
 - **Side effects**: updates positions in DB and in-memory state.
 
 ### PUT `/api/tasks/:id`
-Update any subset of: `title, description, column, agentId, type, priority, dueDate, boardId, position, isManual`.
+Update any subset of: `title, description, column, agentId, type, priority, dueDate, boardId, position, isManual, recurrence`.
 - **Auth**: JWT + task access (board-scoped).
 - **Side effects**: writes a row to the task audit log; triggers any workflow transition action attached to the new column.
+- `recurrence` is **not** stored on the task: `{ enabled: true, … }` creates (or edits) the recurring rule this card belongs to and links the card as its run #1; `{ enabled: false }` deletes the rule and keeps the runs. See §4.
 
 ### POST `/api/tasks/bulk-move`
 Move many tasks at once between boards/columns.
@@ -60,7 +62,36 @@ Soft-delete a task. Returns 409 if the agent is currently executing it.
 
 ---
 
-## 3. Admin operations
+## 3. Recurring rules
+
+A recurring task is **two** things: a *rule* (a `tasks` row with `is_template`, carrying the schedule in `recurrence`) and the *runs* it spawns (ordinary tasks with `template_id` + `occurrence_seq`). The rule never appears on a board, is never executed, and is filtered out of every other task query; each due date spawns a fresh run with an empty history, and finished runs are deleted by the rule's own retention settings.
+
+This replaced resetting one row in place, which grew that row's history, commits and audit trail without bound and could yank back a run still in flight.
+
+Schedule fields (`recurrence`): `period`, `intervalMinutes`, `originalStatus` (the column runs start in), `onOverlap` (`skip` — the default — or `spawn`), `historyRetentionDays` (delete finished runs older than N days), `keepLastOccurrences` (keep only the N most recent finished runs). `lastResetAt`, `occurrenceCount` and `lastOccurrenceId` are maintained server-side.
+
+### GET `/api/tasks/templates`
+List recurring rules.
+- **Query**: `board_id?` — without it, every rule on a board the caller can see.
+- **Response 200**: rules with `nextRunAt`, `unfinishedRuns` and the 5 most `recentRuns`.
+
+### GET `/api/tasks/templates/:id/runs`
+The runs a rule has spawned, newest first.
+- **Query**: `limit?` (default 50, max 200).
+
+### PUT `/api/tasks/templates/:id`
+Edit a rule: `{ title?, description?, recurrence? }`. Omitted schedule fields keep their current value, so a partial edit cannot rewind the clock or reset the retention. `recurrence: { enabled: false }` deletes the rule and answers `{ ok: true, deleted: true }`.
+
+### POST `/api/tasks/templates/:id/run`
+Start one extra run now, **without** moving the schedule.
+- **Response 200**: the created task.
+
+### DELETE `/api/tasks/templates/:id`
+Stop the rule. The runs it already spawned are kept.
+
+---
+
+## 4. Admin operations
 
 ### GET `/api/tasks/deleted`
 List soft-deleted tasks.

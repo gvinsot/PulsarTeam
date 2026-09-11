@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --experimental-test-module-mocks --test \"src/**/__tests__/*.test.ts\"",
-    "lint": "eslint . --max-warnings 61",
+    "lint": "eslint . --max-warnings 60",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write . --ignore-path ../.gitignore --ignore-path ../.prettierignore",
     "format:check": "prettier --check . --ignore-path ../.gitignore --ignore-path ../.prettierignore"

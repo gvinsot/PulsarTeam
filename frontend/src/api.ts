@@ -147,17 +147,24 @@ export interface TaskSecondaryRepoInput {
 
 /**
  * The `recurrence` sub-object as CLIENTS SEND it. NOT a `TaskRecurrence`:
- * `originalStatus` and `lastResetAt` are stamped server-side
- * (api/src/services/agentManager/tasks.ts:196-210), and `enabled` is the only key
- * the server reads before rebuilding the rest — `{ enabled: false }` is how the
- * UI turns recurrence off.
+ * `originalStatus`, `lastResetAt` and the run counters are stamped server-side
+ * (api/src/services/taskRecurrence.ts), and `enabled` is the only key the server
+ * reads before rebuilding the rest — `{ enabled: false }` is how the UI turns
+ * recurrence off, which DELETES the rule.
+ *
+ * Sending it on a card is what CREATES the rule (the card becomes its run #1);
+ * sending it on a rule edits that rule's schedule.
  */
 export interface TaskRecurrenceInput {
   enabled: boolean;
   period?: TaskRecurrencePeriod;
   intervalMinutes?: number;
-  /** null / 0 both mean "keep everything". */
+  /** Days a finished run is kept. null / 0 both mean "keep everything". */
   historyRetentionDays?: number | null;
+  /** How many finished runs to keep. null / 0 mean "unlimited". */
+  keepLastOccurrences?: number | null;
+  /** Default 'skip' — do not start a run while the previous one is unfinished. */
+  onOverlap?: 'skip' | 'spawn';
 }
 
 /**
@@ -1289,6 +1296,52 @@ export const clearTaskStopped = (taskId: string) => patch<OkAck>(`/tasks/${taskI
 /* ── Reorder tasks within a column ──────────────────────────────────── */
 export const reorderTasks = (orderedIds: string[]) =>
   put<OkAck & { count: number }>('/tasks/reorder', { orderedIds });
+
+/* ── Recurring rules ──────────────────────────────────────────────────────── */
+// A rule is a task row the board never shows (api NOT_TEMPLATE filter); these
+// are the only routes that return one. `recentRuns` and `nextRunAt` are
+// computed server-side — the panel cannot derive them from the rule alone.
+
+/** One run of a rule, as summarised on the rule itself. */
+export interface TaskTemplateRun {
+  id: string;
+  occurrenceSeq: number | null;
+  status: TaskStatus;
+  createdAt: string;
+  completedAt: string | null;
+  error: string | null;
+}
+
+/** A recurring rule plus what the panel needs to describe its schedule. */
+export interface TaskTemplate extends Task {
+  agentName: string | null;
+  /** ISO 8601, or null when the rule carries no usable reference timestamp. */
+  nextRunAt: string | null;
+  /** Runs not yet in a terminal column — what `onOverlap: 'skip'` waits on. */
+  unfinishedRuns: number;
+  recentRuns: TaskTemplateRun[];
+}
+
+export const getTaskTemplates = (boardId?: string | null) =>
+  get<TaskTemplate[]>(`/tasks/templates${boardId ? `?board_id=${boardId}` : ''}`);
+
+export const getTaskTemplateRuns = (templateId: string, limit = 50) =>
+  get<Task[]>(`/tasks/templates/${templateId}/runs?limit=${limit}`);
+
+/** Editing the schedule. `recurrence: { enabled: false }` deletes the rule and
+ * answers `{ ok: true, deleted: true }` instead of the updated rule. */
+export const updateTaskTemplate = (
+  templateId: string,
+  body: { title?: string | null; description?: string | null; recurrence?: TaskRecurrenceInput }
+) => put<TaskTemplate | (OkAck & { deleted: true })>(`/tasks/templates/${templateId}`, body);
+
+/** Starts one extra run now WITHOUT moving the schedule. */
+export const runTaskTemplate = (templateId: string) =>
+  post<Task>(`/tasks/templates/${templateId}/run`);
+
+/** Stops the rule. The runs it already spawned are kept. */
+export const deleteTaskTemplate = (templateId: string) =>
+  del<OkAck>(`/tasks/templates/${templateId}`);
 
 /* ── Soft-delete management ──────────────────────────────────────────────── */
 // The only route where Task.deletedAt / deletedBy are actually populated.

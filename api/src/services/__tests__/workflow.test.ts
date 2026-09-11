@@ -1027,18 +1027,268 @@ test('addTask returns null for invalid agent', async () => {
   assert.equal(await mgr.addTask('fake-agent', 'Task', null), null);
 });
 
-test('addTask with recurrence config', async () => {
+// ── Recurring rules ──────────────────────────────────────────────────────────
+// A recurring task is a RULE (is_template) plus the runs it spawns. The rule
+// never reaches a board and is never executed; each run is a fresh row with an
+// empty history, which is what bounds the growth the in-place reset never did.
+
+/** The rule rows in the fake DB. */
+function templates(): any[] {
+  return [...rows.values()].filter((t: any) => t.isTemplate && !t.deletedAt);
+}
+
+/** The runs one rule has spawned, newest first. */
+function runsOf(templateId: string): any[] {
+  return [...rows.values()]
+    .filter((t: any) => t.templateId === templateId && !t.deletedAt)
+    .sort((a: any, b: any) => (b.occurrenceSeq || 0) - (a.occurrenceSeq || 0));
+}
+
+test('addTask with recurrence creates a rule and a first run, not a recurring card', async () => {
   const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
   const [agentId] = mgr.agents.keys();
 
-  const task = await mgr.addTask(agentId, 'Daily task', null, null, {
+  const firstRun = await mgr.addTask(agentId, 'Daily task', null, null, {
     skipAutoRefine: true,
     recurrence: { enabled: true, period: 'daily', intervalMinutes: 1440 },
   });
-  assert.ok(task.recurrence);
-  assert.equal(task.recurrence.enabled, true);
-  assert.equal(task.recurrence.period, 'daily');
-  assert.equal(task.recurrence.originalStatus, 'backlog');
+
+  const [rule] = templates();
+  assert.ok(rule, 'a rule row exists');
+  assert.equal(rule.recurrence.enabled, true);
+  assert.equal(rule.recurrence.period, 'daily');
+  assert.equal(rule.recurrence.originalStatus, 'backlog');
+  assert.equal(rule.recurrence.onOverlap, 'skip');
+
+  // addTask returns the run — the card the user sees — not the rule.
+  assert.equal(firstRun.isTemplate, false);
+  assert.equal(firstRun.templateId, rule.id);
+  assert.equal(firstRun.occurrenceSeq, 1);
+  assert.equal(firstRun.recurrence, null);
+  assert.equal(firstRun.status, 'backlog');
+  assert.equal(firstRun.text, 'Daily task');
+  assert.equal(firstRun.agentId, agentId);
+});
+
+test('a rule is invisible to every task listing', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Daily task', null, null, {
+    skipAutoRefine: true,
+    boardId: 'board-1',
+    recurrence: { enabled: true, intervalMinutes: 60 },
+  });
+  const [rule] = templates();
+
+  const db = await import('../database.js');
+  for (const [label, listed] of [
+    ['getAllTasks', await db.getAllTasks()],
+    ['getTasksByAgent', await db.getTasksByAgent(agentId)],
+    ['getTasksByBoard', await db.getTasksByBoard('board-1')],
+    ['getTasksByAssignee', await db.getTasksByAssignee(agentId)],
+    ['getActiveWorkflowTasks', await db.getActiveWorkflowTasks(null)],
+  ] as [string, any[]][]) {
+    assert.ok(
+      !listed.some(t => t.id === rule.id),
+      `${label} must not return the rule`
+    );
+  }
+  // …but the run it spawned is there.
+  assert.equal((await db.getTasksByBoard('board-1')).length, 1);
+});
+
+test('a due rule spawns a new run instead of resetting the previous one', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Hourly task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60 },
+  });
+  const [rule] = templates();
+  const firstRun = runsOf(rule.id)[0];
+
+  // The first run finishes and accumulates some history.
+  firstRun.status = 'done';
+  firstRun.history.push({ status: 'done', at: new Date().toISOString(), by: 'test' });
+
+  // Make the rule due.
+  rule.recurrence.lastResetAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+  await mgr._processRecurringTasks();
+
+  const runs = runsOf(rule.id);
+  assert.equal(runs.length, 2, 'a second run exists');
+  const secondRun = runs[0];
+  assert.notEqual(secondRun.id, firstRun.id, 'the run is a NEW row');
+  assert.equal(secondRun.occurrenceSeq, 2);
+  assert.equal(secondRun.status, 'backlog');
+  assert.equal(secondRun.history.length, 1, 'the new run starts with an empty history');
+  assert.equal(secondRun.commits.length, 0);
+
+  // The finished run is left exactly as it was.
+  assert.equal(firstRun.status, 'done');
+  assert.equal(firstRun.history.length, 2);
+});
+
+test('overlap=skip leaves an unfinished run alone and drops the cycle', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Long task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60 },
+  });
+  const [rule] = templates();
+  const inFlight = runsOf(rule.id)[0];
+
+  // Still working when the next cycle comes round.
+  inFlight.status = 'code';
+  inFlight.startedAt = new Date().toISOString();
+  inFlight.actionRunning = true;
+  rule.recurrence.lastResetAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+
+  await mgr._processRecurringTasks();
+
+  assert.equal(runsOf(rule.id).length, 1, 'no second run while one is in flight');
+  // The run in progress is untouched — the old in-place reset yanked it back.
+  assert.equal(inFlight.status, 'code');
+  assert.equal(inFlight.actionRunning, true);
+  // The clock moved on, so the rule is not due again immediately.
+  assert.ok(Date.parse(rule.recurrence.lastResetAt) > Date.now() - 5000);
+});
+
+test('overlap=spawn starts a run even while one is unfinished', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Parallel task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60, onOverlap: 'spawn' },
+  });
+  const [rule] = templates();
+  runsOf(rule.id)[0].status = 'code';
+  rule.recurrence.lastResetAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+
+  await mgr._processRecurringTasks();
+
+  assert.equal(runsOf(rule.id).length, 2);
+});
+
+test('retention deletes old finished runs and never one in flight', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Kept short', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60, keepLastOccurrences: 2 },
+  });
+  const [rule] = templates();
+  // The run addTask spawned finishes too, so runs #1-#4 are all finished.
+  runsOf(rule.id)[0].status = 'done';
+
+  // Four finished runs plus one still going. Read each run back from the fake
+  // DB — saveTaskToDb stores a copy, so mutating the returned object would
+  // leave the stored row untouched.
+  for (let i = 0; i < 4; i++) {
+    rule.recurrence.lastResetAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+    const spawned = await mgr._spawnOccurrence(rule, { by: 'test' });
+    rows.get(spawned.id).status = 'done';
+  }
+  const stillRunning = runsOf(rule.id)[0];
+  stillRunning.status = 'code';
+
+  const purged = await mgr._purgeOccurrences(rule);
+
+  assert.equal(purged, 2, 'the two oldest finished runs are gone');
+  const left = runsOf(rule.id);
+  assert.equal(left.length, 3, '2 kept finished + 1 in flight');
+  assert.ok(left.some(t => t.id === stillRunning.id), 'the in-flight run survives');
+  // Run numbers keep climbing even after older rows are deleted.
+  assert.equal(rule.recurrence.occurrenceCount, 5);
+});
+
+test('enabling recurrence on an existing task keeps the card and adopts it as run 1', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  const task = await mgr.addTask(agentId, 'Was a one-off', null, null, { skipAutoRefine: true });
+
+  await mgr.setTaskRecurrence(task, { enabled: true, intervalMinutes: 30 });
+
+  const [rule] = templates();
+  assert.ok(rule, 'a rule was minted');
+  assert.equal(rule.text, 'Was a one-off');
+  assert.equal(rule.recurrence.intervalMinutes, 30);
+  // The card stays a card, where it was, now linked to the rule.
+  assert.equal(task.isTemplate, undefined);
+  assert.equal(task.templateId, rule.id);
+  assert.equal(task.occurrenceSeq, 1);
+  assert.equal(rows.get(task.id).templateId, rule.id, 'the link is persisted');
+  // The next run is a full period away, not immediate.
+  assert.equal(rule.recurrence.occurrenceCount, 1);
+});
+
+test('editing recurrence from a run edits its rule, it does not mint a second one', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  const run = await mgr.addTask(agentId, 'Daily task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60 },
+  });
+
+  await mgr.setTaskRecurrence(run, { enabled: true, intervalMinutes: 15 });
+
+  assert.equal(templates().length, 1, 'still exactly one rule');
+  assert.equal(templates()[0].recurrence.intervalMinutes, 15);
+  assert.equal(templates()[0].id, run.templateId);
+});
+
+test('disabling recurrence deletes the rule and leaves the runs', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  const run = await mgr.addTask(agentId, 'Daily task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60 },
+  });
+
+  await mgr.setTaskRecurrence(run, { enabled: false });
+
+  assert.equal(templates().length, 0, 'the rule is gone');
+  assert.ok(!rows.get(run.id).deletedAt, 'the run it already spawned stays');
+  // And nothing is due any more.
+  await mgr._processRecurringTasks();
+  assert.equal([...rows.values()].filter((t: any) => !t.deletedAt).length, 1);
+});
+
+test('editing a rule preserves the schedule and the counters it already has', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Daily task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60, keepLastOccurrences: 5 },
+  });
+  const [rule] = templates();
+  const lastResetAt = rule.recurrence.lastResetAt;
+
+  // A PUT that only changes the period must not rewind the clock, reset the
+  // retention, or lose the run counter.
+  await mgr.setTaskRecurrence(rule, { enabled: true, intervalMinutes: 120 });
+
+  assert.equal(rule.recurrence.intervalMinutes, 120);
+  assert.equal(rule.recurrence.keepLastOccurrences, 5);
+  assert.equal(rule.recurrence.lastResetAt, lastResetAt);
+  assert.equal(rule.recurrence.occurrenceCount, 1);
+});
+
+test('a rule only fires in its own environment', async () => {
+  const mgr = await setup([{ name: 'Dev', role: 'developer' }]);
+  const [agentId] = mgr.agents.keys();
+  await mgr.addTask(agentId, 'Daily task', null, null, {
+    skipAutoRefine: true,
+    recurrence: { enabled: true, intervalMinutes: 60 },
+  });
+  const [rule] = templates();
+  rule.environment = 'somewhere-else';
+  rule.recurrence.lastResetAt = new Date(Date.now() - 61 * 60 * 1000).toISOString();
+
+  await mgr._processRecurringTasks();
+
+  assert.equal(runsOf(rule.id).length, 1, 'another replica owns this rule');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════

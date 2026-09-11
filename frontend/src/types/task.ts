@@ -159,11 +159,11 @@ export interface TaskSource {
 }
 
 /**
- * Recurring-reset configuration; the scheduler re-arms the task each interval.
- * Produced by api/src/services/agentManager/tasks.ts:198.
+ * The schedule of a recurring RULE. Produced by buildRecurrenceConfig
+ * (api/src/services/taskRecurrence.ts).
  *
- * Disabling recurrence sets the whole object to null (api/src/routes/tasks.ts:215),
- * it does NOT set enabled:false — see Task.recurrence.
+ * Only a rule (`Task.isTemplate`) ever carries one — a card never does. A card
+ * that belongs to a rule points at it through `templateId` instead.
  */
 export interface TaskRecurrence {
   /** Every current writer sets it literally to true; typed boolean only because
@@ -172,13 +172,22 @@ export interface TaskRecurrence {
   period: TaskRecurrencePeriod;
   /** Defaults to 1440. Only meaningful when period === 'custom'. */
   intervalMinutes: number;
-  /** The column the task is reset back to. */
+  /** The column each run starts in. */
   originalStatus: TaskStatus;
-  /** NULLABLE, and null means "keep everything". normalizeRetention maps
-   *  null/0/''/false/NaN/<=0 to null and clamps to 3650. */
+  /** Days a FINISHED run is kept before it is deleted. NULLABLE, and null means
+   *  "keep everything". normalizeRetention maps null/0/''/false/NaN/<=0 to null
+   *  and clamps to 3650. */
   historyRetentionDays: number | null;
-  /** ISO 8601 reference timestamp for the next reset, rewritten each cycle. */
+  /** How many finished runs to keep, newest first. null = unlimited. */
+  keepLastOccurrences?: number | null;
+  /** What to do when a run is due while the previous one is unfinished:
+   *  'skip' (default) drops the cycle, 'spawn' starts it anyway. */
+  onOverlap?: 'skip' | 'spawn';
+  /** ISO 8601 reference timestamp for the next run, rewritten each cycle. */
   lastResetAt: string;
+  /** Monotonic run counter — the source of `occurrenceSeq`. */
+  occurrenceCount?: number;
+  lastOccurrenceId?: string | null;
 }
 
 /**
@@ -334,8 +343,17 @@ export interface Task {
    *  Date while an HTTP client sees the ISO string JSON.stringify makes of it. */
   dueDate?: string;
   source: TaskSource | null;
-  /** Disabling recurrence sets this to null; it does not set enabled:false. */
+  /** Non-null ONLY on a recurring rule (`isTemplate`); always null on a card. */
   recurrence: TaskRecurrence | null;
+  /** True on a recurring RULE: it holds the schedule, never appears on a board
+   *  and is never executed. Every task listing filters these out — they are
+   *  reached through GET /api/tasks/templates only. */
+  isTemplate: boolean;
+  /** On a run: the rule that spawned it. null on an ordinary task. */
+  templateId: string | null;
+  /** On a run: its 1-based number within the rule. Keeps climbing after the
+   *  retention sweep deletes older runs. */
+  occurrenceSeq: number | null;
   /** `row.commits || []` — always an array. */
   commits: TaskCommit[];
   /** `row.history || []` — always an array. */

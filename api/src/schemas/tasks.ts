@@ -48,6 +48,32 @@ export const updateTaskSchema = z.object({
  */
 export type UpdateTaskBody = z.infer<typeof updateTaskSchema>;
 
+/**
+ * Body of PUT /tasks/templates/:id — editing a recurring RULE.
+ *
+ * Deliberately narrower than `updateTaskSchema`: a rule has no column, no
+ * assignee and no position, and its repo/storage targets are inherited by every
+ * run from the moment they are spawned, so they are edited on the task side.
+ * `recurrence: { enabled: false }` is the documented way to stop the rule.
+ */
+export const updateTemplateSchema = z.object({
+  title: optionalString(2000),
+  description: optionalString(20000),
+  recurrence: z
+    .object({
+      enabled: z.boolean().optional(),
+      period: z.string().max(50).optional(),
+      intervalMinutes: z.number().int().min(1).max(60 * 24 * 365).optional(),
+      originalStatus: optionalString(100),
+      historyRetentionDays: z.number().int().min(0).max(3650).nullable().optional(),
+      keepLastOccurrences: z.number().int().min(0).max(1000).nullable().optional(),
+      onOverlap: z.enum(['skip', 'spawn']).optional(),
+    })
+    .optional(),
+});
+
+export type UpdateTemplateBody = z.infer<typeof updateTemplateSchema>;
+
 export const bulkMoveSchema = z.object({
   taskIds: z.array(z.string().uuid()).min(1).max(2000),
   boardId: z.string().uuid(),

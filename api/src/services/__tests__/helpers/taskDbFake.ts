@@ -23,6 +23,9 @@ export function makeTaskDbFake() {
   const rows = new Map<string, any>();
 
   const live = (t: any) => t && !t.deletedAt;
+  // Mirrors NOT_TEMPLATE in services/database/tasks.ts: a recurring rule is
+  // never returned by a task listing, only by the template getters below.
+  const card = (t: any) => live(t) && !t.isTemplate;
   // Identity-preserving: reads return the live row object (not a copy) and
   // saveTaskToDb merges in place, mirroring the old in-memory store's shared-
   // object semantics that the tests rely on (seed a task, mutate it, read it
@@ -89,41 +92,41 @@ export function makeTaskDbFake() {
     },
     getActiveTaskForExecutor: async (agentId: string) => {
       const m = all().filter(
-        t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.startedAt
+        t => card(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.startedAt
       );
       return m[0] ? clone(m[0]) : null;
     },
     getTaskByActionRunningAgent: async (agentId: string) => {
-      const m = all().filter(t => live(t) && t.actionRunningAgentId === agentId && t.actionRunning);
+      const m = all().filter(t => card(t) && t.actionRunningAgentId === agentId && t.actionRunning);
       return m[0] ? clone(m[0]) : null;
     },
 
     // ── multi-row reads ───────────────────────────────────────────────────
     getTasksByAgent: async (agentId: string) =>
       all()
-        .filter(t => live(t) && t.agentId === agentId)
+        .filter(t => card(t) && t.agentId === agentId)
         .map(clone),
-    getAllTasks: async () => all().filter(live).map(clone),
+    getAllTasks: async () => all().filter(card).map(clone),
     getAllTaskIds: async () =>
       all()
         .filter(live)
         .map(t => t.id),
     getActiveTasksByAgent: async (agentId: string) =>
       all()
-        .filter(t => live(t) && t.agentId === agentId && !INACTIVE.has(t.status))
+        .filter(t => card(t) && t.agentId === agentId && !INACTIVE.has(t.status))
         .map(clone),
     getTasksByAssignee: async (agentId: string) =>
       all()
-        .filter(t => live(t) && isExecutor(t, agentId))
+        .filter(t => card(t) && isExecutor(t, agentId))
         .map(clone),
     getTasksByBoard: async (boardId: string) =>
       all()
-        .filter(t => live(t) && t.boardId === boardId)
+        .filter(t => card(t) && t.boardId === boardId)
         .map(clone),
     getTasksByStatusAndBoard: async (status: any = null, boardId: any = null) =>
       all()
         .filter(
-          t => live(t) && (!status || t.status === status) && (!boardId || t.boardId === boardId)
+          t => card(t) && (!status || t.status === status) && (!boardId || t.boardId === boardId)
         )
         .map(clone),
     // Board-scoped form (the one the agent tools use): an empty id list matches
@@ -132,7 +135,7 @@ export function makeTaskDbFake() {
       all()
         .filter(
           t =>
-            live(t) &&
+            card(t) &&
             (!status || t.status === status) &&
             !!t.boardId &&
             boardIds.includes(t.boardId)
@@ -144,21 +147,59 @@ export function makeTaskDbFake() {
         .map(clone),
     getRecurringTasks: async () =>
       all()
-        .filter(t => live(t) && t.recurrence)
+        .filter(t => live(t) && t.isTemplate && t.recurrence)
         .map(clone),
+    getTaskTemplates: async (boardId: string | null = null) =>
+      all()
+        .filter(t => live(t) && t.isTemplate && (!boardId || t.boardId === boardId))
+        .map(clone),
+    getTaskTemplateById: async (id: string) => {
+      const t = rows.get(id);
+      return live(t) && t.isTemplate ? clone(t) : null;
+    },
+    getOccurrencesForTemplate: async (templateId: string, limit = 50) =>
+      all()
+        .filter(t => live(t) && t.templateId === templateId)
+        .sort((a, b) => (b.occurrenceSeq || 0) - (a.occurrenceSeq || 0))
+        .slice(0, limit)
+        .map(clone),
+    countUnfinishedOccurrences: async (templateId: string) =>
+      all().filter(
+        t => live(t) && t.templateId === templateId && !['done', 'error'].includes(t.status)
+      ).length,
+    // Hard delete, like the real sweep: finished runs only, never one in flight.
+    purgeTemplateOccurrences: async (
+      templateId: string,
+      { retentionDays, keepLast }: { retentionDays?: number | null; keepLast?: number | null } = {}
+    ) => {
+      const finished = all()
+        .filter(
+          t => live(t) && t.templateId === templateId && ['done', 'error'].includes(t.status)
+        )
+        .sort((a, b) => (b.occurrenceSeq || 0) - (a.occurrenceSeq || 0));
+      const cutoff = retentionDays ? Date.now() - retentionDays * 86400000 : null;
+      const doomed = finished.filter((t, index) => {
+        const endedAt = Date.parse(t.completedAt || t.updatedAt || t.createdAt || '');
+        const tooOld = cutoff !== null && Number.isFinite(endedAt) && endedAt < cutoff;
+        const tooMany = !!keepLast && index >= keepLast;
+        return tooOld || tooMany;
+      });
+      for (const t of doomed) rows.delete(t.id);
+      return doomed.length;
+    },
     hasActiveTask: async (agentId: string, excludeTaskId: any = null) =>
       all().some(
-        t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId
+        t => card(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId
       ),
     countActiveTasksForAgent: async (agentId: string, excludeTaskId: any = null) =>
       all().filter(
-        t => live(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId
+        t => card(t) && isExecutor(t, agentId) && !INACTIVE.has(t.status) && t.id !== excludeTaskId
       ).length,
     getActiveWorkflowTasks: async (env: any = null) =>
       all()
         .filter(
           t =>
-            live(t) &&
+            card(t) &&
             t.boardId &&
             !t.isManual &&
             !['done', 'error'].includes(t.status) &&
@@ -171,7 +212,7 @@ export function makeTaskDbFake() {
       all()
         .filter(
           t =>
-            live(t) &&
+            card(t) &&
             t.boardId &&
             !t.isManual &&
             (t.actionRunning || t.completedActionIdx != null) &&
@@ -182,7 +223,7 @@ export function makeTaskDbFake() {
       all()
         .filter(
           t =>
-            live(t) &&
+            card(t) &&
             t.startedAt &&
             !INACTIVE.has(t.status) &&
             !['watching', 'stopped'].includes(t.executionStatus) &&

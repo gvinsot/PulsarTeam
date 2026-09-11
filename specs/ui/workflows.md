@@ -77,7 +77,7 @@ A card displays:
 - Priority chip (if set)
 - Assignee agent avatar + name (clickable → opens agent detail in Agents tab)
 - Repository badge (`owner/repo`) and/or storage badge (`/Drive/path`)
-- Recurrence icon if set
+- Recurring-run badge (`#N`) when the card is one run of a recurring rule
 - Commit count badge (links to commit modal)
 - Status indicator (running / stopped / error)
 
@@ -105,7 +105,7 @@ Modal with two main areas:
 - **Due date** — optional date picker.
 - **Repository** — picker of repos accessible via the board's GitHub plugin (`getBoardAvailableRepos`).
 - **Storage** — picker of OneDrive/Drive roots accessible via the board's OneDrive plugin (`getBoardAvailableStorages`).
-- **Recurrence** — cron expression and recurrence rules.
+- **Recurrence** — ticking it turns this card into the first run of a recurring rule (period, overlap policy, run retention). The rule itself lives off the board, in the **Recurring tasks** panel (toolbar ↻); each period spawns a NEW card rather than resetting this one.
 - **Manual flag** — when set, the workflow will not auto-route this task.
 - **Transfer to another agent** — POST `/api/agents/:id/tasks/:taskId/transfer`.
 - **Commits panel** — list of linked commit hashes. Each commit row opens `AllCommitsDiffModal` to display the diff fetched via `GET /api/tasks/:id/commits/:hash/diff`.

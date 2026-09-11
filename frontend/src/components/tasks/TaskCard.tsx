@@ -545,12 +545,15 @@ export default function TaskCard({
             {task.commits.length}
           </span>
         )}
-        {task.recurrence?.enabled && (
-          <span className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-teal-500/10 text-teal-400 ring-1 ring-teal-500/20">
+        {/* One run of a recurring rule. The rule itself never reaches a board,
+            so what a card can show is which run it is. */}
+        {task.templateId && (
+          <span
+            className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-teal-500/10 text-teal-400 ring-1 ring-teal-500/20"
+            title="Run of a recurring task"
+          >
             <Repeat className="w-2.5 h-2.5" />
-            {task.recurrence.period === 'custom'
-              ? `${task.recurrence.intervalMinutes}m`
-              : task.recurrence.period}
+            {task.occurrenceSeq ? `#${task.occurrenceSeq}` : 'recurring'}
           </span>
         )}
         {task.isManual && (

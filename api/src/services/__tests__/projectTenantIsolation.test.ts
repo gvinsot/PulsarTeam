@@ -38,6 +38,12 @@ mock.module('../database.js', {
     getTasksByAssignee: async () => [],
     getTasksByAgent: async () => [],
     getTasksByBoard: async () => [],
+    // Recurring-rule routes live in routes/tasks.ts too; they are never reached
+    // by these tests, but the module must still resolve every import.
+    getTaskTemplates: async () => [],
+    getTaskTemplateById: async () => null,
+    getOccurrencesForTemplate: async () => [],
+    countUnfinishedOccurrences: async () => 0,
     getProjectsForUser: async (...args: any[]) => {
       projectListCalls.push(args);
       return [{ id: 'proj-A', name: 'Project A', owner_id: 'user-A' }];

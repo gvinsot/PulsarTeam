@@ -52,9 +52,12 @@ export default function CreateTaskModal({
   const [recurring, setRecurring] = useState(false);
   const [recurrencePeriod, setRecurrencePeriod] = useState('daily');
   const [customInterval, setCustomInterval] = useState(60);
-  // 0 = keep everything (no purge). Otherwise drops history/commits older
-  // than N days at each reset.
+  // Retention acts on whole finished RUNS: a recurring task spawns one fresh
+  // card per period, and these two limits are what keep them from piling up.
+  // 0 = no limit on either.
   const [historyRetentionDays, setHistoryRetentionDays] = useState(0);
+  const [keepLastRuns, setKeepLastRuns] = useState(0);
+  const [onOverlap, setOnOverlap] = useState<'skip' | 'spawn'>('skip');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -115,7 +118,13 @@ export default function CreateTaskModal({
     setError(null);
     try {
       const recurrence = recurring
-        ? buildRecurrence(recurrencePeriod, customInterval, historyRetentionDays)
+        ? buildRecurrence(
+            recurrencePeriod,
+            customInterval,
+            historyRetentionDays,
+            keepLastRuns,
+            onOverlap
+          )
         : undefined;
       const storageProvider = storagePath
         ? availableStorages.find(s => s.path === storagePath)?.provider || 'onedrive'
@@ -386,15 +395,26 @@ export default function CreateTaskModal({
               </span>
             </label>
             {recurring && (
-              <RecurrenceFields
-                period={recurrencePeriod}
-                onPeriodChange={setRecurrencePeriod}
-                customInterval={customInterval}
-                onCustomIntervalChange={setCustomInterval}
-                retentionDays={historyRetentionDays}
-                onRetentionDaysChange={setHistoryRetentionDays}
-                rowClass="mt-3"
-              />
+              <>
+                <p className="mt-2 text-[11px] text-dark-500 leading-relaxed">
+                  Creates a recurring rule, listed under{' '}
+                  <span className="text-teal-400">Recurring tasks</span>, not on the board. The
+                  first run starts now; each period spawns a new card.
+                </p>
+                <RecurrenceFields
+                  period={recurrencePeriod}
+                  onPeriodChange={setRecurrencePeriod}
+                  customInterval={customInterval}
+                  onCustomIntervalChange={setCustomInterval}
+                  retentionDays={historyRetentionDays}
+                  onRetentionDaysChange={setHistoryRetentionDays}
+                  keepLast={keepLastRuns}
+                  onKeepLastChange={setKeepLastRuns}
+                  onOverlap={onOverlap}
+                  onOverlapChange={setOnOverlap}
+                  rowClass="mt-3"
+                />
+              </>
             )}
           </div>
 

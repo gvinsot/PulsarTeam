@@ -156,6 +156,13 @@ const TABLES = [
       action_running_mode TEXT,
       pending_on_enter TEXT,
       is_manual BOOLEAN DEFAULT FALSE,
+      -- Recurring tasks: the rule lives in its own row (is_template), never on a
+      -- board column and never executed; each due date spawns an occurrence that
+      -- carries template_id + occurrence_seq. Invariant: recurrence IS NOT NULL
+      -- ⇔ is_template (see services/agentManager/tasks.ts).
+      is_template BOOLEAN NOT NULL DEFAULT FALSE,
+      template_id UUID,
+      occurrence_seq INTEGER,
       position BIGINT NOT NULL DEFAULT 0,
       environment TEXT NOT NULL DEFAULT 'prod',
       repo_provider TEXT,
@@ -263,6 +270,10 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_tasks_repo ON tasks(repo_full_name)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_storage ON tasks(storage_path)',
   'CREATE INDEX IF NOT EXISTS idx_tasks_workflow_recheck ON tasks(environment, status) WHERE deleted_at IS NULL AND board_id IS NOT NULL',
+  // Recurring rules are few and read on every scheduler tick + panel open.
+  'CREATE INDEX IF NOT EXISTS idx_tasks_templates ON tasks(board_id) WHERE is_template AND deleted_at IS NULL',
+  // Occurrence lookups: the retention sweep and the per-template run list.
+  'CREATE INDEX IF NOT EXISTS idx_tasks_occurrences ON tasks(template_id, created_at) WHERE template_id IS NOT NULL',
   'CREATE INDEX IF NOT EXISTS idx_task_audit_task ON task_audit_logs(task_id)',
   'CREATE INDEX IF NOT EXISTS idx_task_audit_date ON task_audit_logs(created_at)',
   'CREATE INDEX IF NOT EXISTS idx_board_shares_board ON board_shares(board_id)',

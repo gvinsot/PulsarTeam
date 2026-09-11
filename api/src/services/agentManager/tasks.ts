@@ -18,9 +18,18 @@ import {
   getTasksByAssignee,
   getTaskByActionRunningAgent,
   getRecurringTasks,
+  countUnfinishedOccurrences,
+  purgeTemplateOccurrences,
   updateTaskFields,
   clearAllStaleActionRunning,
 } from '../database.js';
+import {
+  buildRecurrenceConfig,
+  nextRunAt,
+  normalizeRetention,
+  normalizeKeepLast,
+  normalizeOverlap,
+} from '../taskRecurrence.js';
 import { getWorkflowForBoard, getAllBoardWorkflows, getReminderConfig } from '../configManager.js';
 import {
   isActiveStatus,
@@ -34,7 +43,8 @@ import { enrichAssignee, emitTaskUpdated } from '../taskMutations.js';
 import { snapshotGitBaseline, reconcileTaskCommits } from './tools/gitReconcile.js';
 import { normalizeSecondaryRepos } from '../taskRepos.js';
 import { ensureAgentWorkspace, resolveAgentGitCredentials } from '../execution/agentWorkspace.js';
-import type { Task } from '../database/tasks.js';
+import type { Task, TaskWriteInput, TaskRecurrence } from '../database/tasks.js';
+import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import { getCurrentEnvironment } from '../../lib/environment.js';
 import { isCliRunner, SELF_COMPLETING_RUNNERS } from '../runners.js';
 import { checkBoardAccess } from '../../middleware/authz.js';
@@ -109,38 +119,32 @@ export function purgeStaleTaskSignals(activeTaskIds: Set<string>): void {
 }
 
 /**
- * Coerce an arbitrary input into a positive integer day count, or null if the
- * caller wants no retention (the default — keep the full history).
- * Caps at 3650 days (~10 years) to keep JSONB rows bounded even if the field
- * is mis-set via a direct API call.
+ * The fields a recurring rule and its runs share — everything that describes
+ * WHAT to do (text, board, repo, storage, owner), never the state of one
+ * attempt (status, assignee, history, commits, timestamps, execution flags).
+ *
+ * One list, used in both directions: card → rule when recurrence is switched
+ * on, rule → run at every due date. `dueDate` is deliberately absent: a fixed
+ * deadline copied onto every run would be wrong the moment the second one
+ * starts.
  */
-function normalizeRetention(value: any): number | null {
-  if (value === null || value === undefined || value === '' || value === 0 || value === false)
-    return null;
-  const n = typeof value === 'number' ? value : parseInt(value, 10);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.min(3650, Math.floor(n));
-}
-
-/**
- * Drop history entries with `at` older than `cutoffMs`. Mutates the array
- * in place and returns the number of dropped entries.
- */
-function pruneByDate<T extends { at?: string; date?: string }>(
-  arr: T[] | undefined,
-  cutoffMs: number
-): number {
-  if (!Array.isArray(arr) || arr.length === 0) return 0;
-  let dropped = 0;
-  for (let i = arr.length - 1; i >= 0; i--) {
-    const stamp = arr[i]?.at || arr[i]?.date;
-    const t = stamp ? Date.parse(stamp) : NaN;
-    if (Number.isFinite(t) && t < cutoffMs) {
-      arr.splice(i, 1);
-      dropped++;
-    }
-  }
-  return dropped;
+function pickTemplateFields(task: RecurrenceTask) {
+  return {
+    agentId: task.agentId || null,
+    text: task.text || '',
+    title: task.title || undefined,
+    boardId: task.boardId || null,
+    repoProvider: task.repoProvider || null,
+    repoFullName: task.repoFullName || null,
+    secondaryRepos: Array.isArray(task.secondaryRepos) ? task.secondaryRepos : [],
+    storageProvider: task.storageProvider || null,
+    storagePath: task.storagePath || null,
+    taskType: task.taskType || null,
+    priority: task.priority || undefined,
+    source: task.source || null,
+    isManual: task.isManual || false,
+    environment: task.environment || getCurrentEnvironment(),
+  };
 }
 
 /** @this {import('./index.js').AgentManager} */
@@ -211,25 +215,29 @@ export const tasksMethods = {
     };
     if (taskType) newTask.taskType = taskType;
     if (recurrence && recurrence.enabled) {
-      newTask.recurrence = {
-        enabled: true,
-        period: recurrence.period || 'daily',
-        intervalMinutes: recurrence.intervalMinutes || 1440,
-        originalStatus: status,
-        // Optional retention: drop history/commits older than N days at each
-        // reset. null/0/undefined means "keep everything" (legacy behavior).
-        historyRetentionDays: normalizeRetention(recurrence.historyRetentionDays),
-        // Reference timestamp for the next reset. Set on creation so the first
-        // cycle is measured from "now" regardless of how long the task takes
-        // to reach `done` (or whether it ever does).
-        lastResetAt: now,
-      };
+      // Recurring ⇒ this row is the RULE, not a card: it holds the schedule,
+      // stays off the board and is never executed. The work the user described
+      // happens in the runs it spawns, starting with one right now so enabling
+      // recurrence has a visible effect instead of a wait of up to one period.
+      newTask.recurrence = buildRecurrenceConfig(recurrence, { defaultStatus: status });
+      newTask.isTemplate = true;
     }
     // Persist first; the DB row is the single source of truth (no in-memory store).
     // Awaiting the write guarantees downstream readers (_checkAutoRefine → workflow
     // processing, and the frontend's loadTasks() after agent:updated) observe the
     // committed row rather than racing a fire-and-forget save.
     await saveTaskToDb({ ...newTask, agentId }).catch(() => {});
+    if (newTask.isTemplate) {
+      // No task:updated for the rule — there is no card to render — and no
+      // auto-refine: a rule never enters a workflow column. Both happen for the
+      // run instead, inside _spawnOccurrence.
+      const firstRun = await this._spawnOccurrence(
+        { ...newTask, agentId },
+        { by: source?.name || source?.type || 'user', skipAutoRefine }
+      );
+      if (agent) this._emit('agent:updated', this._sanitize(agent));
+      return firstRun || newTask;
+    }
     if (agent) this._emit('agent:updated', this._sanitize(agent));
     // Emit task:updated after the DB write has committed so the frontend
     // can add the new task to its list in real-time (the handler must support
@@ -471,6 +479,59 @@ export const tasksMethods = {
     return this._editTaskField(agentId, taskId, 'taskType', taskType || null, { by });
   },
 
+  /**
+   * Turn recurrence on or off for a task, working on the caller's task object.
+   *
+   * Only a rule ever carries a `recurrence` config — a card never does — so the
+   * three cases are distinct:
+   *   • the row IS a rule → patch its schedule in place (the panel's editor);
+   *   • enabling on a card → mint a rule from it and adopt the card as run #1,
+   *     so the card the user is looking at stays exactly where it is;
+   *   • disabling on a card → delete the rule that spawned it. The runs, this
+   *     one included, are finished work and stay.
+   *
+   * The passed task is mutated (and its linkage persisted) rather than re-read,
+   * so a caller that saves it afterwards — PUT /tasks/:id does — writes the new
+   * `templateId` instead of clobbering it with a stale null.
+   */
+  async setTaskRecurrence(
+    this: any,
+    task: RecurrenceTask,
+    recurrence: RecurrenceInput | null
+  ): Promise<TaskWriteInput | null> {
+    if (!task) return null;
+
+    if (task.isTemplate) {
+      if (recurrence && recurrence.enabled) {
+        task.recurrence = buildRecurrenceConfig(recurrence, { prev: task.recurrence });
+        await saveTaskToDb(task);
+        return task;
+      }
+      // Disabling a rule removes it; its runs are untouched.
+      await deleteTaskFromDb(task.id, null);
+      return null;
+    }
+
+    if (recurrence && recurrence.enabled) {
+      // A run edits the rule it belongs to — editing the schedule from the card
+      // is the same act as editing it in the panel, and must not mint a second
+      // rule. Only a card with no live rule behind it creates one.
+      const existing = task.templateId ? await getTaskById(task.templateId) : null;
+      if (existing?.isTemplate) {
+        existing.recurrence = buildRecurrenceConfig(recurrence, { prev: existing.recurrence });
+        await saveTaskToDb(existing);
+        return existing;
+      }
+      return this._createTemplateFromTask(task, recurrence);
+    }
+
+    if (task.templateId) {
+      await deleteTaskFromDb(task.templateId, null);
+    }
+    return null;
+  },
+
+  /** Agent-scoped wrapper — the websocket/agent route's entry point. */
   async updateTaskRecurrence(
     this: any,
     agentId: string,
@@ -481,29 +542,123 @@ export const tasksMethods = {
     if (!agent) return null;
     const task = await getTaskById(taskId);
     if (!task) return null;
-    if (recurrence && recurrence.enabled) {
-      const prev = task.recurrence || {};
-      task.recurrence = {
-        enabled: true,
-        period: recurrence.period || 'daily',
-        intervalMinutes: recurrence.intervalMinutes || 1440,
-        originalStatus: recurrence.originalStatus || prev.originalStatus || 'backlog',
-        historyRetentionDays: normalizeRetention(
-          recurrence.historyRetentionDays !== undefined
-            ? recurrence.historyRetentionDays
-            : prev.historyRetentionDays
-        ),
-        // Preserve the existing reference timestamp so toggling recurrence
-        // on/off mid-cycle doesn't postpone the next reset; default to now
-        // if this is the first time recurrence is enabled.
-        lastResetAt: prev.lastResetAt || new Date().toISOString(),
-      };
-    } else {
-      task.recurrence = null;
-    }
-    await saveTaskToDb({ ...task, agentId });
+    await this.setTaskRecurrence(task, recurrence);
     this._emit('agent:updated', this._sanitize(agent));
     return task;
+  },
+
+  /**
+   * Mint a rule out of an existing card, and adopt that card as its first run.
+   *
+   * The rule is a copy, not a move: the card keeps its id, its column, its
+   * history and whatever an agent is doing with it right now. It only gains the
+   * back-link (`templateId`, run #1), which is what lets the UI show "run 1 of a
+   * recurring rule" and the scheduler count it as in-flight for the overlap
+   * check. `lastResetAt` starts now, so the second run is one full period away
+   * rather than immediate.
+   */
+  async _createTemplateFromTask(
+    this: any,
+    task: RecurrenceTask,
+    recurrence: RecurrenceInput | null
+  ): Promise<TaskWriteInput | null> {
+    const now = new Date().toISOString();
+    const template: TaskWriteInput = {
+      ...pickTemplateFields(task),
+      id: uuidv4(),
+      isTemplate: true,
+      status: recurrence?.originalStatus || task.status || 'backlog',
+      assignee: null,
+      position: Date.now(),
+      createdAt: now,
+      commits: [],
+      history: [{ status: 'template', at: now, by: 'user', from: task.id }],
+      recurrence: buildRecurrenceConfig(recurrence, {
+        defaultStatus: task.status || 'backlog',
+      }),
+    };
+    const config = template.recurrence as TaskRecurrence;
+    config.occurrenceCount = task.occurrenceSeq || 1;
+    config.lastOccurrenceId = task.id;
+    await saveTaskToDb(template);
+
+    // Adopt the card. updateTaskFields writes only these columns, so nothing
+    // the agent is doing to the row in parallel is overwritten.
+    await updateTaskFields(task.id, {
+      templateId: template.id,
+      occurrenceSeq: task.occurrenceSeq || 1,
+    });
+    task.templateId = template.id;
+    task.occurrenceSeq = task.occurrenceSeq || 1;
+    this._emit('task:updated', { agentId: task.agentId, task: { ...task } });
+    console.log(
+      `🔁 [Recurrence] Rule created from task ${task.id} ` +
+        `(every ${config.intervalMinutes}min, starts in "${config.originalStatus}")`
+    );
+    return template;
+  },
+
+  /**
+   * Spawn one run of a rule: a brand-new task, with an empty history, that
+   * flows through the workflow like any other and is deleted by the retention
+   * sweep once it is old enough. This is what replaced resetting a single row
+   * forever.
+   *
+   * The rule's counters are advanced in the same call (`lastResetAt`,
+   * `occurrenceCount`, `lastOccurrenceId`) so a crash between the two writes
+   * costs at most a duplicate run, never a lost schedule.
+   */
+  async _spawnOccurrence(
+    this: any,
+    template: TaskWriteInput,
+    {
+      by = 'recurrence',
+      advanceClock = true,
+      skipAutoRefine = false,
+    }: { by?: string; advanceClock?: boolean; skipAutoRefine?: boolean } = {}
+  ): Promise<TaskWriteInput | null> {
+    const rec: TaskRecurrence = template.recurrence || {};
+    const nowIso = new Date().toISOString();
+    const seq = (typeof rec.occurrenceCount === 'number' ? rec.occurrenceCount : 0) + 1;
+    const status = (rec.originalStatus as string) || 'backlog';
+    const occurrence: TaskWriteInput = {
+      ...pickTemplateFields(template),
+      id: uuidv4(),
+      isTemplate: false,
+      templateId: template.id,
+      occurrenceSeq: seq,
+      status,
+      assignee: null,
+      recurrence: null,
+      commits: [],
+      history: [{ status, at: nowIso, by, occurrence: seq }],
+      position: Date.now(),
+      createdAt: nowIso,
+    };
+    await saveTaskToDb(occurrence);
+
+    template.recurrence = {
+      ...rec,
+      occurrenceCount: seq,
+      lastOccurrenceId: occurrence.id,
+      ...(advanceClock ? { lastResetAt: nowIso } : {}),
+    };
+    await saveTaskToDb(template);
+
+    console.log(
+      `🔁 [Recurrence] Run #${seq} of "${(template.text || '').slice(0, 60)}" ` +
+        `spawned in "${status}" (task ${occurrence.id})`
+    );
+
+    const agent = occurrence.agentId ? this.agents.get(occurrence.agentId) : null;
+    if (agent) this._emit('agent:updated', this._sanitize(agent));
+    this._emit('task:updated', { agentId: occurrence.agentId, task: { ...occurrence } });
+    // A run entering its first column is an ordinary column entry — the same
+    // signal addTask sends — so the workflow's on_enter actions fire for it.
+    // processColumnEntry handles a board-level run (agentId null) too: it takes
+    // the owner from the board's workflow and auto-assigns by column role.
+    if (!skipAutoRefine && !occurrence.isManual) this._checkAutoRefine({ ...occurrence }, { by });
+    return occurrence;
   },
 
   _isActiveTaskStatus(this: any, status: string): boolean {
@@ -995,82 +1150,75 @@ export const tasksMethods = {
     console.log('🔄 Task loop stopped');
   },
 
+  /**
+   * Scheduler tick: spawn the runs that are due, then bin the old ones.
+   *
+   * Reads rules only (`getRecurringTasks` filters on `is_template`), so nothing
+   * a user can see on a board is touched here — the reason this loop no longer
+   * needs to be careful about stealing a task from the agent working it.
+   */
   async _processRecurringTasks(this: any): Promise<void> {
     const now = Date.now();
-    const nowIso = new Date(now).toISOString();
     const ownEnv = getCurrentEnvironment();
-    const recurringTasks = await getRecurringTasks();
-    for (const t of recurringTasks) {
-      const task: any = t;
-      // Environment isolation: only the matching replica resets the task.
+    const templates = await getRecurringTasks();
+    for (const template of templates) {
+      // Environment isolation: only the matching replica runs the rule.
       // NULL env is treated as "prod" to preserve legacy behavior.
-      const taskEnv = task.environment || 'prod';
-      if (taskEnv !== ownEnv) continue;
-      const rec = task.recurrence || {};
-      const intervalMs = (rec.intervalMinutes || 1440) * 60 * 1000;
+      const templateEnv = template.environment || 'prod';
+      if (templateEnv !== ownEnv) continue;
+      const rec = template.recurrence;
+      if (!rec) continue;
 
-      // Reference timestamp: prefer the explicit lastResetAt (set on creation
-      // and at every reset). Fall back to completedAt → startedAt → createdAt
-      // so legacy tasks without lastResetAt still trigger correctly.
-      const refIso = rec.lastResetAt || task.completedAt || task.startedAt || task.createdAt;
-      const refMs = refIso ? Date.parse(refIso) : NaN;
-      if (!Number.isFinite(refMs)) continue;
-      if (now - refMs < intervalMs) continue;
+      // Retention first: it is independent of the schedule, so a rule whose
+      // period is long still has its old runs collected on every tick.
+      await this._purgeOccurrences(template);
 
-      const resetStatus = rec.originalStatus || 'backlog';
-      const prevStatus = task.status;
+      const dueAt = nextRunAt(rec, template.createdAt);
+      if (dueAt === null || now < dueAt) continue;
 
-      // Purge old log entries before appending the reset event, so the new
-      // event isn't itself eligible for purge on the next cycle.
-      let prunedHistory = 0;
-      let prunedCommits = 0;
-      const retentionDays = normalizeRetention(rec.historyRetentionDays);
-      if (retentionDays) {
-        const cutoffMs = now - retentionDays * 24 * 60 * 60 * 1000;
-        prunedHistory = pruneByDate(task.history, cutoffMs);
-        prunedCommits = pruneByDate(task.commits, cutoffMs);
+      if (normalizeOverlap(rec.onOverlap) === 'skip') {
+        const inFlight = await countUnfinishedOccurrences(template.id);
+        if (inFlight > 0) {
+          // Drop this cycle rather than queue it: the next run is measured from
+          // now, so a slow workflow produces fewer runs instead of a backlog
+          // that can never drain. The run in progress is left strictly alone.
+          console.log(
+            `🔁 [Recurrence] Skipping "${(template.text || '').slice(0, 60)}" — ` +
+              `${inFlight} run(s) still in flight (overlap=skip)`
+          );
+          template.recurrence = { ...rec, lastResetAt: new Date(now).toISOString() };
+          await saveTaskToDb(template);
+          continue;
+        }
       }
 
-      console.log(
-        `🔁 [Recurrence] Resetting task "${(task.text || '').slice(0, 60)}" ` +
-          `${prevStatus} → ${resetStatus} (interval: ${rec.intervalMinutes}min` +
-          (retentionDays
-            ? `, retention: ${retentionDays}d, pruned: ${prunedHistory}h/${prunedCommits}c`
-            : '') +
-          `)`
-      );
-
-      task.status = resetStatus;
-      const previousAssignee = task.assignee || null;
-      if (previousAssignee) task.assignee = null;
-      task.completedAt = null;
-      task.startedAt = null;
-      task.executionStatus = null;
-      task.completedActionIdx = null;
-      task.actionRunning = false;
-      task.actionRunningAgentId = null;
-      task.actionRunningMode = null;
-      task.error = null;
-      task.errorFromStatus = null;
-      if (!task.history) task.history = [];
-      task.history.push({
-        from: prevStatus,
-        status: resetStatus,
-        at: nowIso,
-        by: 'recurrence',
-        ...(previousAssignee ? { assignee: null, previousAssignee } : {}),
-      });
-      task.recurrence = { ...rec, lastResetAt: nowIso };
-
-      // Drop ephemeral execution signals from the previous cycle so the
-      // freshly-reset task isn't blocked by stale "stopped"/"watching" flags.
-      clearTaskSignals(task.id);
-
-      await saveTaskToDb(task);
-      const agent = task.agentId ? this.agents.get(task.agentId) : null;
-      if (agent) this._emit('agent:updated', this._sanitize(agent));
-      this._emit('task:updated', { agentId: task.agentId, task: { ...task } });
+      await this._spawnOccurrence(template, { by: 'recurrence' });
     }
+  },
+
+  /**
+   * Apply a rule's retention limits to its finished runs. Nothing happens
+   * unless the rule sets at least one of them — a rule with no limit keeps
+   * every run, which is a choice the user makes per rule.
+   */
+  async _purgeOccurrences(this: any, template: TaskWriteInput): Promise<number> {
+    const rec: TaskRecurrence = template.recurrence || {};
+    const retentionDays = normalizeRetention(rec.historyRetentionDays);
+    const keepLast = normalizeKeepLast(rec.keepLastOccurrences);
+    if (!retentionDays && !keepLast) return 0;
+    const purged = await purgeTemplateOccurrences(template.id, { retentionDays, keepLast });
+    if (purged > 0) {
+      console.log(
+        `🧹 [Recurrence] Deleted ${purged} old run(s) of "${(template.text || '').slice(0, 60)}" ` +
+          `(retention: ${retentionDays ? retentionDays + 'd' : 'none'}, ` +
+          `keepLast: ${keepLast ?? 'none'})`
+      );
+      // The board never showed these rows, but an open run list should stop
+      // showing them too.
+      const agent = template.agentId ? this.agents.get(template.agentId) : null;
+      if (agent) this._emit('agent:updated', this._sanitize(agent));
+    }
+    return purged;
   },
 
   _processNextPendingTasks(this: any): void {

@@ -7,7 +7,8 @@ import {
 } from '../database.js';
 import { WsEmitter } from '../../ws/emitter.js';
 import { projectObject, type FieldProjection } from '../../lib/projection.js';
-import type { Task } from '../database/tasks.js';
+import type { Task, TaskWriteInput } from '../database/tasks.js';
+import type { RecurrenceInput, RecurrenceTask } from '../taskRecurrence.js';
 import type { Agent } from '../database/agents.js';
 import type { NativeToolCall } from '../nativeTools.js';
 import type { SessionClaims } from '../../middleware/session.js';
@@ -369,6 +370,21 @@ export interface AgentManager {
     by?: string
   ): Promise<any | null>;
   updateTaskRecurrence(agentId: string, taskId: string, recurrence: any): Promise<any | null>;
+  /** Applies a recurrence change to the PASSED task object (mutating it), and
+   * returns the rule it created/patched, or null when recurrence is now off. */
+  setTaskRecurrence(
+    task: RecurrenceTask,
+    recurrence: RecurrenceInput | null
+  ): Promise<TaskWriteInput | null>;
+  _createTemplateFromTask(
+    task: RecurrenceTask,
+    recurrence: RecurrenceInput | null
+  ): Promise<TaskWriteInput | null>;
+  _spawnOccurrence(
+    template: TaskWriteInput,
+    options?: { by?: string; advanceClock?: boolean; skipAutoRefine?: boolean }
+  ): Promise<TaskWriteInput | null>;
+  _purgeOccurrences(template: TaskWriteInput): Promise<number>;
   _isActiveTaskStatus(status: string): boolean;
   _getFirstColumnStatus(boardId: string): Promise<string>;
   _findTaskForCommitLink(agentId: string): Promise<{ task: any; ownerAgentId: string } | null>;

@@ -1,7 +1,17 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import type { DragEvent } from 'react';
 import type { Socket } from 'socket.io-client';
-import { Search, X, GitCommit, Plus, Settings, ArrowUpDown, Archive, Puzzle } from 'lucide-react';
+import {
+  Search,
+  X,
+  GitCommit,
+  Plus,
+  Settings,
+  ArrowUpDown,
+  Archive,
+  Puzzle,
+  Repeat,
+} from 'lucide-react';
 import {
   api,
   deleteTask as deleteTaskById,
@@ -38,6 +48,7 @@ import type { ColumnInstructionEntry } from './tasks/InstructionsEditModal';
 import KanbanColumn from './tasks/KanbanColumn';
 import WorkflowEditor from './tasks/WorkflowEditor';
 import DeletedTasksPanel from './tasks/DeletedTasksPanel';
+import RecurringTasksPanel from './tasks/RecurringTasksPanel';
 import BoardTabs from './tasks/BoardTabs';
 import BoardPluginsTab from './tasks/BoardPluginsTab';
 
@@ -107,6 +118,9 @@ export default function TasksBoard({
   const [showWorkflowEditor, setShowWorkflowEditor] = useState(false);
   const [editInstructionsCol, setEditInstructionsCol] = useState<string | null>(null);
   const [showDeletedTasks, setShowDeletedTasks] = useState(false);
+  // Recurring RULES live off the board (the API filters them out of every task
+  // listing), so this panel is the only way to reach them.
+  const [showRecurringTasks, setShowRecurringTasks] = useState(false);
   const [shareBoard, setShareBoard] = useState<BoardEntry | null>(null);
   const [activityTarget, setActivityTarget] = useState<GitHubActivityTarget | null>(null);
   const [showBoardPlugins, setShowBoardPlugins] = useState(false);
@@ -1095,6 +1109,15 @@ export default function TasksBoard({
 
         <div className="ml-auto" />
 
+        {/* Recurring rules */}
+        <button
+          onClick={() => setShowRecurringTasks(true)}
+          className="p-1.5 rounded-lg text-dark-400 hover:text-teal-400 hover:bg-dark-700 transition-colors flex-shrink-0"
+          title="Recurring tasks"
+        >
+          <Repeat className="w-3.5 h-3.5" />
+        </button>
+
         {/* Deleted tasks */}
         <button
           onClick={() => setShowDeletedTasks(true)}
@@ -1299,6 +1322,15 @@ export default function TasksBoard({
       {/* Deleted tasks panel */}
       {showDeletedTasks && (
         <DeletedTasksPanel onClose={() => setShowDeletedTasks(false)} onRestored={refreshAll} />
+      )}
+
+      {/* Recurring rules panel */}
+      {showRecurringTasks && (
+        <RecurringTasksPanel
+          boardId={activeBoardId}
+          onClose={() => setShowRecurringTasks(false)}
+          onChanged={refreshAll}
+        />
       )}
 
       {/* Share board modal */}

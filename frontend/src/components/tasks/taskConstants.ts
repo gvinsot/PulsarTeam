@@ -323,7 +323,9 @@ export const RECURRENCE_PERIODS = [
 export function buildRecurrence(
   period: string,
   customMinutes: number,
-  retentionDays: number
+  retentionDays: number,
+  keepLast = 0,
+  onOverlap: 'skip' | 'spawn' = 'skip'
 ): TaskRecurrenceInput {
   return {
     enabled: true,
@@ -332,7 +334,11 @@ export function buildRecurrence(
       period === 'custom'
         ? customMinutes
         : RECURRENCE_PERIODS.find(p => p.value === period)?.minutes || 1440,
+    // Both limits act on whole finished RUNS (the rule spawns one per period),
+    // and 0 means "no limit" on either.
     historyRetentionDays: retentionDays > 0 ? retentionDays : null,
+    keepLastOccurrences: keepLast > 0 ? keepLast : null,
+    onOverlap,
   };
 }
 

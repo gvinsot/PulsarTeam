@@ -705,9 +705,16 @@ export function agentRoutes(agentManager: AgentManager) {
         }
 
         // ── Independent side-effect updates ──────────────────────────────────
-        // Handle recurrence update
+        // Handle recurrence update. setTaskRecurrence takes the SAME object the
+        // branches below persist: it mints the rule and stamps the linkage onto
+        // `oldTask`, so a later full-row save (the isManual branch) writes
+        // template_id rather than reverting it to NULL from a stale snapshot.
         if (recurrence !== undefined && oldTask) {
-          await agentManager.updateTaskRecurrence(req.params.id, req.params.taskId, recurrence);
+          await agentManager.setTaskRecurrence(oldTask, recurrence);
+          agentManager._emit('task:updated', {
+            agentId: oldTask.agentId,
+            task: { ...oldTask, agentId: oldTask.agentId },
+          });
         }
 
         // Handle taskType update

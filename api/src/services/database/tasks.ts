@@ -45,6 +45,9 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   errorFromStatus: 'error_from_status',
   pendingOnEnter: 'pending_on_enter',
   isManual: 'is_manual',
+  isTemplate: 'is_template',
+  templateId: 'template_id',
+  occurrenceSeq: 'occurrence_seq',
   repoProvider: 'repo_provider',
   repoFullName: 'repo_full_name',
   secondaryRepos: 'secondary_repos',
@@ -52,6 +55,19 @@ const TASK_COLUMN_BY_FIELD: Record<string, string> = Object.assign(Object.create
   storagePath: 'storage_path',
 });
 const TASK_COLUMNS = new Set<string>(Object.values(TASK_COLUMN_BY_FIELD));
+
+/**
+ * Every query that LISTS tasks must carry this.
+ *
+ * A recurring rule (`is_template`) is a row in `tasks` so it can reuse the whole
+ * task shape — board, repo, storage, text, agent — but it is not a task: it must
+ * never render on a board, never be picked by the workflow engine, never count
+ * towards an agent's load, and never be returned by search or the MCP task
+ * tools. Only the scheduler, the recurring-rules panel and a by-id lookup see
+ * one. `IS NOT TRUE` (not `= FALSE`) so a NULL from a row written before the
+ * column existed is excluded from the rules, not from the board.
+ */
+const NOT_TEMPLATE = 't.is_template IS NOT TRUE';
 
 // ─── Task shapes ────────────────────────────────────────────────────────────
 // `TaskRow` describes what the pg driver actually hands back for TASK_SELECT —
@@ -136,6 +152,12 @@ export interface TaskRow {
   action_running_mode: string | null;
   pending_on_enter: string | null;
   is_manual: boolean | null;
+  /** True on a recurring RULE — never rendered on a board, never executed. */
+  is_template: boolean | null;
+  /** Set on an occurrence: the rule that spawned it. */
+  template_id: string | null;
+  /** 1-based run number of an occurrence within its rule. */
+  occurrence_seq: number | null;
   /** BIGINT — pg returns it as a string. */
   position: string;
   environment: string;
@@ -210,6 +232,9 @@ export function rowToTask(row: TaskRow) {
     actionRunningMode: row.action_running_mode || undefined,
     errorFromStatus: row.error_from_status || undefined,
     isManual: row.is_manual || false,
+    isTemplate: row.is_template || false,
+    templateId: row.template_id || null,
+    occurrenceSeq: row.occurrence_seq != null ? row.occurrence_seq : null,
     position: parseInt(row.position, 10) || 0,
     environment: row.environment,
   };
@@ -250,8 +275,19 @@ export type Task = Omit<MappedTask, ClearedInPlace> & {
  * What the write path accepts. Every field `_doSaveTask` reads is optional
  * except the primary key, because callers routinely persist a spread of a
  * partially-built task (`{ ...task, agentId }`).
+ *
+ * The four fields below are additionally nullable, unlike on the read model:
+ * `_doSaveTask` coerces each one (`task.title || null`, `task.text || ''`, …),
+ * and the routes hand it half-edited copies where an explicit `null` is how the
+ * PUT body clears a field. Stating it here is what keeps those paths cast-free.
  */
-export type TaskWriteInput = Partial<Task> & Pick<Task, 'id'>;
+export type TaskWriteInput = Omit<Partial<Task>, 'title' | 'text' | 'priority' | 'dueDate'> &
+  Pick<Task, 'id'> & {
+    title?: string | null;
+    text?: string | null;
+    priority?: string | null;
+    dueDate?: Date | string | null;
+  };
 
 /**
  * Run a TASK_SELECT query with the given trailing clause + params, mapping rows
@@ -286,7 +322,7 @@ async function queryOneTask(
 
 export async function getTasksByAgent(agentId: string) {
   return queryTasks(
-    'WHERE t.agent_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at',
+    `WHERE t.agent_id = $1 AND t.deleted_at IS NULL AND ${NOT_TEMPLATE} ORDER BY t.created_at`,
     [agentId],
     'Failed to load tasks for agent:'
   );
@@ -294,7 +330,7 @@ export async function getTasksByAgent(agentId: string) {
 
 export async function getAllTasks() {
   return queryTasks(
-    'WHERE t.deleted_at IS NULL ORDER BY t.created_at',
+    `WHERE t.deleted_at IS NULL AND ${NOT_TEMPLATE} ORDER BY t.created_at`,
     [],
     'Failed to load all tasks:'
   );
@@ -389,8 +425,8 @@ async function _doSaveTask(task: TaskWriteInput) {
                           error, created_at, updated_at, completed_at, started_at,
                           execution_status, completed_action_idx, action_running, action_running_agent_id,
                           action_running_mode, error_from_status, is_manual, position, environment,
-                          pending_on_enter, secondary_repos)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)
+                          pending_on_enter, secondary_repos, is_template, template_id, occurrence_seq)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NOW(),$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
        ON CONFLICT (id) DO UPDATE SET
          text = $3, title = $4, status = $5, repo_provider = $6, repo_full_name = $7,
          storage_provider = $8, storage_path = $9,
@@ -400,7 +436,8 @@ async function _doSaveTask(task: TaskWriteInput) {
          completed_at = $21, started_at = $22,
          execution_status = $23, completed_action_idx = $24, action_running = $25, action_running_agent_id = $26,
          action_running_mode = $27, error_from_status = $28, is_manual = $29, position = $30,
-         pending_on_enter = $32, secondary_repos = $33`,
+         pending_on_enter = $32, secondary_repos = $33,
+         is_template = $34, template_id = $35, occurrence_seq = $36`,
       [
         task.id,
         task.agentId,
@@ -435,6 +472,9 @@ async function _doSaveTask(task: TaskWriteInput) {
         task.environment || 'prod',
         task._pendingOnEnter || null,
         JSON.stringify(Array.isArray(task.secondaryRepos) ? task.secondaryRepos : []),
+        task.isTemplate || false,
+        task.templateId || null,
+        task.occurrenceSeq != null ? task.occurrenceSeq : null,
       ]
     );
   } catch (err) {
@@ -544,6 +584,7 @@ export async function getTasksForResume(environment?: string | null) {
       LEFT JOIN projects p ON b.project_id = p.id
       JOIN agents a ON COALESCE(t.assignee, t.agent_id) = a.id
       WHERE t.deleted_at IS NULL
+        AND t.is_template IS NOT TRUE
         AND t.started_at IS NOT NULL
         AND t.status NOT IN ('done', 'backlog', 'error')
         AND (t.execution_status IS NULL OR t.execution_status NOT IN ('watching', 'stopped'))
@@ -589,6 +630,7 @@ export async function getActiveWorkflowTasks(environment?: string | null) {
   }
   return queryTasks(
     `WHERE t.deleted_at IS NULL
+        AND ${NOT_TEMPLATE}
         AND t.board_id IS NOT NULL
         AND t.is_manual IS NOT TRUE
         AND t.status NOT IN ('done', 'error')
@@ -619,6 +661,7 @@ export async function getInterruptedChainTasks(environment?: string | null) {
   }
   return queryTasks(
     `WHERE t.deleted_at IS NULL
+        AND ${NOT_TEMPLATE}
         AND t.board_id IS NOT NULL
         AND t.is_manual IS NOT TRUE
         AND (t.action_running IS TRUE OR t.completed_action_idx IS NOT NULL)
@@ -744,7 +787,8 @@ export async function clearAllStaleActionRunning(environment?: string | null) {
  */
 export async function getActiveTasksByAgent(agentId: string) {
   return queryTasks(
-    `WHERE t.agent_id = $1 AND t.status NOT IN ('done','backlog','error') AND t.deleted_at IS NULL ORDER BY t.created_at`,
+    `WHERE t.agent_id = $1 AND t.status NOT IN ('done','backlog','error')
+         AND t.deleted_at IS NULL AND ${NOT_TEMPLATE} ORDER BY t.created_at`,
     [agentId],
     'Failed to get active tasks for agent:'
   );
@@ -755,7 +799,7 @@ export async function getActiveTasksByAgent(agentId: string) {
  */
 export async function getTasksByBoard(boardId: string) {
   return queryTasks(
-    'WHERE t.board_id = $1 AND t.deleted_at IS NULL ORDER BY t.created_at',
+    `WHERE t.board_id = $1 AND t.deleted_at IS NULL AND ${NOT_TEMPLATE} ORDER BY t.created_at`,
     [boardId],
     'Failed to get tasks for board:'
   );
@@ -774,7 +818,7 @@ export async function getBoardWithMostTasksForProject(projectName: string) {
        FROM tasks t
        JOIN boards b   ON t.board_id = b.id
        JOIN projects p ON b.project_id = p.id
-       WHERE p.name ILIKE $1 AND t.deleted_at IS NULL
+       WHERE p.name ILIKE $1 AND t.deleted_at IS NULL AND t.is_template IS NOT TRUE
        GROUP BY t.board_id
        ORDER BY task_count DESC
        LIMIT 1`,
@@ -797,6 +841,7 @@ export async function getBoardWithMostTasksForProject(projectName: string) {
 export async function getTaskByActionRunningAgent(agentId: string) {
   return queryOneTask(
     `WHERE t.action_running_agent_id = $1 AND t.action_running IS TRUE AND t.deleted_at IS NULL
+         AND ${NOT_TEMPLATE}
        ORDER BY t.started_at DESC NULLS LAST LIMIT 1`,
     [agentId],
     'Failed to get task by action-running agent:'
@@ -808,7 +853,8 @@ export async function getTaskByActionRunningAgent(agentId: string) {
  */
 export async function getTasksByAssignee(agentId: string) {
   return queryTasks(
-    `WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1)) AND t.deleted_at IS NULL ORDER BY t.created_at`,
+    `WHERE (t.assignee = $1 OR (t.assignee IS NULL AND t.agent_id = $1))
+         AND t.deleted_at IS NULL AND ${NOT_TEMPLATE} ORDER BY t.created_at`,
     [agentId],
     'Failed to get tasks by assignee:'
   );
@@ -824,6 +870,7 @@ export async function getActiveTaskForExecutor(agentId: string) {
          AND t.status NOT IN ('done','backlog','error')
          AND t.started_at IS NOT NULL
          AND t.deleted_at IS NULL
+         AND ${NOT_TEMPLATE}
        ORDER BY t.started_at ASC LIMIT 1`,
     [agentId],
     'Failed to get active task for executor:'
@@ -848,6 +895,7 @@ export async function hasActiveTask(agentId: string, excludeTaskId: string | nul
       `SELECT 1 FROM tasks
        WHERE (assignee = $1 OR (assignee IS NULL AND agent_id = $1))
          AND status NOT IN ('done','backlog','error')
+         AND is_template IS NOT TRUE
          AND deleted_at IS NULL${excludeClause}
        LIMIT 1`,
       params
@@ -879,6 +927,7 @@ export async function countActiveTasksForAgent(
       `SELECT COUNT(*)::int as count FROM tasks
        WHERE (assignee = $1 OR (assignee IS NULL AND agent_id = $1))
          AND status NOT IN ('done','backlog','error')
+         AND is_template IS NOT TRUE
          AND deleted_at IS NULL${excludeClause}`,
       params
     );
@@ -890,18 +939,142 @@ export async function countActiveTasksForAgent(
 }
 
 /**
- * Get all recurring tasks (any status). The reset scheduler decides whether
- * each task is due based on its own `recurrence.lastResetAt`,
- * independently of the workflow status — so a task stuck in `error` or in a
- * mid-workflow column still gets re-armed on its next interval.
+ * Every recurring RULE, whatever its board. The scheduler decides which are due
+ * from each rule's own `recurrence.lastResetAt`.
+ *
+ * `is_template` is the filter, not `recurrence IS NOT NULL`: the two are
+ * equivalent by invariant, but reading the flag means a rule whose recurrence
+ * JSON was somehow cleared is still recognised as a rule (and skipped by the
+ * scheduler) instead of silently re-entering the board as a task.
  */
 export async function getRecurringTasks() {
   return queryTasks(
-    `WHERE t.recurrence IS NOT NULL
+    `WHERE t.is_template IS TRUE
+         AND t.recurrence IS NOT NULL
          AND t.deleted_at IS NULL`,
     [],
     'Failed to get recurring tasks:'
   );
+}
+
+/** Recurring rules of one board (the panel), or of every accessible board. */
+export async function getTaskTemplates(boardId?: string | null) {
+  const params: unknown[] = [];
+  let boardFilter = '';
+  if (boardId) {
+    params.push(boardId);
+    boardFilter = `AND t.board_id = $${params.length}`;
+  }
+  return queryTasks(
+    `WHERE t.is_template IS TRUE AND t.deleted_at IS NULL ${boardFilter}
+      ORDER BY t.created_at DESC`,
+    params,
+    'Failed to get task templates:'
+  );
+}
+
+/** One rule by id — returns null for a normal task, so callers cannot edit a
+ * card through the template routes (or a rule through the task routes). */
+export async function getTaskTemplateById(templateId: string) {
+  return queryOneTask(
+    'WHERE t.id = $1 AND t.is_template IS TRUE AND t.deleted_at IS NULL',
+    [templateId],
+    'Failed to get task template:'
+  );
+}
+
+/** Runs spawned by a rule, newest first. */
+export async function getOccurrencesForTemplate(templateId: string, limit = 50) {
+  return queryTasks(
+    `WHERE t.template_id = $1 AND t.deleted_at IS NULL
+      ORDER BY t.occurrence_seq DESC NULLS LAST, t.created_at DESC
+      LIMIT $2`,
+    [templateId, Math.min(Math.max(limit, 1), 500)],
+    'Failed to get template occurrences:'
+  );
+}
+
+/**
+ * Is a previous run still in flight? Drives the `skip` overlap policy.
+ *
+ * Unfinished means "has not reached a terminal column": `done` and `error` are
+ * both terminal (an errored run stopped, it is not still working). A run nobody
+ * ever picked up counts as unfinished, which is the point — with `skip`, runs
+ * stop piling up behind a workflow that is not moving.
+ */
+export async function countUnfinishedOccurrences(templateId: string): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*)::int AS count FROM tasks
+        WHERE template_id = $1 AND deleted_at IS NULL AND status NOT IN ('done', 'error')`,
+      [templateId]
+    );
+    return result.rows[0]?.count || 0;
+  } catch (err) {
+    console.error('Failed to count unfinished occurrences:', errorMessage(err));
+    return 0;
+  }
+}
+
+/**
+ * Drop old runs of one rule. This is what bounds a recurring task's footprint
+ * now that each cycle is its own row.
+ *
+ * Two independent limits, both optional (0/null disables): `retentionDays`
+ * (older than N days) and `keepLast` (keep the N most recent runs). A run is
+ * only ever eligible when it is FINISHED — an in-flight occurrence is never
+ * deleted, however old, because it still belongs to an agent.
+ *
+ * Hard delete, not the soft `deleted_at`: a soft delete keeps the row, its
+ * history and its commits forever, which is the growth this whole change
+ * exists to stop. Audit rows go with it — `task_audit_logs.task_id` has no FK
+ * (deliberately, so a deleted task keeps its trail), so nothing cascades and
+ * they must be swept explicitly.
+ */
+export async function purgeTemplateOccurrences(
+  templateId: string,
+  { retentionDays, keepLast }: { retentionDays?: number | null; keepLast?: number | null } = {}
+): Promise<number> {
+  const pool = getPool();
+  if (!pool) return 0;
+  const days = retentionDays && retentionDays > 0 ? retentionDays : null;
+  const keep = keepLast && keepLast > 0 ? keepLast : null;
+  if (!days && !keep) return 0;
+  try {
+    const result = await pool.query<{ id: string }>(
+      `WITH finished AS (
+         SELECT id,
+                COALESCE(completed_at, updated_at, created_at) AS ended_at,
+                ROW_NUMBER() OVER (
+                  ORDER BY occurrence_seq DESC NULLS LAST, created_at DESC
+                ) AS recency
+           FROM tasks
+          WHERE template_id = $1
+            AND deleted_at IS NULL
+            AND status IN ('done', 'error')
+       )
+       DELETE FROM tasks
+        WHERE id IN (
+          SELECT id FROM finished
+           WHERE ($2::int IS NOT NULL AND ended_at < NOW() - ($2 * INTERVAL '1 day'))
+              OR ($3::int IS NOT NULL AND recency > $3)
+        )
+       RETURNING id`,
+      [templateId, days, keep]
+    );
+    const ids = result.rows.map(r => r.id);
+    if (ids.length > 0) {
+      await pool
+        .query('DELETE FROM task_audit_logs WHERE task_id = ANY($1::uuid[])', [ids])
+        .catch(err => console.error('Failed to purge occurrence audit logs:', errorMessage(err)));
+    }
+    return ids.length;
+  } catch (err) {
+    console.error('Failed to purge template occurrences:', errorMessage(err));
+    return 0;
+  }
 }
 
 /**
@@ -943,6 +1116,8 @@ export async function searchTasks(
     let idx = 1;
 
     if (!opts.includeDeleted) conditions.push('t.deleted_at IS NULL');
+    // A recurring rule is configuration, not a task anyone searches for.
+    conditions.push(NOT_TEMPLATE);
 
     if (opts.boardIds) {
       conditions.push(`t.board_id = ANY($${idx}::uuid[])`);
@@ -1048,7 +1223,7 @@ export async function getTasksByStatusAndBoards(
   boardIds: string[]
 ): Promise<Task[]> {
   if (boardIds.length === 0) return [];
-  const conditions = ['t.deleted_at IS NULL', 't.board_id = ANY($1::uuid[])'];
+  const conditions = ['t.deleted_at IS NULL', NOT_TEMPLATE, 't.board_id = ANY($1::uuid[])'];
   const params: unknown[] = [boardIds];
   if (status) {
     conditions.push(`t.status = $2`);
@@ -1065,7 +1240,7 @@ export async function getTasksByStatusAndBoard(
   status: string | null = null,
   boardId: string | null = null
 ) {
-  const conditions = ['t.deleted_at IS NULL'];
+  const conditions = ['t.deleted_at IS NULL', NOT_TEMPLATE];
   const params: string[] = [];
   let idx = 1;
   if (status) {

@@ -422,6 +422,13 @@ const ROUTE_POLICY: Readonly<Record<string, RoutePolicy>> = {
 
   // ── /api/tasks ────────────────────────────────────────────────────
   'GET /api/tasks': ['authenticateToken'],
+  // Recurring rules: board access is checked inside the handler
+  // (loadTemplateForRequest → requireTaskAccess), like the rest of /api/tasks.
+  'GET /api/tasks/templates': ['authenticateToken'],
+  'GET /api/tasks/templates/:id/runs': ['authenticateToken'],
+  'PUT /api/tasks/templates/:id': ['authenticateToken'],
+  'POST /api/tasks/templates/:id/run': ['authenticateToken'],
+  'DELETE /api/tasks/templates/:id': ['authenticateToken'],
   'PUT /api/tasks/reorder': ['authenticateToken'],
   'PUT /api/tasks/:id': ['authenticateToken'],
   'POST /api/tasks/bulk-move': ['authenticateToken'],
