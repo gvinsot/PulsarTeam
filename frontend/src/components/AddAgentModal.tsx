@@ -5,6 +5,7 @@ import type { AgentBatchCreated, AgentCreated } from '../api';
 import { isRealtimeLlm, voiceOptions, selectedVoice } from '../utils/llmConfig';
 import { useEnabledAgentTypes } from '../hooks/useEnabledAgentTypes';
 import { AGENT_TYPE_OPTION_LABELS, AGENT_TYPE_SELECT_ORDER } from '../utils/agentTypes';
+import { errorMessage } from '../utils/errors';
 import type { Agent, AgentTemplate, BoardListItem, LlmConfig, RepoPickerOption } from '../types';
 
 /**
@@ -84,6 +85,9 @@ export default function AddAgentModal({
     batchSize: 2,
   });
   const [creating, setCreating] = useState(false);
+  // A failed create used to be swallowed by a bare console.error: the modal just
+  // stopped spinning and the user was left to guess. Surfaced here instead.
+  const [createError, setCreateError] = useState('');
   const {
     enabledAgentTypes,
     isAgentTypeEnabled,
@@ -149,7 +153,15 @@ export default function AddAgentModal({
 
   const handleCreate = async () => {
     if (!form.name.trim()) return;
+    // The board is not cosmetic: an agent created without one is filtered out of
+    // every project-scoped view (Dashboard.tsx:270), so it is created fine and
+    // then invisible. The label has always said `Board *` — this enforces it.
+    if (!form.boardId) {
+      setCreateError('Pick a board — an agent with no board is hidden from the board views.');
+      return;
+    }
     setCreating(true);
+    setCreateError('');
     try {
       const payload: any = { ...form };
       if (form.isVoice && form.voiceMode === 'realtime')
@@ -177,7 +189,7 @@ export default function AddAgentModal({
       const agent = isBatchCreated(result) ? result.agents[0] : result;
       onCreated(agent);
     } catch (err) {
-      console.error(err);
+      setCreateError(errorMessage(err));
     } finally {
       setCreating(false);
     }
@@ -402,8 +414,13 @@ export default function AddAgentModal({
                   <label className="block text-xs text-dark-400 mb-1.5">Board *</label>
                   <select
                     value={form.boardId}
-                    onChange={e => updateField('boardId', e.target.value)}
-                    className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
+                    onChange={e => {
+                      updateField('boardId', e.target.value);
+                      if (e.target.value) setCreateError('');
+                    }}
+                    className={`w-full px-3 py-2 bg-dark-700 border rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500 ${
+                      form.boardId ? 'border-dark-600' : 'border-amber-500/60'
+                    }`}
                   >
                     <option value="">-- Select a board --</option>
                     {boards.map(b => (
@@ -413,7 +430,9 @@ export default function AddAgentModal({
                     ))}
                   </select>
                   <p className="text-[11px] text-dark-500 mt-1">
-                    The board where this agent's tasks will appear
+                    {form.boardId
+                      ? "The board where this agent's tasks will appear"
+                      : 'Required — an agent with no board stays hidden from the board and project views'}
                   </p>
                 </div>
 
@@ -714,6 +733,12 @@ export default function AddAgentModal({
                 </div>
               </div>
 
+              {createError && (
+                <div className="mt-4 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-300">
+                  {createError}
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => {
@@ -726,7 +751,7 @@ export default function AddAgentModal({
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={creating || !form.name.trim()}
+                  disabled={creating || !form.name.trim() || !form.boardId}
                   className="flex-1 py-2.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-medium rounded-xl disabled:opacity-40 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20"
                 >
                   {creating ? (

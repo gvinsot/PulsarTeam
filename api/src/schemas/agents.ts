@@ -45,7 +45,14 @@ export const createAgentSchema = z.object({
   costPerOutputToken: z.number().min(0).nullable().optional(),
   copyApiKeyFromAgent: z.string().uuid().optional(),
   llmConfigId: z.string().max(200).nullable().optional(),
-  boardId: z.string().uuid().nullable().optional(),
+  // REQUIRED on create, and deliberately not nullable. A board-less agent is
+  // accepted by every other layer and then silently invisible: the dashboard
+  // filters agents on `a.boardId` before the project filter runs
+  // (frontend/src/components/Dashboard.tsx:270), so it is created, started, and
+  // never shown. Failing the request is the honest outcome. `updateAgentSchema`
+  // below re-declares it nullable on purpose — detaching an existing agent from
+  // a board stays possible, only creating one that way does not.
+  boardId: z.string().uuid(),
   permissions: z
     .object({
       linuxUser: z

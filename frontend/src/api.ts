@@ -390,9 +390,27 @@ function getHeaders(): Record<string, string> {
 function errorFromBody(data: unknown, status: number): string {
   if (data && typeof data === 'object' && 'error' in data) {
     const { error } = data;
-    if (typeof error === 'string' && error) return error;
+    if (typeof error === 'string' && error) {
+      // A zod 400 is `{ error: 'Validation failed', details: [{path, message}] }`
+      // (api/src/lib/validate.ts:18). On its own the envelope names no field, so
+      // anything that shows this string to a user says only that something was
+      // wrong. Append the first issue, which is the one that actually happened.
+      const detail = firstValidationDetail(data);
+      return detail ? `${error}: ${detail}` : error;
+    }
   }
   return `Request failed (${status})`;
+}
+
+/** `path: message` of the first zod issue in a 400 body, or '' if there is none. */
+function firstValidationDetail(data: object): string {
+  if (!('details' in data) || !Array.isArray(data.details)) return '';
+  const [first] = data.details;
+  if (!first || typeof first !== 'object') return '';
+  const path = 'path' in first && typeof first.path === 'string' ? first.path : '';
+  const message = 'message' in first && typeof first.message === 'string' ? first.message : '';
+  if (!message) return '';
+  return path ? `${path} — ${message}` : message;
 }
 
 async function handleResponse<T>(res: Response): Promise<T> {
