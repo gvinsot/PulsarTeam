@@ -51,6 +51,9 @@ mock.module('../database.js', {
     // handlers directly, not the HTTP handler) — they only have to EXIST, or
     // the mocked module fails to instantiate.
     getAgentById: async () => null,
+    // lib/agentScope.js → lib/boardAccess.js reads this one to resolve an
+    // agent's board scope for the listing tools.
+    getBoardsByUser: async () => [],
     getBoardShare: async () => null,
     getProjectById: async () => null,
     hasProjectBoardAccess: async () => false,
@@ -84,6 +87,14 @@ function makeFakeAgentManager() {
 
   return {
     agents: new Map([[agent.id, agent]]),
+    async _tasksByAgentMap() {
+      const byAgent = new Map<string, any[]>();
+      for (const t of tasks) {
+        if (!byAgent.has(t.agentId)) byAgent.set(t.agentId, []);
+        byAgent.get(t.agentId)!.push(t);
+      }
+      return byAgent;
+    },
     addTask(agentId: string, text: string, source: any, status: any, opts: any) {
       const t = {
         id: `task-${tasks.length + 1}`,
@@ -714,4 +725,40 @@ test('list_boards exposes repos in use on each board', async () => {
   assert.equal(body.count, 1);
   assert.equal(body.boards[0].id, 'board-1');
   assert.deepEqual(body.boards[0].repos, [{ provider: 'github', fullName: 'acme/widgets' }]);
+});
+
+// ── caller tenancy (lib/agentScope.ts) ──────────────────────────────────────
+// The X-Agent-Id the MCP handler authorized also BOUNDS what the listing tools
+// answer. No agent context at all is the external API-key mount, which stays
+// instance-wide by design.
+
+test('list_boards is bounded by the caller agent tenant', async () => {
+  const am = makeFakeAgentManager();
+
+  // Caller on board-1 → still sees board-1.
+  const scoped = getToolHandler(createSwarmApiMcpServer(am as any, 'agent-1'), 'list_boards');
+  assert.equal(parseResult(await scoped({})).count, 1);
+
+  // An agent id that no longer resolves scopes to NOTHING, never to everything.
+  const ghost = getToolHandler(createSwarmApiMcpServer(am as any, 'ghost'), 'list_boards');
+  assert.equal(parseResult(await ghost({})).count, 0);
+});
+
+test('list_agents hides agents from other boards', async () => {
+  const am = makeFakeAgentManager();
+  am.agents.set('agent-2', {
+    id: 'agent-2',
+    name: 'Outsider',
+    role: 'dev',
+    status: 'idle',
+    boardId: 'board-other',
+  } as any);
+
+  const handler = getToolHandler(createSwarmApiMcpServer(am as any, 'agent-1'), 'list_agents');
+  const body = parseResult(await handler({}));
+
+  assert.deepEqual(
+    body.agents.map((a: any) => a.name),
+    ['Builder']
+  );
 });

@@ -34,6 +34,7 @@ export {
 export type { Project } from './database/projects.js';
 export {
   getReposForBoard,
+  getReposForBoards,
   getReposForProject,
   getAccessibleBoardRepos,
 } from './database/boardRepos.js';
@@ -144,6 +145,7 @@ export {
   getRecurringTasks,
   updateTaskFields,
   getTasksByStatusAndBoard,
+  getTasksByStatusAndBoards,
   searchTasks,
 } from './database/tasks.js';
 export { tryAcquireTaskLock, releaseTaskLock, heldTaskLockCount } from './database/locks.js';

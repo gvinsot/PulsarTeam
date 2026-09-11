@@ -9,6 +9,33 @@ import { resolveWorkflowStatus } from './workflow/columnIds.js';
 import { normalizeRepoFullName, normalizeStoragePath } from './taskRepos.js';
 import { jsonOk, jsonError, taskMutationSharedShape } from './mcpResponses.js';
 import type { AgentManager } from './agentManager/index.js';
+import { getAgentBoardScope, agentsVisibleTo } from '../lib/agentScope.js';
+
+/**
+ * The tenant an MCP call runs in, from the authorized X-Agent-Id.
+ *
+ * `null` means "no agent context", which happens only on the external
+ * API-key mount (/api/swarm/mcp in index.ts): that key is instance-wide by
+ * design and is left unscoped so existing integrations keep working. Every
+ * agent-driven call arrives with an agent id and is bounded by its board scope;
+ * an id that no longer resolves to an agent scopes to NOTHING rather than to
+ * everything.
+ */
+async function callerScope(
+  agentManager: AgentManager,
+  callerAgentId: string | null
+): Promise<{ agent: any; boardIds: Set<string> } | null> {
+  if (!callerAgentId) return null;
+  const agent = (agentManager.agents.get(callerAgentId) as any) ?? null;
+  return { agent, boardIds: await getAgentBoardScope(agent) };
+}
+
+/** Is this agent one the caller may address at all? Applied AFTER a name/id
+ * lookup so guessing a name reaches no further than the roster shows. */
+function inScope(scope: { agent: any; boardIds: Set<string> } | null, target: any): boolean {
+  if (!scope) return true;
+  return !!target && agentsVisibleTo(scope.agent, [target], scope.boardIds).length === 1;
+}
 
 /** Resolve an agent by UUID (agent_id) or case-insensitive name (agent_name). */
 function findAgent(
@@ -403,7 +430,10 @@ export function createSwarmApiMcpServer(
       status: z.enum(['idle', 'busy', 'error']).optional().describe('Filter agents by status'),
     },
     async ({ project, status }) => {
-      const allAgents = Array.from(agentManager.agents.values()) as any[];
+      const scope = await callerScope(agentManager, callerAgentId);
+      const allAgents = scope
+        ? agentsVisibleTo(scope.agent, Array.from(agentManager.agents.values()), scope.boardIds)
+        : (Array.from(agentManager.agents.values()) as any[]);
       let agents = allAgents.filter((a: any) => a.enabled !== false);
 
       if (project) {
@@ -439,8 +469,12 @@ export function createSwarmApiMcpServer(
     },
     async ({ agent_id, agent_name }) => {
       const agent = findAgent(agentManager, { agent_id, agent_name });
+      const scope = await callerScope(agentManager, callerAgentId);
 
-      if (!agent) {
+      // Out of the caller's tenant answers exactly like "does not exist" —
+      // otherwise a guessed name would return the status, tasks and metrics
+      // list_agents no longer shows.
+      if (!agent || !inScope(scope, agent)) {
         return jsonError('Agent not found');
       }
 
@@ -481,7 +515,10 @@ export function createSwarmApiMcpServer(
     'List all task boards. Each board has its own workflow configuration and may have associated repositories or storage targets in use. Use this to discover board IDs and what repos/storage paths are valid before adding tasks.',
     {},
     async () => {
-      const boards = await getAllBoards();
+      const scope = await callerScope(agentManager, callerAgentId);
+      const boards = (await getAllBoards()).filter(
+        (b: any) => !scope || scope.boardIds.has(b.id)
+      );
       // Hydrate each board with the distinct repos already in use on it. This
       // gives MCP callers a useful picker of valid repo_full_name values
       // without having to scan tasks themselves.
@@ -757,16 +794,19 @@ export function createSwarmApiMcpServer(
       // Resolve agent_name → agent_id when only the name was given. An
       // unknown agent_id is deliberately passed straight through to
       // searchTasks (zero results), only the name branch errors on miss.
+      const scope = await callerScope(agentManager, callerAgentId);
       let resolvedAgentId = agent_id || null;
       if (!resolvedAgentId && agent_name) {
         const agent = findAgent(agentManager, { agent_name });
-        if (!agent) {
+        if (!agent || !inScope(scope, agent)) {
           return jsonError(`Agent not found: ${agent_name}`);
         }
         resolvedAgentId = agent.id;
       }
 
       const { total, returned, tasks } = await searchTasks({
+        // The search never leaves the caller's boards, whatever the filters say.
+        boardIds: scope ? [...scope.boardIds] : null,
         query: query || null,
         agentId: resolvedAgentId,
         project: project || null,

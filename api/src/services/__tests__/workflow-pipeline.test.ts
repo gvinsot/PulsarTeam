@@ -92,6 +92,7 @@ mock.module('../database.js', {
     setBoardProject: noop,
     // boardRepos
     getReposForBoard: async () => [],
+    getReposForBoards: async () => [],
     getReposForProject: async () => [],
     getAccessibleBoardRepos: async () => [],
     // boardStorages

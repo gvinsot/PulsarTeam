@@ -917,6 +917,11 @@ export async function searchTasks(
     agentId?: string | null;
     project?: string | null;
     boardId?: string | null;
+    /** Tenant bound: when present, the search NEVER leaves these boards, and an
+     * empty list matches nothing. `boardId` narrows further within it. Callers
+     * acting for an agent pass its scope (lib/agentScope.ts); a human route
+     * omits it and keeps its own guard. */
+    boardIds?: string[] | null;
     status?: string | null;
     repoFullName?: string | null;
     createdAfter?: string | Date | null;
@@ -931,12 +936,19 @@ export async function searchTasks(
 ) {
   const pool = getPool();
   if (!pool) return { total: 0, returned: 0, tasks: [] };
+  if (opts.boardIds && opts.boardIds.length === 0) return { total: 0, returned: 0, tasks: [] };
   try {
     const conditions: string[] = [];
     const params: unknown[] = [];
     let idx = 1;
 
     if (!opts.includeDeleted) conditions.push('t.deleted_at IS NULL');
+
+    if (opts.boardIds) {
+      conditions.push(`t.board_id = ANY($${idx}::uuid[])`);
+      params.push(opts.boardIds);
+      idx++;
+    }
 
     if (opts.query && opts.query.trim()) {
       conditions.push(`(t.text ILIKE $${idx} OR t.title ILIKE $${idx} OR t.error ILIKE $${idx})`);
@@ -1022,6 +1034,33 @@ export async function searchTasks(
  * Get tasks filtered by status and/or board.
  * Both parameters are optional — pass null to skip a filter.
  */
+/**
+ * Same filter as getTasksByStatusAndBoard, but over an EXPLICIT set of boards.
+ *
+ * This is the form the agent-facing list_tasks uses: the caller resolves which
+ * boards the agent may read (lib/agentScope.ts) and passes them in. An empty
+ * set returns no task rather than every task on the instance, which is what
+ * getTasksByStatusAndBoard(status, null) returns and why an agent must not
+ * call it.
+ */
+export async function getTasksByStatusAndBoards(
+  status: string | null,
+  boardIds: string[]
+): Promise<Task[]> {
+  if (boardIds.length === 0) return [];
+  const conditions = ['t.deleted_at IS NULL', 't.board_id = ANY($1::uuid[])'];
+  const params: unknown[] = [boardIds];
+  if (status) {
+    conditions.push(`t.status = $2`);
+    params.push(status);
+  }
+  return queryTasks(
+    `WHERE ${conditions.join(' AND ')} ORDER BY t.position, t.created_at`,
+    params,
+    'Failed to get tasks by status/boards:'
+  );
+}
+
 export async function getTasksByStatusAndBoard(
   status: string | null = null,
   boardId: string | null = null

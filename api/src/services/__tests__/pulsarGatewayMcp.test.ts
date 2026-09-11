@@ -48,6 +48,9 @@ mock.module('../database.js', {
     // handlers directly, not the HTTP handler) — they only have to EXIST, or
     // the mocked module fails to instantiate.
     getAgentById: async () => null,
+    // lib/agentScope.js → lib/boardAccess.js reads this one to resolve an
+    // agent's board scope for the listing tools.
+    getBoardsByUser: async () => [],
     getBoardShare: async () => null,
     getProjectById: async () => null,
     hasProjectBoardAccess: async () => false,

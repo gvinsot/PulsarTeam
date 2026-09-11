@@ -126,6 +126,18 @@ export function makeTaskDbFake() {
           t => live(t) && (!status || t.status === status) && (!boardId || t.boardId === boardId)
         )
         .map(clone),
+    // Board-scoped form (the one the agent tools use): an empty id list matches
+    // nothing, mirroring the real query.
+    getTasksByStatusAndBoards: async (status: any = null, boardIds: string[] = []) =>
+      all()
+        .filter(
+          t =>
+            live(t) &&
+            (!status || t.status === status) &&
+            !!t.boardId &&
+            boardIds.includes(t.boardId)
+        )
+        .map(clone),
     getDeletedTasks: async () =>
       all()
         .filter(t => t?.deletedAt)

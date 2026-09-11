@@ -17,7 +17,7 @@ import {
   deleteAgentSkillFromDb,
   getAllBoards,
   getBoardById,
-  getTasksByStatusAndBoard,
+  getTasksByStatusAndBoards,
   saveTaskToDb,
   getTasksByAgent,
   getTaskByIdPrefix,
@@ -25,6 +25,7 @@ import {
 import { getWorkflowForBoard } from '../../configManager.js';
 import { applyTaskUpdate } from '../../swarmApiMcp.js';
 import { checkToolHooks } from '../../toolHooks.js';
+import { getAgentBoardScope, agentsVisibleTo } from '../../../lib/agentScope.js';
 import { findBuiltinMcpServer } from '../../mcpManager.js';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -436,7 +437,10 @@ const handleDeleteTask: ToolHandler = async ({ mgr, agent, call }) => {
 // ── list_boards() ──
 const handleListBoards: ToolHandler = async ({ agent }) => {
   try {
-    const boards = await getAllBoards();
+    // Only the boards this agent's tenant owns (lib/agentScope.ts). getAllBoards
+    // returns every board of every user, which is what an agent used to list.
+    const scope = await getAgentBoardScope(agent);
+    const boards = (await getAllBoards()).filter((b: any) => scope.has(b.id));
     if (boards.length === 0) {
       console.log(`📋 [ListBoards] Agent "${agent.name}" listed ${boards.length} board(s)`);
       return { tool: 'list_boards', args: [], success: true, result: 'No boards found.' };
@@ -465,9 +469,12 @@ const handleListTasks: ToolHandler = async ({ agent, call }) => {
     // Validate that the requested board exists before querying. Without
     // this, an unknown boardId silently returns an empty list which
     // makes agent debugging painful.
+    const scope = await getAgentBoardScope(agent);
     let resolvedBoard: any = null;
     if (boardFilter) {
-      resolvedBoard = await getBoardById(boardFilter);
+      // A board outside the agent's tenant answers exactly like one that does
+      // not exist — the agent learns nothing about the rest of the instance.
+      resolvedBoard = scope.has(boardFilter) ? await getBoardById(boardFilter) : null;
       if (!resolvedBoard) {
         return {
           tool: 'list_tasks',
@@ -495,7 +502,11 @@ const handleListTasks: ToolHandler = async ({ agent, call }) => {
         }
       }
     }
-    const tasks = await getTasksByStatusAndBoard(statusFilter, boardFilter);
+    // Unfiltered means "every board I may see", never every board there is.
+    const tasks = await getTasksByStatusAndBoards(
+      statusFilter,
+      boardFilter ? [boardFilter] : [...scope]
+    );
     if (tasks.length === 0) {
       const filterDesc = [
         statusFilter ? `status="${statusFilter}"` : null,
@@ -541,8 +552,8 @@ const handleListTasks: ToolHandler = async ({ agent, call }) => {
 };
 
 // ── list_projects() ──
-const handleListProjects: ToolHandler = async ({ mgr }) => {
-  const projects = await mgr._listAvailableProjects();
+const handleListProjects: ToolHandler = async ({ mgr, agent }) => {
+  const projects = await mgr._listAvailableProjects(await getAgentBoardScope(agent));
   if (projects.length === 0) {
     return { tool: 'list_projects', args: [], success: true, result: 'No projects found.' };
   }
@@ -912,7 +923,10 @@ const handleAskAgent: ToolHandler = async ({ mgr, agent, agentId, call, depth })
     };
   }
 
-  const targetAgent = Array.from(mgr.agents.values()).find(
+  // Same tenant bound as the roster that advertises these agents: ask_agent
+  // makes the target DO work, so a guessed name must not reach past it.
+  const scope = await getAgentBoardScope(agent);
+  const targetAgent = agentsVisibleTo(agent, Array.from(mgr.agents.values()), scope).find(
     (candidate: any) =>
       candidate.name.toLowerCase() === (agentName || '').toLowerCase() &&
       candidate.id !== agentId &&

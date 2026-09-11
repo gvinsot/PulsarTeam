@@ -300,7 +300,9 @@ export interface AgentManager {
   ): Promise<any[]>;
 
   // ── parsing.ts ──
-  _listAvailableProjects(): Promise<string[]>;
+  // `boardIds` is required: null means "unscoped" and is for a human admin
+  // session only. Agents pass their own scope (lib/agentScope.ts).
+  _listAvailableProjects(boardIds: ReadonlySet<string> | null): Promise<string[]>;
 
   // ── tasks.ts ──
   // `source` describes who created the task ({ type, name }); callers that have

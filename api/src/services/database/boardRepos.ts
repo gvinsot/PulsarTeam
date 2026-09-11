@@ -74,8 +74,32 @@ export async function getReposForBoard(boardId: string): Promise<DerivedRepo[]> 
 }
 
 /**
+ * Distinct repos in use by non-deleted tasks across an EXPLICIT set of boards.
+ *
+ * The agent-facing project list: the caller resolves which boards the agent may
+ * read (lib/agentScope.ts) and this only ever reads those. An empty set returns
+ * an empty list — it must never widen to "every repo on the instance", which is
+ * what `getAccessibleBoardRepos(null, 'admin')` did for every agent.
+ */
+export async function getReposForBoards(boardIds: string[]): Promise<DerivedRepo[]> {
+  const pool = getPool();
+  if (!pool || boardIds.length === 0) return [];
+  const result = await pool.query(
+    `SELECT DISTINCT t.repo_provider, t.repo_full_name
+     FROM tasks t
+     WHERE t.board_id = ANY($1::uuid[])
+       AND t.repo_full_name IS NOT NULL
+       AND t.deleted_at IS NULL
+     ORDER BY t.repo_full_name`,
+    [boardIds]
+  );
+  return result.rows.map(rowToRepo);
+}
+
+/**
  * Distinct repos used across the boards a user has access to (admin = all).
- * Powers global pickers (Add Agent, Broadcast).
+ * Powers global pickers (Add Agent, Broadcast) — HUMAN sessions only: an agent
+ * asks getReposForBoards() with its own scope instead.
  */
 export async function getAccessibleBoardRepos(
   userId: string | null,

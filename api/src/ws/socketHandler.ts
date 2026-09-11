@@ -769,7 +769,12 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
         },
         list_projects: {
           run: async () => {
-            const projects = await agentManager._listAvailableProjects();
+            // Human voice session: the projects of the boards this USER can
+            // reach (an admin keeps the instance-wide list, like every other
+            // listing on this socket).
+            const projects = await agentManager._listAvailableProjects(
+              userRole === 'admin' ? null : userBoardIds
+            );
             return projects.length > 0
               ? `Available projects: ${projects.join(', ')}`
               : 'No projects found';

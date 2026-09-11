@@ -16,6 +16,7 @@ import { NATIVE_TOOL_DEFINITIONS, type NativeToolCall } from '../nativeTools.js'
 import { buildRepoCloneUrl } from '../repoUrl.js';
 import { getGitHubCredentialsForAgent } from '../../routes/github.js';
 import { simplifyMcpSchema } from './helpers.js';
+import { getAgentBoardScope, agentsVisibleTo } from '../../lib/agentScope.js';
 import { createHashedEmbedding, cosineSimilarity } from '../codeSearch/embedding.js';
 import {
   agentRosterLines,
@@ -657,8 +658,16 @@ export const chatMethods = {
     const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Paris' });
     let systemContent = `Your name is "${agent.name}".${agent.role ? ` Your role: ${agent.role}.` : ''}\n\nToday's date is ${todayStr}.\n\n${agent.instructions || 'You are a helpful AI assistant.'}`;
 
+    // Everything this prompt may name about the rest of the instance — sibling
+    // agents, boards, repos — is bounded by the agent's own tenant. Resolved
+    // once here and threaded through every section below (lib/agentScope.ts).
+    const boardScope = await getAgentBoardScope(agent);
+
     if (agent.isLeader && delegationDepth === 0) {
-      const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
+      const availableAgents = agentRosterLines(
+        agentsVisibleTo(agent, Array.from(this.agents.values()), boardScope),
+        id
+      );
 
       if (availableAgents.length > 0) {
         systemContent += `\n\n--- Available Swarm Agents ---\nUse the Swarm API MCP tools to manage agents and assign tasks.\n${availableAgents.join('\n')}\n\nUse mcp_call with server "Swarm API", the desired tool name, and JSON arguments. Call list_boards before creating a task so you have a real board ID. When creating a task, pass board_id, task, and project.\n\nAgents may use report_error for blocking problems. Infrastructure errors (LLM crashes, connection failures, timeouts, authentication) appear as [System Error] notifications. When you check an agent with an error, decide whether to retry, reassign, provide guidance, or escalate to the user.`;
@@ -666,7 +675,7 @@ export const chatMethods = {
         systemContent += `\n\n--- Available Swarm Agents ---\nNo other agents are currently available in the swarm. You will need to complete tasks yourself or ask the user to create specialist agents.`;
       }
 
-      const projectNames = await this._listAvailableProjects();
+      const projectNames = await this._listAvailableProjects(boardScope);
       if (projectNames.length > 0) {
         systemContent += `\n\nAvailable projects: ${projectNames.join(', ')}`;
       }
@@ -727,7 +736,7 @@ export const chatMethods = {
     systemContent += credentialsSection(agent.credentials || {});
 
     if (allSkillIds.includes('skill-agents-direct-access')) {
-      const askableAgents = Array.from(this.agents.values())
+      const askableAgents = agentsVisibleTo(agent, Array.from(this.agents.values()), boardScope)
         .filter((a: any) => a.id !== id && a.enabled !== false)
         .map((a: any) => `- ${a.name} (${a.role})${a.project ? ` [project: ${a.project}]` : ''}`);
       if (askableAgents.length > 0) {
@@ -861,7 +870,10 @@ export const chatMethods = {
     if (systemContent.includes('Active Plugins')) sections.push('plugins');
     if (systemContent.includes('AVAILABLE TOOLS')) sections.push('tools');
     if (systemContent.includes('MCP Tools')) sections.push('mcp');
-    if (systemContent.includes('Current Task List')) sections.push('tasks');
+    // Header as relevantTasksSection actually renders it (promptSections.ts) —
+    // the old 'Current Task List' marker never matched, so the tasks block was
+    // invisible in this log line.
+    if (systemContent.includes('Relevant Tasks')) sections.push('tasks');
     if (systemContent.includes('PROJECT CONTEXT')) sections.push('project');
     if (systemContent.includes('Swarm Agents')) sections.push('swarm');
     console.log(
@@ -905,7 +917,12 @@ export const chatMethods = {
     // direct-chat MCP dispatch. The Swarm API MCP server is assigned to the
     // agent separately (mcpManager) so the CLI sees those tools natively.
     if (agent.isLeader) {
-      const availableAgents = agentRosterLines(Array.from(this.agents.values()), id);
+      // Same tenant bound as the chat prompt — see _buildSystemPrompt.
+      const boardScope = await getAgentBoardScope(agent);
+      const availableAgents = agentRosterLines(
+        agentsVisibleTo(agent, Array.from(this.agents.values()), boardScope),
+        id
+      );
       out += `\n\n--- Swarm Leadership ---\nYou lead a swarm of agents. The Swarm API server (run \`list_mcps\` to see it) exposes list_boards, add_task, list_agents and get_agent_status — invoke them via \`call_mcp_tool({ server: "Swarm API", tool, args })\` to assign work and monitor progress. When adding a task, always specify the project so the agent works in the correct directory.`;
       if (availableAgents.length > 0) {
         out += `\n\nOther agents currently in the swarm:\n${availableAgents.join('\n')}`;
@@ -913,7 +930,7 @@ export const chatMethods = {
         out += `\n\nNo other agents are currently available — complete tasks yourself or ask the user to create specialist agents.`;
       }
       try {
-        const projectNames = await this._listAvailableProjects();
+        const projectNames = await this._listAvailableProjects(boardScope);
         if (projectNames.length > 0) out += `\n\nAvailable projects: ${projectNames.join(', ')}`;
       } catch {
         /* best-effort */
