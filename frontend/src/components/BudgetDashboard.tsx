@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useReducer, useRef } from 'react';
 import {
   fetchBudgetSummary,
   fetchBudgetByAgent,
@@ -26,15 +26,14 @@ import type { ChartOptions } from 'chart.js';
 import { Line, Doughnut } from 'react-chartjs-2';
 import { useTheme } from '../contexts/ThemeContext';
 import { errorMessage } from '../utils/errors';
-import type {
-  Agent,
-  BudgetAlertsResponse,
-  BudgetByAgentRow,
-  BudgetConfig,
-  BudgetDailyPoint,
-  BudgetSummaryResponse,
-  BudgetTimelinePoint,
-} from '../types';
+import {
+  budgetReducer,
+  initialBudgetState,
+  runBudgetLoad,
+  selectBudgetView,
+  type BudgetFetchers,
+} from './budgetScope';
+import type { Agent, BudgetConfig } from '../types';
 
 ChartJS.register(
   CategoryScale,
@@ -53,18 +52,6 @@ function getChartColors(theme: string) {
   if (theme === 'light') return { legend: '#475569', tick: '#64748b', grid: '#e2e8f0' };
   return { legend: '#94a3b8', tick: '#64748b', grid: '#1e293b' };
 }
-
-/**
- * What this component reads off GET /budget/summary.
- *
- * `total_calls` is NOT a field of BudgetSummaryResponse and never arrives: no
- * SELECT in api/src/services/database/tokenUsage.ts emits one (the only per-call
- * count the API produces anywhere is `request_count`, on /budget/by-agent), so
- * the "API Calls Today" card and its "Avg/call" line always render 0 and '0'.
- * Declared optional — never removed — so the reads below keep their current
- * output; see the pass report, the fix belongs on the API side.
- */
-type BudgetSummaryView = BudgetSummaryResponse & { total_calls?: number };
 
 const COLORS = [
   '#6366f1',
@@ -98,16 +85,17 @@ export default function BudgetDashboard({
 }) {
   // ThemeContext is untyped (createContext() without a type argument), so type the result locally.
   const { theme } = useTheme() as { theme: string };
-  const [summary, setSummary] = useState<BudgetSummaryView | null>(null);
-  const [byAgent, setByAgent] = useState<BudgetByAgentRow[]>([]);
-  const [timeline, setTimeline] = useState<BudgetTimelinePoint[]>([]);
-  const [daily, setDaily] = useState<BudgetDailyPoint[]>([]);
-  // `Partial`, not `BudgetConfig`: `handleSaveConfig` copies the draft straight
-  // into this state (`setConfig(editConfig)`), and the draft can be `{}` — see
-  // the note on `editConfig` below.
-  const [config, setConfig] = useState<Partial<BudgetConfig> | null>(null);
-  const [alerts, setAlerts] = useState<BudgetAlertsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  // All server-sourced state lives in one scope-guarded reducer so that a
+  // response can never be written under a project it was not fetched for —
+  // see budgetScope.ts for the two races this closes. `config` is Partial, not
+  // BudgetConfig, because `handleSaveConfig` copies the draft straight in and
+  // the draft can be `{}` (see the note on `editConfig` below).
+  const [state, dispatch] = useReducer(budgetReducer, projectId, initialBudgetState);
+  const { summary, byAgent, timeline, daily, alerts, config, currency, loading, error } =
+    selectBudgetView(state, projectId);
+  // Monotonic stamp: only the newest load may write. A ref, not state, so the
+  // value is readable synchronously at the moment a load is issued.
+  const generationRef = useRef(0);
   const [timeRange, setTimeRange] = useState(7);
   const [showSettings, setShowSettings] = useState(false);
   // The draft is `{ ...config }`, and `{ ...null }` is `{}` at runtime — reachable,
@@ -119,41 +107,41 @@ export default function BudgetDashboard({
   const [editConfig, setEditConfig] = useState<Partial<BudgetConfig> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [currency, setCurrency] = useState('$');
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [s, a, t, d, c, al, settings] = await Promise.all([
-        fetchBudgetSummary(1, projectId),
-        fetchBudgetByAgent(timeRange, projectId),
-        fetchBudgetTimeline(timeRange, timeRange <= 2 ? 'hour' : 'day', projectId),
-        fetchBudgetDaily(30, projectId),
-        // The budget settings themselves are global, not per project.
-        fetchBudgetConfig(),
-        fetchBudgetAlerts(projectId),
-        api.getSettings(),
-      ]);
-      setSummary(s);
-      setByAgent(a);
-      setTimeline(t);
-      setDaily(d);
-      setConfig(c);
-      setAlerts(al);
-      if (settings?.currency) setCurrency(settings.currency);
-    } catch (err) {
+  const fetchers = useMemo<BudgetFetchers>(
+    () => ({
+      summary: fetchBudgetSummary,
+      byAgent: fetchBudgetByAgent,
+      timeline: fetchBudgetTimeline,
+      daily: fetchBudgetDaily,
+      // The budget settings themselves are global, not per project.
+      config: fetchBudgetConfig,
+      alerts: fetchBudgetAlerts,
+      settings: api.getSettings,
+    }),
+    []
+  );
+
+  const loadData = useCallback(() => {
+    // Claiming the stamp and announcing the scope happen synchronously, BEFORE
+    // the first await: that is what lets the reducer drop every response issued
+    // by an earlier load, and what wipes the old project's figures on the spot.
+    const generation = ++generationRef.current;
+    dispatch({ type: 'start', scope: projectId, generation });
+    return runBudgetLoad(fetchers, { scope: projectId, generation, timeRange }, dispatch, err => {
       console.error('Budget load error:', err);
-    } finally {
-      setLoading(false);
-    }
+      return errorMessage(err);
+    });
     // Switching the header's project scope re-runs every read above.
-  }, [timeRange, projectId]);
+  }, [fetchers, timeRange, projectId]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
   useEffect(() => {
     const i = setInterval(loadData, 30000);
+    // Clearing the interval does NOT abort a request already in flight; the
+    // generation guard in budgetReducer is what makes that response harmless.
     return () => clearInterval(i);
   }, [loadData]);
 
@@ -165,7 +153,8 @@ export default function BudgetDashboard({
     setSaveError(null);
     try {
       await updateBudgetConfig(editConfig);
-      setConfig(editConfig);
+      // Global setting, not scoped: safe to write without a generation guard.
+      dispatch({ type: 'config', config: editConfig });
       setShowSettings(false);
       loadData();
     } catch (err) {
@@ -284,7 +273,28 @@ export default function BudgetDashboard({
     },
   };
 
-  if (loading && !summary) return <div className="p-6 text-dark-400">Loading budget data...</div>;
+  const scopeLabel = projectId ? projectName || 'Selected project' : 'All projects';
+
+  // No figures for THIS scope yet: show why, never the previous project's data.
+  // `summary` can only be non-null here if it was fetched for `projectId`.
+  if (!summary) {
+    if (error) {
+      return (
+        <div className="p-6">
+          <div className="px-4 py-3 rounded-lg text-sm font-medium bg-red-900/40 text-red-300 border border-red-800">
+            🚨 Failed to load budget data for {scopeLabel}: {error}
+          </div>
+          <button
+            onClick={loadData}
+            className="mt-3 bg-dark-700 hover:bg-dark-600 text-dark-200 px-3 py-1.5 rounded text-sm"
+          >
+            🔄 Retry
+          </button>
+        </div>
+      );
+    }
+    if (loading) return <div className="p-6 text-dark-400">Loading budget data...</div>;
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -296,9 +306,7 @@ export default function BudgetDashboard({
             AI agent token usage &amp; cost tracking ·{' '}
             {/* Name the scope the figures below are filtered to, so a
                 project-scoped total is never mistaken for the global one. */}
-            <span className="text-dark-300">
-              {projectId ? projectName || 'Selected project' : 'All projects'}
-            </span>
+            <span className="text-dark-300">{scopeLabel}</span>
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -330,6 +338,14 @@ export default function BudgetDashboard({
           </button>
         </div>
       </div>
+
+      {/* A refresh of the CURRENT scope failed; the figures below are this
+          scope's last good ones, so they stay — but say so. */}
+      {error && (
+        <div className="px-4 py-3 rounded-lg text-sm font-medium bg-red-900/40 text-red-300 border border-red-800">
+          🚨 Could not refresh budget data for {scopeLabel}: {error}
+        </div>
+      )}
 
       {/* Alerts */}
       {alerts && alerts.alerts.length > 0 && (
