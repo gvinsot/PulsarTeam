@@ -43,6 +43,9 @@ services:
       - GIT_USER_EMAIL=${GIT_USER_EMAIL:-agent@pulsarteam.local}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITHUB_USER=${GITHUB_USER:-}
+      # Extra hosts a repo may be cloned from (github.com + https are implicit).
+      - GIT_CLONE_ALLOWED_HOSTS=${GIT_CLONE_ALLOWED_HOSTS:-}
+      - GITHUB_ENTERPRISE_HOST=${GITHUB_ENTERPRISE_HOST:-}
       - GITHUB_OAUTH_CLIENT_ID=${GITHUB_OAUTH_CLIENT_ID:-}
       - GITHUB_OAUTH_CLIENT_SECRET=${GITHUB_OAUTH_CLIENT_SECRET:-}
       - SANDBOX_SERVICE_URL=http://sandbox-service:8000

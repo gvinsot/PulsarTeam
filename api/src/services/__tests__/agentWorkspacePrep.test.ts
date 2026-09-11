@@ -175,14 +175,119 @@ test('secondary repos force a switch even when the primary is unchanged', async 
 });
 
 test('an explicit clone URL on the task wins over the derived one', async () => {
+  // GHES only works once the operator has allowlisted the host — see the clone
+  // URL guard tests below.
+  process.env.GIT_CLONE_ALLOWED_HOSTS = 'github.enterprise.local';
+  try {
+    const em = makeExecutionManager('gvinsot/PulsarTeam');
+    await ensureAgentWorkspace(em, agentOnRepo(), {
+      repo: 'gvinsot/PulsarTeam',
+      repoHtmlUrl: 'https://github.enterprise.local/gvinsot/PulsarTeam.git',
+      gitCredentials: creds,
+    });
+    const ensure = em.calls.find(c => c.fn === 'ensureProject');
+    assert.equal(ensure?.args[2], 'https://github.enterprise.local/gvinsot/PulsarTeam.git');
+  } finally {
+    delete process.env.GIT_CLONE_ALLOWED_HOSTS;
+  }
+});
+
+// ── The clone-URL allowlist ─────────────────────────────────────────────────
+//
+// The runner splices the agent's token into the clone URL and writes it to
+// ~/.git-credentials, so the host named there receives that token. `repoHtmlUrl`
+// is server-derived today, but it IS a task field on the API/MCP surfaces: the
+// guard is what keeps a future writable path from turning it into an
+// exfiltration channel.
+
+test('a task clone URL on a foreign host never gets the token', async () => {
   const em = makeExecutionManager('gvinsot/PulsarTeam');
-  await ensureAgentWorkspace(em, agentOnRepo(), {
-    repo: 'gvinsot/PulsarTeam',
-    repoHtmlUrl: 'https://github.enterprise.local/gvinsot/PulsarTeam.git',
-    gitCredentials: creds,
-  });
-  const ensure = em.calls.find(c => c.fn === 'ensureProject');
-  assert.equal(ensure?.args[2], 'https://github.enterprise.local/gvinsot/PulsarTeam.git');
+  await assert.rejects(
+    ensureAgentWorkspace(em, agentOnRepo(), {
+      repo: 'gvinsot/PulsarTeam',
+      repoHtmlUrl: 'https://evil.example.com/gvinsot/PulsarTeam.git',
+      gitCredentials: creds,
+    }),
+    /Refusing to send git credentials to https:\/\/evil\.example\.com/
+  );
+  // Nothing at all reached the runner — not even the keep-set.
+  assert.deepEqual(em.names(), []);
+});
+
+test('every non-https scheme and look-alike host is refused', async () => {
+  for (const url of [
+    'http://github.com/gvinsot/PulsarTeam.git', // token in cleartext
+    'ssh://github.com/gvinsot/PulsarTeam.git',
+    'git://github.com/gvinsot/PulsarTeam.git',
+    'file:///etc/passwd',
+    'https://github.com.evil.tld/gvinsot/PulsarTeam.git', // suffix trick
+    'https://notgithub.com/gvinsot/PulsarTeam.git',
+    'https://attacker@github.com/gvinsot/PulsarTeam.git', // userinfo override
+    'https://user:pass@github.com/gvinsot/PulsarTeam.git',
+    'not a url at all',
+  ]) {
+    const em = makeExecutionManager('gvinsot/PulsarTeam');
+    await assert.rejects(
+      ensureAgentWorkspace(em, agentOnRepo(), {
+        repo: 'gvinsot/PulsarTeam',
+        repoHtmlUrl: url,
+        gitCredentials: creds,
+      }),
+      /Refusing to send git credentials/,
+      `should refuse ${url}`
+    );
+    assert.deepEqual(em.names(), [], `should not call the runner for ${url}`);
+  }
+});
+
+test('the guard also covers a switch to another repo', async () => {
+  const em = makeExecutionManager('gvinsot/Other');
+  await assert.rejects(
+    ensureAgentWorkspace(
+      em,
+      { id: 'agent-1', project: 'gvinsot/Other' },
+      {
+        repo: 'gvinsot/PulsarTeam',
+        repoHtmlUrl: 'https://evil.example.com/gvinsot/PulsarTeam.git',
+        gitCredentials: creds,
+      }
+    ),
+    /Refusing to send git credentials/
+  );
+  assert.deepEqual(em.names(), []);
+});
+
+test('github.com and an allowlisted GHES host pass, on the exact authority only', async () => {
+  const { isAllowedCloneUrl, allowedCloneHosts } = await import('../execution/cloneUrlGuard.js');
+  assert.ok(isAllowedCloneUrl('https://github.com/gvinsot/PulsarTeam.git'));
+  assert.ok(isAllowedCloneUrl('https://www.github.com/gvinsot/PulsarTeam.git'));
+  assert.ok(!isAllowedCloneUrl('https://ghes.corp.local/gvinsot/PulsarTeam.git'));
+
+  // Entries may be written as a bare host, host:port, or a full URL.
+  process.env.GIT_CLONE_ALLOWED_HOSTS = 'ghes.corp.local, https://git.corp.local:8443/';
+  try {
+    assert.ok(isAllowedCloneUrl('https://ghes.corp.local/gvinsot/PulsarTeam.git'));
+    assert.ok(isAllowedCloneUrl('https://git.corp.local:8443/gvinsot/PulsarTeam.git'));
+    // A port was configured, so the bare host is NOT implicitly allowed.
+    assert.ok(!isAllowedCloneUrl('https://git.corp.local/gvinsot/PulsarTeam.git'));
+    assert.ok(!isAllowedCloneUrl('http://ghes.corp.local/gvinsot/PulsarTeam.git'));
+    assert.deepEqual(allowedCloneHosts(), [
+      'github.com',
+      'www.github.com',
+      'ghes.corp.local',
+      'git.corp.local:8443',
+    ]);
+  } finally {
+    delete process.env.GIT_CLONE_ALLOWED_HOSTS;
+  }
+
+  // The single-host alias works too.
+  process.env.GITHUB_ENTERPRISE_HOST = 'github.acme.io';
+  try {
+    assert.ok(isAllowedCloneUrl('https://github.acme.io/gvinsot/PulsarTeam.git'));
+  } finally {
+    delete process.env.GITHUB_ENTERPRISE_HOST;
+  }
 });
 
 // ── Fail-loud where it matters, quiet where it doesn't ──────────────────────

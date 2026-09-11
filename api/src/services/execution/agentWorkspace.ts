@@ -36,6 +36,7 @@
 // action executor and chat share one implementation instead of three.
 
 import { buildRepoCloneUrl } from '../repoUrl.js';
+import { assertAllowedCloneUrl } from './cloneUrlGuard.js';
 import { errorMessage } from '../../lib/errors.js';
 
 /** What `getGitHubCredentialsForAgent` resolves to. */
@@ -143,12 +144,16 @@ export async function ensureAgentWorkspace(
   const switched = !!repo && repo !== (agent.project || null);
   if (!executionManager) return { switched, prepared: false };
 
+  const gitUrl = repo ? repoHtmlUrl || buildRepoCloneUrl(repo) : null;
+  // The runner splices the token into this URL and persists it in
+  // ~/.git-credentials, so an unexpected host here is a token leak. Check the
+  // FINAL url — task-provided or derived — before anything reaches the runner.
+  if (gitUrl) assertAllowedCloneUrl(gitUrl, repo);
+
   // Push the keep-set FIRST so every subsequent ensure (including the frequent
   // primary-only ones from tool batches) preserves the secondaries instead of
   // pruning them.
   executionManager.setSecondaryRepos?.(agent.id, secondaryRepos);
-
-  const gitUrl = repo ? repoHtmlUrl || buildRepoCloneUrl(repo) : null;
 
   if (repo && gitUrl) {
     // A switch (or a new secondary) must bypass the ensure debounce; the
