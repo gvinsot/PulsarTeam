@@ -513,11 +513,13 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
     socket.on(WsEvents.REQ_VOICE_DELEGATE, async (data: unknown) => {
       const payload = fields(data);
       const agentId = str(payload.agentId);
+      const callId = str(payload.callId);
       const targetAgentName = str(payload.targetAgentName);
       const task = str(payload.task);
       if (!agentId || !targetAgentName || !task) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
+          callId,
           agentId,
           targetAgentName,
           error: 'Rate limit exceeded',
@@ -532,6 +534,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
           .find(a => a.name.toLowerCase() === targetAgentName.toLowerCase());
         if (!targetAgent) {
           socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
+            callId,
             agentId,
             targetAgentName,
             error: `Agent "${targetAgentName}" not found in swarm`,
@@ -561,6 +564,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
         ws.streamEnd(targetAgent.id);
 
         socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
+          callId,
           agentId,
           targetAgentName,
           error: null,
@@ -569,6 +573,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
       } catch (err) {
         console.error(`🎙️ [Voice Delegate] Error: ${errorMessage(err)}`);
         socket.emit(WsEvents.VOICE_DELEGATE_RESULT, {
+          callId,
           agentId,
           targetAgentName,
           error: errorMessage(err),
@@ -581,11 +586,13 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
     socket.on(WsEvents.REQ_VOICE_ASK, async (data: unknown) => {
       const payload = fields(data);
       const agentId = str(payload.agentId);
+      const callId = str(payload.callId);
       const targetAgentName = str(payload.targetAgentName);
       const question = str(payload.question);
       if (!agentId || !targetAgentName || !question) return;
       if (!checkSocketRate()) {
         socket.emit(WsEvents.VOICE_ASK_RESULT, {
+          callId,
           agentId,
           targetAgentName,
           error: 'Rate limit exceeded',
@@ -600,6 +607,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
           .find(a => a.name.toLowerCase() === targetAgentName.toLowerCase());
         if (!targetAgent) {
           socket.emit(WsEvents.VOICE_ASK_RESULT, {
+            callId,
             agentId,
             targetAgentName,
             error: `Agent "${targetAgentName}" not found in swarm`,
@@ -610,6 +618,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
 
         if (targetAgent.status === 'busy') {
           socket.emit(WsEvents.VOICE_ASK_RESULT, {
+            callId,
             agentId,
             targetAgentName,
             error: `Agent "${targetAgentName}" is currently busy`,
@@ -638,6 +647,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
         ws.streamEnd(targetAgent.id);
 
         socket.emit(WsEvents.VOICE_ASK_RESULT, {
+          callId,
           agentId,
           targetAgentName,
           error: null,
@@ -646,6 +656,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
       } catch (err) {
         console.error(`🎙️ [Voice Ask] Error: ${errorMessage(err)}`);
         socket.emit(WsEvents.VOICE_ASK_RESULT, {
+          callId,
           agentId,
           targetAgentName,
           error: errorMessage(err),
@@ -658,11 +669,13 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
     socket.on(WsEvents.REQ_VOICE_MANAGEMENT, async (data: unknown) => {
       const payload = fields(data);
       const agentId = str(payload.agentId);
+      const callId = str(payload.callId);
       const functionName = str(payload.functionName);
       const args = fields(payload.args);
       if (!agentId || !functionName) return;
       if (!canAccessAgent(agentId)) {
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          callId,
           agentId,
           functionName,
           error: 'Access denied',
@@ -674,6 +687,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
       const voiceAgent = agentManager.agents.get(agentId);
       if (!voiceAgent) {
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          callId,
           agentId,
           functionName,
           error: 'Voice agent not found',
@@ -844,6 +858,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
         }
 
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          callId,
           agentId,
           functionName,
           error: null,
@@ -852,6 +867,7 @@ export function setupSocketHandlers(io: Server, agentManager: AgentManager) {
       } catch (err) {
         console.error(`🎙️ [Voice Management] ${functionName} error: ${errorMessage(err)}`);
         socket.emit(WsEvents.VOICE_MANAGEMENT_RESULT, {
+          callId,
           agentId,
           functionName,
           error: errorMessage(err),

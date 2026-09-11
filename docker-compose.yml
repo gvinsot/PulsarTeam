@@ -30,6 +30,11 @@ services:
       - DATABASE_CONNECTION_STRING=postgresql://swarm_prod_app:${POSTGRES_PASSWORD:-pulsarteam}@postgres:5432/swarm_prod
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-}
+      - OPENAI_REALTIME_VOICE=${OPENAI_REALTIME_VOICE:-alloy}
+      - OPENAI_REALTIME_TRANSCRIBE_MODEL=${OPENAI_REALTIME_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      - GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-}
+      - GEMINI_LIVE_VOICE=${GEMINI_LIVE_VOICE:-Kore}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost}
@@ -338,6 +343,11 @@ services:
       # an agent has no explicit config.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-}
+      - OPENAI_REALTIME_VOICE=${OPENAI_REALTIME_VOICE:-alloy}
+      - OPENAI_REALTIME_TRANSCRIBE_MODEL=${OPENAI_REALTIME_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      - GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-}
+      - GEMINI_LIVE_VOICE=${GEMINI_LIVE_VOICE:-Kore}
       - TIMEOUT=600
       - PORT=8000
       - HOST=0.0.0.0
@@ -399,6 +409,11 @@ services:
       # once to seed /root/.codex/auth.json. Per-agent HOME isolation gives every
       # agent its own copy. Falls back to OPENAI_API_KEY when no OAuth token.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-}
+      - OPENAI_REALTIME_VOICE=${OPENAI_REALTIME_VOICE:-alloy}
+      - OPENAI_REALTIME_TRANSCRIBE_MODEL=${OPENAI_REALTIME_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      - GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-}
+      - GEMINI_LIVE_VOICE=${GEMINI_LIVE_VOICE:-Kore}
       - RUNNER_MODEL=${CODEX_MODEL:-}
       - TIMEOUT=600
       - PORT=8000

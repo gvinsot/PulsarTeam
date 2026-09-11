@@ -1,3 +1,4 @@
+import type { VoiceSessionConfig } from './lib/voice/types';
 import type {
   AdminBoardListItem,
   Agent,
@@ -847,17 +848,8 @@ export const api = {
   getSlackAuthUrl: slack.authUrl,
   disconnectSlack: slack.disconnect,
 
-  // Realtime (Voice) — an OpenAI ephemeral-token envelope built inline at
-  // api/src/routes/realtime.ts:166; the type module models no voice shape.
-  getRealtimeToken: (agentId: string) =>
-    post<{
-      token: string;
-      expiresAt: number;
-      session: unknown;
-      voice: string;
-      model: string;
-      transcriptionModel: string;
-    }>('/realtime/token', { agentId }),
+  // Provider-specific ephemeral session; permanent credentials stay on the API.
+  getRealtimeToken: (agentId: string) => post<VoiceSessionConfig>('/realtime/token', { agentId }),
 
   // External voice (STT + LLM + TTS pipeline). The wsUrl values are same-origin
   // PATHS onto the api's voice proxy, not provider URLs, and carry no API key —

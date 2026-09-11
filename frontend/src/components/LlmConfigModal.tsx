@@ -111,9 +111,14 @@ export default function LlmConfigModal({ config, onSave, onClose, saving }: LlmC
                 onChange={e => setForm(f => ({ ...f, model: e.target.value }))}
                 className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                 placeholder="e.g. claude-opus-4-20250514"
+                list="voice-model-suggestions"
                 required
               />
             </div>
+            <datalist id="voice-model-suggestions">
+              {form.provider === 'openai' && <option value="gpt-realtime-2" />}
+              {form.provider === 'google' && <option value="gemini-3.1-flash-live-preview" />}
+            </datalist>
             {form.provider !== 'claude-paid' && (
               <div>
                 <label className="block text-xs text-dark-400 mb-1">

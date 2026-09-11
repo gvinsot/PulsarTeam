@@ -103,6 +103,11 @@ async function harness(claims = user) {
   return {
     manager,
     emitted,
+    async request(event: string, payload: unknown) {
+      const handler = handlers.get(event);
+      assert.ok(handler);
+      await handler(payload);
+    },
     async execute(event: string = WsEvents.REQ_TASK_EXECUTE) {
       const handler = handlers.get(event);
       assert.ok(handler);
@@ -258,4 +263,26 @@ test('service entry points reject absent caller identity', async () => {
     /Access denied/
   );
   assert.equal(writes.mock.callCount(), 0);
+});
+
+test('voice tool replies echo each call id, including failed delegate and ask requests', async () => {
+  const h = await harness();
+  for (const event of [
+    WsEvents.REQ_VOICE_DELEGATE,
+    WsEvents.REQ_VOICE_ASK,
+    WsEvents.REQ_VOICE_MANAGEMENT,
+  ]) {
+    for (const callId of ['first-call', 'second-call']) {
+      await h.request(event, {
+        agentId: 'alice-agent',
+        callId,
+        targetAgentName: 'missing',
+        task: 'task',
+        question: 'question',
+        functionName: 'unknown_tool',
+      });
+      const reply = h.emitted.at(-1)?.data as { callId: string };
+      assert.equal(reply.callId, callId);
+    }
+  }
 });

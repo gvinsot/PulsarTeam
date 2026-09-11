@@ -16,6 +16,11 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in the deployment environment}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-}
+      - OPENAI_REALTIME_VOICE=${OPENAI_REALTIME_VOICE:-alloy}
+      - OPENAI_REALTIME_TRANSCRIBE_MODEL=${OPENAI_REALTIME_TRANSCRIBE_MODEL:-gpt-4o-mini-transcribe}
+      - GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-}
+      - GEMINI_LIVE_VOICE=${GEMINI_LIVE_VOICE:-Kore}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
       - MISTRAL_API_KEY=${MISTRAL_API_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS}
@@ -112,7 +117,7 @@ services:
         - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.contentTypeNosniff=true'
         - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.browserXssFilter=true'
         - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.referrerPolicy=strict-origin-when-cross-origin'
-        - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.Permissions-Policy=accelerometer=(),camera=(),geolocation=(),gyroscope=(),magnetometer=(),microphone=(),payment=(),usb=()'
+        - 'traefik.http.middlewares.pulsarteam-sec-headers.headers.customResponseHeaders.Permissions-Policy=accelerometer=(),camera=(),geolocation=(),gyroscope=(),magnetometer=(),microphone=(self),payment=(),usb=()'
         # same-origin-allow-popups (vs same-origin) preserves the window.opener
         # link when the popup navigates cross-origin and back — required so the
         # Google/Microsoft OAuth popups can postMessage back to the React app

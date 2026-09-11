@@ -1,3 +1,4 @@
+import { isRealtimeLlm, voiceOptions, selectedVoice } from '../../utils/llmConfig';
 import { useState, useEffect } from 'react';
 import { Save, Trash2, RotateCw, Power, Users } from 'lucide-react';
 import { api } from '../../api';
@@ -64,6 +65,7 @@ interface SettingsForm {
   /** '' is the "Auto" option, resolved to a concrete runner on save. */
   runner: AgentRunner | '';
   ttsEnabled: boolean;
+  voice: string;
 }
 
 export default function SettingsTab({
@@ -96,6 +98,7 @@ export default function SettingsTab({
     boardId: agent.boardId || '',
     runner: agent.runner || '',
     ttsEnabled: agent.ttsEnabled || false,
+    voice: agent.voice || 'alloy',
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -146,6 +149,7 @@ export default function SettingsTab({
       boardId: agent.boardId || '',
       runner: agent.runner || '',
       ttsEnabled: agent.ttsEnabled || false,
+      voice: agent.voice || 'alloy',
     });
     setSaved(false);
     setBatchSize(2);
@@ -219,9 +223,14 @@ export default function SettingsTab({
       };
       // Claude Code / Codex choose their model in the terminal — never persist a
       // per-agent LLM config for them, even if one lingered from a prior runner.
-      if (payload.runner && MODEL_IN_TERMINAL_RUNNERS.has(payload.runner)) {
+      if (!agent.isVoice && payload.runner && MODEL_IN_TERMINAL_RUNNERS.has(payload.runner)) {
         payload.llmConfigId = null;
       }
+      if (agent.isVoice && agent.voiceMode !== 'external')
+        payload.voice = selectedVoice(
+          form.voice,
+          llmConfigs.find(c => c.id === form.llmConfigId)
+        );
       await api.updateAgent(agent.id, payload);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -398,8 +407,9 @@ export default function SettingsTab({
               // any per-agent LLM config when switching to them. Other runners
               // only clear on a provider mismatch (kept for safety).
               if (
-                MODEL_IN_TERMINAL_RUNNERS.has(nextRunner) ||
-                !isLlmAllowedForRunner(form.llmConfigId, nextRunner)
+                !agent.isVoice &&
+                (MODEL_IN_TERMINAL_RUNNERS.has(nextRunner) ||
+                  !isLlmAllowedForRunner(form.llmConfigId, nextRunner))
               ) {
                 updateField('llmConfigId', '');
               }
@@ -419,7 +429,27 @@ export default function SettingsTab({
           </p>
         </div>
 
-        {MODEL_IN_TERMINAL_RUNNERS.has(form.runner) ? (
+        {agent.isVoice && agent.voiceMode !== 'external' && (
+          <div className="col-span-2">
+            <label className="block text-xs text-dark-400 mb-1.5">Voice</label>
+            <select
+              value={selectedVoice(
+                form.voice,
+                llmConfigs.find(c => c.id === form.llmConfigId)
+              )}
+              onChange={e => updateField('voice', e.target.value)}
+              className="w-full px-3 py-2 bg-dark-800 border border-dark-600 rounded-lg text-sm text-dark-100"
+            >
+              {voiceOptions(llmConfigs.find(c => c.id === form.llmConfigId)).map(voice => (
+                <option key={voice} value={voice}>
+                  {voice}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {!agent.isVoice && MODEL_IN_TERMINAL_RUNNERS.has(form.runner) ? (
           <div className="col-span-2">
             <label className="block text-xs text-dark-400 mb-1.5">LLM Configuration (model)</label>
             <div className="px-3 py-2.5 bg-dark-700/40 rounded-lg border border-dark-600/50 text-xs text-dark-400">
@@ -444,10 +474,10 @@ export default function SettingsTab({
                 ? 'Default LLM (use runner’s built-in model)'
                 : '-- Select an LLM config --';
               const modelOptions = (
-                agent.isVoice
-                  ? llmConfigs.filter(c => c.model && c.model.includes('gpt-realtime'))
+                agent.isVoice && agent.voiceMode !== 'external'
+                  ? llmConfigs.filter(isRealtimeLlm)
                   : llmConfigs
-              ).filter(c => isLlmAllowedForRunner(c.id, form.runner));
+              ).filter(c => agent.isVoice || isLlmAllowedForRunner(c.id, form.runner));
               return (
                 <select
                   value={form.llmConfigId}
@@ -469,13 +499,12 @@ export default function SettingsTab({
                 between them in the terminal. Your selection here is the default.
               </p>
             )}
-            {agent.isVoice &&
-              !llmConfigs.some(c => c.model && c.model.includes('gpt-realtime')) && (
-                <p className="text-[11px] text-amber-400 mt-1">
-                  No realtime LLM config found. Create one with model "gpt-realtime-1.5" in Admin
-                  Settings.
-                </p>
-              )}
+            {agent.isVoice && agent.voiceMode !== 'external' && !llmConfigs.some(isRealtimeLlm) && (
+              <p className="text-[11px] text-amber-400 mt-1">
+                No realtime LLM config found. Create OpenAI "gpt-realtime-2" or Google
+                "gemini-3.1-flash-live-preview" in Admin Settings.
+              </p>
+            )}
             {form.llmConfigId &&
               (() => {
                 const sel = llmConfigs.find(c => c.id === form.llmConfigId);

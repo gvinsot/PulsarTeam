@@ -22,11 +22,9 @@ export default function VoiceChatTab({ agent }: { agent: Agent }) {
 
   const handleSwitchSession = () => {
     voice.disconnect();
-    setTimeout(() => {
-      voice.connect(agent.id).catch(err => {
-        console.error('Voice reconnect after switch failed:', err);
-      });
-    }, 150);
+    void voice.connect(agent.id).catch(err => {
+      console.error('Voice reconnect after switch failed:', err);
+    });
   };
 
   return (

@@ -251,7 +251,7 @@ export default function ContextTab({
         socket.on(WsEvents.HANDOFF_ERROR, onError);
         // If the server never responds (handler crash, reconnect between
         // request and response), unstick the button instead of spinning forever.
-        timer = setTimeout(() => {
+        timer = window.setTimeout(() => {
           cleanup();
           setResult({ success: false, error: 'Handoff timed out — no response from the server.' });
           setSending(false);

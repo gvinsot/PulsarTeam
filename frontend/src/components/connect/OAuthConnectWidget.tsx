@@ -160,7 +160,7 @@ export default function OAuthConnectWidget({
       // Poll only for popup closure detection
       // The server-rendered oauth-redirect page reports the result via postMessage
       clearInterval(pollRef.current ?? undefined);
-      pollRef.current = setInterval(() => {
+      pollRef.current = window.setInterval(() => {
         if (popup.closed) {
           clearInterval(pollRef.current ?? undefined);
           pollRef.current = null;

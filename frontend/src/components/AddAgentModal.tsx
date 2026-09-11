@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { X, Cpu, Search, FolderCode, Crown, Mic, LayoutGrid, Users } from 'lucide-react';
 import { api } from '../api';
 import type { AgentBatchCreated, AgentCreated } from '../api';
-import { isRealtimeLlm } from '../utils/llmConfig';
+import { isRealtimeLlm, voiceOptions, selectedVoice } from '../utils/llmConfig';
 import { useEnabledAgentTypes } from '../hooks/useEnabledAgentTypes';
 import { AGENT_TYPE_OPTION_LABELS, AGENT_TYPE_SELECT_ORDER } from '../utils/agentTypes';
 import type { Agent, AgentTemplate, BoardListItem, LlmConfig, RepoPickerOption } from '../types';
@@ -152,6 +152,11 @@ export default function AddAgentModal({
     setCreating(true);
     try {
       const payload: any = { ...form };
+      if (form.isVoice && form.voiceMode === 'realtime')
+        payload.voice = selectedVoice(
+          form.voice,
+          llmConfigs.find(c => c.id === form.llmConfigId)
+        );
       payload.llmConfigId = payload.llmConfigId || null;
       payload.boardId = payload.boardId || null;
       payload.runner = payload.runner || null;
@@ -451,7 +456,7 @@ export default function AddAgentModal({
                             // Voice agents shouldn't run on opencode CLI — let "Auto" pick sandbox.
                             updateField('runner', '');
                             if (form.voiceMode === 'realtime') {
-                              // Auto-select an LLM config with gpt-realtime model
+                              // Auto-select a speech-to-speech LLM config
                               const realtimeConfig = llmConfigs.find(isRealtimeLlm);
                               if (realtimeConfig) updateField('llmConfigId', realtimeConfig.id);
                             }
@@ -491,7 +496,9 @@ export default function AddAgentModal({
                       }}
                       className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                     >
-                      <option value="realtime">OpenAI Realtime (speech-to-speech)</option>
+                      <option value="realtime">
+                        OpenAI Realtime / Gemini Live (speech-to-speech)
+                      </option>
                       <option value="external">
                         External STT + LLM + TTS (HighSpeedToText-style)
                       </option>
@@ -499,7 +506,7 @@ export default function AddAgentModal({
                     <p className="text-[11px] text-dark-500 mt-1">
                       {form.voiceMode === 'external'
                         ? 'Browser streams mic to the STT service, then a regular text LLM, then the TTS service plays the reply. STT/TTS service URLs are configured in Admin Settings.'
-                        : 'Speech-to-speech via the OpenAI Realtime API.'}
+                        : 'Speech-to-speech via OpenAI Realtime or Gemini Live, selected by the LLM configuration.'}
                     </p>
                   </div>
                 )}
@@ -508,18 +515,18 @@ export default function AddAgentModal({
                   <div className="col-span-2">
                     <label className="block text-xs text-dark-400 mb-1.5">Voice</label>
                     <select
-                      value={form.voice}
+                      value={selectedVoice(
+                        form.voice,
+                        llmConfigs.find(c => c.id === form.llmConfigId)
+                      )}
                       onChange={e => updateField('voice', e.target.value)}
                       className="w-full px-3 py-2 bg-dark-700 border border-dark-600 rounded-lg text-sm text-dark-100 focus:outline-none focus:border-indigo-500"
                     >
-                      <option value="alloy">Alloy</option>
-                      <option value="ash">Ash</option>
-                      <option value="ballad">Ballad</option>
-                      <option value="coral">Coral</option>
-                      <option value="echo">Echo</option>
-                      <option value="sage">Sage</option>
-                      <option value="shimmer">Shimmer</option>
-                      <option value="verse">Verse</option>
+                      {voiceOptions(llmConfigs.find(c => c.id === form.llmConfigId)).map(voice => (
+                        <option key={voice} value={voice}>
+                          {voice}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 )}
@@ -661,8 +668,8 @@ export default function AddAgentModal({
                     form.voiceMode === 'realtime' &&
                     !llmConfigs.some(isRealtimeLlm) && (
                       <p className="text-[11px] text-amber-400 mt-1">
-                        No realtime LLM config found. Create one with model "gpt-realtime-1.5" in
-                        Admin Settings.
+                        No realtime LLM config found. Create OpenAI "gpt-realtime-2" or Google
+                        "gemini-3.1-flash-live-preview" in Admin Settings.
                       </p>
                     )}
                   {form.llmConfigId &&
