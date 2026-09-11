@@ -13,14 +13,7 @@ import { waitForProjectSwitch } from '../agentManager/crud.js';
 import { ActionType, AgentMode, AUTO_ROLE, columnExists } from './taskStateMachine.js';
 import type { WorkflowAction, WorkflowColumn, WorkflowConfig } from './taskStateMachine.js';
 import type { Agent } from '../database/agents.js';
-import {
-  findAgentByRole,
-  findAgentForAssignment,
-  acquireLock,
-  releaseLock,
-  markAgentBusy,
-  clearAgentBusy,
-} from './agentSelector.js';
+import { findAgentByRole, findAgentForAssignment, reserveAgentForTask } from './agentSelector.js';
 import { resolveAutoRole } from './roleRouter.js';
 import { markTaskError, isUserStopError } from './taskErrors.js';
 import {
@@ -339,7 +332,7 @@ async function executeAssignAgent(
 
   if (!agent) {
     console.log(
-      `[ActionExecutor] assign_agent: no agent with role "${action.role}" — skipping task="${task.id}"`
+      `[ActionExecutor] assign_agent: no available agent with role "${action.role}" — deferring task="${task.id}"`
     );
     return { executed: false, skipped: true, reason: 'no-agent-for-role' };
   }
@@ -725,13 +718,6 @@ async function executeRunAgent(
   const columns = workflow?.columns || [];
 
   const lockKey = `${task.agentId}:${task.id}:${mode}`;
-  if (!acquireLock(lockKey)) {
-    console.log(
-      `[ActionExecutor] run_agent: lock held for "${task.text?.slice(0, 60)}" — skipping`
-    );
-    return { executed: false, skipped: true, reason: 'lock-held' };
-  }
-
   // Find agent for this role (scoped to the task's board, preferring agents
   // already on the task's repo so we don't have to project-switch every run).
   // Precompute owned-task counts from the DB for the (sync) load-balancer.
@@ -749,115 +735,145 @@ async function executeRunAgent(
     console.log(
       `[ActionExecutor] run_agent: no idle agent for role "${role}" — task stays pending`
     );
-    releaseLock(lockKey);
     return { executed: false, skipped: true, reason: 'no-idle-agent' };
   }
 
-  markAgentBusy(agent.id);
+  const releaseRun = reserveAgentForTask(agent.id, task.id, lockKey);
+  if (!releaseRun) {
+    console.log(
+      `[ActionExecutor] run_agent: agent or task already reserved agent="${agent.id}" task="${task.id}"`
+    );
+    return { executed: false, skipped: true, reason: 'lock-held' };
+  }
 
-  // A fresh run_agent execution is genuinely starting here — we've passed the
-  // durable executionStatus='stopped' gate in processColumnEntry. Drop any
-  // stale in-memory 'stopped' signal left by a PRIOR lifecycle (classically:
-  // the user pressed Stop and then moved the task to a new column, where
-  // PUT /tasks/:id re-sets the signal to interrupt the already-gone old run).
-  // Without this, _waitForExecutionComplete's early-stop check would consume
-  // that residual signal and abort this run before the agent does anything —
-  // so a stopped-then-moved task could never be picked up again. A genuine
-  // Stop during THIS run sets the signal again, after this point, so it stays
-  // honored.
-  agentManager._clearStopSignal?.(task.id);
-
-  // Wrap everything after markAgentBusy in try/finally so the busy flag is
-  // always cleared — even if task setup or project-switch throws unexpectedly.
-  let actualTask;
-  let execStartMsgIdx;
-  let execStartedAt;
-  let gitBaselineHead: string | null = null;
   try {
-    // Set actionRunning flag on the task
-    actualTask = task.agentId ? await getTaskById(task.id) : null;
-    if (actualTask) {
-      await _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
-    } else {
-      // Board-level task (created unassigned via MCP add_task): not in the
-      // in-memory store, so mark + persist the running flag directly — otherwise
-      // the board never shows it as busy while the agent works.
-      await _markActionRunningBoardLevel(agentManager, task, agent, mode);
-    }
+    // A fresh run_agent execution is genuinely starting here — we've passed the
+    // durable executionStatus='stopped' gate in processColumnEntry. Drop any
+    // stale in-memory 'stopped' signal left by a PRIOR lifecycle (classically:
+    // the user pressed Stop and then moved the task to a new column, where
+    // PUT /tasks/:id re-sets the signal to interrupt the already-gone old run).
+    // Without this, _waitForExecutionComplete's early-stop check would consume
+    // that residual signal and abort this run before the agent does anything —
+    // so a stopped-then-moved task could never be picked up again. A genuine
+    // Stop during THIS run sets the signal again, after this point, so it stays
+    // honored.
+    agentManager._clearStopSignal?.(task.id);
 
-    // Auto-switch agent to the task's repo if needed.
-    const switched = await _ensureAgentOnTaskRepo(agent, task, actualTask, {
-      agentManager,
-      mode,
-      agentId: task.agentId,
-    });
-    if (!switched.ok) return switched.result;
-    execStartMsgIdx = (agent.conversationHistory || []).length;
-    execStartedAt = new Date().toISOString();
+    // The outer reservation also covers setup and the entire cleanup below.
+    let actualTask;
+    let execStartMsgIdx;
+    let execStartedAt;
+    let gitBaselineHead: string | null = null;
+    try {
+      // Set actionRunning flag on the task
+      actualTask = task.agentId ? await getTaskById(task.id) : null;
+      if (actualTask) {
+        await _markActionRunning(actualTask, agent, mode, agentManager, task.agentId);
+      } else {
+        // Board-level task (created unassigned via MCP add_task): not in the
+        // in-memory store, so mark + persist the running flag directly — otherwise
+        // the board never shows it as busy while the agent works.
+        await _markActionRunningBoardLevel(agentManager, task, agent, mode);
+      }
 
-    // Snapshot the repo HEAD before a decide run (the only mode that executes
-    // code). The finally below diffs baseline..HEAD to link every commit made
-    // during the run — the only detection that works for CLI runners, whose
-    // git activity happens inside their PTY and never reaches the direct
-    // command tool path.
-    // parser (and often isn't even rendered by the CLI's TUI).
-    if (mode === AgentMode.DECIDE) {
-      gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
-    }
+      // Auto-switch agent to the task's repo if needed.
+      const switched = await _ensureAgentOnTaskRepo(agent, task, actualTask, {
+        agentManager,
+        mode,
+        agentId: task.agentId,
+      });
+      if (!switched.ok) return switched.result;
+      execStartMsgIdx = (agent.conversationHistory || []).length;
+      execStartedAt = new Date().toISOString();
 
-    let result: ActionResult;
-    switch (mode) {
-      case AgentMode.TITLE:
-        result = await _runSimpleMode('title', agent, task, {
-          agentManager,
-          io,
+      // Snapshot the repo HEAD before a decide run (the only mode that executes
+      // code). The finally below diffs baseline..HEAD to link every commit made
+      // during the run — the only detection that works for CLI runners, whose
+      // git activity happens inside their PTY and never reaches the direct
+      // command tool path.
+      // parser (and often isn't even rendered by the CLI's TUI).
+      if (mode === AgentMode.DECIDE) {
+        gitBaselineHead = await snapshotGitBaseline(agentManager.executionManager, agent.id);
+      }
+
+      let result: ActionResult;
+      switch (mode) {
+        case AgentMode.TITLE:
+          result = await _runSimpleMode('title', agent, task, {
+            agentManager,
+            io,
+            execStartMsgIdx,
+            execStartedAt,
+          });
+          break;
+        case AgentMode.SET_TYPE:
+          result = await _runSimpleMode('set_type', agent, task, {
+            agentManager,
+            io,
+            execStartMsgIdx,
+            execStartedAt,
+          });
+          break;
+        case AgentMode.REFINE:
+          result = await _runRefineMode(agent, task, instructions, {
+            agentManager,
+            io,
+            execStartMsgIdx,
+            execStartedAt,
+          });
+          break;
+        case AgentMode.DECIDE:
+          result = await _runDecideMode(agent, task, instructions, columns, {
+            agentManager,
+            io,
+            execStartMsgIdx,
+            execStartedAt,
+            gitBaselineHead,
+          });
+          break;
+        default:
+          console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
+          result = { executed: false, skipped: true, reason: `unknown-mode: ${mode}` };
+      }
+
+      return result;
+    } catch (err) {
+      // Distinguish a user-triggered Stop from a real failure. stopAgent() aborts
+      // the in-flight stream and llmProviders throws "Agent stopped by user",
+      // which propagates up here. Without this check, a user pressing Stop on a
+      // running workflow action would flip the task to status=error — and if
+      // that errorFromStatus path ever clobbers itself, the task disappears
+      // from the board entirely. stopAgent already marked the task as stopped
+      // and cleaned actionRunning flags, so we just log + return cleanly.
+      if (isUserStopError(err)) {
+        console.log(
+          `[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`
+        );
+        agentManager._saveExecutionLog(
+          task.agentId,
+          task.id,
+          agent.id,
           execStartMsgIdx,
           execStartedAt,
-        });
-        break;
-      case AgentMode.SET_TYPE:
-        result = await _runSimpleMode('set_type', agent, task, {
-          agentManager,
-          io,
-          execStartMsgIdx,
-          execStartedAt,
-        });
-        break;
-      case AgentMode.REFINE:
-        result = await _runRefineMode(agent, task, instructions, {
-          agentManager,
-          io,
-          execStartMsgIdx,
-          execStartedAt,
-        });
-        break;
-      case AgentMode.DECIDE:
-        result = await _runDecideMode(agent, task, instructions, columns, {
-          agentManager,
-          io,
-          execStartMsgIdx,
-          execStartedAt,
-          gitBaselineHead,
-        });
-        break;
-      default:
-        console.warn(`[ActionExecutor] Unknown mode: ${mode}`);
-        result = { executed: false, skipped: true, reason: `unknown-mode: ${mode}` };
-    }
+          false,
+          mode
+        );
+        // Belt-and-suspenders: ensure executionStatus=stopped is durable even
+        // if stopAgent's iteration missed this task (e.g. race between assign
+        // and stop). The in-memory 'stopped' signal is set by stopAgent itself.
+        try {
+          await updateTaskExecutionStatus(task.id, 'stopped');
+        } catch {
+          /* best-effort */
+        }
+        return { executed: false, skipped: true, reason: 'user-stop' };
+      }
 
-    return result;
-  } catch (err) {
-    // Distinguish a user-triggered Stop from a real failure. stopAgent() aborts
-    // the in-flight stream and llmProviders throws "Agent stopped by user",
-    // which propagates up here. Without this check, a user pressing Stop on a
-    // running workflow action would flip the task to status=error — and if
-    // that errorFromStatus path ever clobbers itself, the task disappears
-    // from the board entirely. stopAgent already marked the task as stopped
-    // and cleaned actionRunning flags, so we just log + return cleanly.
-    if (isUserStopError(err)) {
-      console.log(
-        `[ActionExecutor] run_agent stopped by user for "${task.text?.slice(0, 60)}" (mode=${mode}) — not marking as error`
+      console.error(
+        `[ActionExecutor] run_agent error for "${task.text?.slice(0, 60)}":`,
+        errorMessage(err)
       );
+      // Save error execution log
       agentManager._saveExecutionLog(
         task.agentId,
         task.id,
@@ -867,149 +883,127 @@ async function executeRunAgent(
         false,
         mode
       );
-      // Belt-and-suspenders: ensure executionStatus=stopped is durable even
-      // if stopAgent's iteration missed this task (e.g. race between assign
-      // and stop). The in-memory 'stopped' signal is set by stopAgent itself.
+      // Emit system error report so leader + frontend are notified
+      const errorTimestamp = new Date().toISOString();
+      agentManager._emit('agent:error:report', {
+        agentId: agent.id,
+        agentName: agent.name,
+        project: agent.project || task.project || null,
+        description: `[System Error] Workflow action "${mode}" failed for task "${task.text?.slice(0, 100)}": ${errorMessage(err)}`,
+        timestamp: errorTimestamp,
+        isSystemError: true,
+        taskId: task.id,
+      });
+      // Log detailed error in task history and set error status.
+      // markTaskError guarantees the task stays visible on the board even if
+      // it was already errored or if the prior status no longer exists in the
+      // workflow (renamed/deleted columns).
       try {
-        await updateTaskExecutionStatus(task.id, 'stopped');
-      } catch {
-        /* best-effort */
-      }
-      return { executed: false, skipped: true, reason: 'user-stop' };
-    }
-
-    console.error(
-      `[ActionExecutor] run_agent error for "${task.text?.slice(0, 60)}":`,
-      errorMessage(err)
-    );
-    // Save error execution log
-    agentManager._saveExecutionLog(
-      task.agentId,
-      task.id,
-      agent.id,
-      execStartMsgIdx,
-      execStartedAt,
-      false,
-      mode
-    );
-    // Emit system error report so leader + frontend are notified
-    const errorTimestamp = new Date().toISOString();
-    agentManager._emit('agent:error:report', {
-      agentId: agent.id,
-      agentName: agent.name,
-      project: agent.project || task.project || null,
-      description: `[System Error] Workflow action "${mode}" failed for task "${task.text?.slice(0, 100)}": ${errorMessage(err)}`,
-      timestamp: errorTimestamp,
-      isSystemError: true,
-      taskId: task.id,
-    });
-    // Log detailed error in task history and set error status.
-    // markTaskError guarantees the task stays visible on the board even if
-    // it was already errored or if the prior status no longer exists in the
-    // workflow (renamed/deleted columns).
-    try {
-      if (actualTask) {
-        const mutated = markTaskError(actualTask, errorMessage(err), {
-          by: agent.name || 'workflow',
-          mode,
-          agentName: agent.name,
-          workflow,
-        });
-        if (mutated) {
-          await saveTaskToDb({ ...actualTask, agentId: task.agentId });
-          agentManager._emit('task:updated', {
-            agentId: task.agentId,
-            task: { ...actualTask, agentId: task.agentId },
+        if (actualTask) {
+          const mutated = markTaskError(actualTask, errorMessage(err), {
+            by: agent.name || 'workflow',
+            mode,
+            agentName: agent.name,
+            workflow,
+          });
+          if (mutated) {
+            await saveTaskToDb({ ...actualTask, agentId: task.agentId });
+            agentManager._emit('task:updated', {
+              agentId: task.agentId,
+              task: { ...actualTask, agentId: task.agentId },
+            });
+          }
+        } else {
+          agentManager.setTaskStatus(task.agentId, task.id, 'error', {
+            skipAutoRefine: true,
+            by: 'workflow',
           });
         }
-      } else {
-        agentManager.setTaskStatus(task.agentId, task.id, 'error', {
-          skipAutoRefine: true,
-          by: 'workflow',
-        });
+      } catch (e) {
+        console.error(`[ActionExecutor] Failed to set error status:`, errorMessage(e));
       }
-    } catch (e) {
-      console.error(`[ActionExecutor] Failed to set error status:`, errorMessage(e));
-    }
-    return { executed: false, error: true, message: errorMessage(err) };
-  } finally {
-    releaseLock(lockKey);
-    clearAgentBusy(agent.id);
-    // End-of-run commit/push reconcile — runs whichever way the run ended
-    // (update_task completion, status-only move, no-decision retry, error,
-    // user stop). This is the safety net that catches commits a CLI runner
-    // made silently in its PTY: the update_task path only detects commits
-    // when the runner sends a completion comment, and a status-only move
-    // detects nothing at all. Idempotent (prefix-aware dedup), so overlap
-    // with the mid-run sweep and recordTaskCompletion is harmless.
-    if (mode === AgentMode.DECIDE && execStartedAt) {
-      try {
-        await reconcileTaskCommits(agentManager, agent.id, task.id, {
-          baselineHead: gitBaselineHead,
-          startedAt: gitBaselineHead ? null : execStartedAt,
-          label: 'RunEndReconcile',
-        });
-      } catch (reconcileErr) {
-        console.warn(
-          `[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${errorMessage(reconcileErr)}`
+      return { executed: false, error: true, message: errorMessage(err) };
+    } finally {
+      // End-of-run commit/push reconcile — runs whichever way the run ended
+      // (update_task completion, status-only move, no-decision retry, error,
+      // user stop). This is the safety net that catches commits a CLI runner
+      // made silently in its PTY: the update_task path only detects commits
+      // when the runner sends a completion comment, and a status-only move
+      // detects nothing at all. Idempotent (prefix-aware dedup), so overlap
+      // with the mid-run sweep and recordTaskCompletion is harmless.
+      if (mode === AgentMode.DECIDE && execStartedAt) {
+        try {
+          await reconcileTaskCommits(agentManager, agent.id, task.id, {
+            baselineHead: gitBaselineHead,
+            startedAt: gitBaselineHead ? null : execStartedAt,
+            label: 'RunEndReconcile',
+          });
+        } catch (reconcileErr) {
+          console.warn(
+            `[ActionExecutor] End-of-run commit reconcile failed for task ${task.id}: ${errorMessage(reconcileErr)}`
+          );
+        }
+      }
+      let cleanupMutated = false;
+      const cleanupFields: any = {};
+      // Clear actionRunning with a targeted DB update. The chain reads the task
+      // fresh from the DB after this function returns; if the durable row still
+      // says action_running=true, skipped/no-decision actions get re-saved as
+      // "busy" forever and the recheck loop will ignore them.
+      if (actualTask && actualTask.actionRunning) {
+        actualTask.actionRunning = false;
+        actualTask.startedAt = null;
+        delete actualTask.actionRunningAgentId;
+        delete actualTask.actionRunningMode;
+        cleanupFields.actionRunning = false;
+        cleanupFields.actionRunningAgentId = null;
+        cleanupFields.actionRunningMode = null;
+        cleanupFields.startedAt = null;
+        cleanupMutated = true;
+      }
+      // Workflow action modes (decide, refine, title, set_type) should not leave
+      // the agent as the permanent assignee — clear it so the task loop won't send
+      // the task to the wrong agent if the next workflow action is delayed.
+      if (actualTask && actualTask.assignee === agent.id) {
+        actualTask.assignee = null;
+        cleanupFields.assignee = null;
+        cleanupMutated = true;
+      }
+      // Notify the UI that the action is no longer running. Without this, the
+      // frontend keeps the task card in "spinner / undraggable" state until a
+      // page refresh, because no later event in the chain may emit a fresh
+      // task:updated payload (e.g. when the chain has no change_status action
+      // after run_agent). Persist only the execution/assignee cleanup fields so a
+      // concurrent status/text update cannot be overwritten by a stale task copy.
+      if (cleanupMutated && actualTask) {
+        // Emit the FRESH row returned by the update, not the captured actualTask: a
+        // decide agent may have moved the task to its next column DURING the run, so
+        // actualTask.status is stale. Emitting it with a new timestamp bounces the
+        // card back to the previous column — mid-flow it self-corrects in ~0.5s when
+        // the next column emits, but on the FINAL action nothing corrects it, so the
+        // card sticks a column back until a reload. cleanupFields is non-empty
+        // whenever cleanupMutated, so the update runs and returns the current row.
+        const updated =
+          Object.keys(cleanupFields).length > 0
+            ? await updateTaskFields(actualTask.id, cleanupFields)
+            : null;
+        emitTaskUpdated(
+          agentManager,
+          updated
+            ? { ...updated, agentId: task.agentId }
+            : { ...actualTask, agentId: task.agentId },
+          { emitAgent: false, stampUpdatedAt: true }
         );
       }
+      // Board-level task: no in-memory copy, and board-level moves bypass
+      // setTaskStatus, so nothing else will persist the cleared flag — do it here
+      // or the task stays stuck "busy" in the DB after the run ends.
+      if (!actualTask && task?.actionRunning) {
+        await _clearActionRunningBoardLevel(agentManager, task);
+      }
     }
-    let cleanupMutated = false;
-    const cleanupFields: any = {};
-    // Clear actionRunning with a targeted DB update. The chain reads the task
-    // fresh from the DB after this function returns; if the durable row still
-    // says action_running=true, skipped/no-decision actions get re-saved as
-    // "busy" forever and the recheck loop will ignore them.
-    if (actualTask && actualTask.actionRunning) {
-      actualTask.actionRunning = false;
-      actualTask.startedAt = null;
-      delete actualTask.actionRunningAgentId;
-      delete actualTask.actionRunningMode;
-      cleanupFields.actionRunning = false;
-      cleanupFields.actionRunningAgentId = null;
-      cleanupFields.actionRunningMode = null;
-      cleanupFields.startedAt = null;
-      cleanupMutated = true;
-    }
-    // Workflow action modes (decide, refine, title, set_type) should not leave
-    // the agent as the permanent assignee — clear it so the task loop won't send
-    // the task to the wrong agent if the next workflow action is delayed.
-    if (actualTask && actualTask.assignee === agent.id) {
-      actualTask.assignee = null;
-      cleanupFields.assignee = null;
-      cleanupMutated = true;
-    }
-    // Notify the UI that the action is no longer running. Without this, the
-    // frontend keeps the task card in "spinner / undraggable" state until a
-    // page refresh, because no later event in the chain may emit a fresh
-    // task:updated payload (e.g. when the chain has no change_status action
-    // after run_agent). Persist only the execution/assignee cleanup fields so a
-    // concurrent status/text update cannot be overwritten by a stale task copy.
-    if (cleanupMutated && actualTask) {
-      // Emit the FRESH row returned by the update, not the captured actualTask: a
-      // decide agent may have moved the task to its next column DURING the run, so
-      // actualTask.status is stale. Emitting it with a new timestamp bounces the
-      // card back to the previous column — mid-flow it self-corrects in ~0.5s when
-      // the next column emits, but on the FINAL action nothing corrects it, so the
-      // card sticks a column back until a reload. cleanupFields is non-empty
-      // whenever cleanupMutated, so the update runs and returns the current row.
-      const updated =
-        Object.keys(cleanupFields).length > 0
-          ? await updateTaskFields(actualTask.id, cleanupFields)
-          : null;
-      emitTaskUpdated(
-        agentManager,
-        updated ? { ...updated, agentId: task.agentId } : { ...actualTask, agentId: task.agentId },
-        { emitAgent: false, stampUpdatedAt: true }
-      );
-    }
-    // Board-level task: no in-memory copy, and board-level moves bypass
-    // setTaskStatus, so nothing else will persist the cleared flag — do it here
-    // or the task stays stuck "busy" in the DB after the run ends.
-    if (!actualTask && task?.actionRunning) {
-      await _clearActionRunningBoardLevel(agentManager, task);
-    }
+  } finally {
+    releaseRun();
   }
 }
 

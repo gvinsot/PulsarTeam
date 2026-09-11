@@ -11,11 +11,44 @@ const _executionLocks = new Map();
 const _busyAgents = new Map();
 const LOCK_TTL_MS = 15 * 60 * 1000; // 15 min
 
+// Workflow actions and manual/automatic resumes share these reservations.
+// A CLI can report idle while its task is still running. Live promises retain
+// their reservation through cleanup; elapsed time alone must never free them.
+const _agentRuns = new Map<string, { taskId: string; lockKey: string }>();
+const _taskRuns = new Set<string>();
+
+export function isAgentBusy(agentId: string): boolean {
+  return _agentRuns.has(agentId) || _busyAgents.has(agentId);
+}
+
+export function isTaskRunning(taskId: string): boolean {
+  return _taskRuns.has(taskId);
+}
+
+/** Synchronous check-and-reserve, before workspace preparation or prompt injection. */
+export function reserveAgentForTask(agentId: string, taskId: string, lockKey: string) {
+  if (isAgentBusy(agentId) || isTaskRunning(taskId)) return null;
+  const token = acquireLock(lockKey);
+  if (!token) return null;
+  const run = { taskId, lockKey };
+  _agentRuns.set(agentId, run);
+  _taskRuns.add(taskId);
+  console.log(`[AgentSelector] Reserved agent="${agentId}" task="${taskId}" lock="${lockKey}"`);
+  return () => {
+    if (_agentRuns.get(agentId) !== run) return;
+    _agentRuns.delete(agentId);
+    _taskRuns.delete(taskId);
+    releaseLock(lockKey, token);
+    console.log(`[AgentSelector] Released agent="${agentId}" task="${taskId}"`);
+  };
+}
+
 // ── Lock management ─────────────────────────────────────────────────────────
 
 function _evictStaleLocks() {
   const now = Date.now();
   for (const [key, entry] of _executionLocks) {
+    if ([..._agentRuns.values()].some(run => run.lockKey === key)) continue;
     if (now - entry.ts > LOCK_TTL_MS) {
       console.warn(
         `[AgentSelector] Evicting stale execution lock: ${key} (age: ${Math.round((now - entry.ts) / 1000)}s)`
@@ -75,6 +108,9 @@ export function refreshLock(lockKey: string, token: string | null = null) {
  * for that task.
  */
 export function hasLockForTask(lockKeyPrefix: string) {
+  for (const run of _agentRuns.values()) {
+    if (run.lockKey.startsWith(lockKeyPrefix)) return true;
+  }
   const now = Date.now();
   for (const [key, entry] of _executionLocks) {
     if (key.startsWith(lockKeyPrefix) && now - entry.ts <= LOCK_TTL_MS) return true;
@@ -112,7 +148,13 @@ export function clearAgentBusy(agentId: string) {
  */
 export function hasIdleAgentWithRole(agents: Map<any, any>, role?: string): boolean {
   for (const a of agents.values()) {
-    if (a.status === 'idle' && a.enabled !== false && (!role || a.role === role)) return true;
+    if (
+      a.status === 'idle' &&
+      a.enabled !== false &&
+      !isAgentBusy(a.id) &&
+      (!role || a.role === role)
+    )
+      return true;
   }
   return false;
 }
@@ -187,7 +229,7 @@ export function findAgentByRole(
       console.log(`[AgentSelector] Skipping "${a.name}" — status: ${a.status}`);
       return false;
     }
-    if (_busyAgents.has(a.id)) {
+    if (isAgentBusy(a.id)) {
       console.log(`[AgentSelector] Skipping "${a.name}" — busy in another transition`);
       return false;
     }
@@ -250,7 +292,8 @@ export function findAgentByRole(
 
 /**
  * Find the best agent for a role-based assignment (for assign_agent actions).
- * Same logic as findAgentByRole but does NOT filter on idle status (for pure assignment).
+ * Only available agents may receive automatic assignments, including while a
+ * CLI reports idle during an active workflow or resume.
  */
 export function findAgentForAssignment(
   agents: Map<any, any>,
@@ -267,6 +310,8 @@ export function findAgentForAssignment(
   const candidates = allAgents.filter(
     (a: any) =>
       a.enabled !== false &&
+      (a.status === 'idle' || a.status === 'error') &&
+      !isAgentBusy(a.id) &&
       (a.role || '').toLowerCase() === (role || '').toLowerCase() &&
       (!ownerId || !a.ownerId || a.ownerId === ownerId)
   );

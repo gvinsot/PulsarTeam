@@ -53,6 +53,7 @@ import {
   hasLockForTask,
   hasIdleAgentWithRole,
   clearAgentBusy,
+  isTaskRunning,
 } from './agentSelector.js';
 
 // ── Progressive cooldown for on_enter retries ──────────────────────────────
@@ -132,8 +133,8 @@ export async function processColumnEntry(
   // running. This causes race conditions where multiple chains can move the
   // task concurrently, leading to tasks "jumping" columns or disappearing.
   // We defer the nested call so recheckPendingTransitions picks it up instead.
-  if (_processingTasks.has(task.id)) {
-    const currentlyProcessing = _processingTasks.get(task.id);
+  if (_processingTasks.has(task.id) || isTaskRunning(task.id)) {
+    const currentlyProcessing = _processingTasks.get(task.id) ?? 'active-run';
     console.log(
       `[WorkflowEngine] processColumnEntry: already processing task="${task.id}" (status="${currentlyProcessing}") — deferring for status="${task.status}"`
     );
@@ -422,6 +423,7 @@ function _recheckTask(
 
   if (task.status === 'error') return;
   if (task.isManual) return;
+  if (isTaskRunning(task.id)) return;
   // Don't re-fire on_enter retries or condition transitions for tasks
   // the user has stopped; otherwise the periodic recheck would relaunch
   // the agent on the very next tick after a Stop click. Only the durable
@@ -557,12 +559,9 @@ function _recheckTask(
 // corrupt (no startedAt) or stale past an age that exceeds any real action.
 let _lastStaleReconcile = 0;
 const STALE_RECONCILE_INTERVAL_MS = 60_000; // run the sweep at most once a minute
-// Only heal runs older than this (or with no startedAt). Kept ABOVE the execution
-// lock TTL (agentSelector LOCK_TTL_MS = 15 min): a live run's lock is not
-// refreshed, so past 15 min the lock system itself already treats the task as
-// free-to-reassign — acting here at 20 min never removes protection the rest of
-// the engine still relied on. The real-world stranding (torn write, startedAt=null)
-// bypasses this gate and heals immediately.
+// Only heal runs older than this (or with no startedAt). Live workflow/resume
+// reservations remain protected regardless of age by hasLockForTask below.
+// The real-world stranding (torn write, startedAt=null) bypasses this age gate.
 const STALE_ACTION_MIN_AGE_MS = 20 * 60 * 1000;
 
 export async function reconcileStaleActionRunning(agentManager: AgentManager, ownEnv: string) {

@@ -1,4 +1,5 @@
 import { waitForProjectSwitch } from './crud.js';
+import { isAgentBusy, isTaskRunning, reserveAgentForTask } from '../workflow/agentSelector.js';
 // ─── Tasks: CRUD, execution, task loop, queue, wait, resume ──────────────────
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -826,6 +827,13 @@ export const tasksMethods = {
     await requireTaskExecutionAccess(this.agents, task, user);
     if (task.status === 'done') throw new Error('Task already completed');
 
+    // Check before clearing Stop/watching signals: a rejected resume must not
+    // disturb the workflow already owning this task or executor.
+    const requestedExecutorId = task.assignee || agentId;
+    if (isTaskRunning(task.id) || isAgentBusy(requestedExecutorId)) {
+      throw new Error('Agent or task is already processing another execution');
+    }
+
     console.log(
       `[Workflow] Triggering execution for "${task.text.slice(0, 80)}" (status=${task.status})`
     );
@@ -1112,7 +1120,12 @@ export const tasksMethods = {
           const executor = this.agents.get(executorId);
           if (!executor) continue;
           if (executor.status !== 'idle') continue;
-          if (this._loopProcessing.has(executorId)) continue;
+          if (
+            this._loopProcessing.has(executorId) ||
+            isAgentBusy(executorId) ||
+            isTaskRunning(dbTask.id)
+          )
+            continue;
           if (!this._isActiveTaskStatus(dbTask.status)) continue;
 
           if (this._workflowManagedStatuses?.has(dbTask.status)) continue;
@@ -1596,250 +1609,271 @@ export const tasksMethods = {
   async _resumeActiveTask(this: any, agentId: string, agent: any, task: any): Promise<void> {
     const executorId = task.assignee || agentId;
     const executor = this.agents.get(executorId) || agent;
-
-    const streamCallback = (chunk: any) => {
-      this._emit('agent:stream:chunk', { agentId: executorId, chunk });
-      this._emit('agent:thinking', {
-        agentId: executorId,
-        thinking: executor.currentThinking || '',
-      });
-    };
-
-    this._emit('agent:stream:start', { agentId: executorId });
-
-    let startMsgIdx = executor.conversationHistory.length;
-    let executionStartedAt = new Date().toISOString();
-    let gitBaselineHead: string | null = null;
-    // Ensure startedAt is set for managesContext history scoping
-    if (!task.startedAt) {
-      task.startedAt = executionStartedAt;
+    const releaseRun = reserveAgentForTask(
+      executorId,
+      task.id,
+      `${task.agentId}:${task.id}:resume`
+    );
+    if (!releaseRun) {
+      throw new Error(`Agent or task already reserved: agent="${executorId}" task="${task.id}"`);
     }
 
     try {
-      await waitForProjectSwitch(executor);
-      // Repo selection drives the executor's project context. The task carries
-      // a `repoFullName` (hydrated from board_repos via the JOIN); if it
-      // differs from the executor's current repo we switch sandbox + history.
-      // Secondary repos are cloned alongside the primary. Hand the keep-set to
-      // the execution layer first so every subsequent ensure (even primary-only
-      // ones) preserves them; then re-ensure when the primary changed OR there
-      // are secondaries to (re)clone.
-      const taskRepo = task.repoFullName || null;
-      const secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos, taskRepo);
-      // Runs on EVERY execution, including when the executor is already recorded
-      // as being on the task's repo: `executor.project` is API-side state that
-      // outlives the runner container, so that case is exactly the one where a
-      // recycled runner has no clone and no ~/.git-credentials, and every push
-      // fails with "could not read Username". The ensure is idempotent and
-      // TTL-debounced — see services/execution/agentWorkspace.ts.
-      if (this.executionManager) {
-        try {
-          const gitCreds = await resolveAgentGitCredentials(executor);
-          const { switched } = await ensureAgentWorkspace(this.executionManager, executor, {
-            repo: taskRepo,
-            repoHtmlUrl: task.repoHtmlUrl,
-            secondaryRepos,
-            gitCredentials: gitCreds,
-          });
-          if (switched) {
-            console.log(
-              `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
-            );
-            this._switchProjectContext?.(executor, executor.project, taskRepo);
-          }
-        } catch (switchErr: any) {
-          console.error(
-            `🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`
-          );
-          throw switchErr;
-        }
-      }
-      if (taskRepo) executor.project = taskRepo;
+      const streamCallback = (chunk: any) => {
+        this._emit('agent:stream:chunk', { agentId: executorId, chunk });
+        this._emit('agent:thinking', {
+          agentId: executorId,
+          thinking: executor.currentThinking || '',
+        });
+      };
 
-      clearTaskSignal(task.id, 'completed');
-      clearTaskSignal(task.id, 'comment');
+      this._emit('agent:stream:start', { agentId: executorId });
 
-      startMsgIdx = executor.conversationHistory.length;
-      executionStartedAt = new Date().toISOString();
-
-      // Check if the agent already started working on this task (has the task
-      // text in its conversation history).  If so, send a continuation nudge
-      // instead of the original message, which would cause a full reasoning reset.
-      const taskPrefix = task.text.slice(0, 80);
-      // API history can survive a repo switch while the interactive CLI has
-      // restarted. Always send the complete task to CLI runners.
-      const alreadySent =
-        !isCliRunner(executor) &&
-        executor.conversationHistory.some(
-          (msg: any) =>
-            msg.role === 'user' &&
-            typeof msg.content === 'string' &&
-            msg.content.includes(taskPrefix)
-        );
-      const messageToSend = alreadySent
-        ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
-        : task.text;
-
-      // CLI runners always resume through their interactive PTY (not headless
-      // sendMessage), regardless of the transient agent.status — the runner
-      // gates the inject on the TUI being input-ready (PTY-is-free).
-      const terminalDriven = isCliRunner(executor) && this.executionManager?.sendTerminalInput;
-
-      // Snapshot the repo HEAD before the run: the wait-loop sweep and the
-      // finally reconcile below diff baseline..HEAD to link every commit the
-      // executor makes — the only detection that works for CLI runners, whose
-      // git activity happens silently inside their PTY.
-      gitBaselineHead = await snapshotGitBaseline(this.executionManager, executorId);
-
-      if (terminalDriven) {
-        await bindAgentRunner(this, executor);
-        await this.executionManager.sendTerminalInput(executorId, messageToSend, { submit: true });
-      } else {
-        await this.sendMessage(executorId, messageToSend, streamCallback);
+      let startMsgIdx = executor.conversationHistory.length;
+      let executionStartedAt = new Date().toISOString();
+      let gitBaselineHead: string | null = null;
+      // Ensure startedAt is set for managesContext history scoping
+      if (!task.startedAt) {
+        task.startedAt = executionStartedAt;
       }
 
-      // CLI runners like opencode, openclaw, hermes, and codex manage their own
-      // internal tool pipeline and exit when their work is done. For those
-      // runners, process exit is enough to satisfy the task wait; otherwise the
-      // loop would treat the idle runner as unfinished and keep reminding it.
-      if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
-        if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
-          console.log(
-            `✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`
-          );
-          setTaskSignal(task.id, 'completed', true);
-        }
-      }
-
-      // _saveExecutionLog moved after _waitForExecutionComplete — captures full conversation
-
-      const waitResult = await this._waitForExecutionComplete(
-        agentId,
-        task.id,
-        executorId,
-        executor.name,
-        task.text,
-        {
-          terminalDriven,
-          gitBaselineHead,
-        }
-      );
-
-      // A detected CLI auth failure (or other hard error) must fail the task
-      // rather than silently complete. Throw so the catch below runs the
-      // standard error path (markTaskError + error report + execution log).
-      if (waitResult === 'error') {
-        const authError = this._consumeTaskAuthError(task.id);
-        throw new Error(authError || 'CLI execution ended in error');
-      }
-
-      // Save execution log AFTER wait completes — captures the full conversation
-      // including retries, reminders, and tool calls.
-      this._saveExecutionLog(
-        agentId,
-        task.id,
-        executorId,
-        startMsgIdx,
-        executionStartedAt,
-        waitResult !== 'error' && waitResult !== 'timeout'
-      );
-    } catch (err: any) {
-      const isUserStop = isUserStopError(err);
-      console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
-      this._emit('agent:stream:error', { agentId: executorId, error: err.message });
-
-      // Save execution log for the error case — captures whatever conversation happened before the error
-      this._saveExecutionLog(agentId, task.id, executorId, startMsgIdx, executionStartedAt, false);
-
-      const errorTimestamp = new Date().toISOString();
-
-      if (isUserStop) {
-        // User manually stopped — mark as stopped, keep in current column
-        setTaskSignal(task.id, 'stopped', true);
-        await updateTaskExecutionStatus(task.id, 'stopped');
-        // Add stopped entry to history
-        const stoppedTask = await getTaskById(task.id);
-        if (stoppedTask) {
-          if (!stoppedTask.history) stoppedTask.history = [];
-          stoppedTask.history.push({
-            status: stoppedTask.status,
-            at: errorTimestamp,
-            by: 'user',
-            type: 'stopped',
-          });
-          stoppedTask.startedAt = null;
-          stoppedTask.actionRunning = false;
-          delete stoppedTask.actionRunningAgentId;
-          delete stoppedTask.actionRunningMode;
-          await saveTaskToDb({ ...stoppedTask, agentId });
-          this._emit('task:updated', { agentId, task: { ...stoppedTask, agentId } });
-        }
-      } else {
-        // Real error — keep task in its originating column via errorFromStatus.
-        // markTaskError guards against the disappearance bug (errorFromStatus
-        // clobbered to 'error' when the task was already errored, or set to a
-        // status that no longer exists in the workflow).
-        const errorTask = await getTaskById(task.id);
-        if (errorTask) {
-          // Load the workflow so markTaskError can validate the fallback column.
-          // Best-effort: if it fails the helper still works (just no validation).
-          let wf: any = null;
-          if (errorTask.boardId) {
-            try {
-              wf = await getWorkflowForBoard(errorTask.boardId);
-            } catch {
-              /* ignore */
+      try {
+        await waitForProjectSwitch(executor);
+        // Repo selection drives the executor's project context. The task carries
+        // a `repoFullName` (hydrated from board_repos via the JOIN); if it
+        // differs from the executor's current repo we switch sandbox + history.
+        // Secondary repos are cloned alongside the primary. Hand the keep-set to
+        // the execution layer first so every subsequent ensure (even primary-only
+        // ones) preserves them; then re-ensure when the primary changed OR there
+        // are secondaries to (re)clone.
+        const taskRepo = task.repoFullName || null;
+        const secondaryRepos = normalizeSecondaryRepos(task.secondaryRepos, taskRepo);
+        // Runs on EVERY execution, including when the executor is already recorded
+        // as being on the task's repo: `executor.project` is API-side state that
+        // outlives the runner container, so that case is exactly the one where a
+        // recycled runner has no clone and no ~/.git-credentials, and every push
+        // fails with "could not read Username". The ensure is idempotent and
+        // TTL-debounced — see services/execution/agentWorkspace.ts.
+        if (this.executionManager) {
+          try {
+            const gitCreds = await resolveAgentGitCredentials(executor);
+            const { switched } = await ensureAgentWorkspace(this.executionManager, executor, {
+              repo: taskRepo,
+              repoHtmlUrl: task.repoHtmlUrl,
+              secondaryRepos,
+              gitCredentials: gitCreds,
+            });
+            if (switched) {
+              console.log(
+                `🔄 [TaskLoop] Switching "${executor.name}" from "${executor.project || '(none)'}" to repo "${taskRepo}" for resume`
+              );
+              this._switchProjectContext?.(executor, executor.project, taskRepo);
             }
+          } catch (switchErr: any) {
+            console.error(
+              `🔄 [TaskLoop] Execution env switch failed for "${executor.name}": ${switchErr.message}`
+            );
+            throw switchErr;
           }
-          const mutated = markTaskError(errorTask, err.message, {
-            by: executor.name,
-            agentName: executor.name,
-            workflow: wf,
+        }
+        if (taskRepo) executor.project = taskRepo;
+
+        clearTaskSignal(task.id, 'completed');
+        clearTaskSignal(task.id, 'comment');
+
+        startMsgIdx = executor.conversationHistory.length;
+        executionStartedAt = new Date().toISOString();
+
+        // Check if the agent already started working on this task (has the task
+        // text in its conversation history).  If so, send a continuation nudge
+        // instead of the original message, which would cause a full reasoning reset.
+        const taskPrefix = task.text.slice(0, 80);
+        // API history can survive a repo switch while the interactive CLI has
+        // restarted. Always send the complete task to CLI runners.
+        const alreadySent =
+          !isCliRunner(executor) &&
+          executor.conversationHistory.some(
+            (msg: any) =>
+              msg.role === 'user' &&
+              typeof msg.content === 'string' &&
+              msg.content.includes(taskPrefix)
+          );
+        const messageToSend = alreadySent
+          ? `[SYSTEM REMINDER] You have an active task that needs to be completed:\n"${task.text.slice(0, 300)}"\n\nContinue where you left off. When you are done, use the native update_task tool with the task ID, final column, and summary to complete it.`
+          : task.text;
+
+        // CLI runners always resume through their interactive PTY (not headless
+        // sendMessage), regardless of the transient agent.status — the runner
+        // gates the inject on the TUI being input-ready (PTY-is-free).
+        const terminalDriven = isCliRunner(executor) && this.executionManager?.sendTerminalInput;
+
+        // Snapshot the repo HEAD before the run: the wait-loop sweep and the
+        // finally reconcile below diff baseline..HEAD to link every commit the
+        // executor makes — the only detection that works for CLI runners, whose
+        // git activity happens silently inside their PTY.
+        gitBaselineHead = await snapshotGitBaseline(this.executionManager, executorId);
+
+        if (terminalDriven) {
+          await bindAgentRunner(this, executor);
+          await this.executionManager.sendTerminalInput(executorId, messageToSend, {
+            submit: true,
           });
-          if (mutated) {
-            await saveTaskToDb({ ...errorTask, agentId });
-            this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
+        } else {
+          await this.sendMessage(executorId, messageToSend, streamCallback);
+        }
+
+        // CLI runners like opencode, openclaw, hermes, and codex manage their own
+        // internal tool pipeline and exit when their work is done. For those
+        // runners, process exit is enough to satisfy the task wait; otherwise the
+        // loop would treat the idle runner as unfinished and keep reminding it.
+        if (!terminalDriven && executor.runner && SELF_COMPLETING_RUNNERS.has(executor.runner)) {
+          if (!getTaskSignal(task.id, 'completed') && !getTaskSignal(task.id, 'stopped')) {
+            console.log(
+              `✅ [TaskLoop] CLI runner "${executor.runner}" finished — auto-signaling task completion`
+            );
+            setTaskSignal(task.id, 'completed', true);
+          }
+        }
+
+        // _saveExecutionLog moved after _waitForExecutionComplete — captures full conversation
+
+        const waitResult = await this._waitForExecutionComplete(
+          agentId,
+          task.id,
+          executorId,
+          executor.name,
+          task.text,
+          {
+            terminalDriven,
+            gitBaselineHead,
+          }
+        );
+
+        // A detected CLI auth failure (or other hard error) must fail the task
+        // rather than silently complete. Throw so the catch below runs the
+        // standard error path (markTaskError + error report + execution log).
+        if (waitResult === 'error') {
+          const authError = this._consumeTaskAuthError(task.id);
+          throw new Error(authError || 'CLI execution ended in error');
+        }
+
+        // Save execution log AFTER wait completes — captures the full conversation
+        // including retries, reminders, and tool calls.
+        this._saveExecutionLog(
+          agentId,
+          task.id,
+          executorId,
+          startMsgIdx,
+          executionStartedAt,
+          waitResult !== 'error' && waitResult !== 'timeout'
+        );
+      } catch (err: any) {
+        const isUserStop = isUserStopError(err);
+        console.error(`🔄 [TaskLoop] Error resuming task for ${executor.name}:`, err.message);
+        this._emit('agent:stream:error', { agentId: executorId, error: err.message });
+
+        // Save execution log for the error case — captures whatever conversation happened before the error
+        this._saveExecutionLog(
+          agentId,
+          task.id,
+          executorId,
+          startMsgIdx,
+          executionStartedAt,
+          false
+        );
+
+        const errorTimestamp = new Date().toISOString();
+
+        if (isUserStop) {
+          // User manually stopped — mark as stopped, keep in current column
+          setTaskSignal(task.id, 'stopped', true);
+          await updateTaskExecutionStatus(task.id, 'stopped');
+          // Add stopped entry to history
+          const stoppedTask = await getTaskById(task.id);
+          if (stoppedTask) {
+            if (!stoppedTask.history) stoppedTask.history = [];
+            stoppedTask.history.push({
+              status: stoppedTask.status,
+              at: errorTimestamp,
+              by: 'user',
+              type: 'stopped',
+            });
+            stoppedTask.startedAt = null;
+            stoppedTask.actionRunning = false;
+            delete stoppedTask.actionRunningAgentId;
+            delete stoppedTask.actionRunningMode;
+            await saveTaskToDb({ ...stoppedTask, agentId });
+            this._emit('task:updated', { agentId, task: { ...stoppedTask, agentId } });
           }
         } else {
-          await this.setTaskStatus(agentId, task.id, 'error', {
-            skipAutoRefine: true,
-            by: executor.name,
+          // Real error — keep task in its originating column via errorFromStatus.
+          // markTaskError guards against the disappearance bug (errorFromStatus
+          // clobbered to 'error' when the task was already errored, or set to a
+          // status that no longer exists in the workflow).
+          const errorTask = await getTaskById(task.id);
+          if (errorTask) {
+            // Load the workflow so markTaskError can validate the fallback column.
+            // Best-effort: if it fails the helper still works (just no validation).
+            let wf: any = null;
+            if (errorTask.boardId) {
+              try {
+                wf = await getWorkflowForBoard(errorTask.boardId);
+              } catch {
+                /* ignore */
+              }
+            }
+            const mutated = markTaskError(errorTask, err.message, {
+              by: executor.name,
+              agentName: executor.name,
+              workflow: wf,
+            });
+            if (mutated) {
+              await saveTaskToDb({ ...errorTask, agentId });
+              this._emit('task:updated', { agentId, task: { ...errorTask, agentId } });
+            }
+          } else {
+            await this.setTaskStatus(agentId, task.id, 'error', {
+              skipAutoRefine: true,
+              by: executor.name,
+            });
+            await updateTaskFields(task.id, { error: err.message });
+          }
+          this._emit('agent:error:report', {
+            agentId: executorId,
+            agentName: executor.name,
+            project: executor.project || null,
+            description: `[System Error] Task "${task.text?.slice(0, 100)}" failed: ${err.message}`,
+            timestamp: errorTimestamp,
+            isSystemError: true,
+            taskId: task.id,
           });
-          await updateTaskFields(task.id, { error: err.message });
         }
-        this._emit('agent:error:report', {
-          agentId: executorId,
-          agentName: executor.name,
-          project: executor.project || null,
-          description: `[System Error] Task "${task.text?.slice(0, 100)}" failed: ${err.message}`,
-          timestamp: errorTimestamp,
-          isSystemError: true,
-          taskId: task.id,
-        });
-      }
-      if (executor.status === 'error') {
-        this.setStatus(executorId, 'idle', 'Auto-recovered after resume error');
+        if (executor.status === 'error') {
+          this.setStatus(executorId, 'idle', 'Auto-recovered after resume error');
+        }
+      } finally {
+        // End-of-run commit/push reconcile — mirrors executeRunAgent's finally.
+        // Catches commits a CLI runner made silently in its PTY regardless of
+        // how the run ended (completion, move, stop, error, timeout). Idempotent.
+        try {
+          // Time-window fallback uses THIS run's start (not task.startedAt, which
+          // can be days old and would sweep in other agents' commits that the
+          // ensure's fetch+reset pulled into the clone's history).
+          await reconcileTaskCommits(this, executorId, task.id, {
+            baselineHead: gitBaselineHead,
+            startedAt: gitBaselineHead ? null : executionStartedAt,
+            label: 'ResumeEndReconcile',
+          });
+        } catch (reconcileErr: any) {
+          console.warn(
+            `🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`
+          );
+        }
+        this._emit('agent:stream:end', { agentId: executorId });
+        this._emit('agent:updated', this._sanitize(executor));
       }
     } finally {
-      // End-of-run commit/push reconcile — mirrors executeRunAgent's finally.
-      // Catches commits a CLI runner made silently in its PTY regardless of
-      // how the run ended (completion, move, stop, error, timeout). Idempotent.
-      try {
-        // Time-window fallback uses THIS run's start (not task.startedAt, which
-        // can be days old and would sweep in other agents' commits that the
-        // ensure's fetch+reset pulled into the clone's history).
-        await reconcileTaskCommits(this, executorId, task.id, {
-          baselineHead: gitBaselineHead,
-          startedAt: gitBaselineHead ? null : executionStartedAt,
-          label: 'ResumeEndReconcile',
-        });
-      } catch (reconcileErr: any) {
-        console.warn(
-          `🔗 [TaskLoop] End-of-run commit reconcile failed for task ${task.id}: ${reconcileErr?.message}`
-        );
-      }
-      this._emit('agent:stream:end', { agentId: executorId });
-      this._emit('agent:updated', this._sanitize(executor));
+      releaseRun();
     }
   },
 

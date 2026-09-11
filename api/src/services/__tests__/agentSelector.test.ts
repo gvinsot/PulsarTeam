@@ -13,13 +13,18 @@
  * busy even though idle agents on other repos were available.
  */
 
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
   findAgentByRole,
   findAgentForAssignment,
   hasIdleAgentWithRole,
+  reserveAgentForTask,
+  acquireLock,
+  releaseLock,
+  hasLockForTask,
+  isAgentBusy,
 } from '../workflow/agentSelector.js';
 
 function makeAgents(list: any[]): Map<string, any> {
@@ -235,7 +240,7 @@ test('findAgentForAssignment prefers the task board but falls back to another on
       name: 'A1',
       role: 'dev',
       boardId: 'b2',
-      status: 'busy',
+      status: 'idle',
       project: 'org/repo',
       enabled: true,
     },
@@ -244,7 +249,7 @@ test('findAgentForAssignment prefers the task board but falls back to another on
       name: 'A2',
       role: 'dev',
       boardId: 'b1',
-      status: 'busy',
+      status: 'idle',
       project: 'org/repo',
       enabled: true,
     },
@@ -266,7 +271,7 @@ test('findAgentForAssignment prefers the task board but falls back to another on
       name: 'A1',
       role: 'dev',
       boardId: 'b2',
-      status: 'busy',
+      status: 'idle',
       project: 'org/repo',
       enabled: true,
     },
@@ -285,6 +290,47 @@ test('findAgentForAssignment prefers the task board but falls back to another on
     'assignment must not return null just because the role lives on another board'
   );
   assert.equal(fallback.id, 'a1');
+});
+
+test('automatic assignment excludes occupied agents before board and repo preferences', () => {
+  const agents = makeAgents([
+    { id: 'busy', role: 'dev', status: 'busy', boardId: 'home', project: 'org/repo' },
+    { id: 'free', role: 'dev', status: 'idle', boardId: 'other', project: 'org/other' },
+  ]);
+  assert.equal(
+    findAgentForAssignment(agents, 'dev', null, () => [], null, 'home', 'org/repo')?.id,
+    'free'
+  );
+  agents.delete('free');
+  assert.equal(findAgentForAssignment(agents, 'dev'), null);
+});
+
+test('a live reservation excludes an idle CLI from assignment and survives the stale-lock TTL', () => {
+  const agents = makeAgents([{ id: 'reserved', role: 'dev', status: 'idle' }]);
+  const release = reserveAgentForTask('reserved', 'task-live', 'owner:task-live:decide');
+  assert.ok(release);
+  try {
+    assert.equal(reserveAgentForTask('reserved', 'task-other', 'owner:task-other:resume'), null);
+    assert.equal(reserveAgentForTask('other-agent', 'task-live', 'owner:task-live:resume'), null);
+    assert.equal(findAgentByRole(agents, 'dev'), null);
+    assert.equal(findAgentForAssignment(agents, 'dev'), null);
+    assert.equal(hasIdleAgentWithRole(agents, 'dev'), false);
+    const later = Date.now() + 21 * 60 * 1000;
+    mock.method(Date, 'now', () => later);
+    const unrelated = acquireLock('unrelated'); // triggers stale-lock eviction
+    releaseLock('unrelated', unrelated);
+    assert.equal(hasLockForTask('owner:task-live:'), true);
+    assert.equal(isAgentBusy('reserved'), true);
+  } finally {
+    mock.restoreAll();
+    release();
+  }
+  const successor = reserveAgentForTask('reserved', 'task-other', 'owner:task-other:resume');
+  assert.ok(successor);
+  release(); // an old finally must not release its successor
+  assert.equal(isAgentBusy('reserved'), true);
+  successor();
+  assert.equal(findAgentForAssignment(agents, 'dev')?.id, 'reserved');
 });
 
 test('findAgentForAssignment still respects the owner scope', () => {

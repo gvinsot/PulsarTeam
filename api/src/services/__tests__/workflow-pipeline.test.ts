@@ -272,6 +272,14 @@ const mockIo = {
   },
 };
 
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 async function setup(agentDefs: any[] = []) {
   taskRows.clear();
   const mgr = new AgentManager(mockIo, null, null, null);
@@ -362,6 +370,81 @@ async function waitForStatus(
 // ═══════════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════════
+
+test('manual resume and workflow cannot inject overlapping tasks into an idle agent', async () => {
+  const { executeAction } = await import('../workflow/actionExecutor.js');
+  const mgr = await setup([{ name: 'Shared worker', role: 'assistant' }]);
+  const { task: resumed, agentId } = createTask(mgr, 'Manual task', 'execute');
+  const { task: next } = createTask(mgr, 'Workflow task', 'step1');
+  const agent = mgr.agents.get(agentId)!;
+  const entered = deferred();
+  const finish = deferred();
+  let injections = 0;
+  mgr.sendMessage = async () => {
+    injections++;
+    entered.resolve();
+    await finish.promise;
+    return 'Mocked title';
+  };
+  mgr._waitForExecutionComplete = async () => 'completed';
+  const running = mgr._resumeActiveTask(agentId, agent, resumed);
+  try {
+    await entered.promise;
+    assert.equal(agent.status, 'idle', 'CLI status alone does not show the reservation');
+    const result = await executeAction(
+      { type: 'run_agent', mode: 'title', role: 'assistant' },
+      next,
+      { agentManager: mgr, io: mgr.io, ownerId: null, workflow: null }
+    );
+    assert.equal(result.skipped, true);
+    await assert.rejects(mgr._resumeActiveTask(agentId, agent, next), /already reserved/);
+    assert.equal(injections, 1);
+    resumed.status = 'step4';
+    await processColumnEntry(resumed, mgr);
+    assert.equal(resumed.status, 'step4', 'column actions wait for the manual execution');
+    assert.equal(resumed._pendingOnEnter, 'step4', 'the deferred column is retried later');
+  } finally {
+    finish.resolve();
+    await running;
+  }
+  const result = await executeAction(
+    { type: 'run_agent', mode: 'title', role: 'assistant' },
+    next,
+    { agentManager: mgr, io: mgr.io, ownerId: null, workflow: null }
+  );
+  assert.equal(result.executed, true, 'the deferred task can run after release');
+  assert.equal(injections, 2);
+});
+
+test('workflow reservation blocks manual resume until its action has settled', async () => {
+  const { executeAction } = await import('../workflow/actionExecutor.js');
+  const mgr = await setup([{ name: 'Shared worker', role: 'assistant' }]);
+  const { task, agentId } = createTask(mgr, 'Workflow task', 'step1');
+  const { task: next } = createTask(mgr, 'Manual task', 'execute');
+  const entered = deferred();
+  const finish = deferred();
+  mgr.sendMessage = async () => {
+    entered.resolve();
+    await finish.promise;
+    return 'Title';
+  };
+  const running = executeAction({ type: 'run_agent', mode: 'title', role: 'assistant' }, task, {
+    agentManager: mgr,
+    io: mgr.io,
+    ownerId: null,
+    workflow: null,
+  });
+  try {
+    await entered.promise;
+    await assert.rejects(
+      mgr._resumeActiveTask(agentId, mgr.agents.get(agentId), next),
+      /already reserved/
+    );
+  } finally {
+    finish.resolve();
+    await running;
+  }
+});
 
 test('single task flows through entire pipeline: todo → done', async () => {
   const mgr = await setup([{ name: 'TitlesBot', role: 'assistant' }]);

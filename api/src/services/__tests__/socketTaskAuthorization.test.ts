@@ -143,6 +143,20 @@ function assertDenied(h: Awaited<ReturnType<typeof harness>>, expectedError = 'A
   assert.ok(!JSON.stringify(h.emitted).includes('Confidential'));
 }
 
+test('rejecting a resume of a reserved task preserves its execution signals', async () => {
+  const { reserveAgentForTask } = await import('../workflow/agentSelector.js');
+  seedTask('alice-board', 'alice-agent');
+  const h = await harness();
+  const release = reserveAgentForTask('alice-agent', 'task', 'alice-agent:task:decide');
+  assert.ok(release);
+  try {
+    await h.execute();
+    assertDenied(h, 'Agent or task is already processing another execution');
+  } finally {
+    release();
+  }
+});
+
 test('own agent cannot execute another tenant task, even when it owns the task record', async () => {
   for (const agentId of ['bob-agent', 'alice-agent']) {
     seedTask('bob-board', agentId);
